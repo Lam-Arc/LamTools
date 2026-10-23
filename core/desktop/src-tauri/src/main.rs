@@ -381,6 +381,47 @@ fn get_api_base(state: tauri::State<'_, BackendState>) -> Result<String, String>
 }
 
 #[tauri::command]
+fn append_frontend_console(app: tauri::AppHandle, lines: String) -> Result<(), String> {
+    // Developer-mode console retention. WebView2 console output never reaches
+    // the terminal, so a frontend error was invisible unless the user opened
+    // devtools. This appends the batched lines to
+    // `core/data/core-agent/frontend-console.log` in a source checkout.
+    if lines.trim().is_empty() {
+        return Ok(());
+    }
+    let path = if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|desktop| desktop.parent())
+            .map(|core| core.join("data").join("core-agent").join("frontend-console.log"))
+            .ok_or_else(|| "cannot resolve frontend console log path".to_string())?
+    } else {
+        app.path()
+            .app_log_dir()
+            .map_err(|error| error.to_string())?
+            .join("frontend-console.log")
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    if fs::metadata(&path)
+        .map(|metadata| metadata.len() > 32 * 1024 * 1024)
+        .unwrap_or(false)
+    {
+        let rotated = path.with_extension("log.1");
+        let _ = fs::rename(&path, rotated);
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| error.to_string())?;
+    file.write_all(lines.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn enable_startup_glass(window: WebviewWindow) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -1678,6 +1719,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_api_base,
+            append_frontend_console,
             enable_startup_glass,
             export_session_archive,
             minimize_window,

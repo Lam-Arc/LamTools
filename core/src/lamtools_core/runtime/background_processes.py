@@ -373,21 +373,19 @@ class BackgroundProcessRegistry:
         self._store.save(records)
 
 
-def persistent_process_prompt(registry: BackgroundProcessRegistry | None, session_id: str) -> str:
-    """Context block telling the agent which long-lived processes are running.
-
-    Empty when the session has none, so normal sessions pay no token cost.
-    """
+def persistent_process_snapshot(
+    registry: BackgroundProcessRegistry | None,
+    session_id: str,
+) -> dict[str, str]:
+    """Return ``{pid: command}`` for this session's live background processes."""
     if registry is None or not str(session_id or "").strip():
-        return ""
-    running = [status for status in registry.list_status(session_id=str(session_id).strip()) if status.alive]
-    if not running:
-        return ""
-    lines = [
-        "[Persistent Background Processes]",
-        "The processes below were started in this session and keep running after turns end. "
-        "Check status with the list_processes tool; terminate with kill_process when no longer needed.",
+        return {}
+    running = [
+        status
+        for status in registry.list_status(session_id=str(session_id).strip())
+        if status.alive
     ]
+    result: dict[str, str] = {}
     for status in running:
         record = status.record
         command = " ".join((record.command or "").split())
@@ -395,8 +393,32 @@ def persistent_process_prompt(registry: BackgroundProcessRegistry | None, sessio
             command = "<unknown command>"
         if len(command) > 160:
             command = command[:157] + "..."
-        lines.append(f"- pid {record.pid} | running | {command}")
+        result[str(record.pid)] = command
+    return result
+
+
+def format_persistent_process_prompt(processes: dict[str, str]) -> str:
+    """Render a process snapshot as the context block the model reads."""
+    if not processes:
+        return ""
+    lines = [
+        "[Persistent Background Processes]",
+        "The processes below were started in this session and keep running after turns end. "
+        "Check status with the list_processes tool; terminate with kill_process when no longer needed.",
+    ]
+    for pid, command in processes.items():
+        lines.append(f"- pid {pid} | running | {command}")
     return "\n".join(lines)
+
+
+def persistent_process_prompt(registry: BackgroundProcessRegistry | None, session_id: str) -> str:
+    """Context block telling the agent which long-lived processes are running.
+
+    Empty when the session has none, so normal sessions pay no token cost.
+    """
+    return format_persistent_process_prompt(
+        persistent_process_snapshot(registry, session_id)
+    )
 
 
 def status_to_dict(status: BackgroundProcessStatus) -> dict[str, object]:
@@ -429,7 +451,9 @@ __all__ = [
     "BackgroundProcessRegistry",
     "BackgroundProcessStatus",
     "default_background_process_registry",
+    "format_persistent_process_prompt",
     "persistent_process_prompt",
+    "persistent_process_snapshot",
     "pid_alive",
     "status_to_dict",
 ]

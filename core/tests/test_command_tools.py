@@ -597,7 +597,11 @@ async def test_python_http_server_lifecycle_contract_with_real_process(tmp_path:
         assert result.metadata["process_state"] == "running"
         assert result.metadata["shell_state"] == "running"
         assert result.metadata["readiness_state"] == "ready"
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as response:
+        # Localhost belongs to the direct route regardless of the host's
+        # outbound proxy environment; urllib otherwise sends 127.0.0.1 through
+        # HTTP_PROXY and a proxy can answer 502.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{port}/", timeout=2) as response:
             assert "ready from served directory" in response.read().decode("utf-8")
     finally:
         registry.cleanup_run("server-test", "turn-test")

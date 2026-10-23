@@ -26,8 +26,8 @@ from .plan import (
     start_next_pending_step,
 )
 
-RuntimeStatus = Literal["idle", "running", "waiting", "completed", "failed", "cancelled"]
-RuntimeLoopState = Literal["continue", "wait", "done", "failed"]
+RuntimeStatus = Literal["idle", "running", "waiting", "paused", "completed", "failed", "cancelled"]
+RuntimeLoopState = Literal["continue", "wait", "paused", "done", "failed"]
 
 
 class RuntimeStateConflictError(RuntimeError):
@@ -263,6 +263,9 @@ def normalize_run_id(thread_id: str, run_id: str | None) -> str:
 @dataclass
 class _RuntimeTaskEntry:
     run_id: str
+    # user:“严格分离回合编号和执行编号，拒绝过期写入”+登记表要记住这次执行属于
+    # 哪个逻辑回合；缺它就只能拿 run_id 猜回合，旧的暂停便会打到新执行上。
+    turn_id: str = ""
     task: asyncio.Task[Any] | None = None
     guidance_open: bool = True
     guidance: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
@@ -277,6 +280,8 @@ class RuntimeTaskRegistry:
 
     def __init__(self, *, background_process_registry: BackgroundProcessRegistry | None = None) -> None:
         self._entries: dict[str, _RuntimeTaskEntry] = {}
+        # user:“修 问题严重的话 就重新设计”+(执行代次保留到任务退出之后，迟到的控制收尾不能作用于新执行)。
+        self._control_generations: dict[str, int] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
         # Pause requests are their own signal: a pause keeps the run resumable
         # while the cancel event above keeps its terminal meaning.
@@ -314,6 +319,7 @@ class RuntimeTaskRegistry:
         thread_id: str,
         *,
         run_id: str | None = None,
+        turn_id: str | None = None,
         force: bool = False,
         reason: str = "user_pause",
     ) -> bool:
@@ -332,6 +338,13 @@ class RuntimeTaskRegistry:
             return False
         if run_id is not None and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
             return False
+        # user:“只有一个控制服务能决定暂停”+请求点名的回合必须就是这条执行的回合；
+        # 对不上（含登记表还没记下回合）就不发信号、不取消，旧回合的暂停到此为止。
+        if turn_id is not None and str(turn_id or "").strip():
+            wanted = str(turn_id or "").strip()
+            known = str(getattr(entry, "turn_id", "") or "").strip()
+            if not known or known != wanted:
+                return False
         event = self.get_pause_event(thread_id)
         # The kernel reads the reason off the event it polls, so the log and the
         # durable metadata can tell a user pause from the memory watchdog.
@@ -342,7 +355,7 @@ class RuntimeTaskRegistry:
             task.cancel()
         return task is not None and not task.done()
 
-    def accept_run(self, thread_id: str, run_id: str) -> bool:
+    def accept_run(self, thread_id: str, run_id: str, *, turn_id: str = "") -> bool:
         thread_id = str(thread_id or "").strip()
         run_id = str(run_id or "").strip()
         if not thread_id or not run_id:
@@ -350,28 +363,61 @@ class RuntimeTaskRegistry:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
         if entry is not None:
+            # user:“修 问题严重的话 就重新设计”+(失败的所有权申请不能修改当前执行的身份)。
+            if entry.run_id != run_id:
+                return False
+            if entry.turn_id == "" and turn_id:
+                # The first claim may not know the logical turn yet; a later
+                # precise claim fills it in so a pause can be scoped.
+                entry.turn_id = str(turn_id)
             return entry.run_id == run_id
         self.reset_cancel_event(thread_id)
         # A fresh run starts unpaused: the resume clears the request that
         # parked the previous run.
         self.reset_pause_event(thread_id)
-        self._entries[thread_id] = _RuntimeTaskEntry(run_id=run_id)
+        self._control_generations[thread_id] = self.control_generation(thread_id) + 1
+        self._entries[thread_id] = _RuntimeTaskEntry(run_id=run_id, turn_id=str(turn_id or ""))
         return True
+
+    def control_generation(self, thread_id: str) -> int:
+        return self._control_generations.get(thread_id, 0)
 
     def active_run_id(self, thread_id: str) -> str | None:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
         return entry.run_id if entry is not None else None
 
-    def register(self, thread_id: str, task: asyncio.Task[Any], *, run_id: str = "") -> bool:
+    def active_turn_id(self, thread_id: str) -> str:
+        """The logical turn the live execution belongs to ("" when unclaimed).
+
+        A pause/terminate request names a turn; the registry names an execution.
+        Without this the handler can only compare two run ids, which is exactly
+        how a stale pause reached a newer execution.
+        """
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        return str(getattr(entry, "turn_id", "") or "") if entry is not None else ""
+
+    def register(
+        self,
+        thread_id: str,
+        task: asyncio.Task[Any],
+        *,
+        run_id: str = "",
+        turn_id: str = "",
+    ) -> bool:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
         if entry is None:
-            if not self.accept_run(thread_id, run_id):
+            if not self.accept_run(thread_id, run_id, turn_id=turn_id):
                 return False
             entry = self._entries[thread_id]
         if normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
             return False
+        if turn_id:
+            if entry.turn_id and entry.turn_id != turn_id:
+                return False
+            entry.turn_id = turn_id
         if entry.task is not None and entry.task is not task and not entry.task.done():
             return False
         entry.task = task
@@ -425,11 +471,13 @@ class RuntimeTaskRegistry:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
         if entry is None:
+            self._control_generations[thread_id] = self.control_generation(thread_id) + 1
             self.get_cancel_event(thread_id).set()
             self._background_process_registry.cleanup_session(thread_id)
             return
         if run_id is not None and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
             return
+        self._control_generations[thread_id] = self.control_generation(thread_id) + 1
         task = entry.task
         self.get_cancel_event(thread_id).set()
         entry.guidance_open = False

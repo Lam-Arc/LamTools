@@ -20,6 +20,7 @@ from lamtools_core.attachment.service import AttachmentRecord, build_capability_
 from lamtools_core.event import CoreEvent, EventSink
 from lamtools_core.kernel import CoreLoopKernel, LoopPolicy
 from lamtools_core.llm import ChatMessage, normalize_reasoning_level, reasoning_level_from_legacy
+from lamtools_core.llm.image_payload import MESSAGE_ADDED_AT_STEP
 from lamtools_core.runtime import (
     InMemoryRuntimeStateStore,
     RuntimeCheckpointStore,
@@ -28,7 +29,7 @@ from lamtools_core.runtime import (
 )
 from lamtools_core.skills import SkillRegistry
 from lamtools_core.sub_agent import SubAgentEventForwardingSink
-from lamtools_core.sub_session import normalize_sub_session_agent_name
+from lamtools_core.sub_agent import normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolSpec
 from lamtools_core.tool.approval_continuation import (
     ApprovedToolExecution,
@@ -345,9 +346,44 @@ class KernelSubAgentRunner:
             plugin_mode_tool_sets=self.plugin_mode_tool_sets,
             plugin_availability=self.plugin_availability,
             parent_guidance_sink=self.parent_guidance_sink,
+            artifact_store=self.artifact_store,
+            plugin_mode_exclusive_tools=self.plugin_mode_exclusive_tools,
         )
         clone._owned_mcp_registry = independent_mcp
         return clone
+
+    def config_signature(self) -> tuple[Any, ...]:
+        """Identity of the turn-local configuration this runner was built for.
+
+        The supervisor keeps one cloned runner for its lifetime for its MCP
+        registry, but the parent's project, model, permissions and skills can
+        change between turns.  Comparing this signature lets the supervisor
+        rebuild the clone instead of silently running new turns with the first
+        turn's configuration.
+        """
+        import json as _json
+
+        def stable(value: Any) -> str:
+            try:
+                return _json.dumps(value, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                return repr(value)
+
+        return (
+            str(self.work_root),
+            self.model_id,
+            self.reasoning_level,
+            self.approval_policy,
+            self.permission_preset,
+            self.active_tier,
+            stable(self.tier_tools),
+            stable(self.runtime_snapshot),
+            self.active_mode,
+            bool(self.allow_access_outside_workdir),
+            str(self.instructions or ""),
+            id(self.artifact_store) if self.artifact_store is not None else 0,
+            stable(self.plugin_mode_exclusive_tools),
+        )
 
     async def close(self) -> None:
         if self._owned_mcp_registry is not None:
@@ -432,6 +468,8 @@ class KernelSubAgentRunner:
         return build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.approval_policy,
+            # user:“处于完全访问状态，但是它运行命令的时候弹审批了”+(子代理继承相同的完全访问授权)。
+            permission_preset=self.permission_preset,
             active_tier=self.active_tier,
             tier_tools=child_tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
@@ -1006,6 +1044,9 @@ class KernelSubAgentRunner:
                 name=call.name,
                 tool_call_id=call.id,
                 content=tool_result.content or tool_result.error,
+                # user:“作为下一轮的输入时，它应该是以自己本身的清晰度输入”+子代理审批恢复的
+                # 工具结果也要带计数，续跑的第一请求仍看原图。
+                metadata={MESSAGE_ADDED_AT_STEP: int(getattr(state, "turn_count", 0) or 0)},
             ).to_dict()
             await self.state_store.append_history(session_id, [tool_msg])
             await self.state_store.save(state)
@@ -1085,6 +1126,7 @@ class KernelSubAgentRunner:
         parent_call_id: str,
         answer: str,
         question: str = "",
+        skipped: bool = False,
         parent_run_id: str = "",
         parent_turn_id: str = "",
         model: str = "",
@@ -1143,7 +1185,11 @@ class KernelSubAgentRunner:
                 "content": answer,
                 "error": "",
                 "artifacts": [],
-                "metadata": {"question": question, "answer": answer},
+                "metadata": {
+                    "question": question,
+                    "answer": answer,
+                    **({"skipped": True} if skipped else {}),
+                },
             },
             session_id=session_id,
             run_id=state.run_id,
@@ -1158,6 +1204,7 @@ class KernelSubAgentRunner:
             name="question",
             tool_call_id=call_id,
             content=answer,
+            metadata={MESSAGE_ADDED_AT_STEP: int(getattr(state, "turn_count", 0) or 0)},
         ).to_dict()
         if isinstance(self.state_store, RuntimeCheckpointStore):
             await self.state_store.append_history(session_id, [question_message])
@@ -1168,6 +1215,7 @@ class KernelSubAgentRunner:
             original_task=task,
             question=question,
             answer=answer,
+            skipped=skipped,
         )
 
         async def continue_child() -> SubAgentRunResult:

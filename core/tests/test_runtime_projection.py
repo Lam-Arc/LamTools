@@ -1421,3 +1421,58 @@ def test_forwarded_sub_agent_request_keeps_provenance_in_the_payload():
     assert item.item_id == "thread-1:sub:worker:call-9:tool"
     assert item.parent_item_id == "thread-1:run-P:call-0:tool"
     assert item.metadata["sub_agent"]["name"] == "worker"
+
+
+def test_runtime_waiting_does_not_emit_a_second_decision_card():
+    """The waiting fact is a run state, not another card.
+
+    `runtime.approval_request` already emitted the card with its options; the
+    parked run's waiting record used to be projected as a second approval card
+    with an empty option list, which produced two cards for one question and
+    could reopen a request the user had already answered.
+    """
+    for request_kind in ("permission", "question", "approval"):
+        events = runtime_fact_to_run_item_events(
+            thread_id="thread-1",
+            event_id=f"waiting-{request_kind}",
+            group="runtime",
+            source="core",
+            phase="runtime.waiting",
+            status="waiting",
+            sequence=1,
+            metadata={
+                "payload": {
+                    "request_id": "req-1",
+                    "request_kind": request_kind,
+                    "tool_name": "question",
+                    "message": "继续吗？",
+                    "run_id": "turn-1",
+                    "turn_id": "turn-1",
+                }
+            },
+        )
+        assert events == []
+
+
+def test_runtime_waiting_without_a_card_is_a_status_row():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="waiting-verification",
+        group="runtime",
+        source="core",
+        phase="runtime.waiting",
+        status="waiting",
+        sequence=1,
+        metadata={
+            "payload": {
+                "request_kind": "verification",
+                "message": "Required verification evidence was not produced.",
+                "run_id": "turn-1",
+                "turn_id": "turn-1",
+            }
+        },
+    )
+
+    assert len(events) == 1
+    assert events[0].kind == "status"
+    assert events[0].payload["content"] == "Required verification evidence was not produced."

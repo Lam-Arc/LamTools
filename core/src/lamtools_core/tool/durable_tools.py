@@ -22,13 +22,13 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
         specs.append(ToolSpec(
             name="goal",
             description=(
-                "Create, inspect, list, or cancel an explicit Goal. Creating a Goal immediately binds it "
-                "to the current run, so the agent must continue until it is complete or genuinely blocked. "
-                "Use create only when the user explicitly asks to set or track a Goal; an Arrange task does not "
-                "need a Goal."
+                "Create, inspect, list, complete, or cancel an explicit Goal. Creating a Goal immediately binds it "
+                "to the current run. While it stays active, ending a turn starts the next turn with a reminder "
+                "to continue; call complete when its completion criteria are met. Use create only when the user "
+                "explicitly asks to set or track a Goal; an Arrange task does not need a Goal."
             ),
             input_schema=_schema({
-                "action": {"type": "string", "enum": ["create", "list", "get", "cancel"]},
+                "action": {"type": "string", "enum": ["create", "list", "get", "complete", "cancel"]},
                 "objective": {"type": "string", "description": "Goal objective for create"},
                 "completion_criteria": {
                     "type": "array",
@@ -114,6 +114,13 @@ def durable_tool_handlers(
         elif action == "get":
             operation = "goal.get"
             payload = {"goal_id": str(args.get("goal_id") or "").strip()}
+        elif action == "complete":
+            operation = "goal.update"
+            payload = {
+                "goal_id": str(args.get("goal_id") or "").strip(),
+                "status": "archived",
+                "status_reason": "completed by agent request",
+            }
         elif action == "cancel":
             operation = "goal.update"
             payload = {
@@ -122,7 +129,7 @@ def durable_tool_handlers(
                 "status_reason": "cancelled by agent request",
             }
         else:
-            return _failed(call, "goal action must be create, list, get, or cancel")
+            return _failed(call, "goal action must be create, list, get, complete, or cancel")
         result = await execute_operation(operation, payload, _operation_metadata(call))
         tool_result = _from_operation(call, result)
         if tool_result.status == "ok" and action == "create":

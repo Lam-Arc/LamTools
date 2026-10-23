@@ -190,6 +190,166 @@ class CoreRuntimeSession(CoreDbBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class CoreTurnControl(CoreDbBase):
+    """Authoritative read model for one logical turn.
+
+    The event log remains the immutable truth; this row is the indexed,
+    compare-and-set friendly projection the turn coordinator reads before it
+    applies a control intent.
+    """
+
+    __tablename__ = "core_turn_control"
+    __table_args__ = (Index("idx_core_turn_control_thread", "thread_id", "updated_seq"),)
+
+    turn_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    waiting_reason: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    waiting_on_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreTurnRun(CoreDbBase):
+    """One execution attempt of a logical turn."""
+
+    __tablename__ = "core_turn_runs"
+    __table_args__ = (
+        Index("idx_core_turn_runs_turn", "turn_id", "attempt"),
+        UniqueConstraint("turn_id", "attempt", name="uq_core_turn_runs_attempt"),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="created")
+    started_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ended_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreTurnInteraction(CoreDbBase):
+    """One user-facing decision: approval, question, clarification or plan."""
+
+    __tablename__ = "core_turn_interactions"
+    __table_args__ = (
+        Index("idx_core_interactions_turn", "turn_id", "status"),
+        Index("idx_core_interactions_thread", "thread_id", "status"),
+        Index("idx_core_interactions_legacy", "legacy_request_id"),
+        Index("idx_core_interactions_expiry", "status", "expires_at_ms"),
+    )
+
+    interaction_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    scope: Mapped[str] = mapped_column(String(128), nullable=False, default="main")
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="approval")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    tool_call_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    legacy_request_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    body: Mapped[str] = mapped_column(String(8192), nullable=False, default="")
+    context_text: Mapped[str] = mapped_column(String(8192), nullable=False, default="")
+    facts_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    options_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    default_answer_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    answer_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    expires_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    claim_token: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resolved_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CoreTurnIntent(CoreDbBase):
+    """A durable request to change a turn's control state."""
+
+    __tablename__ = "core_turn_intents"
+    __table_args__ = (
+        Index("idx_core_turn_intents_turn", "turn_id", "created_at_ms"),
+        Index("idx_core_turn_intents_status", "status", "created_at_ms"),
+    )
+
+    intent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    expected_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    applied_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreTurnJob(CoreDbBase):
+    """A durable continuation job consumed by the per-session turn worker."""
+
+    __tablename__ = "core_turn_jobs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_core_turn_jobs_idempotency"),
+        Index("idx_core_turn_jobs_pending", "status", "available_at_ms"),
+        Index("idx_core_turn_jobs_turn", "turn_id", "created_at_ms"),
+    )
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreAgentRun(CoreDbBase):
+    """One delegated member execution."""
+
+    __tablename__ = "core_agent_runs"
+    __table_args__ = (
+        Index("idx_core_agent_runs_parent", "parent_turn_id", "name"),
+        Index("idx_core_agent_runs_live", "status", "lease_until_ms"),
+    )
+
+    agent_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    parent_thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_turn_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    parent_run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    type: Mapped[str] = mapped_column(String(32), nullable=False, default="execute")
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    reasoning_level: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")
+    lease_until_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sub_session_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    source_call_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    source_run_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    source_turn_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    summary: Mapped[str] = mapped_column(String(8192), nullable=False, default="")
+    started_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_at_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
 class CoreHandoffContext(CoreDbBase):
     """Latest provider-neutral context captured at the model boundary.
 
@@ -741,19 +901,58 @@ class SqlAlchemyRuntimeStateStore:
             row = await db.get(CoreRuntimeSession, session_id)
         if row is None:
             return None
-        payload = dict(row.runtime_state_json or {})
-        # A state row belongs to the session whose id is its primary key, but
-        # rows written by earlier builds can carry an empty payload. Trust the
-        # row key instead of raising a TypeError out of a plain read — every
-        # caller of this store treats "no row" as None, not as an exception.
-        payload.setdefault("session_id", str(row.thread_id))
-        metadata = dict(payload.get("metadata") or {})
-        metadata.update(dict(row.pending_approval_json or {}))
-        payload["metadata"] = metadata
-        allowed = {"session_id", "run_id", "status", "position", "loop_state", "turn_count", "metadata"}
-        state = RuntimeState(**{key: value for key, value in payload.items() if key in allowed})
-        setattr(state, "_runtime_store_revision", int(row.revision or 0))
-        return state
+        return _state_from_row(row)
+
+    async def patch(
+        self,
+        session_id: str,
+        mutate: Callable[[RuntimeState], None],
+    ) -> RuntimeState | None:
+        """Load-mutate-save one state row inside the write transaction.
+
+        The ordinary ``get`` + ``save`` pair is optimistic: a second writer can
+        land between them, and a stale state can then be *adopted* over the
+        newer one when the row is no longer live.  Pause/cancel settle paths
+        need a read-modify-write that cannot interleave, so this method does the
+        whole cycle under the SQLite write coordinator.
+        """
+
+        def write(db: Any):
+            async def action() -> RuntimeState | None:
+                row = await db.get(CoreRuntimeSession, session_id)
+                if row is None:
+                    return None
+                state = _state_from_row(row)
+                mutate(state)
+                refresh_owner(state.metadata)
+                state_payload, pending_payload = _runtime_state_payloads(state)
+                next_revision = int(row.revision or 0) + 1
+                now = datetime.now()
+                result = await db.execute(
+                    update(CoreRuntimeSession)
+                    .where(
+                        CoreRuntimeSession.thread_id == session_id,
+                        CoreRuntimeSession.revision == int(row.revision or 0),
+                    )
+                    .values(
+                        revision=next_revision,
+                        runtime_state_json=state_payload,
+                        pending_approval_json=pending_payload,
+                        last_event_seq=_last_event_seq(state),
+                        updated_at=now,
+                    )
+                )
+                if result.rowcount != 1:
+                    raise RuntimeStateConflictError(
+                        f"Runtime state revision conflict for {session_id}"
+                    )
+                self._append_runtime_change(db, state, state_payload, pending_payload, now)
+                setattr(state, "_runtime_store_revision", next_revision)
+                return state
+
+            return action()
+
+        return await self.write_coordinator.run(write)
 
     async def save(self, state: RuntimeState) -> None:
         change_id = await self._save(state, history=None)
@@ -1009,6 +1208,34 @@ class SqlAlchemyRuntimeStateStore:
                 )
             ).scalars().all()
         return [str(row) for row in rows]
+
+    async def list_pending_approvals(self) -> list[RuntimeState]:
+        """Every session carrying a durable pending decision.
+
+        Used by the backend question-expiry scheduler.  The SQL filter keeps
+        the scan to sessions that actually have a pending payload; the Python
+        filter then applies the semantic rules (question only, waiting, not
+        paused).
+        """
+        async with self.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(CoreRuntimeSession).where(
+                        func.json_extract(
+                            CoreRuntimeSession.pending_approval_json,
+                            "$.pending_approval",
+                        ).isnot(None)
+                    )
+                )
+            ).scalars().all()
+        states: list[RuntimeState] = []
+        for row in rows:
+            pending_root = row.pending_approval_json if isinstance(row.pending_approval_json, dict) else {}
+            pending = pending_root.get("pending_approval") if isinstance(pending_root, dict) else None
+            if not isinstance(pending, dict):
+                continue
+            states.append(_state_from_row(row))
+        return states
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         async with self.session_factory() as db:
@@ -2509,6 +2736,22 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
             "ALTER TABLE core_restore_operations "
             "ADD COLUMN derived_checkpoint_id VARCHAR(64) NOT NULL DEFAULT ''"
         ))
+
+
+def _state_from_row(row: CoreRuntimeSession) -> RuntimeState:
+    payload = dict(row.runtime_state_json or {})
+    # A state row belongs to the session whose id is its primary key, but rows
+    # written by earlier builds can carry an empty payload. Trust the row key
+    # instead of raising a TypeError out of a plain read — every caller of this
+    # store treats "no row" as None, not as an exception.
+    payload.setdefault("session_id", str(row.thread_id))
+    metadata = dict(payload.get("metadata") or {})
+    metadata.update(dict(row.pending_approval_json or {}))
+    payload["metadata"] = metadata
+    allowed = {"session_id", "run_id", "status", "position", "loop_state", "turn_count", "metadata"}
+    state = RuntimeState(**{key: value for key, value in payload.items() if key in allowed})
+    setattr(state, "_runtime_store_revision", int(row.revision or 0))
+    return state
 
 
 def _runtime_state_payloads(state: RuntimeState) -> tuple[dict[str, Any], dict[str, Any]]:

@@ -98,6 +98,23 @@ def serialize_tier_tools(raw: object) -> dict[str, list[str]]:
     return {tier: sorted(normalized[tier]) for tier in PERMISSION_MODES}
 
 
+def overlay_runtime_permissions(target: object, current: object) -> dict[str, Any]:
+    """Overlay the live permission keys from ``current`` onto ``target``.
+
+    Model/thinking options stay tied to the parked turn; only the permission
+    dimension is refreshed from the live session. This is the one merge used by
+    approval continuations, queue dispatch, and toolbox refresh so no caller
+    can invent a different precedence or copy a partial key set.
+    """
+    merged = dict(target) if isinstance(target, Mapping) else {}
+    if not isinstance(current, Mapping):
+        return merged
+    for key in RUNTIME_PERMISSION_KEYS:
+        if key in current:
+            merged[key] = deepcopy(current[key])
+    return merged
+
+
 def read_global_runtime_controls(value: object) -> dict[str, Any]:
     """Read only the global defaults relevant to new sessions.
 

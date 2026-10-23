@@ -88,6 +88,7 @@ def _build_context(
         app_event_hub=hub,
         runtime_state_store=handle.runtime_state_store,
         runtime_task_registry=registry,
+        write_coordinator=handle.persistence.write_coordinator,
     )
     return CoreLiveContext(
         session_factory=handle.session_factory,
@@ -314,4 +315,61 @@ async def test_restart_still_reaps_an_unanswerable_wait(
         assert "pending_approval" not in reconciled.metadata
     finally:
         restarted_registry.clear()
+        await handle.close()
+
+
+@pytest.mark.asyncio
+async def test_approval_transitions_processing_to_answered_and_publishes_ending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The card must leave the pool with a notification, not stay processing."""
+    handle, context, _llm, registry, work_root, request_id = await _park_turn_on_approval(
+        tmp_path, monkeypatch
+    )
+    queue = context.hub.subscribe(THREAD_ID)
+    try:
+        initial = await context.turn_store.get_interaction(request_id)
+        assert initial is not None and initial.status == "open"
+
+        responded = await handle_approval_respond_operation(
+            request_id=3,
+            params={
+                "thread_id": THREAD_ID,
+                "request_id": request_id,
+                "decision": "approve_once",
+                "guidance": "",
+            },
+            context=context,
+        )
+        assert "result" in responded.response, responded.response
+
+        # The decision is durable at this point: the card must already be
+        # ending, before the model continuation runs.
+        resolved = await context.turn_store.get_interaction(request_id)
+        assert resolved is not None
+        assert resolved.status == "answered", resolved.status
+        assert resolved.lifecycle_state == "ending"
+
+        lifecycle: list[tuple[str, str]] = []
+        while not queue.empty():
+            event = queue.get_nowait()
+            payload = getattr(event, "payload", None)
+            if not isinstance(payload, dict):
+                continue
+            item = payload.get("item") if isinstance(payload.get("item"), dict) else payload
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "")
+            if kind not in {"interaction_update", "approval_response"}:
+                continue
+            inner = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            lifecycle.append((kind, str(inner.get("state") or inner.get("lifecycle") or "")))
+        assert ("interaction_update", "processing") in lifecycle, lifecycle
+        assert ("approval_response", "ending") in lifecycle, lifecycle
+
+        await _await_continuation(registry)
+        assert (work_root / "approved.md").read_text(encoding="utf-8") == "approved content\n"
+    finally:
+        context.hub.unsubscribe(THREAD_ID, queue)
+        registry.clear()
         await handle.close()

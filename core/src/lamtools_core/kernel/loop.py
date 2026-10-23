@@ -50,6 +50,7 @@ from lamtools_core.context_compaction_budget import (
 from lamtools_core.dialogue_records import COMPACTION_RECORD, build_compaction_record
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import (
+    HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER,
     TAIL_SYSTEM_MESSAGE_MARKER,
     ChatMessage,
     LLMClient,
@@ -71,6 +72,17 @@ from lamtools_core.llm.retry import (
     stream_with_retry,
 )
 from lamtools_core.plugins import HookEvent
+from lamtools_core.prompt.movable import (
+    MOVABLE_CONTEXT_METADATA_KEY,
+    is_movable_context_notice,
+)
+from lamtools_core.runtime.context_delta import is_runtime_context_delta
+from lamtools_core.app.tool_freeze import reset_session_tool_freeze
+from lamtools_core.runtime.goal_continuation import (
+    GOAL_CONTINUATION_KEY,
+    goal_continuation_message,
+    is_goal_continuation,
+)
 from lamtools_core.runtime import (
     CompletionGate,
     RuntimeCheckpointStore,
@@ -224,6 +236,57 @@ def _message_history_seq(message: ChatMessage) -> int:
     return value if value > 0 else 0
 
 
+def _retained_history_messages(
+    history: list[ChatMessage],
+    replacement_messages: list[ChatMessage],
+    request_only_ids: set[int],
+) -> list[ChatMessage]:
+    """Map request-bound retained copies back to their durable originals.
+
+    user:“图片以原图发送，那么在压缩之后还是以原图追加吗？”+压缩保留的消息如果只是
+    请求期的降级副本，必须按 history_seq 找回原始历史，避免图片被 id 过滤掉或把低清副本写回存储。
+    """
+    originals_by_seq: dict[int, ChatMessage] = {}
+    for message in history:
+        seq = _message_history_seq(message)
+        if seq > 0:
+            originals_by_seq[seq] = message
+    result: list[ChatMessage] = []
+    for message in replacement_messages:
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        if message.role == "system" and metadata.get("key") == "context_compaction_summary":
+            continue
+        seq = _message_history_seq(message)
+        original = originals_by_seq.get(seq) if seq > 0 else None
+        if original is not None:
+            if metadata.get("lam_compaction_resume"):
+                if not isinstance(original.metadata, dict):
+                    original.metadata = {}
+                original.metadata["lam_compaction_resume"] = True
+            result.append(original)
+            continue
+        if id(message) in request_only_ids:
+            continue
+        result.append(message)
+    return result
+
+
+def compaction_input_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Return the messages a summarizer may read.
+
+    Context notices, runtime deltas and goal-continuation reminders are
+    bookkeeping added by Sunday, not conversation; summarizing them would turn
+    one internal reminder into permanent summary text.
+    """
+    return [
+        message
+        for message in messages
+        if not is_movable_context_notice(message)
+        and not is_runtime_context_delta(message)
+        and not is_goal_continuation(message)
+    ]
+
+
 def _history_seq_set(value: Any) -> set[int]:
     if not isinstance(value, list):
         return set()
@@ -274,11 +337,28 @@ def _strip_internal_message_metadata(messages: list[ChatMessage]) -> list[ChatMe
     return result
 
 
+def _historical_tail_copy(message: ChatMessage) -> ChatMessage:
+    """Store an emitted tail update as an in-place historical message.
+
+    user:“当存在更改时，将更改内容追加到最后，但是不动前面的”+通知只在发出它的那一步位于末尾；
+    写进持久历史后原地不动，下一步起成为可复用前缀的一部分。
+    """
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    return replace(
+        message,
+        metadata={
+            **metadata,
+            TAIL_SYSTEM_MESSAGE_MARKER: False,
+            HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER: True,
+        },
+    )
+
+
 def _stamp_message_origin(message: ChatMessage, step_index: int) -> None:
-    """Record the step that produced *message*.
+    """Record the model-response counter at which *message* entered history.
 
     Neutral bookkeeping, not policy: the kernel does not decide how long an
-    image may stay visible, but the app layer needs the arrival step to know
+    image may stay visible, but the app layer needs the arrival counter to know
     when a picture is past its full-fidelity request (see
     ``lamtools_core.llm.image_payload``).
     """
@@ -287,12 +367,26 @@ def _stamp_message_origin(message: ChatMessage, step_index: int) -> None:
     message.metadata.setdefault(MESSAGE_ADDED_AT_STEP, int(step_index))
 
 
-def _repair_incomplete_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
+def _repair_incomplete_tool_history(
+    messages: list[ChatMessage],
+    *,
+    session_id: str = "",
+) -> list[ChatMessage]:
     repaired: list[ChatMessage] = []
     pending: dict[str, LLMToolCall] = {}
+    # Observability only: the repair itself must stay byte-for-byte identical.
+    # Every entry records where the rewrite happened so the backend log can
+    # explain a one-off prompt-cache miss ("history was repaired at index N").
+    closed_calls: list[dict[str, Any]] = []
+    orphan_results: list[dict[str, Any]] = []
 
     def close_pending() -> None:
         for call in pending.values():
+            closed_calls.append({
+                "index": len(repaired),
+                "call_id": str(call.id or ""),
+                "tool": str(call.name or ""),
+            })
             repaired.append(ChatMessage(
                 role="tool",
                 name=call.name,
@@ -324,12 +418,24 @@ def _repair_incomplete_tool_history(messages: list[ChatMessage]) -> list[ChatMes
             and isinstance(previous.content, str)
             and isinstance(content, str)
         ):
+            orphan_results.append({
+                "index": len(repaired) - 1,
+                "call_id": str(message.tool_call_id or ""),
+                "merged_into_previous_user": True,
+                "content_chars": len(content),
+            })
             previous.content = f"{previous.content}\n\n{content}" if content else previous.content
             previous.metadata = {
                 **dict(previous.metadata or {}),
                 "history_repair": "orphaned_tool_result",
             }
             return
+        orphan_results.append({
+            "index": len(repaired),
+            "call_id": str(message.tool_call_id or ""),
+            "merged_into_previous_user": False,
+            "content_chars": len(content) if isinstance(content, str) else None,
+        })
         repaired.append(ChatMessage(
             role="user",
             content=content,
@@ -359,6 +465,25 @@ def _repair_incomplete_tool_history(messages: list[ChatMessage]) -> list[ChatMes
             }
     if pending:
         close_pending()
+    if closed_calls or orphan_results:
+        # One warning per repaired load, greppable as [kernel:history-repair].
+        # Only counts, ids and positions are logged — never message content.
+        _logger.warning(
+            "[kernel:history-repair] session=%s messages=%d dangling_calls=%d "
+            "orphan_results=%d first_repair_index=%d closed_calls=%s orphan_results_detail=%s "
+            "cache_note=provider_request_changes_at_the_first_repair_index_so_the_prefix_"
+            "before_it_may_be_re_read_once",
+            session_id or "-",
+            len(messages),
+            len(closed_calls),
+            len(orphan_results),
+            min(
+                [entry["index"] for entry in closed_calls]
+                + [entry["index"] for entry in orphan_results]
+            ),
+            json.dumps(closed_calls[:20], ensure_ascii=False, sort_keys=True),
+            json.dumps(orphan_results[:20], ensure_ascii=False, sort_keys=True),
+        )
     return repaired
 
 
@@ -819,10 +944,6 @@ class CoreLoopKernel:
         recent_successful_payloads: list[dict[str, Any]] = []
         explicit_input_errors: dict[str, ToolResult] = {}
         consecutive_failure_rounds = 0
-        tool_only_rounds = 0
-        tool_progress_pending = False
-        tool_progress_prompted = False
-        tool_progress_blocked_rounds = 0
 
         # Emit runtime.started event
         await self._emit_state_event(state, "runtime.started", "run started")
@@ -901,6 +1022,23 @@ class CoreLoopKernel:
 
                 # 5.3 Build model request
                 request = await self.kit.build_model_request(state, context)
+                # user:“当存在更改时，将更改内容追加到最后，但是不动前面的”+Kit 把变化生成为尾部通知；这里把它写进持久历史，之后每一步和重启后都留在原位。
+                movable_notices = request.metadata.pop("_movable_context_notices", None)
+                runtime_deltas = request.metadata.pop("_runtime_context_delta", None)
+                movable_seeded = bool(
+                    request.metadata.pop("_movable_context_seeded", False)
+                )
+                committed_updates = [
+                    *(runtime_deltas or []),
+                    *(movable_notices or []),
+                ]
+                if committed_updates:
+                    history.extend(
+                        _historical_tail_copy(message)
+                        for message in committed_updates
+                    )
+                if committed_updates or movable_seeded:
+                    await self._save_checkpoint(state)
                 request.metadata.update(_runtime_session_id=state.session_id,
                                         _runtime_run_id=state.run_id, _runtime_step=index)
                 await self._compact_request_if_needed(state, request, history=history)
@@ -1044,11 +1182,6 @@ class CoreLoopKernel:
                         "split it into smaller calls."
                     )
                 step.turn = turn
-                # A text reply acknowledges a pending progress request. Do not
-                # enforce a particular heading structure or ask the model to
-                # fill in missing sections.
-                tool_progress_acknowledged = tool_progress_pending and bool(turn.reply.strip())
-
                 # Kernel-level natural-stop signal (OpenAI-style): model
                 # produced a text reply with no tool calls. Kit MAY consume
                 # turn.is_natural_stop in decide_next as a done candidate.
@@ -1186,36 +1319,144 @@ class CoreLoopKernel:
                     for call in turn.tool_calls
                     if call.id not in blocked_results and call.requires_approval
                 ]
+                #: True when this step's tool calls were fully handled inside
+                #: the approval gate, so the normal parallel/sequential block
+                #: must not execute them a second time.
+                approval_batch_handled = False
                 if approval_calls:
-                    approval_call = approval_calls[0]
-                    # PermissionRequest hook — allows hook-driven auto-approve / deny
-                    perm_hook_result = await self._apply_permission_request_hook(state, approval_call)
-                    if not approval_call.requires_approval:
-                        # Hook auto-approved the call — skip waiting gate, proceed
+                    # Commit every call that does not need a decision before
+                    # parking. The assistant message is already in history; if
+                    # these stay unexecuted, history repair later fabricates an
+                    # "interrupted" result for work that was never attempted.
+                    for call in [
+                        candidate
+                        for candidate in turn.tool_calls
+                        if candidate.id not in blocked_results and candidate not in approval_calls
+                    ]:
+                        tool_results.append(
+                            await self._execute_call_and_writeback(
+                                state,
+                                call,
+                                blocked_results=blocked_results,
+                                step=step,
+                                index=index,
+                                history=history,
+                            )
+                        )
+
+                    waiting_call: ToolCall | None = None
+                    deferred_calls: list[ToolCall] = []
+                    for position, candidate in enumerate(approval_calls):
+                        # PermissionRequest hook — allows hook-driven
+                        # auto-approve / deny for each call in the batch.
+                        perm_hook_result = await self._apply_permission_request_hook(
+                            state, candidate
+                        )
+                        if not candidate.requires_approval:
+                            tool_results.append(
+                                await self._execute_call_and_writeback(
+                                    state,
+                                    candidate,
+                                    blocked_results=blocked_results,
+                                    step=step,
+                                    index=index,
+                                    history=history,
+                                )
+                            )
+                            continue
+                        if perm_hook_result is not None:
+                            blocked_results[candidate.id] = perm_hook_result
+                            tool_results.append(
+                                await self._execute_call_and_writeback(
+                                    state,
+                                    candidate,
+                                    blocked_results=blocked_results,
+                                    step=step,
+                                    index=index,
+                                    history=history,
+                                )
+                            )
+                            continue
+                        waiting_call = candidate
+                        deferred_calls = list(approval_calls[position + 1:])
+                        break
+
+                    approval_batch_handled = True
+                    if waiting_call is None:
+                        # Every call was auto-approved or denied by a hook; all
+                        # results are already committed above.
                         pass
-                    elif perm_hook_result is not None:
-                        # Hook denied the call — treat as blocked
-                        blocked_results[approval_call.id] = perm_hook_result
                     else:
+                        # The provider's tool-call id is only unique within one
+                        # response. Two agents (or two sessions) can both use
+                        # ``call_0``; the durable request identity must be
+                        # globally unambiguous because it is the routing key
+                        # for approval.respond.
+                        request_id = f"{state.session_id}:{state.run_id}:{waiting_call.id}"
+                        question_args = (
+                            waiting_call.arguments
+                            if waiting_call.name == "question"
+                            and isinstance(waiting_call.arguments, dict)
+                            else {}
+                        )
+                        question_context = str(question_args.get("context") or "").strip()
+                        request_kind = (
+                            "question" if waiting_call.name == "question" else "permission"
+                        )
+                        request_options, request_message = self._approval_request_options_and_message(
+                            waiting_call
+                        )
                         state.metadata["pending_approval"] = {
-                            "request_id": approval_call.id,
-                            "tool_call": approval_call.to_dict(),
+                            "request_id": request_id,
+                            "tool_call": waiting_call.to_dict(),
                             "response_index": index,
                             "status": "waiting",
+                            "asked_at_ms": int(time_module.time() * 1000),
+                            # Calls after the waiting one stay owned by this
+                            # batch. They get explicit results on continuation
+                            # instead of vanishing or being re-executed twice.
+                            "deferred_calls": [call.to_dict() for call in deferred_calls],
+                            # A crash between the checkpoint and the card event
+                            # used to leave a waiting turn with nothing to
+                            # answer. Recovery rebuilds the card from this
+                            # payload instead of guessing.
+                            "request_payload": {
+                                "request_id": request_id,
+                                "tool_name": waiting_call.name,
+                                "arguments": waiting_call.arguments,
+                                "request_kind": request_kind,
+                                "message": request_message,
+                                "metadata": dict(waiting_call.metadata),
+                                "options": request_options,
+                                **(
+                                    {"context": question_context}
+                                    if question_context
+                                    else {}
+                                ),
+                            },
                         }
                         state.metadata["pending_waiting_request"] = {
-                            "request_kind": "permission",
-                            "tool_call_id": approval_call.id,
-                            "tool_name": approval_call.name,
-                            "arguments": approval_call.arguments,
-                            "metadata": dict(approval_call.metadata),
-                            "message": self._approval_request_message(approval_call),
+                            "request_id": request_id,
+                            "request_kind": request_kind,
+                            "tool_call_id": waiting_call.id,
+                            "tool_name": waiting_call.name,
+                            "arguments": waiting_call.arguments,
+                            "metadata": dict(waiting_call.metadata),
+                            "message": request_message,
+                            # Recovery may rebuild the card from this record when
+                            # pending_approval was lost. Without the real options
+                            # it produced a card that asked the same question but
+                            # offered different (or no) choices.
+                            "options": request_options,
+                            **({"context": question_context} if question_context else {}),
                         }
                         step.metadata["pending_approval"] = state.metadata["pending_approval"]
                         decision = "wait"
                         step.decision = decision
                         final_decision = decision
-                        await self.kit.writeback(state, turn, tool_results, VerificationResult(passed=True), decision)
+                        await self.kit.writeback(
+                            state, turn, tool_results, VerificationResult(passed=True), decision
+                        )
                         state.loop_state = decision
                         if self.policy.persist_steps:
                             steps_log = state.metadata.setdefault("kernel_steps", [])
@@ -1223,36 +1464,88 @@ class CoreLoopKernel:
                         await self._save_checkpoint(state)
                         # The pending record is durable now, so a permission
                         # switch that landed in the window between the
-                        # pre-emission check and this save — the switch side
-                        # looked for a card *before* it existed — becomes
-                        # visible here.  If the live preset already covers the
-                        # call, release it on the spot instead of surfacing a
-                        # stale card.  This is the cheapest close of that
-                        # window: one extra permission read, no reconciliation.
+                        # pre-emission check and this save becomes visible
+                        # here. If the live preset already covers the call,
+                        # release it on the spot instead of surfacing a stale
+                        # card.
                         released_call = self._release_approval_if_live_preset_covers(
-                            state, step, approval_call
+                            state, step, waiting_call
                         )
                         if released_call is not None:
                             for _position, _existing in enumerate(turn.tool_calls):
                                 if _existing.id == released_call.id:
                                     turn.tool_calls[_position] = released_call
                                     break
+                            # Re-evaluate the deferred approvals against the
+                            # same live preset; execute what is now allowed and
+                            # hand the rest back as explicit deferrals.
+                            released = [released_call]
+                            still_waiting: list[ToolCall] = []
+                            for candidate in deferred_calls:
+                                refreshed = self._reprepare_against_live_permissions(candidate)
+                                if refreshed.requires_approval:
+                                    still_waiting.append(refreshed)
+                                else:
+                                    released.append(refreshed)
+                            for candidate in released:
+                                tool_results.append(
+                                    await self._execute_call_and_writeback(
+                                        state,
+                                        candidate,
+                                        blocked_results=blocked_results,
+                                        step=step,
+                                        index=index,
+                                        history=history,
+                                    )
+                                )
+                            for candidate in still_waiting:
+                                blocked_results[candidate.id] = ToolResult(
+                                    call_id=candidate.id,
+                                    name=candidate.name,
+                                    status="blocked",
+                                    content=(
+                                        "Deferred: this call still requires its own approval. "
+                                        "Re-issue it as a separate call if it is still needed."
+                                    ),
+                                    metadata={"deferred_approval": True},
+                                )
+                                tool_results.append(
+                                    await self._execute_call_and_writeback(
+                                        state,
+                                        candidate,
+                                        blocked_results=blocked_results,
+                                        step=step,
+                                        index=index,
+                                        history=history,
+                                    )
+                                )
                             decision = "continue"
                             step.decision = decision
                             final_decision = decision
-                            # Correct the "wait" the gate recorded a moment ago:
-                            # this turn is proceeding, not waiting.
+                            state.metadata.pop("pending_approval", None)
+                            state.metadata.pop("pending_waiting_request", None)
+                            step.metadata.pop("pending_approval", None)
+                            state.loop_state = decision
                             await self.kit.writeback(
-                                state, turn, tool_results, VerificationResult(passed=True), decision
+                                state,
+                                turn,
+                                tool_results,
+                                VerificationResult(passed=True),
+                                decision,
                             )
                             await self._save_checkpoint(state)
                         else:
                             await self._emit_tool_waiting_for_approval(
                                 state,
-                                approval_call,
+                                waiting_call,
                                 response_index=index,
                             )
-                            await self._emit_approval_request(state, approval_call, response_index=index)
+                            await self._emit_approval_request(
+                                state,
+                                waiting_call,
+                                response_index=index,
+                                request_id=request_id,
+                            )
                             break
                 parallel_names = set(self.policy.parallel_tool_names)
                 can_parallelize_named_tools = (
@@ -1260,7 +1553,7 @@ class CoreLoopKernel:
                     and len(turn.tool_calls) > 1
                     and all(call.name in parallel_names for call in turn.tool_calls)
                 )
-                if (self.policy.parallel_tool_calls or can_parallelize_named_tools) and len(turn.tool_calls) > 1:
+                if not approval_batch_handled and (self.policy.parallel_tool_calls or can_parallelize_named_tools) and len(turn.tool_calls) > 1:
                     # Parallel execution (OpenAI Agents SDK style): emit all
                     # started events, run concurrently with optional cap,
                     # then emit finished events and write back in original order.
@@ -1291,10 +1584,10 @@ class CoreLoopKernel:
                         step.tool_steps.append(RuntimeToolStep(call=call, result=result))
                         await self._emit_tool_finished(state, call, result, response_index=index)
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
-                        _stamp_message_origin(tool_message, index)
+                        _stamp_message_origin(tool_message, state.turn_count)
                         history.append(tool_message)
                         await self._save_checkpoint(state)
-                else:
+                elif not approval_batch_handled:
                     # Sequential execution (OpenAI Codex default for shell-safety)
                     for call_index, call in enumerate(turn.tool_calls):
                         await self._emit_tool_started(state, call, response_index=index)
@@ -1309,7 +1602,7 @@ class CoreLoopKernel:
                         await self._emit_tool_finished(state, call, result, response_index=index)
                         # 5.9 Append formatted tool result to history
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
-                        _stamp_message_origin(tool_message, index)
+                        _stamp_message_origin(tool_message, state.turn_count)
                         history.append(tool_message)
                         await self._save_checkpoint(state)
                         # Collect (do not yet apply) new guidance: the rest of the
@@ -1351,6 +1644,7 @@ class CoreLoopKernel:
                         ])
                         break
 
+                # user:“直接把这个功能删掉，一点都不要留”+(工具调用不再附加汇报计数、提示或暂停门槛)。
                 payload_reassessment_required = False
                 duplicate_payload_blocked = any(
                     bool(result.metadata.get("duplicate_substantive_payload"))
@@ -1369,7 +1663,6 @@ class CoreLoopKernel:
                     recent_successful_payloads.append(payload)
                     del recent_successful_payloads[:-int(self.policy.identical_tool_result_window or 12)]
                 if payload_reassessment_required:
-                    tool_progress_pending = True
                     history.append(ChatMessage(
                         role="user",
                         content=(
@@ -1382,43 +1675,6 @@ class CoreLoopKernel:
                     ))
                     step.metadata["substantive_payload_reassessment_required"] = True
                     await self._save_checkpoint(state)
-
-                executed_tool_round = any(result.status != "blocked" for result in tool_results)
-
-                progress_gate_blocked = any(
-                    bool(result.metadata.get("tool_progress_required")) for result in tool_results
-                )
-                if progress_gate_blocked:
-                    tool_progress_blocked_rounds += 1
-                    if tool_progress_blocked_rounds >= 2:
-                        message = (
-                            "Tool progress did not converge after two reminders. The run is paused and can be "
-                            "resumed after reporting confirmed facts, remaining uncertainty, and the next action."
-                        )
-                        step.decision = "wait"
-                        step.metadata["tool_progress_no_progress"] = True
-                        state.metadata["tool_progress"] = {
-                            "status": "waiting",
-                            "response_index": index,
-                            "recoverable": True,
-                        }
-                        state.metadata["pending_waiting_request"] = {
-                            "request_kind": "no_progress",
-                            "message": message,
-                        }
-                        final_decision = "wait"
-                        state.loop_state = "wait"
-                        await self.kit.writeback(
-                            state,
-                            turn,
-                            tool_results,
-                            VerificationResult(passed=False, required=True, summary=message),
-                            "wait",
-                        )
-                        if self.policy.persist_steps:
-                            state.metadata.setdefault("kernel_steps", []).append(self._summarize_step(step))
-                        await self._save_checkpoint(state)
-                        break
 
                 repeat_observation = self._observe_repeated_tool_failures(
                     turn.tool_calls,
@@ -1473,52 +1729,6 @@ class CoreLoopKernel:
                         "response_index": index,
                     }
                     await self._save_checkpoint(state)
-
-                if (
-                    tool_progress_acknowledged
-                    and not payload_reassessment_required
-                ):
-                    tool_progress_pending = False
-                    tool_only_rounds = 0
-                    tool_progress_prompted = False
-                    tool_progress_blocked_rounds = 0
-                    step.metadata["tool_progress_acknowledged"] = True
-                    state.metadata["tool_progress"] = {
-                        "status": "acknowledged",
-                        "response_index": index,
-                    }
-                    await self._save_checkpoint(state)
-                elif turn.tool_calls and not turn.reply.strip() and executed_tool_round:
-                    tool_only_rounds += 1
-                    limit = self.policy.max_tool_only_rounds_without_progress
-                    if (
-                        limit is not None
-                        and limit > 0
-                        and tool_only_rounds >= limit
-                        and not tool_progress_prompted
-                    ):
-                        history.append(ChatMessage(
-                            role="user",
-                            content=(
-                                "[TOOL_PROGRESS_REQUIRED] Before using more tools, briefly report "
-                                "[已确认事实] [剩余不确定性] [下一步]. Do not repeat prior evidence, and do not "
-                                "claim a result that has not been observed."
-                            ),
-                            metadata={"key": "tool_progress_required", "internal": True},
-                        ))
-                        step.metadata["tool_progress_required"] = True
-                        tool_progress_pending = True
-                        tool_progress_prompted = True
-                        state.metadata["tool_progress"] = {
-                            "status": "required",
-                            "response_index": index,
-                            "tool_only_rounds": tool_only_rounds,
-                        }
-                        await self._save_checkpoint(state)
-                elif turn.reply.strip():
-                    tool_only_rounds = 0
-                    tool_progress_prompted = False
-                    tool_progress_blocked_rounds = 0
 
                 failed_pairs = [
                     (call, result)
@@ -1907,6 +2117,8 @@ class CoreLoopKernel:
             else:
                 user_msg = ChatMessage(role="user", content=current_user_content,
                                        metadata={"turn_id": str(state.metadata.get("turn_id") or state.run_id)})
+            if turn_input.metadata.get(GOAL_CONTINUATION_KEY):
+                user_msg.metadata[GOAL_CONTINUATION_KEY] = True
             initial_ids = list(turn_input.metadata.get("initial_guidance_ids") or [])
             if initial_ids:
                 user_msg.metadata["guidance_ids"] = initial_ids
@@ -1915,8 +2127,18 @@ class CoreLoopKernel:
                 for message_id in message.metadata.get("guidance_ids", [])
             }
             if not initial_ids or not set(initial_ids).issubset(known_ids):
+                # user:“作为下一轮的输入时，它应该是以自己本身的清晰度输入”+用户本轮带入的图片
+                # 和下一条工具图片使用同一个计数口径，保证第一次请求仍看原图。
+                _stamp_message_origin(user_msg, state.turn_count)
                 history.append(user_msg)
                 new_messages.append(user_msg)
+        # user:“不是合并成一条消息，是都追加进去，但不是同一条消息”+排队消息保持原样，
+        # 目标提醒单独成一条，压缩时只剔除提醒。
+        reminder = str(turn_input.metadata.get("goal_continuation_text") or "").strip()
+        if reminder:
+            reminder_msg = goal_continuation_message(reminder)
+            history.append(reminder_msg)
+            new_messages.append(reminder_msg)
         await self._append_history_checkpoint(state, new_messages)
         _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
         return new_messages
@@ -2243,7 +2465,7 @@ class CoreLoopKernel:
                 and message.metadata.get("key") == "context_compaction_summary"
             )
         ]
-        return _repair_incomplete_tool_history(messages)
+        return _repair_incomplete_tool_history(messages, session_id=session_id)
 
     async def _history_max_seq(self, session_id: str) -> int | None:
         """Read the durable history high-water mark when the store exposes it."""
@@ -3670,6 +3892,37 @@ class CoreLoopKernel:
                 raw=raw,
             )
 
+    async def _execute_call_and_writeback(
+        self,
+        state: RuntimeState,
+        call: ToolCall,
+        *,
+        blocked_results: dict[str, ToolResult],
+        step: KernelStep,
+        index: int,
+        history: list[ChatMessage],
+    ) -> ToolResult:
+        """Execute one call and commit its result before a batch parks.
+
+        When a step contains both side-effecting calls and an approval wait,
+        the non-approval calls must run *before* the run ends.  Otherwise the
+        history repair later fabricates "interrupted" results for work that was
+        never attempted and the model loses both the output and the request.
+        """
+        await self._emit_tool_started(state, call, response_index=index)
+        if call.id in blocked_results:
+            result = blocked_results[call.id]
+        else:
+            result = await self._execute_tool(state, call, forensic_step=index)
+            result = await self._apply_post_tool_hook(state, call, result)
+        step.tool_steps.append(RuntimeToolStep(call=call, result=result))
+        await self._emit_tool_finished(state, call, result, response_index=index)
+        tool_message = await self.kit.format_tool_result_for_model(state, call, result)
+        _stamp_message_origin(tool_message, state.turn_count)
+        history.append(tool_message)
+        await self._save_checkpoint(state)
+        return result
+
     async def _execute_tools_parallel(
         self, state: RuntimeState, calls: list[ToolCall], *, forensic_step: int | None = None,
     ) -> list[ToolResult]:
@@ -4001,8 +4254,11 @@ class CoreLoopKernel:
         before_messages = len(request.messages)
         request_messages_before_compaction = list(request.messages)
         allow_previous = request.metadata.get("allow_previous_model_compaction") is not False
+        # user:“压缩时把最新的给它（相当于把后面的所有差异都给合并，修回成一个正版）”+通知不再参与压缩，压缩后顶部会直接换成最新内容。
+        # user:“但是用压缩后自动追加用户消息里面剔除”+目标续跑自动追加的提醒不进入压缩输入。
+        compaction_messages = compaction_input_messages(request.messages)
         execution = await compaction_controller.compact(
-            list(request.messages),
+            compaction_messages,
             budget=budget,
             timeout=request.timeout,
             current_model=current_model,
@@ -4083,12 +4339,11 @@ class CoreLoopKernel:
                     for message in request_messages_before_compaction
                     if id(message) not in history_message_ids
                 }
-                compacted_history = [
-                    message
-                    for message in result.replacement_messages
-                    if id(message) not in request_only_ids
-                    and message.metadata.get("key") != "context_compaction_summary"
-                ]
+                compacted_history = _retained_history_messages(
+                    history,
+                    result.replacement_messages,
+                    request_only_ids,
+                )
                 summary_history = next(
                     (
                         message
@@ -4109,6 +4364,58 @@ class CoreLoopKernel:
                 # positionally: invalidate the incremental counter so the
                 # tail persist falls back to one atomic full replace.
                 self._persisted_len = None
+        # user:“每次压缩的时候重建为新态”+压缩已经让前缀失效，用最新块内容重建压缩周期；
+        # 此前的尾部通知已从压缩输入排除，不再保留。
+        rebuild_movable = getattr(self.kit, "rebuild_movable_system_context", None)
+        replaced_system_message: ChatMessage | None = None
+        if callable(rebuild_movable):
+            rebuild_movable(state)
+            # The replacement above still carries the pre-compaction system
+            # prompt. The epoch has just been rebuilt from the latest blocks,
+            # so this request must use that authoritative version too.
+            epoch = state.metadata.get(MOVABLE_CONTEXT_METADATA_KEY)
+            if (
+                isinstance(epoch, dict)
+                and isinstance(epoch.get("system_prompt"), str)
+                and request.messages
+                and request.messages[0].role == "system"
+            ):
+                replaced_system_message = request.messages[0]
+                request.messages[0] = ChatMessage(
+                    role="system",
+                    content=epoch["system_prompt"],
+                )
+        # user:“等待下一次压缩或者新会话再重建”+压缩是工具数组重新冻结的时刻。
+        reset_session_tool_freeze(state.session_id)
+        # user:“压缩时把最新的给它”+压缩把历史里的增量清掉了，补一张完整便签作为新基线。
+        emit_runtime_snapshot = getattr(
+            self.kit, "emit_runtime_context_snapshot", None
+        )
+        if callable(emit_runtime_snapshot):
+            snapshot = emit_runtime_snapshot(state)
+            if snapshot is not None:
+                if history is not None:
+                    history.append(_historical_tail_copy(snapshot))
+                request.messages.append(snapshot)
+        # The fit above used the old system prefix. If the rebuilt prompt is so
+        # large that the request no longer fits the hard window, keep the old
+        # frozen prompt for this one request rather than sending an over-limit
+        # request; the next step still starts from the rebuilt epoch.
+        if replaced_system_message is not None:
+            try:
+                estimated = self._estimate_request_tokens(request, fast=True)
+            except Exception:  # noqa: BLE001 — a guard must not break compaction
+                estimated = 0
+            if estimated > window:
+                request.messages[0] = replaced_system_message
+                _logger.warning(
+                    "[kernel:compaction] rebuilt system prompt exceeds window: "
+                    "estimated=%d window=%d sid=%s; keeping the previous prompt "
+                    "for this request",
+                    estimated,
+                    window,
+                    state.session_id,
+                )
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True
@@ -4603,23 +4910,27 @@ class CoreLoopKernel:
         call: ToolCall,
         *,
         response_index: int | None = None,
+        request_id: str = "",
     ) -> None:
         """Emit an approval request event before executing a tool that
         requires approval (OpenAI Codex-style ExecApprovalRequest)."""
         options, message = self._approval_request_options_and_message(call)
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        context = str(args.get("context") or "").strip() if call.name == "question" else ""
         event = CoreEvent(
             name="runtime.approval_request",
             category="decision",
             payload={
                 "tool_call_id": call.id,
-                "request_id": call.id,
+                "request_id": request_id or call.id,
                 "tool_name": call.name,
                 "arguments": call.arguments,
                 "reason": call.reason,
-                "request_kind": "permission",
+                "request_kind": "question" if call.name == "question" else "permission",
                 "message": message,
                 "metadata": dict(call.metadata) if isinstance(call.metadata, dict) else {},
                 "options": options,
+                **({"context": context} if context else {}),
                 **({"response_index": response_index} if response_index is not None else {}),
             },
             session_id=state.session_id,
@@ -4642,18 +4953,31 @@ class CoreLoopKernel:
             if isinstance(raw_options, list) and raw_options:
                 options = [
                     {
-                        "id": str(opt.get("label") or opt.get("id") or f"option-{i + 1}"),
+                        # The label is display text, never an identity or a
+                        # decision verb. Using it as the option id made a
+                        # literal "cancel" option mean "user declined".
+                        "id": f"option-{i + 1}",
                         "label": str(opt.get("label") or f"选项 {i + 1}"),
                         "description": str(opt.get("description") or ""),
-                        "response": str(opt.get("label") or ""),
+                        "response": str(opt.get("label") or f"选项 {i + 1}"),
                     }
                     for i, opt in enumerate(raw_options)
                     if isinstance(opt, dict)
                 ]
             else:
                 options = [
-                    {"id": "confirm", "label": "确认", "description": "确认继续", "response": "confirm"},
-                    {"id": "cancel", "label": "取消", "description": "取消当前操作", "response": "cancel"},
+                    {
+                        "id": "option-confirm",
+                        "label": "确认并继续",
+                        "description": "确认继续",
+                        "response": "确认并继续",
+                    },
+                    {
+                        "id": "option-skip",
+                        "label": "跳过问题",
+                        "description": "不回答，按合理默认继续",
+                        "response": "（用户跳过了这个问题，未提供回答。）",
+                    },
                 ]
             return options, message
         options = [

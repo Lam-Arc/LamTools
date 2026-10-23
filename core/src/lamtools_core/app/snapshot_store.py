@@ -19,6 +19,7 @@ from lamtools_core.snapshot import (
     reconcile_terminal_requests,
     recompute_thread_status,
 )
+from lamtools_core.turn.model import LIVE_RUNTIME_STATUSES
 
 from .event_store import CORE_RUN_ITEM_METHOD, AppEventEnvelope
 
@@ -553,6 +554,9 @@ class SqlAlchemyThreadSnapshotStore:
             state["core"] = core
         core["items"] = items
         core["item_order"] = order
+        decisions = await self._load_open_interactions(db, thread_id)
+        core["decisions"] = decisions
+        core["interactions"] = decisions
         return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
 
     async def load_metadata(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
@@ -576,7 +580,81 @@ class SqlAlchemyThreadSnapshotStore:
             state["core"] = core
         core.setdefault("items", {})
         core.setdefault("item_order", [])
+        decisions = await self._load_open_interactions(db, thread_id)
+        core["decisions"] = decisions
+        core["interactions"] = decisions
         return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
+
+    async def _load_open_interactions(
+        self, db: AsyncSession, thread_id: str
+    ) -> list[dict[str, Any]]:
+        """Open decisions as a first-class snapshot field.
+
+        The transcript window may not include the turn that owns an older
+        card; the composer must still be able to answer it.  This query is
+        indexed by (thread_id, status) and only returns open/deferred rows.
+
+        用户要求（原文）：“池子的持久化做了吗”
+        池子的事实源是 core_turn_interactions（创建即落库，回答/取消即终态），
+        快照每次读取都用本查询覆盖 core.decisions / core.interactions；
+        不依赖消息树，也不依赖快照 JSON 里的事件归约结果。
+        """
+        try:
+            from .core_db import CoreTurnInteraction
+
+            rows = (
+                await db.execute(
+                    select(CoreTurnInteraction)
+                    .where(
+                        CoreTurnInteraction.thread_id == thread_id,
+                        CoreTurnInteraction.status.in_(
+                            ("open", "deferred", "processing")
+                        ),
+                    )
+                    .order_by(CoreTurnInteraction.created_seq.asc())
+                )
+            ).scalars().all()
+        except BaseException:
+            return []
+        return [
+            {
+                "interaction_id": str(row.interaction_id),
+                "turn_id": str(row.turn_id),
+                "run_id": str(row.run_id or ""),
+                "scope": str(row.scope or "main"),
+                "kind": str(row.kind),
+                "status": str(row.status),
+                "lifecycle": (
+                    "processing" if str(row.status) == "processing" else "appearing"
+                ),
+                "decision_id": "dec_"
+                + __import__("hashlib")
+                .sha256(str(row.interaction_id).encode("utf-8"))
+                .hexdigest()[:32],
+                "sequence": int(row.created_seq or 0),
+                "project_id": str(
+                    (row.metadata_json or {}).get("project_id") or ""
+                ),
+                "agent_name": str(
+                    (row.metadata_json or {}).get("agent_name") or ""
+                ),
+                "agent_session_id": str(
+                    (row.metadata_json or {}).get("agent_session_id") or ""
+                ),
+                "delivered_by": str(
+                    (row.metadata_json or {}).get("delivered_by") or "main"
+                ),
+                "tool_call_id": str(row.tool_call_id or ""),
+                "title": str(row.title or ""),
+                "body": str(row.body or ""),
+                "context": str(row.context_text or ""),
+                "options": list(row.options_json or []),
+                "expires_at_ms": int(row.expires_at_ms or 0),
+                "answer": row.answer_json,
+                "metadata": dict(row.metadata_json or {}),
+            }
+            for row in rows
+        ]
 
     async def load_page(
         self,
@@ -1155,7 +1233,7 @@ def prune_orphan_turns(state: dict[str, Any]) -> dict[str, Any]:
     core = state.get("core")
     core_turns = core.get("turns") if isinstance(core, dict) else None
     containers = [item for item in (turns, core_turns) if isinstance(item, dict)]
-    active = {"running", "waiting", "interrupting"}
+    active = LIVE_RUNTIME_STATUSES
     evidence: dict[str, dict[str, Any]] = {}
     for container in containers:
         for turn_id, turn in container.items():

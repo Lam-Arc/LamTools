@@ -972,3 +972,70 @@ async def test_member_status_is_published_mid_turn_when_it_finishes(tmp_path):
     assert len(items) == 1
     assert items[0].payload["sub_agent"]["status"] == "idle"
     assert items[0].metadata["sub_agent"]["name"] == "worker"
+
+
+class _FakeAgentRunStore:
+    def __init__(self) -> None:
+        self.runs: dict[str, object] = {}
+
+    async def upsert_agent_run(self, run):
+        self.runs[run.agent_run_id] = run
+        return run
+
+    async def list_agent_runs(self, *, parent_turn_id=None, parent_thread_id=None, live_only=False):
+        return [
+            run
+            for run in self.runs.values()
+            if (not parent_thread_id or run.parent_thread_id == parent_thread_id)
+            and (not parent_turn_id or run.parent_turn_id == parent_turn_id)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_mirrors_durable_records_into_agent_runs(tmp_path):
+    from lamtools_core.turn import AgentRun
+
+    store = _FakeAgentRunStore()
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent",
+        runner=FakeRunner(tmp_path),
+        database_path=tmp_path / "state.sqlite3",
+        agent_run_store=store,
+    )
+    try:
+        record = SubAgentRecord(
+            parent_thread_id="parent",
+            type="execute",
+            name="reader",
+            model_id="test-model",
+            reasoning_level="high",
+            status="running",
+            source_run_id="run-1",
+            source_turn_id="turn-1",
+            sub_session_id="parent:sub:reader",
+            lease_until=time.time() + 60,
+            started_at=time.time(),
+        )
+        supervisor._save(record)
+        await asyncio.sleep(0)
+        run = store.runs["parent:agent:reader"]
+        assert run.parent_turn_id == "turn-1"
+        assert run.parent_run_id == "run-1"
+        assert run.status == "running"
+        assert run.lease_until_ms > 0
+        assert run.sub_session_id == "parent:sub:reader"
+
+        # A row that outlived its sqlite record is hidden, not resurrected.
+        store.runs["parent:agent:stale"] = AgentRun(
+            agent_run_id="parent:agent:stale",
+            parent_turn_id="turn-old",
+            parent_thread_id="parent",
+            name="stale",
+            status="idle",
+        )
+        mirrored = await supervisor.sync_agent_runs()
+        assert mirrored == 1
+        assert store.runs["parent:agent:stale"].status == "deleted"
+        assert store.runs["parent:agent:reader"].status == "running"
+    finally:
+        await supervisor.shutdown()

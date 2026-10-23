@@ -429,3 +429,52 @@ async def test_rollback_is_a_persisted_sync_boundary_that_requires_a_snapshot(tm
         assert change["entity"]["event"]["payload"]["target_turn_id"] == "turn-2"
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_reappending_an_event_reuses_its_existing_sync_change(tmp_path: Path) -> None:
+    """A retained sync row must not turn a retried event into a crash.
+
+    Sub-agent recovery re-publishes deterministic member status events. Event
+    retention may already have removed the event row while the sync journal row
+    survives; the retry must update that row, not insert a duplicate key.
+    """
+    from sqlalchemy import select
+
+    from lamtools_core.app.core_db import CoreAppEvent
+
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        event = AppEventInput(
+            event_id="event-replayed",
+            thread_id="thread-1",
+            method="core/runItem",
+            payload={"kind": "status", "status": "paused"},
+        )
+        async with db.session_factory() as session:
+            await db.event_store.append(session, event)
+            await session.commit()
+
+        async with db.session_factory() as session:
+            await session.execute(
+                delete(CoreAppEvent).where(CoreAppEvent.event_id == "event-replayed")
+            )
+            await session.commit()
+
+        async with db.session_factory() as session:
+            replayed = await db.event_store.append(session, event)
+            await session.commit()
+
+        assert replayed.event_id == "event-replayed"
+        async with db.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(CoreSyncChange).where(
+                        CoreSyncChange.change_id == "event-replayed"
+                    )
+                )
+            ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].entity_json["event"]["event_id"] == "event-replayed"
+    finally:
+        await db.close()

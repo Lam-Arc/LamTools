@@ -3816,10 +3816,11 @@ function isLowValueControlResult(part: MessagePart, result: string): boolean {
   return /验证通过|verification passed|design verified|ok/i.test(result)
 }
 
-/** 只有待处理中的审批卡会渲染，因此状态标签只覆盖未答复的三种形态。 */
+/** 卡片状态与决策池 lifecycle 一致：待处理 → 处理中 → 完成。 */
 function decisionStatusLabel(part: MessagePart): string {
-  if (part.status === 'pending') return t("等待选择")
+  if (part.status === 'pending') return t("待处理")
   if (part.status === 'running') return t("处理中")
+  if (part.status === 'completed') return t("完成")
   if (part.status === 'error') return t("失败")
   return ''
 }

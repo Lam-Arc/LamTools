@@ -37,7 +37,10 @@ export {
   selectChatMessages,
   selectLatestTurnStatus,
   selectQueueTray,
+  selectTurnControl,
   type CoreAppServerChatMessage,
+  type CoreTurnActionMode,
+  type CoreTurnControl,
 } from './selectors.ts'
 
 export {
@@ -101,7 +104,10 @@ export {
   coreDecisionTitle,
   coreDecisionToolName,
   collectDecisionParts,
+  coreKnownRequestIds,
   selectPendingCoreDecisions,
+  selectPendingInteractionDecisions,
+  selectVisiblePendingDecisions,
   type CoreDecisionChoice,
   type CoreDecisionFact,
   type CoreDecisionFactTone,

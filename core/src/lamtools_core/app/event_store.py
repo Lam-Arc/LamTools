@@ -140,17 +140,36 @@ class SqlAlchemyAppEventStore:
                 raise
             envelope = self._to_envelope(row)
             if self.sync_change_model is not None:
-                db.add(self.sync_change_model(
-                    change_id=envelope.event_id,
-                    workspace_id=self.workspace_id,
-                    entity_type=envelope.entity_type,
-                    event_type=envelope.event_type or envelope.method,
-                    operation="upsert",
-                    entity_id=envelope.thread_id,
-                    thread_id=envelope.thread_id,
-                    revision=envelope.revision,
-                    entity_json={"event": envelope.to_dict()},
-                ))
+                # Event retention can remove an event row while its sync
+                # journal row survives. Re-publishing the same deterministic
+                # event id (member status recovery does this) must update that
+                # row instead of inserting a duplicate primary key.
+                existing_change = await db.scalar(
+                    select(self.sync_change_model).where(
+                        self.sync_change_model.change_id == envelope.event_id
+                    )
+                )
+                if existing_change is None:
+                    db.add(self.sync_change_model(
+                        change_id=envelope.event_id,
+                        workspace_id=self.workspace_id,
+                        entity_type=envelope.entity_type,
+                        event_type=envelope.event_type or envelope.method,
+                        operation="upsert",
+                        entity_id=envelope.thread_id,
+                        thread_id=envelope.thread_id,
+                        revision=envelope.revision,
+                        entity_json={"event": envelope.to_dict()},
+                    ))
+                else:
+                    if hasattr(existing_change, "entity_json"):
+                        existing_change.entity_json = {"event": envelope.to_dict()}
+                    if hasattr(existing_change, "revision"):
+                        existing_change.revision = envelope.revision
+                    if hasattr(existing_change, "event_type"):
+                        existing_change.event_type = (
+                            envelope.event_type or envelope.method
+                        )
             return envelope
 
         if last_error is not None:

@@ -3,6 +3,7 @@ import type {
   CoreAppCommandCatalogItem,
   CoreAppEvent,
   CoreAppInputItem,
+  CoreAppInteraction,
   CoreAppQueueItem,
   CoreAppRequestState,
   CoreAppSnapshot,
@@ -429,7 +430,14 @@ export function createCoreAppServerRuntimeController<
     // running, even when it contains different content. The CAS revision is not
     // a pure content cursor (see `isStaleSnapshot`), so a snapshot with a newer
     // content cursor is never treated as stale.
-    if (currentState && isStaleSnapshot(incomingVersion, currentState)) return
+    if (currentState && isStaleSnapshot(incomingVersion, currentState)) {
+      // Request resolution is monotonic even when the snapshot is stale. A
+      // resolved approval whose event/snapshot lost the revision race used to
+      // leave the card visible for the rest of the session (the user clicked
+      // it again and got "no pending approval").
+      adoptResolvedRequestStates(currentState.snapshot as CoreAppSnapshot, incoming)
+      return
+    }
     // The guard must see the received set BEFORE this snapshot's ids are
     // recorded, otherwise "unseen event" would always be satisfied (an
     // incoming snapshot's own ids would count as received).
@@ -450,6 +458,7 @@ export function createCoreAppServerRuntimeController<
         currentState.snapshot.revision = incomingVersion.revision
         currentState.snapshot.snapshot_seq = incomingVersion.snapshotSeq
       }
+      adoptResolvedRequestStates(current, incoming)
       return
     }
     if (!sessionStateStore.applySnapshot(incoming)) return
@@ -463,6 +472,19 @@ export function createCoreAppServerRuntimeController<
       receivedEventIds.clear()
     }
     runtime.state = sessionStateStore.get(incoming.thread_id)?.snapshot as Snapshot
+  }
+
+  function adoptResolvedRequestStates(
+    current: CoreAppSnapshot | null,
+    incoming: CoreAppSnapshot,
+  ): void {
+    if (!current) return
+    const merged = mergeResolvedRequestStates(current, incoming)
+    if (!merged) return
+    if (!sessionStateStore.applySnapshot(merged)) return
+    if (runtime.state?.thread_id === merged.thread_id) {
+      runtime.state = sessionStateStore.get(merged.thread_id)?.snapshot as Snapshot
+    }
   }
 
   function applyRuntimeEvent(
@@ -537,8 +559,8 @@ export function createCoreAppServerRuntimeController<
       scheduleFrame(flushFrame)
       return
     }
-    // Apply turn/accepted and item/started directly to the top-level snapshot
-    if (event.method === 'turn/accepted' || event.method === 'turn/started' || event.method === 'item/started') {
+    // user:“界面上的引导队列里面，还是有一条”+(队列实时通知必须更新界面，发送后立即移除)。
+    if (event.method.startsWith('queue/') || event.method === 'turn/accepted' || event.method === 'turn/started' || event.method === 'item/started') {
       if (!runtime.state) {
         // Same hold-and-replay rule as flushFrame: never drop events that
         // arrived before the first snapshot (audit 16 S2).
@@ -1053,6 +1075,28 @@ function isSubAgentChildItem(item: CoreRuntimeItem): boolean {
   return isRecord(payload.sub_agent)
 }
 
+/** Request facts a restated/ending event may not erase with an empty value. */
+const DECISION_FACT_KEYS = new Set([
+  'options',
+  'message',
+  'title',
+  'kind',
+  'tool_name',
+  'tool_call_id',
+  'request_id',
+  'requestId',
+  'context',
+  'metadata',
+  'sub_agent',
+])
+
+function hasContent(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'string') return value.length > 0
+  if (value && typeof value === 'object') return Object.keys(value as object).length > 0
+  return value !== undefined && value !== null
+}
+
 function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
   const value = event.payload
   const itemId = typeof value.item_id === 'string' ? value.item_id : event.item_id || ''
@@ -1064,8 +1108,8 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     : eventId
       ? [eventId]
       : []
-  const currentCore = snapshot.core ?? emptyCoreSnapshot(snapshot.thread_id)
-  const seenEventSet = new Set(currentCore.seen_event_ids ?? [])
+  const currentCoreBefore = snapshot.core ?? emptyCoreSnapshot(snapshot.thread_id)
+  const seenEventSet = new Set(currentCoreBefore.seen_event_ids ?? [])
   // Filter the coalesced batch by id instead of dropping it wholesale when any
   // id is already seen: a replayed persisted event and a live transient delta
   // can share one coalesced batch, and "all or nothing" killed the unseen
@@ -1074,7 +1118,20 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
   if (unseenEventIds.length === 0) return snapshot
   const runPayload = isRecord(value.payload) ? value.payload : {}
   const turnId = typeof value.turn_id === 'string' ? value.turn_id : event.turn_id || ''
-  const seen = [...(currentCore.seen_event_ids ?? []), ...unseenEventIds].slice(-2000)
+  const seen = [...(currentCoreBefore.seen_event_ids ?? []), ...unseenEventIds].slice(-2000)
+  if (kind === 'interaction_update') {
+    // Appearing/processing is a decision-pool upsert only. It must never
+    // touch turn status: the card's lifecycle and the turn's lifecycle are
+    // separate facts.
+    return applyDecisionLifecycle(snapshot, runPayload, seen)
+  }
+  let currentCore = currentCoreBefore
+  let lifecycleSnapshot = snapshot
+  if (kind === 'approval_response') {
+    lifecycleSnapshot = applyDecisionLifecycle(snapshot, runPayload, seen)
+    snapshot = lifecycleSnapshot
+    currentCore = lifecycleSnapshot.core ?? currentCoreBefore
+  }
   if (kind === 'status') {
     const rawStatus = typeof runPayload.status === 'string'
       ? runPayload.status
@@ -1247,6 +1304,20 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
   // anchor": keep the item's existing seq, or leave it unset (sorts last
   // within the turn) until a real completion event lands.
   const realSeq = typeof event.seq === 'number' && event.seq > 0 ? event.seq : undefined
+  // Identity and presentation facts are write-once for a live request: a
+  // restated or ending event with `options: []` (or an empty title/message)
+  // must not erase what the card originally carried. This mirrors the server
+  // snapshot reducer.
+  const preservedPayload: Record<string, unknown> = { ...(existing.payload ?? {}) }
+  const preserveRequestFacts = kind === 'approval_request'
+    || kind === 'approval_response'
+    || kind === 'interaction_update'
+  for (const [key, value] of Object.entries(runPayload)) {
+    if (preserveRequestFacts && DECISION_FACT_KEYS.has(key) && !hasContent(value) && preservedPayload[key]) {
+      continue
+    }
+    preservedPayload[key] = value
+  }
   const item: CoreRuntimeItem = {
     ...existing,
     item_id: itemId,
@@ -1258,7 +1329,7 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     kind: kind === 'tool_result' ? 'tool_result' : existing.kind || kind,
     last_kind: kind,
     status: terminalTurnStatus || (typeof value.status === 'string' ? value.status : existing.status),
-    payload: { ...(existing.payload ?? {}), ...runPayload },
+    payload: preservedPayload,
   }
   if (delta !== undefined) {
     item.deltas = [...(existing.deltas ?? []), delta]
@@ -1350,6 +1421,101 @@ export function applyCoreAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent
   return event.method === 'core/runItem'
     ? applyCoreRunItemEvent(snapshot, event)
     : applyAppEvent(snapshot, event)
+}
+
+/**
+ * Apply one decision-pool lifecycle transition.
+ *
+ * `appearing` and `processing` upsert an ordered pool row; `ending` removes it
+ * and resolves the request. Updates keep the original `sequence`, so a card
+ * never jumps position. This is the single client-side transition function;
+ * no caller may hide a card by any other rule.
+ */
+function applyDecisionLifecycle(
+  snapshot: CoreAppSnapshot,
+  payload: Record<string, unknown>,
+  seen: string[],
+): CoreAppSnapshot {
+  const core = snapshot.core ?? emptyCoreSnapshot(snapshot.thread_id)
+  const requestId = String(payload.request_id || payload.interaction_id || '')
+  const interactionId = String(payload.interaction_id || requestId)
+  if (!requestId && !interactionId) return snapshot
+  const lifecycle = String(payload.state || payload.lifecycle || 'ending')
+  const terminal = lifecycle === 'ending'
+  const status = terminal ? 'resolved' : lifecycle === 'processing' ? 'processing' : 'open'
+  const toolCallId = String(payload.tool_call_id || '')
+  const matches = (item: CoreAppInteraction): boolean => {
+    const ids = [
+      String(item.interaction_id || ''),
+      String(item.request_id || ''),
+      String(item.tool_call_id || ''),
+    ]
+    return ids.includes(interactionId) || ids.includes(requestId)
+      || (Boolean(toolCallId) && ids.includes(toolCallId))
+  }
+  const isTerminalRequest = (value: unknown): boolean => {
+    const state = String(value || '')
+    return state === 'resolved' || state === 'cancelled' || state === 'expired'
+  }
+  const updateRequests = (
+    source: Record<string, CoreAppRequestState> | undefined,
+  ): Record<string, CoreAppRequestState> => {
+    const map = { ...(source ?? {}) }
+    for (const key of new Set([requestId, toolCallId].filter(Boolean))) {
+      const existing = map[key]
+      // Ending always wins; appearing/processing may not reopen a terminal row.
+      if (terminal || !existing || !isTerminalRequest(existing.status)) {
+        map[key] = {
+          ...(existing ?? {}),
+          ...payload,
+          request_id: key,
+          status,
+        }
+      }
+    }
+    return map
+  }
+  const coreRequests = updateRequests(core.requests)
+  const topRequests = updateRequests(snapshot.requests)
+  const pool: CoreAppInteraction[] = [...(core.interactions ?? core.decisions ?? [])]
+  const index = pool.findIndex(matches)
+  if (terminal) {
+    if (index >= 0) pool.splice(index, 1)
+  } else {
+    const item = {
+      interaction_id: interactionId,
+      request_id: requestId || interactionId,
+      kind: String(payload.kind || (index >= 0 ? pool[index].kind : 'approval') || 'approval'),
+      status,
+      lifecycle,
+      decision_id: String(payload.decision_id || ''),
+      sequence: Number(payload.sequence || 0),
+      tool_call_id: toolCallId,
+      turn_id: String(payload.turn_id || ''),
+      title: String(payload.title || ''),
+      options: Array.isArray(payload.options) ? payload.options : [],
+      scope: String(payload.scope || 'main'),
+      agent_name: String(payload.agent_name || ''),
+      agent_session_id: String(payload.agent_session_id || ''),
+      delivered_by: String(payload.delivered_by || 'main'),
+      project_id: String(payload.project_id || ''),
+    } as unknown as CoreAppInteraction
+    if (index >= 0) pool[index] = { ...pool[index], ...item }
+    else pool.push(item)
+  }
+  return {
+    ...snapshot,
+    requests: topRequests,
+    interactions: pool,
+    decisions: pool,
+    core: {
+      ...core,
+      seen_event_ids: seen,
+      requests: coreRequests,
+      interactions: pool,
+      decisions: pool,
+    },
+  }
 }
 
 export function mergeCoreHistorySnapshot<T extends CoreAppSnapshot>(current: T, page: T): T {
@@ -1577,6 +1743,77 @@ function shouldHydrateSnapshot(
   return false
 }
 
+/**
+ * Adopt resolved request states from a snapshot the version guard rejected.
+ *
+ * Approval resolution is monotonic: an open card never becomes open again.
+ * The version guard exists to stop content rollback, not to preserve a stale
+ * "open" card after the runtime already answered it. Keeping this merge
+ * narrow means a stale snapshot can clear a card without replacing the rest
+ * of the thread.
+ */
+export function mergeResolvedRequestStates(
+  current: CoreAppSnapshot,
+  incoming: CoreAppSnapshot,
+): CoreAppSnapshot | null {
+  const incomingRequests = {
+    ...(incoming.core?.requests ?? {}),
+    ...(incoming.requests ?? {}),
+  }
+  if (Object.keys(incomingRequests).length === 0) return null
+  const currentCore = current.core ?? emptyCoreSnapshot(current.thread_id)
+  const coreRequests = { ...(currentCore.requests ?? {}) }
+  const topRequests = { ...(current.requests ?? {}) }
+  const resolvedIds = new Set<string>()
+  let changed = false
+  for (const [requestId, request] of Object.entries(incomingRequests)) {
+    const existing = coreRequests[requestId] ?? topRequests[requestId]
+    // Never invent a request from a stale snapshot, and never reopen one.
+    if (!existing) continue
+    if (!isResolvedRequestStatus(request.status)) continue
+    // user:“修”+(旧快照确认结束时同步移除池中卡片，包括已合并结束状态的残留。)
+    const resolved = isResolvedRequestStatus(existing.status) ? existing : { ...existing, ...request }
+    for (const id of [requestId, resolved.request_id, resolved.interaction_id, resolved.tool_call_id]) {
+      if (typeof id === 'string' && id) resolvedIds.add(id)
+    }
+    if (isResolvedRequestStatus(existing.status)) continue
+    const merged = { ...existing, ...request }
+    if (coreRequests[requestId]) coreRequests[requestId] = merged
+    if (topRequests[requestId]) topRequests[requestId] = merged
+    changed = true
+  }
+  const prunePool = (pool: CoreAppInteraction[] | undefined): CoreAppInteraction[] | undefined => {
+    if (!pool) return pool
+    const remaining = pool.filter(card => ![card.interaction_id, card.request_id, card.tool_call_id]
+      .some(id => Boolean(id) && resolvedIds.has(String(id))))
+    if (remaining.length === pool.length) return pool
+    changed = true
+    return remaining
+  }
+  const interactions = prunePool(current.interactions)
+  const decisions = prunePool(current.decisions)
+  const coreInteractions = prunePool(currentCore.interactions)
+  const coreDecisions = prunePool(currentCore.decisions)
+  if (!changed) return null
+  return {
+    ...current,
+    requests: topRequests,
+    ...(interactions !== undefined ? { interactions } : {}),
+    ...(decisions !== undefined ? { decisions } : {}),
+    core: {
+      ...currentCore,
+      requests: coreRequests,
+      ...(coreInteractions !== undefined ? { interactions: coreInteractions } : {}),
+      ...(coreDecisions !== undefined ? { decisions: coreDecisions } : {}),
+    },
+  }
+}
+
+function isResolvedRequestStatus(status: unknown): boolean {
+  const value = String(status ?? '')
+  return Boolean(value) && !['open', 'pending', 'waiting', 'processing', 'deferred'].includes(value)
+}
+
 // Approval request states (status/decision/guidance) are derived during
 // projection and have no event path — the request cards depend on them.
 function snapshotRequestsChanged(current: CoreAppSnapshot, incoming: CoreAppSnapshot): boolean {
@@ -1608,7 +1845,7 @@ function snapshotRequestsChanged(current: CoreAppSnapshot, incoming: CoreAppSnap
   return false
 }
 
-// The queue tray has no event path either — it only syncs via snapshots.
+// Snapshots reconcile the queue after reconnects or missed notifications.
 function snapshotQueueChanged(current: CoreAppSnapshot, incoming: CoreAppSnapshot): boolean {
   const a = current.queue ?? []
   const b = incoming.queue ?? []

@@ -418,27 +418,51 @@ export function coreAppItemToWorkbenchPart(
   const requestId = typeof item.request_id === 'string' ? item.request_id : ''
   const requestState = requestStateForId(snapshot, requestId)
   const isResolvedRequest = requestState?.status === 'resolved' || item.status === 'resolved'
+  const isProcessingRequest = requestState?.status === 'processing'
   const isSubmittingRequest = requestId ? options.submittingApprovalRequestIds?.has(requestId) === true : false
-  const status = coreWorkbenchPartStatus(String(item.status || ''), isResolvedRequest, isSubmittingRequest)
+  const status = coreWorkbenchPartStatus(
+    String(item.status || ''),
+    isResolvedRequest,
+    isSubmittingRequest,
+    isProcessingRequest,
+  )
   const waitingResponse = requestState?.status === 'resolved'
     ? coreDecisionToWaitingResponse(String(requestState.decision || ''), String(requestState.guidance || ''))
     : undefined
   const basePart = coreAppItemToMessagePart(item, { status })
   const itemMetadata = isRecord(item.metadata) ? item.metadata : {}
+  // The run item stores approval/question options in its payload; older
+  // snapshots may carry them at the top level. Reading only the top level left
+  // the in-thread card with no approve/deny/option buttons and only the free
+  // input, while the interaction index showed the real options.
+  const itemPayload = isRecord(item.payload) ? item.payload : {}
+  const itemArguments = isRecord(item.arguments)
+    ? item.arguments
+    : isRecord(itemPayload.arguments)
+      ? itemPayload.arguments
+      : undefined
+  // A restated/degraded request event may carry `options: []`. An empty list
+  // must never hide the real choices the original card carried, whether they
+  // live on the payload, its arguments, or the top level.
+  const optionCandidates = [
+    item.options,
+    itemPayload.options,
+    isRecord(itemArguments) ? itemArguments.options : undefined,
+  ]
+  const itemOptions = optionCandidates.find(
+    (candidate): candidate is unknown[] => Array.isArray(candidate) && candidate.length > 0,
+  ) ?? optionCandidates.find(
+    (candidate): candidate is unknown[] => Array.isArray(candidate),
+  )
   const subLineItems = Array.isArray(itemMetadata.subLineItems)
     ? itemMetadata.subLineItems.filter(isRecord) as CoreAppItem[]
     : []
   const subLineParts = subLineItems.map(child => coreAppItemToWorkbenchPart(snapshot, child, options))
   return {
     ...basePart,
-    toolArgs: Array.isArray(item.options)
-      ? {
-          ...(isRecord(item.arguments) ? item.arguments : {}),
-          options: item.options,
-        }
-      : isRecord(item.arguments)
-        ? item.arguments
-        : undefined,
+    toolArgs: itemOptions
+      ? { ...(itemArguments ?? {}), options: itemOptions }
+      : itemArguments,
     toolResult: typeof item.content === 'string' ? item.content : basePart.toolResult,
     metadata: {
       ...(isRecord(basePart.metadata) ? basePart.metadata : {}),
@@ -448,12 +472,12 @@ export function coreAppItemToWorkbenchPart(
       title: item.title,
       question: item.question,
       description: item.description || item.message,
-      options: item.options,
+      options: itemOptions,
       waitingResponse,
       waitingRequest: requestId ? {
         kind: item.kind || 'approval',
         request_id: requestId,
-        options: item.options,
+        options: itemOptions,
         response: waitingResponse,
       } : undefined,
     },
@@ -602,8 +626,12 @@ function coreWorkbenchPartStatus(
   rawStatus: string,
   isResolvedRequest: boolean,
   isSubmittingRequest: boolean,
+  isProcessingRequest = false,
 ): MessagePart['status'] {
   if (isResolvedRequest) return 'completed'
+  // Processing is a server fact: the answer was durably accepted and the
+  // continuation is still running. The card stays visible but disabled.
+  if (isProcessingRequest) return 'running'
   const itemStatus = coreAppItemPartStatus(rawStatus)
   // A click holds the card at "处理中" only while its item is still in flight.
   // Once the item itself is terminal (the approved tool ran, the request was

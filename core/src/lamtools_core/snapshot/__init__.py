@@ -5,6 +5,27 @@ facts. Product members can project domain labels around it, but the reducer is
 member-neutral and idempotent.
 """
 
+# 用户要求原文（本次决策池修复，按发送顺序）：
+#
+# 0. “卡片点完之后，没有立马消失，我又再点了一次。有没有出错我不确定，自己查去”
+# 1. “。继续查，直接查日志。为什么这次又在一次提问中出现了两张卡片？，一张带
+#    选项 另一张不带选项，问的是同一个问题，你把设计考虑清楚了之后再做修改，
+#    不要留下 bug 好不好”
+# 2. “以后开发者模式，你把前端的 console 一块儿给留存下来。方便你随时查”
+# 3. “。把边界情况考虑清楚，然后告诉我，这个东西不应该是前端显示池子内拥有的
+#    东西，，前端显示的更新时间应当是池子内信息发生变动的时候，当一个卡片或请求
+#    被回答完毕之后，这个东西被丢出池子，然后池子顺位补上下一个。这个为什么会出现
+#    广播两次这件事儿呢？”
+# 4. “想清楚再动手，池子的持久化做了吗”
+# 5. “你接下来的所有任务，就是根据我的自然语言去写代码，不要增加额外的逻辑。
+#    不要新增我没有说过的东西，你应该替我思考所有的，枚举清楚所有的边界情况来
+#    攻击我的逻辑漏洞。你可以随时向我提出质疑，但是绝对不能用我没有说过的话去干”
+# 6. “你应该在做每一次工具调用之前，先用一句话说清楚你要干什么”
+# 7. “我给你发的所有消息的原文记进注释里了吗”
+#
+# 这些要求落到本模块的规则：一次出现只有一个作者；回答即终态并从池子移除；
+# 重复或迟到的事件不能改写终态、不能擦掉选项；池子的事实源是数据库行。
+
 from __future__ import annotations
 
 import bisect
@@ -13,8 +34,29 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from lamtools_core.event import RunItemEvent
+from lamtools_core.turn.model import TERMINAL_TURN_STATUSES
 
-TERMINAL_STATUSES = {"completed", "failed", "cancelled", "skipped"}
+TERMINAL_STATUSES = TERMINAL_TURN_STATUSES
+
+# Fields a live approval card must keep when a duplicate/ending event restates
+# it with an empty value. `options: []` from a waiting/replay record used to
+# overwrite the real choices and leave the card with free input only.
+_SERVER_REQUEST_KINDS = frozenset(
+    {"approval_request", "approval_response", "interaction_update"}
+)
+_APPROVAL_REQUEST_FACTS = frozenset(
+    {
+        "request_id",
+        "tool_call_id",
+        "tool_name",
+        "kind",
+        "message",
+        "options",
+        "context",
+        "metadata",
+        "sub_agent",
+    }
+)
 
 
 def empty_thread_snapshot(thread_id: str) -> dict[str, Any]:
@@ -27,6 +69,7 @@ def empty_thread_snapshot(thread_id: str) -> dict[str, Any]:
         "item_order": [],
         "requests": {},
         "artifacts": {},
+        "deleted_agents": {},
         "status": "idle",
     }
 
@@ -89,25 +132,43 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
             reconcile_terminal_requests(state)
         return state
 
+    if event.kind == "interaction_update":
+        _apply_interaction_update(state, event)
+        _recompute_thread_status(state)
+        return state
+
     if event.kind == "approval_response":
         _apply_approval_response(state, event)
+        nested_child = bool(event.parent_item_id) or isinstance(
+            (event.payload or {}).get("sub_agent"), dict
+        )
+        # The answer closes the visible row in the transcript as well as the
+        # request. The live client already flipped this item to completed; the
+        # stored snapshot used to keep it `waiting` until the tool result
+        # arrived, so after a reload (or for a client that trusts the snapshot)
+        # the answered card looked pending again for the whole continuation.
+        item = _upsert_item(state, event)
         # Only an existing turn may be resumed by an answer. A response naming a
         # turn this thread never created must not invent one: the invented turn
         # stayed `running` forever (nothing owns it to close it) and pinned the
         # whole session to "running" after everything had finished (2026-10-14).
         turn = (state.get("turns") or {}).get(event.turn_id) if event.turn_id else None
         if isinstance(turn, dict):
+            if event.item_id and event.item_id not in turn.setdefault("items", []):
+                turn["items"].append(event.item_id)
             turn["last_kind"] = event.kind
             turn["last_seq"] = event.seq or state.get("snapshot_seq", 0)
             if event.run_id:
                 turn["run_id"] = event.run_id
-            if str(turn.get("status") or "") not in {"failed", "cancelled", "skipped", "paused"}:
+            if not nested_child and str(turn.get("status") or "") not in {"failed", "cancelled", "skipped", "paused"}:
                 # Resolving a server request resumes the existing turn; it does
                 # not complete that turn. A later lifecycle/status item owns
                 # terminality. A *paused* turn is excluded: its run has already
                 # ended, so reviving it left the session reading running with
                 # nothing running, until the user terminated it by hand
-                # (2026-10-14).
+                # (2026-10-14). A delegated member's answer belongs to the
+                # member, never to the parent turn that happens to own the
+                # timeline anchor.
                 turn["status"] = "running"
         _recompute_thread_status(state)
         return state
@@ -146,6 +207,21 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
     if event.kind == "artifact" or event.artifacts:
         _apply_artifact(state, event)
 
+    event_payload = event.payload if isinstance(event.payload, dict) else {}
+    if event_payload.get("type") == "subAgentStatus":
+        sub_agent = event_payload.get("sub_agent")
+        if isinstance(sub_agent, dict) and str(sub_agent.get("status") or "") == "deleted":
+            deleted = state.setdefault("deleted_agents", {})
+            for key in (
+                sub_agent.get("name"),
+                sub_agent.get("agent"),
+                sub_agent.get("session_id"),
+                sub_agent.get("sub_session_id"),
+            ):
+                value = str(key or "").strip()
+                if value:
+                    deleted[value] = True
+
     existing_turn = (state.get("turns") or {}).get(event.turn_id) if event.turn_id else None
     terminal_turn_status = (
         str(existing_turn.get("status") or "")
@@ -160,6 +236,22 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
     nested_child = bool(event.parent_item_id) or isinstance(
         (event.payload or {}).get("sub_agent"), dict
     )
+    # Ending is terminal for a request. A late duplicate approval_request (a
+    # replayed event, or the parked run's waiting record) must never reopen a
+    # card the user already answered: that produced a second, option-less card
+    # asking the same question after the first one had been resolved.
+    #
+    # 用户要求（原文）：“卡片点完之后，没有立马消失”
+    # 用户要求（原文）：“当一个卡片或请求被回答完毕之后，这个东西被丢出池子”
+    if event.kind == "approval_request":
+        request_id = str(
+            event.payload.get("request_id") or event.item_id or event.event_id
+        )
+        existing_request = (state.get("requests") or {}).get(request_id)
+        if isinstance(existing_request, dict) and str(
+            existing_request.get("status") or ""
+        ) in {"resolved", "cancelled", "expired"}:
+            return state
     item = _upsert_item(state, event)
     if terminal_turn_status and not nested_child:
         item["status"] = terminal_turn_status
@@ -170,15 +262,37 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         return state
     if event.kind == "approval_request":
         item["status"] = "waiting"
-        state["status"] = "waiting"
+        if not nested_child:
+            state["status"] = "waiting"
         request_id = str(event.payload.get("request_id") or event.item_id or event.event_id)
-        state.setdefault("requests", {})[request_id] = {
-            "request_id": request_id,
-            "status": "open",
-            "item_id": item["item_id"],
-            "turn_id": event.turn_id,
-            **event.payload,
-        }
+        requests = state.setdefault("requests", {})
+        existing_record = requests.get(request_id)
+        request_record = (
+            dict(existing_record) if isinstance(existing_record, dict) else {}
+        )
+        for key, value in event.payload.items():
+            if (
+                key in _APPROVAL_REQUEST_FACTS
+                and not value
+                and request_record.get(key)
+            ):
+                continue
+            request_record[key] = value
+        request_record.update(
+            {
+                "request_id": request_id,
+                "status": "open",
+                "item_id": item["item_id"],
+                "turn_id": event.turn_id,
+            }
+        )
+        requests[request_id] = request_record
+        # Compatibility alias: older clients and persisted tests address the
+        # request by the provider tool-call id. The composite id is the routing
+        # key; the alias is the same record and never a second request.
+        tool_call_id = str(event.payload.get("tool_call_id") or "")
+        if tool_call_id and tool_call_id != request_id:
+            requests[tool_call_id] = request_record
     elif event.kind == "error":
         item["status"] = "failed"
         state["last_error"] = event.payload or {"message": item.get("content", "")}
@@ -204,8 +318,9 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         _recompute_thread_status(state)
         return state
     if event.kind == "approval_request":
-        turn["status"] = "waiting"
-        state["status"] = "waiting"
+        if not nested_child:
+            turn["status"] = "waiting"
+            state["status"] = "waiting"
     elif _is_turn_terminal_event(event):
         turn["status"] = event.status
         reconcile_terminal_requests(state)
@@ -362,6 +477,19 @@ def typed_input_parts_text(parts: list[Any]) -> str:
 
 def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
     item_id = event.item_id or f"{event.turn_id or event.thread_id}:{event.kind}:{event.event_id}"
+    existing_item = (state.get("items") or {}).get(item_id)
+    # A duplicate approval_request is only a restatement while the item is
+    # live. Once the card ended (tool_result/completed), it must not demote the
+    # row back to waiting or turn it into a serverRequest again.
+    if (
+        event.kind == "approval_request"
+        and isinstance(existing_item, dict)
+        and str(existing_item.get("status") or "") in TERMINAL_STATUSES
+    ):
+        existing_item["last_seq"] = max(
+            int(existing_item.get("last_seq") or 0), int(event.seq or 0)
+        )
+        return existing_item
     item = state.setdefault("items", {}).setdefault(
         item_id,
         {
@@ -382,7 +510,19 @@ def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
     item["last_seq"] = event.seq or state.get("snapshot_seq", 0)
     item["status"] = event.status
     if event.payload:
-        item.setdefault("payload", {}).update(event.payload)
+        current_payload = item.setdefault("payload", {})
+        for key, value in event.payload.items():
+            # Identity/presentation facts are write-once for an open request:
+            # a restated event with an empty field (notably `options: []`) must
+            # not erase what the original card carried.
+            if (
+                event.kind in _SERVER_REQUEST_KINDS
+                and key in _APPROVAL_REQUEST_FACTS
+                and not value
+                and current_payload.get(key)
+            ):
+                continue
+            current_payload[key] = value
     if event.artifacts:
         item["artifacts"] = event.artifacts
     if event.usage:
@@ -447,9 +587,142 @@ def _apply_approval_response(state: dict[str, Any], event: RunItemEvent) -> None
     request_id = str(event.payload.get("request_id") or event.item_id or "")
     if not request_id:
         return
-    request = state.setdefault("requests", {}).setdefault(request_id, {"request_id": request_id})
-    request.update(event.payload)
+    requests = state.setdefault("requests", {})
+    request = requests.setdefault(request_id, {"request_id": request_id})
+    for key, value in event.payload.items():
+        if key in _APPROVAL_REQUEST_FACTS and not value and request.get(key):
+            continue
+        request[key] = value
     request["status"] = event.payload.get("status") or "resolved"
+    # Keep the compatibility alias (provider tool-call id) in step with the
+    # composite record. Both keys describe one request, never two.
+    for key, candidate in requests.items():
+        if key == request_id or not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("request_id") or "") == request_id:
+            for field, value in event.payload.items():
+                if field in _APPROVAL_REQUEST_FACTS and not value and candidate.get(field):
+                    continue
+                candidate[field] = value
+            candidate["status"] = request["status"]
+    # Ending is terminal for the decision pool: the card never renders again.
+    _remove_interaction_from_pools(state, request_id, event.payload)
+
+
+def _interaction_matches(
+    item: dict[str, Any], request_id: str, payload: dict[str, Any]
+) -> bool:
+    candidates = {
+        request_id,
+        str(payload.get("interaction_id") or ""),
+        str(payload.get("tool_call_id") or ""),
+    }
+    return bool(
+        {
+            str(item.get("interaction_id") or ""),
+            str(item.get("request_id") or ""),
+            str(item.get("tool_call_id") or ""),
+        }
+        & candidates
+    )
+
+
+def _remove_interaction_from_pools(
+    state: dict[str, Any], request_id: str, payload: dict[str, Any]
+) -> None:
+    for container in (state, state.get("core")):
+        if not isinstance(container, dict):
+            continue
+        pool = container.get("interactions")
+        if isinstance(pool, list):
+            container["interactions"] = [
+                item
+                for item in pool
+                if not (
+                    isinstance(item, dict)
+                    and _interaction_matches(item, request_id, payload)
+                )
+            ]
+
+
+def _apply_interaction_update(state: dict[str, Any], event: RunItemEvent) -> None:
+    """Appearing/processing is a pool upsert; the sequence never changes."""
+    payload = dict(event.payload or {})
+    interaction_id = str(
+        payload.get("interaction_id")
+        or payload.get("request_id")
+        or event.item_id
+        or ""
+    )
+    if not interaction_id:
+        return
+    terminal_request_status = {"resolved", "cancelled", "expired"}
+    existing_requests = state.get("requests") or {}
+    for key in (
+        interaction_id,
+        str(payload.get("request_id") or ""),
+        str(payload.get("interaction_id") or ""),
+    ):
+        existing_request = existing_requests.get(key) if key else None
+        if isinstance(existing_request, dict) and str(
+            existing_request.get("status") or ""
+        ) in terminal_request_status:
+            # Ending is terminal for the pool too: a late appearing/processing
+            # update must not resurrect a card that was already answered.
+            return
+    lifecycle = str(
+        payload.get("state") or payload.get("lifecycle") or "appearing"
+    )
+    status = "processing" if lifecycle == "processing" else "open"
+    item = {
+        "interaction_id": interaction_id,
+        "request_id": str(payload.get("request_id") or interaction_id),
+        "kind": str(payload.get("kind") or "approval"),
+        "status": status,
+        "lifecycle": lifecycle,
+        "decision_id": str(payload.get("decision_id") or ""),
+        "sequence": int(payload.get("sequence") or 0),
+        "tool_call_id": str(payload.get("tool_call_id") or ""),
+        "turn_id": str(payload.get("turn_id") or ""),
+        "title": str(payload.get("title") or ""),
+        "options": list(payload.get("options") or []),
+        "scope": str(payload.get("scope") or "main"),
+        "agent_name": str(payload.get("agent_name") or ""),
+        "agent_session_id": str(payload.get("agent_session_id") or ""),
+        "delivered_by": str(payload.get("delivered_by") or "main"),
+        "project_id": str(payload.get("project_id") or ""),
+    }
+    for container in (state, state.get("core")):
+        if not isinstance(container, dict):
+            continue
+        pool = container.get("interactions")
+        if not isinstance(pool, list):
+            pool = []
+            container["interactions"] = pool
+        for index, existing in enumerate(pool):
+            if isinstance(existing, dict) and _interaction_matches(
+                existing, interaction_id, payload
+            ):
+                merged = {**existing, **item}
+                if not item.get("options") and existing.get("options"):
+                    merged["options"] = existing["options"]
+                pool[index] = merged
+                break
+        else:
+            pool.append(item)
+
+    requests = state.setdefault("requests", {})
+    request = requests.setdefault(
+        item["request_id"], {"request_id": item["request_id"]}
+    )
+    # Monotonic: a late appearing update may not reopen a resolved request.
+    if str(request.get("status") or "") not in {
+        "resolved",
+        "cancelled",
+        "expired",
+    }:
+        request.update(payload)
+        request["status"] = status
 
 
 def _apply_artifact(state: dict[str, Any], event: RunItemEvent) -> None:

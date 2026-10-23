@@ -31,7 +31,9 @@ def normalize_waiting_action(value: str) -> str:
         normalized_action = "approve"
     if normalized_action in {"other", "guidance", "other_guidance"}:
         normalized_action = "guide"
-    if normalized_action not in {"approve", "deny", "guide"}:
+    if normalized_action in {"skip", "skipped", "timeout"}:
+        normalized_action = "skip"
+    if normalized_action not in {"approve", "deny", "guide", "skip"}:
         raise ValueError("Unsupported waiting request decision")
     return normalized_action
 
@@ -101,16 +103,69 @@ def approved_tool_failure_continuation_prompt(
     )
 
 
+def denied_tool_continuation_prompt(
+    *,
+    original_task: str,
+    tool_name: str,
+    tool_args: dict[str, Any],
+) -> str:
+    """Continue after the user declines one action, without ending the task.
+
+    Denying a tool is a decision about that action, not a decision to abandon
+    the whole user request.  The model gets the blocked result and a chance to
+    choose another path (or ask the user what to do instead).
+    """
+    return (
+        "继续完成同一个用户任务。用户拒绝了这个工具调用，后端没有执行它。\n\n"
+        f"原始任务：{original_task}\n"
+        f"被拒绝的工具：{tool_name}\n"
+        f"工具参数：{json.dumps(tool_args, ensure_ascii=False)}\n\n"
+        "请不要重复同一个调用。换一种不需要该授权的方式继续；"
+        "如果确实无法继续，向用户说明原因并询问下一步。"
+    )
+
+
+def approved_tool_blocked_continuation_prompt(
+    *,
+    original_task: str,
+    tool_name: str,
+    tool_args: dict[str, Any],
+    reason: str,
+) -> str:
+    """Continue after an approved call is refused at the execution boundary.
+
+    A permission, plugin lifecycle or path boundary can change while the card
+    is open.  Re-running the same call cannot succeed; the model must choose a
+    different path or ask the user again.
+    """
+    return (
+        "继续完成同一个用户任务。用户已经批准了这个工具调用，但后端在执行边界拒绝了它，"
+        "因此没有执行。\n\n"
+        f"原始任务：{original_task}\n"
+        f"被拒绝的工具：{tool_name}\n"
+        f"工具参数：{json.dumps(tool_args, ensure_ascii=False)}\n"
+        f"拒绝原因：{reason}\n\n"
+        "请不要重复同一个调用。换一种不触发该限制的方式继续；"
+        "如果必须获得新的授权，请重新向用户说明并请求确认。"
+    )
+
+
 def question_answer_continuation_prompt(
     *,
     original_task: str,
     question: str,
     answer: str,
+    skipped: bool = False,
 ) -> str:
+    outcome = (
+        "用户没有回答这个问题，已跳过。请按合理默认继续，或在必要时换一种问法。"
+        if skipped
+        else f"用户的回答：{answer[:4000]}"
+    )
     return (
-        "继续完成同一个用户任务。你之前向用户提出了一个问题，用户已回答。\n\n"
+        "继续完成同一个用户任务。你之前向用户提出了一个问题。\n\n"
         f"原始任务：{original_task}\n"
         f"你提出的问题：{question}\n"
-        f"用户的回答：{answer[:4000]}\n\n"
-        "请根据用户的回答继续后续步骤。"
+        f"{outcome}\n\n"
+        "请根据上述结果继续后续步骤。"
     )

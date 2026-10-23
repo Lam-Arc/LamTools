@@ -142,9 +142,15 @@ const active = computed<CorePendingDecision | null>(() => (
   props.items[Math.min(Math.max(activeIndex.value, 0), props.items.length - 1)] ?? null
 ))
 
-const countLabel = computed(() => (
-  props.items.length > 1 ? t("第 {0} / {1} 项", { 0: activeIndex.value + 1, 1: props.items.length }) : t("等待你的选择")
-))
+const countLabel = computed(() => {
+  if (props.items.length > 1) {
+    return t("第 {0} / {1} 项", { 0: activeIndex.value + 1, 1: props.items.length })
+  }
+  const item = active.value
+  if (item?.lifecycle === 'ending') return t("完成")
+  if (item?.lifecycle === 'processing' || item?.submitting) return t("处理中")
+  return t("待处理")
+})
 
 const ariaLabel = computed(() => (
   props.items.length > 1 ? t("需要你确认，共 {0} 项", { 0: props.items.length }) : t("需要你确认")

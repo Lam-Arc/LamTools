@@ -187,6 +187,6 @@ describe('已答复的审批卡撤出对话', () => {
     const wrapper = mountMessageView( { props: { msg: m, processExpandedIds: new Set([m.id]) } })
     const card = wrapper.find('.decision-card')
     expect(card.exists()).toBe(true)
-    expect(card.text()).toContain('等待选择')
+    expect(card.text()).toContain('待处理')
   })
 })

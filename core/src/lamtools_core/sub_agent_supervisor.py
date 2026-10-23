@@ -29,10 +29,63 @@ from lamtools_core.runtime_owner import (
 
 _logger = logging.getLogger(__name__)
 
+#: A member run that exceeds this wall-clock budget is presumed hung.  The
+#: watchdog (every 15s) marks it failed and notifies the parent; without a
+#: bound a blocked provider call kept a member "running" indefinitely.
+SUB_AGENT_MAX_RUN_SECONDS = 2 * 60 * 60
+
+#: Upper bounds for member work.  A per-session cap keeps one supervisor from
+#: spawning an unbounded number of model calls; the registry cap bounds how
+#: many idle supervisors (each with a runner and MCP registry) stay resident.
+SUB_AGENT_MAX_CONCURRENT_RUNS = 8
+SUB_AGENT_MAX_SUPERVISORS = 64
+
 SUB_AGENT_TYPES = ("consider", "execute")
 # 允许中文名字（例如「张前端」这类稳定称呼），仍须以小写拉丁字母或汉字开头。
 SUB_AGENT_NAME_PATTERN = re.compile(r"^[a-z\u4e00-\u9fff][a-z0-9_\u4e00-\u9fff]{0,63}$")
 _REASONING_ALIASES = {"xh": "xhigh"}
+
+#: Optional process-wide sink that mirrors every durable member record into the
+#: turn-control read model (``core_agent_runs``). It is a projection, not a
+#: second authority: ``sub_agents.sqlite3`` still owns mailboxes and recovery,
+#: while snapshots/recovery can query one cross-thread table.
+_agent_run_store_factory: Callable[[], Any] | None = None
+
+
+def set_agent_run_store_factory(factory: Callable[[], Any] | None) -> None:
+    global _agent_run_store_factory
+    _agent_run_store_factory = factory
+
+
+def _agent_run_from_record(parent_thread_id: str, record: "SubAgentRecord") -> Any:
+    from .turn.model import AgentRun
+
+    turn_id = str(record.source_turn_id or "")
+    if not turn_id and record.source_run_id:
+        turn_id = f"{parent_thread_id}:turn:{record.source_run_id}"
+    if not turn_id:
+        turn_id = f"{parent_thread_id}:turn:member:{record.name}"
+    return AgentRun(
+        agent_run_id=f"{parent_thread_id}:agent:{record.name}",
+        parent_turn_id=turn_id,
+        parent_thread_id=parent_thread_id,
+        parent_run_id=str(record.source_run_id or ""),
+        name=record.name,
+        type=record.type,
+        model_id=record.model_id,
+        reasoning_level=record.reasoning_level,
+        status=record.status,  # type: ignore[arg-type]
+        lease_until_ms=int(record.lease_until * 1000) if record.lease_until else 0,
+        sub_session_id=record.sub_session_id,
+        source_call_id=record.source_call_id,
+        source_run_id=record.source_run_id,
+        source_turn_id=record.source_turn_id,
+        summary=record.summary,
+        started_at_ms=int(record.started_at * 1000) if record.started_at else 0,
+        completed_at_ms=int(record.completed_at * 1000) if record.completed_at else 0,
+        elapsed_ms=int(record.elapsed_ms or 0),
+        metadata={"runtime_owner": dict(record.runtime_owner or {})},
+    )
 _child_identity: contextvars.ContextVar[tuple["SubAgentSupervisor", str, str] | None] = (
     contextvars.ContextVar("lamtools_sub_agent_identity", default=None)
 )
@@ -60,6 +113,12 @@ class SubAgentRecord:
     source_message_id: str = ""
     source_part_id: str = ""
     runtime_owner: dict[str, Any] = field(default_factory=dict)
+    #: Absolute wall-clock deadline for the current run.  A member with no
+    #: lease never expires; a run that exceeds it is marked failed by the
+    #: watchdog instead of showing "running" forever.
+    lease_until: float = 0.0
+    # user:“修 问题严重的话 就重新设计”+(每次执行与控制动作使用持久令牌，使旧结果失去写入权)。
+    execution_token: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -227,17 +286,37 @@ class SubAgentSupervisor:
     depend on a soon-to-be-disposed turn/MCP registry.
     """
 
-    def __init__(self, *, parent_thread_id: str, runner: Any, database_path: str | Path) -> None:
+    def __init__(
+        self,
+        *,
+        parent_thread_id: str,
+        runner: Any,
+        database_path: str | Path,
+        agent_run_store: Any | None = None,
+    ) -> None:
         self.parent_thread_id = str(parent_thread_id)
         self.runner = runner
         self.database_path = Path(database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
+        self._agent_run_store = agent_run_store
+        if self._agent_run_store is None and _agent_run_store_factory is not None:
+            try:
+                self._agent_run_store = _agent_run_store_factory()
+            except BaseException:
+                self._agent_run_store = None
+        self._agent_run_tasks: set[asyncio.Task[Any]] = set()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         # Member runs executed inline by the caller (an answered question or
         # approval continuation). They are not drive tasks, but a Stop must be
         # able to cancel them like any other member work.
         self._inline_tasks: dict[str, asyncio.Task[Any]] = {}
+        # Serializes every writer of one child session: drive tasks, answered
+        # questions and approval continuations.  The runner's own lock is per
+        # runner instance, and a continuation is built from a different runner,
+        # so it cannot provide this guarantee.
+        self._agent_locks: dict[str, asyncio.Lock] = {}
+        self._run_semaphore = asyncio.Semaphore(SUB_AGENT_MAX_CONCURRENT_RUNS)
         self._resume_names: set[str] = set()
         self._pending_prompts: dict[str, str] = {}
         # Continuation text for a scheduled resume. ``None`` means "use the
@@ -267,6 +346,27 @@ class SubAgentSupervisor:
 
     def update_runner(self, runner: Any) -> None:
         self.runner = runner
+
+    def execution_token(self, name: str) -> str:
+        return self._required(validate_name(name)).execution_token
+
+    def result_is_current(self, name: str, token: str) -> bool:
+        record = self._load(validate_name(name))
+        return bool(record and record.execution_token == token
+                    and record.status not in {"terminated", "closed", "deleted"})
+
+    def agent_lock(self, name: str) -> asyncio.Lock:
+        key = str(name or "")
+        lock = self._agent_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._agent_locks[key] = lock
+        return lock
+
+    def has_active_work(self) -> bool:
+        return any(not task.done() for task in self._tasks.values()) or any(
+            not task.done() for task in self._inline_tasks.values()
+        )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
@@ -380,6 +480,10 @@ class SubAgentSupervisor:
         # 事件写入放在连接释放之后：独立连接不会与外层写事务互相锁住。
         for record in interrupted:
             await self._record_member_event(record, "member_interrupted", detail="进程重启时该成员仍在运行")
+        # user:“主子代理控制关系持久保存，重启后仍可完整恢复”+重启对账建出来的
+        # 监督器就是本进程的成员所有者；登记它是为了让恢复入口按持久记录找到人，
+        # 而不是碰运气看启动时是否恰好缓存过这个会话（AR-03）。
+        _remember_supervisor(self)
 
     async def create(self, *, type: object, name: object, model: object,
                      reasoning_level: object, source_ids: dict[str, str] | None = None) -> SubAgentRecord:
@@ -408,7 +512,7 @@ class SubAgentSupervisor:
         desired = (child_type, child_name, model_id, reasoning)
         async with self._lock:
             existing = self._load(child_name)
-            if existing and existing.status not in {"closed", "interrupted", "failed"}:
+            if existing and existing.status not in {"closed", "interrupted", "terminated", "failed"}:
                 current = (existing.type, existing.name, existing.model_id, existing.reasoning_level)
                 if current != desired:
                     raise ValueError("active sub-agent exists with a different configuration")
@@ -532,11 +636,17 @@ class SubAgentSupervisor:
             self._save(record)
             self._pending_prompts.pop(child_name, None)
             task = self._tasks.pop(child_name, None)
-            if task and not task.done():
-                task.cancel()
+            inline = self._inline_tasks.pop(child_name, None)
+            for candidate in (task, inline):
+                if candidate and not candidate.done():
+                    candidate.cancel()
+            if inline and inline is not task:
+                task = inline if task is None else task
             await self._record_member_event(record, "member_closed")
         if task:
             await asyncio.gather(task, return_exceptions=True)
+        if inline and inline is not task:
+            await asyncio.gather(inline, return_exceptions=True)
         return SubAgentOperationResult(record, "closed")
 
     async def delete(self, *, name: object) -> dict[str, Any]:
@@ -566,17 +676,25 @@ class SubAgentSupervisor:
             if record is None:
                 raise ValueError(f"sub-agent not found: {child_name}")
             task = self._tasks.get(child_name)
-            if record.status == "running" and (task is None or task.done()) and owner_is_live(record.runtime_owner):
-                raise ValueError("sub-agent is owned by another running process")
+            inline = self._inline_tasks.get(child_name)
             if (
                 record.status == "running"
                 or (task is not None and not task.done())
+                or (inline is not None and not inline.done())
                 or child_name in self._pending_prompts
             ):
                 raise ValueError(
                     f"sub-agent '{child_name}' is running; stop it first with "
                     "sub_agent close, then delete"
                 )
+            # Publish a durable deletion marker before removing the record.
+            # The member's forwarded rows live under the parent thread and are
+            # not part of the child-session purge; this fact lets the snapshot
+            # and the interface hide that subtree on every later load.
+            record.status = "deleted"
+            self._mirror_agent_run(record)
+            await self._record_member_event(record, "member_deleted")
+            await self._publish_member_status(record, event="member_deleted")
             # Purge the member's own session family before the durable record is
             # removed: a failure here leaves the record in place for a retry
             # instead of orphaning rows nothing can find again.
@@ -638,7 +756,9 @@ class SubAgentSupervisor:
             raise ValueError("prompt is required")
         async with self._lock:
             record = self._required(child_name)
-            if record.type != child_type or record.status in {"closed", "interrupted", "failed"}:
+            if record.type != child_type or record.status in {
+                "closed", "interrupted", "terminated", "failed"
+            }:
                 raise ValueError("sub-agent must exist, match type, and be active")
             task = self._tasks.get(child_name)
             if record.status == "running" and (task is None or task.done()) and owner_is_live(record.runtime_owner):
@@ -673,6 +793,7 @@ class SubAgentSupervisor:
                 record.started_at = time.time()
                 record.completed_at = None
                 record.elapsed_ms = None
+                record.lease_until = time.time() + SUB_AGENT_MAX_RUN_SECONDS
                 record.runtime_owner = owner_token()
                 self._save(record)
                 self._queue_initial_mail(child_name)
@@ -697,7 +818,7 @@ class SubAgentSupervisor:
             "lifecycle_action": "message_sent",
         }
 
-    def track_inline_task(self, name: object, task: asyncio.Task[Any] | None) -> None:
+    def track_inline_task(self, name: object, task: asyncio.Task[Any] | None) -> str:
         """Register (or clear) a member run the caller executes inline.
 
         The approval/question continuation runs inside the caller's request, not
@@ -705,19 +826,30 @@ class SubAgentSupervisor:
         """
         child_name = str(name or "").strip()
         if not child_name:
-            return
+            return ""
         if task is None:
             self._inline_tasks.pop(child_name, None)
         else:
+            record = self._required(child_name)
+            if record.status in {"terminated", "closed", "deleted"}:
+                raise ValueError("Sub-agent was terminated")
+            record.execution_token = uuid.uuid4().hex
+            self._save(record)
             self._inline_tasks[child_name] = task
+            return record.execution_token
+        return ""
 
-    async def interrupt_active(self) -> list[dict[str, Any]]:
+    async def interrupt_active(
+        self, *, include_paused: bool = False, final_status: str | None = None
+    ) -> list[dict[str, Any]]:
         """Interrupt every locally owned active child and return its records.
 
         The parent turn may already be terminal, so this operation deliberately
         targets the supervisor's member tasks instead of the parent runtime
-        registry. Paused members remain paused; only running/pending work is
-        interrupted, which makes mixed child states deterministic.
+        registry.  A user pause keeps members waiting on a question: that card
+        is still the user's.  A user terminate is different — it promises to
+        discard unanswered member questions, so ``include_paused`` also stops
+        members parked at a human boundary and clears their durable request.
         """
         victims: list[SubAgentRecord] = []
         tasks: list[asyncio.Task[None]] = []
@@ -734,13 +866,20 @@ class SubAgentSupervisor:
                 active = record.status in {"running", "pending"} or (
                     task is not None and not task.done()
                 )
+                if include_paused and record.status in {"paused", "suspended", "interrupted"}:
+                    active = True
                 if not active:
                     continue
-                if task is None and _owned_elsewhere(record):
+                if task is None and record.status == "running" and _owned_elsewhere(record):
                     raise ValueError(
                         f"sub-agent '{record.name}' is owned by another running process"
                     )
-                record.status = "interrupted"
+                # user:“终止不能复用可恢复的 interrupted”+用户终止写独立终态，
+                # 只有崩溃重启留下的 interrupted 才允许被 Resume 复活。
+                record.status = final_status or (
+                    "terminated" if include_paused else "interrupted"
+                )
+                record.execution_token = uuid.uuid4().hex
                 record.completed_at = time.time()
                 if record.started_at:
                     record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
@@ -771,6 +910,9 @@ class SubAgentSupervisor:
             )
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if include_paused:
+            for record in victims:
+                await self._clear_child_pending(record.sub_session_id)
         # Cancellation persists through the kernel's detached cancel finalizer,
         # which can still be in flight when the task is gone. A Resume issued
         # right after Stop must not race that write, so Stop only reports done
@@ -780,6 +922,69 @@ class SubAgentSupervisor:
         await self._await_children_settled(victims)
         await self._maybe_report_members_drained()
         return [record.to_dict() for record in victims]
+
+    async def _clear_child_pending(self, session_id: str) -> None:
+        """Drop a parked member's durable question when the user terminates.
+
+        A paused member keeps its card for a *pause*; a terminate promises to
+        discard it.  Clearing the runtime request here also makes the backend
+        auto-continue scheduler unable to resurrect the member later.
+        """
+        store = getattr(self.runner, "state_store", None)
+        if store is None or not session_id:
+            return
+        try:
+            state = await store.get(session_id)
+        except BaseException:
+            _logger.exception("[sub-agent] could not read child state %s", session_id)
+            return
+        if state is None or not isinstance(getattr(state, "metadata", None), dict):
+            return
+        if "pending_approval" not in state.metadata and "pending_waiting_request" not in state.metadata:
+            return
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
+        try:
+            await store.save(state)
+        except BaseException:
+            _logger.exception("[sub-agent] could not clear child pending %s", session_id)
+
+    async def expire_lease(self, name: str) -> dict[str, Any] | None:
+        """Stop a member whose run exceeded the wall-clock lease.
+
+        Without this a blocked provider call showed as "running" forever: the
+        user had no signal and no automatic recovery.  The failure is recorded
+        as a member event so the parent can be woken with the explanation.
+        """
+        child_name = validate_name(name)
+        task: asyncio.Task[Any] | None = None
+        inline: asyncio.Task[Any] | None = None
+        async with self._lock:
+            record = self._load(child_name)
+            if record is None or record.status != "running":
+                return None
+            if not record.lease_until or time.time() <= record.lease_until:
+                return None
+            record.status = "failed"
+            record.summary = "Sub-agent execution exceeded its lease and was stopped."
+            record.completed_at = time.time()
+            record.lease_until = 0.0
+            if record.started_at:
+                record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
+            self._save(record)
+            task = self._tasks.pop(child_name, None)
+            inline = self._inline_tasks.pop(child_name, None)
+            for candidate in (task, inline):
+                if candidate is not None and not candidate.done():
+                    candidate.cancel()
+        for candidate in (task, inline):
+            if candidate is not None:
+                await asyncio.gather(candidate, return_exceptions=True)
+        await self._record_member_event(
+            record, "member_failed", detail="lease_expired"
+        )
+        await self._publish_member_status(record, event="member_failed")
+        return record.to_dict()
 
     async def _await_children_settled(
         self, records: list[SubAgentRecord], *, timeout: float = 3.0
@@ -809,7 +1014,7 @@ class SubAgentSupervisor:
             self._pause_event = asyncio.Event()
         return self._pause_event
 
-    async def pause_active(self) -> list[dict[str, Any]]:
+    async def pause_active(self, *, control_guard: Callable[[], bool] | None = None) -> list[dict[str, Any]]:
         """Park every locally owned active child without killing its work.
 
         The mirror image of :meth:`interrupt_active`: the child kernel observes
@@ -820,8 +1025,11 @@ class SubAgentSupervisor:
         """
         victims: list[SubAgentRecord] = []
         tasks: list[asyncio.Task[None]] = []
-        self.pause_event.set()
         async with self._lock:
+            # user:“修 问题严重的话 就重新设计”+(等锁期间目标已换代时，旧暂停既不能发信号，也不能修改成员)。
+            if control_guard is not None and not control_guard():
+                return []
+            self.pause_event.set()
             names = set(self._tasks)
             with self._connection() as db:
                 rows = db.execute(
@@ -841,6 +1049,7 @@ class SubAgentSupervisor:
                         f"sub-agent '{record.name}' is owned by another running process"
                     )
                 record.status = "suspended"
+                record.execution_token = uuid.uuid4().hex
                 record.completed_at = time.time()
                 if record.started_at:
                     record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
@@ -872,6 +1081,7 @@ class SubAgentSupervisor:
             )
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self._await_children_settled(victims)
         await self._maybe_report_members_drained()
         return [record.to_dict() for record in victims]
 
@@ -897,6 +1107,7 @@ class SubAgentSupervisor:
         statuses: set[str],
         prompt: str | None,
     ) -> list[dict[str, Any]]:
+        # user:“修 问题严重的话 就重新设计”+(没有真实执行器时不能先写正在恢复)。
         resumed: list[SubAgentRecord] = []
         async with self._lock:
             with self._connection() as db:
@@ -908,6 +1119,8 @@ class SubAgentSupervisor:
                 record = SubAgentRecord(**json.loads(row["payload"]))
                 if record.status not in statuses:
                     continue
+                if not any(callable(getattr(self.runner, attr, None)) for attr in ("run", "resume_interrupted")):
+                    raise ValueError("Sub-agent execution owner is not configured")
                 task = self._tasks.get(record.name)
                 if task is not None and not task.done():
                     continue
@@ -917,7 +1130,9 @@ class SubAgentSupervisor:
                 record.started_at = time.time()
                 record.completed_at = None
                 record.elapsed_ms = None
+                record.lease_until = time.time() + SUB_AGENT_MAX_RUN_SECONDS
                 record.runtime_owner = owner_token()
+                record.execution_token = uuid.uuid4().hex
                 self._save(record)
                 self._resume_names.add(record.name)
                 self._resume_prompts[record.name] = prompt
@@ -935,6 +1150,7 @@ class SubAgentSupervisor:
         return [record.to_dict() for record in resumed]
 
     async def _drive(self, name: str) -> None:
+        execution_token = ""
         try:
             while True:
                 async with self._lock:
@@ -946,14 +1162,18 @@ class SubAgentSupervisor:
                     initial_ids = self._initial_mail_ids.pop(name, [])
                     if prompt or resume:
                         record = self._required(name)
-                        if record.status == "closed":
+                        execution_token = record.execution_token
+                        if record.status in {"closed", "terminated", "deleted"}:
                             stop_driving = True
                         else:
+                            record.execution_token = uuid.uuid4().hex
+                            execution_token = record.execution_token
                             stop_driving = False
                             record.status = "running"
                             record.started_at = record.started_at or time.time()
                             record.completed_at = None
                             record.elapsed_ms = None
+                            record.lease_until = time.time() + SUB_AGENT_MAX_RUN_SECONDS
                             self._save(record)
                     else:
                         record = self._required(name)
@@ -965,9 +1185,26 @@ class SubAgentSupervisor:
                     await self._maybe_report_members_drained(exclude=name)
                     return
                 run_runner = self._owned_runner
+                signature_fn = getattr(self.runner, "config_signature", None)
+                current_signature = signature_fn() if callable(signature_fn) else None
+                if run_runner is not None and current_signature is not None:
+                    owned_signature = getattr(run_runner, "_config_signature", None)
+                    if owned_signature is not None and owned_signature != current_signature:
+                        # The parent's project/model/permissions changed since
+                        # the clone was built. Rebuild it instead of running a
+                        # new turn with stale configuration.
+                        closer = getattr(run_runner, "close", None)
+                        if callable(closer):
+                            try:
+                                await closer()
+                            except BaseException:
+                                _logger.exception("[sub-agent] failed to close the stale runner")
+                        run_runner = None
+                        self._owned_runner = None
                 if run_runner is None:
                     factory = getattr(self.runner, "create_supervisor_runner", None)
                     run_runner = await factory() if callable(factory) else self.runner
+                    setattr(run_runner, "_config_signature", current_signature)
                     self._owned_runner = run_runner
                 else:
                     # The owned runner preserves its independent MCP registry,
@@ -983,45 +1220,56 @@ class SubAgentSupervisor:
                 self._provider_messages_by_invocation[invocation_id] = set()
                 invocation_token = _child_invocation_id.set(invocation_id)
                 try:
-                    if resume and hasattr(run_runner, "resume_interrupted"):
-                        result = await run_runner.resume_interrupted(
-                            session_id=record.sub_session_id,
-                            agent=record.name,
-                            model=record.model_id,
-                            reasoning_level=record.reasoning_level,
-                            mode=record.type,
-                            parent_call_id=record.source_call_id,
-                            parent_run_id=record.source_run_id,
-                            parent_turn_id=record.source_turn_id,
-                            supervisor=self,
-                            prompt=resume_prompt,
-                        )
-                    else:
-                        result = await run_runner.run(
-                            task=prompt or "Continue the interrupted sub-agent task using committed conversation history.",
-                            agent=record.name, model=record.model_id,
-                            reasoning_level=record.reasoning_level, mode=record.type,
-                            parent_call_id=record.source_call_id,
-                            parent_run_id=record.source_run_id,
-                            parent_turn_id=record.source_turn_id,
-                            late_context=self._late_context(record),
-                            guidance_source=lambda child=name: self.consume_guidance(child),
-                            guidance_finalizer=lambda child=name: self.finalize_guidance(child),
-                            guidance_acknowledger=lambda ids, child=name: self.acknowledge_guidance(child, ids),
-                            initial_guidance_ids=initial_ids,
-                        )
+                    # Only the child invocation is serialized. The closeout
+                    # below runs outside this lock so a message that arrives
+                    # while the previous run is draining can start the next
+                    # run instead of waiting for bookkeeping.
+                    async with self.agent_lock(name):
+                        async with self._run_semaphore:
+                            if resume and hasattr(run_runner, "resume_interrupted"):
+                                result = await run_runner.resume_interrupted(
+                                    session_id=record.sub_session_id,
+                                    agent=record.name,
+                                    model=record.model_id,
+                                    reasoning_level=record.reasoning_level,
+                                    mode=record.type,
+                                    parent_call_id=record.source_call_id,
+                                    parent_run_id=record.source_run_id,
+                                    parent_turn_id=record.source_turn_id,
+                                    supervisor=self,
+                                    prompt=resume_prompt,
+                                )
+                            else:
+                                result = await run_runner.run(
+                                    task=prompt or "Continue the interrupted sub-agent task using committed conversation history.",
+                                    agent=record.name, model=record.model_id,
+                                    reasoning_level=record.reasoning_level, mode=record.type,
+                                    parent_call_id=record.source_call_id,
+                                    parent_run_id=record.source_run_id,
+                                    parent_turn_id=record.source_turn_id,
+                                    late_context=self._late_context(record),
+                                    guidance_source=lambda child=name: self.consume_guidance(child),
+                                    guidance_finalizer=lambda child=name: self.finalize_guidance(child),
+                                    guidance_acknowledger=lambda ids, child=name: self.acknowledge_guidance(child, ids),
+                                    initial_guidance_ids=initial_ids,
+                                )
                 finally:
                     _child_invocation_id.reset(invocation_token)
                     _child_identity.reset(token)
                     self._provider_messages_by_invocation.pop(invocation_id, None)
                 async with self._lock:
                     current = self._required(name)
-                    current.summary = str(getattr(result, "message", "") or getattr(result, "error", ""))[:1000]
+                    if not self.result_is_current(name, execution_token):
+                        return
+                    # user:“把最多 500 字符这个限制给去掉”+(上游记录也保留完整最终消息，避免通知前已被截断。)
+                    current.summary = str(getattr(result, "message", "") or getattr(result, "error", ""))
                     decision = str(getattr(result, "decision", "done"))
                     current.status = _result_status(result)
                     current.completed_at = time.time()
                     current.elapsed_ms = int((current.completed_at - (current.started_at or current.completed_at)) * 1000)
-                    self._save(current)
+                    current.lease_until = 0.0
+                    if not self._save_if_current(current, execution_token):
+                        return
                     # Guidance accepted after the kernel sealed its final step
                     # becomes the immediate next run; the normal busy path is
                     # consumed inside the same run at a step boundary.
@@ -1052,14 +1300,15 @@ class SubAgentSupervisor:
         except BaseException as exc:
             async with self._lock:
                 record = self._load(name)
-                if record and record.status != "closed":
+                if record and self.result_is_current(name, execution_token):
                     self._offered_mail.pop(name, None)
                     self._initial_mail_ids.pop(name, None)
                     record.status = "failed"
                     record.summary = str(exc)[:1000]
                     record.completed_at = time.time()
-                    self._save(record)
-                    await self._record_member_event(record, "member_failed", detail=str(exc))
+                    record.lease_until = 0.0
+                    if self._save_if_current(record, execution_token):
+                        await self._record_member_event(record, "member_failed", detail=str(exc))
             await self._maybe_report_members_drained(exclude=name)
 
     @staticmethod
@@ -1180,20 +1429,63 @@ class SubAgentSupervisor:
         async with self._lock:
             return self._late_context(self._required(validate_name(name)))
 
-    async def finalize_resumed(self, name: str, result: Any) -> SubAgentRecord:
+    async def finalize_resumed(self, name: str, result: Any, *, expected_token: str | None = None) -> SubAgentRecord:
         """Converge the durable lifecycle record after approval continuation."""
         async with self._lock:
             record = self._required(validate_name(name))
+            # user:“修 问题严重的话 就重新设计”+(终止不可被迟到的审批结果或旧执行覆盖)。
+            if record.status in {"terminated", "closed", "deleted"} or (
+                expected_token is not None and record.execution_token != expected_token
+            ):
+                return record
+            # user:“把最多 500 字符这个限制给去掉”+(审批或问询恢复后的最终消息同样完整保存。)
             record.summary = str(
                 getattr(result, "message", "") or getattr(result, "error", "")
-            )[:1000]
+            )
             record.status = _result_status(result)
             record.completed_at = time.time()
+            record.lease_until = 0.0
             record.elapsed_ms = int(
                 (record.completed_at - (record.started_at or record.completed_at)) * 1000
             )
-            self._save(record)
+            if not self._save_if_current(record, expected_token if expected_token is not None else record.execution_token):
+                return self._required(validate_name(name))
             return record
+
+    async def finalize_terminal(
+        self,
+        name: str,
+        *,
+        status: str = "failed",
+        summary: str = "",
+        expected_token: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Converge a member record after a denied or failed continuation.
+
+        The record was ``paused`` while the card waited.  Without this sync it
+        stayed paused after the child state had already become cancelled or
+        failed, so the interface showed a member that could never finish.
+        """
+        child_name = validate_name(name)
+        async with self._lock:
+            record = self._load(child_name)
+            if record is None:
+                return None
+            if record.status in {"terminated", "closed", "deleted"} or (
+                expected_token is not None and record.execution_token != expected_token
+            ):
+                return record.to_dict()
+            record.status = status
+            record.summary = str(summary or record.summary or "")[:1000]
+            record.completed_at = time.time()
+            record.lease_until = 0.0
+            if record.started_at:
+                record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
+            if not self._save_if_current(record, expected_token if expected_token is not None else record.execution_token):
+                return self._required(child_name).to_dict()
+        await self._record_member_event(record, f"member_{status}")
+        await self._publish_member_status(record, event=f"member_{status}")
+        return record.to_dict()
 
     async def drain_parent_mailbox(self) -> list[dict[str, Any]]:
         async with self._lock:
@@ -1231,7 +1523,8 @@ class SubAgentSupervisor:
                 "name": record.name,
                 "type": record.type,
                 "status": record.status,
-                "summary": (record.summary or "")[:500],
+                # user:“把最多 500 字符这个限制给去掉”+(完成通知向主代理传递完整最终消息。)
+                "summary": record.summary or "",
                 "detail": str(detail or "")[:500],
                 "elapsed_ms": record.elapsed_ms,
                 "occurred_at": record.completed_at or time.time(),
@@ -1281,11 +1574,22 @@ class SubAgentSupervisor:
             return
         from lamtools_core.event import CoreEvent
 
+        # The record uses ``source_*`` names while the projection reads
+        # ``parent_*``. Publish both so a status row can be nested under the
+        # member's parent card instead of floating with no linkage.
+        record_payload = record.to_dict()
+        record_payload.update({
+            "agent": record.name,
+            "parent_call_id": record.source_call_id,
+            "parent_run_id": record.source_run_id,
+            "parent_turn_id": record.source_turn_id,
+        })
+
         try:
             await sink.emit(CoreEvent(
                 name="runtime.sub_agent_status",
                 category="message",
-                payload={"event": event, "sub_agent": record.to_dict()},
+                payload={"event": event, "sub_agent": record_payload},
                 event_id=hashlib.sha256(
                     f"member-status:{self.parent_thread_id}:{record.name}:{record.status}:"
                     f"{record.started_at}:{record.completed_at}:{record.source_turn_id}".encode()
@@ -1429,6 +1733,34 @@ class SubAgentSupervisor:
         out.sort(key=lambda item: item["name"])
         return out
 
+    async def sync_agent_runs(self) -> int:
+        """Rebuild this parent's agent_runs projection from durable records.
+
+        Startup recovery calls this after the sqlite registry is settled, so a
+        projection lost while the process was down is restored from the same
+        authority the supervisor uses.
+        """
+        store = self._agent_run_store
+        if store is None:
+            return 0
+        live_names: set[str] = set()
+        for payload in await self.list():
+            name = str(payload.get("name") or "")
+            record = self._load(name)
+            if record is None:
+                continue
+            live_names.add(name)
+            await store.upsert_agent_run(
+                _agent_run_from_record(self.parent_thread_id, record)
+            )
+        # A record that no longer exists was deleted while the projection could
+        # not be written. Keep the row (transcript identity) but hide it.
+        for run in await store.list_agent_runs(parent_thread_id=self.parent_thread_id):
+            if run.name and run.name not in live_names and run.status != "deleted":
+                run.status = "deleted"
+                await store.upsert_agent_run(run)
+        return len(live_names)
+
     async def wait_for_activity(self, timeout: float) -> str:
         """Wait for the next member state change.
 
@@ -1465,6 +1797,11 @@ class SubAgentSupervisor:
                         record, "member_interrupted", detail="进程关闭时该成员仍在运行"
                     )
             self._tasks.clear()
+        if self._agent_run_tasks:
+            await asyncio.gather(*list(self._agent_run_tasks), return_exceptions=True)
+        key = (str(self.database_path.parent.resolve()), self.parent_thread_id)
+        if _SUPERVISORS.get(key) is self:
+            _SUPERVISORS.pop(key, None)
 
     def _required(self, name: str) -> SubAgentRecord:
         record = self._load(name)
@@ -1478,11 +1815,64 @@ class SubAgentSupervisor:
         return SubAgentRecord(**json.loads(row["payload"])) if row else None
 
     def _save(self, record: SubAgentRecord) -> None:
+        if not record.execution_token:
+            record.execution_token = uuid.uuid4().hex
         with self._connection() as db:
             db.execute(
                 "INSERT INTO sub_agents(parent_thread_id,name,payload) VALUES(?,?,?) ON CONFLICT(parent_thread_id,name) DO UPDATE SET payload=excluded.payload",
                 (self.parent_thread_id, record.name, json.dumps(record.to_dict(), ensure_ascii=False)),
             )
+        self._mirror_agent_run(record)
+
+    def _save_if_current(self, record: SubAgentRecord, token: str) -> bool:
+        # user:“修 问题严重的话 就重新设计”+(在同一数据库写入中校验执行凭据，其他连接提交的终止同样优先)。
+        with self._connection() as db:
+            changed = db.execute(
+                "UPDATE sub_agents SET payload=? WHERE parent_thread_id=? AND name=? "
+                "AND COALESCE(json_extract(payload, '$.execution_token'), '')=? "
+                "AND json_extract(payload, '$.status') NOT IN ('terminated','closed','deleted')",
+                (json.dumps(record.to_dict(), ensure_ascii=False), self.parent_thread_id, record.name, token),
+            ).rowcount
+        if changed:
+            self._mirror_agent_run(record)
+        return bool(changed)
+
+    def _mirror_agent_run(self, record: SubAgentRecord) -> None:
+        """Project one durable record into the turn-control read model.
+
+        The mirror is best-effort and never blocks a member transition: a
+        failed projection is repaired by ``reconcile_sub_agent_state`` at the
+        next startup or watchdog pass. Keeping it off the sqlite commit path
+        also means a core.db lock can never freeze sub-agent lifecycle work.
+        """
+        store = self._agent_run_store
+        if store is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        run = _agent_run_from_record(self.parent_thread_id, record)
+        task = loop.create_task(
+            store.upsert_agent_run(run), name=f"agent-run:{run.agent_run_id}"
+        )
+        self._agent_run_tasks.add(task)
+
+        def _finished(done: asyncio.Task[Any]) -> None:
+            self._agent_run_tasks.discard(done)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                # The projection is repaired by sync_agent_runs; never let a
+                # mirror failure surface as an unretrieved task exception.
+                _logger.debug(
+                    "[sub-agent] agent_run mirror failed name=%s: %s",
+                    record.name,
+                    exc,
+                )
+
+        task.add_done_callback(_finished)
 
     def _mail(self, name: str, direction: str, body: str, *, message_key: str) -> bool:
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -1506,7 +1896,33 @@ class SubAgentSupervisor:
 _SUPERVISORS: dict[tuple[str, str], SubAgentSupervisor] = {}
 
 
-def find_sub_agent_supervisor(parent_thread_id: object) -> SubAgentSupervisor | None:
+def _remember_supervisor(supervisor: "SubAgentSupervisor") -> None:
+    """Adopt a supervisor as this process's owner of one parent session.
+
+    The durable sub-agent rows stay the authority; this index only answers
+    "who in this process can drive them", so a restart-recovered supervisor is
+    reachable by ``find_sub_agent_supervisor`` instead of being invisible.
+    """
+    key = (str(supervisor.database_path.parent.resolve()), supervisor.parent_thread_id)
+    # user:“修 问题严重的话 就重新设计”+(对账对象没有执行权，不能取代仍持有任务的所有者)。
+    if not any(callable(getattr(supervisor.runner, attr, None)) for attr in ("run", "resume_interrupted")):
+        return
+    incumbent = _SUPERVISORS.get(key)
+    if incumbent is not None and incumbent is not supervisor:
+        return
+    if key not in _SUPERVISORS and len(_SUPERVISORS) >= SUB_AGENT_MAX_SUPERVISORS:
+        # Same bound as ``get_sub_agent_supervisor``: startup reconciliation
+        # visits every parent, and an unbounded index would keep one runner per
+        # session alive for the whole process. Only an idle entry is dropped.
+        for candidate_key, candidate in list(_SUPERVISORS.items()):
+            if candidate.has_active_work():
+                continue
+            _SUPERVISORS.pop(candidate_key, None)
+            break
+    _SUPERVISORS[key] = supervisor
+
+
+def find_sub_agent_supervisor(parent_thread_id: object, *, data_dir: Path | str | None = None) -> SubAgentSupervisor | None:
     """Return the live supervisor for one parent session, if this process owns it.
 
     Used by the kernel loop to drain member events at the end of a turn without
@@ -1515,6 +1931,8 @@ def find_sub_agent_supervisor(parent_thread_id: object) -> SubAgentSupervisor | 
     thread_id = str(parent_thread_id or "")
     if not thread_id:
         return None
+    if data_dir is not None:
+        return _SUPERVISORS.get((str(Path(data_dir).resolve()), thread_id))
     for (_, supervisor_thread_id), supervisor in _SUPERVISORS.items():
         if supervisor_thread_id == thread_id:
             return supervisor
@@ -1528,9 +1946,25 @@ async def get_sub_agent_supervisor(
     data_dir: str | Path,
     update_existing_runner: bool = True,
 ) -> SubAgentSupervisor:
+    # user:“修 问题严重的话 就重新设计”+(执行所有者的所有入口都拒绝纯投影对象)。
+    if not any(callable(getattr(runner, attr, None)) for attr in ("run", "resume_interrupted")):
+        raise ValueError("Sub-agent execution owner is not configured")
     key = (str(Path(data_dir).resolve()), str(parent_thread_id))
     supervisor = _SUPERVISORS.get(key)
     if supervisor is None:
+        if len(_SUPERVISORS) >= SUB_AGENT_MAX_SUPERVISORS:
+            # Bound the resident set: every supervisor owns a runner and an
+            # independent MCP registry, so a long-lived process that visits
+            # many sessions would otherwise accumulate them forever.
+            for candidate_key, candidate in list(_SUPERVISORS.items()):
+                if candidate_key == key or candidate.has_active_work():
+                    continue
+                _SUPERVISORS.pop(candidate_key, None)
+                try:
+                    await candidate.shutdown()
+                except BaseException:
+                    _logger.exception("[sub-agent] failed to shut down an idle supervisor")
+                break
         supervisor = SubAgentSupervisor(
             parent_thread_id=parent_thread_id, runner=runner,
             database_path=Path(data_dir) / "sub_agents.sqlite3",
@@ -1562,6 +1996,18 @@ def register_sub_agent_lifecycle_operations(
         if inspect.isawaitable(runner):
             runner = await runner
         runner.session_prefix = thread_id
+        # user:“修 问题严重的话 就重新设计”+(冷启动运行器继承所属会话的工作目录与权限，不使用通用工厂默认值)。
+        state_store = getattr(runner, "state_store", None)
+        state = await state_store.get(thread_id) if state_store is not None else None
+        runtime_snapshot = dict(getattr(state, "metadata", {}).get("runtime_snapshot") or {})
+        runtime_snapshot.update(dict(request.payload.get("runtime_snapshot") or {}))
+        for attr in ("approval_policy", "permission_preset", "active_tier", "tier_tools", "allow_access_outside_workdir"):
+            if attr in runtime_snapshot:
+                setattr(runner, attr, runtime_snapshot[attr])
+        work_root = request.payload.get("work_root") or getattr(state, "metadata", {}).get("work_root")
+        if work_root:
+            runner.work_root = Path(work_root)
+        runner.runtime_snapshot = runtime_snapshot or getattr(runner, "runtime_snapshot", None)
         return await get_sub_agent_supervisor(
             parent_thread_id=thread_id,
             runner=runner,
@@ -1623,17 +2069,22 @@ def register_sub_agent_lifecycle_operations(
                 )
             if request.name == "sub_agent.interrupt":
                 # Stop for the members themselves: the parent turn may already
-                # be terminal, so this never touches the parent runtime.
+                # be terminal, so this never touches the parent runtime. A
+                # per-member Stop keeps its documented "can be continued"
+                # meaning; only a session terminate writes the final state.
                 victims = await supervisor.interrupt_active()
                 return OperationResult(request.name, payload={
                     "items": victims,
                     "lifecycle_action": "members_interrupted",
                 })
+            if request.name == "sub_agent.terminate":
+                victims = await supervisor.interrupt_active(include_paused=True, final_status="terminated")
+                return OperationResult(request.name, payload={"items": victims, "lifecycle_action": "members_terminated"})
             if request.name == "sub_agent.pause":
                 # Per-member Stop has the same meaning as the session Stop: the
                 # member is parked and can be continued, not killed. The kill
                 # entry point stays ``sub_agent.interrupt``.
-                parked = await supervisor.pause_active()
+                parked = await supervisor.pause_active(control_guard=metadata.get("control_guard"))
                 return OperationResult(request.name, payload={
                     "items": parked,
                     "lifecycle_action": "members_suspended",
@@ -1641,7 +2092,7 @@ def register_sub_agent_lifecycle_operations(
             if request.name == "sub_agent.resume":
                 # One Resume press covers both stoppings: members interrupted by
                 # a terminate or a crash, and members a pause parked.
-                resumed = await supervisor.resume_interrupted()
+                resumed = [] if payload.get("suspended_only") else await supervisor.resume_interrupted()
                 resumed += await supervisor.resume_suspended()
                 return OperationResult(request.name, payload={
                     "items": resumed,
@@ -1659,6 +2110,7 @@ def register_sub_agent_lifecycle_operations(
 
     for operation_name in (
         "sub_agent.list",
+        "sub_agent.terminate",
         "sub_agent.create",
         "sub_agent.close",
         "sub_agent.delete",

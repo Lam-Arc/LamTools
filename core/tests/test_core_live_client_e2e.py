@@ -74,6 +74,13 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
     cancelled_stream_started = asyncio.Event()
     async def stream(self, request):
         user_text = "\n".join(str(message.content or "") for message in request.messages if message.role == "user")
+        # A denial is a blocked tool outcome, not the end of the task. The
+        # continuation carries the denial prompt; answer it instead of asking
+        # for the same approval forever.
+        if "拒绝" in user_text or "denied" in user_text:
+            yield LLMStreamEvent(kind="content_delta", content="Understood; no write.")
+            yield LLMStreamEvent(kind="done")
+            return
         if "fail-model" in user_text:
             raise RuntimeError("provider unavailable")
         if "approval" in user_text:
@@ -234,8 +241,14 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                     "action": "deny", "response": "no",
                 },
             )
-            assert approval["snapshot"]["core"]["requests"]["call-approval"]["status"] == "resolved"
-            assert approval["snapshot"]["core"]["status"] == "cancelled"
+            # Denial is accepted asynchronously: the model gets a blocked tool
+            # result and continues. Read the final snapshot instead of the
+            # immediate RPC response, which may predate the continuation.
+            assert approval
+            await _wait_for_terminal(client, "thread-approval")
+            final_snapshot = (await client.read_thread(thread_id="thread-approval"))["snapshot"]
+            assert final_snapshot["core"]["requests"]["call-approval"]["status"] == "resolved"
+            assert final_snapshot["core"]["status"] == "completed"
 
         finally:
             await asyncio.wait_for(client.close(), timeout=1)

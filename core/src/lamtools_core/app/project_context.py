@@ -66,6 +66,9 @@ class ProjectContextFile:
             kind=self.kind,
             content=f"Instructions from: {self.path}\n{self.content.strip()}",
             priority=self.priority,
+            # user:“包括但不限于 agents MD、memory MD”+块变更通知要用人类可读的文件名，
+            # 而不是内部 key。这里只做标记，不进入模型可见内容。
+            metadata={"source_name": self.name},
         )
 
 

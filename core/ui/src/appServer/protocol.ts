@@ -32,6 +32,11 @@ export interface CoreAppSnapshot {
   queue?: CoreAppQueueItem[]
   requests?: Record<string, CoreAppRequestState>
   artifacts?: Record<string, Record<string, unknown>>
+  /** Member names/session ids whose projected timeline was deleted. */
+  deleted_agents?: Record<string, boolean>
+  /** Decision pool, ordered by the server-assigned sequence. */
+  decisions?: CoreAppInteraction[]
+  interactions?: CoreAppInteraction[]
   core?: CoreRuntimeSnapshot
   status?: CoreAppThreadStatus
   history_page?: CoreHistoryPage
@@ -180,6 +185,41 @@ export interface CoreAppRequestState {
   [key: string]: unknown
 }
 
+export interface CoreAppInteractionOption {
+  id?: string
+  label?: string
+  description?: string
+  response?: string
+}
+
+export interface CoreAppInteraction {
+  interaction_id: string
+  request_id?: string
+  turn_id?: string
+  run_id?: string
+  scope?: string
+  kind?: string
+  status?: string
+  /** appearing | processing | ending — the decision-pool lifecycle. */
+  lifecycle?: string
+  /** Stable hash identity for cross-window dedupe and event replay. */
+  decision_id?: string
+  /** Delivery order inside the pool; updates never change it. */
+  sequence?: number
+  project_id?: string
+  agent_name?: string
+  agent_session_id?: string
+  delivered_by?: string
+  tool_call_id?: string
+  title?: string
+  body?: string
+  context?: string
+  options?: CoreAppInteractionOption[]
+  expires_at_ms?: number
+  answer?: Record<string, unknown> | null
+  metadata?: Record<string, unknown>
+}
+
 export interface CoreRuntimeSnapshot {
   thread_id: string
   snapshot_seq: number
@@ -190,6 +230,11 @@ export interface CoreRuntimeSnapshot {
   item_order?: string[]
   requests?: Record<string, CoreAppRequestState>
   artifacts?: Record<string, Record<string, unknown>>
+  /** Open/processing decisions, including cards outside the rendered window. */
+  interactions?: CoreAppInteraction[]
+  /** Decision pool (the same ordered list under its canonical name). */
+  decisions?: CoreAppInteraction[]
+  deleted_agents?: Record<string, boolean>
   status?: CoreAppThreadStatus
 }
 

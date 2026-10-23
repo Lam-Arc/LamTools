@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import re
 import time
 import uuid
 
 from lamtools_core.event import CoreEvent, EventSink
+
+
+def normalize_sub_session_agent_name(agent_name: str | None) -> str:
+    """Canonical member name used in child session ids and tool routing."""
+    value = str(agent_name or "").strip().lower().replace(" ", "_").replace("-", "_")
+    value = re.sub(r"[^a-z0-9_]+", "_", value)
+    value = re.sub(r"_+", "_", value).strip("_")
+    return value or "sub"
 
 
 class SubAgentEventForwardingSink:
@@ -40,18 +49,15 @@ class SubAgentEventForwardingSink:
         # events update the items the run already created (an answered question
         # resolves the card that asked it instead of orphaning it).
         self._invocation_id = str(invocation_id or "").strip() or uuid.uuid4().hex
-        self._events: list[CoreEvent] = []
-
-    @property
-    def events(self) -> list[CoreEvent]:
-        return list(self._events)
 
     @property
     def invocation_id(self) -> str:
         return self._invocation_id
 
     async def emit(self, event: CoreEvent) -> None:
-        self._events.append(event)
+        # Events are forwarded, not retained. The previous buffer appended
+        # every child delta and was never read, so a long child duplicated its
+        # entire stream in memory for the duration of the run.
         if self._parent_sink is None or not _is_visible_child_event(event):
             return
         payload = dict(event.payload or {})
@@ -109,4 +115,4 @@ def _is_visible_child_event(event: CoreEvent) -> bool:
     return event.name == "runtime.part"
 
 
-__all__ = ["SubAgentEventForwardingSink"]
+__all__ = ["SubAgentEventForwardingSink", "normalize_sub_session_agent_name"]

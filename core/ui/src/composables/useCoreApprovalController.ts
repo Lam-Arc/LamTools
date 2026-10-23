@@ -1,5 +1,5 @@
 import { ref, watch, type Ref } from 'vue'
-import { coreDecisionSelectionPlan, type CoreDecisionSelectionPayload } from '../appServer/workbenchActions'
+import { coreAppServerDecision, coreDecisionSelectionPlan, type CoreDecisionSelectionPayload } from '../appServer/workbenchActions'
 import type { CoreMessage, MessagePart } from '../types'
 
 export interface UseCoreApprovalControllerOptions {
@@ -21,6 +21,43 @@ export function useCoreApprovalController(options: UseCoreApprovalControllerOpti
   watch(options.messages, clearResolvedSubmissions)
 
   async function handleDecision(payload: CoreDecisionSelectionPayload): Promise<CoreApprovalHandlingResult> {
+    // The server interaction index can surface a card whose part is outside
+    // the rendered transcript window. It has no MessagePart, so submit it by
+    // the stable interaction id instead of falling back to a chat message.
+    const interactionId = payload.partId.startsWith('interaction:')
+      ? payload.partId.slice('interaction:'.length)
+      : ''
+    if (interactionId) {
+      let canRespond = options.canRespondApproval.value
+      if (!canRespond && options.ensureApprovalChannel) {
+        try {
+          canRespond = await options.ensureApprovalChannel()
+        } catch (error) {
+          lastError.value = error instanceof Error ? error.message : String(error)
+          return 'deferred'
+        }
+      }
+      if (!canRespond) {
+        lastError.value = 'Approval channel is unavailable'
+        return 'deferred'
+      }
+      if (submittingRequestIds.value.has(interactionId)) return 'ignored'
+      addSubmittingRequest(interactionId)
+      try {
+        await options.respondApproval(
+          interactionId,
+          coreAppServerDecision(String(payload.option?.id || payload.response)),
+          String(payload.response || ''),
+        )
+        lastError.value = ''
+        return 'approval'
+      } catch (error) {
+        lastError.value = error instanceof Error ? error.message : String(error)
+        removeSubmittingRequest(interactionId)
+        return 'failed'
+      }
+    }
+
     const plan = coreDecisionSelectionPlan(findMessagePart(payload.partId), payload)
     if (plan.status === 'approval') {
       let canRespond = options.canRespondApproval.value

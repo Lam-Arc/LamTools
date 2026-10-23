@@ -38,29 +38,12 @@ pub mod workflow_store;
 /// must show a thinking-level menu without a Python backend.
 pub use profiles::{DeclaredReasoningLevel, ReasoningDeclaration};
 
-/// How many consecutive tool-only rounds the model may run before it is asked
-/// for a visible progress note. Desktop parity for
-/// `LoopPolicy.max_tool_only_rounds_without_progress`.
-///
-/// There is deliberately no cap on tool rounds: the desktop kernel has none
-/// either, because a real task can take dozens of steps. What the desktop does
-/// instead is require a short report from a model that keeps calling tools
-/// without saying anything, and stop a model that keeps repeating one step.
-pub const DEFAULT_TOOL_ONLY_ROUND_LIMIT: usize = 8;
 /// Desktop parity for `LoopPolicy.max_identical_tool_results`: how often one
 /// exact call-and-result pair may repeat inside the window below before the
 /// turn is wound down.
 pub const DEFAULT_IDENTICAL_TOOL_RESULT_LIMIT: usize = 10;
 /// Desktop parity for `LoopPolicy.identical_tool_result_window`.
 pub const DEFAULT_IDENTICAL_TOOL_RESULT_WINDOW: usize = 12;
-/// The desktop's progress note, verbatim (`kernel/loop.py`), so a model that
-/// learned one host's recovery path recovers the same way on the other.
-const TOOL_PROGRESS_REQUIRED: &str = concat!(
-    "[TOOL_PROGRESS_REQUIRED] Before using more tools, briefly report ",
-    "[已确认事实] [剩余不确定性] [下一步]. Do not repeat prior evidence, and do not ",
-    "claim a result that has not been observed."
-);
-
 // Image input carries no size or count budget here: the desktop has none either
 // (it enforces one 50 MiB limit per attachment and sends what the user attached),
 // so a cap on this side could only refuse requests the desktop accepts.
@@ -255,10 +238,6 @@ pub struct TurnOptions {
     /// desktop treats as full access — mean the mode restricts nothing.
     #[serde(default)]
     pub mode_tools: Option<Vec<String>>,
-    /// Tool-only rounds before the model must report progress. `None` keeps the
-    /// desktop default, `Some(0)` turns the request off.
-    #[serde(default)]
-    pub tool_only_round_limit: Option<usize>,
     /// Repetitions of one exact call-and-result pair that end the turn. `None`
     /// keeps the desktop default, `Some(0)` turns the stop off.
     #[serde(default)]
@@ -274,15 +253,6 @@ impl TurnOptions {
         match &self.mode_tools {
             Some(tools) if !tools.is_empty() => Some(tools.as_slice()),
             _ => None,
-        }
-    }
-
-    /// The progress-note threshold, or `None` when the host disabled it.
-    pub fn tool_only_round_limit(&self) -> Option<usize> {
-        match self.tool_only_round_limit {
-            Some(0) => None,
-            Some(limit) => Some(limit),
-            None => Some(DEFAULT_TOOL_ONLY_ROUND_LIMIT),
         }
     }
 
@@ -421,10 +391,6 @@ pub struct TurnContinuation {
     #[serde(default)]
     pub runtime_warnings: Vec<String>,
     pub tool_rounds: usize,
-    /// Consecutive rounds that called tools without the model saying anything.
-    /// Kept on the continuation so an approval pause does not lose the streak.
-    #[serde(default)]
-    pub tool_only_rounds: usize,
     /// Fingerprints of the most recent tool results, oldest first, trimmed to
     /// `identical_tool_result_window`.
     #[serde(default)]
@@ -437,26 +403,6 @@ pub struct TurnContinuation {
     pub next_call_index: usize,
     #[serde(default)]
     pub compaction: Option<compaction::CompactionReport>,
-}
-
-impl TurnContinuation {
-    /// Whether the round that just finished called tools without narration.
-    ///
-    /// The round's own assistant message is the newest one in the transcript,
-    /// so this reads what the model actually said rather than a copy that could
-    /// drift.
-    fn round_was_tool_only(&self) -> bool {
-        self.messages
-            .iter()
-            .rev()
-            .find_map(|message| match message {
-                Message::AssistantToolCalls { content, .. } => Some(content.trim().is_empty()),
-                _ => None,
-            })
-            // No tool-call message: treat the round as narrated, so a bookkeeping
-            // edge case cannot inject a progress demand nobody earned.
-            .unwrap_or(false)
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -654,7 +600,6 @@ where
             hook_status_messages: Vec::new(),
             runtime_warnings: Vec::new(),
             tool_rounds: 0,
-            tool_only_rounds: 0,
             identical_tool_results: Vec::new(),
             duplicate_result_stop: None,
             pending_calls: Vec::new(),
@@ -902,25 +847,11 @@ where
                 continuation.tool_rounds += 1;
                 continuation.pending_calls.clear();
                 continuation.next_call_index = 0;
-                // Desktop parity (`kernel/loop.py`): a round counts as
-                // tool-only when the model called tools without saying
-                // anything, and the streak resets as soon as it speaks.
-                if continuation.round_was_tool_only() {
-                    continuation.tool_only_rounds += 1;
-                } else {
-                    continuation.tool_only_rounds = 0;
-                }
+                // user:“直接把这个功能删掉，一点都不要留”+(调用工具后不计数、不要求模型汇报)。
                 if let Some(count) = continuation.duplicate_result_stop.take() {
                     return self
                         .finish_after_repeated_results(continuation, count)
                         .await;
-                }
-                if let Some(limit) = continuation.options.tool_only_round_limit() {
-                    if continuation.tool_only_rounds >= limit {
-                        continuation.messages.push(Message::User {
-                            content: TOOL_PROGRESS_REQUIRED.into(),
-                        });
-                    }
                 }
             }
 
@@ -1948,9 +1879,28 @@ mod tests {
         messages.iter().filter(|message| predicate(message)).count()
     }
 
-    const PROGRESS_NOTE: &str = "[TOOL_PROGRESS_REQUIRED] Before using more tools, briefly report \
-[已确认事实] [剩余不确定性] [下一步]. Do not repeat prior evidence, and do not claim a result \
-that has not been observed.";
+    // user:“直接把这个功能删掉，一点都不要留”+(无论是否主动说明进展，都不插入汇报指令)。
+    #[tokio::test]
+    async fn long_tool_runs_never_insert_narration_demands() {
+        for narrate_round in [None, Some(14)] {
+            let model = Arc::new(StreakModel {
+                narrate_round,
+                ..StreakModel::new(30)
+            });
+            let result = AgentRuntime::new(
+                model.clone(),
+                CountingTools { executions: Arc::new(AtomicUsize::new(0)) },
+            )
+            .run_turn(streak_request("no-narration-demand", TurnOptions::default()))
+            .await
+            .unwrap();
+            assert_eq!(result.tool_rounds, 30);
+            assert_eq!(count(&result.runtime_history, |m| matches!(m, Message::User { .. })), 1);
+            for request in model.requests.lock().unwrap().iter() {
+                assert_eq!(count(request, |m| matches!(m, Message::User { .. })), 1);
+            }
+        }
+    }
 
     /// The old runtime abandoned the whole turn on the ninth tool round
     /// (`MAX_TOOL_ROUNDS`), so every round before it was lost. The desktop has
@@ -2000,57 +1950,10 @@ that has not been observed.";
         );
     }
 
-    /// Desktop parity: after eight tool-only rounds the model is asked for a
-    /// short progress note, once per round until it says something.
-    #[tokio::test]
-    async fn tool_only_rounds_are_asked_for_progress_and_a_narrated_round_resets_the_streak() {
-        let silent = AgentRuntime::new(
-            Arc::new(StreakModel::new(12)),
-            CountingTools {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .run_turn(streak_request("turn-gate", TurnOptions::default()))
-        .await
-        .unwrap();
-        let notes = silent
-            .runtime_history
-            .iter()
-            .filter(|message| matches!(message, Message::User { content } if content == PROGRESS_NOTE))
-            .collect::<Vec<_>>();
-        // Rounds 8, 9, 10, 11 and 12 are past the threshold.
-        assert_eq!(notes.len(), 5);
-        // The demand must be the desktop's sentence, word for word.
-
-        let narrated = AgentRuntime::new(
-            Arc::new(StreakModel {
-                narrate_round: Some(9),
-                ..StreakModel::new(12)
-            }),
-            CountingTools {
-                executions: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-        .run_turn(streak_request("turn-gate-reset", TurnOptions::default()))
-        .await
-        .unwrap();
-        let notes = narrated
-            .runtime_history
-            .iter()
-            .filter(|message| matches!(message, Message::User { content } if content == PROGRESS_NOTE))
-            .count();
-        // The narrated round clears the streak, so only rounds 8 and 9 demand it.
-        assert_eq!(notes, 2);
-    }
-
-    /// A host may tune or switch off the two thresholds, like every other
+    /// A host may tune or switch off the repetition threshold, like every other
     /// desktop policy knob the runtime reads from `TurnOptions`.
     #[test]
     fn tool_round_policy_defaults_to_the_desktop_and_can_be_switched_off() {
-        assert_eq!(
-            TurnOptions::default().tool_only_round_limit(),
-            Some(DEFAULT_TOOL_ONLY_ROUND_LIMIT)
-        );
         assert_eq!(
             TurnOptions::default().identical_tool_result_limit(),
             Some(DEFAULT_IDENTICAL_TOOL_RESULT_LIMIT)
@@ -2060,11 +1963,9 @@ that has not been observed.";
             DEFAULT_IDENTICAL_TOOL_RESULT_WINDOW
         );
         let disabled = TurnOptions {
-            tool_only_round_limit: Some(0),
             identical_tool_result_limit: Some(0),
             ..Default::default()
         };
-        assert_eq!(disabled.tool_only_round_limit(), None);
         assert_eq!(disabled.identical_tool_result_limit(), None);
         // A threshold below the window still has to be reachable.
         assert_eq!(

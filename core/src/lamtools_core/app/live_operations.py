@@ -38,6 +38,10 @@ from lamtools_core.runtime.background_processes import (
     default_background_process_registry,
     status_to_dict,
 )
+from lamtools_core.runtime.goal_continuation import (
+    goal_continuation_text,
+    should_continue_goal,
+)
 from lamtools_core.runtime.memory_guard import (
     HOST_MEMORY_EXHAUSTED,
     ensure_pending_memory_resume,
@@ -86,6 +90,7 @@ from .runtime_permissions import (
     load_global_runtime_controls,
     normalize_permission_preset,
     normalize_permission_mode,
+    overlay_runtime_permissions,
     permissions_from_snapshot,
     resolve_permission_preset,
     resolve_session_permissions,
@@ -93,9 +98,8 @@ from .runtime_permissions import (
     session_runtime_preferences,
     with_session_runtime_preferences,
 )
+from lamtools_core.turn.model import TERMINAL_TURN_STATUSES
 
-
-TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
 # History paging bounds.
 #
 # Every live paging path (thread.resume / thread.read / thread.history) routes
@@ -552,6 +556,8 @@ class CoreLiveOperationHost:
     # Optional session store used to persist auto-generated titles. When None,
     # title generation still runs but the result is only broadcast, not stored.
     session_store: Any = None
+    # user:“在正常的目标终止之后，还会多发这条消息出去”+(续跑前核对目标的当前状态)。
+    goal_manager: Any = None
     # Global journal used by Local-First mobile clients. It is optional so the
     # operation host remains usable in focused unit tests.
     sync_journal: Any = None
@@ -724,6 +730,12 @@ class CoreLiveContext:
     runtime_state_store: RuntimeStateStore | None = None
     session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
     host: CoreLiveOperationHost | None = None
+    _job_waiters: dict[str, list[asyncio.Future[Any]]] = field(
+        default_factory=dict, repr=False
+    )
+    _job_outcomes: dict[str, dict[str, Any]] = field(
+        default_factory=dict, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.host is not None:
@@ -762,6 +774,40 @@ class CoreLiveContext:
                 session_actors=self.session_actors,
             ),
         )
+
+    @property
+    def turn_store(self) -> Any:
+        """Lazy read-model store for turns, runs, interactions and jobs."""
+        cached = getattr(self, "_turn_store_cache", None)
+        if cached is not None:
+            return cached
+        from lamtools_core.turn.store import TurnStore
+
+        store = TurnStore(self.session_factory, self.persistence.write_coordinator)
+        object.__setattr__(self, "_turn_store_cache", store)
+        return store
+
+    @property
+    def turn_worker(self) -> Any:
+        """Durable continuation worker bound to this live context."""
+        cached = getattr(self, "_turn_worker_cache", None)
+        if cached is not None:
+            return cached
+        from lamtools_core.turn.worker import TurnWorker
+
+        worker = TurnWorker(
+            self.turn_store,
+            lambda job: _execute_continuation_job(context=self, job=job),
+            # Continuations converge inside the operation (success or a
+            # persisted failure), so an exception is not retried blindly: a
+            # replayed kernel could execute tools twice. A crash instead leaves
+            # the job leased and startup recovery reclaims it.
+            max_attempts=1,
+            retry_delay_ms=0,
+            poll_seconds=0.1,
+        )
+        object.__setattr__(self, "_turn_worker_cache", worker)
+        return worker
 
 
 @dataclass
@@ -1441,545 +1487,12 @@ def _character_page_snapshot(
     return page
 
 
-async def handle_thread_start_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    context: CoreLiveContext,
-) -> CoreLiveOperationOutcome:
-    thread_id = _thread_id_from_params(params)
-    if not thread_id:
-        return CoreLiveOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
-        )
-    try:
-        expected_revision = _expected_revision(params)
-    except ValueError as exc:
-        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-
-    async def write(db: AsyncSession):
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
-        member_payload = await context.host.member_hooks.materialize_thread(
-            db=db,
-            thread_id=thread_id,
-            params=params,
-        )
-        event = await _append_app_event(
-            db,
-            context=context,
-            event=AppEventInput(
-                thread_id=thread_id,
-                method="thread/started",
-                payload={"type": "thread", "status": "idle", **params, **member_payload},
-            ),
-        )
-        return event, await context.persistence.load(db, thread_id)
-
-    event, snapshot = await context.persistence.write(write)
-    await context.hub.publish(event)
-    return CoreLiveOperationOutcome(
-        response=rpc_result(
-            request_id,
-            {"thread": {"id": thread_id}, "event": event.to_dict(), "snapshot": snapshot},
-        ),
-        publish_events=[event],
-    )
 
 
-async def handle_turn_start_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    context: CoreLiveContext,
-) -> CoreLiveOperationOutcome:
-    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
-    client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
-    # Provenance of an automatic (non-user) turn, e.g. "member_wake". It rides the
-    # acceptance and runtime payloads so the projection can mark the turn and its
-    # input item, and the kernel can preserve the wake as a marked system-history
-    # entry at the model boundary.
-    turn_origin = str(params.get("origin") or params.get("turn_origin") or "").strip()
-    input_items = params.get("input")
-    if not thread_id or not isinstance(input_items, list):
-        return CoreLiveOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and input are required")
-        )
-    try:
-        _expected_revision(params)  # 形状校验；回合创建是幂等追加，见 write 说明
-    except ValueError as exc:
-        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-
-    turn_id = str(params.get("turn_id") or params.get("turnId") or f"{thread_id}:turn:{uuid.uuid4().hex[:12]}")
-    user_item_id = str(params.get("user_item_id") or params.get("userItemId") or f"{turn_id}:user")
-    run_claimed = False
-
-    # Capture the session's initial permission state in the acceptance event.
-    # Running toolboxes refresh these fields from the session before each tool
-    # boundary, while the remaining runtime options stay turn-scoped.
-    try:
-        resolved = await _resolve_turn_approval_policy(context=context, params={**params, "thread_id": thread_id})
-    except ValueError as exc:
-        return CoreLiveOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
-        )
-    # Clients and automatic continuations need not repeat the project path on
-    # every message. Resolve it before composer preparation and persist the
-    # same root that the tools/runtime will receive.
-    if not (params.get("work_root") or params.get("workRoot")) and resolved.get("work_root"):
-        params = {**params, "work_root": resolved["work_root"]}
-    try:
-        prepared = await context.host.member_hooks.prepare_turn_input(
-            thread_id=thread_id, params=params, input_items=input_items,
-        )
-    except ValueError as exc:
-        return CoreLiveOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
-        )
-    turn_runtime_snapshot = _runtime_snapshot_with_turn_options(
-        resolved["runtime_snapshot"],
-        params=params,
-        active_mode=resolved.get("active_mode"),
-    )
 
 
-    async def write(db):
-        nonlocal run_claimed
-        _w0 = time_module.perf_counter()
-        existing = await context.persistence.find_client_event(
-            db,
-            thread_id=thread_id,
-            client_message_id=client_message_id,
-            methods=TURN_ACCEPTED_METHODS,
-        )
-        _w1 = time_module.perf_counter()
-        _logger.info("[PERF:turn_start:write] find_client_event=%.3fs", _w1 - _w0)
-        if existing is not None:
-            return ("existing", existing, None, None, None, False)
-
-        _w2 = time_module.perf_counter()
-        # 回合创建是幂等追加（client_message_id 去重）：它只追加 turn/accepted、
-        # user item 与 running 状态，不读改写任何共享字段，真正的并发保护是下面的
-        # 活跃回合判定（注册表 + 元数据行）。因此这里不做修订号 CAS：活跃回合持续
-        # 追加事件会把会话修订号一路推高，而本写又要排队数秒才执行，客户端在发起
-        # RPC 前读到的修订号几乎必然落后，CAS 会把一条合法的新回合打成
-        # REVISION_CONFLICT，还盖住了本该返回的 SESSION_BUSY（2026-10-12）。
-        # 只需要轮次状态与顶层用户条目顺序（活跃轮判定 + 首条消息判定），
-        # 全部存放在元数据行——这里曾装配整个会话的条目表，大会话上阻塞写锁秒级。
-        snapshot = await context.persistence.load_metadata(db, thread_id)
-        _w3 = time_module.perf_counter()
-        _logger.info("[PERF:turn_start:write] load_metadata=%.3fs", _w3 - _w2)
-        active_run_id = latest_active_turn_id(snapshot) or context.host.runtime_task_registry.active_run_id(thread_id)
-        if active_run_id:
-            return CoreLiveOperationOutcome(
-                response=rpc_error(
-                    request_id,
-                    code=INVALID_REQUEST,
-                    message="session has an active turn",
-                    data={
-                        "code": "SESSION_BUSY",
-                        "reason": "active_turn_exists",
-                        "active_run_id": active_run_id,
-                    },
-                )
-            )
-        # A continuation of the paused turn runs through this same executor, so
-        # the gate below must let its own resume pass and only refuse a *new*
-        # turn started behind the paused one.
-        is_continuation = str(
-            params.get("origin") or params.get("turn_origin") or ""
-        ).strip() == "turn_resume"
-        paused_turn_id = "" if is_continuation else _paused_turn_id(snapshot)
-        if paused_turn_id:
-            # One session, one turn: a paused turn owns the session until the
-            # user continues or terminates it. Clients turn a send into a
-            # continue, so reaching here means a caller tried to start a second
-            # turn behind the paused one.
-            return CoreLiveOperationOutcome(
-                response=rpc_error(
-                    request_id,
-                    code=INVALID_REQUEST,
-                    message="session has a paused turn",
-                    data={
-                        "code": "SESSION_PAUSED",
-                        "reason": "paused_turn_exists",
-                        "paused_turn_id": paused_turn_id,
-                    },
-                )
-            )
-        # Detect a first message: the snapshot has no items yet. Captured before
-        # the user item is appended so it reflects the pre-turn state.
-        prior_item_order = snapshot.get("item_order") if isinstance(snapshot, dict) else None
-        is_first_message = not prior_item_order
-        if not context.host.runtime_task_registry.accept_run(thread_id, turn_id):
-            return CoreLiveOperationOutcome(
-                response=rpc_error(
-                    request_id,
-                    code=INVALID_REQUEST,
-                    message="session has an active turn",
-                    data={
-                        "code": "SESSION_BUSY",
-                        "reason": "active_turn_exists",
-                        "active_run_id": context.host.runtime_task_registry.active_run_id(thread_id),
-                    },
-                )
-            )
-
-        run_claimed = True
-        try:
-            materialized = await context.host.member_hooks.materialize_turn(
-                db=db,
-                thread_id=thread_id,
-                turn_id=turn_id,
-                user_item_id=user_item_id,
-                client_message_id=client_message_id,
-                prepared=prepared,
-                params=params,
-            )
-            if materialized.turn_id != turn_id or materialized.user_item_id != user_item_id:
-                raise ValueError("member turn materialization must preserve Core acceptance ids")
-            plan = build_turn_acceptance_plan(
-                thread_id=thread_id,
-                turn_id=turn_id,
-                user_item_id=user_item_id,
-                client_message_id=client_message_id,
-                input_items=prepared.visible_input,
-                work_root=prepared.work_root,
-                turn_payload_extra={
-                    **materialized.turn_payload_extra,
-                    "runtime_snapshot": turn_runtime_snapshot,
-                    **({"origin": turn_origin} if turn_origin else {}),
-                },
-                user_payload_extra={
-                    **materialized.user_payload_extra,
-                    **(
-                        # An automatic turn's input is a SYSTEM message, not the
-                        # user's: the interface must not render it as their text.
-                        {"origin": turn_origin, "type": "systemMessage", "role": "system"}
-                        if turn_origin
-                        else {}
-                    ),
-                },
-                include_turn_status=materialized.include_turn_status,
-            )
-            _w4 = time_module.perf_counter()
-            envelopes = await context.persistence.append_batch(
-                db,
-                app_events=[_app_event_input(plan.turn_accepted), _app_event_input(plan.user_item)],
-                run_item_events=[plan.running_status],
-            )
-            _w5 = time_module.perf_counter()
-            _logger.info("[PERF:turn_start:write] append_batch=%.3fs", _w5 - _w4)
-            accepted, user, running = envelopes[0], envelopes[1], envelopes[2]
-            # 响应快照不再在写锁内装配（曾有一次全量 load + 一次 return_state 全量
-            # load）；需要快照的调用方在事务提交后于锁外装配。
-            return ("applied", accepted, user, running, materialized, is_first_message)
-        except BaseException:
-            context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
-            run_claimed = False
-            raise
-
-    _t0 = time_module.perf_counter()
-    try:
-        write_result = await context.persistence.write(write)
-    except BaseException:
-        if run_claimed:
-            context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
-        raise
-    _t1 = time_module.perf_counter()
-    _logger.info("[PERF:turn_start] persistence.write=%.3fs thread_id=%s", _t1 - _t0, thread_id)
-    if isinstance(write_result, CoreLiveOperationOutcome):
-        return write_result
-    include_snapshot = _include_snapshot_param(params)
-    response_snapshot: dict[str, Any] | None = None
-    outcome_kind, accepted, user, running, materialized, is_first_message = write_result
-    if include_snapshot:
-        response_snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
-    if outcome_kind == "existing":
-        response_payload: dict[str, Any] = {"events": [accepted.to_dict()]}
-        if response_snapshot is not None:
-            response_payload["snapshot"] = response_snapshot
-        return CoreLiveOperationOutcome(
-            response=rpc_result(request_id, response_payload),
-            notify_events=[accepted],
-        )
-
-    # Best-effort: generate a short title from the first user message.
-    if is_first_message and context.host.llm_client and prepared.runtime_text:
-        loop = _get_running_loop()
-        loop.create_task(_auto_title_session(
-            context=context,
-            thread_id=thread_id,
-            first_message=prepared.runtime_text,
-            model_id=str(params.get("model_id") or params.get("modelId") or "").strip(),
-        ))
-
-    imagegen_config = await _resolve_imagegen_config(context=context)
-    runtime_start = {
-        "thread_id": thread_id,
-        "turn_id": turn_id,
-        "user_message_id": user_item_id,
-        "text": prepared.runtime_text,
-        "input": prepared.runtime_input,
-        "work_root": prepared.work_root,
-        "approval_policy": turn_runtime_snapshot["approval_policy"],
-        "active_tier": turn_runtime_snapshot["active_tier"],
-        "tier_tools": resolved["tier_tools"],
-        "active_mode": resolved["active_mode"],
-        "instructions": str(params.get("instructions") or ""),
-        "request_local_late_context": str(params.get("request_local_late_context") or ""),
-        "allow_access_outside_workdir": turn_runtime_snapshot["allow_access_outside_workdir"],
-        "permission_preset": turn_runtime_snapshot["permission_preset"],
-        "runtime_snapshot": turn_runtime_snapshot,
-        "imagegen_config": imagegen_config,
-        "model_id": str(params.get("model_id") or params.get("modelId") or ""),
-        "reasoning_level": str(params.get("reasoning_level") or params.get("reasoningLevel") or ""),
-        "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
-        "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
-        "reasoning_effort": str(params.get("reasoning_effort") or params.get("reasoningEffort") or ""),
-        "shallow_thinking_enabled": (
-            params.get("shallow_thinking_enabled")
-            if isinstance(params.get("shallow_thinking_enabled"), bool)
-            else None
-        ),
-        "context_window_tokens": (
-            params.get("context_window_tokens")
-            if isinstance(params.get("context_window_tokens"), int)
-            and not isinstance(params.get("context_window_tokens"), bool)
-            and params.get("context_window_tokens") > 0
-            else None
-        ),
-        "goal_id": str(params.get("goal_id") or params.get("goalId") or "").strip(),
-        "max_tokens": (
-            params.get("max_tokens")
-            if isinstance(params.get("max_tokens"), int)
-            and not isinstance(params.get("max_tokens"), bool)
-            and params.get("max_tokens") > 0
-            else None
-        ),
-        "temperature": (
-            float(params.get("temperature"))
-            if isinstance(params.get("temperature"), (int, float))
-            and not isinstance(params.get("temperature"), bool)
-            else None
-        ),
-        "compact_trigger_tokens": (
-            params.get("compact_trigger_tokens")
-            if isinstance(params.get("compact_trigger_tokens"), int)
-            and not isinstance(params.get("compact_trigger_tokens"), bool)
-            and params.get("compact_trigger_tokens") > 0
-            else None
-        ),
-        "compact_limit_tokens": (
-            params.get("compact_limit_tokens")
-            if isinstance(params.get("compact_limit_tokens"), int)
-            and not isinstance(params.get("compact_limit_tokens"), bool)
-            and params.get("compact_limit_tokens") > 0
-            else None
-        ),
-        **prepared.runtime_extras,
-        **materialized.runtime_extras,
-        **({"origin": turn_origin} if turn_origin else {}),
-    }
-    events = [accepted, user, running]
-    _t2 = time_module.perf_counter()
-    for event in events:
-        await context.hub.publish(event)
-    _t3 = time_module.perf_counter()
-    _logger.info("[PERF:turn_start] hub.publish(3)=%.3fs", _t3 - _t2)
-    start_failure = await _start_runtime_task(context=context, runtime_start=runtime_start)
-    _t4 = time_module.perf_counter()
-    _logger.info("[PERF:turn_start] _start_runtime_task=%.3fs", _t4 - _t3)
-    if start_failure is not None:
-        failure_event, failure_snapshot = start_failure
-        events.append(failure_event)
-        # 失败终态快照比提交后的常规快照更新（含 failed 终态），必须覆盖。
-        if include_snapshot:
-            response_snapshot = failure_snapshot
-    _logger.info("[PERF:turn_start] total=%.3fs thread_id=%s", _t4 - _t0, thread_id)
-    _logger.info("[live:handle_turn_start] dispatched background task thread_id=%s turn_id=%s model=%s",
-                  thread_id, turn_id, runtime_start.get("model_id") or "default")
-    response_payload = {
-        "events": [event.to_dict() for event in events],
-        "runtime_start": runtime_start,
-    }
-    if response_snapshot is not None:
-        response_payload["snapshot"] = response_snapshot
-    return CoreLiveOperationOutcome(
-        response=rpc_result(request_id, response_payload),
-        notify_events=events,
-        runtime_start=runtime_start,
-    )
 
 
-async def _latest_persisted_active_mode(*, context: "CoreLiveContext", thread_id: str) -> str | None:
-    """Return the newest non-empty active mode persisted for this thread."""
-    session_factory = getattr(context, "session_factory", None)
-    persistence = getattr(context, "persistence", None)
-    load_metadata = getattr(persistence, "load_metadata", None)
-    if not thread_id or not callable(session_factory) or not callable(load_metadata):
-        return None
-    try:
-        async with session_factory() as db:
-            snapshot = await load_metadata(db, thread_id)
-    except Exception:
-        # Mode inheritance is best-effort; an unavailable snapshot must not
-        # prevent an automatic continuation from starting.
-        return None
-    if not isinstance(snapshot, Mapping):
-        return None
-
-    # Turn acceptance stores the authoritative runtime snapshot in `turns`.
-    # Older snapshots may expose only the core projection, so use it only when
-    # the canonical turn map is unavailable.
-    raw_turns = snapshot.get("turns")
-    core = snapshot.get("core")
-    core_turns = core.get("turns") if isinstance(core, Mapping) else None
-    if not isinstance(raw_turns, Mapping):
-        raw_turns = core_turns
-    if not isinstance(raw_turns, Mapping):
-        return None
-
-    def turn_sequence(turn: Mapping[str, Any]) -> int:
-        try:
-            return int(turn.get("last_seq") or turn.get("seq") or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    ordered_turns = sorted(
-        (turn for turn in raw_turns.values() if isinstance(turn, Mapping)),
-        key=turn_sequence,
-        reverse=True,
-    )
-    for turn in ordered_turns:
-        runtime_snapshot = turn.get("runtime_snapshot")
-        if not isinstance(runtime_snapshot, Mapping):
-            continue
-        active_mode = runtime_snapshot.get("active_mode")
-        if isinstance(active_mode, str) and active_mode.strip():
-            return active_mode.strip()
-    return None
-
-
-async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> dict[str, Any]:
-    """Resolve approval policy, tier configuration, and loadtools mode for a turn.
-
-    Returns dict with keys: approval_policy, active_tier, tier_tools, active_mode, load_tools
-    """
-    explicit = params.get("approval_policy") or params.get("approvalPolicy")
-    thread_id = str(
-        params.get("thread_id")
-        or params.get("threadId")
-        or params.get("session_id")
-        or params.get("sessionId")
-        or ""
-    ).strip()
-    active_mode = params.get("active_mode")
-    if isinstance(active_mode, str) and active_mode.strip():
-        active_mode = active_mode.strip()
-    else:
-        active_mode = None
-    automatic_origin = str(params.get("origin") or params.get("turn_origin") or "").strip()
-    if active_mode is None and automatic_origin:
-        active_mode = await _latest_persisted_active_mode(context=context, thread_id=thread_id)
-    load_tools = _load_load_tools(context)
-    global_controls: dict[str, Any] = load_global_runtime_controls()
-    global_value: dict[str, Any] = {}
-    if context.operations.has("settings.get"):
-        try:
-            result = await context.operations.execute(
-                "settings.get",
-                {"namespace": "core.runtimeControls"},
-                metadata={"source": "core_live"},
-            )
-            value = result.payload.get("value") if result.status == "ok" and isinstance(result.payload, dict) else None
-            if isinstance(value, dict):
-                global_value = dict(value)
-                global_controls = {
-                    **global_controls,
-                    **{
-                        "base_tier": normalize_permission_mode(
-                            value.get("permission_mode"),
-                            default=global_controls["base_tier"],
-                        ),
-                        "base_allow_access_outside_workdir": (
-                            value.get("allow_access_outside_workdir")
-                            if isinstance(value.get("allow_access_outside_workdir"), bool)
-                            else global_controls["base_allow_access_outside_workdir"]
-                        ),
-                        "permission_preset": (
-                            value.get("permission_preset")
-                            if value.get("permission_preset") in {"ask", "auto", "full_access"}
-                            else global_controls["permission_preset"]
-                        ),
-                    },
-                }
-        except Exception:
-            global_value = {}
-
-    session_metadata: dict[str, Any] = {}
-    session_store = getattr(getattr(context, "host", None), "session_store", None)
-    if thread_id and session_store is not None:
-        try:
-            session = session_store.get(thread_id)
-            if inspect.isawaitable(session):
-                session = await session
-            raw_metadata = getattr(session, "metadata", None)
-            if isinstance(raw_metadata, dict):
-                session_metadata = dict(raw_metadata)
-                if "runtime_preferences" not in session_metadata:
-                    canonical = with_session_runtime_preferences(
-                        session_metadata,
-                        global_controls=global_value or global_controls,
-                    )
-                    patch = getattr(session_store, "patch", None)
-                    if callable(patch):
-                        patched = patch(thread_id, metadata=canonical)
-                        if inspect.isawaitable(patched):
-                            await patched
-                    session_metadata = canonical
-        except Exception:
-            session_metadata = {}
-
-    preferences = session_runtime_preferences(
-        session_metadata,
-        global_controls=global_value or global_controls,
-    )
-    # New clients submit only the preset.  Legacy callers may still provide
-    # the expanded fields; those are accepted only when no new preset exists.
-    raw_preset = params.get("permission_preset")
-    legacy_active_tier = params.get("active_tier")
-    legacy_outside = params.get("allow_access_outside_workdir")
-    if raw_preset is not None:
-        preset = normalize_permission_preset(raw_preset)
-        base_tier = preferences["base_tier"]
-        base_outside = preferences["base_allow_access_outside_workdir"]
-    elif explicit is not None or legacy_active_tier is not None or isinstance(legacy_outside, bool):
-        policy = "auto_approve" if explicit == "auto_approve" else "require"
-        preset = "auto" if policy == "auto_approve" else "ask"
-        base_tier = normalize_permission_mode(legacy_active_tier, default=preferences["base_tier"])
-        base_outside = legacy_outside if isinstance(legacy_outside, bool) else preferences[
-            "base_allow_access_outside_workdir"
-        ]
-    else:
-        preset = preferences["permission_preset"]
-        base_tier = preferences["base_tier"]
-        base_outside = preferences["base_allow_access_outside_workdir"]
-
-    tier_tools = _load_tier_tools(context)
-    permissions = resolve_session_permissions(
-        preset=preset,
-        base_tier=base_tier,
-        base_allow_access_outside_workdir=base_outside,
-        tier_tools=tier_tools,
-        global_controls=global_value or global_controls,
-    )
-    return {
-        **permissions.to_dict(),
-        "work_root": str(session_metadata.get("work_root") or ""),
-        "tier_tools": permissions.tier_tools,
-        "active_mode": active_mode,
-        "runtime_snapshot": build_runtime_snapshot(permissions=permissions, active_mode=active_mode),
-    }
 
 
 def _page_item_byte_budget(page_bytes: int) -> int:
@@ -2120,11 +1633,10 @@ async def handle_turn_resume_operation(
         from lamtools_core.runtime_owner import LIVE_RUN_STATES, owner_is_live, read_owner
         if state is not None and state.status in LIVE_RUN_STATES and owner_is_live(read_owner(state.metadata)):
             raise ValueError("previous execution is still settling")
-        runtime_snapshot = deepcopy(latest.get("runtime_snapshot") or {})
-        for key in RUNTIME_PERMISSION_KEYS:
-            if key in resolved["runtime_snapshot"]:
-                runtime_snapshot[key] = resolved["runtime_snapshot"][key]
-        if not registry.accept_run(thread_id, turn_id):
+        runtime_snapshot = overlay_runtime_permissions(
+            latest.get("runtime_snapshot") or {}, resolved["runtime_snapshot"]
+        )
+        if not registry.accept_run(thread_id, turn_id, turn_id=turn_id):
             raise ValueError("session has an active turn")
         claimed = turn_id
         execution_id = uuid.uuid4().hex
@@ -2140,20 +1652,16 @@ async def handle_turn_resume_operation(
         # Stop can win before the initial kernel input checkpoint. The accepted
         # input is already committed; use it as system continuation context then.
         original_input = (latest.get("input") or []) if not original_committed else []
-        original_text = ""
-        if original_input:
-            prepared = await context.host.member_hooks.prepare_turn_input(
+        # user:“早停补充输入丢原任务”+原任务和补充输入是两条独立输入，恢复时
+        # 合并成一次输入交给运行时；原来的二选一会把原任务整条丢掉。
+        carry_input = [*original_input, *extra_input]
+        carry_text = ""
+        if carry_input:
+            prepared_carry = await context.host.member_hooks.prepare_turn_input(
                 thread_id=thread_id, params={**runtime_snapshot, "work_root": latest.get("work_root") or ""},
-                input_items=original_input,
+                input_items=carry_input,
             )
-            original_text = prepared.runtime_text
-        extra_text = ""
-        if extra_input:
-            prepared_extra = await context.host.member_hooks.prepare_turn_input(
-                thread_id=thread_id, params={**runtime_snapshot, "work_root": latest.get("work_root") or ""},
-                input_items=extra_input,
-            )
-            extra_text = prepared_extra.runtime_text
+            carry_text = prepared_carry.runtime_text
         event = await context.persistence.append(db, AppEventInput(
             thread_id=thread_id, turn_id=turn_id, method="turn/started", client_message_id=client_id,
             payload={"status": "running", "resumed": True, "run_id": execution_id},
@@ -2166,10 +1674,10 @@ async def handle_turn_resume_operation(
             # instruction. Two inputs do ride along — what the user typed while
             # the turn was paused, and the original task text when the pause won
             # the race against the first checkpoint.
-            "text": extra_text or (original_text if original_input else ""),
-            "input": extra_input,
-            "user_item_id": f"{turn_id}:input:{client_id}" if extra_input else "",
-            "attachment_ids": input_item_attachment_ids(extra_input or original_input),
+            "text": carry_text,
+            "input": carry_input,
+            "user_item_id": f"{turn_id}:input:{client_id}" if carry_input else "",
+            "attachment_ids": input_item_attachment_ids(carry_input),
             "goal_id": runtime_snapshot.get("goal_id") or (
                 state.metadata.get("goal_id", "") if state is not None
                 and str(state.metadata.get("turn_id") or state.run_id) == turn_id else ""
@@ -2186,6 +1694,14 @@ async def handle_turn_resume_operation(
         if isinstance(exc, ValueError):
             return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
         raise
+    if runtime_start is not None:
+        # Cards from the paused run are superseded by this resume. Closing them
+        # must run outside the write coordinator: cancel_interactions and the
+        # closure event are writes themselves, and nesting them under this
+        # transaction deadlocked the resume.
+        await _close_open_interactions(
+            context=context, thread_id=thread_id, reason="turn_resumed"
+        )
     # The parked turn is about to run again: clear the pause request so the
     # resumed kernel does not immediately park on the same signal.
     reset_pause = getattr(context.host.runtime_task_registry, "reset_pause_event", None)
@@ -2197,6 +1713,15 @@ async def handle_turn_resume_operation(
             "turn_id": event.turn_id, "events": [event.to_dict()],
         }))
     failure = await _start_runtime_task(context=context, runtime_start=runtime_start)
+    if failure is None:
+        await _mirror_turn_started(
+            context=context,
+            thread_id=thread_id,
+            turn_id=str(runtime_start.get("turn_id") or ""),
+            run_id=str(runtime_start.get("run_id") or ""),
+            input_payload={"text": str(runtime_start.get("text") or "")},
+            resumed=True,
+        )
     # One press continues the whole session: the members a pause parked start
     # again from their own committed history. Members waiting on a question are
     # untouched, that card is still the user's to answer. Detached so the
@@ -2337,7 +1862,7 @@ async def handle_turn_start_operation(
         # the user item is appended so it reflects the pre-turn state.
         prior_item_order = snapshot.get("item_order") if isinstance(snapshot, dict) else None
         is_first_message = not prior_item_order
-        if not context.host.runtime_task_registry.accept_run(thread_id, turn_id):
+        if not context.host.runtime_task_registry.accept_run(thread_id, turn_id, turn_id=turn_id):
             return CoreLiveOperationOutcome(
                 response=rpc_error(
                     request_id,
@@ -2513,6 +2038,14 @@ async def handle_turn_start_operation(
         await context.hub.publish(event)
     _t3 = time_module.perf_counter()
     _logger.info("[PERF:turn_start] hub.publish(3)=%.3fs", _t3 - _t2)
+    await _mirror_turn_started(
+        context=context,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        run_id=turn_id,
+        input_payload={"text": str(runtime_start.get("text") or "")},
+        resumed=False,
+    )
     start_failure = await _start_runtime_task(context=context, runtime_start=runtime_start)
     _t4 = time_module.perf_counter()
     _logger.info("[PERF:turn_start] _start_runtime_task=%.3fs", _t4 - _t3)
@@ -2589,7 +2122,7 @@ async def _latest_persisted_active_mode(*, context: "CoreLiveContext", thread_id
 
 async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> dict[str, Any]:
     """Resolve approval policy, tier configuration, and loadtools mode for a turn.
-    
+
     Returns dict with keys: approval_policy, active_tier, tier_tools, active_mode, load_tools
     """
     explicit = params.get("approval_policy") or params.get("approvalPolicy")
@@ -2911,11 +2444,108 @@ async def wait_live_background_tasks() -> None:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
+async def _mirror_turn_started(
+    *,
+    context: "CoreLiveContext",
+    thread_id: str,
+    turn_id: str,
+    run_id: str,
+    input_payload: dict[str, Any] | None = None,
+    resumed: bool = False,
+) -> None:
+    """Record the turn/run in the new read model (best-effort mirror)."""
+    if not thread_id or not turn_id:
+        return
+    try:
+        from lamtools_core.turn.coordinator import TurnCoordinator
+
+        coordinator = TurnCoordinator(context.turn_store)
+        if await context.turn_store.get_turn(turn_id) is None:
+            await coordinator.ensure_turn(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                input_payload=input_payload,
+                status="queued",
+            )
+        if resumed:
+            await coordinator.begin_resumed_run(turn_id, run_id)
+        else:
+            await coordinator.start_run(turn_id, run_id)
+    except BaseException:
+        _logger.exception(
+            "[live:mirror] turn start failed thread_id=%s turn_id=%s", thread_id, turn_id
+        )
+
+
+async def _mirror_turn_status(
+    *,
+    context: "CoreLiveContext",
+    thread_id: str,
+    turn_id: str,
+    status: str,
+    run_id: str = "",
+) -> None:
+    """Mirror a settled status into the new read model (best-effort)."""
+    if not thread_id or not turn_id:
+        return
+    try:
+        from lamtools_core.turn.model import Turn, now_ms as turn_now_ms
+
+        store = context.turn_store
+        turn = await store.get_turn(turn_id)
+        if turn is None:
+            await store.create_turn(
+                Turn(
+                    turn_id=turn_id,
+                    thread_id=thread_id,
+                    status=status,  # type: ignore[arg-type]
+                    epoch=0,
+                    created_seq=turn_now_ms(),
+                    updated_seq=turn_now_ms(),
+                )
+            )
+            return
+        if turn.status == status:
+            return
+        if turn.status in {"completed", "failed", "cancelled"}:
+            return
+        if turn.status in {"paused", "waiting", "stopping"} and status in {
+            "completed",
+            "failed",
+            "running",
+        }:
+            # A control intent owns these states; a late run result must not
+            # overwrite it.
+            return
+        if turn.status == "waiting" and status == "paused":
+            pass
+        transitioned = await store.transition_turn(
+            turn_id,
+            expected_epoch=turn.epoch,
+            expected_status=turn.status,
+            status=status,
+            event="mirror_status",
+            active_run_id=run_id or turn.active_run_id,
+            bump_epoch=True,
+        )
+        # user:“修 问题严重的话 就重新设计”+(比较写入失败说明控制权已改变，镜像不得绕过版本约束强写)。
+        if transitioned is None:
+            return
+    except BaseException:
+        _logger.exception(
+            "[live:mirror] turn status failed thread_id=%s turn_id=%s status=%s",
+            thread_id,
+            turn_id,
+            status,
+        )
+
+
 async def handle_turn_cancel_operation(
     *,
     request_id: int | str | None,
     params: dict[str, Any],
     context: CoreLiveContext,
+    terminate: bool = False,
 ) -> CoreLiveOperationOutcome:
     thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
     if not thread_id:
@@ -2961,6 +2591,7 @@ async def handle_turn_cancel_operation(
             expected_revision=expected_revision,
             live_turn_id=live_turn_id,
             preempted_live_task=preempted_live_task,
+            terminate=terminate,
         ),
         label="turn-cancel-finalizer",
         thread_id=thread_id,
@@ -2985,7 +2616,36 @@ async def handle_turn_terminate_operation(
     wire method instead of overloading the pause a single click sends.
     """
     return await handle_turn_cancel_operation(
-        request_id=request_id, params=params, context=context
+        request_id=request_id, params=params, context=context, terminate=True
+    )
+
+
+@dataclass(frozen=True)
+class _PauseTarget:
+    # user:“修 问题严重的话 就重新设计”+(控制目标固定回合、执行和代次，任何异步收尾都不得重新猜目标)。
+    turn_id: str
+    registry_run_id: str
+    runtime_run_id: str
+    generation: int
+    members_only: bool = False
+
+    def owns_registry(self, context: CoreLiveContext, thread_id: str) -> bool:
+        registry = context.host.runtime_task_registry
+        return registry.control_generation(thread_id) == self.generation
+
+    def owns_state(self, state: Any) -> bool:
+        return bool(state is None or (
+            str(state.metadata.get("turn_id") or state.run_id) == self.turn_id
+            and (not self.runtime_run_id or state.run_id == self.runtime_run_id)
+        ))
+
+
+async def _pause_target_current(context: CoreLiveContext, thread_id: str, target: _PauseTarget) -> bool:
+    if not target.owns_registry(context, thread_id):
+        return False
+    state = await context.runtime_state_store.get(thread_id) if context.runtime_state_store else None
+    return target.owns_registry(context, thread_id) and target.owns_state(state) and (
+        target.members_only or state is None or state.status not in {"completed", "failed", "cancelled"}
     )
 
 
@@ -3014,22 +2674,65 @@ async def handle_turn_pause_operation(
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     reason = str(params.get("reason") or params.get("pause_reason") or "user_pause").strip() or "user_pause"
     registry = context.host.runtime_task_registry
+    requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "").strip()
     live_turn_id = registry.active_run_id(thread_id) or ""
+    # user:“旧回合的暂停不能取消当前新执行”+请求点名的回合若不是这条执行的回合，
+    # 只回报现状，不下发暂停也不取消任务：控制动作必须绑定它自己的目标。
+    active_turn_id = getattr(registry, "active_turn_id", None)
+    live_logical_turn = active_turn_id(thread_id) if callable(active_turn_id) else ""
+    if requested_turn_id and live_turn_id and requested_turn_id != live_logical_turn:
+        _logger.info(
+            "[live:pause] stale target ignored thread_id=%s requested=%s live_turn=%s live_run=%s",
+            thread_id,
+            requested_turn_id,
+            live_logical_turn,
+            live_turn_id,
+        )
+        return CoreLiveOperationOutcome(
+            response=rpc_result(request_id, {
+                "status": "stale_target",
+                "requested_turn_id": requested_turn_id,
+                "current_turn_id": live_logical_turn,
+                "event": None,
+            })
+        )
+    generation = registry.control_generation(thread_id)
+    logical_turn_id = live_logical_turn or requested_turn_id
+    if not logical_turn_id:
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, thread_id)
+        logical_turn_id = latest_active_turn_id(snapshot) or _paused_turn_id(snapshot) or _latest_turn_id_any_status(snapshot) or ""
+    if not logical_turn_id:
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, {"status": "idle", "event": None}))
+    state = await context.runtime_state_store.get(thread_id) if context.runtime_state_store else None
+    target = _PauseTarget(
+        turn_id=logical_turn_id, registry_run_id=live_turn_id,
+        runtime_run_id=state.run_id if state is not None and str(state.metadata.get("turn_id") or state.run_id) == logical_turn_id else "",
+        generation=generation,
+        members_only=not live_turn_id and state is not None and state.status in {"completed", "failed", "cancelled"},
+    )
+    if not await _pause_target_current(context, thread_id, target):
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, {"status": "stale_target", "event": None}))
     request_pause = getattr(registry, "request_pause", None)
     if callable(request_pause) and live_turn_id:
         # ``force`` aborts a tool that never checks the pause event; the kernel
         # tells that teardown apart from a cancel and still parks the turn.
-        request_pause(thread_id, run_id=live_turn_id, force=True, reason=reason)
+        request_pause(
+            thread_id,
+            run_id=live_turn_id,
+            turn_id=requested_turn_id or None,
+            force=True,
+            reason=reason,
+        )
     elif callable(getattr(registry, "get_pause_event", None)):
         # No live task: members may still be working, and a pause must stop them
         # too. Setting the event covers the kernels that pick it up later.
         registry.get_pause_event(thread_id).set()
-    _mark_pause_reason(context=context, thread_id=thread_id, reason=reason)
     _spawn_live_background(
         _turn_pause_finalizer(
             context=context,
             thread_id=thread_id,
-            live_turn_id=live_turn_id,
+            target=target,
             reason=reason,
         ),
         label="turn-pause-finalizer",
@@ -3040,71 +2743,63 @@ async def handle_turn_pause_operation(
     )
 
 
-def _mark_pause_reason(*, context: CoreLiveContext, thread_id: str, reason: str) -> None:
-    """Remember why this session paused, for the log and for a later reader.
+async def _settle_thread_continuations(
+    *, context: CoreLiveContext, thread_id: str, reason: str, turn_id: str | None = None
+) -> None:
+    """Close pending continuation jobs when a control action owns the turn.
 
-    The durable status is written by the run that actually parks; this annotates
-    the reason so an operator can tell a user pause from the memory watchdog in
-    the log and in the runtime state.
+    A pause is resumed from the parked runtime state, not by replaying the
+    approval job. A terminate never resumes at all. Leaving either job
+    ``pending`` would make startup recovery re-run a superseded decision.
     """
-    store = context.runtime_state_store
-    if store is None or not thread_id:
+    if not thread_id:
         return
-
-    def _mutate(state: Any) -> None:
-        if not isinstance(getattr(state, "metadata", None), dict):
-            state.metadata = {}
-        state.metadata["pause_reason"] = reason
-
-    task = asyncio.get_running_loop().create_task(
-        _save_runtime_state_with_retry(store, thread_id, mutate=_mutate)
-    )
-
-    def _done(done: asyncio.Task[None]) -> None:
-        if not done.cancelled() and done.exception() is not None:
-            _logger.warning(
-                "[live:pause] could not record the pause reason thread_id=%s: %s",
-                thread_id,
-                done.exception(),
-            )
-
-    task.add_done_callback(_done)
+    try:
+        await context.turn_store.settle_thread_jobs(
+            thread_id, status="cancelled", error=reason, turn_id=turn_id
+        )
+    except BaseException:
+        _logger.exception(
+            "[live] failed to settle continuation jobs thread_id=%s", thread_id
+        )
 
 
 async def _turn_pause_finalizer(
-    *,
-    context: CoreLiveContext,
-    thread_id: str,
-    live_turn_id: str,
-    reason: str,
+    *, context: CoreLiveContext, thread_id: str, target: _PauseTarget, reason: str,
 ) -> None:
-    """Settle a pause off the RPC path: close the cut step, park the members.
-
-    Idempotent: a turn that already reads ``paused`` is left alone, and a member
-    that is already parked reports nothing.
-    """
     registry = context.host.runtime_task_registry
-    task = None
-    if live_turn_id:
-        task_getter = getattr(registry, "task", None)
-        task = task_getter(thread_id, run_id=live_turn_id) if callable(task_getter) else None
+    if target.members_only:
+        if await _pause_target_current(context, thread_id, target):
+            await _pause_session_members(context=context, thread_id=thread_id, reason=reason, target=target)
+        return
+    task = registry.task(thread_id, run_id=target.registry_run_id) if target.registry_run_id else None
     if task is not None and not task.done():
         await _escalate_and_wait_cancel(thread_id, task)
-    # The kernel writes the paused state itself, but it does so from a detached
-    # finalizer when the pause had to cancel the task. Settling the state here
-    # closes that race: a Continue issued right after the pause must not read
-    # "the previous execution is still settling".
-    await _settle_paused_runtime_state(
-        context=context, thread_id=thread_id, reason=reason
-    )
-    await _ensure_paused_status(
-        context=context, thread_id=thread_id, live_turn_id=live_turn_id, reason=reason
-    )
-    await _pause_session_members(context=context, thread_id=thread_id, reason=reason)
+
+    async def settle() -> None:
+        # user:“修 问题严重的话 就重新设计”+(短控制提交与新建/恢复/终止串行，所有写入固定到同一目标)。
+        if not await _pause_target_current(context, thread_id, target):
+            return
+        await _settle_paused_runtime_state(context=context, thread_id=thread_id, reason=reason, target=target)
+        if not await _pause_target_current(context, thread_id, target):
+            return
+        await _settle_thread_continuations(context=context, thread_id=thread_id,
+            reason=f"turn paused: {reason}", turn_id=target.turn_id)
+        await _close_open_interactions(context=context, thread_id=thread_id,
+            reason="turn_paused", turn_id=target.turn_id)
+        await _ensure_paused_status(context=context, thread_id=thread_id,
+            live_turn_id=target.turn_id, reason=reason, target=target)
+        if await _pause_target_current(context, thread_id, target):
+            await _mirror_turn_status(context=context, thread_id=thread_id,
+                turn_id=target.turn_id, status="paused")
+
+    await context.session_actors.run(thread_id, settle)
+    if await _pause_target_current(context, thread_id, target):
+        await _pause_session_members(context=context, thread_id=thread_id, reason=reason, target=target)
 
 
 async def _settle_paused_runtime_state(
-    *, context: CoreLiveContext, thread_id: str, reason: str
+    *, context: CoreLiveContext, thread_id: str, reason: str, target: _PauseTarget
 ) -> None:
     """Move the thread's runtime state to ``paused`` unless it already ended.
 
@@ -3117,16 +2812,25 @@ async def _settle_paused_runtime_state(
         return
 
     def _mutate(state: Any) -> None:
-        if str(getattr(state, "status", "") or "") in {"completed", "failed", "cancelled", "paused"}:
+        if not target.owns_registry(context, thread_id) or not target.owns_state(state):
             return
-        state.status = "paused"
-        state.loop_state = "paused"
+        status = str(getattr(state, "status", "") or "")
+        if status in {"completed", "failed", "cancelled"}:
+            return
+        if status != "paused":
+            state.status = "paused"
+            state.loop_state = "paused"
         if not isinstance(getattr(state, "metadata", None), dict):
             state.metadata = {}
         state.metadata["pause_reason"] = reason
+        # The card was closed by the pause; leaving the durable request behind
+        # let a stale client (or the five-minute auto-continue) answer a turn
+        # the user had already parked, silently reviving it.
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
 
     try:
-        await _save_runtime_state_with_retry(store, thread_id, mutate=_mutate)
+        await _patch_runtime_state(store, thread_id, mutate=_mutate)
     except BaseException:
         _logger.exception("[live:pause] failed to settle the runtime state thread_id=%s", thread_id)
 
@@ -3137,6 +2841,7 @@ async def _ensure_paused_status(
     thread_id: str,
     live_turn_id: str,
     reason: str,
+    target: _PauseTarget,
 ) -> None:
     """Close the paused turn's dangling step and make sure it reads ``paused``.
 
@@ -3160,7 +2865,32 @@ async def _ensure_paused_status(
     async def write(db: AsyncSession):
         appended = []
         current = await context.persistence.load(db, thread_id)
+        known = {**(current.get("turns") or {}), **((current.get("core") or {}).get("turns") or {})}
+        if not target.owns_registry(context, thread_id) or turn_id not in known or _turn_is_terminal(current, turn_id):
+            return []
+        current_core = current.get("core") if isinstance(current.get("core"), dict) else {}
+        current_items = current_core.get("items") if isinstance(current_core.get("items"), dict) else {}
         for item_id in _collect_non_terminal_turn_item_ids(current, turn_id, skip_child_items=True):
+            existing_item = current_items.get(item_id) if isinstance(current_items.get(item_id), dict) else {}
+            existing_payload = (
+                existing_item.get("payload")
+                if isinstance(existing_item.get("payload"), dict)
+                else {}
+            )
+            original = str(
+                existing_payload.get("message")
+                or existing_payload.get("content")
+                or existing_item.get("content")
+                or ""
+            ).strip()
+            # The pause cuts the step, but the user must still be able to read
+            # what was being asked. The card becomes a cancelled row, and that
+            # row now carries the original question instead of a generic note.
+            message = (
+                f"已暂停：{original}"
+                if original
+                else "已暂停，未完成的步骤会在继续后重新执行。"
+            )
             appended.append(
                 await _append_run_item(
                     db,
@@ -3170,7 +2900,7 @@ async def _ensure_paused_status(
                         turn_id=turn_id,
                         item_id=item_id,
                         reason="user_pause",
-                        message="已暂停，未完成的步骤会在继续后重新执行。",
+                        message=message,
                     ),
                 )
             )
@@ -3184,7 +2914,8 @@ async def _ensure_paused_status(
                 db,
                 context=context,
                 event=_build_paused_status_event(
-                    snapshot, thread_id=thread_id, turn_id=turn_id, reason=reason
+                    snapshot, thread_id=thread_id, turn_id=turn_id, reason=reason,
+                    execution_id=target.runtime_run_id or None,
                 ),
             )
         )
@@ -3204,9 +2935,10 @@ def _build_paused_status_event(
     thread_id: str,
     turn_id: str,
     reason: str,
+    execution_id: str | None = None,
 ) -> RunItemEvent:
     """Status item that moves a turn to ``paused`` without ending it."""
-    execution_id = _turn_execution_id(snapshot, turn_id)
+    execution_id = execution_id or _turn_execution_id(snapshot, turn_id)
     return RunItemEvent(
         kind="status",
         thread_id=thread_id,
@@ -3219,7 +2951,7 @@ def _build_paused_status_event(
         event_id=f"{execution_id}:paused:{uuid.uuid4().hex[:8]}",
         run_id=execution_id,
         turn_id=turn_id,
-        item_id=f"{execution_id}:paused",
+        item_id=f"{turn_id}:paused:{execution_id}",
         status="paused",
         payload={
             "type": "turn",
@@ -3237,6 +2969,15 @@ async def _resume_session_members(*, context: CoreLiveContext, thread_id: str) -
 
     supervisor = find_sub_agent_supervisor(thread_id)
     if supervisor is None:
+        # user:“修 问题严重的话 就重新设计”+(重启后通过执行器工厂重建，不能把投影器当成运行器)。
+        if context.operations.has("sub_agent.resume"):
+            resolved = await _resolve_turn_approval_policy(context=context, params={"thread_id": thread_id, "origin": "member_resume"})
+            result = await context.operations.execute("sub_agent.resume", {
+                "thread_id": thread_id, "suspended_only": True,
+                "runtime_snapshot": resolved["runtime_snapshot"], "work_root": resolved.get("work_root"),
+            })
+            if result.status != "ok":
+                _logger.warning("[live:resume] member reconstruction failed thread_id=%s", thread_id)
         return
     resume_suspended = getattr(supervisor, "resume_suspended", None)
     if not callable(resume_suspended):
@@ -3252,7 +2993,7 @@ async def _resume_session_members(*, context: CoreLiveContext, thread_id: str) -
         )
 
 
-async def _pause_session_members(*, context: CoreLiveContext, thread_id: str, reason: str) -> None:
+async def _pause_session_members(*, context: CoreLiveContext, thread_id: str, reason: str, target: _PauseTarget | None = None) -> None:
     """Park every active member of a paused session.
 
     Members waiting on an unanswered question are left alone: their card is
@@ -3263,13 +3004,16 @@ async def _pause_session_members(*, context: CoreLiveContext, thread_id: str, re
     from lamtools_core.sub_agent_supervisor import find_sub_agent_supervisor
 
     supervisor = find_sub_agent_supervisor(thread_id)
+    control_guard = (lambda: target.owns_registry(context, thread_id)) if target is not None else None
     if supervisor is None:
+        if context.operations.has("sub_agent.pause"):
+            await context.operations.execute("sub_agent.pause", {"thread_id": thread_id}, metadata={"control_guard": control_guard})
         return
     pause_active = getattr(supervisor, "pause_active", None)
     if not callable(pause_active):
         return
     try:
-        parked = await pause_active()
+        parked = await pause_active(control_guard=control_guard)
     except BaseException:
         _logger.exception("[live:pause] failed to park members thread_id=%s", thread_id)
         return
@@ -3290,6 +3034,7 @@ async def _turn_cancel_finalizer(
     expected_revision: int | None,
     live_turn_id: str,
     preempted_live_task: bool,
+    terminate: bool = False,
 ) -> None:
     """Settle a turn interrupt off the RPC critical path.
 
@@ -3335,14 +3080,40 @@ async def _turn_cancel_finalizer(
             thread_id=thread_id,
             turn_id=recorded_turn_id,
         )
+    await _settle_thread_continuations(
+        context=context, thread_id=thread_id, reason="turn terminated"
+    )
+    await _close_open_interactions(
+        context=context,
+        thread_id=thread_id,
+        reason="turn_terminated" if terminate else "turn_cancelled",
+        include_member_cards=True,
+    )
     # A user Stop pauses the whole session: the members this session left
     # running are interrupted too, so one Stop leaves nothing working behind it
-    # (and one Resume brings everything back). Members waiting on an unanswered
-    # question are deliberately left alone — that card is still the user's.
-    await _interrupt_session_members(context=context, thread_id=thread_id)
+    # (and one Resume brings everything back). A pause keeps members waiting on
+    # an unanswered question; a terminate discards those cards.
+    await _interrupt_session_members(
+        context=context,
+        thread_id=thread_id,
+        include_paused=terminate,
+        final_status="terminated" if terminate else None,
+    )
+    await _mirror_turn_status(
+        context=context,
+        thread_id=thread_id,
+        turn_id=recorded_turn_id or live_turn_id,
+        status="cancelled",
+    )
 
 
-async def _interrupt_session_members(*, context: CoreLiveContext, thread_id: str) -> None:
+async def _interrupt_session_members(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    include_paused: bool = False,
+    final_status: str | None = None,
+) -> None:
     """Interrupt every active member of a session after a user Stop.
 
     The supervisor owns member tasks, and only the process that owns them can
@@ -3354,9 +3125,18 @@ async def _interrupt_session_members(*, context: CoreLiveContext, thread_id: str
 
     supervisor = find_sub_agent_supervisor(thread_id)
     if supervisor is None:
+        # user:“修 问题严重的话 就重新设计”+(终止也必须覆盖重启后只存在于持久记录中的成员)。
+        operation = "sub_agent.terminate" if include_paused else "sub_agent.interrupt"
+        if context.operations.has(operation):
+            await context.operations.execute(operation, {"thread_id": thread_id})
         return
     try:
-        victims = await supervisor.interrupt_active()
+        # user:“终止不能复用可恢复的 interrupted”+会话终止与普通停止必须落
+        # 不同的成员状态，Resume 才不会把用户已终止的成员拉回来（AR-02）。
+        victims = await supervisor.interrupt_active(
+            include_paused=include_paused,
+            final_status=final_status,
+        )
     except BaseException:
         _logger.exception("[live:cancel] member interruption failed thread_id=%s", thread_id)
         return
@@ -3427,7 +3207,7 @@ async def _append_interrupting_record(
             event_id=f"{execution_id}:interrupting",
             run_id=execution_id,
             turn_id=turn_id,
-            item_id=f"{execution_id}:interrupting",
+            item_id=f"{turn_id}:interrupting",
             status="interrupting",
             payload={"type": "turn", "status": "interrupting", "raw_end_reason": "user_interrupt"},
         )
@@ -3578,9 +3358,23 @@ async def handle_turn_force_reset_operation(
     if turn_id:
         await _persist_cancelled_runtime_state(context=context, thread_id=thread_id, turn_id=turn_id)
         context.host.runtime_task_registry.cancel(thread_id, run_id=turn_id or None, force=True)
+        await _settle_thread_continuations(
+            context=context, thread_id=thread_id, reason="turn force reset"
+        )
+        await _close_open_interactions(
+            context=context, thread_id=thread_id, reason="turn_force_reset"
+        )
     # Force reset is the strongest Stop: the session's active members stop with
-    # it, exactly like an ordinary user Stop.
-    await _interrupt_session_members(context=context, thread_id=thread_id)
+    # it, including members parked on a question.
+    await _interrupt_session_members(
+        context=context, thread_id=thread_id, include_paused=True
+    )
+    await _mirror_turn_status(
+        context=context,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        status="cancelled",
+    )
     for event in events:
         await context.hub.publish(event)
     response_payload: dict[str, Any] = {"status": "reset", "events": [event.to_dict() for event in events]}
@@ -3602,6 +3396,126 @@ def _activate_stored_guidance(context: "CoreLiveContext", event: AppEventEnvelop
             run_id=str(event.turn_id or ""), guidance_id=guidance_id,
         )
     registry.publish_guidance(event.thread_id, run_id=str(event.turn_id or ""), guidance_id=guidance_id)
+
+
+async def _turn_has_ended(
+    context: CoreLiveContext, thread_id: str, turn_id: str
+) -> bool:
+    """Whether a steer target is a finished turn rather than a paused one."""
+    store = context.host.runtime_state_store
+    if store is None:
+        return True
+    try:
+        state = await store.get(thread_id)
+    except BaseException:
+        return False
+    if state is None:
+        return True
+    status = str(getattr(state, "status", "") or "")
+    if status == "paused":
+        return False
+    if status in {"completed", "failed", "cancelled"}:
+        return True
+    try:
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, thread_id)
+        core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+        turn = (
+            (snapshot.get("turns") or {}).get(turn_id)
+            or (core.get("turns") or {}).get(turn_id)
+            or {}
+        )
+        return str(turn.get("status") or "") in {
+            "completed",
+            "failed",
+            "cancelled",
+            "skipped",
+        }
+    except BaseException:
+        return False
+
+
+async def _queue_refused_guidance(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    params: dict[str, Any],
+    input_items: list[dict[str, Any]],
+    client_message_id: str,
+) -> bool:
+    """File guidance the live run can no longer take as the next user turn.
+
+    The decision is part of the turn's final reply boundary: the text must not
+    be dropped and must not be injected into a sealed run. A queued item is a
+    normal user message; an idle session dispatches it immediately, and a
+    still-running turn's completion path dispatches it when it ends.
+    """
+    queue_params: dict[str, Any] = {
+        "thread_id": thread_id,
+        "client_message_id": client_message_id,
+        "input": input_items,
+        "mode": "next_turn",
+    }
+    for key in (
+        "work_root",
+        "workRoot",
+        "model_id",
+        "reasoning_level",
+        "thinking_enabled",
+        "thinking_budget",
+        "reasoning_effort",
+        "shallow_thinking_enabled",
+        "context_window_tokens",
+        "max_tokens",
+        "temperature",
+        "compact_trigger_tokens",
+        "compact_limit_tokens",
+        "permission_preset",
+        "approval_policy",
+        "active_tier",
+        "tier_tools",
+        "allow_access_outside_workdir",
+        "active_mode",
+        "origin",
+    ):
+        if key in params and params[key] is not None:
+            queue_params[key] = params[key]
+    try:
+        outcome = await handle_queue_create_operation(
+            request_id=None, params=queue_params, context=context
+        )
+    except BaseException:
+        _logger.exception(
+            "[live:steer] failed to queue refused guidance thread_id=%s", thread_id
+        )
+        return False
+    response = getattr(outcome, "response", None) or {}
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict) or not result.get("queue_item"):
+        return False
+    state = None
+    try:
+        if context.runtime_state_store is not None:
+            state = await context.runtime_state_store.get(thread_id)
+    except BaseException:
+        state = None
+    if state is not None and str(getattr(state, "status", "") or "") == "paused":
+        return True
+    idle = False
+    try:
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, thread_id)
+        idle = latest_active_turn_id(snapshot) is None
+    except BaseException:
+        idle = False
+    if idle and context.host.runtime_task_registry.active_run_id(thread_id) is None:
+        await _dispatch_next_queue_item(
+            context=context,
+            thread_id=thread_id,
+            work_root=str(params.get("work_root") or params.get("workRoot") or ""),
+            completed_turn_id="",
+        )
+    return True
 
 
 async def handle_turn_steer_operation(
@@ -3662,7 +3576,10 @@ async def handle_turn_steer_operation(
             ready=False,
         )
         if guidance_status not in {"accepted", "duplicate"}:
-            return "run_not_active", None
+            # "closed" means the kernel already sealed guidance for its final
+            # reply: injecting now would never be consumed. The caller turns
+            # this text into the next user turn instead.
+            return ("guidance_closed" if guidance_status == "closed" else "run_not_active"), None
         if guidance_status == "accepted":
             guidance_accepted = True
         try:
@@ -3696,6 +3613,36 @@ async def handle_turn_steer_operation(
     outcome_kind, payload = write_result
     if outcome_kind in {"existing", "applied"}:
         _activate_stored_guidance(context, payload)
+    elif outcome_kind == "guidance_closed" or (
+        outcome_kind == "run_not_active"
+        and await _turn_has_ended(context, thread_id, turn_id)
+    ):
+        # The live run cannot take this text as guidance any more. This is the
+        # final-reply boundary (guidance was sealed) or a turn that already
+        # ended: never drop the text. File it as a normal user message for the
+        # next turn; an idle session dispatches it immediately.
+        queued = await _queue_refused_guidance(
+            context=context,
+            thread_id=thread_id,
+            params=params,
+            input_items=input_items,
+            client_message_id=client_message_id,
+        )
+        response_payload: dict[str, Any] = {
+            "applied": False,
+            "queued": queued,
+            "reason": (
+                "turn_ending"
+                if outcome_kind == "guidance_closed"
+                else "run_not_active"
+            ),
+            "events": [],
+        }
+        if include_snapshot:
+            response_payload["snapshot"] = await _load_snapshot_outside_write_lock(
+                context, thread_id
+            )
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
     snapshot: dict[str, Any] | None = None
     if include_snapshot:
         snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
@@ -3730,6 +3677,731 @@ async def handle_turn_steer_operation(
     )
 
 
+def _approval_job_key(
+    *,
+    thread_id: str,
+    run_id: str,
+    request_id: str,
+    decision: str,
+    guidance: str,
+) -> str:
+    import hashlib
+    import json as _json
+
+    material = _json.dumps(
+        {
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "request_id": request_id,
+            "decision": decision,
+            "guidance": guidance,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return "continuation:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _settle_continuation_waiters(
+    context: CoreLiveContext, job_id: str, outcome: dict[str, Any]
+) -> None:
+    # Keep the terminal outcome so a duplicate click that registers a waiter
+    # after the first one was resolved still receives an acknowledgement.
+    context._job_outcomes[job_id] = outcome
+    while len(context._job_outcomes) > 512:
+        context._job_outcomes.pop(next(iter(context._job_outcomes)))
+    for waiter in context._job_waiters.pop(job_id, []):
+        if not waiter.done():
+            waiter.set_result(outcome)
+
+
+def _pending_approval_record(state: Any) -> dict[str, Any] | None:
+    metadata = state.metadata if state is not None and isinstance(state.metadata, dict) else {}
+    pending = metadata.get("pending_approval")
+    if not isinstance(pending, dict):
+        pending = metadata.get("pending_waiting_request")
+    return pending if isinstance(pending, dict) else None
+
+
+async def _approval_continuation_params(
+    *, context: CoreLiveContext, params: dict[str, Any]
+) -> dict[str, Any]:
+    """Overlay the session's current permissions onto the parked runtime.
+
+    Model/thinking options stay tied to the paused turn; permission fields must
+    reflect the live session, because the user may have changed them after the
+    card was opened.
+    """
+    approval_params = dict(params)
+    approval_thread_id = _thread_id_from_params(approval_params)
+    approval_params.setdefault("approval_policy", "require")
+    approval_params.setdefault("active_tier", None)
+    approval_params.setdefault("tier_tools", None)
+    approval_params.setdefault("allow_access_outside_workdir", False)
+    state_store = context.host.runtime_state_store
+    if state_store is None:
+        return approval_params
+    approval_state = None
+    if approval_thread_id:
+        approval_state = await state_store.get(approval_thread_id)
+    if approval_state is None:
+        approval_request_id = str(
+            approval_params.get("request_id")
+            or approval_params.get("requestId")
+            or ""
+        ).strip()
+        finder = getattr(state_store, "find_pending_approval", None)
+        if approval_request_id and callable(finder):
+            approval_state = await finder(approval_request_id)
+    if approval_state is not None and not approval_thread_id:
+        approval_thread_id = str(approval_state.session_id or "").strip()
+    raw_snapshot = (
+        approval_state.metadata.get("runtime_snapshot")
+        if approval_state is not None and isinstance(approval_state.metadata, dict)
+        else None
+    )
+    if not approval_thread_id:
+        return approval_params
+    current_permissions = await _resolve_turn_approval_policy(
+        context=context,
+        params={"thread_id": approval_thread_id},
+    )
+    current_snapshot = current_permissions["runtime_snapshot"]
+    approval_params["runtime_snapshot"] = overlay_runtime_permissions(
+        raw_snapshot, current_snapshot
+    )
+    approval_params.update(overlay_runtime_permissions({}, current_snapshot))
+    return approval_params
+
+
+async def _turn_has_control_decision(
+    context: CoreLiveContext, turn_id: str
+) -> bool:
+    """Whether the turn model already holds the ending of this turn.
+
+    ``paused``/``stopping`` mean a control command owns the turn; terminal
+    statuses mean it already ended. Either way a cancelled execution must not
+    write a second ending.
+    """
+    store = getattr(context, "turn_store", None)
+    if store is None or not turn_id:
+        return False
+    try:
+        turn = await store.get_turn(turn_id)
+    except BaseException:
+        return False
+    if turn is None:
+        return False
+    return str(turn.status) in {
+        "paused",
+        "stopping",
+        "completed",
+        "failed",
+        "cancelled",
+    }
+
+
+async def _continuation_turn_is_settled(
+    context: CoreLiveContext, thread_id: str
+) -> bool:
+    """Whether a pause/terminate/completion already owns this turn.
+
+    A cancelled continuation must not write a second terminal over a paused or
+    terminated turn; the control path is the authority for that ending.
+    """
+    store = context.host.runtime_state_store
+    if store is None or not thread_id:
+        return False
+    try:
+        state = await store.get(thread_id)
+    except BaseException:
+        return False
+    return state is not None and str(getattr(state, "status", "") or "") in {
+        "paused",
+        "cancelled",
+        "failed",
+        "completed",
+    }
+
+
+async def _execute_continuation_job(
+    *, context: CoreLiveContext, job: dict[str, Any]
+) -> None:
+    """Run one durable approval/question continuation.
+
+    This is the worker half of ``approval.respond``. The RPC only persists the
+    job and waits for the durable claim below; the model continuation runs
+    here, so a dropped connection or a slow model no longer owns the work.
+    """
+    job_id = str(job.get("job_id") or "")
+    kind = str(job.get("kind") or "")
+    if kind not in {"approval.respond", "question.respond"}:
+        raise RuntimeError(f"unsupported continuation job: {kind}")
+    raw_payload = job.get("payload")
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    approval_params = await _approval_continuation_params(
+        context=context, params=dict(payload.get("params") or {})
+    )
+    fallback_thread_id = str(job.get("thread_id") or "")
+    fallback_run_id = str(job.get("run_id") or "")
+    # A pause or terminate may have settled the turn between enqueue and
+    # claim. The answer is then superseded by the resume path, which reopens
+    # the card from the parked history.
+    if await _continuation_turn_is_settled(context, fallback_thread_id):
+        _settle_continuation_waiters(
+            context,
+            job_id,
+            {
+                "type": "accepted",
+                "info": {
+                    "thread_id": fallback_thread_id,
+                    "run_id": fallback_run_id,
+                    "turn_id": str(job.get("turn_id") or fallback_run_id),
+                    "status": "superseded",
+                    "snapshot": None,
+                },
+            },
+        )
+        return
+    lifecycle_interaction = await _interaction_for_request(
+        context,
+        fallback_thread_id,
+        str(
+            approval_params.get("request_id")
+            or approval_params.get("requestId")
+            or ""
+        ).strip(),
+    )
+    if lifecycle_interaction is not None and not lifecycle_interaction.terminal:
+        marked = await context.turn_store.mark_interaction_processing(
+            lifecycle_interaction.interaction_id
+        )
+        if marked is not None:
+            lifecycle_interaction = marked
+            await _append_interaction_lifecycle_event(
+                context,
+                lifecycle_interaction,
+                state="processing",
+                reason="answer_accepted",
+            )
+    info_holder: dict[str, Any] = {}
+    lifecycle_ended = False
+
+    async def decision_durable(info: dict[str, Any]) -> None:
+        nonlocal lifecycle_ended
+        thread_id = str(info.get("thread_id") or "").strip()
+        run_id = str(info.get("run_id") or info.get("turn_id") or "").strip()
+        # The decision is durable now: the card's job is done. The model
+        # continuation that follows is a consequence, not part of the card's
+        # lifecycle, so end the card here instead of waiting for the next model
+        # request to finish.
+        if lifecycle_interaction is not None and not lifecycle_ended:
+            decision = str(info.get("decision") or "")
+            card_status = (
+                "cancelled"
+                if decision in {"deny", "denied", "cancel"}
+                else "answered"
+            )
+            resolved_card = await context.turn_store.resolve_interaction(
+                lifecycle_interaction.interaction_id, status=card_status
+            )
+            card = resolved_card or await context.turn_store.get_interaction(
+                lifecycle_interaction.interaction_id
+            )
+            if card is not None:
+                await _append_interaction_lifecycle_event(
+                    context,
+                    card,
+                    state="ending",
+                    decision=decision,
+                    reason="decision_durable",
+                )
+            lifecycle_ended = True
+        # A child continuation is admitted against the CHILD session, not the
+        # parent thread: it writes the child's state and only publishes onto
+        # the parent's timeline, so claiming the parent would let one child's
+        # answer block another child's (and a new parent turn).
+        claim_thread_id = str(info.get("claim_thread_id") or "").strip() or thread_id
+        task = asyncio.current_task()
+        if not bool(info.get("continues", str(info.get("decision") or "") != "deny")):
+            # A terminal denial keeps its short final writes inline.
+            return
+        if task is None or not thread_id or not run_id:
+            raise RuntimeError("approval continuation identity is unavailable")
+        registry = context.host.runtime_task_registry
+        prior_task = registry.task(claim_thread_id, run_id=run_id)
+        if prior_task is not None and prior_task is not task:
+            registry.release_run(claim_thread_id, run_id=run_id)
+        if not registry.accept_run(
+            claim_thread_id, run_id, turn_id=str(info.get("turn_id") or "")
+        ):
+            raise RuntimeError("approval continuation runtime claim failed")
+        if not registry.register(
+            claim_thread_id, task, run_id=run_id, turn_id=str(info.get("turn_id") or "")
+        ):
+            registry.release_run(claim_thread_id, run_id=run_id)
+            raise RuntimeError("approval continuation task registration failed")
+        info_holder.update(dict(info))
+        _settle_continuation_waiters(
+            context, job_id, {"type": "accepted", "info": dict(info)}
+        )
+
+    try:
+        result = await context.operations.execute(
+            "approval.respond",
+            approval_params,
+            metadata={
+                "source": "core_live",
+                "continuation_job_id": job_id,
+                "approval_decision_durable": decision_durable,
+            },
+        )
+    except asyncio.CancelledError:
+        thread_id = str(info_holder.get("thread_id") or fallback_thread_id)
+        # user:“缺失身份应拒绝并记录，不从 run_id 猜 turn_id”+取消只说明这次执行
+        # 被取消，不携带用户意图；要不要落终态由控制决定，这里只能用 job 自己的
+        # 逻辑回合身份证伪，绝不把 run_id 塞进 turn_id 字段。
+        logical_turn_id = str(
+            info_holder.get("turn_id") or job.get("turn_id") or ""
+        ).strip()
+        settled = await _continuation_turn_is_settled(context, thread_id)
+        if not settled and logical_turn_id:
+            settled = await _turn_has_control_decision(context, logical_turn_id)
+        if settled:
+            # Pause/terminate already wrote the durable ending. Requeueing
+            # this job would replay an approval the control path superseded.
+            await context.turn_store.finish_job(
+                job_id,
+                status="cancelled",
+                error="turn control superseded the continuation",
+            )
+        elif thread_id and logical_turn_id:
+            await asyncio.shield(
+                _persist_cancelled_terminal(
+                    context=context,
+                    thread_id=thread_id,
+                    turn_id=logical_turn_id,
+                )
+            )
+        else:
+            _logger.warning(
+                "[live] cancelled continuation without a logical turn job=%s thread=%s",
+                job_id,
+                thread_id,
+            )
+        _settle_continuation_waiters(
+            context, job_id, {"type": "error", "error": asyncio.CancelledError()}
+        )
+        raise
+    except BaseException as exc:
+        _settle_continuation_waiters(
+            context, job_id, {"type": "error", "error": exc}
+        )
+        raise
+
+    payload_result = dict(result.payload or {})
+    thread_id = str(
+        payload_result.get("thread_id") or info_holder.get("thread_id") or fallback_thread_id
+    ).strip()
+    run_id = str(
+        payload_result.get("run_id")
+        or payload_result.get("turn_id")
+        or info_holder.get("run_id")
+        or fallback_run_id
+    ).strip()
+    decision = str(payload_result.get("decision") or info_holder.get("decision") or "")
+    if (
+        result.status != "ok"
+        and lifecycle_interaction is not None
+    ):
+        current_interaction = await context.turn_store.get_interaction(
+            lifecycle_interaction.interaction_id
+        )
+        if (
+            current_interaction is not None
+            and current_interaction.status == "processing"
+        ):
+            reverted = await context.turn_store.revert_interaction_processing(
+                current_interaction.interaction_id
+            )
+            if reverted is not None:
+                await _append_interaction_lifecycle_event(
+                    context,
+                    reverted,
+                    state="appearing",
+                    reason="answer_not_accepted",
+                )
+    if should_continue_goal(status=str(result.status or ""), decision=decision) and thread_id:
+        await _dispatch_next_queue_item(
+            context=context,
+            thread_id=thread_id,
+            work_root=str(info_holder.get("work_root") or ""),
+            completed_turn_id=run_id,
+            active_goal=payload_result.get("active_goal"),
+        )
+    if decision in {"deny", "denied"} and thread_id and run_id:
+        context.host.runtime_task_registry.release_run(thread_id, run_id=run_id)
+    _settle_continuation_waiters(
+        context, job_id, {"type": "result", "result": result}
+    )
+
+
+async def _run_continuation_job(
+    *,
+    context: CoreLiveContext,
+    worker: Any,
+    job_id: str,
+    fallback_info: dict[str, Any],
+) -> None:
+    try:
+        handled = await worker.run_job(job_id)
+    except asyncio.CancelledError:
+        _settle_continuation_waiters(
+            context, job_id, {"type": "error", "error": asyncio.CancelledError()}
+        )
+        raise
+    except BaseException as exc:
+        _settle_continuation_waiters(
+            context, job_id, {"type": "error", "error": exc}
+        )
+        return
+    if handled:
+        return
+    # Another task owns the job. If it already finished (duplicate click), do
+    # not leave the caller waiting on a handler that will never run again.
+    job = await context.turn_store.get_job(job_id)
+    if job is None or str(job.get("status") or "") in {"completed", "failed"}:
+        _settle_continuation_waiters(
+            context, job_id, {"type": "accepted", "info": fallback_info}
+        )
+
+
+async def _interaction_for_request(
+    context: CoreLiveContext, thread_id: str, request_id: str
+) -> Any | None:
+    """Resolve an interaction by its own id, composite id, or tool-call id."""
+    if not request_id:
+        return None
+    store = context.turn_store
+    try:
+        interaction = await store.get_interaction(request_id)
+        if interaction is None and thread_id:
+            for candidate in await store.list_interactions(thread_id, limit=200):
+                if request_id in {
+                    candidate.interaction_id,
+                    candidate.legacy_request_id,
+                    candidate.tool_call_id,
+                }:
+                    return candidate
+    except BaseException:
+        # The interaction table is a read model; a focused host or a pre-migration
+        # database may not have it. Fall back to the runtime pending record.
+        return None
+    return interaction
+
+
+async def _resolved_interaction_for_request(
+    context: CoreLiveContext, thread_id: str, request_id: str
+) -> Any | None:
+    """Find an already-resolved interaction behind a repeated approval click.
+
+    The UI can keep a submitted card on screen until the next snapshot lands.
+    A second click then names a request whose runtime pending record is already
+    cleared. That is an idempotent no-op, not a user error.
+    """
+    interaction = await _interaction_for_request(context, thread_id, request_id)
+    if interaction is not None and interaction.terminal:
+        return interaction
+    return None
+
+
+async def _append_interaction_lifecycle_event(
+    context: CoreLiveContext,
+    interaction: Any,
+    *,
+    state: str = "ending",
+    decision: str = "",
+    reason: str = "",
+) -> None:
+    """Publish one decision-pool lifecycle transition.
+
+    ``appearing`` / ``processing`` / ``ending`` is the only card vocabulary.
+    The empty envelope turn_id keeps the snapshot reducer's turn-status branch
+    out of this write: a card transition must never revive or close a turn.
+    """
+    import hashlib
+
+    event_id = "interaction:" + hashlib.sha1(
+        f"{interaction.interaction_id}:{state}:{decision}:{reason}".encode("utf-8")
+    ).hexdigest()
+    run_status = {
+        "appearing": "pending",
+        "processing": "processing",
+        "ending": "completed",
+    }.get(state, "completed")
+    request_status = {
+        "appearing": "open",
+        "processing": "processing",
+        "ending": "resolved",
+    }.get(state, "resolved")
+    event = RunItemEvent(
+        kind=("interaction_update" if state in {"appearing", "processing"} else "approval_response"),
+        thread_id=interaction.thread_id,
+        event_id=event_id,
+        run_id=interaction.run_id or "",
+        turn_id="",
+        item_id=interaction.interaction_id,
+        status=run_status,
+        payload={
+            "type": "serverRequest",
+            "request_id": interaction.interaction_id,
+            "interaction_id": interaction.interaction_id,
+            "decision_id": interaction.decision_id,
+            "sequence": int(interaction.created_seq),
+            "tool_call_id": interaction.tool_call_id,
+            "legacy_request_id": interaction.tool_call_id,
+            "turn_id": interaction.turn_id,
+            "kind": interaction.kind,
+            "scope": interaction.scope,
+            "agent_name": interaction.agent_name,
+            "agent_session_id": interaction.agent_session_id,
+            "delivered_by": interaction.delivered_by,
+            "project_id": interaction.project_id,
+            "title": interaction.title,
+            "options": [option.to_dict() for option in interaction.options],
+            "state": state,
+            "lifecycle": state,
+            "status": request_status,
+            "decision": decision,
+            "action": decision,
+            "guidance": "",
+            "reason": reason,
+        },
+    )
+
+    async def write(db: AsyncSession) -> AppEventEnvelope:
+        return await _append_run_item(db, context=context, event=event)
+
+    envelope = await context.persistence.write(write)
+    if context.hub is not None:
+        await context.hub.publish(envelope)
+
+
+async def _close_open_interactions(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    reason: str,
+    include_member_cards: bool = False,
+    turn_id: str | None = None,
+) -> int:
+    """Cancel this thread's open cards and close them in every window.
+
+    A paused/terminated turn must not leave its cards in the interaction
+    index: they would reappear as "queued backups" behind the next question
+    and answering one would mismatch the new pending request.
+
+    Member-scoped cards are the member's to answer, not the parent turn's, so
+    a pause or a resume closes only the parent's own cards. A terminate passes
+    ``include_member_cards=True`` because it promises to discard them.
+    """
+    if not thread_id:
+        return 0
+    from lamtools_core.turn.model import MAIN_SCOPE
+
+    try:
+        cancelled = await context.turn_store.cancel_interactions(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            reason=reason,
+            **({} if include_member_cards else {"scopes": (MAIN_SCOPE,)}),
+        )
+    except BaseException:
+        _logger.exception(
+            "[live] failed to cancel open interactions thread_id=%s", thread_id
+        )
+        return 0
+    for interaction in cancelled:
+        try:
+            await _append_interaction_lifecycle_event(
+                context,
+                interaction,
+                decision="cancelled",
+                reason=reason,
+            )
+        except BaseException:
+            _logger.exception(
+                "[live] failed to publish closed interaction thread_id=%s id=%s",
+                thread_id,
+                getattr(interaction, "interaction_id", ""),
+            )
+    return len(cancelled)
+
+
+async def _cancel_superseded_interactions(
+    context: CoreLiveContext,
+    thread_id: str,
+    *,
+    keep_request_id: str,
+    keep_tool_call_id: str,
+    reason: str,
+) -> int:
+    """Close every open card except the runtime's current pending request.
+
+    Restart recovery keeps the answerable card and drops cards left by older
+    runs; otherwise the old question reappeared as a queued backup behind the
+    current one.
+    """
+    if not thread_id:
+        return 0
+    try:
+        open_interactions = await context.turn_store.list_open_interactions(
+            thread_id=thread_id
+        )
+    except BaseException:
+        _logger.exception(
+            "[live] failed to list interactions for reconciliation thread_id=%s",
+            thread_id,
+        )
+        return 0
+    cancelled = 0
+    for interaction in open_interactions:
+        if interaction.interaction_id == keep_request_id:
+            continue
+        if keep_tool_call_id and interaction.tool_call_id == keep_tool_call_id:
+            continue
+        resolved = await context.turn_store.resolve_interaction(
+            interaction.interaction_id, status="cancelled"
+        )
+        if resolved is None:
+            continue
+        try:
+            await _append_interaction_lifecycle_event(
+                context,
+                resolved,
+                decision="superseded",
+                reason=reason,
+            )
+        except BaseException:
+            _logger.exception(
+                "[live] failed to publish superseded interaction thread_id=%s id=%s",
+                thread_id,
+                interaction.interaction_id,
+            )
+        cancelled += 1
+    return cancelled
+
+
+async def _execute_inline_approval_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    """Delegate to the operation catalog when the host owns no turn state.
+
+    Focused embedders and pre-migration databases may not carry the runtime
+    state or continuation-job tables. They keep the direct catalog contract;
+    the app host always supplies both and uses the durable worker.
+    """
+    result = await context.operations.execute(
+        "approval.respond", dict(params), metadata={"source": "core_live"}
+    )
+    payload = dict(result.payload or {})
+    if result.status != "ok":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=str(payload.get("error") or result.status),
+                data=payload,
+            )
+        )
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+
+
+async def reconcile_open_interactions(
+    *, context: CoreLiveContext, thread_id: str | None = None
+) -> int:
+    """Close decision-pool cards whose runtime pending no longer exists.
+
+    A card is alive only while its request is the runtime's current pending
+    request. A completed/cancelled turn, a restarted process, or an old run
+    must not leave an answerable-looking card behind. Child-scope cards stay
+    while the child session itself is active.
+    """
+    store = context.turn_store
+    state_store = context.host.runtime_state_store
+    try:
+        open_interactions = await store.list_open_interactions(thread_id=thread_id)
+    except BaseException:
+        _logger.exception("[live:reconcile] interaction pool read failed")
+        return 0
+    closed = 0
+    for interaction in open_interactions:
+        owner_thread = interaction.thread_id
+        state = None
+        try:
+            if state_store is not None and owner_thread:
+                state = await state_store.get(owner_thread)
+        except BaseException:
+            state = None
+        if interaction.scope != "main":
+            child_id = interaction.scope.split(":", 1)[-1]
+            child_state = None
+            try:
+                if state_store is not None and child_id:
+                    child_state = await state_store.get(child_id)
+            except BaseException:
+                child_state = None
+            if child_state is not None and str(
+                getattr(child_state, "status", "") or ""
+            ) in {"waiting", "running", "interrupting"}:
+                continue
+        else:
+            pending = _pending_approval_record(state)
+            pending_call = (
+                pending.get("tool_call")
+                if isinstance(pending, dict)
+                and isinstance(pending.get("tool_call"), dict)
+                else {}
+            )
+            if (
+                state is not None
+                and str(getattr(state, "status", "") or "")
+                in {"waiting", "running", "interrupting"}
+                and pending is not None
+                and (
+                    interaction.interaction_id
+                    == str(pending.get("request_id") or "")
+                    or interaction.tool_call_id
+                    == str(pending_call.get("id") or "")
+                )
+            ):
+                continue
+        resolved = await store.resolve_interaction(
+            interaction.interaction_id, status="cancelled"
+        )
+        if resolved is None:
+            continue
+        try:
+            await _append_interaction_lifecycle_event(
+                context,
+                resolved,
+                state="ending",
+                decision="superseded",
+                reason="no_live_pending",
+            )
+        except BaseException:
+            _logger.exception(
+                "[live:reconcile] failed to publish closed interaction thread_id=%s id=%s",
+                owner_thread,
+                interaction.interaction_id,
+            )
+        closed += 1
+    return closed
+
+
 async def handle_approval_respond_operation(
     *,
     request_id: int | str | None,
@@ -3744,131 +4416,250 @@ async def handle_approval_respond_operation(
         expected_revision = _expected_revision(params)
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    loop = asyncio.get_running_loop()
-    decision_ready: asyncio.Future[dict[str, Any]] = loop.create_future()
-
-    async def decision_durable(info: dict[str, Any]) -> None:
-        thread_id = str(info.get("thread_id") or "").strip()
-        run_id = str(info.get("run_id") or info.get("turn_id") or "").strip()
-        # A child continuation is admitted against the CHILD session, not the
-        # parent thread: it writes the child's state and only publishes onto the
-        # parent's timeline, so claiming the parent would let one child's answer
-        # block another child's (and block a new parent turn) for as long as the
-        # first child keeps working.
-        claim_thread_id = str(info.get("claim_thread_id") or "").strip() or thread_id
-        task = asyncio.current_task()
-        if str(info.get("decision") or "") != "deny":
-            if task is None or not thread_id or not run_id:
-                raise RuntimeError("approval continuation identity is unavailable")
-            registry = context.host.runtime_task_registry
-            prior_task = registry.task(claim_thread_id, run_id=run_id)
-            if prior_task is not None and prior_task is not task:
-                registry.release_run(claim_thread_id, run_id=run_id)
-            if not registry.accept_run(claim_thread_id, run_id):
-                raise RuntimeError("approval continuation runtime claim failed")
-            if not registry.register(claim_thread_id, task, run_id=run_id):
-                registry.release_run(claim_thread_id, run_id=run_id)
-                raise RuntimeError("approval continuation task registration failed")
-            if not decision_ready.done():
-                decision_ready.set_result(dict(info))
-
-    async def continue_approval() -> OperationResult:
-        thread_id = ""
-        run_id = ""
-        try:
-            # Keep the paused turn's model/runtime options, but overlay the
-            # session's current permission state before continuing.
-            approval_params = dict(params)
-            approval_thread_id = _thread_id_from_params(approval_params)
-            approval_params.setdefault("approval_policy", "require")
-            approval_params.setdefault("active_tier", None)
-            approval_params.setdefault("tier_tools", None)
-            approval_params.setdefault("allow_access_outside_workdir", False)
-            state_store = context.host.runtime_state_store
-            if state_store is not None:
-                approval_state = None
-                if approval_thread_id:
-                    approval_state = await state_store.get(approval_thread_id)
-                if approval_state is None:
-                    approval_request_id = str(
-                        approval_params.get("request_id")
-                        or approval_params.get("requestId")
-                        or ""
-                    ).strip()
-                    finder = getattr(state_store, "find_pending_approval", None)
-                    if approval_request_id and callable(finder):
-                        approval_state = await finder(approval_request_id)
-                if approval_state is not None and not approval_thread_id:
-                    approval_thread_id = str(approval_state.session_id or "").strip()
-                raw_snapshot = (
-                    approval_state.metadata.get("runtime_snapshot")
-                    if approval_state is not None and isinstance(approval_state.metadata, dict)
-                    else None
+    thread_id = _thread_id_from_params(params)
+    approval_request_id = str(
+        params.get("request_id") or params.get("requestId") or ""
+    ).strip()
+    state_store = context.host.runtime_state_store
+    state = None
+    if state_store is not None and thread_id:
+        state = await state_store.get(thread_id)
+    pending = _pending_approval_record(state)
+    if (
+        state_store is not None
+        and approval_request_id
+        and (state is None or pending is None)
+    ):
+        # The card's owner may be a child session, or an older run whose
+        # request id routes to a different runtime state. The pool must send
+        # the answer back to its own owner, not assume the parent thread.
+        finder = getattr(state_store, "find_pending_approval", None)
+        if callable(finder):
+            matched_state = await finder(approval_request_id)
+            if matched_state is not None:
+                state = matched_state
+                pending = _pending_approval_record(state)
+    if state is None or pending is None:
+        resolved = await _resolved_interaction_for_request(
+            context, thread_id, approval_request_id
+        )
+        if resolved is not None:
+            # A repeated click on a card whose answer already landed is a
+            # duplicate acknowledgement, not an error. Returning success lets
+            # every window clear the stale card.
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {
+                        "thread_id": resolved.thread_id or thread_id,
+                        "turn_id": resolved.turn_id,
+                        "request_id": approval_request_id,
+                        "status": "resolved",
+                        "duplicate": True,
+                    },
                 )
-                if approval_thread_id:
-                    current_permissions = await _resolve_turn_approval_policy(
-                        context=context,
-                        params={"thread_id": approval_thread_id},
-                    )
-                    current_snapshot = current_permissions["runtime_snapshot"]
-                    merged_snapshot = deepcopy(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
-                    for key in RUNTIME_PERMISSION_KEYS:
-                        if key in current_snapshot:
-                            merged_snapshot[key] = deepcopy(current_snapshot[key])
-                    approval_params["runtime_snapshot"] = merged_snapshot
-                    approval_params.update({
-                        key: deepcopy(current_snapshot[key])
-                        for key in RUNTIME_PERMISSION_KEYS
-                        if key in current_snapshot
-                    })
-            if approval_thread_id and expected_revision is not None:
-                await context.persistence.write(
-                    lambda db: context.persistence.assert_revision(
-                        db, approval_thread_id, expected_revision
-                    )
-                )
-                thread_id = approval_thread_id
-            result = await context.operations.execute(
-                "approval.respond",
-                approval_params,
-                metadata={
-                    "source": "core_live",
-                    "approval_decision_durable": decision_durable,
-                },
             )
-            payload = dict(result.payload or {})
-            thread_id = str(payload.get("thread_id") or "").strip()
-            run_id = str(payload.get("run_id") or payload.get("turn_id") or "").strip()
-            if result.status == "ok" and str(payload.get("decision") or "") == "done" and thread_id:
-                info = decision_ready.result() if decision_ready.done() and not decision_ready.cancelled() else {}
-                await _dispatch_next_queue_item(
-                    context=context,
-                    thread_id=thread_id,
-                    work_root=str(info.get("work_root") or ""),
-                    completed_turn_id=run_id,
+        stale = await _interaction_for_request(
+            context, thread_id, approval_request_id
+        )
+        if stale is not None:
+            # The interaction outlived its runtime pending (a completed turn,
+            # a restart, or an old run). It can never be answered; close it as
+            # superseded instead of returning a raw backend error.
+            if not stale.terminal:
+                await context.turn_store.resolve_interaction(
+                    stale.interaction_id, status="cancelled"
                 )
-            return result
-        except asyncio.CancelledError:
-            info = decision_ready.result() if decision_ready.done() and not decision_ready.cancelled() else {}
-            thread_id = thread_id or str(info.get("thread_id") or "").strip()
-            run_id = run_id or str(info.get("run_id") or info.get("turn_id") or "").strip()
-            if thread_id and run_id:
-                await asyncio.shield(
-                    _persist_cancelled_terminal(
-                        context=context,
-                        thread_id=thread_id,
-                        turn_id=run_id,
+                try:
+                    await _append_interaction_lifecycle_event(
+                        context,
+                        stale,
+                        state="ending",
+                        decision="superseded",
+                        reason="no_live_pending",
                     )
+                except BaseException:
+                    _logger.exception(
+                        "[live:approval] failed to close stale interaction thread_id=%s id=%s",
+                        thread_id,
+                        stale.interaction_id,
+                    )
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {
+                        "thread_id": stale.thread_id or thread_id,
+                        "turn_id": stale.turn_id,
+                        "request_id": approval_request_id,
+                        "status": "resolved" if stale.terminal else "superseded",
+                        "duplicate": True,
+                    },
                 )
-            raise
-
-    task = loop.create_task(continue_approval())
-    done, _pending = await asyncio.wait(
-        {decision_ready, task},
-        return_when=asyncio.FIRST_COMPLETED,
+            )
+        if context.host.runtime_state_store is None:
+            # Focused/embedded hosts without the turn-control tables keep the
+            # direct catalog contract.
+            return await _execute_inline_approval_operation(
+                request_id=request_id, params=params, context=context
+            )
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="approval.respond requires a runtime with a pending approval",
+                data={"error": "no pending approval"},
+            )
+        )
+    pending_call = pending.get("tool_call") if isinstance(pending.get("tool_call"), dict) else {}
+    expected_request_id = str(pending.get("request_id") or "").strip()
+    expected_tool_call_id = str(pending_call.get("id") or "").strip()
+    if (
+        approval_request_id
+        and approval_request_id not in {expected_request_id, expected_tool_call_id}
+    ):
+        # A stale card from an old run can stay visible after pause/resume or
+        # after the model re-asks. It is no longer the active request: close it
+        # instead of returning "approval request mismatch" to the user.
+        stale = await _interaction_for_request(context, thread_id, approval_request_id)
+        if stale is not None:
+            if not stale.terminal:
+                await context.turn_store.resolve_interaction(
+                    stale.interaction_id, status="cancelled"
+                )
+                try:
+                    await _append_interaction_lifecycle_event(
+                        context,
+                        stale,
+                        decision="superseded",
+                        reason="superseded_by_active_request",
+                    )
+                except BaseException:
+                    _logger.exception(
+                        "[live:approval] failed to close stale interaction thread_id=%s id=%s",
+                        thread_id,
+                        stale.interaction_id,
+                    )
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {
+                        "thread_id": stale.thread_id or thread_id,
+                        "turn_id": stale.turn_id,
+                        "request_id": approval_request_id,
+                        "status": "resolved" if stale.terminal else "superseded",
+                        "duplicate": True,
+                    },
+                )
+            )
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="approval request mismatch",
+                data={"error": "approval request mismatch"},
+            )
+        )
+    if str(pending.get("status") or "") == "executing":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="approval already resolving",
+                data={"error": "approval already resolving"},
+            )
+        )
+    if str(getattr(state, "status", "") or "") == "paused":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="turn is paused",
+                data={"error": "turn is paused", "code": "turn_paused"},
+            )
+        )
+    if thread_id and expected_revision is not None:
+        await context.persistence.write(
+            lambda db: context.persistence.assert_revision(
+                db, thread_id, expected_revision
+            )
+        )
+    # Child approvals are queued on the child session: that is also the claim
+    # the continuation serializes against, and it keeps two children from
+    # blocking each other or a new parent turn.
+    job_thread_id = str(getattr(state, "session_id", "") or thread_id or approval_request_id)
+    run_id = str(getattr(state, "run_id", "") or "")
+    state_metadata = state.metadata if isinstance(state.metadata, dict) else {}
+    turn_id = str(state_metadata.get("turn_id") or run_id)
+    decision = str(params.get("decision") or params.get("action") or "")
+    guidance = str(params.get("guidance") or params.get("response") or "")
+    worker = context.turn_worker
+    job = await worker.enqueue(
+        thread_id=job_thread_id,
+        turn_id=turn_id,
+        run_id=run_id,
+        kind="approval.respond",
+        payload={"params": dict(params)},
+        idempotency_key=_approval_job_key(
+            thread_id=job_thread_id,
+            run_id=run_id,
+            request_id=approval_request_id or str(pending.get("request_id") or ""),
+            decision=decision,
+            guidance=guidance,
+        ),
     )
-    if decision_ready in done:
-        info = decision_ready.result()
+    job_id = str(job.get("job_id") or "")
+    fallback_info = {
+        "thread_id": thread_id or job_thread_id,
+        "run_id": run_id,
+        "turn_id": turn_id,
+        "decision": decision,
+        "status": "accepted",
+        "snapshot": None,
+    }
+    waiter: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    context._job_waiters.setdefault(job_id, []).append(waiter)
+    recorded_outcome = context._job_outcomes.get(job_id)
+    if recorded_outcome is not None:
+        _settle_continuation_waiters(context, job_id, recorded_outcome)
+    task = asyncio.create_task(
+        _run_continuation_job(
+            context=context,
+            worker=worker,
+            job_id=job_id,
+            fallback_info=fallback_info,
+        ),
+        name=f"turn-continuation:{job_id}",
+    )
+
+    def _log_background_failure(done: asyncio.Task[Any]) -> None:
+        if done.cancelled():
+            return
+        exc = done.exception()
+        if exc is not None:
+            _logger.error(
+                "[live:approval] durable continuation failed thread_id=%s job_id=%s: %s",
+                job_thread_id,
+                job_id,
+                exc,
+            )
+
+    task.add_done_callback(_log_background_failure)
+    try:
+        outcome = await waiter
+    except asyncio.CancelledError:
+        # The continuation task must outlive the RPC that asked for it.
+        raise
+    outcome_type = str(outcome.get("type") or "")
+    if outcome_type == "error":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=str(outcome.get("error") or "approval continuation failed"),
+            )
+        )
+    if outcome_type == "accepted":
+        info = dict(outcome.get("info") or {})
         return CoreLiveOperationOutcome(
             response=rpc_result(
                 request_id,
@@ -3882,19 +4673,117 @@ async def handle_approval_respond_operation(
                 },
             )
         )
-
-    result = task.result()
-    payload = dict(result.payload or {})
+    result = outcome.get("result")
+    if not isinstance(result, OperationResult):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="approval continuation produced no result",
+            )
+        )
+    payload_result = dict(result.payload or {})
     if result.status != "ok":
         return CoreLiveOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(payload.get("error") or result.status), data=payload)
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=str(payload_result.get("error") or result.status),
+                data=payload_result,
+            )
         )
-    if str(payload.get("decision") or "") in {"deny", "denied"}:
-        thread_id = str(payload.get("thread_id") or _thread_id_from_params(params)).strip()
-        run_id = str(payload.get("run_id") or payload.get("turn_id") or "").strip()
-        if thread_id and run_id:
-            context.host.runtime_task_registry.release_run(thread_id, run_id=run_id)
-    return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, payload_result))
+
+
+async def handle_interaction_list_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = _thread_id_from_params(params)
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    store = context.turn_store
+    if bool(params.get("include_resolved")):
+        interactions = await store.list_interactions(thread_id)
+    else:
+        interactions = await store.list_open_interactions(thread_id=thread_id)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {"thread_id": thread_id, "interactions": [item.to_dict() for item in interactions]},
+        )
+    )
+
+
+async def handle_interaction_respond_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    """Answer an interaction through the unified broker surface.
+
+    ``approval.respond`` remains the compatibility transport underneath; the
+    difference is that the caller names a stable ``interaction_id`` and sends a
+    typed answer instead of overloading the approval decision vocabulary.
+    """
+    interaction_id = str(
+        params.get("interaction_id")
+        or params.get("interactionId")
+        or params.get("request_id")
+        or ""
+    ).strip()
+    thread_id = _thread_id_from_params(params)
+    if not interaction_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="interaction_id is required")
+        )
+    store = context.turn_store
+    interaction = await store.get_interaction(interaction_id)
+    answer = params.get("answer") if isinstance(params.get("answer"), dict) else {}
+    kind = str(answer.get("kind") or ("option" if answer.get("option_id") else "text"))
+    decision = "other_guidance"
+    guidance = str(answer.get("text") or "")
+    if interaction is not None:
+        thread_id = interaction.thread_id
+        if kind == "option":
+            option = interaction.option(str(answer.get("option_id") or ""))
+            if option is None:
+                return CoreLiveOperationOutcome(
+                    response=rpc_error(
+                        request_id, code=INVALID_REQUEST, message="unknown interaction option"
+                    )
+                )
+            decision = "approve_once"
+            guidance = option.response or option.label
+        elif kind == "skip":
+            decision = "skip"
+            guidance = "（用户跳过了这个问题，未提供回答。）"
+        elif kind == "cancel":
+            decision = "deny"
+        elif not guidance:
+            return CoreLiveOperationOutcome(
+                response=rpc_error(request_id, code=INVALID_REQUEST, message="answer text is required")
+            )
+    params_for_approval: dict[str, Any] = {
+        "thread_id": thread_id,
+        "request_id": interaction_id,
+        "decision": decision,
+        "guidance": guidance,
+        "include_snapshot": params.get("include_snapshot", False),
+    }
+    for key in ("expected_revision", "expectedRevision"):
+        if key in params:
+            params_for_approval[key] = params[key]
+    return await handle_approval_respond_operation(
+        request_id=request_id,
+        params=params_for_approval,
+        context=context,
+    )
 
 
 async def handle_session_permissions_set_operation(
@@ -4066,6 +4955,8 @@ async def handle_queue_create_operation(
         runtime_snapshot=queue_runtime_snapshot,
     )
     payload["work_root"] = prepared.work_root
+    if params.get("goal_continuation"):
+        payload["goal_continuation"] = True
     async def write(db: AsyncSession):
         existing = await context.persistence.find_client_event(
             db,
@@ -4558,7 +5449,9 @@ async def _start_runtime_task(
             turn_id=turn_id,
             message=str(exc) or "runtime task creation failed",
         )
-    if task.done() or not context.host.runtime_task_registry.register(thread_id, task, run_id=turn_id):
+    if task.done() or not context.host.runtime_task_registry.register(
+        thread_id, task, run_id=turn_id, turn_id=turn_id
+    ):
         return await _fail_runtime_start(
             context=context,
             thread_id=thread_id,
@@ -4711,11 +5604,39 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
                     message=str(result.payload.get("error") or result.status),
                 )
             await _ensure_turn_terminal(context=context, thread_id=thread_id, turn_id=turn_id)
+            await _mirror_turn_status(
+                context=context,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                status="completed" if result.status == "ok" else "failed",
+            )
+            # A card that outlived its turn must not stay answerable. Child
+            # cards survive while their own child session is active.
+            try:
+                await reconcile_open_interactions(
+                    context=context, thread_id=thread_id
+                )
+            except BaseException:
+                _logger.exception(
+                    "[live] post-turn interaction reconciliation failed thread_id=%s",
+                    thread_id,
+                )
         await _dispatch_next_queue_item(
             context=context,
             thread_id=thread_id,
             work_root=str(runtime_start.get("work_root") or ""),
             completed_turn_id=turn_id,
+            # user:“只有在模型像是自然终止的时候，才会给目标开一个新回合”
+            # +错误、重试、暂停和停止都不续跑，避免卡在供应商错误上无限循环。
+            active_goal=(
+                result.payload.get("active_goal")
+                if isinstance(result, OperationResult)
+                and should_continue_goal(
+                    status=str(result.status or ""),
+                    decision=str(result.payload.get("decision") or ""),
+                )
+                else None
+            ),
         )
     except BaseException as exc:
         _elapsed = time_module.time() - _start_ts
@@ -4843,18 +5764,22 @@ async def _session_current_model(context: CoreLiveContext, thread_id: str) -> st
     return str(metadata.get("model_id") or "").strip()
 
 
+def _goal_reminder(active_goal: dict[str, Any] | None) -> str:
+    """Return the continuation reminder for an active goal, or ""."""
+    if not isinstance(active_goal, dict):
+        return ""
+    objective = str(active_goal.get("objective") or "").strip()
+    return goal_continuation_text(objective) if objective else ""
+
+
 async def _dispatch_next_queue_item(
     *,
     context: CoreLiveContext,
     thread_id: str,
     work_root: str,
     completed_turn_id: str,
+    active_goal: dict[str, Any] | None = None,
 ) -> None:
-    async with context.session_factory() as db:
-        current_snapshot = await context.persistence.load(db, thread_id)
-    queued_candidate = next_dispatchable_queue_item(current_snapshot)
-    if queued_candidate is None:
-        return
     live_permissions = await _resolve_turn_approval_policy(
         context=context,
         params={"thread_id": thread_id},
@@ -4866,15 +5791,50 @@ async def _dispatch_next_queue_item(
     async def write(db: AsyncSession):
         nonlocal claimed_turn_id
         snapshot = await context.persistence.load(db, thread_id)
+        # user:“界面上的引导队列里面，还是有一条”+(自动目标提醒不占用户队列，旧提醒一并作废)。
+        cleanup_events = []
+        for item in snapshot.get("queue") or []:
+            if isinstance(item, dict) and item.get("goal_continuation"):
+                item_id = str(item.get("queue_item_id") or "")
+                if item_id:
+                    cleanup_events.append(await _append_app_event(
+                        db, context=context, event=AppEventInput(
+                            thread_id=thread_id, method="queue/itemDeleted", item_id=item_id,
+                            payload=queue_delete_payload(queue_item_id=item_id),
+                        ),
+                    ))
+        if cleanup_events:
+            snapshot = await context.persistence.load(db, thread_id)
+        current_goal = active_goal
+        manager = context.host.goal_manager
+        if manager is not None and isinstance(current_goal, dict):
+            goal = await manager.get(str(current_goal.get("id") or ""))
+            current_goal = (
+                {"id": goal.id, "objective": goal.objective}
+                if goal is not None and goal.status == "active" and goal.thread_id == thread_id
+                else None
+            )
+        reminder = _goal_reminder(current_goal)
         queued = next_dispatchable_queue_item(snapshot)
+        automatic_goal_turn = queued is None
+        if automatic_goal_turn:
+            if not reminder:
+                return cleanup_events, None
+            # Construct the next turn's input locally, never a durable queue item.
+            candidate = queue_item_payload(
+                queue_item_id=f"goal:{uuid.uuid4().hex}",
+                input_items=[{"type": "text", "text": reminder}],
+                runtime_snapshot=live_permission_snapshot,
+            )
+            queued = next_dispatchable_queue_item({**snapshot, "queue": [candidate]})
         dispatch = queue_dispatch_payload(queued) if queued is not None else None
         if dispatch is None:
-            return None
+            return cleanup_events, None
         queue_item_id, visible_input, runtime_input, dispatch_payload = dispatch
         turn_id = f"{thread_id}:turn:{uuid.uuid4().hex[:12]}"
         user_item_id = f"{turn_id}:user"
-        if not context.host.runtime_task_registry.accept_run(thread_id, turn_id):
-            return None
+        if not context.host.runtime_task_registry.accept_run(thread_id, turn_id, turn_id=turn_id):
+            return cleanup_events, None
         claimed_turn_id = turn_id
         try:
             queued_work_root = str(queued.get("work_root") or work_root)
@@ -4894,9 +5854,9 @@ async def _dispatch_next_queue_item(
                         f"排队消息原定的模型「{queued_model}」与当前模型不一致，"
                         f"已按当前模型「{current_model}」执行"
                     )
-            for key in RUNTIME_PERMISSION_KEYS:
-                if key in live_permission_snapshot:
-                    runtime_snapshot[key] = deepcopy(live_permission_snapshot[key])
+            runtime_snapshot = overlay_runtime_permissions(
+                runtime_snapshot, live_permission_snapshot
+            )
             prepared = PreparedLiveInput(
                 visible_input=visible_input,
                 runtime_input=runtime_input,
@@ -4936,14 +5896,33 @@ async def _dispatch_next_queue_item(
             )
             envelopes = await context.persistence.append_batch(
                 db,
-                app_events=[dispatched_input, _app_event_input(plan.turn_accepted), _app_event_input(plan.user_item)],
+                app_events=[
+                    *([] if automatic_goal_turn else [dispatched_input]),
+                    _app_event_input(plan.turn_accepted), _app_event_input(plan.user_item),
+                ],
                 run_item_events=[plan.running_status],
             )
-            dispatched, accepted, user, running = envelopes[0], envelopes[1], envelopes[2], envelopes[3]
             runtime_start = {
                 "thread_id": thread_id,
                 "turn_id": turn_id,
                 "user_message_id": user_item_id,
+                # user:“不是合并成一条消息，是都追加进去，但不是同一条消息”
+                # +排队消息照常作为本回合输入；目标提醒作为单独一条消息追加。
+                **(
+                    {"goal_id": str(current_goal.get("id") or "")}
+                    if isinstance(current_goal, dict) and current_goal.get("id")
+                    else {}
+                ),
+                **(
+                    {"goal_continuation": True}
+                    if automatic_goal_turn
+                    else {}
+                ),
+                **(
+                    {"goal_continuation_text": reminder}
+                    if reminder and not (automatic_goal_turn)
+                    else {}
+                ),
                 "text": prepared.runtime_text,
                 "input": prepared.runtime_input,
                 "work_root": prepared.work_root,
@@ -4978,7 +5957,7 @@ async def _dispatch_next_queue_item(
             ):
                 if key in runtime_snapshot:
                     runtime_start[key] = runtime_snapshot[key]
-            return [dispatched, accepted, user, running], runtime_start
+            return [*cleanup_events, *envelopes], runtime_start
         except BaseException:
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
             claimed_turn_id = ""
@@ -4995,6 +5974,16 @@ async def _dispatch_next_queue_item(
     events, next_runtime_start = result
     for event in events:
         await context.hub.publish(event)
+    if next_runtime_start is None:
+        return
+    await _mirror_turn_started(
+        context=context,
+        thread_id=thread_id,
+        turn_id=str(next_runtime_start.get("turn_id") or ""),
+        run_id=str(next_runtime_start.get("turn_id") or ""),
+        input_payload={"text": str(next_runtime_start.get("text") or "")},
+        resumed=False,
+    )
     await _start_runtime_task(context=context, runtime_start=next_runtime_start)
 
 
@@ -5094,11 +6083,25 @@ async def _persist_cancelled_terminal(
         snapshot = await context.persistence.load(db, thread_id)
         if _turn_is_terminal(snapshot, turn_id):
             return None
+        # user:“结束事件不能创建回合”+没有这个回合就什么都不写：宁可留下一个
+        # 未落终态的执行，也不用执行编号造出一个假的逻辑回合（AR-06）。
+        known_turns = snapshot.get("turns") if isinstance(snapshot.get("turns"), dict) else {}
+        core = snapshot.get("core")
+        core_turns = core.get("turns") if isinstance(core, dict) else None
+        if turn_id not in known_turns and not (
+            isinstance(core_turns, dict) and turn_id in core_turns
+        ):
+            _logger.warning(
+                "[live] refused a terminal for an unknown turn thread=%s turn=%s",
+                thread_id,
+                turn_id,
+            )
+            return None
         terminal = build_cancelled_turn_event(thread_id=thread_id, turn_id=turn_id)
         execution_id = _turn_execution_id(snapshot, turn_id)
         terminal.run_id = execution_id
         terminal.event_id = f"{execution_id}:cancelled"
-        terminal.item_id = f"{execution_id}:terminal"
+        terminal.item_id = f"{turn_id}:terminal"
         event = await _append_run_item(db, context=context, event=terminal)
         return event
 
@@ -5135,6 +6138,26 @@ async def _save_runtime_state_with_retry(
     _logger.warning("[live] runtime state save exhausted %d retries thread_id=%s", max_attempts, thread_id)
 
 
+async def _patch_runtime_state(
+    store: RuntimeStateStore,
+    thread_id: str,
+    *,
+    mutate: "Callable[[RuntimeState], None]",
+) -> None:
+    """Read-modify-write one state row without a stale-adoption window.
+
+    ``get`` + ``save`` is optimistic and, for a row that is no longer "live",
+    the store's adoption path can overwrite a newer state with the stale
+    snapshot the caller loaded.  Pause/cancel settlement must not do that, so
+    it uses the store's transactional patch when available.
+    """
+    patcher = getattr(store, "patch", None)
+    if callable(patcher):
+        await patcher(thread_id, mutate)
+        return
+    await _save_runtime_state_with_retry(store, thread_id, mutate=mutate)
+
+
 async def _persist_cancelled_runtime_state(
     *, context: CoreLiveContext, thread_id: str, turn_id: str, reason: str = "user_cancelled"
 ) -> None:
@@ -5151,7 +6174,7 @@ async def _persist_cancelled_runtime_state(
         state.metadata.pop("pending_approval", None)
         state.metadata.pop("pending_waiting_request", None)
 
-    await _save_runtime_state_with_retry(store, thread_id, mutate=_mark_cancelled)
+    await _patch_runtime_state(store, thread_id, mutate=_mark_cancelled)
 
 
 async def _reconcile_cancelled_runtime_state(
@@ -5173,7 +6196,7 @@ async def _reconcile_cancelled_runtime_state(
         state.metadata.pop("pending_approval", None)
         state.metadata.pop("pending_waiting_request", None)
 
-    await _save_runtime_state_with_retry(store, thread_id, mutate=_mark_cancelled)
+    await _patch_runtime_state(store, thread_id, mutate=_mark_cancelled)
 
 
 async def _active_thread_ids(*, context: "CoreLiveContext") -> list[str]:
@@ -5247,7 +6270,7 @@ async def _close_active_turns(
                 # Same identity as the kernel's terminal projection: the
                 # reaper refreshes the turn's single cancel row rather than
                 # appending another "recovered" bubble on every incident.
-                item_id=f"{execution_id}:terminal",
+                item_id=f"{active}:terminal",
                 status=status,
                 payload={
                     "type": "turn",
@@ -5308,13 +6331,131 @@ async def _arm_pending_memory_resume(
     try:
         if not ensure_pending_memory_resume(state):
             return False
-        await _save_runtime_state_with_retry(
+        await _patch_runtime_state(
             store, thread_id, mutate=ensure_pending_memory_resume
         )
     except BaseException:
         _logger.exception("[live:reconcile] arming the memory resume failed thread_id=%s", thread_id)
         return False
     _logger.warning("[live:reconcile] armed the memory resume thread_id=%s", thread_id)
+    return True
+
+
+async def _recover_missing_approval_card(
+    *, context: "CoreLiveContext", thread_id: str
+) -> bool:
+    """Re-emit a waiting card that never reached the event log.
+
+    The kernel commits ``pending_approval`` and then emits the card. A crash in
+    between leaves a turn that is durably waiting and can still be answered by
+    ``approval.respond``, but the interface has no card. Recovery rebuilds the
+    card from the recorded request payload; it never invents a second request
+    for one the event log already contains.
+    """
+    store = context.runtime_state_store
+    if store is None or not thread_id:
+        return False
+    try:
+        state = await store.get(thread_id)
+    except BaseException:
+        _logger.exception("[live:recover] runtime-state read failed thread_id=%s", thread_id)
+        return False
+    if state is None:
+        return False
+    metadata = state.metadata if isinstance(state.metadata, dict) else {}
+    pending = metadata.get("pending_approval")
+    if not isinstance(pending, dict) or str(pending.get("status") or "") != "waiting":
+        return False
+    request_id = str(pending.get("request_id") or "")
+    if not request_id:
+        return False
+    try:
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, thread_id)
+    except BaseException:
+        _logger.exception("[live:recover] snapshot read failed thread_id=%s", thread_id)
+        return False
+    core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+    requests = core.get("requests") if isinstance(core.get("requests"), dict) else {}
+    outer_requests = snapshot.get("requests") if isinstance(snapshot.get("requests"), dict) else {}
+    if request_id in requests or request_id in outer_requests:
+        # The card exists (open or already answered); do not create a second
+        # request identity for it.
+        return False
+
+    tool_call = pending.get("tool_call") if isinstance(pending.get("tool_call"), dict) else {}
+    tool_call_id = str(tool_call.get("id") or "")
+    turn_id = str(metadata.get("turn_id") or state.run_id)
+    run_id = str(getattr(state, "run_id", "") or turn_id)
+    payload = pending.get("request_payload") if isinstance(pending.get("request_payload"), dict) else None
+    if not isinstance(payload, dict):
+        waiting = metadata.get("pending_waiting_request")
+        waiting = waiting if isinstance(waiting, dict) else {}
+        tool_name = str(waiting.get("tool_name") or tool_call.get("name") or "")
+        is_question = tool_name == "question"
+        payload = {
+            "request_id": request_id,
+            "tool_name": tool_name,
+            "arguments": waiting.get("arguments") if isinstance(waiting.get("arguments"), dict) else {},
+            "request_kind": "question" if is_question else "permission",
+            "message": str(
+                waiting.get("message")
+                or (
+                    f"需要授权后才能执行工具：{tool_name}"
+                    if tool_name
+                    else "等待用户确认"
+                )
+            ),
+            "metadata": dict(waiting.get("metadata") or {}),
+            "options": (
+                [
+                    {"id": "option-confirm", "label": "确认并继续", "description": "确认继续", "response": "确认并继续"},
+                    {"id": "option-skip", "label": "跳过问题", "description": "不回答，按合理默认继续", "response": "（用户跳过了这个问题，未提供回答。）"},
+                ]
+                if is_question
+                else [
+                    {"id": "approve", "label": "批准执行", "description": "允许后端继续执行这个工具调用。", "response": "approve"},
+                    {"id": "deny", "label": "拒绝执行", "description": "不执行这个工具调用，本轮停在等待点。", "response": "deny"},
+                ]
+            ),
+        }
+    event = RunItemEvent(
+        kind="approval_request",
+        thread_id=thread_id,
+        event_id=f"{request_id}:recovered",
+        run_id=run_id,
+        turn_id=turn_id,
+        item_id=f"{thread_id}:{run_id}:{tool_call_id}:tool",
+        status="waiting",
+        payload={
+            "type": "serverRequest",
+            "request_id": request_id,
+            "kind": str(payload.get("request_kind") or "permission"),
+            "message": str(payload.get("message") or ""),
+            "tool_name": str(payload.get("tool_name") or tool_call.get("name") or ""),
+            "options": payload.get("options") if isinstance(payload.get("options"), list) else [],
+            "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+            **({"context": str(payload.get("context"))} if payload.get("context") else {}),
+        },
+    )
+
+    async def write(db: AsyncSession):
+        return await _append_run_item(db, context=context, event=event)
+
+    try:
+        appended = await context.persistence.write(write)
+    except BaseException:
+        _logger.exception("[live:recover] could not rebuild the approval card thread_id=%s", thread_id)
+        return False
+    try:
+        await context.hub.publish(appended)
+    except BaseException:
+        pass
+    _logger.warning(
+        "[live:recover] rebuilt a missing approval card thread_id=%s request_id=%s",
+        thread_id,
+        request_id,
+    )
     return True
 
 
@@ -5341,11 +6482,95 @@ async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
     """
     recovered = 0
     for thread_id in await _active_thread_ids(context=context):
+        # Upgrade path: derive the new turn/interaction read models from the
+        # snapshot an older build already persisted. Idempotent and best-effort;
+        # a failure here must not block the reaper.
+        try:
+            async with context.session_factory() as db:
+                upgrade_snapshot = await context.persistence.load(db, thread_id)
+            from lamtools_core.turn.migrate import backfill_snapshot
+
+            await backfill_snapshot(context.turn_store, thread_id, upgrade_snapshot)
+            project_id = ""
+            try:
+                session = (
+                    upgrade_snapshot.get("session")
+                    if isinstance(upgrade_snapshot, dict)
+                    else None
+                )
+                metadata = (
+                    session.get("metadata")
+                    if isinstance(session, dict)
+                    and isinstance(session.get("metadata"), dict)
+                    else {}
+                )
+                project_id = str(metadata.get("project_id") or "")
+            except BaseException:
+                project_id = ""
+            await context.turn_store.backfill_interaction_pool(
+                thread_id, project_id=project_id
+            )
+        except BaseException:
+            _logger.exception(
+                "[live:recover] turn read-model backfill failed thread_id=%s", thread_id
+            )
+        paused_state = None
+        try:
+            if context.runtime_state_store is not None:
+                paused_state = await context.runtime_state_store.get(thread_id)
+        except BaseException:
+            paused_state = None
+        if paused_state is not None and str(
+            getattr(paused_state, "status", "") or ""
+        ) == "paused":
+            # A paused turn keeps its place, but its cards do not: resume
+            # re-asks, and an old open card otherwise appeared as a queued
+            # backup behind the new question.
+            await _close_open_interactions(
+                context=context, thread_id=thread_id, reason="turn_paused_restart"
+            )
+            _logger.info(
+                "[live:recover] closed paused turn cards thread_id=%s", thread_id
+            )
+            continue
+        if paused_state is not None:
+            pending = _pending_approval_record(paused_state)
+            if pending is not None:
+                pending_call = (
+                    pending.get("tool_call")
+                    if isinstance(pending.get("tool_call"), dict)
+                    else {}
+                )
+                await _cancel_superseded_interactions(
+                    context,
+                    thread_id,
+                    keep_request_id=str(pending.get("request_id") or ""),
+                    keep_tool_call_id=str(pending_call.get("id") or ""),
+                    reason="superseded_restart",
+                )
         if await _active_turn_awaits_user_decision(context=context, thread_id=thread_id):
+            # The request is answerable, but the process may have died between
+            # the checkpoint and the card event. Rebuild the card before the
+            # user sees a waiting turn with nothing to click.
+            await _recover_missing_approval_card(context=context, thread_id=thread_id)
             _logger.info(
                 "[live:recover] keeping thread_id=%s parked on a user decision", thread_id
             )
             continue
+        try:
+            if await context.turn_store.has_pending_jobs(thread_id):
+                # A durable continuation was accepted and has not finished.
+                # Reaping the turn here would race the worker that is about to
+                # write its terminal status.
+                _logger.info(
+                    "[live:recover] keeping thread_id=%s owned by a continuation job",
+                    thread_id,
+                )
+                continue
+        except BaseException:
+            _logger.exception(
+                "[live:recover] continuation job lookup failed thread_id=%s", thread_id
+            )
 
         # Ask the durable state first. When the runtime already recorded why the
         # turn ended (a memory exhaustion, for instance) that reason is the
@@ -5511,10 +6736,14 @@ async def _active_turn_awaits_user_decision(*, context: "CoreLiveContext", threa
         return False
     if state is None or str(getattr(state, "loop_state", "") or "") != "wait":
         return False
-    run_id = str(getattr(state, "run_id", "") or "")
-    if not run_id:
-        return False
     metadata = state.metadata if isinstance(getattr(state, "metadata", None), dict) else {}
+    # ``state.run_id`` is the execution attempt, not the logical turn.  A
+    # resumed turn keeps its turn id but receives a fresh run id, so comparing
+    # the snapshot's turn id against run_id lost every resumed decision on the
+    # next restart.
+    recorded_turn_id = str(metadata.get("turn_id") or getattr(state, "run_id", "") or "")
+    if not recorded_turn_id:
+        return False
     pending = metadata.get("pending_approval")
     if not isinstance(pending, dict):
         return False
@@ -5531,7 +6760,7 @@ async def _active_turn_awaits_user_decision(*, context: "CoreLiveContext", threa
     except BaseException:
         _logger.exception("[live:recover] snapshot read failed thread_id=%s", thread_id)
         return False
-    return latest_active_turn_id(snapshot) == run_id
+    return latest_active_turn_id(snapshot) == recorded_turn_id
 
 
 def _turn_execution_id(snapshot: dict[str, Any], turn_id: str) -> str:
@@ -5678,7 +6907,7 @@ async def _execute_compact_live_command(
         client_command_id=str(params.get("client_command_id") or params.get("clientCommandId") or ""),
     )
     registry = context.host.runtime_task_registry
-    if not registry.accept_run(thread_id, ids["run_id"]):
+    if not registry.accept_run(thread_id, ids["run_id"], turn_id=ids.get("turn_id") or ""):
         raise SessionBusyError(
             reason="active_turn_exists",
             message="A context compaction is already running",
@@ -5692,7 +6921,9 @@ async def _execute_compact_live_command(
         params=params,
         ids=ids,
     ))
-    if not registry.register(thread_id, operation_task, run_id=ids["run_id"]):
+    if not registry.register(
+        thread_id, operation_task, run_id=ids["run_id"], turn_id=ids.get("turn_id") or ""
+    ):
         operation_task.cancel()
         try:
             await operation_task
@@ -6086,6 +7317,8 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "turn.force_reset": handle_turn_force_reset_operation,
     "turn.steer": handle_turn_steer_operation,
     "approval.respond": handle_approval_respond_operation,
+    "interaction.list": handle_interaction_list_operation,
+    "interaction.respond": handle_interaction_respond_operation,
     "session.permissions.set": handle_session_permissions_set_operation,
     "command.catalog": handle_command_catalog_operation,
     "command.execute": handle_command_execute_operation,
@@ -6113,6 +7346,8 @@ __all__ = [
     "handle_queue_guidance_operation",
     "handle_queue_update_operation",
     "handle_approval_respond_operation",
+    "handle_interaction_list_operation",
+    "handle_interaction_respond_operation",
     "handle_session_permissions_set_operation",
     "handle_thread_read_operation",
     "handle_thread_history_operation",

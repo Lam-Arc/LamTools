@@ -272,6 +272,9 @@ export function coreAppServerDecision(value: string): string {
   if (normalized === 'approve' || normalized === 'accept' || normalized === 'approve_once') return 'approve_once'
   if (normalized === 'approve_for_session' || normalized === 'acceptforsession') return 'approve_for_session'
   if (normalized === 'deny' || normalized === 'decline' || normalized === 'cancel') return 'deny'
+  // A question option may deliberately be labelled "cancel"; its stable id is
+  // option-N, so only the explicit skip option reaches this branch.
+  if (normalized === 'skip' || normalized === 'option-skip' || normalized === 'skipped') return 'skip'
   return 'other_guidance'
 }
 

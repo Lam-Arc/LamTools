@@ -19,6 +19,7 @@ from lamtools_core.app.persistence_host import RevisionConflictError
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.runtime import RuntimeState
 from lamtools_core.tool import ToolResult
+from lamtools_core.tool.default_toolbox import CoreToolbox
 
 
 @pytest.mark.asyncio
@@ -222,6 +223,31 @@ class ApprovalRequestLLM:
                 )
             ],
         )
+
+
+class DeniedThenAnswerLLM(ApprovalRequestLLM):
+    """Requests an approval once, then answers instead of repeating it.
+
+    A denial is a decision about one action, not an instruction to abandon the
+    task; the model gets the blocked result and a chance to choose another path.
+    """
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-write",
+                        name="write_file",
+                        arguments={"path": "approved.md", "content": "approved\n"},
+                    )
+                ],
+            )
+            return
+        yield LLMStreamEvent(kind="content_delta", content="Understood; I will not write the file.")
+        yield LLMStreamEvent(kind="done")
 
 
 class BlockingGuideContinuationLLM:
@@ -615,7 +641,7 @@ async def test_core_denied_approval_resolves_request_and_cancels_turn(tmp_path) 
     work_root = tmp_path / "work"
     work_root.mkdir()
     try:
-        catalog = _catalog(db=db, work_root=work_root, llm=ApprovalRequestLLM())
+        catalog = _catalog(db=db, work_root=work_root, llm=DeniedThenAnswerLLM())
         waiting = await catalog.execute(
             "turn.start",
             {"thread_id": "thread-deny", "message": "Write the approval file."},
@@ -626,16 +652,20 @@ async def test_core_denied_approval_resolves_request_and_cancels_turn(tmp_path) 
         )
 
         assert waiting.payload["decision"] == "wait"
-        assert denied.status == "ok"
-        assert denied.payload["decision"] == "denied"
+        assert denied.status == "ok", denied.payload
+        assert denied.payload["decision"] == "done"
         snapshot = denied.payload["snapshot"]
-        assert snapshot["status"] == "cancelled"
-        assert snapshot["core"]["status"] == "cancelled"
+        assert snapshot["status"] == "completed"
+        assert snapshot["core"]["status"] == "completed"
         assert snapshot["core"]["requests"]["call-write"]["status"] == "resolved"
+        assert snapshot["core"]["requests"]["call-write"]["decision"] == "deny"
         state = await db.runtime_state_store.get("thread-deny")
         assert state is not None
-        assert state.status == "cancelled"
+        assert state.status == "completed"
         assert "pending_approval" not in state.metadata
+        history = await db.runtime_state_store.get_history("thread-deny")
+        assert any("blocked" in str(row.get("content") or "") for row in history)
+        assert any("I will not write the file" in str(row.get("content") or "") for row in history)
     finally:
         await db.close()
 
@@ -699,7 +729,7 @@ async def test_core_decision_persistence_failure_restores_retryable_pending(tmp_
     work_root.mkdir()
     db = await open_core_app_db(db_path)
     try:
-        catalog = _catalog(db=db, work_root=work_root, llm=ApprovalRequestLLM())
+        catalog = _catalog(db=db, work_root=work_root, llm=DeniedThenAnswerLLM())
         waiting = await catalog.execute(
             "turn.start",
             {"thread_id": "thread-decision-retry", "message": "Write the approval file."},
@@ -760,9 +790,14 @@ async def test_core_terminal_persistence_failure_keeps_durable_response_closed(t
             return await original_persist(run_items, **kwargs)
 
         monkeypatch.setattr(default_agent, "_persist_run_items", fail_terminal_persistence)
+
+        async def explode_execute(self, call, context=None):
+            raise RuntimeError("tool exploded during approved execution")
+
+        monkeypatch.setattr(CoreToolbox, "execute", explode_execute)
         failed = await catalog.execute(
             "approval.respond",
-            {"thread_id": "thread-terminal-failure", "request_id": "call-write", "decision": "deny"},
+            {"thread_id": "thread-terminal-failure", "request_id": "call-write", "decision": "approve"},
         )
 
         assert failed.status == "error"
@@ -914,7 +949,11 @@ async def test_core_approval_resolution_failure_closes_all_persisted_surfaces(
             event
             for event in events
             if event.payload.get("kind") == "approval_response"
-            and event.payload.get("payload", {}).get("request_id") == "call-write"
+            and (
+                event.payload.get("payload", {}).get("request_id") == "call-write"
+                or event.payload.get("payload", {}).get("legacy_request_id") == "call-write"
+                or event.payload.get("payload", {}).get("tool_call_id") == "call-write"
+            )
         ]
         assert len(response_events) == 1
         error_events = [

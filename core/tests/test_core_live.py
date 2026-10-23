@@ -149,6 +149,21 @@ async def test_thread_start_uses_core_transaction_and_member_materialization(tmp
 async def test_approval_respond_uses_operation_catalog_without_member_lifecycle_hook(tmp_path):
     engine, context = await _context(tmp_path)
     calls = []
+    state_store = InMemoryRuntimeStateStore()
+    await state_store.save(
+        RuntimeState(
+            session_id="thread-1",
+            run_id="turn-1",
+            status="waiting",
+            metadata={
+                "pending_approval": {
+                    "request_id": "request-1",
+                    "status": "waiting",
+                }
+            },
+        )
+    )
+    context.host.runtime_state_store = state_store
 
     async def respond(request):
         calls.append(request.payload)
@@ -163,22 +178,114 @@ async def test_approval_respond_uses_operation_catalog_without_member_lifecycle_
             context=context,
         )
         assert outcome.response["result"]["decision"] == "approve"
-        assert calls == [{
-            "thread_id": "thread-1", "request_id": "request-1",
-            "decision": "approve", "guidance": "",
-            "approval_policy": "require",
-            "active_tier": None,
-            "tier_tools": None,
-            "allow_access_outside_workdir": False,
-        }]
+        # The parked runtime keeps its model options; permission fields are
+        # overlaid from the live session at continuation time.
+        assert calls[0]["thread_id"] == "thread-1"
+        assert calls[0]["request_id"] == "request-1"
+        assert calls[0]["decision"] == "approve"
+        assert calls[0]["guidance"] == ""
+        assert calls[0]["approval_policy"] == "require"
+        assert calls[0]["active_tier"] == "full_edit"
         assert not hasattr(context.host.member_hooks, "continue_approval")
     finally:
         await engine.dispose()
 
 
 @pytest.mark.asyncio
+async def test_approval_respond_acknowledges_before_the_continuation_finishes(tmp_path):
+    """The RPC owns a durable job, not the model run.
+
+    A slow continuation must not keep the request open; the user's decision is
+    accepted once the workspace is claimed, and the worker finishes it.
+    """
+    engine, context = await _context(tmp_path)
+    state_store = InMemoryRuntimeStateStore()
+    await state_store.save(
+        RuntimeState(
+            session_id="thread-1",
+            run_id="turn-1",
+            status="waiting",
+            metadata={
+                "pending_approval": {
+                    "request_id": "request-1",
+                    "status": "waiting",
+                }
+            },
+        )
+    )
+    context.host.runtime_state_store = state_store
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def respond(request):
+        durable = request.metadata.get("approval_decision_durable")
+        await durable(
+            {
+                "thread_id": "thread-1",
+                "run_id": "turn-1",
+                "turn_id": "turn-1",
+                "decision": "approve_once",
+                "continues": True,
+            }
+        )
+        started.set()
+        await release.wait()
+        return OperationResult(
+            name=request.name,
+            payload={"thread_id": "thread-1", "run_id": "turn-1", "decision": "done"},
+        )
+
+    context.operations.register("approval.respond", respond)
+    try:
+        pending = asyncio.create_task(
+            context.host.execute(
+                "approval.respond",
+                request_id=1,
+                params={
+                    "thread_id": "thread-1",
+                    "request_id": "request-1",
+                    "decision": "approve",
+                },
+                context=context,
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+        outcome = await asyncio.wait_for(pending, timeout=2)
+        assert outcome.response["result"]["status"] == "accepted"
+        assert context.runtime_task_registry.active_run_id("thread-1") == "turn-1"
+
+        jobs = await context.turn_store.list_jobs("thread-1")
+        assert jobs and jobs[0]["status"] == "running"
+        release.set()
+        for _ in range(200):
+            jobs = await context.turn_store.list_jobs("thread-1")
+            if jobs and jobs[0]["status"] == "completed":
+                break
+            await asyncio.sleep(0.01)
+        assert jobs[0]["status"] == "completed"
+    finally:
+        release.set()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_denied_approval_releases_stale_runtime_claim_before_next_turn(tmp_path):
     engine, context = await _context(tmp_path)
+    state_store = InMemoryRuntimeStateStore()
+    await state_store.save(
+        RuntimeState(
+            session_id="thread-deny",
+            run_id="turn-denied",
+            status="waiting",
+            metadata={
+                "pending_approval": {
+                    "request_id": "request-1",
+                    "status": "waiting",
+                }
+            },
+        )
+    )
+    context.host.runtime_state_store = state_store
     stale_release = asyncio.Event()
     next_release = _register_blocking_turn_start(context)
     stale_task = asyncio.create_task(stale_release.wait())
@@ -1929,7 +2036,8 @@ async def test_sealed_active_snapshot_rejects_steer_and_queue_guidance_without_e
         )
 
         assert steered.response["result"]["applied"] is False
-        assert steered.response["result"]["reason"] == "run_not_active"
+        assert steered.response["result"]["queued"] is True
+        assert steered.response["result"]["reason"] == "turn_ending"
         assert guided.response["result"]["applied"] is False
         assert guided.response["result"]["reason"] == "run_not_active"
         resumed = await handle_thread_resume_operation(
@@ -1939,7 +2047,15 @@ async def test_sealed_active_snapshot_rejects_steer_and_queue_guidance_without_e
         )
         events = resumed.response["result"]["events"]
         assert not any(event["method"] == "turn/steered" for event in events)
-        assert [item["queue_item_id"] for item in resumed.response["result"]["snapshot"]["queue"]] == [queue_item_id]
+        queue = resumed.response["result"]["snapshot"]["queue"]
+        assert queue[0]["queue_item_id"] == queue_item_id
+        assert len(queue) == 2
+        late_texts = [
+            str(part.get("text") or "")
+            for part in queue[1]["input"]
+            if isinstance(part, dict)
+        ]
+        assert "late steer" in late_texts
     finally:
         task = context.runtime_task_registry.task("thread-sealed-window")
         release.set()
@@ -3706,4 +3822,298 @@ async def test_queue_create_survives_a_stale_revision_while_members_keep_appendi
                 await asyncio.wait_for(asyncio.shield(task), timeout=5)
             except BaseException:
                 pass
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repeated_approval_click_returns_a_duplicate_resolution(tmp_path):
+    """A card that stays visible after submit must not produce a raw error."""
+    from lamtools_core.turn import Interaction
+
+    engine, context = await _context(tmp_path)
+
+    async def respond(request):
+        raise AssertionError("an already-resolved interaction must not run again")
+
+    context.operations.register("approval.respond", respond)
+    try:
+        await context.turn_store.create_interaction(
+            Interaction(
+                interaction_id="request-resolved",
+                turn_id="turn-1",
+                thread_id="thread-1",
+                kind="approval",
+                status="answered",
+                title="write a file",
+            )
+        )
+        outcome = await context.host.execute(
+            "approval.respond",
+            request_id=1,
+            params={
+                "thread_id": "thread-1",
+                "request_id": "request-resolved",
+                "decision": "approve",
+            },
+            context=context,
+        )
+        assert outcome.response["result"]["status"] == "resolved"
+        assert outcome.response["result"]["duplicate"] is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_paused_turn_does_not_replay_its_continuation_job(tmp_path):
+    engine, context = await _context(tmp_path)
+    state_store = InMemoryRuntimeStateStore()
+    await state_store.save(
+        RuntimeState(
+            session_id="thread-paused",
+            run_id="turn-paused",
+            status="paused",
+        )
+    )
+    context.host.runtime_state_store = state_store
+    called = []
+
+    async def respond(request):
+        called.append(request.name)
+        return OperationResult(name=request.name, payload={})
+
+    context.operations.register("approval.respond", respond)
+    try:
+        job = await context.turn_store.enqueue_job(
+            thread_id="thread-paused",
+            turn_id="turn-paused",
+            run_id="turn-paused",
+            kind="approval.respond",
+            payload={"params": {"thread_id": "thread-paused", "decision": "approve"}},
+            idempotency_key="paused-continuation",
+        )
+        handled = await context.turn_worker.run_job(job["job_id"])
+        assert handled is True
+        assert called == []
+        final = await context.turn_store.get_job(job["job_id"])
+        assert final is not None and final["status"] == "completed"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_answering_a_superseded_card_does_not_reach_the_active_request(tmp_path):
+    """A stale card must close itself, not report a request mismatch."""
+    from lamtools_core.turn import Interaction
+
+    engine, context = await _context(tmp_path)
+    state_store = InMemoryRuntimeStateStore()
+    await state_store.save(
+        RuntimeState(
+            session_id="thread-1",
+            run_id="run-new",
+            status="waiting",
+            metadata={
+                "pending_approval": {
+                    "request_id": "new-req",
+                    "status": "waiting",
+                    "tool_call": {
+                        "id": "new-call",
+                        "name": "question",
+                        "arguments": {},
+                    },
+                }
+            },
+        )
+    )
+    context.host.runtime_state_store = state_store
+    called = []
+
+    async def respond(request):
+        called.append(request)
+        raise AssertionError("the active request must not run")
+
+    context.operations.register("approval.respond", respond)
+    try:
+        await context.turn_store.create_interaction(
+            Interaction(
+                interaction_id="stale-req",
+                turn_id="old-turn",
+                thread_id="thread-1",
+                kind="question",
+                status="open",
+                tool_call_id="stale-call",
+            )
+        )
+        outcome = await context.host.execute(
+            "approval.respond",
+            request_id=1,
+            params={
+                "thread_id": "thread-1",
+                "request_id": "stale-req",
+                "decision": "approve",
+            },
+            context=context,
+        )
+        assert outcome.response["result"]["status"] == "superseded"
+        assert called == []
+        stale = await context.turn_store.get_interaction("stale-req")
+        assert stale is not None and stale.status == "cancelled"
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, "thread-1")
+        requests = (snapshot.get("core") or {}).get("requests") or snapshot.get("requests") or {}
+        assert requests["stale-req"]["status"] == "resolved"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_closing_open_interactions_resolves_their_snapshot_requests(tmp_path):
+    from lamtools_core.turn import Interaction
+
+    engine, context = await _context(tmp_path)
+    try:
+        for index in (1, 2):
+            await context.turn_store.create_interaction(
+                Interaction(
+                    interaction_id=f"req-{index}",
+                    turn_id="turn-1",
+                    thread_id="thread-1",
+                    kind="question",
+                    status="open",
+                    tool_call_id=f"call-{index}",
+                )
+            )
+        closed = await live_operations_module._close_open_interactions(
+            context=context, thread_id="thread-1", reason="test"
+        )
+        assert closed == 2
+        assert await context.turn_store.list_open_interactions(thread_id="thread-1") == []
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, "thread-1")
+        requests = (snapshot.get("core") or {}).get("requests") or snapshot.get("requests") or {}
+        assert requests["req-1"]["status"] == "resolved"
+        assert requests["req-2"]["status"] == "resolved"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_closes_cards_without_a_live_pending(tmp_path):
+    from lamtools_core.turn import Interaction
+
+    engine, context = await _context(tmp_path)
+    store = InMemoryRuntimeStateStore()
+    await store.save(
+        RuntimeState(
+            session_id="thread-done",
+            run_id="turn-done",
+            status="completed",
+        )
+    )
+    context.host.runtime_state_store = store
+    try:
+        await context.turn_store.create_interaction(
+            Interaction(
+                interaction_id="stale-card",
+                turn_id="turn-done",
+                thread_id="thread-done",
+                kind="approval",
+                status="open",
+                tool_call_id="stale-call",
+            )
+        )
+        closed = await live_operations_module.reconcile_open_interactions(
+            context=context, thread_id="thread-done"
+        )
+        assert closed == 1
+        stale = await context.turn_store.get_interaction("stale-card")
+        assert stale is not None and stale.status == "cancelled"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_child_approval_routes_to_the_child_session_not_the_completed_parent(tmp_path):
+    from lamtools_core.turn import Interaction
+
+    engine, context = await _context(tmp_path)
+    store = InMemoryRuntimeStateStore()
+    await store.save(
+        RuntimeState(
+            session_id="parent",
+            run_id="turn-parent",
+            status="completed",
+        )
+    )
+    request_id = "parent:sub:reader:run-child:call-1"
+    await store.save(
+        RuntimeState(
+            session_id="parent:sub:reader",
+            run_id="run-child",
+            status="waiting",
+            metadata={
+                "turn_id": "parent:sub:reader:turn:run-child",
+                "pending_approval": {
+                    "request_id": request_id,
+                    "status": "waiting",
+                    "tool_call": {
+                        "id": "call-1",
+                        "name": "run_command",
+                        "arguments": {"command": "wc -l file.txt"},
+                    },
+                },
+            },
+        )
+    )
+    context.host.runtime_state_store = store
+    calls = []
+
+    async def respond(request):
+        calls.append(request)
+        return OperationResult(
+            name=request.name,
+            payload={
+                "thread_id": "parent:sub:reader",
+                "run_id": "run-child",
+                "decision": "done",
+            },
+        )
+
+    context.operations.register("approval.respond", respond)
+    try:
+        await context.turn_store.create_interaction(
+            Interaction(
+                interaction_id=request_id,
+                turn_id="parent:sub:reader:turn:run-child",
+                thread_id="parent",
+                run_id="run-child",
+                scope="agent:parent:sub:reader",
+                kind="approval",
+                status="open",
+                tool_call_id="call-1",
+                title="child approval",
+                agent_name="reader",
+                agent_session_id="parent:sub:reader",
+                delivered_by="agent:reader",
+            )
+        )
+        outcome = await context.host.execute(
+            "approval.respond",
+            request_id=1,
+            params={
+                "thread_id": "parent",
+                "request_id": request_id,
+                "decision": "approve",
+            },
+            context=context,
+        )
+        assert "result" in outcome.response, outcome.response
+        assert calls and calls[0].payload["request_id"] == request_id
+
+        child_jobs = await context.turn_store.list_jobs("parent:sub:reader")
+        parent_jobs = await context.turn_store.list_jobs("parent")
+        assert len(child_jobs) == 1
+        assert child_jobs[0]["status"] == "completed"
+        assert parent_jobs == []
+    finally:
         await engine.dispose()

@@ -292,14 +292,18 @@ async def test_capability_and_deferred_attachment_instructions_keep_delegation_c
     kit = _isolated_kit(monkeypatch, tmp_path, config=CoreBaseAgentConfig(capability="text"))
     delegated = kit._capability_prompt_line(["attachment-1"])
     assert "image, video, and audio input are unsupported" in delegated
-    assert 'sub_agent(task="Inspect and describe the attachment content", attachments=["attachment-1"], model="vision/model")' in delegated
+    assert 'sub_agent(action="create", type="execute", name="image_reader"' in delegated
+    assert 'reasoning_level="medium", model="vision/model")' in delegated
+    assert 'sub_agent_message(type="execute", name="image_reader"' in delegated
+    assert "attachment-1" in delegated
     assert "read the same path and return a text description" in delegated
     assert not re.search(r"[\u4e00-\u9fff]", delegated)
 
     monkeypatch.setattr(subagent_prompt, "resolve_default_multimodal_model", lambda _: None)
     fallback = kit._capability_prompt_line(["attachment-2"])
     assert "set model to a model that supports images" in fallback
-    assert 'attachments=["attachment-2"])' in fallback
+    assert 'model="<multimodal model_id>")' in fallback
+    assert "attachment-2" in fallback
 
     monkeypatch.setattr(base_agent, "load_effective_delegation_strategy", lambda _: "forbidden")
     forbidden_kit = _isolated_kit(monkeypatch, tmp_path, config=CoreBaseAgentConfig(capability="text"))

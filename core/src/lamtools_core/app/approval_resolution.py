@@ -11,6 +11,7 @@ from typing import Any
 
 from lamtools_core.event import CoreEvent
 from lamtools_core.llm import ChatMessage
+from lamtools_core.llm.image_payload import MESSAGE_ADDED_AT_STEP
 from lamtools_core.runtime import RuntimeCheckpointStore, RuntimeState, RuntimeStateConflictError, RuntimeStateStore
 
 from .operation_catalog import OperationResult
@@ -48,10 +49,14 @@ class ApprovalResolutionLifecycle:
         payload = {
             "request_id": self.request_id,
             "tool_call_id": str(self.tool_call.get("id") or ""),
+            # Compatibility alias: a client or persisted test may still
+            # address the request by the provider's tool-call id.
+            "legacy_request_id": str(self.tool_call.get("id") or ""),
             "decision": self.decision,
             "action": self.decision,
             "guidance": self.guidance,
             "status": "resolved",
+            **self._scope_payload("resolved"),
         }
         return CoreEvent(
             name="runtime.approval_response",
@@ -79,6 +84,42 @@ class ApprovalResolutionLifecycle:
                 return parent_turn
         return str(metadata.get("turn_id") or self.state.run_id or "").strip()
 
+    def _delegated_session(self) -> dict[str, Any] | None:
+        metadata = self.state.metadata if isinstance(self.state.metadata, dict) else {}
+        delegated = metadata.get("delegated_session")
+        return delegated if isinstance(delegated, dict) else None
+
+    def _scope_payload(self, status: str) -> dict[str, Any]:
+        """Provenance that keeps a child's ending out of the parent turn.
+
+        A delegated member's terminal fact must be projected as a nested child
+        item.  Without this payload the reducer treated it as a main-line
+        terminal and cancelled a turn nobody owned (the phantom-turn defect).
+        """
+        delegated = self._delegated_session()
+        if delegated is None:
+            return {}
+        agent = str(delegated.get("agent") or delegated.get("name") or "")
+        return {
+            "sub_agent": {
+                "agent": agent,
+                "name": agent,
+                "type": str(delegated.get("type") or ""),
+                "task": str(delegated.get("task") or ""),
+                "status": status,
+                "session_id": str(delegated.get("session_id") or self.state.session_id or ""),
+                "sub_session_id": str(delegated.get("session_id") or self.state.session_id or ""),
+                "run_id": str(delegated.get("run_id") or self.state.run_id or ""),
+                "invocation_id": str(delegated.get("invocation_id") or ""),
+                "parent_call_id": str(delegated.get("parent_call_id") or ""),
+                "parent_run_id": str(delegated.get("parent_run_id") or ""),
+                "parent_turn_id": str(delegated.get("parent_turn_id") or ""),
+                "summary": str(delegated.get("task") or "")[:1000],
+                "completed_at": None,
+                "elapsed_ms": 0,
+            }
+        }
+
     async def persist_decision(self) -> OperationResult | None:
         self.decision_run_items = self.run_items_from_events([self.decision_event])
         try:
@@ -97,6 +138,13 @@ class ApprovalResolutionLifecycle:
         await self._commit_state(candidate)
 
     async def persist_tool_history(self, tool_history: ChatMessage) -> None:
+        # user:“作为下一轮的输入时，它应该是以自己本身的清晰度输入”+审批恢复写入的工具结果
+        # 与内核写入的工具结果使用同一个计数口径，紧接的续跑请求仍看原图。
+        if not isinstance(tool_history.metadata, dict):
+            tool_history.metadata = {}
+        tool_history.metadata.setdefault(
+            MESSAGE_ADDED_AT_STEP, int(self.state.turn_count)
+        )
         candidate = deepcopy(self.state)
         await self._commit_state(candidate, tool_history=tool_history)
 
@@ -112,9 +160,10 @@ class ApprovalResolutionLifecycle:
             CoreEvent(
                 name="runtime.cancelled",
                 category="lifecycle",
-                payload={"message": "approval denied", "decision": "denied"},
+                payload={"message": "approval denied", "decision": "denied", **self._scope_payload("cancelled")},
                 session_id=self.thread_id,
                 run_id=self.state.run_id,
+                turn_id=self.answered_turn_id(),
                 tags=["terminal", "cancelled"],
             ),
         ]
@@ -171,9 +220,11 @@ class ApprovalResolutionLifecycle:
                     # failure.
                     "decision": _failure_decision(failure_origin, tool_event),
                     **_state_failure_detail(self.state),
+                    **self._scope_payload("failed"),
                 },
                 session_id=self.thread_id,
                 run_id=self.state.run_id,
+                turn_id=self.answered_turn_id(),
                 tags=["terminal", "failed"],
             )
         )
@@ -342,9 +393,11 @@ class ApprovalResolutionLifecycle:
                 "content": "",
                 "error": reason,
                 "metadata": {"failure_reason": reason},
+                **self._scope_payload("failed"),
             },
             session_id=self.thread_id,
             run_id=self.state.run_id,
+            turn_id=self.answered_turn_id(),
             tags=["tool", "failed"],
         )
 

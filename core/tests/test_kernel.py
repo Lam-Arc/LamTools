@@ -5,6 +5,7 @@ CoreLoopKernel behavior without any business logic.
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -34,8 +35,20 @@ from lamtools_core.kernel import (
     RuntimeKit,
     VerificationResult,
 )
-from lamtools_core.kernel.loop import _repair_incomplete_tool_history
-from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
+from lamtools_core.kernel.loop import (
+    _repair_incomplete_tool_history,
+    _retained_history_messages,
+)
+from lamtools_core.llm import (
+    HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER,
+    TAIL_SYSTEM_MESSAGE_MARKER,
+    ChatMessage,
+    LLMClient,
+    LLMRequest,
+    LLMResponse,
+    LLMStreamEvent,
+    LLMToolCall,
+)
 from lamtools_core.llm.helpers import normalize_usage
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.prompt import PromptContext
@@ -126,6 +139,98 @@ def test_leading_orphaned_tool_result_becomes_a_user_message():
     assert [message.role for message in repaired] == ["user", "user"]
     assert "stale" in str(repaired[0].content)
     assert repaired[0].metadata["history_repair"] == "orphaned_tool_result"
+
+
+def test_history_repair_is_reported_in_backend_log(caplog):
+    """A repaired load must leave one greppable warning in the backend log.
+
+    The repair is silent otherwise: the stored history still looks fine, while
+    the provider receives a different prefix and the cache is re-read once.
+    """
+    messages = [
+        ChatMessage(role="user", content="start"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[LLMToolCall(id="call-1", name="search_files", arguments={})],
+        ),
+        ChatMessage(role="user", content="continue"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[LLMToolCall(id="call-2", name="run_command", arguments={})],
+        ),
+        ChatMessage(role="tool", tool_call_id="call-2", content="status: ok\nfirst"),
+        ChatMessage(role="tool", tool_call_id="call-9", content="status: ok\norphan"),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="lamtools_core.kernel.loop"):
+        repaired = _repair_incomplete_tool_history(messages, session_id="sid-42")
+
+    assert [message.role for message in repaired] == [
+        "user", "assistant", "tool", "user", "assistant", "tool", "user",
+    ]
+    records = [
+        record for record in caplog.records
+        if "[kernel:history-repair]" in record.getMessage()
+    ]
+    assert len(records) == 1
+    text = records[0].getMessage()
+    assert "session=sid-42" in text
+    assert "dangling_calls=1" in text
+    assert "orphan_results=1" in text
+    assert "first_repair_index=2" in text
+    assert "call-1" in text
+    assert "call-9" in text
+
+
+def test_clean_history_produces_no_repair_log(caplog):
+    messages = [
+        ChatMessage(role="user", content="start"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[LLMToolCall(id="call-1", name="search_files", arguments={})],
+        ),
+        ChatMessage(role="tool", tool_call_id="call-1", content="status: ok"),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="lamtools_core.kernel.loop"):
+        _repair_incomplete_tool_history(messages, session_id="sid-clean")
+
+    assert not [
+        record for record in caplog.records
+        if "[kernel:history-repair]" in record.getMessage()
+    ]
+
+
+def test_retained_history_keeps_the_original_not_the_request_copy():
+    """A request-bound degraded copy must map back to its durable original.
+
+    user:“图片以原图发送，那么在压缩之后还是以原图追加吗？”+压缩保留的消息按 history_seq
+    找回原始对象，避免图片被请求期副本的 id 过滤掉，或把低清副本写回存储。
+    """
+    original = ChatMessage(
+        role="tool",
+        content="full-resolution image",
+        metadata={"history_seq": 7},
+    )
+    degraded_copy = ChatMessage(
+        role="tool",
+        content="degraded image",
+        metadata={"history_seq": 7, "lam_compaction_resume": True},
+    )
+    runtime_only = ChatMessage(role="user", content="runtime note")
+    synthesized = ChatMessage(role="tool", content="synthesized result")
+
+    result = _retained_history_messages(
+        [original],
+        [degraded_copy, runtime_only, synthesized],
+        {id(degraded_copy), id(runtime_only)},
+    )
+
+    assert result[0] is original
+    assert result[0].content == "full-resolution image"
+    assert result[0].metadata["lam_compaction_resume"] is True
+    assert runtime_only not in result
+    assert synthesized in result
 
 
 @pytest.mark.asyncio
@@ -2727,7 +2832,7 @@ class TestKernelStateSave:
                 return ToolResult(call_id=call.id, name=call.name, content=f"Created {call.arguments['path']}")
 
         kit = RecordingKit()
-        policy = LoopPolicy(max_tool_only_rounds_without_progress=20)
+        policy = LoopPolicy()
 
         result = await _make_kernel(kit, policy=policy).run(_make_turn_input())
 
@@ -5119,6 +5224,62 @@ class TestKernelAssistantHistory:
         assert history_snapshots[1][1].content == "step 1 reply"
 
     @pytest.mark.asyncio
+    async def test_movable_context_notice_is_committed_to_history_once(self):
+        """A tail notice returned by the Kit becomes durable history exactly once.
+
+        user:“当存在更改时，将更改内容追加到最后，但是不动前面的”+通知由 Kernel 写进历史，
+        下一步仍然可见，且不会重复生成。
+        """
+        history_snapshots: list[list[ChatMessage]] = []
+        notice = ChatMessage(role="system", content="movable notice")
+
+        class NoticeKit(MockRuntimeKit):
+            def __init__(self, steps):
+                super().__init__(steps)
+                self.emitted = False
+
+            async def build_context(self, state, turn_input, history, step_index):
+                history_snapshots.append(list(history))
+                return await super().build_context(state, turn_input, history, step_index)
+
+            async def build_model_request(self, state, context):
+                request = await super().build_model_request(state, context)
+                if not self.emitted:
+                    self.emitted = True
+                    request.metadata["_movable_context_notices"] = [notice]
+                return request
+
+        kit = NoticeKit([
+            MockKitStep(reply="step 1", decision="continue"),
+            MockKitStep(reply="step 2", decision="done"),
+        ])
+        kernel = _make_kernel(kit)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert len(history_snapshots) == 2
+        assert not any(
+            message.content == notice.content for message in history_snapshots[0]
+        )
+        assert (
+            sum(
+                1
+                for message in history_snapshots[1]
+                if message.content == notice.content
+            )
+            == 1
+        )
+        committed = next(
+            message
+            for message in history_snapshots[1]
+            if message.content == notice.content
+        )
+        assert committed is not notice
+        assert committed.metadata.get(TAIL_SYSTEM_MESSAGE_MARKER) is False
+        assert committed.metadata.get(HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER) is True
+
+    @pytest.mark.asyncio
     async def test_assistant_tool_calls_visible_in_next_iteration(self):
         """Assistant history preserves tool call IDs before tool result messages."""
         history_snapshots: list[list[ChatMessage]] = []
@@ -5316,38 +5477,6 @@ async def test_empty_stop_fails_after_max_retries(tmp_path):
     assert llm.calls == 4
 
 
-@pytest.mark.asyncio
-async def test_tool_progress_report_does_not_require_a_fixed_structure():
-    """A text response acknowledges a progress request without format retries."""
-    big_text = "\n".join(f"line-{index:03d} content" for index in range(60))  # >=512 chars, >=3 lines
-
-    class ProgressGateKit(MockRuntimeKit):
-        async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
-            return KernelTurn(
-                reply="working on it",
-                tool_calls=[ToolCall(id="c1", name="read_file", arguments={"path": "big.txt", "content": big_text})],
-            )
-
-        async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
-            return ToolResult(call_id=call.id, name=call.name, content="ok")
-
-        async def decide_next(self, state: RuntimeState, turn: KernelTurn, verification, step) -> str:
-            return "continue"
-
-    kit = ProgressGateKit(steps=[MockKitStep()])
-    kernel = _make_kernel(kit, policy=LoopPolicy(max_identical_tool_results=3))
-
-    result = await kernel.run(_make_turn_input())
-
-    # The separate repeated-result guard still bounds the identical-call loop,
-    # but the progress request does not demand headings or force retry rounds.
-    assert result.decision == "wait"
-    assert any(step.metadata.get("tool_progress_acknowledged") for step in result.steps)
-    assert not any(step.metadata.get("tool_progress_incomplete") for step in result.steps)
-    assert not any(step.metadata.get("tool_progress_retry_required") for step in result.steps)
-    assert result.error == ""
-
-
 class TestHistoryCompactedEvent:
     """The pre-sampling trim must report trimmed/remaining counts consistent
     with the actual history (audit 13 S3 — a count mismatch was flagged in
@@ -5512,6 +5641,15 @@ class TestLivePermissionRefreshAtTheWaitingGate:
         assert result.state is not None
         pending = result.state.metadata.get("pending_approval")
         assert isinstance(pending, dict) and pending.get("status") == "waiting"
+        # The waiting record is the crash-recovery source for the card. It must
+        # carry the same choices as the approval request, otherwise a recovered
+        # card asks the same question with different (or no) options.
+        waiting = result.state.metadata.get("pending_waiting_request")
+        assert isinstance(waiting, dict)
+        assert [option["id"] for option in waiting["options"]] == [
+            "option-confirm",
+            "option-skip",
+        ]
 
     @pytest.mark.asyncio
     async def test_a_switch_landing_after_the_card_is_persisted_is_released_on_the_spot(self):
@@ -5571,6 +5709,74 @@ class TestLivePermissionRefreshAtTheWaitingGate:
         assert "pending_approval" not in result.state.metadata
         # The released call actually ran rather than being left blocked.
         assert result.steps[0].tool_steps[0].result.status == "ok"
+
+
+class TestApprovalBatchSerialization:
+    """A step may mix ordinary calls with more than one approval call.
+
+    The ordinary calls must run before the run parks; the second approval must
+    be recorded as a named deferral instead of disappearing or being executed
+    twice.  This is the structural fix for the "second question vanished"
+    defect.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_approval_calls_run_and_extra_approvals_are_deferred(self):
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                reply="",
+                tool_calls=[
+                    ToolCall(id="read", name="read_file", arguments={"path": "a.txt"}),
+                    ToolCall(
+                        id="cmd",
+                        name="run_command",
+                        arguments={"command": "echo hi"},
+                        requires_approval=True,
+                    ),
+                    ToolCall(
+                        id="ask",
+                        name="question",
+                        arguments={"question": "which one?", "options": [{"label": "A"}, {"label": "B"}]},
+                        requires_approval=True,
+                    ),
+                ],
+                tool_results=[
+                    ToolResult(call_id="read", name="read_file", status="ok", content="FILE BODY"),
+                ],
+                decision="wait",
+            ),
+        ])
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, event_sink=sink)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "wait"
+        state = result.state
+        assert state is not None
+        pending = state.metadata.get("pending_approval")
+        assert isinstance(pending, dict)
+        assert pending["tool_call"]["id"] == "cmd"
+        assert [call["id"] for call in pending.get("deferred_calls", [])] == ["ask"]
+
+        finished = [
+            event.payload.get("call_id")
+            for event in sink.events
+            if event.name == "runtime.tool.finished"
+        ]
+        assert "read" in finished, "the ordinary call in the batch must execute before parking"
+        cards = [event for event in sink.events if event.name == "runtime.approval_request"]
+        assert len(cards) == 1
+        assert cards[0].payload.get("request_id", "").endswith(":cmd")
+        assert cards[0].payload.get("request_kind") == "permission"
+        assert cards[0].payload.get("options", [])[0]["id"] == "approve"
+        # A question's options are stable ids, not their labels.
+        question_options = [
+            event.payload.get("options", [])
+            for event in cards
+            if event.payload.get("tool_name") == "question"
+        ]
+        assert question_options == []
 
 
 class _MemoryExhaustedKit(MockRuntimeKit):

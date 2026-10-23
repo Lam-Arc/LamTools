@@ -797,7 +797,7 @@ def test_internal_user_guidance_does_not_start_a_new_semantic_group():
         ChatMessage(
             role="user",
             content="internal runtime guidance",
-            metadata={"key": "tool_progress_required", "internal": True},
+            metadata={"key": "no_progress_recovery", "internal": True},
         ),
         ChatMessage(role="assistant", content="second step"),
         ChatMessage(role="user", content="next real request"),
@@ -814,7 +814,7 @@ def test_fallback_summary_does_not_promote_internal_guidance_to_user_instruction
         ChatMessage(
             role="user",
             content="internal runtime guidance",
-            metadata={"key": "tool_progress_required", "internal": True},
+            metadata={"key": "no_progress_recovery", "internal": True},
         ),
     ])
 
@@ -1595,7 +1595,7 @@ def test_fitter_preserves_latest_real_user_instead_of_internal_guidance():
                 ChatMessage(
                     role="user",
                     content="internal guidance" + ("z" * 400),
-                    metadata={"key": "tool_progress_required", "internal": True},
+                    metadata={"key": "no_progress_recovery", "internal": True},
                 ),
             ],
             target_tokens=600,

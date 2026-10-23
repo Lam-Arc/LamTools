@@ -863,7 +863,7 @@ import { createCoreProjectClient } from '../projects/client'
 import { createCoreProjectWorkspaceActions } from '../projects/workspace'
 import {
   lockedMessageIdsBeforeCompaction,
-  selectPendingCoreDecisions,
+  selectVisiblePendingDecisions,
   type CoreQueuedInput,
 } from '../appServer'
 import type { LamToolsTransport, TransportHttpResponse } from '../transport'
@@ -1726,9 +1726,23 @@ const composerPlaceholder = computed(() => (
  * composer input area is therefore replaced by the decision panel, which sends
  * its choices through the one existing approval channel.
  */
-const pendingDecisions = computed(() => (
-  activePluginMode.value ? [] : selectPendingCoreDecisions(workbench.messages.value)
-))
+const pendingDecisions = computed(() => {
+  if (activePluginMode.value) return []
+  const pool = workbench.snapshot.value?.core?.decisions
+    ?? workbench.snapshot.value?.core?.interactions
+  // One display authority: the interaction pool. It gains a row when a card
+  // appears, keeps its assigned sequence through processing, and drops the row
+  // the moment the answer is durable — the next card then takes the slot. A
+  // message-tree card is used only when the snapshot carries no pool at all.
+  return selectVisiblePendingDecisions(
+    workbench.messages.value,
+    pool,
+    {
+      submittingRequestIds: workbench.approval.submittingRequestIds.value,
+      requests: workbench.snapshot.value?.core?.requests,
+    },
+  )
+})
 const composerTakenOver = computed(() => pendingDecisions.value.length > 0)
 const approvalChannelReady = computed(() => workbench.connectionState.value === 'open')
 
@@ -2133,7 +2147,7 @@ function requestComposerTerminate(): void {
 
 /** 终止会丢弃什么：未完成的步骤与未回答的子代理提问，已完成的工具结果保留。 */
 function terminateDiscardSummary(): string {
-  const pending = selectPendingCoreDecisions(workbench.messages.value).length
+  const pending = pendingDecisions.value.length
   const members = sessionActivity.value.interruptibleSubAgentNames.length
     + sessionActivity.value.resumableSubAgentNames.length
   const parts: string[] = []

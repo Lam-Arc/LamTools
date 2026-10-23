@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -107,6 +107,13 @@ class ToolApprovalDecision:
     #: is never settled by a preset alone (see ``CoreToolbox.prepare_call``);
     #: once the user approves it, the call receives a one-shot grant.
     outside_workdir: bool = False
+    #: True when the session's automatic preset settled this call.  The gate
+    #: records it so callers can keep the audit marker without re-deciding
+    #: whether the preset applies.
+    auto_approved: bool = False
+    #: Command confirmation remains in automatic mode; explicit full access
+    #: settles it together with other approval requests.
+    command_confirmation: bool = False
 
 
 def normalize_command_policies(raw: dict[str, object] | None) -> dict[CommandPermissionGroup, CommandApprovalPolicy]:
@@ -162,6 +169,7 @@ class ApprovalGate:
         tier_tools: TierTools | None = None,
         allow_access_outside_workdir: bool = False,
         approval_policy: RuntimeApprovalPolicy | None = None,
+        permission_preset: str = "ask",
         manifest_tool_permissions: dict[str, PermissionTier] | None = None,
         manifest_hard_block_tools: set[str] | None = None,
         resource_roots: Callable[[], Iterable[Path]] | Iterable[Path] | None = None,
@@ -179,6 +187,7 @@ class ApprovalGate:
         self.tier_tools = tier_tools
         self.allow_access_outside_workdir = allow_access_outside_workdir
         self.approval_policy = approval_policy
+        self.permission_preset = permission_preset
         self.manifest_tool_permissions = dict(manifest_tool_permissions or {})
         self.manifest_hard_block_tools = set(manifest_hard_block_tools or set())
         self.resource_roots = resource_roots
@@ -208,6 +217,30 @@ class ApprovalGate:
         return (self.work_root, *extra)
 
     def check(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:
+        """Resolve one call and apply the session preset in the same place.
+
+        The preset used to be applied again by ``CoreToolbox`` after this gate,
+        which meant command approvals bypassed the documented precedence table.
+        It is now the last step of the single authority.
+        """
+        decision = self._check_decision(tool_name, params)
+        if self.approval_policy == "auto_approve" and not decision.blocked:
+            # user:“处于完全访问状态，但是它运行命令的时候弹审批了”+(完全访问授权包含命令确认，普通自动模式保留确认)。
+            if decision.requires_approval and (
+                not decision.command_confirmation or self.permission_preset == "full_access"
+            ):
+                return replace(
+                    decision,
+                    allowed=True,
+                    requires_approval=False,
+                    reason="Auto-approved by permission preset",
+                    auto_approved=True,
+                )
+            if decision.allowed and not decision.auto_approved:
+                return replace(decision, auto_approved=True)
+        return decision
+
+    def _check_decision(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:
         params = params or {}
         if tool_name in self.manifest_hard_block_tools:
             return ToolApprovalDecision(
@@ -260,6 +293,7 @@ class ApprovalGate:
                         decision.reason or "Command requires user confirmation",
                         base_tier,
                         requires_approval=True,
+                        command_confirmation=True,
                     )
                 if base_tier == AUTO_ALLOW:
                     return ToolApprovalDecision(True, f"Auto-approved {decision.group} command", base_tier)
@@ -286,3 +320,57 @@ class ApprovalGate:
                 if pattern.casefold() in path:
                     return f"Blocked: path contains sensitive pattern '{pattern}'"
         return ""
+
+
+class PermissionResolver:
+    """Single owner of a gate's mutable live-permission inputs.
+
+    ``ApprovalGate.check`` owns the precedence table (manifest hard block,
+    capability tier, destructive path/command rules, manifest tier, preset).
+    This class owns the only place a runtime snapshot may change those inputs:
+    the toolbox refresh, kernel re-preparation and approval continuation all
+    call :meth:`apply_snapshot` instead of assigning gate fields themselves.
+    """
+
+    def __init__(self, gate: ApprovalGate) -> None:
+        self.gate = gate
+
+    def apply_snapshot(self, value: object) -> bool:
+        """Apply one live runtime snapshot; invalid fields are ignored.
+
+        Returns ``True`` when any input changed, so callers can mirror the
+        effective values without re-implementing the validation rules.
+        """
+        if not isinstance(value, Mapping):
+            return False
+        from lamtools_core.app.runtime_permissions import normalize_tier_tools
+
+        changed = False
+        preset = value.get("permission_preset")
+        if preset in {"ask", "auto", "full_access"} and self.gate.permission_preset != preset:
+            self.gate.permission_preset = preset
+            changed = True
+        policy = value.get("approval_policy")
+        if policy in {"require", "auto_approve"} and self.gate.approval_policy != policy:
+            self.gate.approval_policy = policy  # type: ignore[assignment]
+            changed = True
+        tier = value.get("active_tier")
+        if tier in {"read_only", "limited_edit", "full_edit"} and self.gate.active_tier != tier:
+            self.gate.active_tier = tier  # type: ignore[assignment]
+            changed = True
+        raw_tier_tools = value.get("tier_tools")
+        if isinstance(raw_tier_tools, Mapping):
+            tier_tools = normalize_tier_tools(raw_tier_tools)
+            if tier_tools != self.gate.tier_tools:
+                self.gate.tier_tools = tier_tools
+                changed = True
+        outside = value.get("allow_access_outside_workdir")
+        if isinstance(outside, bool) and self.gate.allow_access_outside_workdir != outside:
+            self.gate.allow_access_outside_workdir = outside
+            changed = True
+        return changed
+
+    def resolve(
+        self, tool_name: str, params: dict[str, Any] | None = None
+    ) -> ToolApprovalDecision:
+        return self.gate.check(tool_name, params)

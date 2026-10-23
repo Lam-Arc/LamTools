@@ -24,6 +24,10 @@ ASK_AUTO_CONTINUE_NAMESPACE = "core.askAutoContinue"
 #: 无人回答的等待窗口（分钟）——与 ZCode 常规页的 5 分钟一致。
 ASK_AUTO_CONTINUE_TIMEOUT_MINUTES = 5
 
+#: The exact answer the backend submits when the window expires.  The wording
+#: tells the model this was a timeout, not a user choice.
+ASK_SKIP_GUIDANCE = "用户跳过回答：等待 5 分钟未响应，未收集到用户答案。"
+
 
 def ask_auto_continue_enabled() -> bool:
     stored = get_setting(ASK_AUTO_CONTINUE_NAMESPACE)
@@ -55,6 +59,7 @@ def ask_auto_continue_status() -> dict[str, Any]:
 __all__ = [
     "ASK_AUTO_CONTINUE_NAMESPACE",
     "ASK_AUTO_CONTINUE_TIMEOUT_MINUTES",
+    "ASK_SKIP_GUIDANCE",
     "ask_auto_continue_enabled",
     "ask_auto_continue_status",
     "merge_ask_auto_continue",

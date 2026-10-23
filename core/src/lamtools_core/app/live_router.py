@@ -68,7 +68,9 @@ SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0
 # of high-volume runItem deltas. Both lanes are bounded; producers of control
 # messages apply backpressure while the sender drains them, whereas deltas may
 # be dropped and recovered from snapshots/resume.
-CONTROL_OUTBOUND_RUN_ITEM_KINDS = frozenset({"approval_request"})
+CONTROL_OUTBOUND_RUN_ITEM_KINDS = frozenset(
+    {"approval_request", "approval_response", "interaction_update"}
+)
 CONTROL_OUTBOUND_ENQUEUE_TIMEOUT_SECONDS = 5.0
 OUTBOUND_DROP_LOG_INTERVAL_SECONDS = 10.0
 # After the lossy lane drops frames, tell the client to resynchronize from its
@@ -557,7 +559,7 @@ class CoreLiveConnection:
                 # 卡就无法回答（死锁）。到达即节流推一次快照，让所有连接都能
                 # 从快照恢复审批状态（快照由 item 表组装 + requests，见
                 # snapshot_store._assemble）。
-                if _run_item_kind(event) == "approval_request":
+                if _run_item_kind(event) in {"approval_request", "approval_response"}:
                     await self._flush_run_item_buffer()
                     now = asyncio.get_running_loop().time()
                     if now - self._last_snapshot_sent_at >= SNAPSHOT_MIN_INTERVAL_SECONDS:
@@ -933,7 +935,13 @@ class CoreLiveConnection:
                     # (sub_agent.interrupt / sub_agent.resume) is a Core
                     # runtime operation; runtimes without it (embedded
                     # mobile standalone) must not offer the control.
-                    "capabilities": {"same_turn_resume": True, "sub_agent_control": True},
+                    "capabilities": {
+                        "same_turn_resume": True,
+                        "sub_agent_control": True,
+                        # The backend owns the question-expiry timer; a client
+                        # that sees this must not run a second local timer.
+                        "ask_auto_continue_backend": True,
+                    },
                 },
             )
         )

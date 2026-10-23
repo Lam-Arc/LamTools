@@ -13,6 +13,7 @@
  * (`approve_once` / `deny` / `other_guidance`), so it lives here once instead
  * of being restated per surface.
  */
+import type { CoreAppInteraction } from './protocol.ts'
 import type { CoreMessage, MessagePart } from '../types.ts'
 
 export type CoreDecisionFactTone = 'neutral' | 'warn'
@@ -69,6 +70,12 @@ export interface CorePendingDecision {
   subAgentName: string
   /** Durable child session id of the asking sub-agent, when known. */
   subAgentSessionId: string
+  /** Decision-pool identity and provenance. */
+  decisionId: string
+  sequence: number
+  lifecycle: 'appearing' | 'processing' | 'ending'
+  deliveredBy: string
+  projectId: string
 }
 
 export interface SelectPendingCoreDecisionsOptions {
@@ -134,8 +141,154 @@ export function selectPendingCoreDecisions(
         canGuide: part.status === 'pending',
         subAgentName: entry.subAgentName,
         subAgentSessionId: entry.subAgentSessionId,
+        decisionId: String(part.metadata?.decision_id || ''),
+        sequence: Number(part.metadata?.sequence || 0),
+        lifecycle: part.status === 'running' ? 'processing' : 'appearing',
+        deliveredBy: String(part.metadata?.delivered_by || (entry.subAgentName ? `agent:${entry.subAgentName}` : 'main')),
+        projectId: String(part.metadata?.project_id || ''),
       })
     }
+  }
+  return decisions
+}
+
+/**
+ * Request identities the server already knows about.
+ *
+ * The interaction index is authoritative for a request's lifecycle. A card
+ * recovered from the message tree must not re-appear once the pool has the
+ * same request — open (the pool card wins) or terminal (it was answered).
+ * Legacy servers without a pool keep the message-backed fallback.
+ */
+export function coreKnownRequestIds(
+  interactions: readonly CoreAppInteraction[] | undefined,
+  requests: Readonly<Record<string, { status?: unknown; request_id?: unknown }>> | undefined,
+): Set<string> {
+  const known = new Set<string>()
+  for (const interaction of interactions || []) {
+    if (!interaction) continue
+    for (const id of [
+      interaction.interaction_id,
+      interaction.request_id,
+      interaction.tool_call_id,
+    ]) {
+      if (id) known.add(String(id))
+    }
+  }
+  for (const [key, request] of Object.entries(requests || {})) {
+    const status = String(request?.status || '')
+    if (status !== 'resolved' && status !== 'cancelled' && status !== 'expired') continue
+    if (key) known.add(key)
+    if (request?.request_id) known.add(String(request.request_id))
+  }
+  return known
+}
+
+/**
+ * The cards the interface should show.
+ *
+ * The interaction pool is the single display authority: a card appears when
+ * the pool gains a row, changes when that row changes, and disappears when the
+ * row ends (the next row fills the slot by its assigned sequence). The message
+ * tree is only a fallback for hosts/snapshots that have no pool field at all —
+ * never a second source next to a present pool. This is what prevents an
+ * answered request from reappearing out of a stale message part.
+ *
+ * 用户要求（原文）：“前端显示的更新时间应当是池子内信息发生变动的时候，当一个
+ * 卡片或请求被回答完毕之后，这个东西被丢出池子，然后池子顺位补上下一个。”
+ * 用户要求（原文）：“这个东西不应该是前端显示池子内拥有的东西”
+ */
+export function selectVisiblePendingDecisions(
+  messages: readonly CoreMessage[],
+  interactions: readonly CoreAppInteraction[] | undefined,
+  options: SelectPendingCoreDecisionsOptions & {
+    requests?: Readonly<Record<string, { status?: unknown; request_id?: unknown }>> | undefined
+  } = {},
+): CorePendingDecision[] {
+  if (Array.isArray(interactions)) {
+    return selectPendingInteractionDecisions(interactions)
+  }
+  const settled = coreKnownRequestIds(undefined, options.requests)
+  return selectPendingCoreDecisions(messages, options)
+    .filter(item => !item.requestId || !settled.has(item.requestId))
+}
+
+/**
+ * Pending decisions from the server's interaction index.
+ *
+ * The transcript window can omit the turn that owns a card; these rows are
+ * still answerable and appear in the composer panel. A part-backed card with
+ * the same request id wins (it carries the richer tool metadata), so callers
+ * should merge and dedupe by `requestId`.
+ */
+export function selectPendingInteractionDecisions(
+  interactions: readonly CoreAppInteraction[] | undefined,
+): CorePendingDecision[] {
+  const decisions: CorePendingDecision[] = []
+  for (const interaction of interactions || []) {
+    if (!interaction || !interaction.interaction_id) continue
+    const status = String(interaction.status || 'open')
+    if (status !== 'open' && status !== 'deferred' && status !== 'processing') continue
+    const lifecycle = String(interaction.lifecycle || (status === 'processing' ? 'processing' : 'appearing'))
+    if (lifecycle === 'ending') continue
+    const isQuestion = String(interaction.kind || '') === 'question'
+    const title = String(interaction.title || '').trim() || '等待确认'
+    const context = String(interaction.context || '').trim()
+    const rawOptions = Array.isArray(interaction.options) ? interaction.options : []
+    const options: CoreDecisionChoice[] = rawOptions
+      .filter(option => Boolean(option && (option.label || option.id)))
+      .map((option, index) => {
+        const label = String(option.label || option.id || `选项 ${index + 1}`)
+        return {
+          id: String(option.id || `option-${index + 1}`),
+          label,
+          description: String(option.description || ''),
+          response: option.response ? String(option.response) : undefined,
+          wireResponse: option.response ? String(option.response) : label,
+        }
+      })
+    if (options.length === 0) {
+      options.push(
+        ...(isQuestion
+          ? [
+              { id: 'option-confirm', label: '确认并继续', wireResponse: '确认并继续' },
+              { id: 'option-skip', label: '跳过问题', wireResponse: '（用户跳过了这个问题，未提供回答。）' },
+            ]
+          : [
+              { id: 'approve', label: '批准执行', wireResponse: 'approve' },
+              { id: 'deny', label: '拒绝执行', wireResponse: 'deny' },
+            ]),
+      )
+    }
+    decisions.push({
+      partId: `interaction:${interaction.interaction_id}`,
+      requestId: interaction.interaction_id,
+      isQuestion,
+      kindLabel: isQuestion ? '提问' : '审批',
+      subject: compactDetail(title, DEFAULT_SUBJECT_LIMIT),
+      title: `需要确认：${compactDetail(title, DEFAULT_SUBJECT_LIMIT)}`,
+      detail: context ? compactDetail(context, DEFAULT_DETAIL_LIMIT) : '',
+      facts: [
+        ...(context ? [{ label: '背景', value: compactDetail(context, 200), tone: 'neutral' as const }] : []),
+        ...(interaction.delivered_by && interaction.delivered_by !== 'main'
+          ? [{ label: '来源', value: interaction.delivered_by, tone: 'neutral' as const }]
+          : []),
+        ...(interaction.project_id
+          ? [{ label: '项目', value: interaction.project_id, tone: 'neutral' as const }]
+          : []),
+      ],
+      options,
+      status: status === 'processing' ? 'running' : 'pending',
+      submitting: status === 'processing',
+      canGuide: isQuestion && status !== 'processing',
+      subAgentName: String(interaction.agent_name || ''),
+      subAgentSessionId: String(interaction.agent_session_id || ''),
+      decisionId: String(interaction.decision_id || interaction.interaction_id),
+      sequence: Number(interaction.sequence || 0),
+      lifecycle: lifecycle === 'processing' ? 'processing' : 'appearing',
+      deliveredBy: String(interaction.delivered_by || 'main'),
+      projectId: String(interaction.project_id || ''),
+    })
   }
   return decisions
 }
@@ -274,6 +427,11 @@ export function coreDecisionFacts(part: MessagePart): CoreDecisionFact[] {
   const askedTool = toolName || matchAsk(message, /^需要授权后才能执行工具[：:]\s*(.+)$/)
   if (askedTool && !isQuestion) {
     pushFact(facts, { label: '工具', value: compactDetail(askedTool, 64), tone: 'neutral', mono: true })
+  }
+
+  const context = firstString(args.context, meta.context)
+  if (context) {
+    pushFact(facts, { label: '背景', value: compactDetail(context, 200), tone: 'neutral' })
   }
 
   const askReason = matchAsk(message, /^需要授权[：:]\s*(.+)$/)

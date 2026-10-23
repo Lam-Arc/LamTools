@@ -721,6 +721,7 @@ def test_empty_snapshot_shape_is_member_neutral():
         "item_order": [],
         "requests": {},
         "artifacts": {},
+        "deleted_agents": {},
         "status": "idle",
     }
 
@@ -868,3 +869,235 @@ def test_resource_calls_isolate_children_and_replace_same_call_id():
     assert len(turn["usage_calls"]) == 2
     assert turn["child_context_metrics"]["delegate"]["context_window_tokens"] == 1000
     assert "context_metrics" not in turn
+
+
+def test_decision_pool_lifecycle_processing_then_ending():
+    snapshot = empty_thread_snapshot("thread-1")
+    processing = RunItemEvent(
+        kind="interaction_update",
+        thread_id="thread-1",
+        event_id="event-processing",
+        item_id="dec-a",
+        status="processing",
+        seq=1,
+        payload={
+            "type": "serverRequest",
+            "request_id": "dec-a",
+            "interaction_id": "dec-a",
+            "kind": "question",
+            "state": "processing",
+            "lifecycle": "processing",
+            "status": "processing",
+            "decision_id": "dec_hash",
+            "sequence": 4,
+            "title": "Pick one",
+            "options": [{"id": "option-1", "label": "A"}],
+            "delivered_by": "agent:reader",
+            "agent_name": "reader",
+            "project_id": "project-1",
+        },
+    )
+    updated = apply_run_item_event(snapshot, processing)
+    assert updated["requests"]["dec-a"]["status"] == "processing"
+    pool = updated.get("interactions") or []
+    assert pool[0]["lifecycle"] == "processing"
+    assert pool[0]["decision_id"] == "dec_hash"
+    assert pool[0]["sequence"] == 4
+    assert pool[0]["delivered_by"] == "agent:reader"
+
+    ending = RunItemEvent(
+        kind="approval_response",
+        thread_id="thread-1",
+        event_id="event-ending",
+        item_id="dec-a",
+        status="completed",
+        seq=2,
+        payload={
+            "type": "serverRequest",
+            "request_id": "dec-a",
+            "interaction_id": "dec-a",
+            "state": "ending",
+            "lifecycle": "ending",
+            "status": "resolved",
+            "decision": "approve_once",
+        },
+    )
+    ended = apply_run_item_event(updated, ending)
+    assert ended["requests"]["dec-a"]["status"] == "resolved"
+    assert ended.get("interactions") == []
+
+
+def test_duplicate_approval_request_cannot_erase_options():
+    """A restated request keeps the choices the original card carried."""
+    first = RunItemEvent(
+        kind="approval_request",
+        thread_id="thread-1",
+        event_id="event-1",
+        turn_id="turn-1",
+        item_id="approval-1",
+        seq=1,
+        status="waiting",
+        payload={
+            "type": "serverRequest",
+            "request_id": "request-1",
+            "tool_call_id": "call-1",
+            "kind": "question",
+            "message": "先检查文件还是先看报告？",
+            "options": [
+                {"id": "option-1", "label": "先检查文件"},
+                {"id": "option-2", "label": "先看报告"},
+            ],
+        },
+    )
+    restated = RunItemEvent(
+        kind="approval_request",
+        thread_id="thread-1",
+        event_id="event-2",
+        turn_id="turn-1",
+        item_id="approval-1",
+        seq=2,
+        status="waiting",
+        payload={
+            "type": "serverRequest",
+            "request_id": "request-1",
+            "tool_call_id": "call-1",
+            "kind": "question",
+            "message": "",
+            "options": [],
+        },
+    )
+
+    snapshot = reduce_run_item_events("thread-1", [first, restated])
+
+    item = snapshot["items"]["approval-1"]
+    assert item["status"] == "waiting"
+    assert item["payload"]["options"] == [
+        {"id": "option-1", "label": "先检查文件"},
+        {"id": "option-2", "label": "先看报告"},
+    ]
+    assert item["payload"]["message"] == "先检查文件还是先看报告？"
+    # The composite id and its tool-call alias describe one record.
+    assert len(snapshot["requests"]) == 2
+    assert snapshot["requests"]["request-1"] is snapshot["requests"]["call-1"]
+    assert snapshot["requests"]["request-1"]["status"] == "open"
+    assert snapshot["requests"]["request-1"]["options"] == [
+        {"id": "option-1", "label": "先检查文件"},
+        {"id": "option-2", "label": "先看报告"},
+    ]
+
+
+def test_late_approval_request_cannot_reopen_an_answered_card():
+    """Ending is terminal: a duplicate after the answer changes nothing."""
+    request = RunItemEvent(
+        kind="approval_request",
+        thread_id="thread-1",
+        event_id="event-1",
+        turn_id="turn-1",
+        item_id="approval-1",
+        seq=1,
+        status="waiting",
+        payload={
+            "type": "serverRequest",
+            "request_id": "request-1",
+            "tool_call_id": "call-1",
+            "kind": "question",
+            "message": "先检查文件还是先看报告？",
+            "options": [{"id": "option-1", "label": "先检查文件"}],
+        },
+    )
+    answered = RunItemEvent(
+        kind="approval_response",
+        thread_id="thread-1",
+        event_id="event-2",
+        turn_id="turn-1",
+        item_id="approval-1",
+        seq=2,
+        status="completed",
+        payload={
+            "request_id": "request-1",
+            "interaction_id": "request-1",
+            "state": "ending",
+            "lifecycle": "ending",
+            "status": "resolved",
+            "decision": "guide",
+            "guidance": "先看报告",
+        },
+    )
+    late_repeat = RunItemEvent(
+        kind="approval_request",
+        thread_id="thread-1",
+        event_id="event-3",
+        turn_id="turn-1",
+        item_id="approval-1",
+        seq=3,
+        status="waiting",
+        payload={
+            "type": "serverRequest",
+            "request_id": "request-1",
+            "tool_call_id": "call-1",
+            "kind": "question",
+            "message": "先检查文件还是先看报告？",
+            "options": [],
+        },
+    )
+
+    snapshot = reduce_run_item_events("thread-1", [request, answered, late_repeat])
+
+    assert snapshot["requests"]["request-1"]["status"] == "resolved"
+    assert snapshot["items"]["approval-1"]["status"] == "completed"
+    assert snapshot["items"]["approval-1"].get("last_kind") != "approval_request"
+
+
+def test_late_interaction_update_cannot_reinsert_an_ended_card():
+    """The pool may not regain an interaction after its ending event."""
+    request = RunItemEvent(
+        kind="approval_request",
+        thread_id="thread-1",
+        event_id="event-1",
+        turn_id="turn-1",
+        item_id="approval-1",
+        seq=1,
+        status="waiting",
+        payload={
+            "type": "serverRequest",
+            "request_id": "request-1",
+            "kind": "approval",
+            "options": [{"id": "approve", "label": "批准执行"}],
+        },
+    )
+    answered = RunItemEvent(
+        kind="approval_response",
+        thread_id="thread-1",
+        event_id="event-2",
+        turn_id="turn-1",
+        item_id="approval-1",
+        seq=2,
+        status="completed",
+        payload={
+            "request_id": "request-1",
+            "interaction_id": "request-1",
+            "state": "ending",
+            "status": "resolved",
+        },
+    )
+    late_update = RunItemEvent(
+        kind="interaction_update",
+        thread_id="thread-1",
+        event_id="event-3",
+        turn_id="turn-1",
+        item_id="interaction:request-1",
+        seq=3,
+        status="pending",
+        payload={
+            "request_id": "request-1",
+            "interaction_id": "request-1",
+            "kind": "approval",
+            "state": "appearing",
+            "options": [{"id": "approve", "label": "批准执行"}],
+        },
+    )
+
+    snapshot = reduce_run_item_events("thread-1", [request, answered, late_update])
+
+    assert not snapshot.get("interactions")
+    assert snapshot["requests"]["request-1"]["status"] == "resolved"

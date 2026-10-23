@@ -5,6 +5,7 @@ import {
   coreDecisionSubject,
   coreDecisionTitle,
   selectPendingCoreDecisions,
+  selectVisiblePendingDecisions,
 } from '../src/appServer'
 import type { CoreMessage, MessagePart } from '../src/types'
 
@@ -245,5 +246,49 @@ describe('selectPendingCoreDecisions', () => {
     expect(coreDecisionTitle(part)).toBe('需要确认：approval')
     expect(coreDecisionSubject(part)).toBe('需要授权后才能执行命令：npm test')
     expect(coreDecisionSubject(part, 12)).toBe('需要授权后才能执行命令：...')
+  })
+})
+
+describe('selectVisiblePendingDecisions', () => {
+  it('shows only pool rows when the server provides a pool, even an empty one', () => {
+    const messages = [assistantMessage('a1', [approvalPart()])]
+
+    expect(selectVisiblePendingDecisions(messages, [])).toEqual([])
+  })
+
+  it('uses the pool card instead of a duplicate message-backed card', () => {
+    const messages = [assistantMessage('a1', [approvalPart()])]
+    const pool = [{
+      interaction_id: 'req-1',
+      request_id: 'req-1',
+      kind: 'approval',
+      status: 'open',
+      lifecycle: 'appearing',
+      sequence: 1,
+      title: '需要授权后才能执行命令：npm test',
+      options: APPROVAL_OPTIONS,
+    }]
+
+    const decisions = selectVisiblePendingDecisions(messages, pool)
+
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0].requestId).toBe('req-1')
+    expect(decisions[0].options.map(option => option.label)).toEqual(['批准执行', '拒绝执行'])
+    expect(decisions[0].sequence).toBe(1)
+  })
+
+  it('falls back to the message tree only when no pool field exists', () => {
+    const messages = [assistantMessage('a1', [approvalPart()])]
+
+    expect(selectVisiblePendingDecisions(messages, undefined)).toHaveLength(1)
+  })
+
+  it('does not revive a settled request in the legacy fallback', () => {
+    const messages = [assistantMessage('a1', [approvalPart()])]
+    const requests = {
+      'req-1': { request_id: 'req-1', status: 'resolved' },
+    }
+
+    expect(selectVisiblePendingDecisions(messages, undefined, { requests })).toEqual([])
   })
 })

@@ -6,7 +6,12 @@ from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
 from lamtools_core.config.defaults import DEFAULT_AGENTS_MD
 from lamtools_core.config.root import core_config_dir
 from lamtools_core.kernel import KernelStep, KernelTurn, VerificationResult
-from lamtools_core.llm import ChatMessage, LLMResponse, LLMToolCall
+from lamtools_core.llm import (
+    TAIL_SYSTEM_MESSAGE_MARKER,
+    ChatMessage,
+    LLMResponse,
+    LLMToolCall,
+)
 from lamtools_core.runtime import RuntimeState, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.prompt import PromptContext
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
@@ -155,8 +160,9 @@ async def test_active_plan_is_appended_after_history_without_changing_cached_pre
     assert first.messages[0].role == "system"
     assert "[Current plan]" not in str(first.messages[0].content)
     assert first.messages[1:3] == history
-    assert first.messages[-1].role == "user"
-    assert first.messages[-1].metadata == {"key": "active_plan_snapshot", "internal": True}
+    assert first.messages[-1].role == "system"
+    assert first.messages[-1].metadata["key"] == "runtime_context_delta"
+    assert first.messages[-1].metadata.get(TAIL_SYSTEM_MESSAGE_MARKER) is True
     assert "Goal: Prepare the quarterly report" in str(first.messages[-1].content)
     assert "Files: report.docx" in str(first.messages[-1].content)
     assert "step-1 · pending · Draft report" in str(first.messages[-1].content)

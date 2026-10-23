@@ -124,8 +124,72 @@ function latestActiveTurnStatus(state: CoreAppSnapshot): 'running' | 'waiting' |
   return active[0]?.status ?? null
 }
 
-export function selectQueueTray(state: CoreAppSnapshot): CoreAppQueueItem[] {
-  return [...(state.queue ?? [])].sort((a, b) => Number(a.seq ?? 0) - Number(b.seq ?? 0))
+export type CoreTurnActionMode = 'send' | 'stop' | 'resume'
+
+export interface CoreTurnControl {
+  turnId: string
+  status: 'idle' | 'running' | 'waiting' | 'paused' | 'stopping' | 'completed' | 'failed' | 'cancelled'
+  actionMode: CoreTurnActionMode
+  /** The turn a Continue press would continue (empty unless paused). */
+  pausedTurnId: string
+  canSend: boolean
+  canPause: boolean
+  canResume: boolean
+  canTerminate: boolean
+}
+
+/**
+ * One canonical derivation of "what can the composer do right now".
+ *
+ * The previous UI had four independent derivations (latest status, resumable
+ * turn, composer action mode, session activity). They could disagree after a
+ * delegated member event or a restart. The backend now owns the turn status
+ * contract; this selector is the only UI reader of it.
+ */
+export function selectTurnControl(state: CoreAppSnapshot): CoreTurnControl {
+  const turns = {
+    ...(state.turns || {}),
+    ...(state.core?.turns || {}),
+  } as Record<string, CoreRuntimeTurn>
+  const ordered = Object.entries(turns)
+    .map(([id, turn]) => ({
+      id: String(turn?.turn_id || id),
+      status: String(turn?.status || ''),
+      seq: Number(turn?.last_seq ?? turn?.seq ?? 0),
+    }))
+    .sort((a, b) => b.seq - a.seq || a.id.localeCompare(b.id))
+
+  const active = ordered.find(item => ['running', 'waiting', 'interrupting'].includes(item.status))
+  const paused = ordered.find(item => item.status === 'paused')
+  const latest = ordered[0]
+  const rawStatus = active
+    ? (active.status === 'interrupting' ? 'stopping' : active.status)
+    : paused
+      ? 'paused'
+      : (latest?.status || state.core?.status || state.status || 'idle')
+  const status = (
+    ['idle', 'running', 'waiting', 'paused', 'stopping', 'completed', 'failed', 'cancelled'].includes(rawStatus)
+      ? rawStatus
+      : 'idle'
+  ) as CoreTurnControl['status']
+  const actionMode: CoreTurnActionMode = status === 'paused'
+    ? 'resume'
+    : status === 'running' || status === 'waiting' || status === 'stopping'
+      ? 'stop'
+      : 'send'
+  return {
+    turnId: (active || paused || latest)?.id || '',
+    status,
+    actionMode,
+    pausedTurnId: paused?.id || '',
+    canSend: actionMode === 'send',
+    canPause: status === 'running' || status === 'waiting',
+    canResume: status === 'paused',
+    canTerminate: !['idle', 'completed', 'failed', 'cancelled'].includes(status),
+  }
+}
+
+export function selectQueueTray(state: CoreAppSnapshot): CoreAppQueueItem[] {  return [...(state.queue ?? [])].sort((a, b) => Number(a.seq ?? 0) - Number(b.seq ?? 0))
 }
 
 export function selectApprovalCards(state: CoreAppSnapshot): CoreAppRequestState[] {
@@ -159,10 +223,18 @@ export function selectChatMessages(
   const messages: CoreAppServerChatMessage[] = []
   const itemOrder = mergedItemOrder(state)
   const artifactsByItem = artifactsGroupedByItem(state)
-  const subAgentChildren = subAgentChildrenByParentId(state, itemOrder, artifactsByItem, itemCache, subAgentChildrenCache)
+  const allSubAgentChildren = subAgentChildrenByParentId(state, itemOrder, artifactsByItem, itemCache, subAgentChildrenCache)
   const nestedChildItemIds = new Set(
-    [...subAgentChildren.values()].flatMap(items => items.map(item => item.item_id)),
+    [...allSubAgentChildren.values()].flatMap(items => items.map(item => item.item_id)),
   )
+  const deletedAgents = new Set(Object.keys(state.deleted_agents ?? {}))
+  // Deleted members keep their rows suppressed (they are still nested child
+  // ids), but their subtree is no longer attached to the parent card. This is
+  // derived from a durable snapshot fact, not a process-local dismissal set.
+  const subAgentChildren = new Map<string, CoreAppItem[]>()
+  for (const [parent, items] of allSubAgentChildren) {
+    subAgentChildren.set(parent, items.filter(item => !isDeletedSubAgentItem(item, deletedAgents)))
+  }
   const suppressedItemIds = duplicateSubAgentChildItemIds(state, itemOrder, itemCache)
   // Mid-turn user messages (queue guide) split a turn's runtime items into
   // several assistant segments; each segment needs a unique message id
@@ -234,6 +306,7 @@ export function selectChatMessages(
       ? withSubAgentChildren(itemWithArtifacts, subAgentChildren.get(itemId))
       : undefined
     if (!item) continue
+    if (isDeletedSubAgentItem(item, deletedAgents)) continue
     if (isSubAgentParentItem(item)) {
       const turn = state.core?.turns?.[String(item.turn_id || '')]
       const usageCallIndex = turn?.usage_calls ? indexUsageCalls(turn.usage_calls) : undefined
@@ -838,6 +911,16 @@ function normalizeMetadataDelivery(value: unknown): unknown {
 function normalizeDeliveryRecord(value: unknown): unknown {
   if (!isRecord(value)) return value
   return value
+}
+
+function isDeletedSubAgentItem(item: CoreAppItem, deleted: ReadonlySet<string>): boolean {
+  if (deleted.size === 0) return false
+  const meta = isRecord(item.metadata) ? item.metadata : {}
+  const sub = isRecord(meta.sub_agent) ? meta.sub_agent : null
+  if (!sub) return false
+  return [sub.name, sub.agent, sub.session_id, sub.sub_session_id].some(
+    value => typeof value === 'string' && value.length > 0 && deleted.has(value),
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

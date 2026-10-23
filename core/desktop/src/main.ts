@@ -1,3 +1,4 @@
+import './frontendConsoleLog'
 import { waitForBackendApiBase } from './backendReady'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event'

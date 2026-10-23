@@ -533,6 +533,7 @@ export function normalizeSubAgentStatus(value: unknown): CoreSubAgentStatus {
   if (status === 'pending' || status === 'waiting' || status === 'queued') return 'pending'
   if (status === 'error' || status === 'failed' || status === 'rejected') return 'error'
   if (status === 'paused' || status === 'blocked' || status === 'wait') return 'paused'
+  if (status === 'suspended') return 'paused'
   if (status === 'closed' || status === 'disabled') return 'closed'
   if (status === 'interrupted' || status === 'cancelled' || status === 'canceled') return 'interrupted'
   if (status === 'idle' || status === 'ready' || status === 'enabled') return 'idle'

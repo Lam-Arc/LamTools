@@ -1538,8 +1538,8 @@ async def test_approval_respond_rechecks_forbidden_delegation_strategy(
         },
     )
 
-    assert result.status == "error"
-    assert result.payload["decision"] == "failed"
+    assert result.status == "ok"
+    assert result.payload["decision"] == "done"
     tool_results = [
         item
         for item in result.payload["run_items"]
@@ -1548,6 +1548,9 @@ async def test_approval_respond_rechecks_forbidden_delegation_strategy(
     ]
     assert tool_results
     assert tool_results[-1]["status"] == "failed"
+    assert "disabled" in str(tool_results[-1]["payload"]).lower() or "blocked" in str(
+        tool_results[-1]["payload"]
+    ).lower()
     assert "disabled" in str(tool_results[-1]["payload"]).lower() or "blocked" in str(
         tool_results[-1]["payload"]
     ).lower()

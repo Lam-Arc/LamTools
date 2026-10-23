@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import inspect
+import sys
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -19,7 +21,7 @@ from lamtools_core.agent import (
 from lamtools_core.llm import normalize_reasoning_level, reasoning_level_from_legacy
 from lamtools_core.skills import SkillRegistry
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult, ToolSpec
-from lamtools_core.tool.approval import ApprovalGate
+from lamtools_core.tool.approval import ApprovalGate, PermissionResolver
 from lamtools_core.tool.loadtools import LoadTools, mode_tool_set
 from lamtools_core.tool.command import run_subprocess
 from lamtools_core.tool.command_tools import CommandToolHandlers
@@ -139,6 +141,31 @@ def _missing_dependency_handler(tool_name: str, error: str) -> ToolHandler:
         )
 
     return handler
+
+
+def _unavailable_plugin_handler(tool_name: str, error: str) -> ToolHandler:
+    """导入失败的占位 handler：工具仍出现在数组里，调用时返回明确错误。
+
+    工具数组参与请求前缀；如果导入失败就把工具从数组里删掉，同一会话的
+    下一次请求会整段前缀失效。占位让数组保持稳定，把错误留到真正调用时。
+    """
+
+    async def handler(call: ToolCall) -> ToolResult:
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="failed",
+            error=error,
+            content=f"PLUGIN HANDLER UNAVAILABLE: {error}",
+            metadata={"error_type": "plugin_handler_unavailable"},
+        )
+
+    return handler
+
+
+#: (plugin_root, module_name) -> imported module. Keyed by root so two plugins
+#: that both ship ``tools.py`` never share one module object.
+_PLUGIN_MODULE_CACHE: dict[tuple[str, str], Any] = {}
 
 
 @runtime_checkable
@@ -1100,6 +1127,7 @@ class CoreToolbox:
         sub_agent_runner: SubAgentRunner | None = None,
         command_policies: dict[str, object] | None = None,
         approval_policy: ApprovalPolicy = "require",
+        permission_preset: str = "ask",
         disabled_tools: set[str] | None = None,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
         operation_executor: OperationExecutor | None = None,
@@ -1260,12 +1288,17 @@ class CoreToolbox:
             tier_tools=tier_tools,
             allow_access_outside_workdir=allow_access_outside_workdir,
             approval_policy=approval_policy,
+            # user:“处于完全访问状态，但是它运行命令的时候弹审批了”+(保留完全访问标记，供唯一权限判断处使用)。
+            permission_preset=permission_preset,
             manifest_tool_permissions=self.manifest_tool_permissions,
             manifest_hard_block_tools=self.manifest_hard_block_tools | self.disabled_tools,
             # A loaded skill folder is granted scope: its assets are not a
             # consent question (the skill body is what pointed at them).
             resource_roots=lambda: tuple(self.loaded_skill_roots),
         )
+        # The resolver is the only writer of the gate's live inputs;
+        # prepare_call and the kernel's re-preparation both go through it.
+        self.permission_resolver = PermissionResolver(self.approval_gate)
         self._specs = [
             *default_core_tool_specs(),
             *list(mcp_tool_specs or []),
@@ -1411,27 +1444,16 @@ class CoreToolbox:
             return
         if not isinstance(value, Mapping):
             return
-        policy = value.get("approval_policy")
-        if policy in {"require", "auto_approve"}:
-            self.approval_policy = policy
-            self.approval_gate.approval_policy = policy
-        tier = value.get("active_tier")
-        if tier in {"read_only", "limited_edit", "full_edit"}:
-            self.active_tier = tier
-            self.approval_gate.active_tier = tier
-        raw_tier_tools = value.get("tier_tools")
-        if isinstance(raw_tier_tools, Mapping):
-            tier_tools = {
-                str(name): {str(tool) for tool in tools}
-                for name, tools in raw_tier_tools.items()
-                if isinstance(tools, (set, frozenset, list, tuple))
-            }
-            self.tier_tools = tier_tools
-            self.approval_gate.tier_tools = tier_tools
-        outside = value.get("allow_access_outside_workdir")
-        if isinstance(outside, bool):
-            self.allow_access_outside_workdir = outside
-            self.approval_gate.allow_access_outside_workdir = outside
+        if self.permission_resolver.apply_snapshot(value):
+            # Mirror the effective inputs the gate accepted. Invalid or missing
+            # fields keep their previous value instead of being normalized to a
+            # default here.
+            self.approval_policy = self.approval_gate.approval_policy or self.approval_policy
+            self.active_tier = self.approval_gate.active_tier
+            self.tier_tools = self.approval_gate.tier_tools
+            self.allow_access_outside_workdir = (
+                self.approval_gate.allow_access_outside_workdir
+            )
 
     def model_tools(
         self,
@@ -1553,7 +1575,10 @@ class CoreToolbox:
         # preset.  Evaluate them before mode/capability filtering so the
         # strongest reason cannot be hidden by a weaker mode denial.
         if call.name in self.manifest_hard_block_tools or call.name in self.disabled_tools:
-            decision = self.approval_gate.check(call.name, call.arguments if isinstance(call.arguments, dict) else {})
+            decision = self.permission_resolver.resolve(
+                call.name,
+                call.arguments if isinstance(call.arguments, dict) else {},
+            )
             approval = {
                 "tier": decision.permission_tier,
                 "reason": decision.reason,
@@ -1599,7 +1624,7 @@ class CoreToolbox:
             )
 
         args = call.arguments if isinstance(call.arguments, dict) else {}
-        decision = self.approval_gate.check(call.name, args)
+        decision = self.permission_resolver.resolve(call.name, args)
         if call.name == "arrange" and not arrange_requires_approval(args) and not decision.blocked:
             decision = replace(
                 decision,
@@ -1614,17 +1639,11 @@ class CoreToolbox:
             "requires_approval": decision.requires_approval,
             "outside_workdir": decision.outside_workdir,
         }
-        requires_approval = bool(decision.requires_approval)
-        # The automatic preset approves inside the session's capability.  The
-        # ``outside_workdir`` dimension no longer carves anything out of that
-        # capability (2026-09-27), so the preset settles every ask it covers.
-        if self.approval_policy == "auto_approve" and not decision.blocked:
-            if requires_approval:
-                requires_approval = False
-                approval["requires_approval"] = False
-            # Keep an explicit audit marker for every decision made by the
-            # automatic preset, including tools that were already auto-allow.
+        if decision.auto_approved:
+            # Audit marker comes from the gate's decision, not a second check
+            # of the preset here.
             approval["auto_approved"] = True
+        requires_approval = bool(decision.requires_approval)
         metadata = {**dict(call.metadata or {}), "approval": approval}
         return replace(
             call,
@@ -2252,8 +2271,10 @@ class CoreToolbox:
                 )
             if handler is None:
                 handler = self._import_plugin_handler(spec)
-            if handler is not None:
-                handlers[spec.name] = handler
+            if handler is None:
+                error = self._plugin_handler_errors.get(spec.name) or "plugin handler is unavailable"
+                handler = _unavailable_plugin_handler(spec.name, error)
+            handlers[spec.name] = handler
         # 模型可调插件管理工具（F2：skill 引导安装的调用通道）
         if plugin_manager_specs and operation_executor is not None:
             from lamtools_core.plugins.manager_tools import plugin_manager_tool_handlers
@@ -2307,16 +2328,59 @@ class CoreToolbox:
             )
         return None
 
-    def _import_plugin_handler(self, spec: ToolSpec) -> ToolHandler | None:
-        import importlib
+    def _load_plugin_module(self, spec: ToolSpec, module_name: str) -> Any:
+        """Load a plugin's handler module without sharing a global module name.
 
+        Two plugins may both ship ``tools.py`` and both declare ``tools:fn``.
+        The old ``importlib.import_module("tools")`` resolved one of them for
+        the whole process, so the other plugin's tool silently disappeared on
+        the next toolbox rebuild. A unique module name per plugin root keeps
+        each handler attached to its own file.
+        """
+        import importlib
+        import importlib.util
+
+        root = str(spec.metadata.get("plugin_root") or "").strip()
+        cache_key = (root, module_name)
+        cached = _PLUGIN_MODULE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        if root and "." not in module_name:
+            path = Path(root) / f"{module_name}.py"
+            if path.is_file():
+                digest = hashlib.sha1(root.encode("utf-8")).hexdigest()[:12]
+                unique_name = f"_lam_plugin_{digest}_{module_name}"
+                module = sys.modules.get(unique_name)
+                if module is None:
+                    module_spec = importlib.util.spec_from_file_location(unique_name, path)
+                    if module_spec is None or module_spec.loader is None:
+                        raise ImportError(f"cannot load plugin module from {path}")
+                    module = importlib.util.module_from_spec(module_spec)
+                    sys.modules[unique_name] = module
+                    try:
+                        module_spec.loader.exec_module(module)
+                    except BaseException:
+                        sys.modules.pop(unique_name, None)
+                        raise
+                _PLUGIN_MODULE_CACHE[cache_key] = module
+                return module
+        # Dotted modules keep the legacy import path, but the plugin root must
+        # be importable. Package-name collisions remain the plugin author's
+        # responsibility (e.g. rag_engine.tools is already namespaced).
+        if root and root not in sys.path:
+            sys.path.append(root)
+        module = importlib.import_module(module_name)
+        _PLUGIN_MODULE_CACHE[cache_key] = module
+        return module
+
+    def _import_plugin_handler(self, spec: ToolSpec) -> ToolHandler | None:
         entry = str(spec.metadata.get("handler") or "")
         if ":" not in entry:
             self._plugin_handler_errors[spec.name] = f"invalid handler entry (expected module:function): {entry!r}"
             return None
         module_name, func_name = entry.split(":", 1)
         try:
-            module = importlib.import_module(module_name)
+            module = self._load_plugin_module(spec, module_name)
             func = getattr(module, func_name)
         except Exception as exc:  # noqa: BLE001 — plugin code must never break the toolbox
             self._plugin_handler_errors[spec.name] = f"{type(exc).__name__}: {exc}"

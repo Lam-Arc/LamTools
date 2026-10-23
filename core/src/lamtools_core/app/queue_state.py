@@ -5,9 +5,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from .turn_acceptance import CoreAppEventSpec
+from lamtools_core.turn.model import ACTIVE_TURN_STATUSES as TURN_ACTIVE_STATUSES
 
 
-ACTIVE_TURN_STATUSES = {"running", "waiting", "interrupting"}
+#: A paused turn is owned by the session but not executing: resume must be
+#: allowed, while queue dispatch still refuses a running/waiting/stopping one.
+ACTIVE_TURN_STATUSES = TURN_ACTIVE_STATUSES | {"interrupting"}
 QUEUE_TERMINAL_STATUSES = {"cancelled", "deleted", "dispatched", "sent"}
 
 

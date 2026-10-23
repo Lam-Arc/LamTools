@@ -6,6 +6,7 @@ are idempotent, so a crash between the two databases is repaired on the next pas
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections import Counter
 from contextlib import closing
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any
 from sqlalchemy import select
 
 from lamtools_core.runtime_owner import owner_is_live, read_owner
-from lamtools_core.sub_agent_supervisor import SubAgentSupervisor
+from lamtools_core.sub_agent_supervisor import SubAgentSupervisor, find_sub_agent_supervisor
 from .base_agent import core_events_to_run_items
 from .core_db import CoreAppEvent, CoreHistoryEntry
 
@@ -45,16 +46,29 @@ async def reconcile_sub_agent_state(*, context: Any, data_dir: Path | str,
         parents = [row[0] for row in db.execute("SELECT DISTINCT parent_thread_id FROM sub_agents")]
     repaired = 0
     for parent in parents:
-        supervisor = SubAgentSupervisor(
+        # user:“修 问题严重的话 就重新设计”+(对账复用真实所有者；冷启动的投影对象不取得执行权)。
+        supervisor = find_sub_agent_supervisor(parent, data_dir=database.parent) or SubAgentSupervisor(
             parent_thread_id=parent,
             database_path=database,
             runner=SimpleNamespace(state_store=context.runtime_state_store,
                                    parent_event_sink=_ProjectionSink(context)),
+            agent_run_store=getattr(context, "turn_store", None),
         )
         await supervisor.recover()
+        try:
+            await supervisor.sync_agent_runs()
+        except BaseException:
+            # The projection is a read model; never let it block registry
+            # repair or member finalization below.
+            pass
         for payload in await supervisor.list():
             record = supervisor._required(payload["name"])
             if record.status == "running":
+                if record.lease_until and time.time() > record.lease_until:
+                    expired = await supervisor.expire_lease(record.name)
+                    if expired is not None:
+                        repaired += 1
+                        continue
                 # recover deliberately leaves live cross-process owners alone.
                 continue
             state = await context.runtime_state_store.get(record.sub_session_id) if record.sub_session_id else None
@@ -91,6 +105,22 @@ async def reconcile_sub_agent_state(*, context: Any, data_dir: Path | str,
                     for _, envelope in envelopes:
                         await context.hub.publish(envelope)
                 repaired += 1
+            if record.status == "paused":
+                # A paused record means the member was waiting at a human
+                # boundary.  If its runtime state is already cancelled/failed,
+                # the continuation ended without syncing the registry.
+                state = (
+                    await context.runtime_state_store.get(record.sub_session_id)
+                    if record.sub_session_id
+                    else None
+                )
+                if state is not None and state.status in {"cancelled", "failed"}:
+                    await supervisor.finalize_terminal(
+                        record.name,
+                        status="failed" if state.status == "failed" else "interrupted",
+                        summary=str(state.metadata.get("failure_message") or "Sub-agent continuation ended."),
+                    )
+                    repaired += 1
             if acknowledge_legacy_mail and record.sub_session_id:
                 await _acknowledge_legacy_mail(context, supervisor, record)
             # Include already-interrupted records: old lazy recovery may have

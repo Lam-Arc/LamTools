@@ -11,8 +11,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
-from . import HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER, TAIL_SYSTEM_MESSAGE_MARKER
-
 _SIGNING_KEY = secrets.token_bytes(32)
 _TRACKER_LOCK = threading.Lock()
 _MAX_TRACKED_SESSIONS = 128
@@ -229,8 +227,9 @@ def _request_shape(request: Any, route: Any) -> _RequestShape:
 
 
 def _message_signature(message: Any) -> str:
-    metadata = getattr(message, "metadata", None)
-    metadata = metadata if isinstance(metadata, dict) else {}
+    # Tail/historical markers are adapter routing decisions, not provider
+    # bytes; including them would flag a cache "change" when a tail update is
+    # retyped in place on the next request.
     material = {
         "role": getattr(message, "role", ""),
         "content": getattr(message, "content", ""),
@@ -238,8 +237,6 @@ def _message_signature(message: Any) -> str:
         "tool_call_id": getattr(message, "tool_call_id", ""),
         "tool_calls": [call.to_dict() for call in (getattr(message, "tool_calls", None) or [])],
         "provider_state": getattr(message, "provider_state", None),
-        "tail_system": bool(metadata.get(TAIL_SYSTEM_MESSAGE_MARKER)),
-        "historical_tail_system": bool(metadata.get(HISTORICAL_TAIL_SYSTEM_MESSAGE_MARKER)),
     }
     return _private_digest(material)
 

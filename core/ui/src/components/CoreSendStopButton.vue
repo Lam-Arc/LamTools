@@ -15,11 +15,14 @@
       type="submit"
       :disabled="disabled"
       :title="holdEnabled
-        ? (actionMode === 'resume' ? defaultUiText(resumeTitle, '继续运行') : defaultUiText(stopTitle, '停止运行'))
+        ? (actionMode === 'resume' ? `${defaultUiText(resumeTitle, '继续运行')}（长按终止）` : `${defaultUiText(stopTitle, '停止运行')}（长按终止）`)
         : (actionMode === 'resume' ? defaultUiText(resumeTitle, '继续运行') : actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送'))"
       :aria-label="actionMode === 'resume' ? defaultUiText(resumeTitle, '继续运行') : actionMode === 'stop' ? defaultUiText(stopTitle, '停止运行') : defaultUiText(sendTitle, '发送')"
       :aria-pressed="visualMode === 'stop'"
       @click="handleClick"
+      @contextmenu.prevent="handleContextMenu"
+      @focus="handleFocus"
+      @blur="handleBlur"
       @pointerdown="handlePointerDown"
       @pointerup="handlePointerUp"
       @pointercancel="cancelHold"
@@ -360,6 +363,21 @@ watch(
 function handlePointerEnter() {
   if (!props.holdEnabled || props.disabled || props.actionMode === 'send') return
   holdHintVisible.value = true
+}
+
+/** Keyboard/screen-reader discoverability: focus shows the hold hint. */
+function handleFocus() {
+  handlePointerEnter()
+}
+
+function handleBlur() {
+  holdHintVisible.value = false
+}
+
+/** Right-click is the explicit terminate affordance for pointer users. */
+function handleContextMenu() {
+  if (!props.holdEnabled || props.disabled || props.actionMode === 'send') return
+  emit('terminate')
 }
 
 onMounted(() => {

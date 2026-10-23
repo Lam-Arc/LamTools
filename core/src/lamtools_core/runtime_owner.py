@@ -19,11 +19,13 @@ import socket
 import time
 from typing import Any, Mapping
 
+from lamtools_core.turn.model import LIVE_RUNTIME_STATUSES
+
 #: Metadata key holding the owner token of the run that last wrote the state.
 OWNER_METADATA_KEY = "runtime_owner"
 
 #: Run states that mean "a turn is in flight".  Anything else is terminal.
-LIVE_RUN_STATES = frozenset({"running", "waiting", "interrupting"})
+LIVE_RUN_STATES = LIVE_RUNTIME_STATUSES
 
 #: Fallback staleness window, used when the owner's pid cannot be checked
 #: (owner on another host, or a token without a pid).  Generous on purpose: a

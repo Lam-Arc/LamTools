@@ -19,6 +19,7 @@ import {
   selectCoreSessionActivity,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
+  selectTurnControl,
   type CoreAppEvent,
   type CoreAppServerRuntimeClient,
   type CoreAppSnapshot,
@@ -418,18 +419,21 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     }
   }
 
-  // The turn a Continue press would continue: the paused one. A terminated
-  // turn is final, so it offers nothing.
-  const resumableTurnId = computed(() => {
-    const turns = Object.values(snapshot.value?.turns ?? {})
-    const latest = turns.at(-1)
-    return runtime.client?.capabilities?.same_turn_resume === true && latest?.status === 'paused'
-      ? latest.turn_id : ''
-  })
+  // One canonical turn-control derivation. The paused turn and the session's
+  // paused state come from the same snapshot facts as the action mode, so a
+  // delegated member event cannot make them disagree.
+  const turnControl = computed(() => (
+    snapshot.value ? selectTurnControl(snapshot.value) : null
+  ))
+  const resumableTurnId = computed(() => (
+    runtime.client?.capabilities?.same_turn_resume === true
+      ? turnControl.value?.pausedTurnId || ''
+      : ''
+  ))
 
   // A paused session owns its members too: their own Continue buttons stay
   // disabled until the session continues as a whole.
-  const sessionPaused = computed(() => Boolean(resumableTurnId.value))
+  const sessionPaused = computed(() => turnControl.value?.status === 'paused')
 
   const liveComposerController = useCoreLiveComposerController({
     activeThreadId: activeSessionId,
@@ -525,6 +529,10 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   useCoreAskAutoContinue({
     messages: projectionController.messages,
     loadEnabled: async () => {
+      // The backend now owns this timer. A second renderer-side timer would
+      // race the server's skip; the server's durable claim absorbs the race,
+      // but running two timers only produces duplicate requests.
+      if (runtime.client?.capabilities?.ask_auto_continue_backend === true) return false
       try {
         const result = await requestRpc('settings.get', { namespace: 'core.askAutoContinue' })
         const value = result && typeof result.value === 'object' && result.value

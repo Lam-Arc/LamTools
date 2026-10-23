@@ -13,8 +13,9 @@ from lamtools_core.llm.helpers import (
     _cache_creation_tokens_from_usage,
     _cached_tokens_from_usage,
 )
+from lamtools_core.turn.model import TERMINAL_ITEM_STATUSES
 
-TERMINAL_STATUSES = {"completed", "done", "ok", "failed", "error", "cancelled"}
+TERMINAL_STATUSES = TERMINAL_ITEM_STATUSES
 DEFAULT_RUNTIME_PREVIEW_CHARS = 25565
 APPROVAL_OPTIONS = [
     {
@@ -359,11 +360,13 @@ def runtime_fact_to_run_item_events(
                 payload={
                     "type": "serverRequest",
                     "request_id": str(payload.get("request_id") or payload.get("decision_id") or f"{fact.id}:request"),
+                    "tool_call_id": str(payload.get("tool_call_id") or ""),
                     "kind": kind,
                     "message": message,
                     "tool_name": _tool_name(payload),
                     "options": _request_options(payload),
                     "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+                    **({"context": str(payload.get("context"))} if payload.get("context") else {}),
                     # Provenance also rides the payload (not only the item
                     # metadata, which the snapshot drops): the session reducer
                     # needs it to keep a delegated member's card open when the
@@ -377,10 +380,37 @@ def runtime_fact_to_run_item_events(
 
     if phase == "runtime.approval_response":
         request_id = str(payload.get("request_id") or payload.get("tool_call_id") or fact.id)
+        lifecycle_state = str(
+            payload.get("state") or payload.get("lifecycle") or "ending"
+        )
         response_payload = {
             "type": "serverRequest",
             "request_id": request_id,
-            "status": "resolved",
+            "interaction_id": str(
+                payload.get("interaction_id") or request_id
+            ),
+            "decision_id": str(payload.get("decision_id") or ""),
+            "sequence": int(payload.get("sequence") or 0),
+            "tool_call_id": str(payload.get("tool_call_id") or ""),
+            "legacy_request_id": str(
+                payload.get("legacy_request_id") or payload.get("tool_call_id") or ""
+            ),
+            "turn_id": str(payload.get("turn_id") or ""),
+            "kind": str(payload.get("kind") or ""),
+            "scope": str(payload.get("scope") or ""),
+            "agent_name": str(payload.get("agent_name") or ""),
+            "agent_session_id": str(payload.get("agent_session_id") or ""),
+            "delivered_by": str(payload.get("delivered_by") or ""),
+            "project_id": str(payload.get("project_id") or ""),
+            "title": str(payload.get("title") or ""),
+            "options": list(payload.get("options") or []),
+            "state": lifecycle_state,
+            "lifecycle": lifecycle_state,
+            "status": {
+                "appearing": "open",
+                "processing": "processing",
+                "ending": "resolved",
+            }.get(lifecycle_state, "resolved"),
             "decision": str(payload.get("decision") or ""),
             "action": str(payload.get("action") or payload.get("decision") or ""),
             "guidance": str(payload.get("guidance") or ""),
@@ -390,13 +420,21 @@ def runtime_fact_to_run_item_events(
             response_payload["failure_reason"] = failure_reason
         return [
             RunItemEvent(
-                kind="approval_response",
+                kind=(
+                    "interaction_update"
+                    if lifecycle_state in {"appearing", "processing"}
+                    else "approval_response"
+                ),
                 item_id=(
                     _tool_item_id(fact, payload)
                     if sub_agent is not None
                     else request_id
                 ),
-                status="completed",
+                status={
+                    "appearing": "pending",
+                    "processing": "processing",
+                    "ending": "completed",
+                }.get(lifecycle_state, "completed"),
                 payload=response_payload,
                 **base,
             )
@@ -502,39 +540,31 @@ def runtime_fact_to_run_item_events(
         ]
 
     if phase == "runtime.waiting":
-        kind = str(payload.get("request_kind") or "ask")
-        if kind == "permission":
+        kind = str(payload.get("request_kind") or "")
+        # The decision card has exactly one author: runtime.approval_request.
+        # A waiting fact only says the run stopped, and the record it carries
+        # (pending_waiting_request) is a routing/history copy — not a second
+        # card. Emitting one here duplicated every question and permission card
+        # (the waiting record used to be option-less), and the duplicate could
+        # reopen a request the user had already answered. Anything else that
+        # waits without an approval card (no_progress, verification, a bare
+        # wait) is a status row, never an unanswerable empty card.
+        #
+        # 用户要求（原文）：“一张带选项 另一张不带选项，问的是同一个问题”
+        # 用户要求（原文）：“为什么会出现广播两次这件事儿呢？”
+        if kind in {"permission", "approval", "question"}:
             return []
         tool_item_id = _tool_item_id(fact, payload)
         message = str(payload.get("message") or payload.get("question") or fact.summary or "Waiting for user decision")
-        if kind == "no_progress":
-            return [
-                RunItemEvent(
-                    kind="status",
-                    item_id=tool_item_id,
-                    status="running",
-                    payload={
-                        "type": "status",
-                        "content": message,
-                        "status": "running",
-                    },
-                    **base,
-                )
-            ]
         return [
             RunItemEvent(
-                kind="approval_request",
+                kind="status",
                 item_id=tool_item_id,
-                status="waiting",
+                status="running",
                 payload={
-                    "type": "serverRequest",
-                    "request_id": str(payload.get("request_id") or payload.get("decision_id") or f"{fact.id}:request"),
-                    "kind": kind,
-                    "message": message,
-                    "tool_name": _tool_name(payload),
-                    "options": payload.get("options") if isinstance(payload.get("options"), list) else [],
-                    "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
-                    **({"sub_agent": payload["sub_agent"]} if isinstance(payload.get("sub_agent"), dict) else {}),
+                    "type": "status",
+                    "content": message,
+                    "status": "running",
                 },
                 **base,
             )
@@ -755,7 +785,9 @@ def runtime_fact_to_run_item_events(
             "failed": "failed",
             "error": "failed",
             "paused": "waiting",
+            "suspended": "waiting",
             "interrupted": "cancelled",
+            "deleted": "completed",
         }.get(member_status, "running")
         return [
             RunItemEvent(
@@ -869,7 +901,7 @@ def runtime_fact_to_run_item_events(
         return [
             RunItemEvent(
                 kind="status",
-                item_id=f"{run_id}:paused" if run_id else f"{turn_id}:paused",
+                item_id=f"{turn_id}:paused:{run_id}" if run_id else f"{turn_id}:paused",
                 status="paused",
                 payload=paused_payload,
                 usage=paused_metrics or {},
@@ -908,7 +940,7 @@ def runtime_fact_to_run_item_events(
         return [
             RunItemEvent(
                 kind="status",
-                item_id=f"{run_id}:terminal" if run_id else f"{turn_id}:terminal",
+                item_id=f"{turn_id}:terminal",
                 status=completed_status,
                 payload=completed_payload,
                 usage=runtime_metrics or {},

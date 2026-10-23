@@ -41,9 +41,20 @@ exact_tokens(result.messages) <= compact_limit_tokens
 
 文本截断按 `estimate_text_tokens` 二分，截断标记本身也计入预算；禁止使用字符数乘常数近似 token 数。
 
+## 与可动系统上下文的关系
+
+压缩是唯一允许 leading system prompt 本身更新的时刻。压缩输入会排除两类追加消息：
+
+- `key = "movable_context_notice"` 的系统提示词变化通知
+- `key = "runtime_context_delta"` 的运行时便签
+
+压缩成功后，Kernel 用当前块的最新内容重新冻结系统提示词，替换本次请求的第一条 system 消息，并补发一张完整的运行时便签作为新基线。旧通知和旧便签不进入摘要，也不保留；它们表达的差异已经合并进新版本。压缩保留的消息按 `history_seq` 映射回原始历史对象：请求期的图片降级副本不会写回存储，持久历史保留原图。完整规则见 [可动系统上下文与运行时便签](movable-system-context.md)。
+
 ## 持久化与恢复
 
 摘要保存在 `state.metadata["context_compaction"]`，其中包括 `summary`、`summary_seq`、计数和前后 token 数。原始 history 不插入 `context_compaction_summary` 行。第一条 retained message 携带 `lam_compaction_resume`，完整 history 重写后由 Kernel 重新锚定 `summary_seq`。
+
+系统提示词压缩周期（`movable_system_context`）和运行时便签基线（`runtime_context_reported`）也随 `state.metadata` 持久化；压缩成功时二者一起重建。
 
 下一次运行加载：
 

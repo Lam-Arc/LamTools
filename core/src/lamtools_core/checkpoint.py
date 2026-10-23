@@ -2429,7 +2429,6 @@ def _conversation_runtime_payload(
         "pending_approval",
         "pending_waiting_request",
         "kernel_steps",
-        "tool_progress",
         "failure_diagnosis",
     ):
         source_metadata.pop(key, None)

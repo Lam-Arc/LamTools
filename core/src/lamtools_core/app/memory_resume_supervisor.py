@@ -23,10 +23,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
+from lamtools_core.config.automation import (
+    ASK_AUTO_CONTINUE_TIMEOUT_MINUTES,
+    ASK_SKIP_GUIDANCE,
+    ask_auto_continue_enabled,
+)
 from lamtools_core.runtime.member_wake import (
     clear_member_wake_autostart,
     mark_member_wake_autostart,
@@ -57,6 +63,39 @@ from .live_operations import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+def _due_question_request_id(state: Any, now_ms: int, timeout_ms: int) -> str:
+    """The request id of a question whose window expired, or ``""``.
+
+    Deliberately strict: only a question, only in ``waiting``/``wait``, only
+    when the kernel recorded ``asked_at_ms``.  An approval never expires — a
+    timeout is not consent — and a paused turn owns its own cards.
+    """
+    if str(getattr(state, "status", "") or "") != "waiting":
+        return ""
+    if str(getattr(state, "loop_state", "") or "") != "wait":
+        return ""
+    metadata = getattr(state, "metadata", None)
+    if not isinstance(metadata, dict):
+        return ""
+    pending = metadata.get("pending_approval")
+    if not isinstance(pending, dict):
+        return ""
+    if str(pending.get("status") or "") != "waiting":
+        return ""
+    tool_call = pending.get("tool_call")
+    if not isinstance(tool_call, dict) or str(tool_call.get("name") or "") != "question":
+        return ""
+    request_id = str(pending.get("request_id") or "")
+    if not request_id:
+        return ""
+    asked_at = pending.get("asked_at_ms")
+    if not isinstance(asked_at, (int, float)) or isinstance(asked_at, bool) or asked_at <= 0:
+        return ""
+    if int(now_ms) < int(asked_at) + max(0, int(timeout_ms)):
+        return ""
+    return request_id
 
 #: Metadata key carrying the armed resume; also what the store finds threads by.
 MEMORY_RESUME_METADATA_KEY = MEMORY_RESUME_KEY
@@ -124,6 +163,11 @@ class MemoryResumeSupervisor:
         self._stopping = False
         # Debounce handle for coalescing member completions into one wake turn.
         self._coalesce_handle: asyncio.TimerHandle | None = None
+        # One in-flight automatic skip per request id.  The durable claim in
+        # approval.respond is the real idempotency boundary; this only avoids
+        # spawning a second handler every polling tick while the first one is
+        # still persisting its decision.
+        self._auto_continue_inflight: set[str] = set()
 
     async def start(self) -> None:
         if self._task is not None:
@@ -235,6 +279,12 @@ class MemoryResumeSupervisor:
             await reconcile_terminal_turns(context=self._context)
         except BaseException:
             _logger.exception("[memory-resume] reconcile failed")
+        try:
+            await self._auto_continue_questions()
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            _logger.exception("[ask-auto-continue] pass failed")
         resumed = await self._resume_ready_threads()
         try:
             resumed += await self._wake_member_threads()
@@ -243,6 +293,93 @@ class MemoryResumeSupervisor:
         except BaseException:
             _logger.exception("[member-wake] pass failed")
         return resumed
+
+    async def _auto_continue_questions(self) -> int:
+        """Skip an unanswered *question* once its durable window expires.
+
+        This used to live only in the desktop renderer: a CLI, a mobile host,
+        a background session, a switched-away thread, or a restart all left the
+        question waiting forever.  The timer now belongs to the backend, which
+        owns the fact and the durable pending record.
+        """
+        if not ask_auto_continue_enabled():
+            return 0
+        store = self._context.runtime_state_store
+        lister = getattr(store, "list_pending_approvals", None)
+        if store is None or not callable(lister):
+            return 0
+        try:
+            states = await lister()
+        except BaseException:
+            _logger.exception("[ask-auto-continue] could not list pending approvals")
+            return 0
+        registry = self._context.runtime_task_registry
+        deadline_ms = int(time.time() * 1000)
+        timeout_ms = ASK_AUTO_CONTINUE_TIMEOUT_MINUTES * 60 * 1000
+        due: list[tuple[str, str]] = []
+        for state in states:
+            request_id = _due_question_request_id(state, deadline_ms, timeout_ms)
+            if not request_id or request_id in self._auto_continue_inflight:
+                continue
+            thread_id = str(getattr(state, "session_id", "") or "")
+            if not thread_id:
+                continue
+            if registry is not None and registry.is_running(thread_id):
+                # The turn is executing, not parked; leave it alone.
+                continue
+            due.append((thread_id, request_id))
+        for thread_id, request_id in due:
+            self._auto_continue_inflight.add(request_id)
+            task = asyncio.create_task(
+                self._auto_continue_one(thread_id, request_id),
+                name=f"ask-auto-continue:{request_id}",
+            )
+            task.add_done_callback(
+                lambda done, rid=request_id: self._auto_continue_inflight.discard(rid)
+            )
+        if due:
+            _logger.info("[ask-auto-continue] skipping %d expired question(s)", len(due))
+        return len(due)
+
+    async def _auto_continue_one(self, thread_id: str, request_id: str) -> None:
+        from .live_operations import handle_approval_respond_operation
+
+        try:
+            outcome = await handle_approval_respond_operation(
+                request_id=f"ask-auto-continue:{request_id}",
+                params={
+                    "thread_id": thread_id,
+                    "request_id": request_id,
+                    # ``skip`` is the explicit question outcome; the model sees
+                    # a skipped marker instead of a normal answer.
+                    "decision": "skip",
+                    "guidance": ASK_SKIP_GUIDANCE,
+                    "include_snapshot": False,
+                },
+                context=self._context,
+            )
+            response = getattr(outcome, "response", None) or {}
+            if isinstance(response, dict) and response.get("error"):
+                _logger.warning(
+                    "[ask-auto-continue] skip refused thread_id=%s request_id=%s: %s",
+                    thread_id,
+                    request_id,
+                    response.get("error"),
+                )
+            else:
+                _logger.info(
+                    "[ask-auto-continue] skipped thread_id=%s request_id=%s",
+                    thread_id,
+                    request_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            _logger.exception(
+                "[ask-auto-continue] skip failed thread_id=%s request_id=%s",
+                thread_id,
+                request_id,
+            )
 
     async def _wake_member_threads(self) -> int:
         """Start a turn for every idle session holding an undelivered finish.

@@ -1,15 +1,16 @@
 """Model-visible image payloads: full fidelity once, then a cheap copy.
 
 Every model call re-sends the whole history, so an inline image is uploaded
-again on every step of the session.  Measured on a real session: a 2.31 MB
-reference PNG cost 20.8 s and 1011 prompt tokens per call, while the same
-picture re-encoded as a 44 KB JPEG cost 3.7 s and 288 tokens — and the model
-described it identically.
+again on every step of the session.  The original measurement that motivated
+this module: a 2.31 MB reference PNG cost 20.8 s and 1011 prompt tokens per
+call, while a much smaller re-encoded copy cost 3.7 s and 288 tokens, with an
+identical description from the model.
 
 Full resolution is what lets the model read small text, count details and judge
 artefacts, so the *first* request that carries an image keeps it as sent.  From
-the request after that, the image is degraded to a small JPEG: still visible as
-a reference, no longer able to answer fine-detail questions.
+the request after that, the image is degraded to a 360p, 256-colour PNG:
+landscape at most 640x360, portrait at most 360x640.  It stays visible as a
+reference but can no longer answer fine-detail questions.
 
 Two properties matter more than they look:
 
@@ -33,11 +34,12 @@ from typing import Any
 if True:
     from lamtools_core.llm import ChatMessage
 
-#: Long side of the degraded copy.  768 keeps roughly A4-readable structure at
-#: ~44 KB for the reference sheets measured here; text smaller than ~10 px is
-#: expected to be lost, which is exactly what the note tells the model.
-DEGRADED_IMAGE_MAX_SIDE = 768
-DEGRADED_IMAGE_QUALITY = 80
+#: user:“再低清一些，建议改成 8bit，360p”+降级副本固定为 360p 的 256 色调色板 PNG。
+#: The box is orientation-aware: landscape is at most 640x360, portrait 360x640.
+DEGRADED_IMAGE_MAX_LONG_SIDE = 640
+DEGRADED_IMAGE_MAX_SHORT_SIDE = 360
+DEGRADED_IMAGE_COLORS = 256
+DEGRADED_IMAGE_MIME = "image/png"
 
 #: Appended to a message whose images were degraded, so the model does not treat
 #: a low-resolution copy as evidence about picture quality.
@@ -72,7 +74,7 @@ def split_data_url(url: str) -> tuple[str, bytes] | None:
 
 
 def degraded_data_url(url: str) -> str | None:
-    """Return a small JPEG data URL for *url*, or ``None`` when impossible.
+    """Return a small 8-bit 360p PNG data URL for *url*, or ``None``.
 
     Deterministic for the same input, so repeated request builds produce byte
     identical payloads.
@@ -81,7 +83,11 @@ def degraded_data_url(url: str) -> str | None:
     if decoded is None:
         return None
     mime, payload = decoded
-    if mime == "image/jpeg" and len(payload) <= 64 * 1024 and max(_jpeg_size(payload)) <= DEGRADED_IMAGE_MAX_SIDE:
+    if (
+        mime == "image/jpeg"
+        and len(payload) <= 64 * 1024
+        and _within_degraded_box(_jpeg_size(payload))
+    ):
         # Already small enough — re-encoding would only change bytes and cost cache.
         return url
     key = hashlib.sha1(url.encode("utf-8")).hexdigest()
@@ -96,24 +102,50 @@ def degraded_data_url(url: str) -> str | None:
         with Image.open(io.BytesIO(payload)) as opened:
             image = opened.convert("RGB")
             width, height = image.size
-            longest = max(width, height)
-            if longest > DEGRADED_IMAGE_MAX_SIDE:
-                scale = DEGRADED_IMAGE_MAX_SIDE / longest
+            if width >= height:
+                max_width = DEGRADED_IMAGE_MAX_LONG_SIDE
+                max_height = DEGRADED_IMAGE_MAX_SHORT_SIDE
+            else:
+                max_width = DEGRADED_IMAGE_MAX_SHORT_SIDE
+                max_height = DEGRADED_IMAGE_MAX_LONG_SIDE
+            scale = min(1.0, max_width / width, max_height / height)
+            if scale < 1.0:
                 image = image.resize(
                     (max(1, int(width * scale)), max(1, int(height * scale))),
                     Image.LANCZOS,
                 )
+            # 8-bit palette keeps the copy small and its bytes deterministic.
+            image = image.convert(
+                "P",
+                palette=Image.ADAPTIVE,
+                colors=DEGRADED_IMAGE_COLORS,
+                dither=Image.Dither.NONE,
+            )
             buffer = io.BytesIO()
-            image.save(buffer, format="JPEG", quality=DEGRADED_IMAGE_QUALITY, optimize=True)
+            image.save(buffer, format="PNG", optimize=True)
     except Exception:  # noqa: BLE001 — an undecodable picture keeps its original
         return None
     if not buffer.tell():
         return None
-    result = "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    result = (
+        f"data:{DEGRADED_IMAGE_MIME};base64,"
+        + base64.b64encode(buffer.getvalue()).decode("ascii")
+    )
     _CACHE[key] = result
     while len(_CACHE) > _CACHE_LIMIT:
         _CACHE.popitem(last=False)
     return result
+
+
+def _within_degraded_box(size: tuple[int, int]) -> bool:
+    """Whether *size* already fits the 360p degraded box."""
+    width, height = size
+    if width <= 0 or height <= 0:
+        return False
+    return (
+        max(width, height) <= DEGRADED_IMAGE_MAX_LONG_SIDE
+        and min(width, height) <= DEGRADED_IMAGE_MAX_SHORT_SIDE
+    )
 
 
 def _jpeg_size(payload: bytes) -> tuple[int, int]:
@@ -156,18 +188,15 @@ def has_images(content: Any) -> bool:
 
 
 def image_step_allowance(metadata: Any) -> int:
-    """Return the last step that may still see this message's images at full size.
+    """Return the counter value at which this message is still full size.
 
-    A message produced by step *n* is first sent by step *n+1*, so it keeps full
-    fidelity for exactly one request.  Messages with no stamp arrived before the
-    first model call (user input and its attachments): they are full for the
-    first request only.
+    user:“作为下一轮的输入时，它应该是以自己本身的清晰度输入...在这之后立马把它降成极低清晰度”+消息记录产生它时的模型回答次数；下一次请求使用同一个数，仍看高清，再下一次才降清。
     """
     if not isinstance(metadata, dict):
         return 0
     raw = metadata.get(MESSAGE_ADDED_AT_STEP)
     try:
-        return int(raw) + 1
+        return int(raw)
     except (TypeError, ValueError):
         return 0
 
@@ -225,10 +254,12 @@ def degrade_stale_message_images(messages: "list[ChatMessage]", *, current_step:
 
 
 __all__ = [
-    "DEGRADED_IMAGE_MAX_SIDE",
+    "DEGRADED_IMAGE_COLORS",
+    "DEGRADED_IMAGE_MAX_LONG_SIDE",
+    "DEGRADED_IMAGE_MAX_SHORT_SIDE",
+    "DEGRADED_IMAGE_MIME",
     "degrade_stale_message_images",
     "DEGRADED_IMAGE_NOTE",
-    "DEGRADED_IMAGE_QUALITY",
     "MESSAGE_ADDED_AT_STEP",
     "degraded_content",
     "degraded_data_url",

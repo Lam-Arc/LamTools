@@ -14,7 +14,8 @@
         "git_diff",
         "load_skill",
         "memory",
-        "message"
+        "message",
+        "question"
       ]
     },
     "execute": {

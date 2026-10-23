@@ -423,6 +423,18 @@ def create_core_agent_http_app(
         _logger.info("[startup] project reconciliation ready in %.3fs", perf_counter() - phase_started)
         phase_started = perf_counter()
         app_state["core_db"] = core_db_handle
+        # Sub-agent lifecycle mirrors its durable sqlite record into the
+        # turn-control read model so recovery and snapshots can query one
+        # cross-thread table. The factory is process-wide because supervisors
+        # are created lazily from the kernel.
+        from lamtools_core.sub_agent_supervisor import set_agent_run_store_factory
+        from lamtools_core.turn.store import TurnStore
+
+        agent_run_store = TurnStore(
+            core_db_handle.session_factory,
+            core_db_handle.persistence.write_coordinator,
+        )
+        set_agent_run_store_factory(lambda: agent_run_store)
         session_store.set_sync_journal(core_db_handle.sync_journal)
         session_store.set_sync_publisher(lambda change: live_hub.broadcast(change))
         core_db_handle.project_store.set_session_visibility(plugin_session_visibility)
@@ -622,7 +634,37 @@ def create_core_agent_http_app(
             await recover_stale_active_turns(context=live_context())
         except BaseException:
             _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
+        try:
+            from .live_operations import reconcile_open_interactions
+
+            await reconcile_open_interactions(context=live_context())
+        except BaseException:
+            _logger.exception(
+                "[startup] decision pool reconciliation failed (non-fatal)"
+            )
         _logger.info("[startup] stale-turn recovery ready in %.3fs", perf_counter() - phase_started)
+        # Approval/question continuations are durable jobs. A process that
+        # died after claiming one leaves a leased row; reopen it now and run
+        # each job in its own task so the runtime registry keeps one claim per
+        # run (the same contract as a live RPC continuation).
+        try:
+            recovery_context = live_context()
+            await recovery_context.turn_store.requeue_running_jobs()
+            recovery_worker = recovery_context.turn_worker
+            recovery_tasks: list[asyncio.Task[Any]] = []
+            for recovery_thread_id in await recovery_context.turn_store.list_pending_job_threads():
+                for recovery_job in await recovery_context.turn_store.list_jobs(
+                    recovery_thread_id, status="pending"
+                ):
+                    recovery_tasks.append(
+                        asyncio.create_task(
+                            recovery_worker.run_job(str(recovery_job.get("job_id") or "")),
+                            name=f"turn-recovery:{recovery_job.get('job_id')}",
+                        )
+                    )
+            app_state["turn_recovery_tasks"] = recovery_tasks
+        except BaseException:
+            _logger.exception("[startup] continuation job recovery failed (non-fatal)")
         from .sub_agent_recovery import reconcile_sub_agent_state
         try:
             await reconcile_sub_agent_state(
@@ -653,8 +695,14 @@ def create_core_agent_http_app(
         app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
 
     async def shutdown_core_agent() -> None:
-        from lamtools_core.sub_agent_supervisor import shutdown_sub_agent_supervisors
+        from lamtools_core.sub_agent_supervisor import (
+            set_agent_run_store_factory,
+            shutdown_sub_agent_supervisors,
+        )
 
+        set_agent_run_store_factory(None)
+        for recovery_task in app_state.get("turn_recovery_tasks") or []:
+            recovery_task.cancel()
         await shutdown_sub_agent_supervisors()
         await shutdown_plugin_backends(app_state.get("plugin_runtimes") or [])
         memory_resume_supervisor = app_state.get("memory_resume_supervisor")
@@ -687,6 +735,8 @@ def create_core_agent_http_app(
                 llm_client=llm_client,
                 default_model_id=config.model_id,
                 session_store=session_store,
+                # user:“在正常的目标终止之后，还会多发这条消息出去”+(共享持久化目标状态以阻止过期续跑)。
+                goal_manager=GoalManager(core_db_handle.goal_store),
                 sync_journal=core_db_handle.sync_journal,
                 session_actors=core_db_handle.session_actors,
                 member_hooks=_MemberDefaultsHooks(

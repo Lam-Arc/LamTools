@@ -239,7 +239,7 @@ describe('CorePendingDecisionPanel', () => {
     const wrapper = mountPanel(items)
 
     await wrapper.setProps({ items: items.slice(1) })
-    expect(wrapper.text()).toContain('等待你的选择')
+    expect(wrapper.text()).toContain('待处理')
     expect(wrapper.find('[data-pending-decision-subject]').text()).toBe('先做哪一端？')
   })
 
@@ -351,14 +351,13 @@ describe('composer takeover wiring', () => {
     expect(slot.slice(fallbackStart)).toContain('ref="composerTextareaEl"')
   })
 
-  it('derives the takeover from pending decisions in the message projection', () => {
+  it('derives the takeover from the interaction pool with a legacy message fallback', () => {
     expect(appSource).toMatch(
-      /const pendingDecisions = computed\(\(\) => \([\s\S]{0,120}selectPendingCoreDecisions\(workbench\.messages\.value\)/,
+      /const pendingDecisions = computed\(\(\) => \{[\s\S]{0,900}workbench\.snapshot\.value\?\.core\?\.decisions[\s\S]{0,300}workbench\.snapshot\.value\?\.core\?\.interactions[\s\S]{0,600}selectVisiblePendingDecisions\([\s\S]{0,200}workbench\.messages\.value,[\s\S]{0,120}pool/s,
     )
     expect(appSource).toMatch(/const composerTakenOver = computed\(\(\) => pendingDecisions\.value\.length > 0\)/)
     // Plugin-owned surfaces keep their own composer.
-    expect(appSource).toMatch(/selectPendingCoreDecisions\(workbench\.messages\.value\)[\s\S]{0,40}\)\)/)
-    expect(appSource).toMatch(/activePluginMode\.value \? \[\] : selectPendingCoreDecisions/)
+    expect(appSource).toMatch(/if \(activePluginMode\.value\) return \[\]/)
   })
 
   it('routes panel decisions into the single approval handler and blocks the composer send', () => {

@@ -38,7 +38,7 @@ from lamtools_core.runtime import (
     RuntimeTurnInput,
     default_runtime_task_registry,
 )
-from lamtools_core.runtime.goal import GoalCompletionGate, GoalManager, ModelGoalEvaluator
+from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.arrange import ArrangeManager
 from lamtools_core.skills import SkillRegistry, SkillStateStore
 from lamtools_core.skill_runtime import create_skill_runtime
@@ -64,7 +64,7 @@ from .operation_catalog import OperationCatalog, OperationRequest, OperationResu
 from .persistence_host import AppPersistenceHost
 from .snapshot_store import SqlAlchemyThreadSnapshotStore
 from .runtime_permissions import (
-    RUNTIME_PERMISSION_KEYS,
+    overlay_runtime_permissions,
     permissions_from_snapshot,
     resolve_permission_preset,
     resolve_session_permissions,
@@ -145,23 +145,6 @@ _RUNTIME_OPTION_KEYS: tuple[str, ...] = (
     "compact_trigger_tokens",
     "compact_limit_tokens",
 )
-
-
-def create_goal_gate(
-    goal_manager: GoalManager | None,
-    goal_id: str,
-    llm_client: Any,
-    model_id: str = "",
-) -> GoalCompletionGate | None:
-    """Create a GoalCompletionGate with model_id wired to the evaluator."""
-    if goal_manager is None:
-        return None
-    clean_goal_id = str(goal_id or "").strip()
-    return GoalCompletionGate(
-        goal_manager,
-        clean_goal_id,
-        ModelGoalEvaluator(llm_client, model_id=model_id),
-    )
 
 
 def create_kernel(
@@ -694,12 +677,6 @@ def create_core_agent_operations(
                     compact_limit_tokens=runtime_options.compact_limit_tokens,
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
-                    completion_gate=create_goal_gate(
-                        goal_manager,
-                        goal_id,
-                        runtime_model_provider,
-                        runtime_options.model_id,
-                    ),
                     cancel_event_source=runtime_task_registry.get_cancel_event(thread_id),
                     pause_event_source=runtime_task_registry.get_pause_event(thread_id),
                     model_context_sink=model_context_sink,
@@ -757,7 +734,21 @@ def create_core_agent_operations(
                                 ).strip()
                                 else {}
                             ),
-                            "goal_id": goal_id,
+                            **({"goal_id": goal_id} if goal_id else {}),
+                            **(
+                                {"goal_continuation": True}
+                                if request.payload.get("goal_continuation")
+                                else {}
+                            ),
+                            **(
+                                {
+                                    "goal_continuation_text": str(
+                                        request.payload.get("goal_continuation_text") or ""
+                                    ).strip()
+                                }
+                                if str(request.payload.get("goal_continuation_text") or "").strip()
+                                else {}
+                            ),
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
@@ -839,6 +830,22 @@ def create_core_agent_operations(
             )
             if snapshot is None:
                 snapshot = core_events_to_snapshot(sink.events, thread_id=thread_id)
+            # user:“有 goal 生效时，模型主动结束回合和起一个新的回合并追加”
+            # +回合结束后把仍激活的目标交给队列层，由它起新回合并追加提醒。
+            active_goal = None
+            bound_goal_id = goal_id
+            if not bound_goal_id and runtime_state_store is not None:
+                current_state = await runtime_state_store.get(thread_id)
+                if current_state is not None and isinstance(current_state.metadata, dict):
+                    bound_goal_id = str(current_state.metadata.get("goal_id") or "").strip()
+            if goal_manager is not None and bound_goal_id:
+                current_goal = await goal_manager.get(bound_goal_id)
+                if current_goal is not None and current_goal.status == "active":
+                    active_goal = {
+                        "id": current_goal.id,
+                        "objective": current_goal.objective,
+                        "completion_criteria": list(current_goal.completion_criteria),
+                    }
             return OperationResult(
                 name=request.name,
                 status="ok" if kernel_result.decision in {"done", "wait"} else "error",
@@ -848,6 +855,7 @@ def create_core_agent_operations(
                     "turn_id": effective_turn_id or f"{kernel_result.session_id}:turn:{kernel_result.run_id}",
                     "message": kernel_result.message,
                     "decision": kernel_result.decision,
+                    "active_goal": active_goal,
                     "snapshot": snapshot,
                     "run_items": [item.to_dict() for item in run_items],
                     "events": [event.to_dict() for event in sink.events],
@@ -929,6 +937,8 @@ def create_core_agent_operations(
                 ApprovedToolExecution,
                 approved_tool_continuation_prompt,
                 approved_tool_failure_continuation_prompt,
+                approved_tool_blocked_continuation_prompt,
+                denied_tool_continuation_prompt,
                 guidance_continuation_prompt,
                 question_answer_continuation_prompt,
                 resolve_waiting_decision,
@@ -989,14 +999,9 @@ def create_core_agent_operations(
             persisted_snapshot = _runtime_snapshot_from_payload(state.metadata)
             if persisted_snapshot is not None:
                 live_permission_snapshot = runtime_snapshot or {}
-                runtime_snapshot = {
-                    **persisted_snapshot,
-                    **{
-                        key: deepcopy(live_permission_snapshot[key])
-                        for key in RUNTIME_PERMISSION_KEYS
-                        if key in live_permission_snapshot
-                    },
-                }
+                runtime_snapshot = overlay_runtime_permissions(
+                    persisted_snapshot, live_permission_snapshot
+                )
                 approval_policy = str(runtime_snapshot.get("approval_policy") or "require")
                 active_tier = runtime_snapshot.get("active_tier")
                 if active_tier not in ("read_only", "limited_edit", "full_edit"):
@@ -1015,12 +1020,27 @@ def create_core_agent_operations(
                 return OperationResult(name=request.name, status="error", payload={"error": "no pending approval"})
             expected_request_id = str(pending.get("request_id") or pending_call.get("id") or "")
             if approval_request_id and expected_request_id and approval_request_id != expected_request_id:
-                return OperationResult(name=request.name, status="error", payload={"error": "approval request mismatch"})
+                # Older clients and already-persisted cards use the provider's
+                # tool-call id. Accept it as an alias for the composite request
+                # id without weakening the match for a genuinely different ask.
+                if approval_request_id == str(pending_call.get("id") or ""):
+                    approval_request_id = expected_request_id
+                else:
+                    return OperationResult(name=request.name, status="error", payload={"error": "approval request mismatch"})
             if str(pending.get("status") or "") == "executing":
                 return OperationResult(
                     name=request.name,
                     status="error",
                     payload={"error": "approval already resolving"},
+                )
+            if str(getattr(state, "status", "") or "") == "paused":
+                # The pause already closed this card and parked the turn. A
+                # stale window (or the automatic skip) must not answer the
+                # invisible request and silently revive the turn.
+                return OperationResult(
+                    name=request.name,
+                    status="error",
+                    payload={"error": "turn is paused", "code": "turn_paused"},
                 )
             delegated_session = (
                 pending.get("delegated_session")
@@ -1125,6 +1145,20 @@ def create_core_agent_operations(
                     isinstance(state.metadata, dict)
                     and state.metadata.get("actor_kind") == "sub_agent"
                 )
+                resolved_tool_name = str(pending_call.get("name") or "")
+                # user:“修”+(主代理拒绝工具后仍要续跑，必须登记任务并及时释放审批 RPC。)
+                # Only a delegated child's non-question denial ends inline;
+                # the main agent continues with a blocked tool result.
+                continues = (
+                    decision.action in {"approve", "guide", "skip"}
+                    or (
+                        decision.action == "deny"
+                        and (
+                            resolved_tool_name == "question"
+                            or not isinstance(delegated_session, dict)
+                        )
+                    )
+                )
                 try:
                     durable_result = decision_durable({
                         "thread_id": event_thread_id,
@@ -1132,6 +1166,8 @@ def create_core_agent_operations(
                         "turn_id": str(state.metadata.get("turn_id") or state.run_id),
                         "work_root": str(runtime_work_root),
                         "decision": decision.action,
+                        "tool_name": resolved_tool_name,
+                        "continues": continues,
                         "snapshot": lifecycle.decision_snapshot,
                         # Child continuations are admitted per child session.
                         "claim_thread_id": str(state.session_id) if resolved_is_child else "",
@@ -1154,15 +1190,47 @@ def create_core_agent_operations(
             tool_name = str(pending_call.get("name") or "")
             tool_args = pending_call.get("arguments") if isinstance(pending_call.get("arguments"), dict) else {}
 
-            if decision.action == "deny":
+            skipped = decision.action == "skip"
+            deny_without_terminal = False
+            approval_events: list[CoreEvent] = []
+            if decision.action in {"deny", "skip"}:
                 if tool_name == "question":
-                    # For the question tool, "deny" (cancel) means the user
-                    # declined to answer — treat as a skipped question rather
-                    # than cancelling the entire run.
-                    answer = "用户取消了该问题，未提供回答。"
+                    # A skipped question is still an answer-shaped outcome: the
+                    # model must continue with a clear "no answer" signal, not
+                    # have the whole turn cancelled.  ``skip`` is explicit now,
+                    # so a literal option labelled "cancel" is no longer
+                    # mistaken for this path.
+                    answer = (
+                        "（用户跳过了这个问题，未提供回答。）"
+                        if skipped
+                        else "用户取消了该问题，未提供回答。"
+                    )
                     question_text = str(tool_args.get("question") or "")
-                else:
+                elif isinstance(delegated_session, dict):
+                    # A denied child approval ends that member, not the parent
+                    # turn. Sync the registry immediately; otherwise it stayed
+                    # "paused" while the child state was already cancelled.
+                    from lamtools_core.sub_agent_supervisor import (
+                        find_sub_agent_supervisor,
+                    )
+
+                    child_supervisor = find_sub_agent_supervisor(event_thread_id)
+                    child_name = str(delegated_session.get("agent") or "")
+                    if child_supervisor is not None and child_name:
+                        try:
+                            await child_supervisor.finalize_terminal(
+                                child_name,
+                                status="interrupted",
+                                summary="The user denied the requested action.",
+                            )
+                        except BaseException:
+                            pass
                     return await lifecycle.finalize_cancelled()
+                else:
+                    # A denied tool is a blocked outcome, not the end of the
+                    # user's task. The continuation is prepared after the
+                    # pending record is cleared.
+                    deny_without_terminal = True
             else:
                 answer = ""
 
@@ -1173,6 +1241,79 @@ def create_core_agent_operations(
                     raise
                 return await lifecycle.finalize_failure(exc)
             state = lifecycle.state
+
+            async def persist_deferred_approval_calls() -> None:
+                """Give every call deferred behind this card an explicit result.
+
+                The kernel commits non-approval calls before parking, but a
+                second approval call cannot be answered from the same step:
+                the batch is serialized.  Leaving it without a tool result made
+                history repair fabricate an interruption, so the model believed
+                the call ran and failed.  A named deferral tells the model to
+                re-issue it after this decision instead.
+                """
+                raw = pending.get("deferred_calls") if isinstance(pending, dict) else None
+                for item in raw or []:
+                    if not isinstance(item, dict):
+                        continue
+                    call_id = str(item.get("id") or "")
+                    if not call_id:
+                        continue
+                    await lifecycle.persist_tool_history(
+                        ChatMessage(
+                            role="tool",
+                            name=str(item.get("name") or ""),
+                            tool_call_id=call_id,
+                            content=(
+                                "status: blocked\n"
+                                "error: Deferred: this call was part of a batch with another "
+                                "approval. Re-issue it as a separate call if it is still needed."
+                            ),
+                            metadata={"deferred_approval": True},
+                        )
+                    )
+
+            if deny_without_terminal:
+                try:
+                    await lifecycle.persist_tool_history(
+                        ChatMessage(
+                            role="tool",
+                            name=tool_name,
+                            tool_call_id=str(pending_call.get("id") or ""),
+                            content=(
+                                "status: blocked\n"
+                                "error: The user denied this action; it was not executed. "
+                                "Do not repeat the same call; choose another path or ask "
+                                "the user what to do instead."
+                            ),
+                        )
+                    )
+                    await persist_deferred_approval_calls()
+                    continuation = denied_tool_continuation_prompt(
+                        original_task=original_task,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                    )
+                except BaseException as exc:
+                    return await lifecycle.finalize_failure(exc)
+                approval_events = [
+                    CoreEvent(
+                        name="runtime.tool.finished",
+                        category="tool",
+                        payload={
+                            "tool_name": tool_name,
+                            "call_id": str(pending_call.get("id") or ""),
+                            "status": "blocked",
+                            "content": "",
+                            "error": "User denied this action.",
+                            "artifacts": [],
+                            "metadata": {"decision": "denied"},
+                        },
+                        session_id=thread_id,
+                        run_id=state.run_id,
+                        tags=["tool", "blocked"],
+                    )
+                ]
 
             # question tool: inject the user's answer as the tool result and
             # continue the loop with a question-specific continuation prompt.
@@ -1205,7 +1346,11 @@ def create_core_agent_operations(
                             "content": answer,
                             "error": "",
                             "artifacts": [],
-                            "metadata": {"question": question_text, "answer": answer},
+                            "metadata": {
+                                "question": question_text,
+                                "answer": answer,
+                                **({"skipped": True} if skipped else {}),
+                            },
                         },
                         session_id=thread_id,
                         run_id=state.run_id,
@@ -1225,10 +1370,12 @@ def create_core_agent_operations(
                                 content=answer,
                             )
                         )
+                    await persist_deferred_approval_calls()
                     continuation = question_answer_continuation_prompt(
                         original_task=original_task,
                         question=question_text,
                         answer=answer,
+                        skipped=skipped,
                     )
                 except BaseException as exc:
                     return await lifecycle.finalize_failure(exc)
@@ -1265,6 +1412,10 @@ def create_core_agent_operations(
                         context=plugin_context,
                         plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
                     )
+                    # user:“是不是因为它在重建的时候有一个时序错误？所以导致可能会漏？”
+                    # +审批恢复没有原始 turn 载荷，必须重新解析生图设置，否则
+                    # generate_image 会被当成未启用而少一个工具。
+                    imagegen_config = _resolve_imagegen_config(paths.data_dir)
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
                         work_root=runtime_work_root,
                         artifact_store=artifact_store,
@@ -1298,6 +1449,8 @@ def create_core_agent_operations(
                         runtime_snapshot=runtime_snapshot,
                         activated_mcp_servers=delegated_activated_mcp,
                         allow_access_outside_workdir=allow_access_outside_workdir,
+                        imagegen_config=imagegen_config,
+                        attachment_service=attachment_service,
                         model_context_sink=model_context_sink,
                     )
                     sub_agent_runner = toolbox.sub_agent_runner
@@ -1334,22 +1487,33 @@ def create_core_agent_operations(
                     }
                     # The continuation runs inline in this request; track it as
                     # member work so a user Stop can pause it like any other.
-                    supervisor.track_inline_task(
-                        delegated_session.get("agent"), asyncio.current_task()
-                    )
-                    try:
-                        if child_question:
-                            child_result = await sub_agent_runner.resume_question(
-                                **continuation_kwargs,
-                                answer=answer,
-                                question=str(tool_args.get("question") or ""),
-                            )
-                        else:
-                            child_result = await sub_agent_runner.resume_approved(
-                                **continuation_kwargs,
-                            )
-                    finally:
-                        supervisor.track_inline_task(delegated_session.get("agent"), None)
+                    # The supervisor lock is what serializes it with a drive
+                    # task (or another continuation) for the same child session.
+                    async with supervisor.agent_lock(str(delegated_session.get("agent") or "")):
+                        member_execution_token = supervisor.track_inline_task(
+                            delegated_session.get("agent"), asyncio.current_task()
+                        )
+                        try:
+                            if child_question:
+                                child_result = await sub_agent_runner.resume_question(
+                                    **continuation_kwargs,
+                                    answer=answer,
+                                    question=str(tool_args.get("question") or ""),
+                                    skipped=skipped,
+                                )
+                            else:
+                                child_result = await sub_agent_runner.resume_approved(
+                                    **continuation_kwargs,
+                                )
+                        finally:
+                            supervisor.track_inline_task(delegated_session.get("agent"), None)
+                    # user:“修 问题严重的话 就重新设计”+(控制动作使本次执行失效后，禁止发布迟到的审批、问题或结束结果)。
+                    if not supervisor.result_is_current(str(delegated_session.get("agent") or ""), member_execution_token):
+                        return OperationResult(name=request.name, status="ok", payload={
+                            "thread_id": event_thread_id, "decision": "cancelled",
+                            "run_id": state.run_id,
+                            "turn_id": str(state.metadata.get("turn_id") or ""),
+                        })
                     if child_result.decision == "wait" and child_result.pending_approval:
                         await _close_mcp_registry(mcp_registry)
                         mcp_registry = None
@@ -1373,6 +1537,7 @@ def create_core_agent_operations(
                             app_event_store=app_event_store,
                             thread_snapshot_store=thread_snapshot_store,
                             write_coordinator=write_coordinator,
+                            app_event_hub=app_event_hub,
                         )
                         if snapshot is None:
                             snapshot = core_events_to_snapshot(events, thread_id=event_thread_id)
@@ -1406,6 +1571,7 @@ def create_core_agent_operations(
                         await supervisor.finalize_resumed(
                             str(delegated_session.get("agent") or ""),
                             child_result,
+                            expected_token=member_execution_token,
                         )
                         events = _without_approval_response_events(sink.events)
                         run_items = core_events_to_run_items(
@@ -1418,6 +1584,7 @@ def create_core_agent_operations(
                             app_event_store=app_event_store,
                             thread_snapshot_store=thread_snapshot_store,
                             write_coordinator=write_coordinator,
+                            app_event_hub=app_event_hub,
                         )
                         if snapshot is None:
                             snapshot = core_events_to_snapshot(
@@ -1497,11 +1664,20 @@ def create_core_agent_operations(
                         compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                         compact_limit_tokens=runtime_options.compact_limit_tokens,
                         hook_engine=plugin_assembly["hook_engine"],
-                        completion_gate=create_goal_gate(
-                            goal_manager,
-                            str(state.metadata.get("goal_id") or ""),
-                            runtime_model_provider,
-                            runtime_options.model_id,
+                        checkpoint_coordinator=(
+                            checkpoint_coordinator(runtime_work_root)
+                            if callable(checkpoint_coordinator)
+                            else None
+                        ),
+                        cancel_event_source=(
+                            runtime_task_registry.get_cancel_event(thread_id)
+                            if runtime_task_registry is not None
+                            else None
+                        ),
+                        pause_event_source=(
+                            runtime_task_registry.get_pause_event(thread_id)
+                            if runtime_task_registry is not None
+                            else None
                         ),
                         model_context_sink=model_context_sink,
                     )
@@ -1514,6 +1690,24 @@ def create_core_agent_operations(
                             state=state,
                             run_id=state.run_id,
                             turn_id=str(state.metadata.get("turn_id") or ""),
+                            guidance_source=(
+                                runtime_task_registry.guidance_source(
+                                    thread_id,
+                                    run_id=str(state.run_id or ""),
+                                    include_metadata=True,
+                                )
+                                if runtime_task_registry is not None
+                                else None
+                            ),
+                            guidance_finalizer=(
+                                runtime_task_registry.guidance_finalizer(
+                                    thread_id,
+                                    run_id=str(state.run_id or ""),
+                                    include_metadata=True,
+                                )
+                                if runtime_task_registry is not None
+                                else None
+                            ),
                             metadata={
                                 **_runtime_metadata(request.metadata),
                                 **dict(request.payload.get("metadata") or {}),
@@ -1556,6 +1750,7 @@ def create_core_agent_operations(
                         db_session_factory=db_session_factory,
                         app_event_store=app_event_store,
                         thread_snapshot_store=thread_snapshot_store,
+                        app_event_hub=app_event_hub,
                     )
                 except BaseException as exc:
                     return await lifecycle.finalize_failure(exc)
@@ -1583,9 +1778,9 @@ def create_core_agent_operations(
                     },
                 )
 
-            if tool_name == "question":
-                # Already handled above — continuation and approval_events
-                # are set, skip the standard guide/approve branches.
+            if deny_without_terminal or tool_name == "question":
+                # A denied main-agent tool and an answered question already
+                # have their continuation and events prepared.
                 pass
             elif decision.action == "guide":
                 try:
@@ -1598,6 +1793,7 @@ def create_core_agent_operations(
                 except BaseException as exc:
                     return await lifecycle.finalize_failure(exc)
                 approval_events: list[CoreEvent] = []
+                await persist_deferred_approval_calls()
             else:
                 mcp_registry = None
                 try:
@@ -1731,6 +1927,50 @@ def create_core_agent_operations(
                         )
                     except BaseException as exc:
                         return await lifecycle.finalize_failure(exc)
+                elif tool_result.status == "blocked":
+                    # The call was approved while the card was open, but a
+                    # permission/plugin/path boundary changed before execution.
+                    # Re-running cannot succeed; hand the blocked result back
+                    # and let the model choose another path or ask again.
+                    try:
+                        await lifecycle.persist_tool_history(
+                            ChatMessage(
+                                role="tool",
+                                name=call.name,
+                                tool_call_id=call.id,
+                                content=tool_result.content or tool_result.error or "blocked",
+                            )
+                        )
+                        continuation = approved_tool_blocked_continuation_prompt(
+                            original_task=original_task,
+                            tool_name=call.name,
+                            tool_args=call.arguments,
+                            reason=tool_result.error or tool_result.content or "blocked",
+                        )
+                        approval_events = [
+                            CoreEvent(
+                                name="runtime.tool.finished",
+                                category="tool",
+                                payload={
+                                    "tool_name": call.name,
+                                    "call_id": call.id,
+                                    "status": "blocked",
+                                    "content": tool_result.content or "",
+                                    "error": tool_result.error or "",
+                                    "artifacts": [],
+                                    "metadata": (
+                                        tool_result.metadata
+                                        if isinstance(tool_result.metadata, dict)
+                                        else {}
+                                    ),
+                                },
+                                session_id=thread_id,
+                                run_id=state.run_id,
+                                tags=["tool", "blocked"],
+                            )
+                        ]
+                    except BaseException as exc:
+                        return await lifecycle.finalize_failure(exc)
                 elif not approved_tool.completed:
                     return await lifecycle.finalize_failure(
                         approved_tool.tool_content,
@@ -1759,6 +1999,8 @@ def create_core_agent_operations(
                         )
                     except BaseException as exc:
                         return await lifecycle.finalize_failure(exc)
+
+            await persist_deferred_approval_calls()
 
             async def approval_live_callback(event: Any) -> None:
                 await _persist_core_event_live(
@@ -1851,11 +2093,20 @@ def create_core_agent_operations(
                     compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                     compact_limit_tokens=runtime_options.compact_limit_tokens,
                     hook_engine=plugin_assembly["hook_engine"],
-                    completion_gate=create_goal_gate(
-                        goal_manager,
-                        str(lifecycle.state.metadata.get("goal_id") or ""),
-                        runtime_model_provider,
-                        runtime_options.model_id,
+                    checkpoint_coordinator=(
+                        checkpoint_coordinator(runtime_work_root)
+                        if callable(checkpoint_coordinator)
+                        else None
+                    ),
+                    cancel_event_source=(
+                        runtime_task_registry.get_cancel_event(thread_id)
+                        if runtime_task_registry is not None
+                        else None
+                    ),
+                    pause_event_source=(
+                        runtime_task_registry.get_pause_event(thread_id)
+                        if runtime_task_registry is not None
+                        else None
                     ),
                     model_context_sink=model_context_sink,
                 )
@@ -1866,6 +2117,24 @@ def create_core_agent_operations(
                         state=lifecycle.state,
                         run_id=lifecycle.state.run_id,
                         turn_id=str(lifecycle.state.metadata.get("turn_id") or ""),
+                        guidance_source=(
+                            runtime_task_registry.guidance_source(
+                                thread_id,
+                                run_id=str(lifecycle.state.run_id or ""),
+                                include_metadata=True,
+                            )
+                            if runtime_task_registry is not None
+                            else None
+                        ),
+                        guidance_finalizer=(
+                            runtime_task_registry.guidance_finalizer(
+                                thread_id,
+                                run_id=str(lifecycle.state.run_id or ""),
+                                include_metadata=True,
+                            )
+                            if runtime_task_registry is not None
+                            else None
+                        ),
                         metadata={
                             **_runtime_metadata(request.metadata),
                             **dict(request.payload.get("metadata") or {}),
@@ -1914,6 +2183,7 @@ def create_core_agent_operations(
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
+                    app_event_hub=app_event_hub,
                 )
             except BaseException as exc:
                 return await lifecycle.finalize_failure(exc)
@@ -2356,6 +2626,43 @@ async def _release_refused_claim(
         await state_store.save(current)
     except BaseException:
         return
+
+def _effective_imagegen_config(
+    imagegen_config: dict[str, Any] | None,
+    plugin_assembly: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Use the caller's config, or read the saved one when it was not passed.
+
+    Turn payloads, queue dispatches, goal continuations and approval rebuilds
+    do not all carry imagegen_config. Treating "not passed" as "disabled" made
+    generate_image appear and disappear between turns, changing the tool array
+    and invalidating the cached prefix.
+    """
+    if isinstance(imagegen_config, dict):
+        return imagegen_config
+    data_dir = plugin_assembly.get("data_dir") if isinstance(plugin_assembly, Mapping) else None
+    return _resolve_imagegen_config(data_dir)
+
+
+def _resolve_imagegen_config(data_dir: Any) -> dict[str, Any] | None:
+    """Resolve the imagegen settings for a toolbox rebuilt outside turn.start.
+
+    The approval continuation does not receive the original turn payload, and
+    its internal operation catalog does not expose settings.get. Read the same
+    plugins/imagegen.jsonc the settings page writes; otherwise `generate_image`
+    is treated as disabled and disappears from the tool array, invalidating the
+    cached prefix.
+    """
+    if not data_dir:
+        return None
+    try:
+        from lamtools_core.config.imagegen_store import load_imagegen_config
+
+        value = load_imagegen_config(data_dir)
+    except Exception:
+        return None
+    return value if isinstance(value, dict) else None
+
 
 def _runtime_snapshot_from_payload(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     """Normalize the accepted turn snapshot before live permission overlays.
@@ -2814,7 +3121,158 @@ async def _persist_run_items(
                 published = publish(envelope)
                 if inspect.isawaitable(published):
                     await published
+    await _mirror_run_items_as_interactions(
+        run_items,
+        db_session_factory=db_session_factory,
+        write_coordinator=write_coordinator,
+    )
     return snapshot
+
+
+async def _mirror_run_items_as_interactions(
+    run_items: list[Any],
+    *,
+    db_session_factory: Callable[[], Any] | None,
+    write_coordinator: Any | None,
+) -> None:
+    """Keep the interaction read model in step with the event projection.
+
+    The event log remains the source of truth.  This mirror gives the new
+    broker surface a stable, queryable interaction identity without requiring
+    the kernel to know about it yet.
+    """
+    if db_session_factory is None or write_coordinator is None:
+        return
+    relevant = [
+        item
+        for item in run_items
+        if getattr(item, "kind", "") in {"approval_request", "approval_response"}
+    ]
+    if not relevant:
+        return
+    try:
+        from lamtools_core.config.automation import ASK_AUTO_CONTINUE_TIMEOUT_MINUTES
+        from lamtools_core.turn.model import (
+            Interaction,
+            InteractionAnswer,
+            InteractionOption,
+            now_ms,
+        )
+        from lamtools_core.turn.store import TurnStore
+
+        store = TurnStore(db_session_factory, write_coordinator)
+        project_by_thread: dict[str, str] = {}
+
+        async def _project_for(thread_id: str) -> str:
+            if thread_id in project_by_thread:
+                return project_by_thread[thread_id]
+            project_id = ""
+            try:
+                from .core_db import CoreThreadSnapshot
+
+                async with db_session_factory() as db:
+                    row = await db.get(CoreThreadSnapshot, thread_id)
+                state = row.snapshot_json if row is not None else {}
+                session = state.get("session") if isinstance(state, dict) else {}
+                metadata = (
+                    session.get("metadata")
+                    if isinstance(session, dict)
+                    and isinstance(session.get("metadata"), dict)
+                    else {}
+                )
+                project_id = str(metadata.get("project_id") or "")
+            except BaseException:
+                project_id = ""
+            project_by_thread[thread_id] = project_id
+            return project_id
+
+        for item in relevant:
+            payload = getattr(item, "payload", None)
+            payload = payload if isinstance(payload, dict) else {}
+            request_id = str(
+                payload.get("request_id") or getattr(item, "item_id", "") or getattr(item, "event_id", "")
+            )
+            if not request_id:
+                continue
+            if getattr(item, "kind", "") == "approval_request":
+                tool_name = str(payload.get("tool_name") or "")
+                kind = "question" if tool_name == "question" else "approval"
+                sub_agent = payload.get("sub_agent") if isinstance(payload.get("sub_agent"), dict) else None
+                scope = "main"
+                if isinstance(sub_agent, dict):
+                    scope = "agent:" + str(
+                        sub_agent.get("sub_session_id")
+                        or sub_agent.get("session_id")
+                        or sub_agent.get("agent")
+                        or "agent"
+                    )
+                agent_name = str(
+                    (sub_agent or {}).get("agent")
+                    or (sub_agent or {}).get("name")
+                    or ""
+                )
+                agent_session_id = str(
+                    (sub_agent or {}).get("sub_session_id")
+                    or (sub_agent or {}).get("session_id")
+                    or ""
+                )
+                project_id = str(
+                    payload.get("project_id") or payload.get("projectId") or ""
+                ) or await _project_for(
+                    str(getattr(item, "thread_id", "") or "")
+                )
+                options = [
+                    InteractionOption.from_dict(option)
+                    for option in payload.get("options") or []
+                    if isinstance(option, dict)
+                ]
+                interaction = Interaction(
+                    interaction_id=request_id,
+                    turn_id=str(getattr(item, "turn_id", "") or ""),
+                    thread_id=str(getattr(item, "thread_id", "") or ""),
+                    run_id=str(getattr(item, "run_id", "") or ""),
+                    scope=scope,
+                    kind=kind,  # type: ignore[arg-type]
+                    status="open",
+                    tool_call_id=str(payload.get("tool_call_id") or request_id),
+                    title=str(payload.get("message") or ""),
+                    body="",
+                    context=str(payload.get("context") or ""),
+                    options=options,
+                    expires_at_ms=(
+                        now_ms() + ASK_AUTO_CONTINUE_TIMEOUT_MINUTES * 60 * 1000
+                        if kind == "question"
+                        else 0
+                    ),
+                    legacy_request_id=request_id,
+                    project_id=project_id,
+                    agent_name=agent_name,
+                    agent_session_id=agent_session_id,
+                    delivered_by=(
+                        "main"
+                        if scope == "main"
+                        else "agent:" + (agent_name or agent_session_id or "agent")
+                    ),
+                    metadata={"item_id": str(getattr(item, "item_id", "") or "")},
+                )
+                await store.create_interaction(interaction)
+            else:
+                decision = str(payload.get("decision") or "")
+                skipped = decision in {"skip", "skipped"}
+                status = "cancelled" if decision in {"deny", "denied"} else "answered"
+                await store.resolve_interaction(
+                    request_id,
+                    status=status,
+                    answer=InteractionAnswer(
+                        kind="skip" if skipped else "text",
+                        text=str(payload.get("guidance") or ""),
+                        skipped=skipped,
+                    ),
+                )
+    except BaseException:
+        # The mirror is an index, not the record. A failure here must never
+        # undo or block the event batch that was just committed.
+        _logger.exception("[default:persist_run_items] interaction mirror failed")
 
 
 def _terminal_status_run_items(run_items: list[Any]) -> list[Any]:
@@ -2895,6 +3353,11 @@ async def _persist_core_event_live(
 
     try:
         envelopes = await persistence.write(write)
+        await _mirror_run_items_as_interactions(
+            run_items,
+            db_session_factory=db_session_factory,
+            write_coordinator=write_coordinator,
+        )
         if app_event_hub is None:
             return
         for envelope in envelopes:
@@ -3090,6 +3553,10 @@ async def _build_core_runtime_toolbox(
     plugin_tool_providers = plugin_tooling["providers"]
     plugin_tool_handlers = plugin_tooling["handlers"]
     plugin_availability = plugin_tooling["availability"]
+    # user:“这种经常配置一会儿被读到，一会儿没被读到的原因是什么”
+    # +不同启动路径（直接发送、队列、目标续跑、审批恢复）不一定携带
+    # imagegen_config；没传时回退到已保存配置，避免工具数组忽有忽无。
+    imagegen_config = _effective_imagegen_config(imagegen_config, plugin_assembly)
     # generate_image 是否上传工具集：除 loadtools 模式白名单外，还受
     # 设置 → 生图 的启用开关控制；未启用时从模型可见工具中剔除，
     # 即使模型仍尝试调用也会被 execute() 以 "Tool disabled" 拦截。
@@ -3157,6 +3624,8 @@ async def _build_core_runtime_toolbox(
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=normalized_policy,
+        # user:“处于完全访问状态，但是它运行命令的时候弹审批了”+(新回合与审批恢复重建工具箱时传递完整权限模式)。
+        permission_preset=permission_preset,
         loaded_skill_roots=skill_roots,
         skill_registry=skill_runtime.registry,
         mcp_caller=registry if mcp_tool_specs else None,
