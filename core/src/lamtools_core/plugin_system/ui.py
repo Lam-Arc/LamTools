@@ -64,11 +64,23 @@ class PluginUIRegion:
 
 
 @dataclass(frozen=True)
+class PluginWindowSpec:
+    id: str
+    title: str
+    entry: Path
+    width: int = 420
+    height: int = 620
+    plugin: str = ""
+    root: Path | None = None
+
+
+@dataclass(frozen=True)
 class PluginUISpec:
     plugin: str
     styles: list["PluginAssetSpec"] = field(default_factory=list)
     regions: list[PluginUIRegion] = field(default_factory=list)
     script: "PluginAssetSpec | None" = None
+    windows: list[PluginWindowSpec] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -84,6 +96,7 @@ class UIAssembly:
     regions: list[PluginUIRegion] = field(default_factory=list)
     styles: list[PluginAssetSpec] = field(default_factory=list)
     scripts: list[PluginAssetSpec] = field(default_factory=list)
+    windows: list[PluginWindowSpec] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -207,6 +220,37 @@ def _parse_region(manifest: PluginManifest, raw: Any) -> PluginUIRegion:
     )
 
 
+def _positive_int(plugin: str, value: Any, *, key: str, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise CapabilityError(plugin, f"ui window {key} must be a positive integer")
+    return value
+
+
+def _parse_window(manifest: PluginManifest, raw: Any) -> PluginWindowSpec:
+    if not isinstance(raw, dict):
+        raise CapabilityError(manifest.name, "ui window must be an object")
+    window_id = str(raw.get("id") or "").strip()
+    if not window_id or any(character.isspace() for character in window_id):
+        raise CapabilityError(manifest.name, "ui window id must be one token")
+    entry = _asset(
+        manifest,
+        raw.get("entry"),
+        key="ui window entry",
+        suffixes=(".html",),
+    ).path
+    return PluginWindowSpec(
+        id=window_id,
+        title=str(raw.get("title") or window_id),
+        entry=entry,
+        width=_positive_int(manifest.name, raw.get("width"), key="width", default=420),
+        height=_positive_int(manifest.name, raw.get("height"), key="height", default=620),
+        plugin=manifest.name,
+        root=manifest.root,
+    )
+
+
 def read_ui(manifest: PluginManifest) -> PluginUISpec:
     """Read the optional ``ui`` declaration; a missing section is an empty spec."""
     raw = manifest.raw.get("ui")
@@ -237,11 +281,17 @@ def read_ui(manifest: PluginManifest) -> PluginUISpec:
         raise CapabilityError(manifest.name, "ui.regions must be an array")
     regions = [_parse_region(manifest, item) for item in (regions_raw or [])]
 
+    windows_raw = raw.get("windows")
+    if windows_raw is not None and not isinstance(windows_raw, list):
+        raise CapabilityError(manifest.name, "ui.windows must be an array")
+    windows = [_parse_window(manifest, item) for item in (windows_raw or [])]
+
     return PluginUISpec(
         plugin=manifest.name,
         styles=styles,
         regions=regions,
         script=script,
+        windows=windows,
     )
 
 
@@ -249,6 +299,7 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
     """Flatten enabled plugins' UI declarations with explicit errors."""
     assembly = UIAssembly()
     replaced: dict[str, str] = {}
+    window_owners: dict[str, str] = {}
     for manifest in manifests:
         if not manifest.enabled:
             continue
@@ -274,6 +325,18 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
                     continue
                 replaced[region.region] = manifest.name
             assembly.regions.append(region)
+        for window in spec.windows:
+            owner = window_owners.get(window.id)
+            if owner is not None:
+                assembly.errors.append(
+                    {
+                        "plugin": manifest.name,
+                        "error": f"window '{window.id}' is already declared by plugin '{owner}'",
+                    }
+                )
+                continue
+            window_owners[window.id] = manifest.name
+            assembly.windows.append(window)
     assembly.regions.sort(key=lambda item: (item.order, item.plugin, item.region))
     return assembly
 
@@ -286,6 +349,7 @@ __all__ = [
     "PluginUIBlock",
     "PluginUIRegion",
     "PluginUISpec",
+    "PluginWindowSpec",
     "UIAssembly",
     "assemble_ui",
     "read_ui",

@@ -172,3 +172,47 @@ async def test_ui_operation_hides_a_disabled_plugin(tmp_path: Path) -> None:
 
     assert result.payload["styles"] == []
     assert result.payload["regions"] == []
+
+
+async def test_agent_operation_returns_the_winning_plan(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    mode_dir = root / "focus"
+    mode_dir.mkdir(parents=True)
+    (mode_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "focus",
+                "version": "1.0.0",
+                "scope": "mode",
+                "agent": {"mode": "focus", "prompt": "./prompt.md"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (mode_dir / "prompt.md").write_text("Focused.", encoding="utf-8")
+    global_dir = root / "global"
+    global_dir.mkdir(parents=True)
+    (global_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "global",
+                "version": "1.0.0",
+                "scope": "global",
+                "agent": {"approval": "auto"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    host = PluginHost(roots=[root], state_path=tmp_path / "plugin-system.jsonc")
+    catalog = OperationCatalog()
+    register_plugin_system_operations(catalog, host)
+
+    result = await catalog.execute(
+        "plugin.system.agent", {"active_mode": "focus:focus"}
+    )
+
+    plan = result.payload["plan"]
+    assert plan["source"] == "mode"
+    assert plan["plugin"] == "focus"
+    assert plan["prompt"] == "Focused."
+    assert result.payload["errors"] == []

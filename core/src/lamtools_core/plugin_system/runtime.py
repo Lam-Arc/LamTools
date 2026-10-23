@@ -15,6 +15,7 @@ from typing import Any
 
 from lamtools_core.tool import ToolSpec
 
+from .agent import AgentAssembly, AgentPlan, assemble_agents, resolve_agent_plan
 from .capabilities import (
     PluginCommandSpec,
     PluginContextSpec,
@@ -91,6 +92,22 @@ class PluginSystemRuntime:
         artifacts.commands = list(assembly.commands)
         artifacts.context = list(assembly.context)
         return artifacts
+
+
+    def agents(self) -> AgentAssembly:
+        return assemble_agents(self.host.discover())
+
+    def agent_plan(
+        self,
+        *,
+        active_mode: str = "",
+        session_plugin: str | None = None,
+    ) -> AgentPlan | None:
+        return resolve_agent_plan(
+            self.agents().agents,
+            active_mode=active_mode,
+            session_plugin=session_plugin,
+        )
 
 
 __all__ = ["PluginSystemRuntime", "RuntimeArtifacts"]

@@ -250,3 +250,77 @@ def test_two_replace_regions_on_the_same_target_conflict(tmp_path: Path) -> None
     assert [region.plugin for region in assembly.regions] == ["first"]
     assert assembly.errors[0]["plugin"] == "second"
     assert "already replaced" in assembly.errors[0]["error"]
+
+
+def test_windows_are_parsed(tmp_path: Path) -> None:
+    manifest_path = make_plugin(
+        tmp_path,
+        "pet",
+        manifest={
+            "ui": {
+                "windows": [
+                    {
+                        "id": "pet",
+                        "title": "Desk Pet",
+                        "entry": "./window.html",
+                        "width": 300,
+                        "height": 400,
+                    }
+                ]
+            }
+        },
+        files={"window.html": "<html></html>"},
+    )
+
+    spec = read_ui(load_manifest(manifest_path))
+
+    window = spec.windows[0]
+    assert window.id == "pet"
+    assert window.title == "Desk Pet"
+    assert window.entry.name == "window.html"
+    assert window.width == 300
+    assert window.height == 400
+    assert window.plugin == "pet"
+
+
+def test_duplicate_window_ids_conflict(tmp_path: Path) -> None:
+    first = make_plugin(
+        tmp_path,
+        "first",
+        manifest={"ui": {"windows": [{"id": "pet", "entry": "./window.html"}]}},
+        files={"window.html": "<html></html>"},
+    )
+    second = make_plugin(
+        tmp_path,
+        "second",
+        manifest={"ui": {"windows": [{"id": "pet", "entry": "./window.html"}]}},
+        files={"window.html": "<html></html>"},
+    )
+
+    assembly = assemble_ui([load_manifest(first), load_manifest(second)])
+
+    assert [window.plugin for window in assembly.windows] == ["first"]
+    assert "already declared" in assembly.errors[0]["error"]
+
+
+def test_window_size_must_be_positive(tmp_path: Path) -> None:
+    manifest_path = make_plugin(
+        tmp_path,
+        "bad",
+        manifest={"ui": {"windows": [{"id": "pet", "entry": "./window.html", "width": 0}]}},
+        files={"window.html": "<html></html>"},
+    )
+
+    with pytest.raises(CapabilityError, match="width"):
+        read_ui(load_manifest(manifest_path))
+
+
+def test_window_entry_must_exist(tmp_path: Path) -> None:
+    manifest_path = make_plugin(
+        tmp_path,
+        "missing",
+        manifest={"ui": {"windows": [{"id": "pet", "entry": "./window.html"}]}},
+    )
+
+    with pytest.raises(CapabilityError, match="missing"):
+        read_ui(load_manifest(manifest_path))

@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from lamtools_core.app import OperationCatalog, OperationRequest, OperationResult
 
+from .agent import assemble_agents, resolve_agent_plan
 from .capabilities import assemble_capabilities
 from .host import PluginHost
 from .ui import assemble_ui
@@ -116,6 +117,19 @@ def _region_payload(region: Any, roots: dict[str, Path]) -> dict[str, Any]:
     }
 
 
+def _agent_payload(agent: Any) -> dict[str, Any]:
+    return {
+        "plugin": agent.plugin,
+        "scope": agent.scope,
+        "mode": agent.mode,
+        "prompt": agent.prompt_text,
+        "tools": list(agent.tools) if agent.tools is not None else None,
+        "approval": agent.approval,
+        "context": [str(path) for path in agent.context],
+        "exclusive_tools": agent.exclusive_tools,
+    }
+
+
 def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHost) -> None:
     """Register the preview surface used by the plugin page."""
 
@@ -149,6 +163,38 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                     for asset in assembly.scripts
                 ],
                 "regions": [_region_payload(region, roots) for region in assembly.regions],
+                "windows": [
+                    {
+                        "plugin": window.plugin,
+                        "id": window.id,
+                        "title": window.title,
+                        "url": _asset_url(window.plugin, window.root, window.entry),
+                        "width": window.width,
+                        "height": window.height,
+                    }
+                    for window in assembly.windows
+                ],
+                "errors": list(assembly.errors),
+            },
+        )
+
+    async def get_agent(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        assembly = assemble_agents(host.discover())
+        plan = resolve_agent_plan(
+            assembly.agents,
+            active_mode=str(payload.get("active_mode") or ""),
+            session_plugin=str(payload.get("session_plugin") or "") or None,
+        )
+        return OperationResult(
+            name="plugin.system.agent",
+            payload={
+                "agents": [_agent_payload(agent) for agent in assembly.agents],
+                "plan": (
+                    {"source": plan.source, **_agent_payload(plan.agent)}
+                    if plan is not None
+                    else None
+                ),
                 "errors": list(assembly.errors),
             },
         )
@@ -195,6 +241,7 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
 
     catalog.register("plugin.system.list", list_plugins, owner=OWNER)
     catalog.register("plugin.system.ui", list_ui, owner=OWNER)
+    catalog.register("plugin.system.agent", get_agent, owner=OWNER)
     catalog.register("plugin.system.enable", enable_plugin, owner=OWNER)
     catalog.register("plugin.system.disable", disable_plugin, owner=OWNER)
     catalog.register("plugin.system.uninstall", uninstall_plugin, owner=OWNER)

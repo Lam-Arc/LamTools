@@ -5,6 +5,14 @@ enablement, uninstall, and the six declarative capabilities. UI contributions,
 agent takeover and module overrides land in later steps behind the same host.
 """
 
+from .agent import (
+    AgentAssembly,
+    AgentPlan,
+    PluginAgentSpec,
+    assemble_agents,
+    read_agent,
+    resolve_agent_plan,
+)
 from .assets import resolve_plugin_asset
 from .capabilities import (
     CapabilityAssembly,
@@ -41,6 +49,7 @@ from .ui import (
     PluginUIBlock,
     PluginUIRegion,
     PluginUISpec,
+    PluginWindowSpec,
     UIAssembly,
     assemble_ui,
     read_ui,
@@ -49,6 +58,12 @@ from .ui import (
 __all__ = [
     "MANIFEST_FILENAME",
     "SUPPORTED_SCOPES",
+    "AgentAssembly",
+    "AgentPlan",
+    "PluginAgentSpec",
+    "assemble_agents",
+    "read_agent",
+    "resolve_agent_plan",
     "CapabilityAssembly",
     "CapabilityError",
     "PluginCapabilities",
@@ -68,6 +83,7 @@ __all__ = [
     "PluginUIBlock",
     "PluginUIRegion",
     "PluginUISpec",
+    "PluginWindowSpec",
     "UIAssembly",
     "assemble_ui",
     "read_ui",

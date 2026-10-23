@@ -165,3 +165,26 @@ def test_a_plugin_without_capabilities_produces_empty_artifacts(tmp_path: Path) 
 
     assert artifacts.is_empty() is True
     assert artifacts.errors == []
+
+
+def test_agent_plan_is_resolved_from_enabled_plugins(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    make_plugin(
+        root,
+        "focus",
+        manifest={
+            "scope": "mode",
+            "agent": {"mode": "focus", "prompt": "./prompt.md"},
+        },
+        files={"prompt.md": "Focused."},
+    )
+    runtime = make_runtime(tmp_path, root)
+
+    plan = runtime.agent_plan(active_mode="focus:focus")
+
+    assert plan is not None
+    assert plan.source == "mode"
+    assert plan.agent.prompt_text == "Focused."
+
+    runtime.host.disable("focus")
+    assert runtime.agent_plan(active_mode="focus:focus") is None
