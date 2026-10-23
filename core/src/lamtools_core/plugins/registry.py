@@ -226,6 +226,15 @@ class PluginRegistry:
                         }
                     )
                     continue
+                # Migration bridge: a v2 plugin is assembled by the new plugin
+                # system. Skipping it here prevents both systems from
+                # contributing the same tools and hooks twice.
+                if str(manifest.raw.get("assembly") or "v1").strip().lower() == "v2":
+                    _logger.info(
+                        "[plugins:discover] skipping %s: owned by the v2 plugin system",
+                        manifest.name,
+                    )
+                    continue
                 # 平台分类不是本机的事时整块不装配：插件页没有它，它的工具/技能/
                 # 钩子/MCP/模式/挂件也不进本机。跳过不是错误（清单本身没问题），
                 # 所以只记日志、不进 discover_errors。

@@ -1192,6 +1192,8 @@ class CoreToolbox:
         self.plugin_tool_providers = list(plugin_tool_providers or [])
         self.plugin_tool_handlers = dict(plugin_tool_handlers or {})
         self.plugin_availability = plugin_availability
+        # v2 agent plan: when set, only these tools are visible and executable.
+        self.agent_tool_whitelist: set[str] | None = None
         self.plugin_mode_tool_sets = {
             str(mode): {str(name) for name in names}
             for mode, names in (plugin_mode_tool_sets or {}).items()
@@ -1483,6 +1485,13 @@ class CoreToolbox:
         for name, allowed_modes in self._exclusive_tool_modes.items():
             if effective_mode not in allowed_modes:
                 effective_exclude.add(name)
+        # v2 agent plan: a declared tool list is an exact whitelist.
+        if self.agent_tool_whitelist is not None:
+            effective_exclude |= {
+                spec.name
+                for spec in self.tool_specs()
+                if spec.name not in self.agent_tool_whitelist
+            }
         # Filter out MCP tools from non-activated servers
         # Activated servers have their full mcp__{server}__* tools exposed;
         # unactivated servers only expose the mcp_activate gateway tool.
@@ -1689,6 +1698,16 @@ class CoreToolbox:
         # ``prepare_call`` first.
         provider_root = self._call_work_root(call, self.work_root)
         self._dynamic_plugin_specs(work_root=provider_root)
+        if (
+            self.agent_tool_whitelist is not None
+            and call.name not in self.agent_tool_whitelist
+        ):
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                error=f"Tool '{call.name}' is not available in this agent",
+            )
         if call.name in self.manifest_hard_block_tools:
             return ToolResult(
                 call_id=call.id,

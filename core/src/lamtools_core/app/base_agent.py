@@ -513,9 +513,13 @@ class CoreBaseAgentKit:
         toolbox: CoreToolbox | None = None,
         verification_policy: VerificationPolicy | None = None,
         allow_access_outside_workdir: bool = False,
+        plugin_agents: list[Any] | None = None,
+        plugin_context_files: list[dict[str, Any]] | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.config = config or CoreBaseAgentConfig()
+        self.plugin_agents = list(plugin_agents or [])
+        self.plugin_context_files = list(plugin_context_files or [])
         self._delegation_strategy = load_effective_delegation_strategy(self.work_root)
         forbidden_subagent_tools = (
             {SUB_AGENT_TOOL_NAME, SUB_AGENT_MESSAGE_TOOL_NAME}
@@ -719,6 +723,26 @@ class CoreBaseAgentKit:
         def record(key: str, label: str, content: str) -> None:
             blocks.append(MovableBlock(key=key, label=label, content=content))
 
+        if self.plugin_agents:
+            from lamtools_core.plugin_system.agent import resolve_agent_plan
+
+            metadata = state.metadata if isinstance(state.metadata, dict) else {}
+            session_plugin = str(
+                metadata.get("owner_plugin") or metadata.get("desktop_plugin_id") or ""
+            ).strip() or None
+            plan = resolve_agent_plan(
+                self.plugin_agents,
+                active_mode=str(self.config.active_mode or ""),
+                session_plugin=session_plugin,
+            )
+            if plan is not None and plan.agent.prompt_text:
+                effective_instructions = plan.agent.prompt_text
+            if hasattr(self.toolbox, "agent_tool_whitelist"):
+                self.toolbox.agent_tool_whitelist = (
+                    set(plan.agent.tools)
+                    if plan is not None and plan.agent.tools is not None
+                    else None
+                )
         push(effective_instructions)
         record("instructions", "instructions", effective_instructions)
 
@@ -792,6 +816,30 @@ class CoreBaseAgentKit:
                 push(mcp_line, blank_before=True)
                 record("mcp_servers", "MCP servers", mcp_line)
         context_parts = [] if study_mode else self._build_project_context_parts()
+
+        if not study_mode and self.plugin_context_files:
+            from lamtools_core.prompt import PromptPart
+
+            for item in sorted(
+                self.plugin_context_files,
+                key=lambda entry: int(entry.get("order") or 50),
+            ):
+                path = Path(str(item.get("file") or ""))
+                if not path.is_file():
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                context_parts.append(
+                    PromptPart(
+                        key=f"plugin_context_{item.get('plugin')}_{path.stem}",
+                        kind="system",
+                        content=f"Instructions from: {path}\n{content.strip()}",
+                        priority=int(item.get("order") or 50),
+                        metadata={"source_name": path.name},
+                    )
+                )
         seen_keys: set[str] = set()
         for index, part in enumerate(context_parts):
             key = str(part.key or f"project_context_{index}")
@@ -1665,6 +1713,51 @@ def core_events_to_snapshot(events: list[CoreEvent], *, thread_id: str) -> dict[
     return reduce_run_item_events(thread_id, core_events_to_run_items(events, thread_id=thread_id))
 
 
+def _v2_hook_definitions(specs: Any, manifests: Any) -> list[Any]:
+    """Convert v2 hook declarations into the engine's HookDefinition shape."""
+    from lamtools_core.plugins.models import HookDefinition, HookHandler
+
+    roots = {item.name: item.root for item in manifests}
+    definitions: list[Any] = []
+    for index, spec in enumerate(specs):
+        plugin_root = roots.get(spec.plugin)
+        for handler_index, raw in enumerate(spec.handlers):
+            try:
+                timeout = float(raw.get("timeout") or 10)
+            except (TypeError, ValueError):
+                timeout = 10.0
+            handler = HookHandler(
+                type=str(raw.get("type") or "command"),
+                command=str(raw.get("command") or ""),
+                url=str(raw.get("url") or ""),
+                tool=str(raw.get("tool") or ""),
+                prompt=str(raw.get("prompt") or ""),
+                timeout=timeout,
+                required=bool(raw.get("required") or False),
+                status_message=str(
+                    raw.get("statusMessage") or raw.get("status_message") or ""
+                ),
+                raw=dict(raw),
+            )
+            definitions.append(
+                HookDefinition(
+                    id=f"v2:{spec.plugin}:{spec.event}:{index}:{handler_index}",
+                    event=spec.event,
+                    matcher=spec.matcher,
+                    source="plugin",
+                    source_name=spec.plugin,
+                    config_path=(plugin_root or Path()) / "plugin.json",
+                    plugin_name=spec.plugin,
+                    plugin_root=plugin_root,
+                    handler=handler,
+                    definition_hash="",
+                    trusted=True,
+                    status="trusted",
+                )
+            )
+    return definitions
+
+
 def assemble_core_agent_plugins(
     *,
     data_dir: str | Path,
@@ -1826,12 +1919,38 @@ def assemble_core_agent_plugins(
             # 短别名与 plugin_mode_tool_sets 同规则：唯一归属时才暴露。
             if len(plugin_mode_ids.get(mode.id, [])) == 1:
                 plugin_mode_exclusive_tools.setdefault(mode.id, set()).update(exclusive)
+    # ── v2 migration bridge ────────────────────────────────────────────────
+    # v2 plugins are skipped by the legacy registry. Their declarations are
+    # assembled here and merged into the same agent-facing artifacts.
+    from lamtools_core.plugin_system import PluginHost, PluginSystemRuntime
+
+    v2_host = PluginHost(
+        roots=roots,
+        state_path=Path(data_dir) / "plugin-system.jsonc",
+    )
+    v2_manifests = [item for item in v2_host.discover() if item.assembly == "v2"]
+    v2_runtime = PluginSystemRuntime(v2_host)
+    v2_artifacts = v2_runtime.assemble(manifests=v2_manifests)
+    v2_agents = v2_runtime.agents(manifests=v2_manifests).agents
+    v2_hooks = _v2_hook_definitions(v2_artifacts.hooks, v2_manifests)
+    plugin_runtime_specs.extend(v2_artifacts.tools)
+    for skill_root in v2_artifacts.skill_roots:
+        if skill_root not in skill_roots:
+            skill_roots.append(skill_root)
+    v2_mcp_files = [path for path in v2_artifacts.mcp_files if path.exists()]
+    plugin_context_files = [
+        {"plugin": item.plugin, "file": str(item.file), "order": item.order}
+        for item in v2_artifacts.context
+    ]
+    plugin_v2_commands = list(v2_artifacts.commands)
+
     hook_registry = HookRegistry(
         project_root=work_root,
         plugins=enabled_plugins,
         trust_store=HookTrustStore(Path(data_dir) / "hook_trust.json"),
     )
     hooks = hook_registry.load()
+    hooks.extend(v2_hooks)
     return {
         "plugins": enabled_plugins,
         "plugin_roots": roots,
@@ -1852,7 +1971,11 @@ def assemble_core_agent_plugins(
             for plugin in enabled_plugins
             for path in plugin.mcp_files
             if path.exists()
-        ],
+        ]
+        + v2_mcp_files,
+        "plugin_agents": v2_agents,
+        "plugin_context_files": plugin_context_files,
+        "plugin_v2_commands": plugin_v2_commands,
         "hook_engine": HookEngine(hooks) if hooks else None,
     }
 

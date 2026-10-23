@@ -667,6 +667,8 @@ def create_core_agent_operations(
                             request_local_late_context=request_local_late_context,
                         ),
                         toolbox=toolbox,
+                        plugin_agents=plugin_assembly.get("plugin_agents") or [],
+                        plugin_context_files=plugin_assembly.get("plugin_context_files") or [],
                         verification_policy=kit.verification_policy(),
                     ),
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
@@ -1654,6 +1656,8 @@ def create_core_agent_operations(
                                 request_local_late_context=request_local_late_context,
                             ),
                             toolbox=toolbox,
+                            plugin_agents=plugin_assembly.get("plugin_agents") or [],
+                            plugin_context_files=plugin_assembly.get("plugin_context_files") or [],
                             verification_policy=kit.verification_policy(),
                         ),
                         llm_client=runtime_model_provider,  # type: ignore[arg-type]
@@ -2084,6 +2088,8 @@ def create_core_agent_operations(
                             request_local_late_context=request_local_late_context,
                         ),
                         toolbox=toolbox,
+                        plugin_agents=plugin_assembly.get("plugin_agents") or [],
+                        plugin_context_files=plugin_assembly.get("plugin_context_files") or [],
                         verification_policy=kit.verification_policy(),
                     ),
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
