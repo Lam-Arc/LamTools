@@ -91,3 +91,17 @@ Evidence copy: `Sunday_0.3.19_x64-setup.exe` beside this report. Ignore files
 labelled `before-task-3b` or `superseded` when preparing publication.
 Final installer: **95,086,883 bytes**, SHA-256
 `82525b74246ab1128fdef0c419057ec0e6cf3c83b193cf61a69b5be937d4a7d7`.
+
+
+## Continuation 2026-10-15 — superseded candidate
+
+The scheduled 0.3.19 acceptance resumed after the development instance closed.
+The current SUNDAY_TASKS.md records a subsequent 0.3.20 release, successful
+installer acceptance and public update lifecycle verification. Those newer
+release results were not rerun in this continuation. The 0.3.19 candidate is
+superseded; its pending GUI/user acceptance must not be marked passed.
+The obsolete helper reinstall attempt was stopped before any main application
+or backend launch was observed. Its target was only E:\setuptest\0.3.19;
+that isolated installation may be incomplete and must be reinstalled before reuse.
+No public artifacts, user data or active development processes were changed.
+The stale resume-windows-release-acceptance heartbeat is now paused.

@@ -23,3 +23,17 @@ local mocks, preserving user data, and record user appearance/behavior acceptanc
 No paid model calls; no commit/tag/publication/deployment without approval.
 Publication stays NO-GO until Tauri acceptance is complete. Do not rerun passing
 Python/UI/benchmark/packaged checks unless source changes justify it.
+
+
+## Continuation 2026-10-15 — superseded candidate
+
+The scheduled 0.3.19 acceptance resumed after the development instance closed.
+The current SUNDAY_TASKS.md records a subsequent 0.3.20 release, successful
+installer acceptance and public update lifecycle verification. Those newer
+release results were not rerun in this continuation. The 0.3.19 candidate is
+superseded; its pending GUI/user acceptance must not be marked passed.
+The obsolete helper reinstall attempt was stopped before any main application
+or backend launch was observed. Its target was only E:\setuptest\0.3.19;
+that isolated installation may be incomplete and must be reinstalled before reuse.
+No public artifacts, user data or active development processes were changed.
+The stale resume-windows-release-acceptance heartbeat is now paused.
