@@ -4217,7 +4217,8 @@ class CoreLoopKernel:
                 id(message) for message in request_messages_before_compaction
                 if id(message) not in {id(m) for m in history}
             }
-            retained = _retained_history_messages(history, result.replacement_messages, request_only_ids)
+            # user:“去重构吧”+(历史只接收保留的原始消息；系统前缀不落入历史，完整快照单独追加一次)。
+            retained = _retained_history_messages(history, result.retained_messages, request_only_ids)
             history[:] = [*([result.summary_message] if result.summary_message is not None else []), *retained]
             # The view changed, but every source row was flushed before the
             # signal. New work continues as ordinary append-only checkpoints.

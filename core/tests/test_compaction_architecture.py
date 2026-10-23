@@ -350,3 +350,25 @@ async def test_child_result_arriving_during_compaction_is_not_erased():
     await kernel._persist_history_tail(state, history)
     restored = await _load_effective_compaction_history(store, state.session_id, state.metadata)
     assert [m.content for m in restored] == ['summary', 'retained', 'late child result']
+
+
+@pytest.mark.asyncio
+async def test_rebuilt_prefix_and_snapshot_do_not_leak_or_duplicate_in_history():
+    from lamtools_core.prompt.movable import MOVABLE_CONTEXT_METADATA_KEY
+    kernel, state, store = setup_case()
+    history = [ChatMessage(role='user', content='old', metadata={'history_seq': 1}),
+               ChatMessage(role='assistant', content='retained', metadata={'history_seq': 2})]
+    await store.append_history(state.session_id, [m.to_dict() for m in history])
+    kernel._live_history = history
+    kernel._persisted_len = 2
+    request = LLMRequest(model='mock-model', messages=[ChatMessage(role='system', content='prefix'), *history])
+    kernel.kit.rebuild_movable_system_context = lambda s: s.metadata.update(
+        {MOVABLE_CONTEXT_METADATA_KEY: {'system_prompt': 'new prefix'}})
+    kernel.kit.emit_runtime_context_snapshot = lambda s: ChatMessage(role='system', content='new snapshot',
+        metadata={'key': 'runtime_context_delta'})
+    with patch.object(ContextCompactionController, 'compact', AsyncMock(return_value=execution(request, history))):
+        await kernel._compact_request_if_needed(state, request, history=history)
+    assert [m.content for m in history] == ['summary', 'retained', 'new snapshot']
+    await kernel._save_checkpoint(state)
+    raw = await store.get_history(state.session_id)
+    assert [m['content'] for m in raw] == ['old', 'retained', 'new snapshot']
