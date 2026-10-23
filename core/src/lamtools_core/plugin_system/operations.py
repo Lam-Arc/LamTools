@@ -12,8 +12,15 @@ from urllib.parse import quote
 from lamtools_core.app import OperationCatalog, OperationRequest, OperationResult
 
 from .agent import assemble_agents, resolve_agent_plan
-from .capabilities import assemble_capabilities
+from .capabilities import CapabilityError, assemble_capabilities
+from .config_store import (
+    read_config_values,
+    read_schema,
+    validate_config,
+    write_config_values,
+)
 from .host import PluginHost
+from .settings import read_config
 from .ui import assemble_ui
 
 OWNER = "plugin-system"
@@ -256,6 +263,76 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
             payload={"updated": True, "name": updated.name, "root": str(updated)},
         )
 
+    async def config_get(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": "name is required"}
+            )
+        manifest = host.get(name)
+        if manifest is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"plugin '{name}' is not installed"},
+            )
+        try:
+            spec = read_config(manifest)
+        except CapabilityError as exc:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": exc.message}
+            )
+        return OperationResult(
+            name=request.name,
+            payload={
+                "name": name,
+                "config": read_config_values(manifest),
+                "schema": read_schema(manifest, spec),
+                "has_schema": spec.schema is not None,
+            },
+        )
+
+    async def config_update(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": "name is required"}
+            )
+        manifest = host.get(name)
+        if manifest is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"plugin '{name}' is not installed"},
+            )
+        values = payload.get("config")
+        if not isinstance(values, dict):
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "config must be an object"},
+            )
+        try:
+            spec = read_config(manifest)
+        except CapabilityError as exc:
+            return OperationResult(
+                name=request.name, status="error", payload={"error": exc.message}
+            )
+        problems = validate_config(read_schema(manifest, spec), values)
+        if problems:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "; ".join(problems)},
+            )
+        path = write_config_values(manifest, values)
+        return OperationResult(
+            name=request.name,
+            payload={"name": name, "saved": True, "path": str(path)},
+        )
+
     async def set_enabled(request: OperationRequest, enabled: bool) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
         if not name:
@@ -301,6 +378,8 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
     catalog.register("plugin.system.agent", get_agent, owner=OWNER)
     catalog.register("plugin.system.install", install_plugin, owner=OWNER)
     catalog.register("plugin.system.update", update_plugin, owner=OWNER)
+    catalog.register("plugin.system.config.get", config_get, owner=OWNER)
+    catalog.register("plugin.system.config.update", config_update, owner=OWNER)
     catalog.register("plugin.system.enable", enable_plugin, owner=OWNER)
     catalog.register("plugin.system.disable", disable_plugin, owner=OWNER)
     catalog.register("plugin.system.uninstall", uninstall_plugin, owner=OWNER)

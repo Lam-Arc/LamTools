@@ -26,6 +26,13 @@ from .capabilities import (
     assemble_capabilities,
     read_capabilities,
 )
+from .config_store import (
+    config_path,
+    read_config_values,
+    read_schema,
+    validate_config,
+    write_config_values,
+)
 from .engine import PluginEngine, check_engine, host_engine_info, read_engine
 from .host import PluginHost
 from .manifest import (
@@ -72,6 +79,11 @@ __all__ = [
     "check_engine",
     "host_engine_info",
     "read_engine",
+    "config_path",
+    "read_config_values",
+    "read_schema",
+    "validate_config",
+    "write_config_values",
     "CapabilityAssembly",
     "CapabilityError",
     "PluginCapabilities",
