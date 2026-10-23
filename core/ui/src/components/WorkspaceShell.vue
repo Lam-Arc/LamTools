@@ -101,7 +101,7 @@
 
     <!-- ===== Main Area ===== -->
     <main
-      class="workspace-main"
+      class="workspace-main" data-region="main"
       :class="{
         'workspace-main--no-composer': hideComposer,
         'workspace-main--no-header': hideMainHeader,
@@ -196,7 +196,7 @@
       v-if="showRightPanel"
       :id="rightDrawerId"
       ref="rightDrawerRef"
-      data-workspace-right-drawer
+      data-workspace-right-drawer data-region="right"
       class="workspace-drawer drawer-right optical-glass"
       :class="{ open: rightDrawerShown, pinned: rightPinned, 'drawer-retracting': rightRetracting }"
       @mouseleave="onRightDrawerLeave"

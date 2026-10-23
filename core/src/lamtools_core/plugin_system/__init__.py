@@ -5,6 +5,7 @@ enablement, uninstall, and the six declarative capabilities. UI contributions,
 agent takeover and module overrides land in later steps behind the same host.
 """
 
+from .assets import resolve_plugin_asset
 from .capabilities import (
     CapabilityAssembly,
     CapabilityError,
@@ -27,6 +28,16 @@ from .manifest import (
 )
 from .runtime import PluginSystemRuntime, RuntimeArtifacts
 from .state import PluginStateStore
+from .ui import (
+    PluginAssetSpec,
+    PluginUIAction,
+    PluginUIBlock,
+    PluginUIRegion,
+    PluginUISpec,
+    UIAssembly,
+    assemble_ui,
+    read_ui,
+)
 
 __all__ = [
     "MANIFEST_FILENAME",
@@ -40,6 +51,15 @@ __all__ = [
     "PluginHost",
     "PluginManifest",
     "PluginManifestError",
+    "PluginAssetSpec",
+    "PluginUIAction",
+    "PluginUIBlock",
+    "PluginUIRegion",
+    "PluginUISpec",
+    "UIAssembly",
+    "assemble_ui",
+    "read_ui",
+    "resolve_plugin_asset",
     "PluginSkillSpec",
     "PluginStateStore",
     "PluginSystemRuntime",

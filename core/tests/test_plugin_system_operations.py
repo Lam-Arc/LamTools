@@ -98,3 +98,77 @@ async def test_unknown_plugin_is_an_operation_error(tmp_path: Path) -> None:
 
     assert result.status == "error"
     assert "not installed" in result.payload["error"]
+
+
+async def test_ui_operation_returns_asset_urls_and_regions(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    plugin_dir = root / "ui"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "ui",
+                "version": "1.0.0",
+                "ui": {
+                    "styles": ["./style.css"],
+                    "regions": [
+                        {
+                            "region": "right",
+                            "order": 10,
+                            "blocks": [{"type": "text", "label": "A", "value": "B"}],
+                            "actions": [
+                                {"id": "go", "title": "Go", "operation": "ui.go"}
+                            ],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (plugin_dir / "style.css").write_text("body{}", encoding="utf-8")
+    host = PluginHost(roots=[root], state_path=tmp_path / "plugin-system.jsonc")
+    catalog = OperationCatalog()
+    register_plugin_system_operations(catalog, host)
+
+    result = await catalog.execute("plugin.system.ui", {})
+
+    payload = result.payload
+    assert payload["styles"] == [
+        {"plugin": "ui", "url": "/api/core/plugin-system/ui/assets/style.css"}
+    ]
+    region = payload["regions"][0]
+    assert region["region"] == "right"
+    assert region["order"] == 10
+    assert region["blocks"][0]["label"] == "A"
+    assert region["actions"][0]["operation"] == "ui.go"
+    assert payload["errors"] == []
+
+
+async def test_ui_operation_hides_a_disabled_plugin(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    plugin_dir = root / "ui"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "ui",
+                "version": "1.0.0",
+                "ui": {
+                    "styles": ["./style.css"],
+                    "regions": [{"region": "right", "blocks": []}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (plugin_dir / "style.css").write_text("body{}", encoding="utf-8")
+    host = PluginHost(roots=[root], state_path=tmp_path / "plugin-system.jsonc")
+    host.disable("ui")
+    catalog = OperationCatalog()
+    register_plugin_system_operations(catalog, host)
+
+    result = await catalog.execute("plugin.system.ui", {})
+
+    assert result.payload["styles"] == []
+    assert result.payload["regions"] == []

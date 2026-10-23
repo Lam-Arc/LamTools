@@ -298,7 +298,7 @@
         </div>
       </template>
       <div v-else-if="appRuntime.platform !== 'mobile' && activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
-      <div v-else-if="appRuntime.platform !== 'mobile' && activeSessionId" class="thread-header" data-session-header>
+      <div v-else-if="appRuntime.platform !== 'mobile' && activeSessionId" class="thread-header" data-session-header data-region="titlebar">
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
           :rename="renameActiveSession"
@@ -638,6 +638,10 @@
       <RuntimeChecklistCard v-if="!activePluginMode" :step-groups="stepGroups" />
     </template>
 
+    <template #composer-preamble>
+      <PluginSystemContributions :request-rpc="requestConfigOperation" region="composer" />
+    </template>
+
     <template #composer-queue-panel>
       <CoreQueuedInputTray
         :goal="activeGoal || undefined"
@@ -943,6 +947,7 @@ import { selectCoreSubAgentRun, type CoreSubAgentRef } from '../agents/subAgentP
 import { subAgentRunIdentity } from '../agents/subAgentDisplay'
 import TitleBar from '../components/TitleBar.vue'
 import PluginModeHost from '../components/PluginModeHost.vue'
+import PluginSystemContributions from '../components/PluginSystemContributions.vue'
 import { refreshPluginUIModes } from '../plugins/api'
 import { listModes } from '../plugins/registry'
 import {

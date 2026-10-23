@@ -5,12 +5,15 @@ user:“插件页能看到它”+先只暴露列表、启停和卸载，安装�
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from lamtools_core.app import OperationCatalog, OperationRequest, OperationResult
 
 from .capabilities import assemble_capabilities
 from .host import PluginHost
+from .ui import assemble_ui
 
 OWNER = "plugin-system"
 
@@ -61,6 +64,58 @@ def _plugin_payload(plugin: Any, assembly: Any = None) -> dict[str, Any]:
     return payload
 
 
+def _asset_url(plugin: str, root: Path | None, path: Path | None) -> str:
+    if root is None or path is None:
+        return ""
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        return ""
+    return (
+        f"/api/core/plugin-system/{quote(plugin, safe='')}"
+        f"/assets/{quote(relative, safe='/')}"
+    )
+
+
+def _block_payload(block: Any) -> dict[str, Any]:
+    payload = {
+        "type": block.type,
+        "label": block.label,
+        "value": block.value,
+        "text": block.text,
+        "state": block.state,
+        "items": list(block.items),
+        "detail": block.detail,
+    }
+    if block.max is not None:
+        payload["max"] = block.max
+    return payload
+
+
+def _action_payload(action: Any) -> dict[str, Any]:
+    return {
+        "id": action.id,
+        "title": action.title,
+        "operation": action.operation,
+        "input_schema": action.input_schema,
+        "dangerous": action.dangerous,
+        "mutates": action.mutates,
+    }
+
+
+def _region_payload(region: Any, roots: dict[str, Path]) -> dict[str, Any]:
+    return {
+        "plugin": region.plugin,
+        "region": region.region,
+        "order": region.order,
+        "mode": region.mode,
+        "replace": region.replace,
+        "blocks": [_block_payload(block) for block in region.blocks],
+        "actions": [_action_payload(action) for action in region.actions],
+        "entry_url": _asset_url(region.plugin, roots.get(region.plugin), region.entry),
+    }
+
+
 def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHost) -> None:
     """Register the preview surface used by the plugin page."""
 
@@ -74,6 +129,27 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                 "plugins": [_plugin_payload(plugin, assembly) for plugin in plugins],
                 "errors": list(host.errors),
                 "capability_errors": list(assembly.errors),
+            },
+        )
+
+    async def list_ui(request: OperationRequest) -> OperationResult:
+        del request
+        manifests = host.discover()
+        assembly = assemble_ui(manifests)
+        roots = {manifest.name: manifest.root for manifest in manifests}
+        return OperationResult(
+            name="plugin.system.ui",
+            payload={
+                "styles": [
+                    {"plugin": asset.plugin, "url": _asset_url(asset.plugin, asset.root, asset.path)}
+                    for asset in assembly.styles
+                ],
+                "scripts": [
+                    {"plugin": asset.plugin, "url": _asset_url(asset.plugin, asset.root, asset.path)}
+                    for asset in assembly.scripts
+                ],
+                "regions": [_region_payload(region, roots) for region in assembly.regions],
+                "errors": list(assembly.errors),
             },
         )
 
@@ -118,6 +194,7 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
         )
 
     catalog.register("plugin.system.list", list_plugins, owner=OWNER)
+    catalog.register("plugin.system.ui", list_ui, owner=OWNER)
     catalog.register("plugin.system.enable", enable_plugin, owner=OWNER)
     catalog.register("plugin.system.disable", disable_plugin, owner=OWNER)
     catalog.register("plugin.system.uninstall", uninstall_plugin, owner=OWNER)

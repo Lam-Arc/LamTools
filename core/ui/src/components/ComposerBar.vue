@@ -1,5 +1,5 @@
 <template>
-  <div class="composer-root" :class="'composer-root--' + variant">
+  <div class="composer-root" data-region="composer" :class="'composer-root--' + variant">
     <div v-if="$slots['queue-panel']" class="composer-queue-panel-host">
       <slot name="queue-panel" />
     </div>

@@ -2512,6 +2512,7 @@ def create_core_agent_operations(
         state_path=Path(paths.data_dir) / "plugin-system.jsonc",
     )
     register_plugin_system_operations(catalog, plugin_system_host)
+    catalog.plugin_system_host = plugin_system_host
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = getattr(plugin_operations, "plugin_runtimes", [])
     catalog.plugin_registry = getattr(plugin_operations, "plugin_registry", None)

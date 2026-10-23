@@ -624,6 +624,7 @@ def create_core_agent_http_app(
             observer_status=observer_supervisor.status,
         )
         app_state["operations"] = agent_operations
+        app_state["plugin_system_host"] = getattr(agent_operations, "plugin_system_host", None)
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
         # Reap turns left durably "running"/"waiting"/"interrupting" by an
@@ -891,6 +892,22 @@ def create_core_agent_http_app(
         # same loopback route. Do not let WebView2 pin stale HTML/JS in its
         # memory cache across host reloads.
         return FileResponse(target, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/core/plugin-system/{plugin_name}/assets/{asset_path:path}")
+    async def plugin_system_asset(plugin_name: str, asset_path: str) -> FileResponse:
+        host = app_state.get("plugin_system_host")
+        if host is None:
+            raise HTTPException(status_code=404, detail="Plugin system is not ready")
+        from lamtools_core.plugin_system.assets import media_type_for, resolve_plugin_asset
+
+        target = resolve_plugin_asset(host, plugin_name, asset_path)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Plugin asset not found")
+        return FileResponse(
+            target,
+            media_type=media_type_for(target),
+            headers={"Cache-Control": "no-store"},
+        )
 
     def attachment_store() -> CoreAttachmentStore:
         store = app_state.get("attachment_store")

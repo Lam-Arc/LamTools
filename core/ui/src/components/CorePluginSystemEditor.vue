@@ -60,6 +60,8 @@
       <summary>{{ t("加载错误 {0}", { 0: loadErrors.length }) }}</summary>
       <p v-for="item in loadErrors" :key="item.path">{{ item.name }}：{{ item.error }}</p>
     </details>
+
+    <PluginSystemContributions :request-rpc="props.requestRpc" region="settings" />
   </article>
 </template>
 
@@ -67,6 +69,7 @@
 import { onMounted, ref } from 'vue'
 
 import { t } from '../i18n/index'
+import PluginSystemContributions from './PluginSystemContributions.vue'
 
 interface PluginSystemCapabilities {
   tools: string[]

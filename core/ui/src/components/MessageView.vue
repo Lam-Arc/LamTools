@@ -1,7 +1,7 @@
 <template>
   <!-- inheritAttrs: false — 模板根节点是 div + Teleport 双根，自动继承会把 class/attrs 丢掉；
        显式把 $attrs 绑到消息根节点，保证 class（如 sub-line-chat）能落到 DOM 上 -->
-  <div ref="rootEl" class="message-view" v-bind="$attrs" @contextmenu="onContextMenu">
+  <div ref="rootEl" class="message-view" data-region="message" v-bind="$attrs" @contextmenu="onContextMenu">
       <!-- Per-message override: product provides full rendering -->
       <slot
         v-if="$slots['message-product']"
@@ -16,7 +16,7 @@
       />
 
       <!-- User message -->
-      <div v-else-if="msg.role === 'user'" class="user-row">
+      <div v-else-if="msg.role === 'user'" class="user-row" data-role="user">
         <div class="user-stack" :class="{ 'user-stack--editing': editingMessageId === msg.id }">
           <div v-if="editingMessageId === msg.id" class="user-bubble user-bubble--editing">
             <AutoTextarea
@@ -126,7 +126,7 @@
       </div>
 
       <!-- Assistant message: answer stream + process stream -->
-      <div v-else class="assistant-row">
+      <div v-else class="assistant-row" data-role="assistant">
         <div
           class="assistant-message"
           data-context-selection-scope
@@ -268,7 +268,7 @@
                       >
                         <div
                           v-if="part.partType === 'reasoning'"
-                          :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]"
+                          data-part="reasoning" :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]"
                           @mouseenter="cancelPartAutoCollapse(part.id)"
                           @mouseleave="schedulePartAutoCollapse(part.id)"
                         >
@@ -300,7 +300,7 @@
                         </div>
                         <div
                           v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
-                          class="process-step process-step--tool"
+                          class="process-step process-step--tool" data-part="tool"
                           :class="['process-step--' + part.status, { 'process-step--sub-agent': isSubAgentToolRow(part) }]"
                           @mouseenter="cancelPartAutoCollapse(part.id)"
                           @mouseleave="schedulePartAutoCollapse(part.id)"
@@ -452,7 +452,7 @@
                 <template v-else-if="group.kind === 'process' && group.part">
                   <div
                     v-if="group.part.partType === 'reasoning'"
-                    :class="['process-step', 'process-step--reasoning', 'process-step--' + group.part.status]"
+                    data-part="reasoning" :class="['process-step', 'process-step--reasoning', 'process-step--' + group.part.status]"
                     @mouseenter="cancelPartAutoCollapse(group.part.id)"
                     @mouseleave="schedulePartAutoCollapse(group.part.id)"
                   >
@@ -485,7 +485,7 @@
 
                   <div
                     v-else-if="(group.part.partType === 'tool_call' || group.part.partType === 'tool_result') && !isControlTool(group.part)"
-                    class="process-step process-step--tool"
+                    class="process-step process-step--tool" data-part="tool"
                     :class="['process-step--' + group.part.status, { 'process-step--sub-agent': isSubAgentToolRow(group.part) }]"
                     @mouseenter="cancelPartAutoCollapse(group.part.id)"
                     @mouseleave="schedulePartAutoCollapse(group.part.id)"
@@ -613,7 +613,7 @@
                   </div>
 
                   <div
-                    v-else-if="group.part.partType === 'model_text' && group.part.content"
+                    v-else-if="group.part.partType === 'model_text' && group.part.content" data-part="conclusion"
                   >
                     <MarkdownRenderer
                       class="part-text-content"
@@ -846,7 +846,7 @@
             </div>
             </Transition>
 
-            <div v-if="answerContent(msg)" class="assistant-answer">
+            <div v-if="answerContent(msg)" class="assistant-answer" data-part="conclusion">
               <slot name="assistant-content" :content="answerContent(msg)" :live="isLiveMessage(msg)">
                 <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" />
               </slot>
@@ -855,7 +855,7 @@
 
           <!-- Fallback: no parts → render flat content -->
           <slot v-else name="assistant-content" :content="answerContent(msg)">
-            <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" />
+            <MarkdownRenderer class="assistant-answer" data-part="conclusion" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" />
           </slot>
 
           <!-- 本轮 artifact 产出统一挂到消息结尾；父级抑制避免子代理嵌套重复。 -->

@@ -1,7 +1,7 @@
 <template>
   <aside
     :id="props.id"
-    data-workspace-left-drawer
+    data-workspace-left-drawer data-region="left"
     class="workspace-drawer drawer-left sidebar-root"
     :class="{ open: props.open, pinned: props.pinned }"
     :inert="!props.open || undefined"
