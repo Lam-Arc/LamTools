@@ -4,6 +4,9 @@ This module deliberately contains no planning, model calls, persistence, or
 token-fitting logic.  The implementation modules depend on these small
 contracts so the public compaction API remains stable while the pipeline is
 split into focused components.
+
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
 """
 
 from __future__ import annotations

@@ -1,4 +1,8 @@
-"""LLM-backed context summarization and streaming support."""
+"""LLM-backed context summarization and streaming support.
+
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ from lamtools_core.llm.retry import (
     stream_with_retry,
 )
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
+from lamtools_core.context_compaction_budget import calibrated_tokens
 
 from .formatting import truncate_text_to_tokens
 from .models import (
@@ -223,7 +228,8 @@ async def _summarize_compaction_chunk(
             timeout=timeout,
             metadata=dict(request_metadata or {}),
         )
-        request_tokens = estimate_message_tokens([message.to_dict() for message in summary_request.messages])
+        # user:“去重构吧”+(摘要请求也遵守同一估算倍率，分段后不再换口径)。
+        request_tokens = calibrated_tokens(estimate_message_tokens([message.to_dict() for message in summary_request.messages]))
         if input_limit_tokens > 0 and request_tokens > input_limit_tokens:
             raise ContextCompactionError(
                 f"Context compaction request exceeds model input limit: {request_tokens} > {input_limit_tokens} tokens"

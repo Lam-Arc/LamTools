@@ -1,6 +1,6 @@
 
 import { t } from '../i18n/index'
-import type { CoreMessage, MessagePart } from '../types'
+import type { CoreMessage } from '../types'
 import { assistantSegmentTurnId } from '../appServer/selectors'
 
 export const CORE_CONTEXT_COMPACTION_TRIGGER_RATIO = 0.8
@@ -30,18 +30,20 @@ export function buildCoreResourceSummary(
   let current = -1
   let max = firstNumber(modelContextWindow)
   let threshold = -1
-  let contextCompacted = false
   // The provider's own count for the last request it actually received.  The
   // local estimator only approximates it — measured on one live request:
   // 75,969 estimated vs 119,365 reported — so the provider number is preferred
   // whenever it is the newest thing we know.
   let providerPromptTokens = -1
-  for (const record of contextRecords) {
+  let authoritativeSource: 'estimate' | 'provider' | null = null
+  // user:“右侧的那个卡片实时显示的应该是 context window 的数值”
+  // +只消费后端最新占用快照，不从更旧的模型/压缩周期捞回已失效的 usage。
+  for (const record of contextRecords.slice(-1)) {
     current = latestNumber(current,
-      record.estimated_prompt_tokens,
-      record.estimatedPromptTokens,
       record.context_tokens,
       record.contextTokens,
+      record.estimated_prompt_tokens,
+      record.estimatedPromptTokens,
     )
     providerPromptTokens = latestNumber(providerPromptTokens,
       record.context_usage_prompt_tokens,
@@ -54,41 +56,15 @@ export function buildCoreResourceSummary(
       record.trigger_tokens,
       record.triggerTokens,
     )
-    contextCompacted = record.context_compacted === true || record.contextCompacted === true
-  }
-  // A completed compaction describes the request that follows it, so its number
-  // may stand in for the live value only until the session moves on.  It used to
-  // override the context size for the rest of the thread, which froze the
-  // indicator at the post-compaction figure — a live session read 17k while the
-  // real context had grown back past 119k.  Track where each record sits in the
-  // transcript and let the newest one win.
-  let lastMetricsIndex = -1
-  let lastProviderIndex = -1
-  let lastCompactionIndex = -1
-  let lastCompactionTokens = -1
-  messages.forEach((message, index) => {
-    const metadata = message.metadata as Record<string, unknown> | undefined
-    // Mirrors collectMetricRecords: the processMetrics alias only carries
-    // provider usage when no dedicated contextMetrics field is present.
-    if (metadata?.contextMetrics || metadata?.processMetrics) lastMetricsIndex = index
-    if (metadata?.usageMetrics || (!metadata?.contextMetrics && metadata?.processMetrics)) {
-      lastProviderIndex = index
-    }
-    const compactedTokens = latestCompletedCompactionTokens(message.parts)
-    if (compactedTokens >= 0) {
-      lastCompactionIndex = index
-      lastCompactionTokens = compactedTokens
-    }
-  })
-  let contextSource: 'estimate' | 'provider' | 'compacted' = 'estimate'
-  if (lastCompactionTokens >= 0) {
-    contextCompacted = true
-    if (lastCompactionIndex >= Math.max(lastMetricsIndex, lastProviderIndex)) {
-      current = lastCompactionTokens
-      contextSource = 'compacted'
+    if (firstNumber(record.context_tokens, record.contextTokens) >= 0) {
+      authoritativeSource = record.context_measurement_source === 'usage' ? 'provider' : 'estimate'
     }
   }
-  if (contextSource !== 'compacted' && providerPromptTokens >= 0) {
+  // user:“有真实 usage 时使用真实 usage，无真实 usage 使用兜底估算值”
+  // +卡片和压缩触发使用同一个 context window 数值；压缩不是一次性状态，
+  // 历史压缩记录不会覆盖当前值。
+  let contextSource: 'estimate' | 'provider' = authoritativeSource ?? 'estimate'
+  if (authoritativeSource === null && providerPromptTokens > 0) {
     current = providerPromptTokens
     contextSource = 'provider'
   }
@@ -147,13 +123,9 @@ export function buildCoreResourceSummary(
   const hasProviderUsage = hasProviderRecord && (hasCalls || hasInput || hasOutput || hasCache || usageReported)
   if (!hasContext && !hasProviderUsage) return null
 
-  // Say where the number comes from: the provider's count for the last request
-  // it received, the local estimate, or the post-compaction figure.
-  const contextSourceLabel = contextSource === 'provider'
-    ? t("实测")
-    : contextSource === 'compacted'
-      ? t("压缩后")
-      : t("估算")
+  // Say where the number comes from: the provider's real usage, or the
+  // fallback estimate.
+  const contextSourceLabel = contextSource === 'provider' ? t("实测") : t("估算")
 
   return {
     currentPct,
@@ -162,7 +134,7 @@ export function buildCoreResourceSummary(
       ? `${formatTokenCompact(current)} / ${formatTokenCompact(max)} · ${contextSourceLabel}`
       : t("暂无上下文"),
     percentLabel: hasContext ? `${currentPct}%` : '--',
-    statusLabel: contextCompacted ? t("已压缩") : (hasContext && currentPct >= thresholdPct ? t("需压缩") : t("正常")),
+    statusLabel: hasContext && currentPct >= thresholdPct ? t("需压缩") : t("正常"),
     currentRatio,
     thresholdRatio,
     hasContext,
@@ -217,6 +189,7 @@ function collectMetricRecords(
 ): Array<Record<string, unknown>> {
   const records: Array<Record<string, unknown>> = []
   const countedTurns = new Set<string>()
+  const contextTurnIndexes = new Map<string, number>()
   const countedCalls = new Set<string>()
   for (const message of messages) {
     const metadata = message.metadata
@@ -251,25 +224,19 @@ function collectMetricRecords(
     if (!metrics) continue
     const turnId = String(metadata?.sourcePartId || (typeof message.id === 'string' ? assistantSegmentTurnId(message.id) : ''))
     if (turnId) {
+      // user:“右侧的那个卡片实时显示的应该是 context window 的数值”
+      // +同一回复的后续片段携带更新快照时替换旧值，费用统计仍按调用去重。
+      if (kind === 'contextMetrics') {
+        const existingIndex = contextTurnIndexes.get(turnId)
+        if (existingIndex !== undefined) { records[existingIndex] = metrics; continue }
+        contextTurnIndexes.set(turnId, records.length)
+      }
       if (countedTurns.has(turnId)) continue
       countedTurns.add(turnId)
     }
     records.push(metrics)
   }
   return records
-}
-
-function latestCompletedCompactionTokens(parts?: MessagePart[]): number {
-  let tokens = -1
-  for (const part of parts || []) {
-    if (part.partType !== 'compaction' || part.status !== 'completed') continue
-    const metadata = part.metadata
-    if (!metadata || typeof metadata !== 'object') continue
-    const status = String(metadata.compaction_status ?? metadata.compactionStatus ?? '')
-    if (status !== 'compacted') continue
-    tokens = latestNumber(tokens, metadata.after_tokens, metadata.afterTokens)
-  }
-  return tokens
 }
 
 function firstNumber(...values: unknown[]): number {

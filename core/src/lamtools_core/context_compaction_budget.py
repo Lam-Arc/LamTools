@@ -4,12 +4,16 @@ The public policy may be expressed as ratios, while compaction algorithms
 should operate on concrete token counts.  This module is intentionally small
 so the policy-to-budget conversion has one well-defined home before the rest
 of the compaction implementation is split into separate components.
+
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from math import ceil
 from typing import Any
 
 from lamtools_core.llm import ChatMessage
@@ -17,6 +21,9 @@ from lamtools_core.tokens import estimate_message_tokens
 
 
 FAST_ESTIMATE_SAFETY_FACTOR = 8.0
+#: user:“本地估算数值直接改比现在的乘 2.5 倍，不要质疑 直接去做”
+#: +本地估算长期偏低，压缩测量统一乘 2.5；供应商 usage 锚点不受影响。
+LOCAL_ESTIMATE_SCALE = 2.5
 DEFAULT_SUMMARY_OUTPUT_TOKENS = 4_096
 DEFAULT_SUMMARY_PROTOCOL_TOKENS = 1_024
 DEFAULT_SUMMARY_SAFETY_RATIO = 0.03
@@ -231,6 +238,24 @@ class TokenMeasurement:
 MessageTokenEstimator = Callable[[list[ChatMessage]], int]
 
 
+def calibrated_tokens(tokens: int) -> int:
+    # user:“本地估算数值直接改比现在的乘 2.5 倍”+(所有预算检查只在原始估算边界乘一次)。
+    return ceil(max(0, int(tokens)) * LOCAL_ESTIMATE_SCALE)
+
+
+def context_measurement(
+    metrics: dict[str, Any], *, model_id: str, estimate: Callable[[], int],
+) -> TokenMeasurement:
+    # user:“主要是要保证优先使用真实 usage”+(允许一拍延迟，不与估算取最大值)。
+    try:
+        usage = int(metrics.get("context_usage_prompt_tokens") or 0)
+    except (TypeError, ValueError):
+        usage = 0
+    if str(metrics.get("model_id") or "") in {"", model_id} and usage > 0:
+        return TokenMeasurement(tokens=usage, exact=True, source="usage")
+    return TokenMeasurement(tokens=calibrated_tokens(estimate()), exact=True, source="estimate")
+
+
 def measure_for_compaction_trigger(
     messages: Sequence[ChatMessage],
     *,
@@ -260,11 +285,11 @@ def measure_for_compaction_trigger(
             fast=False,
         )
     )
-    fast_tokens = max(0, int(fast_fn(values)))
+    fast_tokens = calibrated_tokens(fast_fn(values))
     if fast_tokens * fast_safety_factor < trigger_tokens:
         return TokenMeasurement(tokens=fast_tokens, exact=False, source="fast_estimate")
     return TokenMeasurement(
-        tokens=max(0, int(exact_fn(values))),
+        tokens=calibrated_tokens(exact_fn(values)),
         exact=True,
         source="exact_estimate",
     )
@@ -277,6 +302,9 @@ __all__ = [
     "DEFAULT_SUMMARY_SAFETY_RATIO",
     "DEFAULT_RETAINED_STEPS",
     "FAST_ESTIMATE_SAFETY_FACTOR",
+    "LOCAL_ESTIMATE_SCALE",
+    "calibrated_tokens",
+    "context_measurement",
     "MAX_RETAINED_STEPS",
     "MAX_RETAINED_USER_MESSAGES",
     "SummaryTokenBudget",

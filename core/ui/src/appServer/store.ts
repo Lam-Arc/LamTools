@@ -1940,6 +1940,8 @@ const SUM_USAGE_FIELDS = [
 ] as const
 
 const CONTEXT_METRIC_FIELDS = new Set([
+  // user:“右侧的那个卡片实时显示的应该是 context window 的数值”+(后端同时给出数值与来源)。
+  'context_measurement_source',
   'estimated_prompt_tokens',
   'estimatedPromptTokens',
   // The provider's own count for the last request it received; carried next to

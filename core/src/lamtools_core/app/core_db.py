@@ -1083,49 +1083,65 @@ class SqlAlchemyRuntimeStateStore:
         if not messages:
             return
 
-        async def write(db) -> None:
-            max_seq = int(
-                (
-                    await db.execute(
-                        select(func.coalesce(func.max(CoreHistoryEntry.seq), 0)).where(
-                            CoreHistoryEntry.thread_id == session_id
-                        )
-                    )
-                ).scalar_one()
-            )
-            # Lazy migration: if incremental table is empty but blob has data,
-            # migrate the blob first.
-            if max_seq == 0:
-                row = await db.get(CoreRuntimeSession, session_id)
-                if row is not None and isinstance(row.history_json, list) and row.history_json:
-                    for i, msg in enumerate(row.history_json, 1):
-                        if isinstance(msg, dict) and isinstance(msg.get("metadata"), dict):
-                            msg["metadata"]["history_seq"] = i
-                        db.add(
-                            CoreHistoryEntry(
-                                thread_id=session_id,
-                                seq=i,
-                                revision=i,
-                                message_json=_json_safe(msg),
-                            )
-                        )
-                    max_seq = len(row.history_json)
-            for msg in messages:
-                max_seq += 1
-                # Tag each row with its own seq so context compaction can anchor
-                # the resume boundary at the first retained message.
-                if isinstance(msg, dict) and isinstance(msg.get("metadata"), dict):
-                    msg["metadata"]["history_seq"] = max_seq
-                db.add(
-                    CoreHistoryEntry(
-                        thread_id=session_id,
-                        seq=max_seq,
-                        revision=max_seq,
-                        message_json=_json_safe(msg),
+        await self.write_coordinator.run(
+            lambda db: self._append_history_rows(db, session_id, messages)
+        )
+
+    async def _append_history_rows(self, db: Any, session_id: str, messages: list[dict[str, Any]]) -> None:
+        # user:“去重构吧”+(普通消息与压缩快照共用追加实现，摘要提交时加入同一事务)。
+        max_seq = int(
+            (
+                await db.execute(
+                    select(func.coalesce(func.max(CoreHistoryEntry.seq), 0)).where(
+                        CoreHistoryEntry.thread_id == session_id
                     )
                 )
+            ).scalar_one()
+        )
+        # Lazy migration: if incremental table is empty but blob has data,
+        # migrate the blob first.
+        if max_seq == 0:
+            row = await db.get(CoreRuntimeSession, session_id)
+            if row is not None and isinstance(row.history_json, list) and row.history_json:
+                for i, msg in enumerate(row.history_json, 1):
+                    if isinstance(msg, dict):
+                        if not isinstance(msg.get("metadata"), dict):
+                            msg["metadata"] = {}
+                        msg["metadata"]["history_seq"] = i
+                    db.add(
+                        CoreHistoryEntry(
+                            thread_id=session_id,
+                            seq=i,
+                            revision=i,
+                            message_json=_json_safe(msg),
+                        )
+                    )
+                max_seq = len(row.history_json)
+                # user:“去重构吧”+(旧记录已完整迁入追加表，空尾部不能再回退到旧副本)。
+                row.history_json = []
+        for msg in messages:
+            max_seq += 1
+            # Tag each row with its own seq so context compaction can anchor
+            # the resume boundary at the first retained message.
+            # user:“去重构吧”+(实际分配的序号返回调用者，派生视图不猜测消息位置)。
+            if isinstance(msg, dict):
+                if not isinstance(msg.get("metadata"), dict):
+                    msg["metadata"] = {}
+                msg.setdefault("metadata", {})["history_seq"] = max_seq
+            db.add(
+                CoreHistoryEntry(
+                    thread_id=session_id,
+                    seq=max_seq,
+                    revision=max_seq,
+                    message_json=_json_safe(msg),
+                )
+            )
 
-        await self.write_coordinator.run(write)
+
+    async def save_compaction(self, state: RuntimeState, messages: list[dict[str, Any]]) -> None:
+        """Commit a context view and its new baseline in one transaction."""
+        change_id = await self._save(state, history=None, append_messages=messages)
+        await self._publish_sync_change(change_id)
 
     async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         """Replace the entire history (used after compaction / truncation).
@@ -1264,7 +1280,10 @@ class SqlAlchemyRuntimeStateStore:
                 return await self.get(row.thread_id)
         return None
 
-    async def _save(self, state: RuntimeState, *, history: list[dict[str, Any]] | None) -> str | None:
+    async def _save(
+        self, state: RuntimeState, *, history: list[dict[str, Any]] | None,
+        append_messages: list[dict[str, Any]] | None = None,
+    ) -> str | None:
         # Claim this run as the session's owner (and refresh the heartbeat) so a
         # concurrent process can tell a live writer from a crashed one.
         if isinstance(state.metadata, dict):
@@ -1288,6 +1307,8 @@ class SqlAlchemyRuntimeStateStore:
             )
 
         async def write(db):
+            if append_messages:
+                await self._append_history_rows(db, state.session_id, append_messages)
             row = await db.get(CoreRuntimeSession, state.session_id)
             if row is None:
                 if expected_revision not in {None, 0}:

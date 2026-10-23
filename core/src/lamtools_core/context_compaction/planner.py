@@ -1,4 +1,8 @@
-"""Deterministic context planning and summary-request chunking."""
+"""Deterministic context planning and summary-request chunking.
+
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ from lamtools_core.context_compaction_budget import (
 )
 from lamtools_core.llm import TAIL_SYSTEM_MESSAGE_MARKER, ChatMessage
 from lamtools_core.tokens import estimate_message_tokens
+from lamtools_core.context_compaction_budget import calibrated_tokens
 
 from .formatting import truncate_text_to_tokens
 from .models import (
@@ -119,9 +124,9 @@ def _select_layout(
         retained_steps=resolved_steps,
     )
     estimator = estimate_tokens or (
-        lambda values: estimate_message_tokens(
+        lambda values: calibrated_tokens(estimate_message_tokens(
             [message.to_dict() for message in values]
-        )
+        ))
     )
     fixed_tokens = estimator(prefix_messages)
     retained_budget = max(
@@ -276,9 +281,10 @@ def _compaction_request_tokens(
     existing_summary: str = "",
     prefix_messages: list[ChatMessage] | None = None,
 ) -> int:
-    return estimate_message_tokens(
+    # user:“去重构吧”+(摘要分段与最终预算使用相同的保守估算)。
+    return calibrated_tokens(estimate_message_tokens(
         [message.to_dict() for message in [*(prefix_messages or []), *messages, _compaction_instruction(existing_summary)]]
-    )
+    ))
 
 
 def _split_compaction_messages(

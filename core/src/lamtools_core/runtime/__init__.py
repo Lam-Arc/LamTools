@@ -209,11 +209,19 @@ class InMemoryRuntimeStateStore:
         if not messages:
             return
         existing = self._history.get(session_id, [])
-        existing.extend(deepcopy(msg) for msg in messages)
+        # user:“去重构吧”+(与 SQLite 一样返回原始记录的稳定序号，压缩不再重编号)。
+        for index, msg in enumerate(messages, len(existing) + 1):
+            msg.setdefault("metadata", {})["history_seq"] = index
+            existing.append(deepcopy(msg))
         self._history[session_id] = existing
 
     async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         self._history[session_id] = [deepcopy(msg) for msg in messages]
+
+    async def save_compaction(self, state: RuntimeState, messages: list[dict[str, Any]]) -> None:
+        # user:“去重构吧”+(内存存储与 SQLite 使用相同的摘要和基线提交边界)。
+        await self.append_history(state.session_id, messages)
+        await self.save(state)
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         for state in self._states.values():

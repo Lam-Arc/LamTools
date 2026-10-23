@@ -34,15 +34,14 @@ from lamtools_core.context_compaction import (
     ContextCompactionResult,
     RECENT_USER_MESSAGES_METADATA_KEY,
     USAGE_ANCHOR_METADATA_KEY,
-    USAGE_ANCHOR_SOURCE,
-    build_usage_anchor,
-    describe_request,
     extract_recent_user_messages,
-    measure_with_usage_anchor,
-    request_overhead_digest,
 )
+from lamtools_core.context_compaction.state import load_compaction_history, persist_compaction
 from lamtools_core.context_compaction_budget import (
+    calibrated_tokens,
+    context_measurement,
     TokenBudget,
+    TokenMeasurement,
     load_retained_steps,
     resolve_compaction_budget,
     resolve_retained_steps,
@@ -76,7 +75,7 @@ from lamtools_core.prompt.movable import (
     MOVABLE_CONTEXT_METADATA_KEY,
     is_movable_context_notice,
 )
-from lamtools_core.runtime.context_delta import is_runtime_context_delta
+from lamtools_core.runtime.context_delta import is_runtime_context_delta, RUNTIME_CONTEXT_METADATA_KEY
 from lamtools_core.app.tool_freeze import reset_session_tool_freeze
 from lamtools_core.runtime.goal_continuation import (
     GOAL_CONTINUATION_KEY,
@@ -762,79 +761,14 @@ class CoreLoopKernel:
                 state = RuntimeState(session_id=session_id or _new_run_id())
             _logger.info("[kernel:_run] state loaded sid=%s existing=%s", state.session_id, loaded is not None)
 
-        # Apply persisted compaction boundary: load only messages after the
-        # compaction boundary and prepend the summary so build_model_request
-        # sees [summary, *recent_messages] without touching the original history.
-        compaction_meta = state.metadata.get("context_compaction") if isinstance(state.metadata, dict) else None
-        summary_text = str(compaction_meta.get("summary") or "") if isinstance(compaction_meta, dict) else ""
-        if isinstance(compaction_meta, dict) and summary_text.strip():
-            # A summary exists whenever compaction happened; the boundary seq
-            # is the first retained row minus one and may legitimately be 0.
-            try:
-                boundary = max(0, int(compaction_meta.get("summary_seq") or 0))
-            except (TypeError, ValueError):
-                boundary = 0
-            compacted_seqs = _history_seq_set(
-                compaction_meta.get("compacted_history_seqs")
+        # user:“去重构吧”+(自动与手动共用摘要视图加载，原始消息不随压缩删除)。
+        history = (
+            _repair_incomplete_tool_history(
+                await load_compaction_history(self.state_store, state.session_id, state.metadata),
+                session_id=state.session_id,
             )
-            if compacted_seqs:
-                # Manual compaction keeps durable rows in place. Filter only
-                # rows folded into the summary so retained Steps interspersed
-                # with user rows remain visible.
-                max_seq = await self._history_max_seq(state.session_id)
-                compacted_through_max = (
-                    max_seq is not None
-                    and max_seq > 0
-                    and boundary == max_seq
-                    and compacted_seqs == set(range(1, max_seq + 1))
-                )
-                if compacted_through_max:
-                    # A zero-tail manual compaction has no durable rows to
-                    # retain. Read the incremental tail at the boundary;
-                    # unlike a generic full-history fallback this remains
-                    # empty on stores that honor ``after_seq``.
-                    history = await self._load_history(
-                        state.session_id,
-                        after_seq=boundary,
-                    )
-                    if len(history) == max_seq:
-                        # Legacy blob stores may ignore ``after_seq`` and
-                        # return every row; slice that shape without a second
-                        # full read.
-                        history = history[boundary:]
-                else:
-                    full_history = await self._load_history(state.session_id)
-                    history = [
-                        message
-                        for message in full_history
-                        if _message_history_seq(message) not in compacted_seqs
-                    ]
-            elif boundary > 0:
-                max_seq = await self._history_max_seq(state.session_id)
-                history = await self._load_history(state.session_id, after_seq=boundary)
-                # Legacy blob stores ignore ``after_seq`` and return all rows;
-                # detect that shape before applying the boundary slice.
-                if max_seq == 0 and history:
-                    history = history[boundary:]
-                # An empty result at the current max is valid. Only recover
-                # the full history when rows are known to exist beyond it.
-                elif not history and max_seq is None:
-                    history = await self._load_history(state.session_id)
-                elif not history and max_seq != boundary:
-                    history = await self._load_history(state.session_id)
-            else:
-                history = await self._load_history(state.session_id)
-            recent_users = _summary_recent_user_messages(compaction_meta, summary_text)
-            history.insert(0, ChatMessage(
-                role="system",
-                content=summary_text,
-                metadata={
-                    "key": "context_compaction_summary",
-                    RECENT_USER_MESSAGES_METADATA_KEY: recent_users,
-                },
-            ))
-        else:
-            history = await self._load_history(state.session_id)
+            if isinstance(self.state_store, RuntimeCheckpointStore) else []
+        )
         _logger.info("[kernel:_run] history loaded sid=%s len=%d", state.session_id, len(history))
         # Hand the live list to the external-cancel path: history is only
         # written to the store at loop exit, so a run cut short by Stop must
@@ -1126,17 +1060,9 @@ class CoreLoopKernel:
                     run_id=state.run_id,
                     tags=["usage"],
                 ))
-                # Real provider usage replaces local estimation for the next
-                # trigger check: it measures the request we just sent, so as
-                # long as the prompt only grows at its tail the next compaction
-                # decision is anchored on provider truth instead of a local
-                # character estimate that can undercount badly.
-                self._record_usage_anchor(
-                    state,
-                    request,
-                    response,
-                    sent_message_count=sent_message_count,
-                )
+                # user:“有真实 usage 时使用真实 usage，无真实 usage 使用兜底估算值”
+                # +把上一次成功响应的 prompt tokens 记下来，下一次触发直接用它。
+                self._record_context_usage(state, request, response)
                 if response.thinking and not streamed_response:
                     await self._emit_stream_part(
                         state,
@@ -2526,10 +2452,24 @@ class CoreLoopKernel:
             if not self._is_request_local_summary(message)
         ]
         if pending:
-            await self.state_store.append_history(
-                state.session_id, [m.to_dict() for m in pending]
-            )
+            await self._append_durable_messages(state, pending)
         self._persisted_len = len(history)
+
+    async def _append_durable_messages(self, state: RuntimeState, messages: list[ChatMessage]) -> None:
+        # user:“去重构吧”+(原始消息持续追加，使用存储实际分配的序号锚定摘要视图)。
+        rows = [message.to_dict() for message in messages]
+        await self.state_store.append_history(state.session_id, rows)
+        # Production stores return assigned sequences through each row. The
+        # high-water fallback keeps legacy test/plugin stores compatible.
+        maximum = None
+        if any(not row.get("metadata", {}).get("history_seq") for row in rows):
+            maximum = await self._history_max_seq(state.session_id)
+        for index, (message, row) in enumerate(zip(messages, rows)):
+            seq = row.get("metadata", {}).get("history_seq")
+            if not isinstance(seq, int) and maximum is not None:
+                seq = maximum - len(rows) + index + 1
+            if isinstance(seq, int) and seq > 0:
+                message.metadata["history_seq"] = seq
 
     async def _persist_history_tail(
         self, state: RuntimeState, history: list[ChatMessage]
@@ -2561,9 +2501,7 @@ class CoreLoopKernel:
         """
         if isinstance(self.state_store, RuntimeCheckpointStore):
             if messages:
-                await self.state_store.append_history(
-                    state.session_id, [m.to_dict() for m in messages]
-                )
+                await self._append_durable_messages(state, messages)
             await self.state_store.save(state)
             return
         await self.state_store.save(state)
@@ -4006,50 +3944,36 @@ class CoreLoopKernel:
             )
         return total
 
-    def _record_usage_anchor(
+    def _record_context_usage(
         self,
         state: RuntimeState,
         request: LLMRequest,
         response: LLMResponse,
-        *,
-        sent_message_count: int,
     ) -> None:
-        """Store real provider prompt usage as the next trigger's anchor.
+        """Record the provider's real prompt count for the next trigger.
 
-        The anchor is trusted only while the request keeps the shape it had when
-        it was sent — same model, same tool/format overhead, and an unchanged
-        provider-visible prefix.  ``measure_with_usage_anchor`` re-verifies all
-        three before use, so a stale anchor degrades to local estimation instead
-        of reporting a number that no longer describes the prompt.
+        The value describes the request that was just sent; the 20% headroom
+        below the window absorbs the one-request lag. No prefix/anchor matching
+        is needed: real usage wins when present, estimate is the fallback.
         """
+        # user:“有真实 usage 时使用真实 usage，无真实 usage 使用兜底估算值”
+        # +只保留最新响应的测量；缺失时立即失效旧值，允许下一次检查使用估算。
+        metrics = state.metadata.setdefault("runtime_context_metrics", {})
         usage = getattr(response, "usage", None)
-        if usage is None:
-            return
-        # Publish the provider's own count of the request it just answered,
-        # before any anchor bookkeeping.  The anchored-prefix check below only
-        # decides whether the compaction *trigger* may reuse the number, and it
-        # rarely can (the system prompt shifts between steps: 9 of 115
-        # measurements on one live session).  The resource panel needs the
-        # provider's count regardless — the local estimate undercounts it badly
-        # (measured 75,969 estimated vs 119,365 reported for one request).
-        reported_prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        metrics = state.metadata.get("runtime_context_metrics")
-        if reported_prompt_tokens > 0 and isinstance(metrics, dict):
-            metrics["context_usage_prompt_tokens"] = reported_prompt_tokens
-        if sent_message_count <= 0 or sent_message_count != len(request.messages):
-            # The request is no longer the one the provider measured (or was
-            # empty), so its count cannot be anchored to this state.
-            return
-        anchor = build_usage_anchor(
-            describe_request(request),
-            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
-            cached_tokens=int(getattr(usage, "cached_tokens", 0) or 0),
-            cache_creation_tokens=int(getattr(usage, "cache_creation_tokens", 0) or 0),
-            model_id=str(request.model or ""),
+        try:
+            tokens = max(0, int(getattr(usage, "prompt_tokens", 0) or 0))
+        except (TypeError, ValueError):
+            tokens = 0
+        metrics.pop("context_usage_prompt_tokens", None)
+        if tokens > 0:
+            metrics["context_usage_prompt_tokens"] = tokens
+        metrics["model_id"] = str(request.model or "")
+        measurement = context_measurement(
+            metrics, model_id=str(request.model or ""),
+            estimate=lambda: self._estimate_request_tokens(request, fast=False),
         )
-        if anchor is None:
-            return
-        state.metadata[USAGE_ANCHOR_METADATA_KEY] = anchor
+        metrics.update(context_tokens=measurement.tokens, estimated_prompt_tokens=measurement.tokens,
+                       context_measurement_source=measurement.source)
 
     async def _persist_runtime_context_metrics(
         self,
@@ -4080,7 +4004,11 @@ class CoreLoopKernel:
         *,
         history: list[ChatMessage] | None = None,
     ) -> None:
-        """Structurally summarize old context when the request nears budget."""
+        """Structurally summarize old context when the request nears budget.
+
+        Compaction is not a one-time state: a session may compact any number of
+        times; there is no permanent "already compacted" status.
+        """
         previous_metrics = state.metadata.get("runtime_context_metrics")
         metrics = dict(previous_metrics) if isinstance(previous_metrics, dict) else {}
         previous_model = str(metrics.get("model_id") or "").strip()
@@ -4115,9 +4043,11 @@ class CoreLoopKernel:
             else load_retained_steps()
         )
 
+        reserved_snapshot: ChatMessage | None = None
+
         def estimate_request_messages(messages: list[ChatMessage], *, fast: bool) -> int:
             original_messages = request.messages
-            request.messages = messages
+            request.messages = [*messages, *([reserved_snapshot] if reserved_snapshot is not None else [])]
             try:
                 return self._estimate_request_tokens(request, fast=fast)
             finally:
@@ -4156,64 +4086,21 @@ class CoreLoopKernel:
                 response_index=None,
             ),
         )
-        # Real provider usage from the previous response measures the request we
-        # actually sent, so it wins over local estimation whenever it still
-        # describes a prefix of this request.  Estimation stays the fallback for
-        # the first call of a session, model switches, and after compaction.
-        usage_anchor = state.metadata.get(USAGE_ANCHOR_METADATA_KEY)
-        measurement = measure_with_usage_anchor(
-            request.messages,
-            usage_anchor,
-            trigger_tokens=trigger_tokens,
-            model_id=current_model,
-            overhead_digest=request_overhead_digest(request),
+        measurement = context_measurement(
+            metrics, model_id=current_model,
+            estimate=lambda: self._estimate_request_tokens(request, fast=False),
         )
-        if measurement is None:
-            measurement = compaction_controller.measure(
-                request.messages,
-                trigger_tokens=trigger_tokens,
-            )
-        # The local estimator undercounts the request.  On one live session it
-        # read 388,564 where the provider reported 590,541, and it counts every
-        # picture as 85 tokens regardless of the picture's real size.  The
-        # provider's count of the last request is a floor for this one, because
-        # history only grows inside a turn.  Triggering on the larger of the two
-        # can only fire compaction earlier; firing later is what let requests
-        # run past the context limit while the estimate still looked safe.
-        provider_count = 0
-        if isinstance(usage_anchor, dict) and str(usage_anchor.get("model_id") or "") == current_model:
-            try:
-                provider_count = max(0, int(usage_anchor.get("prompt_tokens") or 0))
-            except (TypeError, ValueError):
-                provider_count = 0
-        if provider_count > measurement.tokens:
-            # Hand the floored measurement to the controller as well, so its own
-            # trigger check sees the provider count, not the optimistic estimate.
-            measurement = replace(measurement, tokens=provider_count, exact=True)
-            metrics["context_measurement_source"] = "provider_count_floor"
-        else:
-            metrics["context_measurement_source"] = measurement.resolved_source
         before_tokens = measurement.tokens
-        # The provider's own count of the last request it received.  Publish it
-        # whenever an anchor exists, not only when the trigger could reuse it:
-        # the anchored-prefix check is about trusting a number for a compaction
-        # *decision*, while this metric only reports what the provider said.
-        # The system prompt changes between steps, so the anchor is reusable
-        # rarely (9 of 115 measurements on one live session) — gating the metric
-        # on reuse left the UI showing the local estimate, which undercounts the
-        # real request badly (measured 75,969 vs 119,365 for one request).
-        anchor_prompt_tokens = 0
-        if isinstance(usage_anchor, dict):
-            try:
-                anchor_prompt_tokens = max(0, int(usage_anchor.get("prompt_tokens") or 0))
-            except (TypeError, ValueError):
-                anchor_prompt_tokens = 0
-        if anchor_prompt_tokens > 0:
-            metrics["context_usage_prompt_tokens"] = anchor_prompt_tokens
-        else:
-            # No provider number yet (first call of a session, or a provider that
-            # reports no usage): the panel must fall back to the estimate.
+        metrics["context_measurement_source"] = measurement.source
+        metrics["context_tokens"] = before_tokens
+        if measurement.source != "usage":
             metrics.pop("context_usage_prompt_tokens", None)
+        # Keep raw request-only overhead separate from calibrated occupancy;
+        # manual /compact must never subtract different units to infer it.
+        history_tokens = estimate_message_tokens([m.to_dict() for m in (history or [])])
+        metrics["context_request_overhead_tokens"] = max(
+            0, self._estimate_request_tokens(request, fast=False) - history_tokens,
+        )
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window
         request.metadata["total_context_window_tokens"] = total_window
@@ -4244,19 +4131,26 @@ class CoreLoopKernel:
         await self._persist_runtime_context_metrics(state, history=history)
         if before_tokens < trigger_tokens:
             return
-        # A single run may execute several model/tool steps. Once its context
-        # has been compacted, keep the summary available to following steps
-        # without immediately compacting that same summary again; a new run
-        # gets a fresh opportunity after durable history is reloaded.
-        if state.metadata.get("_context_compaction_run_id") == state.run_id:
-            return
-
+        # user:“压缩不是一次性状态”+(每次超过阈值都可以产生压缩信号，不按 run_id 禁用)。
         before_messages = len(request.messages)
         request_messages_before_compaction = list(request.messages)
         allow_previous = request.metadata.get("allow_previous_model_compaction") is not False
         # user:“压缩时把最新的给它（相当于把后面的所有差异都给合并，修回成一个正版）”+通知不再参与压缩，压缩后顶部会直接换成最新内容。
         # user:“但是用压缩后自动追加用户消息里面剔除”+目标续跑自动追加的提醒不进入压缩输入。
         compaction_messages = compaction_input_messages(request.messages)
+        # Prepare new system/runtime baselines on an isolated state. Budget
+        # their final representation before fitting; cancellation changes none
+        # of the live baseline or durable summary.
+        candidate_state = copy.deepcopy(state)
+        rebuild_movable = getattr(self.kit, "rebuild_movable_system_context", None)
+        if callable(rebuild_movable):
+            rebuild_movable(candidate_state)
+            epoch = candidate_state.metadata.get(MOVABLE_CONTEXT_METADATA_KEY)
+            if isinstance(epoch, dict) and isinstance(epoch.get("system_prompt"), str) and compaction_messages and compaction_messages[0].role == "system":
+                compaction_messages[0] = replace(compaction_messages[0], content=epoch["system_prompt"])
+        emit_snapshot = getattr(self.kit, "emit_runtime_context_snapshot", None)
+        if callable(emit_snapshot):
+            reserved_snapshot = emit_snapshot(candidate_state)
         execution = await compaction_controller.compact(
             compaction_messages,
             budget=budget,
@@ -4267,7 +4161,11 @@ class CoreLoopKernel:
             model_switched=model_switched,
             allow_previous_model=allow_previous,
             trigger="model_switch" if model_switched else "auto",
-            measurement=measurement,
+            measurement=TokenMeasurement(
+                tokens=before_tokens,
+                exact=True,
+                source=str(metrics.get("context_measurement_source") or "estimate"),
+            ),
             retained_steps=retained_steps,
         )
         result = execution.result
@@ -4288,163 +4186,56 @@ class CoreLoopKernel:
             await self._persist_runtime_context_metrics(state, history=history)
             return
 
-        request.messages[:] = result.replacement_messages
-        # Do NOT overwrite persisted history.  Store the compaction summary +
-        # boundary seq in state.metadata so the next _run loads only the
-        # retained span after the boundary and prepends the summary.  The
-        # boundary is the row seq of the first retained message MINUS one —
-        # never the history tail, otherwise the retained span (c) is dropped
-        # on the next run and context degrades to a summary-only ghost.
-        compaction_boundary = 0
-        retained_messages = result.retained_messages
-        if retained_messages:
-            first_retained = retained_messages[0]
-            first_seq = (
-                first_retained.metadata.get("history_seq")
-                if isinstance(first_retained.metadata, dict)
-                else None
+        # user:“去重构吧”+(所有追加内容先进入最终预算检查，合格后才提交摘要与基线)。
+        replacement = list(result.replacement_messages)
+        if callable(rebuild_movable) and replacement and compaction_messages and replacement[0].role == "system":
+            replacement[0] = compaction_messages[0]
+        if reserved_snapshot is not None:
+            replacement.append(reserved_snapshot)
+        final_request = replace(request, messages=replacement)
+        final_tokens = calibrated_tokens(self._estimate_request_tokens(final_request, fast=False))
+        if final_tokens > limit_tokens:
+            raise ContextCompactionError(
+                f"Final compacted context exceeds target: {final_tokens} > {limit_tokens} tokens"
             )
-            if isinstance(first_seq, int) and first_seq > 0:
-                compaction_boundary = first_seq - 1
-                # Resume marker travels with the first retained message so any
-                # later full history rewrite (truncation / loop exit) can
-                # re-anchor summary_seq after rows are renumbered.
-                first_retained.metadata["lam_compaction_resume"] = True
-            else:
-                # No known row seq (e.g. a message synthesized by tool-history
-                # repair): fall back to loading everything so nothing is lost.
-                compaction_boundary = 0
-        state.metadata["context_compaction"] = {
-            "summary": result.summary,
-            "summary_seq": compaction_boundary,
-            "compacted_count": result.compacted_count,
-            "retained_count": result.retained_count,
-            "before_tokens": result.before_tokens,
-            "after_tokens": result.after_tokens,
-            RECENT_USER_MESSAGES_METADATA_KEY: list(result.recent_user_messages),
-        }
-        state.metadata["_context_compaction_run_id"] = state.run_id
-        # The replacement view is not the anchored prefix: the summary message
-        # now leads the request, so the provider count for the old request must
-        # not survive as if it still described this one.
-        state.metadata.pop(USAGE_ANCHOR_METADATA_KEY, None)
-        # Mutate the in-memory history list so the rest of this run sees the
-        # compacted view, but do NOT persist the replacement over the original
-        # and do NOT let the summary message leak into history rows.
-        if history is not None:
-            history_message_ids = {id(message) for message in history}
-            if any(id(message) in history_message_ids for message in request_messages_before_compaction):
-                request_only_ids = {
-                    id(message)
-                    for message in request_messages_before_compaction
-                    if id(message) not in history_message_ids
-                }
-                compacted_history = _retained_history_messages(
-                    history,
-                    result.replacement_messages,
-                    request_only_ids,
-                )
-                summary_history = next(
-                    (
-                        message
-                        for message in result.replacement_messages
-                        if message.metadata.get("key") == "context_compaction_summary"
-                    ),
-                    result.summary_message,
-                )
-                # Keep the summary in this run's in-memory context so a later
-                # model/tool step receives the same compressed view. The
-                # history checkpoint filters this request-local row before
-                # persistence.
-                history[:] = [
-                    *([summary_history] if summary_history is not None else []),
-                    *compacted_history,
-                ]
-                # The in-memory list no longer aligns with the store rows
-                # positionally: invalidate the incremental counter so the
-                # tail persist falls back to one atomic full replace.
-                self._persisted_len = None
-        # user:“每次压缩的时候重建为新态”+压缩已经让前缀失效，用最新块内容重建压缩周期；
-        # 此前的尾部通知已从压缩输入排除，不再保留。
-        rebuild_movable = getattr(self.kit, "rebuild_movable_system_context", None)
-        replaced_system_message: ChatMessage | None = None
-        if callable(rebuild_movable):
-            rebuild_movable(state)
-            # The replacement above still carries the pre-compaction system
-            # prompt. The epoch has just been rebuilt from the latest blocks,
-            # so this request must use that authoritative version too.
-            epoch = state.metadata.get(MOVABLE_CONTEXT_METADATA_KEY)
-            if (
-                isinstance(epoch, dict)
-                and isinstance(epoch.get("system_prompt"), str)
-                and request.messages
-                and request.messages[0].role == "system"
-            ):
-                replaced_system_message = request.messages[0]
-                request.messages[0] = ChatMessage(
-                    role="system",
-                    content=epoch["system_prompt"],
-                )
-        # user:“等待下一次压缩或者新会话再重建”+压缩是工具数组重新冻结的时刻。
-        reset_session_tool_freeze(state.session_id)
-        # user:“压缩时把最新的给它”+压缩把历史里的增量清掉了，补一张完整便签作为新基线。
-        emit_runtime_snapshot = getattr(
-            self.kit, "emit_runtime_context_snapshot", None
+        result = replace(result, replacement_messages=replacement, after_tokens=final_tokens)
+        snapshot_row = _historical_tail_copy(reserved_snapshot) if reserved_snapshot is not None else None
+        await persist_compaction(
+            self.state_store, candidate_state, result=result, execution=execution,
+            source_messages=request_messages_before_compaction,
+            budget=budget, retained_steps=retained_steps, before_messages=before_messages,
+            total_context_window_tokens=total_window, reserved_output_tokens=reserved_output_tokens,
+            trigger="model_switch" if model_switched else "auto",
+            extra_messages=[snapshot_row] if snapshot_row is not None else [],
         )
-        if callable(emit_runtime_snapshot):
-            snapshot = emit_runtime_snapshot(state)
-            if snapshot is not None:
-                if history is not None:
-                    history.append(_historical_tail_copy(snapshot))
-                request.messages.append(snapshot)
-        # The fit above used the old system prefix. If the rebuilt prompt is so
-        # large that the request no longer fits the hard window, keep the old
-        # frozen prompt for this one request rather than sending an over-limit
-        # request; the next step still starts from the rebuilt epoch.
-        if replaced_system_message is not None:
-            try:
-                estimated = self._estimate_request_tokens(request, fast=True)
-            except Exception:  # noqa: BLE001 — a guard must not break compaction
-                estimated = 0
-            if estimated > window:
-                request.messages[0] = replaced_system_message
-                _logger.warning(
-                    "[kernel:compaction] rebuilt system prompt exceeds window: "
-                    "estimated=%d window=%d sid=%s; keeping the previous prompt "
-                    "for this request",
-                    estimated,
-                    window,
-                    state.session_id,
-                )
-        request.metadata["estimated_prompt_tokens"] = result.after_tokens
-
-        request.metadata["context_compacted"] = True
-        request.metadata["context_compaction_mode"] = "structured_summary"
-        request.metadata["context_compaction_strategy"] = compaction_strategy
-        request.metadata["context_compaction_execution_model"] = execution_model
-        request.metadata["context_tokens_before_compaction"] = result.before_tokens
-        request.metadata["context_tokens_after_compaction"] = result.after_tokens
-        request.metadata["context_messages_before_compaction"] = before_messages
-        request.metadata["context_messages_after_compaction"] = len(request.messages)
-        state.metadata["runtime_context_metrics"] = {
-            **metrics,
-            "estimated_prompt_tokens": result.after_tokens,
-            "context_window_tokens": window,
-            "total_context_window_tokens": total_window,
-            "reserved_output_tokens": reserved_output_tokens,
-            "context_compaction_trigger_tokens": trigger_tokens,
-            "context_compaction_retained_steps": retained_steps,
-            "context_compacted": True,
-            "context_compaction_mode": "structured_summary",
-            "context_tokens_before_compaction": result.before_tokens,
-            "context_tokens_after_compaction": result.after_tokens,
-            "context_messages_before_compaction": before_messages,
-            "context_messages_after_compaction": len(request.messages),
-            "context_compaction_strategy": compaction_strategy,
-            "context_compaction_execution_model": execution_model,
-            "model_id": current_model,
-        }
-        await self._persist_runtime_context_metrics(state, history=None)
+        state.metadata = candidate_state.metadata
+        if hasattr(candidate_state, "_runtime_store_revision"):
+            setattr(state, "_runtime_store_revision", candidate_state._runtime_store_revision)
+        request.messages[:] = replacement
+        if history is not None:
+            request_only_ids = {
+                id(message) for message in request_messages_before_compaction
+                if id(message) not in {id(m) for m in history}
+            }
+            retained = _retained_history_messages(history, result.replacement_messages, request_only_ids)
+            history[:] = [*([result.summary_message] if result.summary_message is not None else []), *retained]
+            # The view changed, but every source row was flushed before the
+            # signal. New work continues as ordinary append-only checkpoints.
+            if snapshot_row is not None:
+                history.append(snapshot_row)
+            self._persisted_len = len(history)
+        reset_session_tool_freeze(state.session_id)
+        request.metadata.update(
+            estimated_prompt_tokens=final_tokens, context_compacted=True,
+            context_compaction_mode="structured_summary",
+            context_compaction_strategy=compaction_strategy,
+            context_compaction_execution_model=execution_model,
+            context_tokens_before_compaction=result.before_tokens,
+            context_tokens_after_compaction=final_tokens,
+            context_messages_before_compaction=before_messages,
+            context_messages_after_compaction=len(request.messages),
+        )
+        await self._persist_runtime_context_metrics(state, history=history)
         await self._emit_context_compacted(
             state,
             removed=result.compacted_count,

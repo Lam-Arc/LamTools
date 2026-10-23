@@ -1,5 +1,8 @@
 """Usage-anchored prompt measurement for the compaction trigger.
 
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
+
 Automatic compaction is a pre-sampling decision: it must be made *before* a
 request is sent, while provider token counts only arrive *after* it.  Local
 estimators close that gap, but their error can be large (CJK/emoji-heavy text,

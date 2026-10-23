@@ -14,11 +14,8 @@ import pytest
 from lamtools_core.context_compaction import (
     COMPACTION_PROMPT,
     USAGE_ANCHOR_METADATA_KEY,
-    USAGE_ANCHOR_SOURCE,
     CompactionExecution,
     ContextCompactionResult,
-    build_usage_anchor,
-    describe_request,
 )
 from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink
 from lamtools_core.app.base_agent import core_events_to_run_items
@@ -3800,7 +3797,7 @@ class TestKernelContextCompaction:
             metadata={
                 "runtime_context_metrics": {
                     "model_id": "previous-model",
-                    "context_window_tokens": 8_000,
+                    "context_window_tokens": 12_000,
                 }
             },
         )
@@ -3858,7 +3855,7 @@ class TestKernelContextCompaction:
             metadata={
                 "runtime_context_metrics": {
                     "model_id": "previous-model",
-                    "context_window_tokens": 12_000,
+                    "context_window_tokens": 20_000,
                 }
             },
         )
@@ -4367,7 +4364,7 @@ class TestKernelContextCompaction:
                 # Keep the second request below the new exact trigger so this
                 # test isolates resume-boundary loading rather than triggering
                 # a second, legitimate compaction.
-                context_window_tokens=3_000,
+                context_window_tokens=6_000,
                 compact_trigger_ratio=0.8,
                 compact_limit_ratio=0.6,
             ),
@@ -4606,13 +4603,8 @@ class TestKernelContextCompaction:
         assert text.count("[Compacted Context]") == 1
 
     @pytest.mark.asyncio
-    async def test_provider_usage_anchor_drives_trigger_over_local_estimate(self):
-        """Real provider usage compacts context the local estimate calls small.
-
-        The estimator cannot see what the provider actually counted, so a
-        prompt near the window may still measure as a few hundred tokens.  The
-        anchor from the previous response is the only signal that can catch it.
-        """
+    async def test_provider_usage_drives_trigger_over_local_estimate(self):
+        """Real provider usage compacts context the local estimate calls small."""
 
         def build_request() -> LLMRequest:
             return LLMRequest(
@@ -4627,11 +4619,14 @@ class TestKernelContextCompaction:
                 model="mock-model",
             )
 
-        async def run_decision(*, anchor: dict | None) -> tuple[RuntimeState, CollectingEventSink]:
+        async def run_decision(*, usage: int | None) -> tuple[RuntimeState, CollectingEventSink]:
             request = build_request()
             state = RuntimeState(session_id="usage-anchor-session")
-            if anchor is not None:
-                state.metadata[USAGE_ANCHOR_METADATA_KEY] = anchor
+            if usage is not None:
+                state.metadata["runtime_context_metrics"] = {
+                    "model_id": "mock-model",
+                    "context_usage_prompt_tokens": usage,
+                }
             sink = CollectingEventSink()
             kernel = _make_kernel(
                 MockRuntimeKit(steps=[MockKitStep(decision="done")]),
@@ -4647,35 +4642,28 @@ class TestKernelContextCompaction:
             await kernel._compact_request_if_needed(state, request, history=None)
             return state, sink
 
-        anchor = build_usage_anchor(
-            describe_request(build_request()),
-            prompt_tokens=900_000,
-            model_id="mock-model",
-        )
-        assert anchor is not None
-
-        anchored_state, anchored_sink = await run_decision(anchor=anchor)
+        anchored_state, anchored_sink = await run_decision(usage=900_000)
         assert [
             event.name for event in anchored_sink.events if event.name == "runtime.context_compacted"
         ] == ["runtime.context_compacted"]
         anchored_metrics = anchored_state.metadata["runtime_context_metrics"]
-        assert anchored_metrics["context_measurement_source"] == USAGE_ANCHOR_SOURCE
+        assert anchored_metrics["context_measurement_source"] == "usage"
         assert anchored_metrics["context_usage_prompt_tokens"] == 900_000
         assert anchored_metrics["context_compacted"] is True
 
         # Same messages, same policy, no provider usage: the local estimate sees
         # a small prompt and leaves the context alone.
-        unanchored_state, unanchored_sink = await run_decision(anchor=None)
+        unanchored_state, unanchored_sink = await run_decision(usage=None)
         assert not [
             event for event in unanchored_sink.events if event.name == "runtime.context_compacted"
         ]
         unanchored_metrics = unanchored_state.metadata["runtime_context_metrics"]
-        assert unanchored_metrics["context_measurement_source"] != USAGE_ANCHOR_SOURCE
+        assert unanchored_metrics["context_measurement_source"] == "estimate"
         assert "context_usage_prompt_tokens" not in unanchored_metrics
         assert unanchored_metrics["context_compacted"] is False
 
     @pytest.mark.asyncio
-    async def test_recorded_provider_usage_anchors_the_next_run(self):
+    async def test_recorded_provider_usage_drives_the_next_run(self):
         """Usage from one run measures the next run's request before it is sent."""
         session_id = "usage-anchor-two-runs"
 
@@ -4728,8 +4716,8 @@ class TestKernelContextCompaction:
         assert first.decision == "done"
         first_state = await store.get(session_id)
         assert first_state is not None
-        anchor = first_state.metadata[USAGE_ANCHOR_METADATA_KEY]
-        assert anchor["prompt_tokens"] == 900_000
+        first_metrics = first_state.metadata["runtime_context_metrics"]
+        assert first_metrics["context_usage_prompt_tokens"] == 900_000
         # The near-window count did not retroactively compact the first request:
         # compaction is a pre-sampling decision and run one was already small.
         assert not [
@@ -4747,7 +4735,7 @@ class TestKernelContextCompaction:
         second_state = await store.get(session_id)
         assert second_state is not None
         metrics = second_state.metadata["runtime_context_metrics"]
-        assert metrics["context_measurement_source"] == USAGE_ANCHOR_SOURCE
+        assert metrics["context_measurement_source"] == "usage"
         assert metrics["context_compacted"] is True
 
     @pytest.mark.asyncio
@@ -4760,11 +4748,12 @@ class TestKernelContextCompaction:
         ]
         request = LLMRequest(messages=messages, model="mock-model")
         state = RuntimeState(session_id="anchor-reset-session")
-        state.metadata[USAGE_ANCHOR_METADATA_KEY] = build_usage_anchor(
-            describe_request(request),
-            prompt_tokens=900_000,
-            model_id="mock-model",
-        )
+        state.metadata["runtime_context_metrics"] = {
+            "model_id": "mock-model",
+            "context_usage_prompt_tokens": 900_000,
+        }
+        # Legacy anchor from an older session must still be cleaned up.
+        state.metadata[USAGE_ANCHOR_METADATA_KEY] = {"prompt_tokens": 900_000}
         kernel = _make_kernel(
             MockRuntimeKit(steps=[MockKitStep(decision="done")]),
             llm_client=CapturingLLMClient(),

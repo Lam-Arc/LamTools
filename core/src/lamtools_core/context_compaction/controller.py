@@ -1,4 +1,8 @@
-"""Orchestration for the context-compaction pipeline."""
+"""Orchestration for the context-compaction pipeline.
+
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ from lamtools_core.context_compaction_budget import (
     TokenMeasurement,
     load_retained_steps,
     measure_for_compaction_trigger,
+    calibrated_tokens,
     resolve_retained_steps,
 )
 from lamtools_core.llm import ChatMessage, LLMClient
@@ -157,8 +162,13 @@ class ContextCompactor:
             request_metadata=dict(self._request_metadata),
             on_delta=self._on_delta,
             on_event=self._on_event,
-            estimate_tokens=self._estimate_tokens,
-            estimate_exact_tokens=self._estimate_exact_tokens,
+            # user:“去重构吧”+(外部估算回调统一输入原始值，进入压缩预算时只乘一次)。
+            estimate_tokens=(
+                lambda values: calibrated_tokens(self._estimate_tokens(values))
+            ) if self._estimate_tokens is not None else None,
+            estimate_exact_tokens=(
+                lambda values: calibrated_tokens(self._estimate_exact_tokens(values))
+            ) if self._estimate_exact_tokens is not None else None,
             summary_budget=self._summary_budget,
             model_retries=self._model_retries,
             model_timeout_seconds=self._model_timeout_seconds,
@@ -253,15 +263,10 @@ class ContextCompactionController:
         trigger_tokens: int,
     ) -> TokenMeasurement:
         """Measure a full request using the shared safe trigger policy."""
-        return measure_for_compaction_trigger(
-            messages,
-            trigger_tokens=trigger_tokens,
-            fast_estimate=lambda current: self._estimate_request_tokens(
-                list(current), True
-            ),
-            exact_estimate=lambda current: self._estimate_request_tokens(
-                list(current), False
-            ),
+        # user:“去重构吧”+(触发、规划、拟合共用同一种占用单位，不再分别选择快慢估算)。
+        return TokenMeasurement(
+            tokens=calibrated_tokens(self._estimate_request_tokens(list(messages), False)),
+            exact=True, source="estimate",
         )
 
     async def compact(
@@ -831,7 +836,7 @@ def _estimate_compaction_tokens(
     estimator = request.estimate_exact_tokens if exact else request.estimate_tokens
     if estimator is not None:
         return max(0, int(estimator(messages)))
-    return estimate_message_tokens([message.to_dict() for message in messages])
+    return calibrated_tokens(estimate_message_tokens([message.to_dict() for message in messages]))
 
 
 async def _emit_compaction_event(

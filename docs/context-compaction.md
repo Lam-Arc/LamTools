@@ -27,10 +27,12 @@ CoreLoopKernel
 - `compact_trigger_tokens` 或 `compact_trigger_ratio`：触发阈值。
 - `compact_limit_tokens` 或 `compact_limit_ratio`：压缩后的硬上限。
 
-触发检查先用 fast estimator。只有当 `fast_tokens * 8` 不低于阈值时才调用 exact estimator，因此中文、emoji 等 fast undercount 不会静默推迟压缩。成功的 fitter 结果必须满足：
+自动路径使用一个统一占用快照：优先上一次成功响应的真实 prompt usage；没有可用 usage 时使用细估结果乘 2.5。允许一拍延迟，不与估算取最大值。响应缺失 usage、换模型或完成压缩后，旧真实值失效。卡片直接消费该快照的占用值和来源。
+
+自动达到阈值和手动 `/compact` 都进入同一 Controller；手动仅跳过触发判断。同一轮运行可以多次产生压缩信号。规划、拟合、摘要分段与最后发送前的预算检查使用相同的 2.5 倍本地估算；真实 usage 不乘倍率。成功的 fitter 结果必须满足：
 
 ```text
-exact_tokens(result.messages) <= compact_limit_tokens
+calibrated_estimate(final_request) <= compact_limit_tokens
 ```
 
 摘要请求另行预留输出、协议和 safety margin。`SummaryTokenBudget.max_input_tokens` 是摘要请求允许的输入上限，segment 和 merge 请求都必须遵守它。`LoopPolicy.compact_summary_output_tokens` 与 `LoopPolicy.compact_safety_margin_tokens` 可覆盖摘要输出上限和 safety margin；保持 `None` 时使用按窗口推导的默认值。
@@ -48,21 +50,21 @@ exact_tokens(result.messages) <= compact_limit_tokens
 - `key = "movable_context_notice"` 的系统提示词变化通知
 - `key = "runtime_context_delta"` 的运行时便签
 
-压缩成功后，Kernel 用当前块的最新内容重新冻结系统提示词，替换本次请求的第一条 system 消息，并补发一张完整的运行时便签作为新基线。旧通知和旧便签不进入摘要，也不保留；它们表达的差异已经合并进新版本。压缩保留的消息按 `history_seq` 映射回原始历史对象：请求期的图片降级副本不会写回存储，持久历史保留原图。完整规则见 [可动系统上下文与运行时便签](movable-system-context.md)。
+Kernel 在隔离的候选状态中准备最新系统提示词和完整运行时便签，把它们的开销纳入拟合，再检查完整最终请求。只有检查成功才提交新基线；失败、取消保留原基线。旧通知和旧便签不进入摘要的派生视图；原始记录仍保留。请求期的图片降级副本不会写回存储，持久历史保留原图。完整规则见 [可动系统上下文与运行时便签](movable-system-context.md)。
 
 ## 持久化与恢复
 
-摘要保存在 `state.metadata["context_compaction"]`，其中包括 `summary`、`summary_seq`、计数和前后 token 数。原始 history 不插入 `context_compaction_summary` 行。第一条 retained message 携带 `lam_compaction_resume`，完整 history 重写后由 Kernel 重新锚定 `summary_seq`。
+自动和手动通过 `context_compaction/state.py` 共用加载与提交。摘要保存在 `state.metadata["context_compaction"]`，包括摘要、覆盖的历史序号、边界和测量信息。原始历史只追加，压缩不删除或重编号，不写入摘要伪消息。旧边界格式继续兼容。
 
-系统提示词压缩周期（`movable_system_context`）和运行时便签基线（`runtime_context_reported`）也随 `state.metadata` 持久化；压缩成功时二者一起重建。
+SQLite 把摘要状态、系统提示词周期和新增的完整运行时便签放进同一个事务；保存失败整笔回滚。后续模型回复与工具结果继续正常追加检查点，不等待本轮结束。迁入追加表的旧历史副本会清空，避免空尾部重新加载旧记录。内存存储遵守相同提交接口；旧扩展存储仍可通过原 checkpoint 协议兼容。
 
 下一次运行加载：
 
 ```text
-派生 summary + summary_seq 之后的原始 retained span + 新用户输入
+派生 summary + 未被摘要覆盖的原始消息 + 新用户输入
 ```
 
-若 boundary 漂移或历史被外部重建，Kernel 回退到完整 history，避免只剩 summary 的 ghost context。
+重复压缩累计覆盖范围，保留原始消息可查阅。系统仍兼容旧边界的全历史回退，避免丢失未摘要内容。
 
 ## 观测字段
 

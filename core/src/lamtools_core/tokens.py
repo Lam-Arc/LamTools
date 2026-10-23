@@ -5,7 +5,6 @@ from __future__ import annotations
 from math import ceil
 from typing import Any
 
-
 def estimate_text_tokens(text: str, *, fast: bool = False) -> int:
     """Estimate text tokens for local budgeting when exact usage is unavailable.
 

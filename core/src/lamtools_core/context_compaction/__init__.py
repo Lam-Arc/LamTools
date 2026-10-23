@@ -1,4 +1,8 @@
-"""Public API for the context-compaction pipeline."""
+"""Public API for the context-compaction pipeline.
+
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
+"""
 
 from lamtools_core.context_compaction_budget import (
     CONTEXT_COMPACTION_NAMESPACE,

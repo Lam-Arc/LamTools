@@ -1,4 +1,8 @@
-"""Local, model-free summary fallback helpers."""
+"""Local, model-free summary fallback helpers.
+
+Compaction is not a one-time state: a session may compact any number of times;
+there is no permanent "already compacted" status.
+"""
 
 from __future__ import annotations
 
