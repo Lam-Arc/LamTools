@@ -10,8 +10,10 @@ user:“每天替你刷一轮 B站”+搜索/字幕/评论/信息四类只读能
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -52,6 +54,45 @@ def _cookies() -> dict[str, str]:
     if str(cfg.get("bili_jct") or "").strip():
         cookies["bili_jct"] = str(cfg["bili_jct"]).strip()
     return cookies
+
+
+_WBI_MIXIN_TAB = (
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+    61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+    36, 20, 34, 44, 52,
+)
+_WBI_CACHE: dict[str, Any] = {"key": "", "ts": 0.0}
+
+
+def _wbi_mixin_key(client: httpx.Client) -> str:
+    """从 nav 取 img/sub key，按官方重排表拼出 32 位 mixin key，缓存一小时。"""
+    now = datetime.now().timestamp()
+    if _WBI_CACHE["key"] and now - float(_WBI_CACHE["ts"]) < 3600:
+        return str(_WBI_CACHE["key"])
+    nav = client.get(f"{_API}/x/web-interface/nav").json()
+    wbi = (nav.get("data") or {}).get("wbi_img") or {}
+    img = str(wbi.get("img_url") or "").rsplit("/", 1)[-1].split(".")[0]
+    sub = str(wbi.get("sub_url") or "").rsplit("/", 1)[-1].split(".")[0]
+    raw = img + sub
+    if len(raw) < 64:
+        return ""
+    key = "".join(raw[i] for i in _WBI_MIXIN_TAB)[:32]
+    _WBI_CACHE.update({"key": key, "ts": now})
+    return key
+
+
+def _wbi_signed(client: httpx.Client, params: dict[str, Any]) -> dict[str, Any]:
+    """给参数补 wts 与 w_rid；拿不到 key 时只补 wts，交给上游如实报失败。"""
+    signed = {k: v for k, v in params.items() if v is not None}
+    signed["wts"] = int(datetime.now().timestamp())
+    key = _wbi_mixin_key(client)
+    if not key:
+        return signed
+    query = urllib.parse.urlencode(sorted(signed.items()))
+    signed["w_rid"] = hashlib.md5((query + key).encode()).hexdigest()
+    return signed
+
 
 
 def _client(ua: str = _UA) -> httpx.Client:
@@ -97,6 +138,33 @@ def _dedup_find(bvid: str, status: str | None = None) -> dict[str, Any] | None:
     return None
 
 
+# ── 值班简报（工具与操作共用一份载荷）────────────────────────────────
+
+def duty_brief_payload() -> dict[str, Any]:
+    cfg = _config()
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_report = _OUT_DIR / f"{today}.md"
+    seen = list(reversed(_dedup_rows()))[:40]
+    return {
+        "keywords": cfg.get("keywords") or [],
+        "per_day": cfg.get("per_day", 5),
+        "comment_per_round": cfg.get("comment_per_round", 1),
+        "auto_comment": bool(cfg.get("auto_comment")),
+        "mention_name": cfg.get("mention_name") or "",
+        "report_level": cfg.get("report_level") or "full",
+        "logged_in": bool(_cookies().get("SESSDATA")),
+        "seen_recent": seen,
+        "seen_total": len(_dedup_rows()),
+        "today_report": str(today_report) if today_report.exists() else "",
+    }
+
+
+async def bili_brief(call: ToolCall) -> ToolResult:
+    # user:“章程第一步拿参数”+操作是命令/面板的通道，模型调不了；
+    # 简报必须是模型工具列表里的真工具。
+    return _result(call, duty_brief_payload())
+
+
 # ── 只读：搜索 / 信息 / 字幕 / 评论 ─────────────────────────────────
 
 async def bili_search(call: ToolCall) -> ToolResult:
@@ -106,52 +174,50 @@ async def bili_search(call: ToolCall) -> ToolResult:
         return _result(call, "keyword is required", failed=True)
     days = max(1, min(int(args.get("days") or 3), 14))
     last_note = ""
+    body: Any = None
     try:
-        # user:“B站 对匿名搜索的挑战页只认 UA+指纹组合且随时会漂”+按 UA
-        # 阶梯逐级重试（浏览器形态 → 朴素客户端），每级先种官方指纹 Cookie；
-        # 全被挑战时如实说明，配置 SESSDATA 后最稳。
-        for ua in (_UA, "curl/8.0.1"):
-            with _client(ua) as client:
-                body = None
-                for attempt in (1, 2):
-                    if attempt == 1 and "buvid3" not in (client.cookies or {}):
-                        try:
-                            spi = client.get(f"{_API}/x/frontend/finger/spi").json()
-                            data = spi.get("data") or {}
-                            if data.get("b_3"):
-                                client.cookies.set("buvid3", str(data["b_3"]), domain=".bilibili.com")
-                            if data.get("b_4"):
-                                client.cookies.set("buvid4", str(data["b_4"]), domain=".bilibili.com")
-                        except Exception:  # noqa: BLE001 — 引导失败交给下一级
-                            pass
-                    response = client.get(
-                        f"{_API}/x/web-interface/search/type",
-                        params={"search_type": "video", "keyword": keyword, "order": "pubdate"},
-                        headers={"User-Agent": ua},
-                    )
-                    try:
-                        body = response.json()
-                        break
-                    except ValueError:
-                        last_note = f"HTTP {response.status_code}，返回了挑战页而不是数据"
-                        if attempt == 1:
-                            continue
-        if body is None or body.get("code") != 0:
-            if body is None:
-                return _result(
-                    call,
-                    f"搜索被 B站 风控（{last_note}）。匿名搜索时灵时不灵；"
-                    "在插件配置里填 SESSDATA 后最稳。",
-                    failed=True,
-                )
-            return _result(call, f"搜索失败：B站 返回 code={body.get('code')}（{body.get('message')}）", failed=True)
+        with _client() as client:
+            # 先种官方指纹：buvid3/4 缺失时 wbi 搜索同样会被挑战
+            try:
+                spi = client.get(f"{_API}/x/frontend/finger/spi").json()
+                spi_data = spi.get("data") or {}
+                if spi_data.get("b_3"):
+                    client.cookies.set("buvid3", str(spi_data["b_3"]), domain=".bilibili.com")
+                if spi_data.get("b_4"):
+                    client.cookies.set("buvid4", str(spi_data["b_4"]), domain=".bilibili.com")
+            except Exception:  # noqa: BLE001 — 指纹失败不影响签名主路径
+                pass
+            # user:“老接口 search/type 现在直接吐挑战页”+改走 wbi 签名接口，
+            # 缺 w_rid 一律被挡；登录态仍从配置里的 Cookie 来。
+            response = client.get(
+                f"{_API}/x/web-interface/wbi/search/type",
+                params=_wbi_signed(
+                    client,
+                    {
+                        "search_type": "video",
+                        "keyword": keyword,
+                        "order": "pubdate",
+                        "page": 1,
+                    },
+                ),
+                headers={"User-Agent": _UA},
+            )
+            try:
+                body = response.json()
+            except ValueError:
+                last_note = f"HTTP {response.status_code}，返回了挑战页而不是数据"
     except Exception as exc:  # noqa: BLE001 — 网络失败要可读，不能炸
         return _result(call, f"搜索失败：{type(exc).__name__}: {exc}", failed=True)
     if body is None:
-        return _result(call, "搜索失败：未拿到有效响应", failed=True)
+        return _result(
+            call,
+            f"搜索被 B站 风控（{last_note}）。已改用 wbi 签名接口，仍失败多半是"
+            "WBI key 过期或指纹被盯上；隔一会儿重试，别连刷。",
+            failed=True,
+        )
     if body.get("code") != 0:
         return _result(call, f"搜索失败：B站 返回 code={body.get('code')}（{body.get('message')}）", failed=True)
-    cutoff = datetime.now().timestamp() - days * 86400
+
     items = []
     for item in (body.get("data") or {}).get("result") or []:
         if item.get("pubdate", 0) < cutoff:

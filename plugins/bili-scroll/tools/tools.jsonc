@@ -106,6 +106,14 @@
       "timeout": 20
     },
     {
+      "name": "bili_brief",
+      "description": "取今日值班参数：关键词、挑选限额、评论预算、判重表近况、日报位置与登录状态。值班第一件事就是调它。",
+      "input_schema": { "type": "object", "properties": {} },
+      "permission": "auto_allow",
+      "handler": "bili:bili_brief",
+      "timeout": 10
+    },
+    {
       "name": "bili_account_status",
       "description": "查当前 B站 登录状态：已登录返回用户名，未登录如实返回。值班开始前看一眼，决定能不能读字幕、能不能发评论。",
       "input_schema": { "type": "object", "properties": {} },

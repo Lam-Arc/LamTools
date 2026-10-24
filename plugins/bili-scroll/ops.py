@@ -36,25 +36,10 @@ def _dedup_rows() -> list[dict[str, Any]]:
 
 
 async def duty_brief(request: OperationRequest) -> OperationResult:
-    cfg = _config()
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_report = _OUT_DIR / f"{today}.md"
-    seen = list(reversed(_dedup_rows()))[:40]
-    return OperationResult(
-        name=request.name,
-        payload={
-            "keywords": cfg.get("keywords") or [],
-            "per_day": cfg.get("per_day", 5),
-            "comment_per_round": cfg.get("comment_per_round", 1),
-            "auto_comment": bool(cfg.get("auto_comment")),
-            "mention_name": cfg.get("mention_name") or "",
-            "report_level": cfg.get("report_level") or "full",
-            "logged_in": bool(cfg.get("sessdata")),
-            "seen_recent": seen,
-            "seen_total": len(_dedup_rows()),
-            "today_report": str(today_report) if today_report.exists() else "",
-        },
-    )
+    # 与工具 bili_brief 共用同一份载荷（单一事实来源）。
+    from bili import duty_brief_payload
+
+    return OperationResult(name=request.name, payload=duty_brief_payload())
 
 
 async def reports_list(request: OperationRequest) -> OperationResult:
