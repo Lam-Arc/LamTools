@@ -92,7 +92,7 @@
     },
     {
       "name": "bili_post_comment",
-      "description": "在一条 B站 视频下发一条评论（同一视频只发一次，受设置里的开关与每轮限额约束）。需要登录凭证；需要用户确认。",
+      "description": "在一条 B站 视频下发一条评论。同一视频只发一次、受配置开关与每轮限额硬性约束；开关关闭或未配置凭证时拒绝。授权语义 = 用户在配置里打开自动评论开关。",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -101,7 +101,7 @@
         },
         "required": ["bvid", "content"]
       },
-      "permission": "ask_user",
+      "permission": "auto_allow",
       "handler": "bili:bili_post_comment",
       "timeout": 20
     },
