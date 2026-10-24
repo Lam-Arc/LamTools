@@ -42,14 +42,19 @@ If neither layer fits, replace host modules with `overrides`. Read section 13 fi
 
 ## 2. Choose the mechanism
 
-**MCP or tool** (the most common decision):
+**MCP or tool** (the most common decision). First question: how often is it called?
 
+- Called in most rounds → an in-process tool. The tool list is always present and the UI collapses its call cards.
+- Called rarely or only in specific flows → MCP. It stays dormant until the session activates it, so its definitions never pollute the prompt, and its call cards collapse by default too.
 - The capability already exists as an MCP server (yours, or a public one you may reuse)? → ship that MCP config. Capabilities come across whole, with zero re-implementation.
-- It needs dependencies the host environment does not ship? → an MCP server in your own environment, or a script (see "External dependencies").
-- It runs on what the host already ships (for example httpx + public APIs)? → an in-process tool. Zero install.
+
+Second question: where do the dependencies live?
+
+- It runs on what the host already ships (for example httpx + public APIs)? → in-process, zero install.
+- It needs dependencies the host does not ship? → MCP in your own environment, or a script (see "External dependencies").
 - It is a long-running service, a watcher, a scheduler? → a backend.
 
-Real example: bili-scroll serves its read path (search, subtitles, comments over public APIs) as in-process tools; its transcription (Whisper) is a script with its own environment; the original plugin it replicated served the same read path from an MCP server. All three shapes are legal — pick by where the dependencies live, and say so in the difference report.
+
 
 **External dependencies — three ways out when something cannot run inside the host process:**
 
@@ -57,7 +62,7 @@ Real example: bili-scroll serves its read path (search, subtitles, comments over
 2. `run_command` / a dedicated tool: ship a script in your plugin folder and execute it. Whether it runs depends on the user's machine, not host packaging. Provide a setup operation (for example: bootstrap uv, create a venv under your `data/`, install the packages) and degrade gracefully when the environment is missing — say what is missing and count what you skipped.
 3. Your own MCP: wrap the script in your own MCP server and declare it in `mcp/mcp.json`.
 
-Real example: bili-scroll transcription — the original ships Whisper (~538 MB) with a uv bootstrap and a "装转写依赖" button. Nothing about that conflicts with host packaging; do not declare a capability impossible because the host process itself cannot import it.
+
 
 **授权分层 — anything that acts as the user** (posting comments, sending DMs):
 
@@ -65,7 +70,9 @@ Real example: bili-scroll transcription — the original ships Whisper (~538 MB)
 - Hard gates live in the handler: dedup, rate limits, credentials. Refuse in code; never rely on the model's judgment.
 - Approval follows the run context: interactive rounds confirm drafts when unsure; unattended rounds run on the switch's authorization.
 
-Real example: bili_post_comment is `auto_allow`; its handler refuses when the consent switch is off, the video was already commented, or credentials are missing.
+Real cases behind these rules — the bili-scroll replication and others — live in the bundled Wiki, in the 插件 article's 案例 section. Read it when a rule above feels abstract.
+
+
 
 ## 3. Manifest fields
 
@@ -354,15 +361,13 @@ The host compares `python`, `app` and `platform` at install time and refuses the
 
 **The runtime runs the installed copy**, not your workspace folder: handler code, `data/`, and saved config all live under the installed root (found via `plugin.system.list`'s `root` field). When settings need to change on the user's behalf, use the config operations (`plugin.system.config.get/update`) — never write a `data/config.jsonc` next to the workspace source, where the running tool will never see it.
 
-**When changes take effect:**
+**When changes take effect** — tell the user which of the three applies:
 
-| change | takes effect |
-| --- | --- |
-| config values | next read — immediate |
-| declarations (tools, skills, commands) | next turn; restart the backend after code changes — a new declaration backed by an old handler module looks callable and fails on call |
-| prompt-affecting changes (context, agent prompt) | new session or next compaction |
-| backend overrides | app restart |
-| frontend overrides | full page reload |
+- Config values: immediate, on next read.
+- Code and declarations: restart the backend.
+- Prompt-affecting changes (context, agent prompt, overrides): new session / compaction for prompts, app restart or full page reload for overrides.
+
+The full table lives in the bundled Wiki's 插件 article.
 
 The definition of done is the loop above passing, not the files looking right.
 
