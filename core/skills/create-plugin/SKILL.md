@@ -321,6 +321,8 @@ The host compares `python`, `app` and `platform` at install time and refuses the
 5. Update with `plugin.system.update` (same three sources) and confirm `data/` survived.
 6. If a capability reports a declaration error, fix the manifest and update; never hand-edit files inside the installed root.
 
+The runtime runs the **installed copy**, not your workspace folder: handler code, `data/`, and saved config all live under the installed root (found via `plugin.system.list`'s `root` field). When settings need to change on the user's behalf, use the config operations (`plugin.system.config.get/update`) — never write a `data/config.jsonc` next to the workspace source, where the running tool will never see it.
+
 The definition of done is the loop above passing, not the files looking right.
 
 ## Rules
