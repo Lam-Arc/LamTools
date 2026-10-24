@@ -123,6 +123,7 @@ def register_manager(host: Any, handles: list[Any], context: Any) -> V2RuntimeMa
     remember_handles(handles)
     if context is not None and hasattr(context, "set_service"):
         context.set_service("plugin.v2_runtime_manager", manager)
+        context.set_service("plugin.v2_host", host)
     if host is not None:
         host.backend_manager = manager
     return manager

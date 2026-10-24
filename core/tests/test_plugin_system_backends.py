@@ -147,3 +147,38 @@ async def test_backend_handler_runs_through_the_toolbox(tmp_path: Path) -> None:
 
     assert result.status == "ok"
     assert result.content == "from backend"
+
+
+def test_assembly_reuses_the_catalog_backend_handles(tmp_path: Path) -> None:
+    """Repeated turns must not create a second study or workflow runtime."""
+    from lamtools_core.app.base_agent import (
+        assemble_core_agent_plugins,
+        build_core_plugin_operation_catalog,
+    )
+
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[],
+    )
+    context = catalog.plugin_context
+    manager = context.service("plugin.v2_runtime_manager")
+    workflow_handle = manager.get("workflow")
+    assert workflow_handle is not None
+
+    assemble_core_agent_plugins(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[],
+        context=context,
+    )
+    assemble_core_agent_plugins(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[],
+        context=context,
+    )
+
+    assert context.service("plugin.v2_runtime_manager") is manager
+    assert manager.get("workflow") is workflow_handle
+    assert sum(1 for item in manager.handles if item.plugin.name == "workflow") == 1

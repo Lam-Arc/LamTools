@@ -1919,21 +1919,36 @@ def assemble_core_agent_plugins(
     # assembled here and merged into the same agent-facing artifacts.
     from lamtools_core.plugin_system import PluginHost, PluginSystemRuntime
 
-    v2_host = PluginHost(
-        roots=roots,
-        state_path=Path(data_dir) / "plugin-system.jsonc",
+    # 宿主和后端实例只建一次：操作目录已经装过就复用，避免每轮装配
+    # 再造一套学习/工作流运行时，导致 watcher 重复或上下文对不上。
+    v2_host = (
+        plugin_context.service("plugin.v2_host")
+        if plugin_context is not None
+        else None
     )
+    if v2_host is None:
+        v2_host = PluginHost(
+            roots=roots,
+            state_path=Path(data_dir) / "plugin-system.jsonc",
+        )
     v2_manifests = [item for item in v2_host.discover() if item.assembly == "v2"]
-    # user:“插件可以有自己的后端”+v2 插件沿用同一套后端装载器，
-    # 工具 handler、动态工具提供者和操作上下文都从这里来。
-    v2_backends = load_enabled_plugin_backends(
-        [item for item in v2_manifests if item.enabled],
-        plugin_context,
-        start=start_lifecycle,
-    )
     from lamtools_core.plugin_system.backend_runtime import register_manager
 
-    register_manager(v2_host, v2_backends, plugin_context)
+    existing_manager = (
+        plugin_context.service("plugin.v2_runtime_manager")
+        if plugin_context is not None
+        else None
+    )
+    if existing_manager is not None and existing_manager.host is v2_host:
+        v2_backends = list(existing_manager.handles)
+    else:
+        # user:“插件可以有自己的后端”+第一次装配时装一次后端。
+        v2_backends = load_enabled_plugin_backends(
+            [item for item in v2_manifests if item.enabled],
+            plugin_context,
+            start=start_lifecycle,
+        )
+        register_manager(v2_host, v2_backends, plugin_context)
     for v2_handle in v2_backends:
         plugin_tool_handlers.update(v2_handle.tool_handlers)
         plugin_tool_providers.extend(v2_handle.tool_providers)
