@@ -512,6 +512,14 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
     turnId ? state.turns?.[turnId] : undefined,
     turnId ? state.core?.turns?.[turnId] : undefined,
   )
+  // user:“这个会话已经跑了很久了，不可能没有上下文”
+  // +(恢复中的等待消息也必须携带该回合已有的测量，不以助手正文是否到达决定有无上下文)。
+  const coreTurn = turnId ? state.core?.turns?.[turnId] : undefined
+  const providerUsage = coreTurn && isRecord(coreTurn.usage) ? coreTurn.usage : null
+  const contextMetrics = coreTurn && isRecord(coreTurn.context_metrics)
+    ? coreTurn.context_metrics
+    : providerUsage
+  const usageCallIndex = coreTurn?.usage_calls ? indexUsageCalls(coreTurn.usage_calls) : undefined
   messages.push({
     id: `assistant:waiting:${last.id}`,
     ...(turnId ? { turnId } : {}),
@@ -522,6 +530,9 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
     metadata: {
       live: true,
       initialWaiting: true,
+      ...(contextMetrics ? { processMetrics: contextMetrics, contextMetrics } : {}),
+      ...(providerUsage ? { usageMetrics: providerUsage } : {}),
+      ...(usageCallIndex ? { resourceCalls: usageCallIndex.main } : {}),
       ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
     },
   })
