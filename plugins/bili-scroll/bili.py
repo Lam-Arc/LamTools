@@ -377,6 +377,98 @@ async def bili_dedup(call: ToolCall) -> ToolResult:
     return _result(call, "action 必须是 list 或 mark", failed=True)
 
 
+# ── 私信：投递与收件箱（原版 dm.mjs 的端点与闸门，窄口收件人）────────
+
+def _receiver_mid(cfg: dict[str, Any], own_mid: int) -> int:
+    # user:“私信发给谁（UID）可留空”+留空发给登录账号自己，不开放任意收件人。
+    uid = int(cfg.get("dm_uid") or 0)
+    return uid if uid > 0 else own_mid
+
+
+async def bili_send_dm(call: ToolCall) -> ToolResult:
+    args = _args(call)
+    content = str(args.get("content") or "").strip()
+    cfg = _config()
+    cookies = _cookies()
+    if not content:
+        return _result(call, "content 不能为空", failed=True)
+    if not cookies.get("SESSDATA") or not str(cfg.get("bili_jct") or "").strip():
+        return _result(call, "未配置登录凭证（SESSDATA 与 bili_jct）", failed=True)
+    if str(cfg.get("dm_mode") or "only").strip().lower() == "off":
+        return _result(call, "私信投递未开启（配置里 dm_mode=off）", failed=True)
+    try:
+        with _client() as client:
+            nav = client.get(f"{_API}/x/web-interface/nav").json()
+            own_mid = int(((nav.get("data") or {}).get("mid")) or 0)
+            if own_mid <= 0:
+                return _result(call, "Cookie 已失效，无法投递私信", failed=True)
+            dev_id = str(__import__("uuid").uuid4())
+            response = client.post(
+                "https://api.vc.bilibili.com/web_im/v1/web_im/send_msg",
+                data={
+                    "sender_uid": own_mid,
+                    "receiver_id": _receiver_mid(cfg, own_mid),
+                    "receiver_type": 1,
+                    "msg_type": 1,
+                    "msg_status": 1,
+                    "content": json.dumps({"content": content}, ensure_ascii=False),
+                    "csrf_token": str(cfg.get("bili_jct")),
+                    "csrf": str(cfg.get("bili_jct")),
+                    "dev_id": dev_id,
+                    "from_firework": 0,
+                    "build": 0,
+                    "mobi_app": "web",
+                },
+                headers={"Referer": "https://message.bilibili.com/"},
+            )
+            body = response.json()
+    except Exception as exc:  # noqa: BLE001
+        return _result(call, f"私信发送失败：{type(exc).__name__}: {exc}", failed=True)
+    if body.get("code") != 0:
+        return _result(call, f"私信被 B站 拒绝：code={body.get('code')}（{body.get('message')}）", failed=True)
+    msg_key = ((body.get("data") or {}).get("msg_key")) or ""
+    if not msg_key:
+        # user:“接口回了成功但没有投递回执 ⇒ 可能没真正送到”+原版踩过的坑照搬。
+        return _result(call, "接口回了成功但没有投递回执（msg_key）：可能没真正送到，不要重复发送。", failed=True)
+    return _result(call, {"sent": True, "msg_key": str(msg_key)[:16]})
+
+
+async def bili_dm_inbox(call: ToolCall) -> ToolResult:
+    # user:“私信双向”+默认关闭；开关打开后读最近会话预览，回话决策按章程。
+    cfg = _config()
+    if not bool(cfg.get("dm_reply")):
+        return _result(call, "私信双向未开启（配置里 dm_reply=false）", failed=True)
+    cookies = _cookies()
+    if not cookies.get("SESSDATA"):
+        return _result(call, "未配置登录凭证（SESSDATA）", failed=True)
+    try:
+        with _client() as client:
+            sessions = client.get(
+                "https://api.vc.bilibili.com/session_svr/v1/session_svr/get_sessions",
+                params={"session_type": 1, "group_id": 0, "build": 0, "mobi_app": "web"},
+            ).json()
+    except Exception as exc:  # noqa: BLE001
+        return _result(call, f"收件箱读取失败：{type(exc).__name__}: {exc}", failed=True)
+    if sessions.get("code") != 0:
+        return _result(call, f"收件箱读取失败：code={sessions.get('code')}", failed=True)
+    items = []
+    for session in ((sessions.get("data") or {}).get("session_list") or [])[:10]:
+        preview = ""
+        try:
+            last = json.loads((session.get("last_msg") or {}).get("content") or "{}")
+            preview = str(last.get("content") or last.get("text") or "")[:80]
+        except (ValueError, TypeError):
+            preview = ""
+        items.append(
+            {
+                "uid": session.get("talker_id"),
+                "unread": session.get("unread_count"),
+                "preview": preview,
+            }
+        )
+    return _result(call, {"count": len(items), "sessions": items})
+
+
 # ── 写：发评论（需要登录凭证 + 用户确认 + 判重与限额由配置管）────────
 
 async def bili_post_comment(call: ToolCall) -> ToolResult:

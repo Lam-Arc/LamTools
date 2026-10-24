@@ -39,6 +39,25 @@
       "default": 1,
       "description": "上限 20；默认 1 条"
     },
+    "dm_mode": {
+      "type": "string",
+      "title": "投递方式",
+      "enum": ["off", "only", "both"],
+      "default": "only",
+      "description": "值班结果的投递：off = 不投递；only = 只私信；both = 私信加评论"
+    },
+    "dm_uid": {
+      "type": "integer",
+      "title": "私信发给谁（UID）",
+      "default": 0,
+      "description": "留空 = 发给登录账号自己"
+    },
+    "dm_reply": {
+      "type": "boolean",
+      "title": "私信双向（读收件箱并回话）",
+      "default": false,
+      "description": "默认关闭；打开后值班轮可读最近私信会话预览，回话准则按值班章程执行"
+    },
     "sessdata": {
       "type": "string",
       "title": "SESSDATA（浏览器 Cookie）",

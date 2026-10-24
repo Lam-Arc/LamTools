@@ -106,6 +106,28 @@
       "timeout": 20
     },
     {
+      "name": "bili_send_dm",
+      "description": "把值班日报或摘要以私信投递给配置的收件人（默认登录账号自己）。收件人固定，不开放任意发送；dm_mode=off 或未登录时拒绝。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string", "description": "私信正文" }
+        },
+        "required": ["content"]
+      },
+      "permission": "auto_allow",
+      "handler": "bili:bili_send_dm",
+      "timeout": 20
+    },
+    {
+      "name": "bili_dm_inbox",
+      "description": "读最近私信会话预览（仅 dm_reply 开关打开时可用；默认关闭）。",
+      "input_schema": { "type": "object", "properties": {} },
+      "permission": "auto_allow",
+      "handler": "bili:bili_dm_inbox",
+      "timeout": 15
+    },
+    {
       "name": "bili_brief",
       "description": "取今日值班参数：关键词、挑选限额、评论预算、判重表近况、日报位置与登录状态。值班第一件事就是调它。",
       "input_schema": { "type": "object", "properties": {} },
