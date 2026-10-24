@@ -341,13 +341,13 @@ def test_every_bundled_plugin_declares_its_platform_class():
     # "没写" 会被当成通用，而内置插件的平台归属是一次明确的决定，不是默认值。
     assert [item.name for item in discovered if "platforms" not in item.raw] == []
     assert {item.name: item.platforms for item in discovered} == {
-        # 手机没有 git 可执行文件、工作流的执行面和桌宠窗口都在桌面。
+        # 工作流的执行面和桌宠窗口都在桌面。
         "emotion-ball-pet": "desktop",
-        "git": "desktop",
         "workflow": "desktop",
         "imagegen": "universal",
-        # 方案包：手机起草、桌面核对后开工，两端读写同一份方案（用户 2026-09-29 决定）。
-        "plan": "universal",
         "study": "universal",
         "websearch": "universal",
     }
+    # git 已删除；plan 已迁到 v2，不再由旧注册表发现。
+    assert "git" not in {item.name for item in discovered}
+    assert "plan" not in {item.name for item in discovered}

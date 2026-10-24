@@ -46,6 +46,25 @@ def test_minimal_manifest_is_accepted(tmp_path: Path) -> None:
     assert host.errors == []
 
 
+def test_default_enabled_is_respected_until_the_user_decides(tmp_path: Path) -> None:
+    # user:“websearch 保留，当最小插件样板”+随包插件可以声明默认关闭，
+    # 用户显式启用后以账本为准。
+    root = tmp_path / "plugins"
+    write_plugin(
+        root / "search",
+        manifest={"name": "search", "version": "0.1.0", "defaultEnabled": False},
+    )
+    host = make_host(tmp_path, root)
+
+    assert host.discover()[0].enabled is False
+
+    host.enable("search")
+    assert host.discover()[0].enabled is True
+
+    host.disable("search")
+    assert host.discover()[0].enabled is False
+
+
 def test_unknown_fields_are_kept_for_later_steps(tmp_path: Path) -> None:
     root = tmp_path / "plugins"
     write_plugin(

@@ -69,8 +69,17 @@ class PluginHost:
                         }
                     )
                     continue
+                # 随包样板可以用 defaultEnabled 声明初次状态；用户一旦在
+                # 插件页开关过，账本永远优先。
+                default_enabled = manifest.raw.get("defaultEnabled", True)
                 found[manifest.name] = replace(
-                    manifest, enabled=self.state.is_enabled(manifest.name)
+                    manifest,
+                    enabled=self.state.is_enabled(
+                        manifest.name,
+                        default=default_enabled
+                        if isinstance(default_enabled, bool)
+                        else True,
+                    ),
                 )
         return sorted(found.values(), key=lambda item: item.name)
 
