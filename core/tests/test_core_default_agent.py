@@ -1330,7 +1330,7 @@ async def test_core_plugin_operation_catalog_uses_user_and_project_roots(tmp_pat
     # 缺口 #3/D3：catalog 统一扫内置根——bundled 插件也在列表中
     names = {item["name"] for item in listed.payload["plugins"]}
     assert {"user-policy", "project-policy"} <= names
-    assert {"websearch", "imagegen"} <= names
+    assert names >= {"emotion-ball-pet", "websearch"}
     assert (data_dir / "plugins.jsonc").exists()
     assert not (data_dir / "core-plugin-state.json").exists()
 

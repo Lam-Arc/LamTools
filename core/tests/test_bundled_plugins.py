@@ -55,36 +55,28 @@ def test_bundled_core_tool_specs_four_tools():
 
 def test_assemble_discovers_bundled_plugins(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
-    from lamtools_core.plugins.registry import PluginStateStore
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugins.registry import bundled_plugins_dir
 
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
         work_root=tmp_path,
         plugin_roots=[],
     )
-    names = {plugin.name for plugin in assembly["plugins"]}
-    # websearch 声明 defaultEnabled=false：默认装配里不出现（要用去插件页启用），
-    # 显式启用后回到装配结果里。
-    assert "git" not in names
-    # plan、study、workflow 都已迁到 v2，由新系统装配。
-    assert not ({"plan", "study", "workflow"} & names)
-    assert "imagegen" in names
-    assert "websearch" not in names
-    group_names = {group["name"] for group in assembly["plugin_tool_groups"]}
-    assert "git" not in group_names
-    assert "imagegen" in group_names
-    assert "websearch" not in group_names
+    # 旧注册表现在只剩桌宠和搜索，其余内置插件都归新系统。
+    assert {plugin.name for plugin in assembly["plugins"]} == {"emotion-ball-pet"}
+    assert assembly["plugin_tool_groups"] == []
 
-    PluginStateStore(tmp_path / "data" / "plugins.jsonc").set_enabled("websearch", True)
-    enabled = assemble_core_agent_plugins(
-        data_dir=tmp_path / "data",
-        work_root=tmp_path,
-        plugin_roots=[],
+    host = PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "data" / "plugin-system.jsonc",
     )
-    enabled_names = {plugin.name for plugin in enabled["plugins"]}
-    assert "websearch" in enabled_names
-    assert "websearch" in {group["name"] for group in enabled["plugin_tool_groups"]}
-
+    v2_names = {
+        item.name for item in host.discover() if item.assembly == "v2" and item.enabled
+    }
+    assert {"plan", "study", "workflow", "imagegen"} <= v2_names
+    # search 仍是旧插件，等右侧栏迁到 v2 之后再动。
+    assert "websearch" not in v2_names
 
 def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
@@ -207,14 +199,18 @@ def test_study_tools_are_scoped_to_the_study_mode(tmp_path):
 
 
 def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
-    """默认装配包含基础工具和所有已启用 bundled plugin 工具。
+    """默认装配包含基础工具和所有已启用内置插件的工具。
 
-    websearch 默认关闭，这里先显式启用，覆盖"启用后工具确实回到工具箱"。
+    websearch 默认关闭，这里先启用，覆盖“启用后工具回到工具箱”。
     """
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
+    from lamtools_core.plugin_system.state import PluginStateStore as V2StateStore
     from lamtools_core.plugins.registry import PluginStateStore
 
     PluginStateStore(tmp_path / "data" / "plugins.jsonc").set_enabled("websearch", True)
+    state_path = tmp_path / "data" / "plugin-system.jsonc"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    V2StateStore(state_path)
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
         work_root=tmp_path,
@@ -233,13 +229,12 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         )
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
     names = {spec.name for spec in toolbox.tool_specs()}
-    # 20 个基础工具加 generate_image、web_search，再加 v2 的 Study、
-    # Workflow 和管道校验器工具；plan 只发技能。
+    # 20 个基础工具，加 Study、Workflow、管道校验、搜索和生图。
     assert len(names) == 33
     assert "git_status" not in names
     assert "git_diff" not in names
-    assert {'get_knowledge_net', 'build_knowledge_net', 'exam', 'sign', 'notes'} <= names
-    assert {"web_search", "generate_image"} <= names
+    assert {"get_knowledge_net", "build_knowledge_net", "exam", "sign", "notes"} <= names
+    assert {"web_search", "generate_image", "check_exports"} <= names
     assert "plan_package" not in names
     assert {
         "workflow_graph",
@@ -253,28 +248,23 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
     assert operations_schema["minItems"] == 1
     assert operations_schema["maxItems"] == 100
     assert "build-map" in study_build.description
-    # 半声明式补全：内置插件工具描述从 core 常量来
     search_spec = next(spec for spec in toolbox.tool_specs() if spec.name == "web_search")
     assert search_spec.permission == "auto_allow"
     assert search_spec.metadata["plugin"] == "websearch"
 
-
 def test_disable_bundled_plugin_removes_tools(tmp_path):
-    from lamtools_core.app.base_agent import assemble_core_agent_plugins
-    from lamtools_core.plugins.registry import PluginStateStore
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.runtime import PluginSystemRuntime
+    from lamtools_core.plugins.registry import bundled_plugins_dir
 
-    state = PluginStateStore(tmp_path / "data" / "plugins.jsonc")
-    state.set_enabled("imagegen", False)
-    assembly = assemble_core_agent_plugins(
-        data_dir=tmp_path / "data",
-        work_root=tmp_path,
-        plugin_roots=[],
+    host = PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "data" / "plugin-system.jsonc",
     )
-    names = {plugin.name for plugin in assembly["plugins"]}
-    assert "imagegen" not in names
-    group_names = {group["name"] for group in assembly["plugin_tool_groups"]}
-    assert "imagegen" not in group_names
-
+    assert "generate_image" in {spec.name for spec in PluginSystemRuntime(host).assemble().tools}
+    host.disable("imagegen")
+    names = {spec.name for spec in PluginSystemRuntime(host).assemble().tools}
+    assert "generate_image" not in names
 
 async def test_bundled_plugin_executes_via_core_assembly(tmp_path):
     """内置插件 handler 由 core 显式装配（不走动态导入）。"""
@@ -296,17 +286,18 @@ async def test_bundled_plugin_executes_via_core_assembly(tmp_path):
     assert "Unknown tool" not in (result.error or "")
 
 
-async def test_bundled_plugin_uninstall_rejected(tmp_path):
-    from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+def test_bundled_plugin_uninstall_rejected(tmp_path):
+    import pytest
 
-    catalog = build_core_plugin_operation_catalog(
-        data_dir=tmp_path / "data",
-        work_root=tmp_path,
-        plugin_roots=[],
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugins.registry import bundled_plugins_dir
+
+    host = PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "data" / "plugin-system.jsonc",
     )
-    result = await catalog.execute("plugin.uninstall", {"name": "imagegen"})
-    assert result.status == "error"
-    assert "bundled" in result.payload["error"]
+    with pytest.raises(ValueError, match="bundled"):
+        host.uninstall("imagegen")
 
 
 # ── D5 配置迁移（websearch/imagegen 旧位置 → 插件配置） ───────────
@@ -366,9 +357,7 @@ def test_websearch_plugin_is_disabled_by_default(tmp_path):
 
     by_name = {plugin.name: plugin for plugin in registry.discover()}
     assert by_name["websearch"].enabled is False
-    # 其它内置插件不受影响
-    assert "git" not in by_name
-    assert by_name["imagegen"].enabled is True
+    assert by_name["emotion-ball-pet"].enabled is True
 
     store.set_enabled("websearch", True)
     by_name = {plugin.name: plugin for plugin in registry.discover()}
@@ -377,7 +366,6 @@ def test_websearch_plugin_is_disabled_by_default(tmp_path):
     store.set_enabled("websearch", False)
     by_name = {plugin.name: plugin for plugin in registry.discover()}
     assert by_name["websearch"].enabled is False
-
 
 def test_unsupported_search_kernel_does_not_break_the_toolbox(tmp_path, monkeypatch):
     """配置里写了不支持的内核名 → 工具箱照常装配（降级到内置默认内核）。

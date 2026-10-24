@@ -137,6 +137,14 @@ class PluginHost:
         manifest = self.get(name)
         if manifest is None:
             raise KeyError(f"plugin '{name}' is not installed")
+        # 随包插件属于应用本体，卸载只会把安装目录弄坏。
+        try:
+            from lamtools_core.plugins.registry import bundled_plugins_dir
+
+            if manifest.root.parent == bundled_plugins_dir().resolve():
+                raise ValueError(f"plugin '{name}' is bundled and cannot be uninstalled")
+        except ImportError:
+            pass
         if keep_data:
             for child in manifest.root.iterdir():
                 if child.name == "data":

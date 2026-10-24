@@ -345,13 +345,13 @@ def test_every_bundled_plugin_declares_its_platform_class():
     # "没写" 会被当成通用，而内置插件的平台归属是一次明确的决定，不是默认值。
     assert [item.name for item in discovered if "platforms" not in item.raw] == []
     assert {item.name: item.platforms for item in discovered} == {
-        # 桌宠窗口在桌面。
+        # 桌宠窗口在桌面，搜索两端都能用。
         "emotion-ball-pet": "desktop",
-        "imagegen": "universal",
         "websearch": "universal",
     }
-    # study 和 workflow 已经迁到 v2，不再由旧注册表发现。
-    assert not ({"study", "workflow"} & {item.name for item in discovered})
-    # git 已删除；plan 已迁到 v2，不再由旧注册表发现。
-    assert "git" not in {item.name for item in discovered}
-    assert "plan" not in {item.name for item in discovered}
+    # 其余内置插件都已迁到 v2，平台归属由新系统的声明表达。
+    assert not (
+        {"study", "workflow", "imagegen", "plan"}
+        & {item.name for item in discovered}
+    )
+
