@@ -37,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'

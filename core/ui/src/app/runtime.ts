@@ -2,10 +2,10 @@ import type {
   LamToolsTransport,
   TransportHttpRequest,
   TransportHttpResponse,
-} from '../transport'
-import { createWorkbench } from '../workbench/createWorkbench'
-import type { WorkbenchRuntime, WorkbenchRuntimeOptions } from '../workbench/types'
-import type { CoreProjectClient } from '../projects/client'
+} from '@/transport/index.ts'
+import { createWorkbench } from '@/workbench/createWorkbench.ts'
+import type { WorkbenchRuntime, WorkbenchRuntimeOptions } from '@/workbench/types.ts'
+import type { CoreProjectClient } from '@/projects/client.ts'
 import type { Ref } from 'vue'
 
 export type LamToolsPlatform = 'desktop' | 'mobile' | 'web'

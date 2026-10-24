@@ -1,5 +1,5 @@
-import type { MemberSlotSet, WorkspaceSlotName, SlotValidationResult } from '../types';
-import { WORKSPACE_SLOT_NAMES } from '../types';
+import type { MemberSlotSet, WorkspaceSlotName, SlotValidationResult } from '@/types.ts';
+import { WORKSPACE_SLOT_NAMES } from '@/types.ts';
 
 /** Validate a MemberSlotSet declaration.
  *  - Checks that all declared slots are valid WorkspaceSlotNames

@@ -35,12 +35,12 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, watch, type Component } from 'vue'
-import { resolveComposerCommandKind } from '../composer/syntax'
-import { coreCommandIcon } from '../composer/commandIcons'
-import type { CoreCommandCatalogItem, CoreCommandKind } from '../types'
+import { resolveComposerCommandKind } from '@/composer/syntax.ts'
+import { coreCommandIcon } from '@/composer/commandIcons.ts'
+import type { CoreCommandCatalogItem, CoreCommandKind } from '@/types.ts'
 
 const props = defineProps<{
   commands: CoreCommandCatalogItem[]

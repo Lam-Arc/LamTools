@@ -4,8 +4,8 @@ import {
   coreDecisionIsQuestion,
   coreDecisionIsUnanswered,
   coreDecisionRequestId,
-} from '../appServer/pendingDecisions'
-import type { CoreMessage } from '../types'
+} from '@/appServer/pendingDecisions.ts'
+import type { CoreMessage } from '@/types.ts'
 
 /**
  * 无人回答的等待窗口：提问卡超过它仍未答复，就按「用户跳过」回传，本轮继续。

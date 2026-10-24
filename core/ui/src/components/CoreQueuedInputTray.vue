@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { Goal } from 'lucide-vue-next'
-import type { CoreGoal } from '../durable/types'
+import type { CoreGoal } from '@/durable/types.ts'
 
 export interface CoreQueuedInputTrayItem {
   id: string

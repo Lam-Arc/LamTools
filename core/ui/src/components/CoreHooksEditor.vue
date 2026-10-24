@@ -204,13 +204,13 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
 import { ChevronLeft, ToggleLeft, ToggleRight } from 'lucide-vue-next'
-import UiSelect from './UiSelect.vue'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
-import type { CoreHookItem, CoreHookListPayload } from '../types'
+import UiSelect from '@/components/UiSelect.vue'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import type { CoreHookItem, CoreHookListPayload } from '@/types.ts'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>

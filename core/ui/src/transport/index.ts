@@ -10,7 +10,7 @@ export {
   type TransportRpcRequest,
   TransportRpcError,
   TransportRequestTimeoutError,
-} from './types'
+} from '@/transport/types.ts'
 
 export {
   DirectHttpTransport,
@@ -18,4 +18,4 @@ export {
   appServerUrl,
   createDirectTransport,
   type DirectTransportOptions,
-} from './directTransport'
+} from '@/transport/directTransport.ts'

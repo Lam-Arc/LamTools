@@ -43,13 +43,13 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
 import { RefreshCw } from 'lucide-vue-next'
-import UiSelect from './UiSelect.vue'
-import { getPluginWidget, invokePluginWidget } from '../plugins/api'
-import type { PluginWidgetEntry, RightSidebarRpc, RightSidebarWidgetSnapshot } from '../right-sidebar/types'
+import UiSelect from '@/components/UiSelect.vue'
+import { getPluginWidget, invokePluginWidget } from '@/plugins/api.ts'
+import type { PluginWidgetEntry, RightSidebarRpc, RightSidebarWidgetSnapshot } from '@/right-sidebar/types.ts'
 
 const props = withDefaults(defineProps<{
   requestRpc?: RightSidebarRpc

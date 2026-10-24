@@ -1,5 +1,5 @@
-import type { MarkAnchor } from './types'
-import { codePointToUtf16, expandEnglishWord, utf16ToCodePoint } from './selection'
+import type { MarkAnchor } from '@/study/types.ts'
+import { codePointToUtf16, expandEnglishWord, utf16ToCodePoint } from '@/study/selection.ts'
 
 const BLOCKS = '.markdown-renderer__content, .user-bubble, [data-selection-block], p, pre, li, h1, h2, h3, td, label'
 const SURFACES = ['.editor-overlay', '.drawer-left', '.drawer-right', '.workspace-main']

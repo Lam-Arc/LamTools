@@ -7,17 +7,17 @@
 </template>
 
 <script setup lang="ts">
-import { t, uiLanguage } from '../i18n/index'
+import { t, uiLanguage } from '@/i18n/index.ts'
 
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { marked, type Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
-import { isExternalUrl, openExternalUrl } from '../helpers/openUrl'
-import { renderAutoMathPlot } from './mathAutoPlot'
-import { getCachedMarkdown, setCachedMarkdown } from './markdownRenderCache'
-import { fadeStreamingText, type StreamingTextFade } from './streamingTextFade'
+import { isExternalUrl, openExternalUrl } from '@/helpers/openUrl.ts'
+import { renderAutoMathPlot } from '@/components/mathAutoPlot.ts'
+import { getCachedMarkdown, setCachedMarkdown } from '@/components/markdownRenderCache.ts'
+import { fadeStreamingText, type StreamingTextFade } from '@/components/streamingTextFade.ts'
 
 defineOptions({ name: 'MarkdownRenderer' })
 

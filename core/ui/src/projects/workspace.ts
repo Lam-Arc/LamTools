@@ -1,14 +1,14 @@
 import { computed, ref, type Ref } from 'vue'
 
-import type { CoreSessionListItem } from '../types'
-import type { CoreProjectClient } from './client'
+import type { CoreSessionListItem } from '@/types.ts'
+import type { CoreProjectClient } from '@/projects/client.ts'
 import type {
   CoreProject,
   CoreProjectAgents,
   CoreProjectCreatePayload,
   CoreProjectCreateResult,
   CoreProjectUpdatePayload,
-} from './types'
+} from '@/projects/types.ts'
 
 export interface CoreProjectWorkspaceOptions {
   client: CoreProjectClient

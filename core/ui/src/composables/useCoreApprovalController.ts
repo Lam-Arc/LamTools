@@ -1,6 +1,6 @@
 import { ref, watch, type Ref } from 'vue'
-import { coreAppServerDecision, coreDecisionSelectionPlan, type CoreDecisionSelectionPayload } from '../appServer/workbenchActions'
-import type { CoreMessage, MessagePart } from '../types'
+import { coreAppServerDecision, coreDecisionSelectionPlan, type CoreDecisionSelectionPayload } from '@/appServer/workbenchActions.ts'
+import type { CoreMessage, MessagePart } from '@/types.ts'
 
 export interface UseCoreApprovalControllerOptions {
   messages: Readonly<Ref<CoreMessage[]>>

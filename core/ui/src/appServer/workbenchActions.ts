@@ -1,6 +1,6 @@
-import type { CoreCommandCatalogItem, CoreInputItem, MessagePart } from '../types.ts'
-import { buildCoreComposerInputItems } from '../composer/inputItems.ts'
-import { parseComposerInput, resolveComposerCommandKind } from '../composer/syntax.ts'
+import type { CoreCommandCatalogItem, CoreInputItem, MessagePart } from '@/types.ts'
+import { buildCoreComposerInputItems } from '@/composer/inputItems.ts'
+import { parseComposerInput, resolveComposerCommandKind } from '@/composer/syntax.ts'
 
 export type CoreComposerActionMode = 'send' | 'stop' | 'resume'
 export type CoreWorkbenchTurnStatus = 'idle' | 'running' | 'waiting' | 'interrupting' | 'completed' | 'failed' | string

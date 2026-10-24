@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import StudyNoteTree from './StudyNoteTree.vue'
-import StudySidebar from './StudySidebar.vue'
-import type { Course, KnowledgeItem, StudyNoteTreeNode, StudyPin } from './types'
+import StudyNoteTree from '@/study/StudyNoteTree.vue'
+import StudySidebar from '@/study/StudySidebar.vue'
+import type { Course, KnowledgeItem, StudyNoteTreeNode, StudyPin } from '@/study/types.ts'
 
 type TreeParent = { id: string; kind: 'course' | 'module'; courseId?: string }
 

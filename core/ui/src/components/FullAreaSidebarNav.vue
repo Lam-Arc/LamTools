@@ -31,7 +31,7 @@
  * 会话栏那一列让给当前整版界面：页名顶替模式位（在 LamToolsApp 里），
  * 这里列出分区。只渲染名称与图标，不带小字描述。
  */
-import { settingsSectionIcon, type SettingsSection } from './settingsSections'
+import { settingsSectionIcon, type SettingsSection } from '@/components/settingsSections.ts'
 
 defineProps<{
   sections: SettingsSection[]

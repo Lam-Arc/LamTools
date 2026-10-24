@@ -9,7 +9,7 @@
  * null-handling strategy without duplicating the mapping logic.
  */
 
-import type { CoreApiMapper, CoreSessionListItem, CoreMessage } from '../types';
+import type { CoreApiMapper, CoreSessionListItem, CoreMessage } from '@/types.ts';
 
 // ---------------------------------------------------------------------------
 // Raw-like types shared by product backends

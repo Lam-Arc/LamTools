@@ -339,7 +339,7 @@
 </template>
 
 <script setup lang="tsx">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * PlanLibraryView — the 资料库 as one full-area view.
@@ -367,12 +367,12 @@ import {
   Trash2,
   Upload,
 } from 'lucide-vue-next'
-import type { CorePlanLibraryEntry, CorePlanLibraryFolder, CoreProjectClient } from '../projects/client'
-import FullAreaActions from './FullAreaActions.vue'
-import DocumentEditor from './DocumentEditor.vue'
-import MarkdownRenderer from './MarkdownRenderer.vue'
-import { useLibraryZoom } from '../composables/useLibraryZoom'
-import { openContextMenu, type ContextMenuEntry } from './context-menu'
+import type { CorePlanLibraryEntry, CorePlanLibraryFolder, CoreProjectClient } from '@/projects/client.ts'
+import FullAreaActions from '@/components/FullAreaActions.vue'
+import DocumentEditor from '@/components/DocumentEditor.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import { useLibraryZoom } from '@/composables/useLibraryZoom.ts'
+import { openContextMenu, type ContextMenuEntry } from '@/components/context-menu/index.ts'
 
 export type PlanLibraryEntry = CorePlanLibraryEntry
 

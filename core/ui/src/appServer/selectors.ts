@@ -5,8 +5,8 @@ import type {
   CoreAppSnapshot,
   CoreRuntimeItem,
   CoreRuntimeTurn,
-} from './protocol.ts'
-import { coreSystemEventForItem } from './systemEvents.ts'
+} from '@/appServer/protocol.ts'
+import { coreSystemEventForItem } from '@/appServer/systemEvents.ts'
 
 const RENDERABLE_ITEM_TYPES = new Set([
   'userMessage',

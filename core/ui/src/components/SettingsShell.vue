@@ -50,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * SettingsShell — settings page layout
@@ -61,7 +61,7 @@ import { t } from '../i18n/index'
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { ArrowLeft, Circle, type LucideIcon } from 'lucide-vue-next'
-import { settingsSectionIcon, type SettingsSection } from './settingsSections'
+import { settingsSectionIcon, type SettingsSection } from '@/components/settingsSections.ts'
 
 function iconComponent(icon: string | undefined): LucideIcon | null {
   return settingsSectionIcon(icon)

@@ -3,13 +3,13 @@ import { waitForBackendApiBase } from './backendReady'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event'
 import { createApp } from 'vue'
-import { createDirectTransport } from '../../ui/src/transport'
-import { createLamToolsRuntime } from '../../ui/src/app/runtime'
-import LamToolsApp from '../../ui/src/app/LamToolsApp.vue'
+import { createDirectTransport } from '@/transport/index.ts'
+import { createLamToolsRuntime } from '@/app/runtime.ts'
+import LamToolsApp from '@/app/LamToolsApp.vue'
 import {
   completeStartupSplash,
   startStartupSplash,
-} from '../../ui/src/motion/startupSplash'
+} from '@/motion/startupSplash.ts'
 
 // The desktop shell owns every right-click interaction. Prevent WebView's
 // native browser menu globally without stopping propagation, so scoped custom

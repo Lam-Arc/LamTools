@@ -101,7 +101,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * CorePendingDecisionPanel — composer-area takeover for waiting requests.
@@ -119,8 +119,8 @@ import { t } from '../i18n/index'
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import { CircleHelp, Info } from 'lucide-vue-next'
-import { autoGrowTextarea } from '../helpers/autoGrowTextarea'
-import type { CoreDecisionChoice, CorePendingDecision } from '../appServer/pendingDecisions'
+import { autoGrowTextarea } from '@/helpers/autoGrowTextarea.ts'
+import type { CoreDecisionChoice, CorePendingDecision } from '@/appServer/pendingDecisions.ts'
 
 const props = withDefaults(defineProps<{
   items: CorePendingDecision[]

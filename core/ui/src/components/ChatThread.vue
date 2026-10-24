@@ -52,13 +52,13 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
-import type { CoreAttachment, CoreMessage } from '../types'
-import type { LamToolsTransport } from '../transport'
-import type { CoreSubAgentRef } from '../agents/subAgentProjection'
-import MessageView from './MessageView.vue'
-import PluginSystemContributions from './PluginSystemContributions.vue'
+import type { CoreAttachment, CoreMessage } from '@/types.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
+import type { CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
+import MessageView from '@/components/MessageView.vue'
+import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
 
 defineOptions({ name: 'ChatThread' })
 

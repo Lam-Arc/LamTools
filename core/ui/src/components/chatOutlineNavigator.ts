@@ -1,4 +1,4 @@
-import type { CoreMessage } from '../types'
+import type { CoreMessage } from '@/types.ts'
 
 /** The compact outline row returned by the `thread.outline` RPC. */
 export interface ChatOutlineItem {

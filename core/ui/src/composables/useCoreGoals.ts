@@ -1,6 +1,6 @@
 import { ref, type Ref } from 'vue'
-import { createDurableApi, type CoreDurableRequest } from '../durable/api'
-import type { CoreGoal } from '../durable/types'
+import { createDurableApi, type CoreDurableRequest } from '@/durable/api.ts'
+import type { CoreGoal } from '@/durable/types.ts'
 
 /** Max goal refresh frequency during a stream (stream-tick watchers fire far more often). */
 const GOAL_REFRESH_THROTTLE_MS = 2_000

@@ -5,14 +5,14 @@ import type {
   CoreProjectCreateResult,
   CoreProjectSession,
   CoreProjectUpdatePayload,
-} from './types'
+} from '@/projects/types.ts'
 import {
   CORE_PROJECT_COLOR_KEYS,
   CORE_PROJECT_ICON_KEYS,
   DEFAULT_CORE_PROJECT_COLOR_KEY,
   DEFAULT_CORE_PROJECT_ICON_KEY,
-} from './types'
-import type { LamToolsTransport, TransportHttpResponse } from '../transport'
+} from '@/projects/types.ts'
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 
 export interface CoreFileEntry {
   name: string

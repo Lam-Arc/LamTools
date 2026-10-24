@@ -14,7 +14,7 @@ import {
   type ResolvedThemeMode,
   type ThemeData,
   type ThemeMode,
-} from '../helpers/theme'
+} from '@/helpers/theme.ts'
 
 const UI_PREFERENCES_STORAGE_KEY = 'lamtools.core.ui.preferences'
 const LEGACY_UI_PREFERENCES_STORAGE_KEY = 'lamtools.core.ui'

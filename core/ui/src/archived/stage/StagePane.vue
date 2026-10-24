@@ -127,15 +127,15 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref } from 'vue'
 import { Globe, Image, Music, Video, X, type LucideIcon } from 'lucide-vue-next'
-import type { StageResource } from './types'
-import StageImagePreview from './StageImagePreview.vue'
-import StageMediaPreview from './StageMediaPreview.vue'
-import StageBrowser from './StageBrowser.vue'
-import MarkdownRenderer from '../../components/MarkdownRenderer.vue'
-import { openContextMenu } from '../../components/context-menu/context-menu'
+import type { StageResource } from '@/archived/stage/types.ts'
+import StageImagePreview from '@/archived/stage/StageImagePreview.vue'
+import StageMediaPreview from '@/archived/stage/StageMediaPreview.vue'
+import StageBrowser from '@/archived/stage/StageBrowser.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import { openContextMenu } from '@/components/context-menu/context-menu.ts'
 
-const StageCodeEditor = defineAsyncComponent(() => import('./StageCodeEditor.vue'))
-type StageCodeEditorInstance = InstanceType<(typeof import('./StageCodeEditor.vue'))['default']>
+const StageCodeEditor = defineAsyncComponent(() => import('@/archived/stage/StageCodeEditor.vue'))
+type StageCodeEditorInstance = InstanceType<(typeof import('@/archived/stage/StageCodeEditor.vue'))['default']>
 
 const props = defineProps<{
   tabs: StageResource[]

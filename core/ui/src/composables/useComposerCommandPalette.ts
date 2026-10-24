@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from 'vue'
-import { findActiveSlashCandidate, resolveComposerCommandKind } from '../composer/syntax'
-import type { CoreCommandCatalogItem } from '../types'
+import { findActiveSlashCandidate, resolveComposerCommandKind } from '@/composer/syntax.ts'
+import type { CoreCommandCatalogItem } from '@/types.ts'
 
 export interface ComposerCommandPaletteOptions {
   text: Ref<string>

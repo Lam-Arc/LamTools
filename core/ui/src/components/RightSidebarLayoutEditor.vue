@@ -17,10 +17,10 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { Circle } from 'lucide-vue-next'
-import type { RightSidebarLayoutState, RightSidebarModuleDefinition } from '../right-sidebar/types'
+import type { RightSidebarLayoutState, RightSidebarModuleDefinition } from '@/right-sidebar/types.ts'
 
 defineProps<{
   modules: RightSidebarModuleDefinition[]

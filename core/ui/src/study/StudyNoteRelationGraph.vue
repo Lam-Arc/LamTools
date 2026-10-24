@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed } from 'vue'
 import { GitBranch, LoaderCircle } from 'lucide-vue-next'
-import type { StudyNoteGraph } from './types'
+import type { StudyNoteGraph } from '@/study/types.ts'
 
 const props = withDefaults(defineProps<{
   graph: StudyNoteGraph

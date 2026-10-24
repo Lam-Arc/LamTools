@@ -1,6 +1,6 @@
-import type { CoreAppEvent, CoreAppSnapshot } from './protocol'
-import type { LamToolsTransport, TransportConnectionState, TransportMessage } from '../transport'
-import { TransportRequestTimeoutError } from '../transport'
+import type { CoreAppEvent, CoreAppSnapshot } from '@/appServer/protocol.ts'
+import type { LamToolsTransport, TransportConnectionState, TransportMessage } from '@/transport/index.ts'
+import { TransportRequestTimeoutError } from '@/transport/index.ts'
 
 export class CoreRequestAcceptanceUnknownError extends Error {
   readonly code = 'ACCEPTANCE_UNKNOWN'

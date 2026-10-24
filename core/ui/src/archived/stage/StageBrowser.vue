@@ -38,7 +38,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ExternalLink, RefreshCw } from 'lucide-vue-next'
-import { openExternalUrl } from '../../helpers/openUrl'
+import { openExternalUrl } from '@/helpers/openUrl.ts'
 
 const props = defineProps<{
   url: string

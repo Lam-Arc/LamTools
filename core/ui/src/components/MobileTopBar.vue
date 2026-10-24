@@ -110,9 +110,9 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Blocks, Check, Clock, Library, PanelLeft, Plug, RefreshCw, Search, Settings, UserRound } from 'lucide-vue-next'

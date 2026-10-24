@@ -30,11 +30,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { onMounted, onUnmounted, ref } from 'vue'
 import { Camera, FileUp, Image, Paperclip } from 'lucide-vue-next'
-import type { RuntimeFileSource } from '../app/runtime'
+import type { RuntimeFileSource } from '@/app/runtime.ts'
 
 const props = withDefaults(defineProps<{
   categorized?: boolean

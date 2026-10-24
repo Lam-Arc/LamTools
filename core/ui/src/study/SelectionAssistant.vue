@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, render, watch } from 'vue'
 import { Bookmark, Languages, Lightbulb, MessageCircle, Send, X } from 'lucide-vue-next'
-import { useCorePluginModeContext } from '../plugins/context'
-import { registerTextSelectionMenuContributor } from '../components/context-menu'
-import type { ContextMenuEntry, TextSelectionMenuContext } from '../components/context-menu'
-import MarkdownRenderer from '../components/MarkdownRenderer.vue'
-import { captureAnchor, anchorRange, splitRangeForFormulaHighlight } from './anchors'
-import { normalizeMark } from './api'
-import { marks, selectionEvents } from './annotations'
-import type { MarkAnchor, StudyDictionaryEntry, StudyMark, TextAction } from './types'
+import { useCorePluginModeContext } from '@/plugins/context.ts'
+import { registerTextSelectionMenuContributor } from '@/components/context-menu/index.ts'
+import type { ContextMenuEntry, TextSelectionMenuContext } from '@/components/context-menu/index.ts'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import { captureAnchor, anchorRange, splitRangeForFormulaHighlight } from '@/study/anchors.ts'
+import { normalizeMark } from '@/study/api.ts'
+import { marks, selectionEvents } from '@/study/annotations.ts'
+import type { MarkAnchor, StudyDictionaryEntry, StudyMark, TextAction } from '@/study/types.ts'
 import './study.css'
 
 const props = defineProps<{ sessionId: string | null; mode: string; themeMode: string; jump: (anchor: MarkAnchor) => Promise<void> }>()

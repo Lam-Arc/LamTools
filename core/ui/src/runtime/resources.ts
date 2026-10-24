@@ -1,7 +1,7 @@
 
-import { t } from '../i18n/index'
-import type { CoreMessage } from '../types'
-import { assistantSegmentTurnId } from '../appServer/selectors'
+import { t } from '@/i18n/index.ts'
+import type { CoreMessage } from '@/types.ts'
+import { assistantSegmentTurnId } from '@/appServer/selectors.ts'
 
 export const CORE_CONTEXT_COMPACTION_TRIGGER_RATIO = 0.8
 

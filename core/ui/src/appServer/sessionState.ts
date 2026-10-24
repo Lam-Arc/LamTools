@@ -1,4 +1,4 @@
-import type { CoreAppEvent, CoreAppSnapshot, CoreAppThreadStatus } from './protocol.ts'
+import type { CoreAppEvent, CoreAppSnapshot, CoreAppThreadStatus } from '@/appServer/protocol.ts'
 
 export interface CoreSessionState {
   threadId: string

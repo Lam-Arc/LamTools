@@ -34,11 +34,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { ref, computed } from 'vue'
 import { ChevronDown, ChevronRight, EyeOff, FileText, Image, Lock, Music, Video, type LucideIcon } from 'lucide-vue-next'
-import type { LamToolsTransport, TransportHttpResponse } from '../transport'
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 
 const props = defineProps<{
   entry: { name: string; type: 'directory' | 'file'; size: number; ext: string; path?: string }

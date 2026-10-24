@@ -19,7 +19,7 @@ import {
   type CoreThinkingModeOption,
   type CoreThinkingPayload,
   normalizeCorePermissionPreset,
-} from '../composer/execution'
+} from '@/composer/execution.ts'
 
 export interface CoreExecutionControlsStorage {
   getItem(key: string): string | null

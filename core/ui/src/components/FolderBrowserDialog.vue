@@ -85,14 +85,14 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { nextTick, onMounted, ref, computed, watch, defineAsyncComponent } from 'vue'
 import { ArrowUp } from 'lucide-vue-next'
-import type { LamToolsTransport, TransportHttpResponse } from '../transport'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
+import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 
-const FbTreeItem = defineAsyncComponent(() => import('./FbTreeItem.vue'))
+const FbTreeItem = defineAsyncComponent(() => import('@/components/FbTreeItem.vue'))
 
 interface Props {
   modelValue?: boolean

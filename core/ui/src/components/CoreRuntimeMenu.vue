@@ -112,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ChevronDown, ChevronRight, ShieldCheck } from 'lucide-vue-next'
@@ -122,9 +122,9 @@ import {
   normalizeCorePermissionPreset,
   type CorePermissionPreset,
   type CoreSelectOption,
-} from '../composer/execution'
-import { useComposerMenuMotion } from '../motion/composerMenu'
-import { useComposerMenuViewport } from '../composables/useComposerMenuViewport'
+} from '@/composer/execution.ts'
+import { useComposerMenuMotion } from '@/motion/composerMenu.ts'
+import { useComposerMenuViewport } from '@/composables/useComposerMenuViewport.ts'
 
 const props = withDefaults(defineProps<{
   activeMode: string

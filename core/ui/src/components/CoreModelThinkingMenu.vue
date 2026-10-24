@@ -141,16 +141,16 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { Brain, ChevronDown, ChevronRight } from 'lucide-vue-next'
-import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreModelCatalogView, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
-import CoreModelCatalogViewToggle from './CoreModelCatalogViewToggle.vue'
-import { useComposerMenuMotion } from '../motion/composerMenu'
-import { useComposerMenuViewport } from '../composables/useComposerMenuViewport'
+import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreModelCatalogView, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '@/composer/execution.ts'
+import CoreModelCatalogViewToggle from '@/components/CoreModelCatalogViewToggle.vue'
+import { useComposerMenuMotion } from '@/motion/composerMenu.ts'
+import { useComposerMenuViewport } from '@/composables/useComposerMenuViewport.ts'
 
 const props = withDefaults(defineProps<{
   modelValue?: string

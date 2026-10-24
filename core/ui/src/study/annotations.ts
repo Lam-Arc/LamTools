@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import type { StudyMark, TextAction } from './types'
+import type { StudyMark, TextAction } from '@/study/types.ts'
 export const marks = ref<StudyMark[]>([])
 export const selectionEvents = new EventTarget()
 export function showMark(mark: StudyMark, action: TextAction) {

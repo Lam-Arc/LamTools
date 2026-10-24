@@ -3,13 +3,13 @@ import type {
   RightSidebarWidgetAction,
   RightSidebarWidgetSnapshot,
   PluginWidgetEntry,
-} from '../right-sidebar/types'
+} from '@/right-sidebar/types.ts'
 
 export type {
   PluginWidgetEntry,
   RightSidebarWidgetAction,
   RightSidebarWidgetSnapshot,
-} from '../right-sidebar/types'
+} from '@/right-sidebar/types.ts'
 
 export interface PluginUIEntry {
   pluginId: string

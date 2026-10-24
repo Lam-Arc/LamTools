@@ -56,7 +56,7 @@ describe('Core UI package boundary', () => {
   })
 
   it('keeps low-frequency workspaces out of the desktop startup chunk', () => {
-    expect(appSource).toContain("defineAsyncComponent(() => import('../components/CoreSettings.vue'))")
+    expect(appSource).toContain("defineAsyncComponent(() => import('@/components/CoreSettings.vue'))")
     expect(appSource).toContain('<PluginModeHost')
     expect(appSource).not.toContain('WorkflowCanvas.vue')
     expect(bundledPlugins).toContain("'workflow:workflow': () => import('@lamtools/bundled-workflow-ui')")

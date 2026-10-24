@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue';
-import type { CoreAttachment, CoreAttachmentInputItem } from '../types';
+import type { CoreAttachment, CoreAttachmentInputItem } from '@/types.ts';
 
 export function usePendingAttachments() {
   const pendingAttachments = ref<CoreAttachment[]>([]);

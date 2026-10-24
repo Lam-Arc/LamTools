@@ -118,7 +118,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Check, Copy } from 'lucide-vue-next'
@@ -126,16 +126,16 @@ import {
   gradientFromStops,
   relativeLuminance,
   type ThemeData,
-} from '../helpers/theme'
-import SettingsShell from './SettingsShell.vue'
-import { PROJECT_SETTINGS_SECTIONS } from './settingsSections'
-import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
-import ProjectVisualPicker from './ProjectVisualPicker.vue'
-import type { CoreSettingsModel } from './CoreSettings.vue'
-import { copyText } from '../helpers/clipboard'
-import type { CoreProjectColorKey, CoreProjectIconKey } from '../projects/types'
-import { createSettingsDraftGuard, useSettingsDraft } from '../composables/useSettingsDraftGuard'
-import SettingsDraftDialog from './SettingsDraftDialog.vue'
+} from '@/helpers/theme.ts'
+import SettingsShell from '@/components/SettingsShell.vue'
+import { PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
+import CoreSubAgentEditor from '@/components/CoreSubAgentEditor.vue'
+import ProjectVisualPicker from '@/components/ProjectVisualPicker.vue'
+import type { CoreSettingsModel } from '@/components/CoreSettings.vue'
+import { copyText } from '@/helpers/clipboard.ts'
+import type { CoreProjectColorKey, CoreProjectIconKey } from '@/projects/types.ts'
+import { createSettingsDraftGuard, useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
+import SettingsDraftDialog from '@/components/SettingsDraftDialog.vue'
 
 export interface CoreProjectSettingsProject {
   id: string

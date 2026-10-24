@@ -247,12 +247,12 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
-import PluginSystemContributions from './PluginSystemContributions.vue'
-import { isRegionReplaced } from '../plugins/contributions'
+import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
+import { isRegionReplaced } from '@/plugins/contributions.ts'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * WorkspaceShell — three-card workspace layout
@@ -265,13 +265,13 @@ import { t } from '../i18n/index'
  */
 import { gsap } from 'gsap'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, useId, watch } from 'vue'
-import { useComposerLayout } from '../composables/useComposerLayout'
-import { useShellLayout } from '../composables/useShellLayout'
-import type { ThemeData } from '../composables/useShellLayout'
-import ComposerBar from './ComposerBar.vue'
-import CoreSendStopButton from './CoreSendStopButton.vue'
-import CoreToastHost from './CoreToastHost.vue'
-import LeftSidebarShell from './LeftSidebarShell.vue'
+import { useComposerLayout } from '@/composables/useComposerLayout.ts'
+import { useShellLayout } from '@/composables/useShellLayout.ts'
+import type { ThemeData } from '@/composables/useShellLayout.ts'
+import ComposerBar from '@/components/ComposerBar.vue'
+import CoreSendStopButton from '@/components/CoreSendStopButton.vue'
+import CoreToastHost from '@/components/CoreToastHost.vue'
+import LeftSidebarShell from '@/components/LeftSidebarShell.vue'
 
 const props = withDefaults(
   defineProps<{

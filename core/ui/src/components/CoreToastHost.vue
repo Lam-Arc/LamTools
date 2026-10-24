@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
-import { useCoreToast } from '../composables/useCoreToast'
+import { useCoreToast } from '@/composables/useCoreToast.ts'
 
 const { toasts, dismiss } = useCoreToast()
 </script>

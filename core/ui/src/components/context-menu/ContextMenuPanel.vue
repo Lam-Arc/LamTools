@@ -85,22 +85,22 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronDown } from 'lucide-vue-next'
-import ContextMenuItem from './ContextMenuItem.vue'
-import ContextMenuSubmenu from './ContextMenuSubmenu.vue'
+import ContextMenuItem from '@/components/context-menu/ContextMenuItem.vue'
+import ContextMenuSubmenu from '@/components/context-menu/ContextMenuSubmenu.vue'
 import {
   isMenuGroupCollapsed,
   setMenuGroupCollapsed,
-} from './context-menu'
+} from '@/components/context-menu/context-menu.ts'
 import type {
   ContextMenuAnchor,
   ContextMenuAttributes,
   ContextMenuEntry,
   ContextMenuGroupMeta,
-} from './types'
+} from '@/components/context-menu/types.ts'
 
 const props = withDefaults(defineProps<{
   items: ContextMenuEntry[]

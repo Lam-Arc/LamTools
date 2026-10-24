@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, ref, watch } from 'vue'
 import { VueFlow, Handle, Position, MarkerType, type Node, type ViewportTransform, type VueFlowStore } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 import { Check, Circle, Folder, Minus, Plus, Maximize2 } from 'lucide-vue-next'
-import type { KnowledgeItem, Net, Relation } from './types'
+import type { KnowledgeItem, Net, Relation } from '@/study/types.ts'
 
 type StudyGraphNode = Node<KnowledgeItem>
 type InspectedNode = { node: KnowledgeItem; neighbors: KnowledgeItem[]; relations: Relation[] } | null

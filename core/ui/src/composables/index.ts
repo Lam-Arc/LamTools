@@ -8,19 +8,19 @@ export {
   type CoreWorkbenchApi,
   type UseCoreWorkbenchControllerContext,
   type UseCoreWorkbenchControllerOptions,
-} from './useCoreWorkbenchController'
+} from '@/composables/useCoreWorkbenchController.ts'
 
-export { usePendingAttachments } from './usePendingAttachments'
+export { usePendingAttachments } from '@/composables/usePendingAttachments.ts'
 
 export {
   NARROW_VIEWPORT_MAX_WIDTH,
   useNarrowViewport,
-} from './useNarrowViewport'
+} from '@/composables/useNarrowViewport.ts'
 
 export {
   useOutsidePointerDismiss,
   type OutsidePointerDismissOptions,
-} from './useOutsidePointerDismiss'
+} from '@/composables/useOutsidePointerDismiss.ts'
 
 export {
   calculateKeyboardInset,
@@ -28,7 +28,7 @@ export {
   type ComposerLayoutOptions,
   type ComposerLayoutState,
   type ComposerPlacement,
-} from './useComposerLayout'
+} from '@/composables/useComposerLayout.ts'
 
 export {
   CORE_EXECUTION_CONTROLS_STORAGE_KEYS,
@@ -38,69 +38,69 @@ export {
   type CoreExecutionControlsStateInitial,
   type CoreExecutionControlsStateLabels,
   type UseCoreExecutionControlsStateOptions,
-} from './useCoreExecutionControlsState'
+} from '@/composables/useCoreExecutionControlsState.ts'
 
 export {
   useCoreApprovalController,
   type CoreApprovalHandlingResult,
   type UseCoreApprovalControllerOptions,
-} from './useCoreApprovalController'
+} from '@/composables/useCoreApprovalController.ts'
 
 export {
   ASK_SKIP_GUIDANCE,
   ASK_SKIP_TIMEOUT_MS,
   useCoreAskAutoContinue,
   type UseCoreAskAutoContinueOptions,
-} from './useCoreAskAutoContinue'
+} from '@/composables/useCoreAskAutoContinue.ts'
 
 export {
   useCoreLiveTurnController,
   type CoreLiveConnectionState,
   type UseCoreLiveTurnControllerOptions,
-} from './useCoreLiveTurnController'
+} from '@/composables/useCoreLiveTurnController.ts'
 
 export {
   useCoreLiveComposerController,
   type CoreLiveComposerMessages,
   type UseCoreLiveComposerControllerOptions,
-} from './useCoreLiveComposerController'
+} from '@/composables/useCoreLiveComposerController.ts'
 
 export {
   useCoreWorkbenchProjectionController,
   type CoreWorkbenchProjectionStatusChange,
   type UseCoreWorkbenchProjectionControllerOptions,
-} from './useCoreWorkbenchProjectionController'
+} from '@/composables/useCoreWorkbenchProjectionController.ts'
 
 export {
   useCorePendingGuidance,
   type CorePendingGuidanceOptions,
-} from './useCorePendingGuidance'
+} from '@/composables/useCorePendingGuidance.ts'
 
 export {
   useCoreQueuedInputController,
   type CoreQueuedInputControllerItem,
   type UseCoreQueuedInputControllerOptions,
-} from './useCoreQueuedInputController'
+} from '@/composables/useCoreQueuedInputController.ts'
 
 export {
   useCoreProjectSessionState,
   type CoreOwnedProject,
   type CoreOwnedSession,
   type CoreProjectSessionAdapter,
-} from './useCoreProjectSessionState'
+} from '@/composables/useCoreProjectSessionState.ts'
 
 export {
   useCoreConfigState,
   type CoreConfigAdapter,
   type CoreConfigEntity,
-} from './useCoreConfigState'
+} from '@/composables/useCoreConfigState.ts'
 
 export {
   useCoreUiPreferences,
   type CoreUiDensity,
   type CoreUiPreferencesAdapter,
   type CoreUiPreferencesValue,
-} from './useCoreUiPreferences'
+} from '@/composables/useCoreUiPreferences.ts'
 
 export {
   CORE_HISTORY_AUTO_LOAD_THRESHOLD_PX,
@@ -116,25 +116,25 @@ export {
   type CoreScrollSentinel,
   type CoreScrollableElement,
   type UseCoreAutoFollowScrollOptions,
-} from './useCoreAutoFollowScroll'
+} from '@/composables/useCoreAutoFollowScroll.ts'
 
 export {
   createIdleHistoryMount,
   IDLE_HISTORY_MAX_BATCHES,
   type IdleHistoryMountController,
   type IdleHistoryMountOptions,
-} from './useIdleHistoryMount'
+} from '@/composables/useIdleHistoryMount.ts'
 
 export {
   useCoreGoals,
   type UseCoreGoalsOptions,
-} from './useCoreGoals'
+} from '@/composables/useCoreGoals.ts'
 
 export {
   useRightSidebarLayout,
   type RightSidebarLayoutOptions,
   type RightSidebarModuleDefaults,
-} from './useRightSidebarLayout'
+} from '@/composables/useRightSidebarLayout.ts'
 
 export {
   createCoreConnectionErrorToastGate,
@@ -147,7 +147,7 @@ export {
   type CoreConnectionErrorToastGate,
   type CoreToast,
   type CoreToastKind,
-} from './useCoreToast'
+} from '@/composables/useCoreToast.ts'
 
 export {
   readUpdateAutoCheck,
@@ -157,5 +157,5 @@ export {
   type CoreUpdateRequestRpc,
   type CoreUpdateState,
   type CoreUpdateStatus,
-} from './useCoreUpdateState'
+} from '@/composables/useCoreUpdateState.ts'
 

@@ -36,11 +36,12 @@ describe('plugin system preview', () => {
     const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
     await flushPromises()
 
-    await wrapper.find('button.small-btn').trigger('click')
+    await wrapper.find('button[data-toggle-for="hello"]').trigger('click')
     await flushPromises()
 
     expect(rpc).toHaveBeenCalledWith('plugin.system.disable', { name: 'hello' })
-    expect(rpc.mock.calls.filter(([method]) => method === 'plugin.system.list')).toHaveLength(2)
+    // 三次：挂载拉列表 + 内嵌 settings 区贡献仓库拉一次 + 开关后刷新。
+    expect(rpc.mock.calls.filter(([method]) => method === 'plugin.system.list')).toHaveLength(3)
   })
 
   it('opens the config panel from the plugin row', async () => {

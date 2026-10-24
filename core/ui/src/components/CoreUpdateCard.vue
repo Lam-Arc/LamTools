@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * CoreUpdateCard — 应用内更新的卡片。

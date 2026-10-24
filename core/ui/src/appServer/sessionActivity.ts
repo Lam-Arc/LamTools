@@ -1,9 +1,9 @@
-import { isCoreActiveTurnStatus } from './workbenchActions.ts'
-import { selectLatestTurnStatus } from './selectors.ts'
-import { selectLatestActiveTurnId } from './workbenchProjection.ts'
-import { normalizeSubAgentStatus, reconcileCoreSubAgentRecords, reconcileCoreSubAgentRun, selectCoreSubAgentRuns } from '../agents/subAgentProjection'
-import type { CoreAppSnapshot, CoreAppThreadStatus } from './protocol.ts'
-import type { CoreMessage, CoreSubAgentStatus, CoreSubAgentDurableRecord } from '../types'
+import { isCoreActiveTurnStatus } from '@/appServer/workbenchActions.ts'
+import { selectLatestTurnStatus } from '@/appServer/selectors.ts'
+import { selectLatestActiveTurnId } from '@/appServer/workbenchProjection.ts'
+import { normalizeSubAgentStatus, reconcileCoreSubAgentRecords, reconcileCoreSubAgentRun, selectCoreSubAgentRuns } from '@/agents/subAgentProjection.ts'
+import type { CoreAppSnapshot, CoreAppThreadStatus } from '@/appServer/protocol.ts'
+import type { CoreMessage, CoreSubAgentStatus, CoreSubAgentDurableRecord } from '@/types.ts'
 
 /**
  * Session-level activity, derived once and consumed by every surface that needs

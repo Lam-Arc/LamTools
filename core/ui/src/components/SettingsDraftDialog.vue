@@ -14,9 +14,9 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n'
-import type { createSettingsDraftGuard } from '../composables/useSettingsDraftGuard'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
+import { t } from '@/i18n/index.ts'
+import type { createSettingsDraftGuard } from '@/composables/useSettingsDraftGuard.ts'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 
 defineProps<{ guard: ReturnType<typeof createSettingsDraftGuard> }>()
 </script>

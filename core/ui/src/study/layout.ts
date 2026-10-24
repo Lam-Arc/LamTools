@@ -1,4 +1,4 @@
-import type { KnowledgeItem, Relation } from './types'
+import type { KnowledgeItem, Relation } from '@/study/types.ts'
 
 export interface StudyLayoutPosition { x: number; y: number }
 

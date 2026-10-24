@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
-import type { CoreSessionListItem, CoreMessage, CoreRuntimeEvent } from '../types'
-import { createLoadingStepGroup } from '../helpers'
+import type { CoreSessionListItem, CoreMessage, CoreRuntimeEvent } from '@/types.ts'
+import { createLoadingStepGroup } from '@/helpers/index.ts'
 
 // ---------------------------------------------------------------------------
 // Public types

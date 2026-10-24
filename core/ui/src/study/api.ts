@@ -19,7 +19,7 @@ import type {
   StudyNoteTreeNode,
   StudyNote,
   StudySubject,
-} from './types'
+} from '@/study/types.ts'
 
 export type StudyRpc = (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 

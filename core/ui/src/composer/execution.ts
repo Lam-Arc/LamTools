@@ -1,5 +1,5 @@
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 /** Product-level reasoning controls. Provider parameter names stay in Core's adapter profiles. */
 export type CoreThinkingMode = 'off' | 'light' | 'medium' | 'high' | 'xhigh' | 'max'
 

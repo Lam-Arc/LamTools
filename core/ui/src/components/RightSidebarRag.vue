@@ -29,12 +29,12 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
 import { LoaderCircle, Search } from 'lucide-vue-next'
-import { getPluginWidget } from '../plugins/api'
-import type { PluginWidgetEntry, RightSidebarRpc, RightSidebarWidgetSnapshot } from '../right-sidebar/types'
+import { getPluginWidget } from '@/plugins/api.ts'
+import type { PluginWidgetEntry, RightSidebarRpc, RightSidebarWidgetSnapshot } from '@/right-sidebar/types.ts'
 
 const props = withDefaults(defineProps<{
   requestRpc?: RightSidebarRpc

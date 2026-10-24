@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { Languages, Lightbulb, MessageCircle, Trash2 } from 'lucide-vue-next'
-import { marks, showMark, jumpMark, deleteMark } from './annotations'
+import { marks, showMark, jumpMark, deleteMark } from '@/study/annotations.ts'
 </script>
 <template>
   <div class="study-marks">

@@ -1,6 +1,6 @@
 
-import { t } from '../i18n/index'
-import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
+import { t } from '@/i18n/index.ts'
+import type { CoreSubAgentRun, CoreSubAgentStatus } from '@/types.ts'
 
 /** Durable run status → UI label. One vocabulary for the pane, the dialog and
  * the rail so the same run never reads differently in two places. */

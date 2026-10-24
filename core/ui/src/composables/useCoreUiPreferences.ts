@@ -20,7 +20,7 @@ import {
   type ThemeSchedule,
   type ThemeStop,
   themeForMode,
-} from '../helpers/theme'
+} from '@/helpers/theme.ts'
 
 export type CoreUiDensity = 'compact' | 'standard' | 'loose'
 export interface CoreUiPreferencesValue {

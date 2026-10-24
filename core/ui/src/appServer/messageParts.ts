@@ -1,5 +1,5 @@
-import type { CoreMessage, MessagePart } from '../types'
-import type { CoreAppItem } from './protocol.ts'
+import type { CoreMessage, MessagePart } from '@/types.ts'
+import type { CoreAppItem } from '@/appServer/protocol.ts'
 
 export interface AssistantMessagePartsProjection {
   processParts: MessagePart[]

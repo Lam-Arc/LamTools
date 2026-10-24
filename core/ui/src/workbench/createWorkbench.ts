@@ -26,7 +26,7 @@ import {
   type CoreAppServerThreadSwitchOptions,
   type CoreSyncChangeNotification,
   type CoreWorkbenchTurnStatus,
-} from '../appServer'
+} from '@/appServer/index.ts'
 import {
   useCoreApprovalController,
   useCoreAskAutoContinue,
@@ -34,21 +34,21 @@ import {
   useCoreQueuedInputController,
   useCorePendingGuidance,
   useCoreWorkbenchProjectionController,
-} from '../composables'
-import type { CoreInputItem, CoreSessionListItem, CoreSubAgentDurableRecord } from '../types'
+} from '@/composables/index.ts'
+import type { CoreInputItem, CoreSessionListItem, CoreSubAgentDurableRecord } from '@/types.ts'
 import {
   readComposerDraft,
   resolveComposerDraftStorage,
   writeComposerDraft,
   type ComposerDraftStorage,
-} from '../composer/drafts'
+} from '@/composer/drafts.ts'
 import {
   isLamToolsTransport,
   type LamToolsTransport,
   type TransportHttpRequest,
   type TransportHttpResponse,
-} from '../transport'
-import type { WorkbenchComposerCallbacks, WorkbenchRuntimeOptions } from './types'
+} from '@/transport/index.ts'
+import type { WorkbenchComposerCallbacks, WorkbenchRuntimeOptions } from '@/workbench/types.ts'
 
 export interface WorkbenchClientOptions {
   transport: LamToolsTransport

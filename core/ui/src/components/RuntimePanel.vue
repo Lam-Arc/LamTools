@@ -55,10 +55,10 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, ref } from 'vue'
-import type { CoreRuntimeEvent, CoreRuntimeStepGroup } from '../types'
+import type { CoreRuntimeEvent, CoreRuntimeStepGroup } from '@/types.ts'
 
 export interface PanelInfoItem {
   label: string

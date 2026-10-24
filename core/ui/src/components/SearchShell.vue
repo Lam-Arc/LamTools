@@ -91,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * SearchShell — 全局搜索（Ctrl+K / 侧边栏“搜索”）。
@@ -121,8 +121,8 @@ import {
   Webhook,
   X,
 } from 'lucide-vue-next'
-import type { CoreSessionListItem } from '../types'
-import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
+import type { CoreSessionListItem } from '@/types.ts'
+import { gradientFromStops, relativeLuminance, type ThemeData } from '@/helpers/theme.ts'
 
 /** A host-supplied shortcut row, so each host offers only the commands it has. */
 export interface SearchCommand {

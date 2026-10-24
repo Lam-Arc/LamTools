@@ -35,7 +35,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ChevronRight } from 'lucide-vue-next'
-import type { ContextMenuSubmenu as ContextMenuSubmenuEntry } from './types'
+import type { ContextMenuSubmenu as ContextMenuSubmenuEntry } from '@/components/context-menu/types.ts'
 
 defineProps<{
   entry: ContextMenuSubmenuEntry

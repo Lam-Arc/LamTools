@@ -17,7 +17,7 @@ import {
   Presentation,
   type LucideIcon,
 } from 'lucide-vue-next'
-import type { ArtifactRole, ProjectArtifact } from '../types'
+import type { ArtifactRole, ProjectArtifact } from '@/types.ts'
 
 export const ROLE_VALUES: ArtifactRole[] = ['input', 'intermediate', 'deliverable']
 

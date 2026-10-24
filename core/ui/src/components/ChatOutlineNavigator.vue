@@ -48,10 +48,10 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
-import type { CoreMessage } from '../types'
+import type { CoreMessage } from '@/types.ts'
 import {
   CHAT_OUTLINE_ACTIVATION_RATIO,
   compactOutlineMarkerPositions,
@@ -64,7 +64,7 @@ import {
   resolveOutlineSelectedIndex,
   type MountedOutlineMessagePosition,
   type ChatOutlineItem,
-} from './chatOutlineNavigator'
+} from '@/components/chatOutlineNavigator.ts'
 
 export type ChatOutlineRequestRpc = (
   method: string,

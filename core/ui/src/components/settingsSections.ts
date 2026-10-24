@@ -1,5 +1,5 @@
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 /**
  * 设置 / 插件的分区清单与图标映射 — 唯一权威来源。
  *

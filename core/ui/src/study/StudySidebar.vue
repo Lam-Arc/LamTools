@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { BookOpen, ChartNoAxesCombined, ChevronDown, ChevronRight, FileText, GitBranch, Pin, PinOff, Search } from 'lucide-vue-next'
 import { ref } from 'vue'
-import { openContextMenu } from '../components/context-menu'
-import type { Course, KnowledgeItem, StudyPin } from './types'
+import { openContextMenu } from '@/components/context-menu/index.ts'
+import type { Course, KnowledgeItem, StudyPin } from '@/study/types.ts'
 
 type TreeParent = { id: string; kind: 'course' | 'module'; courseId?: string }
 

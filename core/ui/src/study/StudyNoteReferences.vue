@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
-import type { StudyNoteResource } from './types'
+import type { StudyNoteResource } from '@/study/types.ts'
 
 defineProps<{
   resources: StudyNoteResource[]

@@ -14,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed } from 'vue'
 import { Circle, CircleCheck, Clock3, LoaderCircle, TriangleAlert } from 'lucide-vue-next'

@@ -88,18 +88,18 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { X } from 'lucide-vue-next'
-import type { CoreSubAgentRun, CoreSubAgentStatus } from '../types'
-import { subAgentStatusLabel } from '../agents/subAgentDisplay'
-import type { LamToolsTransport } from '../transport'
-import type { CoreSelectOption, CoreThinkingModeOption } from '../composer/execution'
-import { useCoreAutoFollowScroll } from '../composables/useCoreAutoFollowScroll'
-import ChatThread from './ChatThread.vue'
-import ComposerBar from './ComposerBar.vue'
-import CoreExecutionControls from './CoreExecutionControls.vue'
+import type { CoreSubAgentRun, CoreSubAgentStatus } from '@/types.ts'
+import { subAgentStatusLabel } from '@/agents/subAgentDisplay.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
+import type { CoreSelectOption, CoreThinkingModeOption } from '@/composer/execution.ts'
+import { useCoreAutoFollowScroll } from '@/composables/useCoreAutoFollowScroll.ts'
+import ChatThread from '@/components/ChatThread.vue'
+import ComposerBar from '@/components/ComposerBar.vue'
+import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
 
 const props = withDefaults(defineProps<{
   run: CoreSubAgentRun

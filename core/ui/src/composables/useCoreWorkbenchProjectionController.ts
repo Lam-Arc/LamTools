@@ -8,8 +8,8 @@ import {
   type CoreAppSnapshot,
   nextCoreProcessExpandedIds,
   normalizeCoreSessionStatus,
-} from '../appServer'
-import type { CoreMessage, MessagePart } from '../types'
+} from '@/appServer/index.ts'
+import type { CoreMessage, MessagePart } from '@/types.ts'
 
 export interface CoreWorkbenchProjectionStatusChange {
   threadId: string

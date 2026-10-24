@@ -51,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * LibraryHomeView — 资料库的壳：一个入口，三个分区。
@@ -67,12 +67,12 @@ import { t } from '../i18n/index'
  * 分区切换只在最外层；每一项内部的层级（记忆的项目层与档位、方案的状态筛选）各自管自己。
  */
 import { computed, ref, watch } from 'vue'
-import type { CoreProjectClient } from '../projects/client'
-import type { LamToolsTransport } from '../transport'
-import MaterialsView from './MaterialsView.vue'
-import MemoryView from './MemoryView.vue'
-import PlanLibraryView from './PlanLibraryView.vue'
-import type { PlanLibraryEntry } from './PlanLibraryView.vue'
+import type { CoreProjectClient } from '@/projects/client.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
+import MaterialsView from '@/components/MaterialsView.vue'
+import MemoryView from '@/components/MemoryView.vue'
+import PlanLibraryView from '@/components/PlanLibraryView.vue'
+import type { PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
 
 const props = defineProps<{
   /** The switchable project client (desktop HTTP or the phone's standalone bridge). */

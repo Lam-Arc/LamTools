@@ -1,4 +1,4 @@
-import { hydrateSnapshot as defaultHydrateSnapshot } from './snapshot.ts'
+import { hydrateSnapshot as defaultHydrateSnapshot } from '@/appServer/snapshot.ts'
 import type {
   CoreAppCommandCatalogItem,
   CoreAppEvent,
@@ -11,17 +11,17 @@ import type {
   CoreRuntimeItem,
   CoreRuntimeSnapshot,
   CoreAppThreadStatus,
-} from './protocol.ts'
-import { TransportRpcError } from '../transport'
-import type { CoreSyncChangeNotification, CoreThreadGapNotification } from './client.ts'
-import { CoreRequestAcceptanceUnknownError } from './client.ts'
-import { TransportRequestTimeoutError } from '../transport'
+} from '@/appServer/protocol.ts'
+import { TransportRpcError } from '@/transport/index.ts'
+import type { CoreSyncChangeNotification, CoreThreadGapNotification } from '@/appServer/client.ts'
+import { CoreRequestAcceptanceUnknownError } from '@/appServer/client.ts'
+import { TransportRequestTimeoutError } from '@/transport/index.ts'
 import {
   CoreSessionStateStore,
   isStaleSnapshot,
   snapshotRevision as sessionSnapshotRevision,
   snapshotSequence,
-} from './sessionState.ts'
+} from '@/appServer/sessionState.ts'
 
 export interface CoreAppServerRuntimeClient {
   capabilities?: Record<string, unknown>

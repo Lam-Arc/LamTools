@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
@@ -14,10 +14,10 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-vue-next'
-import type { CoreArrangeJob } from '../durable/types'
-import { createDurableApi, type CoreDurableRequest } from '../durable/api'
-import FullAreaActions from './FullAreaActions.vue'
-import UiSelect from './UiSelect.vue'
+import type { CoreArrangeJob } from '@/durable/types.ts'
+import { createDurableApi, type CoreDurableRequest } from '@/durable/api.ts'
+import FullAreaActions from '@/components/FullAreaActions.vue'
+import UiSelect from '@/components/UiSelect.vue'
 
 const props = defineProps<{
   workRoot?: string

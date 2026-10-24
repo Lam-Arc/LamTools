@@ -119,11 +119,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Pin, Puzzle, Search, Settings } from 'lucide-vue-next'
-import RailAction from './RailAction.vue'
+import RailAction from '@/components/RailAction.vue'
 
 const props = withDefaults(
   defineProps<{

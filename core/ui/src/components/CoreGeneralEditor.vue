@@ -189,13 +189,13 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Check, ToggleLeft, ToggleRight } from 'lucide-vue-next'
-import UiSelect from './UiSelect.vue'
-import { UI_LANGUAGES, uiLanguage, saveUiLanguage } from '../i18n'
-import { useSettingsDraft } from '../composables/useSettingsDraftGuard'
+import UiSelect from '@/components/UiSelect.vue'
+import { UI_LANGUAGES, uiLanguage, saveUiLanguage } from '@/i18n/index.ts'
+import { useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 
 const languageOptions = [...UI_LANGUAGES]
 const languageSaving = ref(false)

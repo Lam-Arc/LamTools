@@ -31,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * PluginsShell — 与设置（CoreSettings）同级的插件管理全屏页。
@@ -43,13 +43,13 @@ import { t } from '../i18n/index'
  * 复用 SettingsShell 骨架（同一 overlay/侧边栏布局 + --settings-* token）。
  */
 import { computed, ref } from 'vue'
-import SettingsShell from './SettingsShell.vue'
-import { PLUGIN_SHELL_SECTIONS, type SettingsSection } from './settingsSections'
-import CorePluginSystemEditor from './CorePluginSystemEditor.vue'
-import CoreSkillsEditor from './CoreSkillsEditor.vue'
-import CoreHooksEditor from './CoreHooksEditor.vue'
-import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
-import type { LamToolsTransport } from '../transport'
+import SettingsShell from '@/components/SettingsShell.vue'
+import { PLUGIN_SHELL_SECTIONS, type SettingsSection } from '@/components/settingsSections.ts'
+import CorePluginSystemEditor from '@/components/CorePluginSystemEditor.vue'
+import CoreSkillsEditor from '@/components/CoreSkillsEditor.vue'
+import CoreHooksEditor from '@/components/CoreHooksEditor.vue'
+import { gradientFromStops, relativeLuminance, type ThemeData } from '@/helpers/theme.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>

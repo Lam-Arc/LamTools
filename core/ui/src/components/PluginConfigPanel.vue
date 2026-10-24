@@ -76,7 +76,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 interface PluginConfigField {
   key: string

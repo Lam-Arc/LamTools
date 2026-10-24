@@ -9,16 +9,16 @@ import {
   type CoreSteerAttempt,
   type CoreWorkbenchTurnStatus,
   type SubmitCoreComposerTaskResult,
-} from '../appServer/workbenchActions'
-import type { CoreCommandCatalogItem, CoreInputItem } from '../types'
-import { buildCoreComposerInputItems } from '../composer/inputItems'
-import { CoreRequestAcceptanceUnknownError } from '../appServer/client'
-import { parseComposerInput } from '../composer/syntax'
-import { useComposerCommandPalette } from './useComposerCommandPalette'
+} from '@/appServer/workbenchActions.ts'
+import type { CoreCommandCatalogItem, CoreInputItem } from '@/types.ts'
+import { buildCoreComposerInputItems } from '@/composer/inputItems.ts'
+import { CoreRequestAcceptanceUnknownError } from '@/appServer/client.ts'
+import { parseComposerInput } from '@/composer/syntax.ts'
+import { useComposerCommandPalette } from '@/composables/useComposerCommandPalette.ts'
 import {
   useCoreLiveTurnController,
   type CoreLiveConnectionState,
-} from './useCoreLiveTurnController'
+} from '@/composables/useCoreLiveTurnController.ts'
 
 export interface CoreLiveComposerMessages {
   commandCatalogLoadFailed?: (error: string) => string

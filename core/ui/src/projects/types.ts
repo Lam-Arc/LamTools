@@ -1,4 +1,4 @@
-import type { ProjectGroup, SessionItem } from '../types'
+import type { ProjectGroup, SessionItem } from '@/types.ts'
 
 export const CORE_PROJECT_ICON_KEYS = [
   'folder',

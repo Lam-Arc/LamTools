@@ -6,8 +6,8 @@
  */
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { type ThemeData, themeToCSSVars, type ThemeCSSVars, migrateThemeDefaults } from '../helpers/theme'
-import { DEFAULT_THEME } from '../helpers/theme'
+import { type ThemeData, themeToCSSVars, type ThemeCSSVars, migrateThemeDefaults } from '@/helpers/theme.ts'
+import { DEFAULT_THEME } from '@/helpers/theme.ts'
 
 export type DensityMode = 'compact' | 'standard' | 'loose'
 export type { ThemeData, ThemeCSSVars }

@@ -343,7 +343,7 @@ describe('Study mode', () => {
     expect(sidebarSource).toContain('管理你的知识')
     expect(sidebarSource).toContain("select('manage')")
     expect(studySource).toContain('stableLayeredStudyLayout')
-    expect(studySource).toContain("defineAsyncComponent(() => import('./StudyGraph.vue'))")
+    expect(studySource).toContain("defineAsyncComponent(() => import('@/study/StudyGraph.vue')")
     expect(graphSource).toContain('data-study-layout="layered"')
     expect(graphSource).toContain("type: 'default'")
     expect(graphSource).toContain('@init="bindGraphViewport"')

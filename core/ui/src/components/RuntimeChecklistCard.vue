@@ -100,11 +100,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { gsap } from 'gsap'
-import type { CoreRuntimeStep, CoreRuntimeStepGroup, CoreRuntimeStepStatus } from '../types'
+import type { CoreRuntimeStep, CoreRuntimeStepGroup, CoreRuntimeStepStatus } from '@/types.ts'
 
 const props = withDefaults(defineProps<{
   stepGroups?: CoreRuntimeStepGroup[]

@@ -14,7 +14,7 @@
  */
 
 import { computed, ref } from 'vue'
-import { getAppVersion, openUpdatePage, quitApp } from '../helpers/update'
+import { getAppVersion, openUpdatePage, quitApp } from '@/helpers/update.ts'
 
 export type CoreUpdateStatus = 'idle' | 'checking' | 'update_available' | 'up_to_date' | 'check_failed'
 

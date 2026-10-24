@@ -5,8 +5,8 @@ import type {
   TransportHttpResponse,
   TransportMessage,
   TransportRequest,
-} from './types'
-import { TransportDisconnectedError, TransportRpcError, TransportRequestTimeoutError } from './types'
+} from '@/transport/types.ts'
+import { TransportDisconnectedError, TransportRpcError, TransportRequestTimeoutError } from '@/transport/types.ts'
 
 type FetchLike = typeof fetch
 

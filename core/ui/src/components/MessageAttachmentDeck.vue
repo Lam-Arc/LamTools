@@ -145,9 +145,9 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { Flip } from 'gsap/Flip'
 import { gsap } from 'gsap'
@@ -166,9 +166,9 @@ import {
   type LucideIcon,
 } from 'lucide-vue-next'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import type { CoreAttachment, ToolArtifact } from '../types'
-import type { LamToolsTransport, TransportHttpResponse } from '../transport'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
+import type { CoreAttachment, ToolArtifact } from '@/types.ts'
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 
 gsap.registerPlugin(Flip)
 

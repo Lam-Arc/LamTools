@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
-import type { CoreSessionListItem } from '../types'
-import { isInternalSession } from './visibility'
+import type { CoreSessionListItem } from '@/types.ts'
+import { isInternalSession } from '@/sessions/visibility.ts'
 
 /** Plugin views own their sessions; Core remembers its last conversation. */
 export function createModeSessionState(options: {

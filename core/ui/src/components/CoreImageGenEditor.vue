@@ -76,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { onMounted, reactive, ref } from 'vue'
 import { Check, ToggleLeft, ToggleRight } from 'lucide-vue-next'

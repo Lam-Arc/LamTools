@@ -4,13 +4,13 @@ import {
   normalizeNoteGraph,
   normalizeNoteTree,
   type StudyRpc,
-} from './api'
+} from '@/study/api.ts'
 import type {
   StudyNote,
   StudyNoteGraph,
   StudyNoteLock,
   StudyNoteTreeNode,
-} from './types'
+} from '@/study/types.ts'
 
 export interface NoteDocumentSaveMeta {
   revision?: number
@@ -276,7 +276,7 @@ export function useStudyNotes(rpc: StudyRpc) {
     // The mutation response is currently flat ({lock_id,start,end,quote}); a
     // nested {lock:{...}} response remains accepted for forward compatibility.
     const lockValue = result.lock || result
-    const lock = lockValue && typeof lockValue === 'object' ? (await import('./api')).normalizeNoteLock(lockValue) : null
+    const lock = lockValue && typeof lockValue === 'object' ? (await import('@/study/api.ts')).normalizeNoteLock(lockValue) : null
     if (lock && selectedNote.value?.id === note.id) selectedNote.value = normalizeNote({ ...selectedNote.value, locks: [...selectedNote.value.locks, lock] })
     return lock
   }

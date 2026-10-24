@@ -125,12 +125,12 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
 import { ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
-import type { CoreSkillItem } from '../types'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import type { CoreSkillItem } from '@/types.ts'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>

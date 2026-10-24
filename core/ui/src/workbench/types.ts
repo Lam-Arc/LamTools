@@ -8,15 +8,15 @@ import type {
   CoreSessionPhase,
   CoreSteerOutcome,
   CoreSyncChangeNotification,
-} from '../appServer'
-import type { CoreCommandCatalogItem, CoreInputItem, CoreMessage, CoreSessionListItem, CoreSubAgentDurableRecord } from '../types'
-import type { useComposerCommandPalette } from '../composables/useComposerCommandPalette'
-import type { useCoreApprovalController } from '../composables/useCoreApprovalController'
-import type { useCoreLiveComposerController } from '../composables/useCoreLiveComposerController'
-import type { useCoreQueuedInputController } from '../composables/useCoreQueuedInputController'
-import type { CoreQueuedInput } from '../appServer/workbenchProjection'
-import type { ComposerDraftStorage } from '../composer/drafts'
-import type { LamToolsTransport, TransportHttpRequest, TransportHttpResponse } from '../transport'
+} from '@/appServer/index.ts'
+import type { CoreCommandCatalogItem, CoreInputItem, CoreMessage, CoreSessionListItem, CoreSubAgentDurableRecord } from '@/types.ts'
+import type { useComposerCommandPalette } from '@/composables/useComposerCommandPalette.ts'
+import type { useCoreApprovalController } from '@/composables/useCoreApprovalController.ts'
+import type { useCoreLiveComposerController } from '@/composables/useCoreLiveComposerController.ts'
+import type { useCoreQueuedInputController } from '@/composables/useCoreQueuedInputController.ts'
+import type { CoreQueuedInput } from '@/appServer/workbenchProjection.ts'
+import type { ComposerDraftStorage } from '@/composer/drafts.ts'
+import type { LamToolsTransport, TransportHttpRequest, TransportHttpResponse } from '@/transport/index.ts'
 
 export type WorkbenchConnectionState = 'connecting' | 'open' | 'closed' | 'error'
 

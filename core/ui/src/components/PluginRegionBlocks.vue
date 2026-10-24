@@ -117,8 +117,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import { t } from '../i18n/index'
-import { injectScript, type PluginAction, type PluginBlock, type PluginRegionContribution } from '../plugins/contributions'
+import { t } from '@/i18n/index.ts'
+import { injectScript, type PluginAction, type PluginBlock, type PluginRegionContribution } from '@/plugins/contributions.ts'
 
 interface RegionView extends PluginRegionContribution {
   entryUrl: string

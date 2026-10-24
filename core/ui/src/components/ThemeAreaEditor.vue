@@ -92,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * ThemeAreaEditor — single theme area (backdrop/main/composer/control) editor
@@ -100,7 +100,7 @@ import { t } from '../i18n/index'
  * Handles: gradient stops, angle, opacity, text color.
  */
 import { computed } from 'vue'
-import type { ThemeStop } from '../helpers/theme'
+import type { ThemeStop } from '@/helpers/theme.ts'
 
 const props = defineProps<{
   label: string

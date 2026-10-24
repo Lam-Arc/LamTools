@@ -52,9 +52,9 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * ComposerBar — floating composer bar (composer layer in the four-layer system)
@@ -63,7 +63,7 @@ import { t } from '../i18n/index'
  * Drag-and-drop support via slots and events.
  */
 import { ref } from 'vue'
-import CoreSendStopButton from './CoreSendStopButton.vue'
+import CoreSendStopButton from '@/components/CoreSendStopButton.vue'
 
 const props = withDefaults(defineProps<{
   modelValue?: string

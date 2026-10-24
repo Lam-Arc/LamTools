@@ -1,5 +1,5 @@
 import { nextTick, type ObjectDirective } from 'vue'
-import { coreIsScrollNearBottom } from '../composables/useCoreAutoFollowScroll'
+import { coreIsScrollNearBottom } from '@/composables/useCoreAutoFollowScroll.ts'
 
 /**
  * Core 自动跟随滚动 —— 内层面板指令（v-auto-follow-scroll）

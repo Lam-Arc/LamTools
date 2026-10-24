@@ -147,12 +147,12 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { Trash2 } from 'lucide-vue-next'
-import type { CoreSubAgentRun } from '../types'
-import { normalizeSubAgentType, subAgentStatusLabel as statusLabel } from '../agents/subAgentDisplay'
+import type { CoreSubAgentRun } from '@/types.ts'
+import { normalizeSubAgentType, subAgentStatusLabel as statusLabel } from '@/agents/subAgentDisplay.ts'
 
 /** 状态分组顺序：与投影里的运行排序同一口径——在跑的最前，已完成的最后。 */
 const STATUS_ORDER = ['running', 'pending', 'paused', 'error', 'interrupted', 'idle', 'closed', 'completed']

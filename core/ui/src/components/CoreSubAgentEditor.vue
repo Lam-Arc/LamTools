@@ -211,13 +211,13 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
-import UiSelect from './UiSelect.vue'
-import type { CoreSettingsModel } from './CoreSettings.vue'
-import { CORE_THINKING_LABELS, type CoreThinkingMode } from '../composer/execution'
-import { useSettingsDraft } from '../composables/useSettingsDraftGuard'
+import UiSelect from '@/components/UiSelect.vue'
+import type { CoreSettingsModel } from '@/components/CoreSettings.vue'
+import { CORE_THINKING_LABELS, type CoreThinkingMode } from '@/composer/execution.ts'
+import { useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 
 type RoleAssignmentType = 'consider' | 'execute'
 type DelegationStrategy = 'forbidden' | 'low' | 'medium' | 'high'

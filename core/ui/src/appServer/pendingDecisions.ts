@@ -13,8 +13,8 @@
  * (`approve_once` / `deny` / `other_guidance`), so it lives here once instead
  * of being restated per surface.
  */
-import type { CoreAppInteraction } from './protocol.ts'
-import type { CoreMessage, MessagePart } from '../types.ts'
+import type { CoreAppInteraction } from '@/appServer/protocol.ts'
+import type { CoreMessage, MessagePart } from '@/types.ts'
 
 export type CoreDecisionFactTone = 'neutral' | 'warn'
 

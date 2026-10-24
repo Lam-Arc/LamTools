@@ -313,9 +313,9 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onBeforeUnmount, ref, reactive, watch } from 'vue'
 import {
@@ -331,15 +331,15 @@ import {
   Settings,
   Trash2,
 } from 'lucide-vue-next'
-import { motionEnterDirective } from '../directives/motionEnter'
-import { closeContextMenu, contextMenuState, isContextMenuOpen, openContextMenu } from './context-menu/context-menu'
-import type { ContextMenuEntry } from './context-menu/types'
-import ProjectVisualIcon from './ProjectVisualIcon.vue'
+import { motionEnterDirective } from '@/directives/motionEnter.ts'
+import { closeContextMenu, contextMenuState, isContextMenuOpen, openContextMenu } from '@/components/context-menu/context-menu.ts'
+import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
+import ProjectVisualIcon from '@/components/ProjectVisualIcon.vue'
 import type {
   CoreSessionExportFormat,
   ProjectGroup as CoreProjectGroup,
   SessionItem as CoreSessionItem,
-} from '../types'
+} from '@/types.ts'
 
 // ---------------------------------------------------------------------------
 // Types

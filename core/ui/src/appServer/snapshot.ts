@@ -1,4 +1,4 @@
-import type { CoreAppSnapshot } from './protocol.ts'
+import type { CoreAppSnapshot } from '@/appServer/protocol.ts'
 
 export function hydrateSnapshot<T extends CoreAppSnapshot>(snapshot: T): T {
   return {

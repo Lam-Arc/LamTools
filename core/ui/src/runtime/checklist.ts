@@ -4,7 +4,7 @@ import type {
   CoreRuntimeStepGroup,
   CoreRuntimeStepStatus,
   MessagePart,
-} from '../types'
+} from '@/types.ts'
 
 type ChecklistRecord = Record<string, unknown>
 

@@ -1,5 +1,5 @@
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 /**
  * Machine-authored transcript rows.
  *
@@ -11,7 +11,7 @@ import { t } from '../i18n/index'
  * user typed. This module carries the one check that tells such a row apart and
  * parses what it says.
  */
-import type { CoreAppItem } from './protocol.ts'
+import type { CoreAppItem } from '@/appServer/protocol.ts'
 
 export type CoreSystemEventKind = 'member_wake' | 'memory_resume' | 'system'
 

@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * DocumentEditor — 方案与记忆共用的文档编辑器。

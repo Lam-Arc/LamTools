@@ -28,8 +28,8 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { RefreshCw } from 'lucide-vue-next'
-import type { CoreProjectClient, CoreFileEntry } from '../../projects/client'
-import FileTreeNode from './FileTreeNode.vue'
+import type { CoreProjectClient, CoreFileEntry } from '@/projects/client.ts'
+import FileTreeNode from '@/archived/stage/FileTreeNode.vue'
 
 const props = defineProps<{
   projectId: string

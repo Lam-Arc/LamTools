@@ -9,14 +9,14 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 
-import PluginRegionBlocks from './PluginRegionBlocks.vue'
+import PluginRegionBlocks from '@/components/PluginRegionBlocks.vue'
 import {
   contributionsFor,
   contributionsRpc,
   ensureContributions,
   type PluginRegionContribution,
   type PluginRpc,
-} from '../plugins/contributions'
+} from '@/plugins/contributions.ts'
 
 export type { PluginRpc }
 

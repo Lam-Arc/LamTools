@@ -95,17 +95,17 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { gsap } from 'gsap'
-import type { CoreMessage } from '../types'
+import type { CoreMessage } from '@/types.ts'
 import {
   buildCacheTrend,
   buildCoreResourceSummary,
   CORE_CONTEXT_COMPACTION_TRIGGER_RATIO,
   formatPercent,
-} from '../runtime/resources'
+} from '@/runtime/resources.ts'
 
 const props = withDefaults(defineProps<{
   /** 缺省为空：宿主没有会话消息时资源卡仍要能挂载（显示暂无统计）。 */

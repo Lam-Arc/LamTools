@@ -4,8 +4,8 @@
  */
 
 // Types
-export { UI_LANGUAGES, LANGUAGE_NAMESPACE, uiLanguage, setUiLanguage, loadUiLanguage, saveUiLanguage, t, defaultUiText } from './i18n'
-export type { UiLanguage } from './i18n'
+export { UI_LANGUAGES, LANGUAGE_NAMESPACE, uiLanguage, setUiLanguage, loadUiLanguage, saveUiLanguage, t, defaultUiText } from '@/i18n/index.ts'
+export type { UiLanguage } from '@/i18n/index.ts'
 export type {
   ProductFeatureId,
   ProductAdapter,
@@ -46,77 +46,77 @@ export type {
   ThemeData,
   ThemePreset,
   ThemeCSSVars,
-} from './types';
+} from '@/types.ts';
 
-export type { CoreGoal, CoreArrangeJob } from './durable/types';
+export type { CoreGoal, CoreArrangeJob } from '@/durable/types.ts';
 
 export {
   createDurableApi,
   type CoreArrangeOccurrence,
   type CoreDurableApi,
   type CoreDurableRequest,
-} from './durable/api';
+} from '@/durable/api.ts';
 
-export { WORKSPACE_SLOT_NAMES } from './types';
+export { WORKSPACE_SLOT_NAMES } from '@/types.ts';
 
 export {
   buildCoreResourceSummary,
   CORE_CONTEXT_COMPACTION_TRIGGER_RATIO,
   type CoreResourceSummary,
-} from './runtime/resources';
-export { buildCurrentTurnChecklistGroups } from './runtime/checklist';
-export { selectCoreSubAgentRun, selectCoreSubAgentRuns } from './agents/subAgentProjection';
+} from '@/runtime/resources.ts';
+export { buildCurrentTurnChecklistGroups } from '@/runtime/checklist.ts';
+export { selectCoreSubAgentRun, selectCoreSubAgentRuns } from '@/agents/subAgentProjection.ts';
 
 // Components
-export { default as WorkspaceShell } from './components/WorkspaceShell.vue';
-export { default as LamToolsApp } from './app/LamToolsApp.vue';
-export { default as LeftSidebarShell } from './components/LeftSidebarShell.vue';
-export { default as RailAction } from './components/RailAction.vue';
-export { default as SessionSidebar } from './components/SessionSidebar.vue';
-export { default as ChatThread } from './components/ChatThread.vue';
-export { default as ComposerBar } from './components/ComposerBar.vue';
-export { default as CoreSendStopButton } from './components/CoreSendStopButton.vue';
-export { default as MobileTopBar } from './components/MobileTopBar.vue';
-export { default as CoreExecutionControls } from './components/CoreExecutionControls.vue';
-export { default as CoreRuntimeMenu } from './components/CoreRuntimeMenu.vue';
-export { default as CoreWorkspaceMenu } from './components/CoreWorkspaceMenu.vue';
-export { default as CoreModelThinkingMenu } from './components/CoreModelThinkingMenu.vue';
-export { default as CoreSubAgentPanel } from './components/CoreSubAgentPanel.vue';
-export { default as CoreSubAgentDialog } from './components/CoreSubAgentDialog.vue';
-export { default as CoreResourceStats } from './components/CoreResourceStats.vue';
-export { default as MarkdownRenderer } from './components/MarkdownRenderer.vue';
-export { default as UiSelect } from './components/UiSelect.vue';
-export { default as CoreQueuedInputTray } from './components/CoreQueuedInputTray.vue';
-export { default as CorePendingDecisionPanel } from './components/CorePendingDecisionPanel.vue';
-export { default as CommandPalette } from './components/CommandPalette.vue';
-export { default as AttachmentTray } from './components/AttachmentTray.vue';
-export { default as RuntimePanel } from './components/RuntimePanel.vue';
-export { default as RuntimeChecklistCard } from './components/RuntimeChecklistCard.vue';
-export { default as SettingsShell } from './components/SettingsShell.vue';
-export { default as ThemeEditor } from './components/ThemeEditor.vue';
-export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';
-export { default as CoreSettings } from './components/CoreSettings.vue';
-export { default as MobileControlPanel } from './components/MobileControlPanel.vue';
-export { default as PluginsShell } from './components/PluginsShell.vue';
-export { default as PluginModeHost } from './components/PluginModeHost.vue';
-export { default as CoreProjectSettings } from './components/CoreProjectSettings.vue';
-export type { CoreProjectSettingsProject } from './components/CoreProjectSettings.vue';
-export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue';
-export { default as CoreSessionTitleEditor } from './components/CoreSessionTitleEditor.vue';
-export { default as CoreImageGenEditor } from './components/CoreImageGenEditor.vue';
-export { default as CoreGeneralEditor } from './components/CoreGeneralEditor.vue';
-export { default as ArtifactPanel } from './components/ArtifactPanel.vue';
-export { default as RightSidebarHost } from './components/RightSidebarHost.vue';
-export { default as RightSidebarModule } from './components/RightSidebarModule.vue';
-export { default as RightSidebarLayoutEditor } from './components/RightSidebarLayoutEditor.vue';
-export { default as RightSidebarWidgetRenderer } from './components/RightSidebarWidgetRenderer.vue';
-export { default as RightSidebarRuntimeStatus } from './components/RightSidebarRuntimeStatus.vue';
-export { default as RightSidebarWebSearch } from './components/RightSidebarWebSearch.vue';
-export { default as RightSidebarRag } from './components/RightSidebarRag.vue';
-export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
-export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
-export { default as PlanLibraryView } from './components/PlanLibraryView.vue';
-export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';
+export { default as WorkspaceShell } from '@/components/WorkspaceShell.vue';
+export { default as LamToolsApp } from '@/app/LamToolsApp.vue';
+export { default as LeftSidebarShell } from '@/components/LeftSidebarShell.vue';
+export { default as RailAction } from '@/components/RailAction.vue';
+export { default as SessionSidebar } from '@/components/SessionSidebar.vue';
+export { default as ChatThread } from '@/components/ChatThread.vue';
+export { default as ComposerBar } from '@/components/ComposerBar.vue';
+export { default as CoreSendStopButton } from '@/components/CoreSendStopButton.vue';
+export { default as MobileTopBar } from '@/components/MobileTopBar.vue';
+export { default as CoreExecutionControls } from '@/components/CoreExecutionControls.vue';
+export { default as CoreRuntimeMenu } from '@/components/CoreRuntimeMenu.vue';
+export { default as CoreWorkspaceMenu } from '@/components/CoreWorkspaceMenu.vue';
+export { default as CoreModelThinkingMenu } from '@/components/CoreModelThinkingMenu.vue';
+export { default as CoreSubAgentPanel } from '@/components/CoreSubAgentPanel.vue';
+export { default as CoreSubAgentDialog } from '@/components/CoreSubAgentDialog.vue';
+export { default as CoreResourceStats } from '@/components/CoreResourceStats.vue';
+export { default as MarkdownRenderer } from '@/components/MarkdownRenderer.vue';
+export { default as UiSelect } from '@/components/UiSelect.vue';
+export { default as CoreQueuedInputTray } from '@/components/CoreQueuedInputTray.vue';
+export { default as CorePendingDecisionPanel } from '@/components/CorePendingDecisionPanel.vue';
+export { default as CommandPalette } from '@/components/CommandPalette.vue';
+export { default as AttachmentTray } from '@/components/AttachmentTray.vue';
+export { default as RuntimePanel } from '@/components/RuntimePanel.vue';
+export { default as RuntimeChecklistCard } from '@/components/RuntimeChecklistCard.vue';
+export { default as SettingsShell } from '@/components/SettingsShell.vue';
+export { default as ThemeEditor } from '@/components/ThemeEditor.vue';
+export { default as ThemeAreaEditor } from '@/components/ThemeAreaEditor.vue';
+export { default as CoreSettings } from '@/components/CoreSettings.vue';
+export { default as MobileControlPanel } from '@/components/MobileControlPanel.vue';
+export { default as PluginsShell } from '@/components/PluginsShell.vue';
+export { default as PluginModeHost } from '@/components/PluginModeHost.vue';
+export { default as CoreProjectSettings } from '@/components/CoreProjectSettings.vue';
+export type { CoreProjectSettingsProject } from '@/components/CoreProjectSettings.vue';
+export { default as CoreProjectCreate } from '@/components/CoreProjectCreate.vue';
+export { default as CoreSessionTitleEditor } from '@/components/CoreSessionTitleEditor.vue';
+export { default as CoreImageGenEditor } from '@/components/CoreImageGenEditor.vue';
+export { default as CoreGeneralEditor } from '@/components/CoreGeneralEditor.vue';
+export { default as ArtifactPanel } from '@/components/ArtifactPanel.vue';
+export { default as RightSidebarHost } from '@/components/RightSidebarHost.vue';
+export { default as RightSidebarModule } from '@/components/RightSidebarModule.vue';
+export { default as RightSidebarLayoutEditor } from '@/components/RightSidebarLayoutEditor.vue';
+export { default as RightSidebarWidgetRenderer } from '@/components/RightSidebarWidgetRenderer.vue';
+export { default as RightSidebarRuntimeStatus } from '@/components/RightSidebarRuntimeStatus.vue';
+export { default as RightSidebarWebSearch } from '@/components/RightSidebarWebSearch.vue';
+export { default as RightSidebarRag } from '@/components/RightSidebarRag.vue';
+export { default as CoreAgentsEditor } from '@/components/CoreAgentsEditor.vue';
+export { default as CoreArrangeManager } from '@/components/CoreArrangeManager.vue';
+export { default as PlanLibraryView } from '@/components/PlanLibraryView.vue';
+export { default as CoreGoalStrip } from '@/components/CoreGoalStrip.vue';
 export {
   PluginUIRegistry,
   pluginUIRegistry,
@@ -128,7 +128,7 @@ export {
   listWidgets,
   unregisterPlugin,
   unregisterWidgets,
-} from './plugins/registry';
+} from '@/plugins/registry.ts';
 export {
   listPluginUI,
   refreshPluginUIModes,
@@ -136,8 +136,8 @@ export {
   getPluginWidget,
   invokePluginWidget,
   refreshPluginUIWidgets,
-} from './plugins/api';
-export { PLUGIN_WIDGET_RPC_METHODS } from './plugins/types';
+} from '@/plugins/api.ts';
+export { PLUGIN_WIDGET_RPC_METHODS } from '@/plugins/types.ts';
 export type {
   PluginMode,
   PluginModeLoader,
@@ -153,7 +153,7 @@ export type {
   PluginWidgetAction,
   RightSidebarWidgetAction,
   RightSidebarWidgetSnapshot,
-} from './plugins/types';
+} from '@/plugins/types.ts';
 export type {
   RightSidebarLayoutController,
   RightSidebarLayoutState,
@@ -169,8 +169,8 @@ export type {
   RightSidebarWidgetMetricBlock,
   RightSidebarWidgetListBlock,
   RightSidebarWidgetProgressBlock,
-} from './right-sidebar/types';
-export { default as FolderBrowserDialog } from './components/FolderBrowserDialog.vue';
+} from '@/right-sidebar/types.ts';
+export { default as FolderBrowserDialog } from '@/components/FolderBrowserDialog.vue';
 export {
   ContextMenuHost,
   ContextMenuPanel,
@@ -182,7 +182,7 @@ export {
   isContextMenuOpen,
   openContextMenu,
   registerTextSelectionMenuContributor,
-} from './components/context-menu';
+} from '@/components/context-menu/index.ts';
 export type {
   ContextMenuAction,
   ContextMenuAnchor,
@@ -196,14 +196,14 @@ export type {
   OpenContextMenuOptions,
   TextSelectionMenuContext,
   TextSelectionMenuContributor,
-} from './components/context-menu';
+} from '@/components/context-menu/index.ts';
 export type {
   CoreSettingsDensity,
   CoreSettingsModel,
   CoreSettingsModelPayload,
   CoreSettingsProvider,
   CoreSettingsProviderPayload,
-} from './components/CoreSettings.vue';
+} from '@/components/CoreSettings.vue';
 export type {
   MobileControlAccountContext,
   MobileControlAccountDevice,
@@ -212,7 +212,7 @@ export type {
   MobileControlGatewayStatus,
   MobileControlPairing,
   MobileControlTrustedDevice,
-} from './components/MobileControlPanel.vue';
+} from '@/components/MobileControlPanel.vue';
 
 // Helpers
 export {
@@ -225,7 +225,7 @@ export {
   type CoreMessageRawLike,
   type CreateSessionMapperOptions,
   type CreateMessageMapperOptions,
-} from './helpers';
+} from '@/helpers/index.ts';
 
 export {
   DEFAULT_THEME,
@@ -240,14 +240,14 @@ export {
   addGradientStop,
   removeGradientStop,
   sortGradientStops,
-} from './helpers/theme';
+} from '@/helpers/theme.ts';
 
-export { copyText } from './helpers/clipboard';
+export { copyText } from '@/helpers/clipboard.ts';
 
 // Data
-export { THEME_PRESETS, THEME_PRESET_GROUPS } from './data/theme-presets';
-export { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from './data/provider-presets';
-export type { ProviderPreset, ProviderPresetGroup, ProviderPresetModel } from './data/provider-presets';
+export { THEME_PRESETS, THEME_PRESET_GROUPS } from '@/data/theme-presets.ts';
+export { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '@/data/provider-presets.ts';
+export type { ProviderPreset, ProviderPresetGroup, ProviderPresetModel } from '@/data/provider-presets.ts';
 
 // Composables
 export {
@@ -303,9 +303,9 @@ export {
   type UseCoreWorkbenchControllerContext,
   type UseCoreWorkbenchControllerOptions,
   type UseCoreGoalsOptions,
-} from './composables';
+} from '@/composables/index.ts';
 
-export { CORE_EXECUTION_CONTROLS_STORAGE_KEYS } from './composables';
+export { CORE_EXECUTION_CONTROLS_STORAGE_KEYS } from '@/composables/index.ts';
 
 export {
   createCoreProjectClient,
@@ -313,7 +313,7 @@ export {
   type CorePlanLibraryEntry,
   type CorePlanLibraryFolder,
   type CoreProjectClient,
-} from './projects/client';
+} from '@/projects/client.ts';
 
 export {
   buildCoreProjectGroups,
@@ -332,14 +332,14 @@ export {
   type CoreProjectIconKey,
   type CoreProjectSession,
   type CoreProjectUpdatePayload,
-} from './projects/types';
+} from '@/projects/types.ts';
 
-export { usePendingAttachments } from './composables/usePendingAttachments';
-export { useComposerCommandPalette } from './composables/useComposerCommandPalette';
+export { usePendingAttachments } from '@/composables/usePendingAttachments.ts';
+export { useComposerCommandPalette } from '@/composables/useComposerCommandPalette.ts';
 export {
   useOutsidePointerDismiss,
   type OutsidePointerDismissOptions,
-} from './composables/useOutsidePointerDismiss';
+} from '@/composables/useOutsidePointerDismiss.ts';
 
 // Shared Workbench runtime
 export {
@@ -352,7 +352,7 @@ export {
   type WorkbenchRuntime,
   type WorkbenchSessionApi,
   type WorkbenchComposerCallbacks,
-} from './workbench';
+} from '@/workbench/index.ts';
 
 export {
   createLamToolsRuntime,
@@ -363,15 +363,15 @@ export {
   type RuntimeFileCapabilities,
   type RuntimeWorkspaceControl,
   type RuntimeWorkspaceOption,
-} from './app/runtime';
+} from '@/app/runtime.ts';
 
 export {
   useShellLayout,
   type DensityMode,
   type ShellLayoutOptions,
-} from './composables/useShellLayout';
+} from '@/composables/useShellLayout.ts';
 
-export { useTheme } from './composables/useTheme';
+export { useTheme } from '@/composables/useTheme.ts';
 
 export {
   parseComposerSyntax,
@@ -380,14 +380,14 @@ export {
   type ComposerSyntaxKind,
   type ComposerSyntaxSpan,
   type ParsedComposerCommand,
-} from './composer/syntax';
+} from '@/composer/syntax.ts';
 
 export {
   buildCoreComposerHighlightSegments,
   buildCoreComposerInputItems,
   coreStandaloneActionCommand,
   type CoreComposerHighlightSegment,
-} from './composer/inputItems';
+} from '@/composer/inputItems.ts';
 
 export {
   CORE_THINKING_BUDGETS,
@@ -416,7 +416,7 @@ export {
   type CoreThinkingMode,
   type CoreThinkingModeOption,
   type CoreThinkingPayload,
-} from './composer/execution';
+} from '@/composer/execution.ts';
 
 export {
   CoreAppServerClient,
@@ -507,7 +507,7 @@ export {
   type CoreSessionActivity,
   type CoreSessionPhase,
   type SelectCoreSessionActivityOptions,
-} from './appServer';
+} from '@/appServer/index.ts';
 
 // Transport
 export {
@@ -523,7 +523,7 @@ export {
   type TransportMessageType,
   type TransportRequest,
   type TransportRpcRequest,
-} from './transport';
+} from '@/transport/index.ts';
 
 // Styles
 import './styles/variables.css';

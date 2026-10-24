@@ -122,11 +122,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { onMounted, reactive, ref } from 'vue'
 import { Check } from 'lucide-vue-next'
-import UiSelect from './UiSelect.vue'
+import UiSelect from '@/components/UiSelect.vue'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>

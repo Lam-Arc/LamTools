@@ -98,7 +98,7 @@ describe('left rail entry arrangement', () => {
   })
 
   it('exposes the rail action through the package entry', () => {
-    expect(read('src/index.ts')).toContain("export { default as RailAction } from './components/RailAction.vue';")
+    expect(read('src/index.ts')).toContain("export { default as RailAction } from '@/components/RailAction.vue';")
     expect(sidebarSource).toContain('<slot name="toolbar-actions" />')
   })
 })

@@ -167,14 +167,21 @@ afterEach(() => {
   })
 
   it('loads module data only when its card opens', async () => {
-    const rpc = vi.fn(async () => ({}))
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'plugin.system.list') {
+        return { plugins: [{ name: 'websearch', enabled: true }], errors: [] }
+      }
+      return {}
+    })
     const wrapper = mount(RightSidebarHost, { props: { requestRpc: rpc } })
     await flushPromises()
-    expect(rpc).not.toHaveBeenCalled()
+    // 挂载期只发生插件系统清单拉取（门控用），模块数据仍然懒加载。
+    const before = rpc.mock.calls.map(([method]) => String(method))
+    expect(before.length > 0 && before.every((method) => method.startsWith('plugin.system.'))).toBe(true)
 
     await wrapper.get('[data-right-rail-module="web-search"]').trigger('mouseenter')
     await flushPromises()
-    expect(rpc).toHaveBeenCalled()
+    expect(rpc.mock.calls.some(([method]) => !String(method).startsWith('plugin.system.'))).toBe(true)
     wrapper.unmount()
   })
 

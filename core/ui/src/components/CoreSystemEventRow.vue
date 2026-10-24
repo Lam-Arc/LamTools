@@ -25,11 +25,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed } from 'vue'
 import { Bot, History } from 'lucide-vue-next'
-import type { CoreSystemEvent } from '../appServer/systemEvents'
+import type { CoreSystemEvent } from '@/appServer/systemEvents.ts'
 
 const props = defineProps<{ event: CoreSystemEvent }>()
 

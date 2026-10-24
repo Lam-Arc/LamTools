@@ -1,4 +1,4 @@
-import type { CoreGoal, CoreArrangeJob } from './types'
+import type { CoreGoal, CoreArrangeJob } from '@/durable/types.ts'
 
 export type CoreDurableRequest = (
   method: string,

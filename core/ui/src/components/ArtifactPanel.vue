@@ -198,7 +198,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref, watch } from 'vue'
 import {
@@ -221,12 +221,12 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-vue-next'
-import type { ArtifactRole, ProjectArtifact } from '../types'
-import type { LamToolsTransport } from '../transport'
-import { copyText } from '../helpers/clipboard'
-import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
-import UiSelect from './UiSelect.vue'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
+import type { ArtifactRole, ProjectArtifact } from '@/types.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
+import { copyText } from '@/helpers/clipboard.ts'
+import { isNativeContextTarget, openContextMenu } from '@/components/context-menu/context-menu.ts'
+import UiSelect from '@/components/UiSelect.vue'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 
 const props = withDefaults(defineProps<{
   projectId: string | null

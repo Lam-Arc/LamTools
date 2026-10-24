@@ -1,4 +1,4 @@
-export { createWorkbench, createWorkbenchClient, type WorkbenchClientOptions } from './createWorkbench'
+export { createWorkbench, createWorkbenchClient, type WorkbenchClientOptions } from '@/workbench/createWorkbench.ts'
 export type {
   WorkbenchConnectionState,
   WorkbenchClientFactory,
@@ -6,4 +6,4 @@ export type {
   WorkbenchRuntime,
   WorkbenchSessionApi,
   WorkbenchComposerCallbacks,
-} from './types'
+} from '@/workbench/types.ts'

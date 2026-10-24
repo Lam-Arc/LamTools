@@ -19,9 +19,9 @@ import {
   addGradientStop,
   removeGradientStop,
   sortGradientStops,
-} from '../helpers/theme'
-import type { ThemePreset } from '../helpers/theme'
-import { THEME_PRESETS, THEME_PRESET_GROUPS } from '../data/theme-presets'
+} from '@/helpers/theme.ts'
+import type { ThemePreset } from '@/helpers/theme.ts'
+import { THEME_PRESETS, THEME_PRESET_GROUPS } from '@/data/theme-presets.ts'
 
 export function useTheme(storageKey: string) {
   const theme = ref<ThemeData>({ ...DEFAULT_THEME })

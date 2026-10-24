@@ -344,7 +344,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * MemoryView — the 记忆 as one full-area view, shaped like the 资料库.
@@ -376,14 +376,14 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-vue-next'
-import type { CoreDurableRequest } from '../durable/api'
-import type { CoreProjectClient } from '../projects/client'
-import type { CoreProject } from '../projects/types'
-import FullAreaActions from './FullAreaActions.vue'
-import DocumentEditor from './DocumentEditor.vue'
-import MarkdownRenderer from './MarkdownRenderer.vue'
-import ProjectVisualIcon from './ProjectVisualIcon.vue'
-import { openContextMenu, type ContextMenuEntry } from './context-menu'
+import type { CoreDurableRequest } from '@/durable/api.ts'
+import type { CoreProjectClient } from '@/projects/client.ts'
+import type { CoreProject } from '@/projects/types.ts'
+import FullAreaActions from '@/components/FullAreaActions.vue'
+import DocumentEditor from '@/components/DocumentEditor.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import ProjectVisualIcon from '@/components/ProjectVisualIcon.vue'
+import { openContextMenu, type ContextMenuEntry } from '@/components/context-menu/index.ts'
 
 /** One entry the memory RPC reports, path relative to its tier root. */
 interface MemoryEntry {

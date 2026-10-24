@@ -250,7 +250,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * MaterialsView — 资料库的「资料」分区：项目里进出的文件（用户 / 中间产物 / 产物）。
@@ -274,14 +274,14 @@ import {
   Search,
   Star,
 } from 'lucide-vue-next'
-import type { ProjectArtifact } from '../types'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
-import type { LamToolsTransport } from '../transport'
-import { copyText } from '../helpers/clipboard'
-import { useLibraryZoom } from '../composables/useLibraryZoom'
-import { openContextMenu, type ContextMenuEntry } from './context-menu'
-import type { ContextMenuGroupMeta } from './context-menu/types'
-import { extractVideoPoster } from '../artifacts/poster'
+import type { ProjectArtifact } from '@/types.ts'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import type { LamToolsTransport } from '@/transport/index.ts'
+import { copyText } from '@/helpers/clipboard.ts'
+import { useLibraryZoom } from '@/composables/useLibraryZoom.ts'
+import { openContextMenu, type ContextMenuEntry } from '@/components/context-menu/index.ts'
+import type { ContextMenuGroupMeta } from '@/components/context-menu/types.ts'
+import { extractVideoPoster } from '@/artifacts/poster.ts'
 import {
   absoluteArtifactPath,
   artifactHttpPath,
@@ -302,7 +302,7 @@ import {
   normalizeArtifact,
   roleLabel,
   statusLabel,
-} from '../artifacts/model'
+} from '@/artifacts/model.ts'
 
 // 文件卡右键菜单的语义分组：组头可折叠，折叠状态按这两个稳定 id 记忆。
 const MATERIALS_FILE_GROUP: ContextMenuGroupMeta = { id: 'materials.file', get label() { return t("文件") } }

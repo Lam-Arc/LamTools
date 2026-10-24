@@ -78,6 +78,7 @@
           <button
             class="small-btn"
             type="button"
+            :data-toggle-for="plugin.name"
             :disabled="busy === plugin.name"
             @click="toggle(plugin)"
           >
@@ -163,10 +164,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { openPluginWindow, type PluginWindowTarget } from '../helpers/pluginWindow'
-import { t } from '../i18n/index'
-import PluginConfigPanel from './PluginConfigPanel.vue'
-import PluginSystemContributions from './PluginSystemContributions.vue'
+import { openPluginWindow, type PluginWindowTarget } from '@/helpers/pluginWindow.ts'
+import { t } from '@/i18n/index.ts'
+import PluginConfigPanel from '@/components/PluginConfigPanel.vue'
+import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
 
 interface PluginSystemCapabilities {
   tools: string[]

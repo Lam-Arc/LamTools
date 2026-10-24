@@ -1,17 +1,17 @@
-import type { CoreMessage, MessagePart } from '../types'
+import type { CoreMessage, MessagePart } from '@/types.ts'
 import {
   coreAppItemPartStatus,
   coreAppItemToMessagePart,
   projectAssistantMessageParts,
-} from './messageParts.ts'
+} from '@/appServer/messageParts.ts'
 import type {
   CoreAppItem,
   CoreAppQueueItem,
   CoreAppRequestState,
   CoreAppSnapshot,
   CoreRuntimeItem,
-} from './protocol.ts'
-import { selectChatMessages, selectQueueTray, type CoreAppServerChatMessage } from './selectors.ts'
+} from '@/appServer/protocol.ts'
+import { selectChatMessages, selectQueueTray, type CoreAppServerChatMessage } from '@/appServer/selectors.ts'
 
 export interface CoreWorkbenchMessageOptions {
   source?: string

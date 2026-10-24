@@ -113,15 +113,15 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Check, Sparkles } from 'lucide-vue-next'
-import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '../data/provider-presets'
-import { themeToCSSVars, type ThemeData } from '../helpers/theme'
-import { openExternalUrl } from '../helpers/openUrl'
-import UiSelect from './UiSelect.vue'
-import type { CoreSettingsProvider, CoreSettingsModel, CoreSettingsProviderPayload } from './CoreSettings.vue'
+import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '@/data/provider-presets.ts'
+import { themeToCSSVars, type ThemeData } from '@/helpers/theme.ts'
+import { openExternalUrl } from '@/helpers/openUrl.ts'
+import UiSelect from '@/components/UiSelect.vue'
+import type { CoreSettingsProvider, CoreSettingsModel, CoreSettingsProviderPayload } from '@/components/CoreSettings.vue'
 
 const props = defineProps<{
   providers: CoreSettingsProvider[]

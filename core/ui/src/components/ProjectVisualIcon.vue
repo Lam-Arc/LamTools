@@ -29,7 +29,7 @@ import {
   DEFAULT_CORE_PROJECT_ICON_KEY,
   type CoreProjectColorKey,
   type CoreProjectIconKey,
-} from '../projects/types'
+} from '@/projects/types.ts'
 
 const props = withDefaults(defineProps<{
   iconKey?: string

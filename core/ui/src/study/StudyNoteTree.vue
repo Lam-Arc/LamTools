@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, defineComponent, h, ref, type PropType, type VNode } from 'vue'
 import { ArrowLeft, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, RefreshCw } from 'lucide-vue-next'
-import type { StudyNoteTreeNode } from './types'
+import type { StudyNoteTreeNode } from '@/study/types.ts'
 
 const props = withDefaults(defineProps<{
   tree: StudyNoteTreeNode[]

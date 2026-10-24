@@ -93,11 +93,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { RotateCw, Square, X } from 'lucide-vue-next'
-import type { RightSidebarRpc } from '../right-sidebar/types'
+import type { RightSidebarRpc } from '@/right-sidebar/types.ts'
 
 interface BackgroundProcessItem {
   pid: number

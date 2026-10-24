@@ -47,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * RailAction — one icon-only entry in the left rail (the top toolbar row and the

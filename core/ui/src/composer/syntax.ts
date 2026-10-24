@@ -1,4 +1,4 @@
-import type { CoreCommandCatalogItem, CoreCommandKind } from '../types.ts'
+import type { CoreCommandCatalogItem, CoreCommandKind } from '@/types.ts'
 
 export type ComposerSyntaxKind = 'resource' | 'slash';
 

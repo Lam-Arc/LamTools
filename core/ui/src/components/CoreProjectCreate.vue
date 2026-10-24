@@ -91,19 +91,19 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { nextTick, onMounted, ref } from 'vue'
-import FolderBrowserDialog from './FolderBrowserDialog.vue'
-import ProjectVisualPicker from './ProjectVisualPicker.vue'
-import type { LamToolsTransport } from '../transport'
+import FolderBrowserDialog from '@/components/FolderBrowserDialog.vue'
+import ProjectVisualPicker from '@/components/ProjectVisualPicker.vue'
+import type { LamToolsTransport } from '@/transport/index.ts'
 import {
   DEFAULT_CORE_PROJECT_COLOR_KEY,
   DEFAULT_CORE_PROJECT_ICON_KEY,
   type CoreProjectColorKey,
   type CoreProjectIconKey,
-} from '../projects/types'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+} from '@/projects/types.ts'
+import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 
 const props = withDefaults(defineProps<{
   loading?: boolean

@@ -1,4 +1,4 @@
-import type { CoreSessionGroup, ProductAdapter } from '../types'
+import type { CoreSessionGroup, ProductAdapter } from '@/types.ts'
 
 /**
  * Create a standard product adapter object.

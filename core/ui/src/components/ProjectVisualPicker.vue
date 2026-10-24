@@ -47,10 +47,10 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
-import type { CoreProjectColorKey, CoreProjectIconKey } from '../projects/types'
-import ProjectVisualIcon from './ProjectVisualIcon.vue'
+import type { CoreProjectColorKey, CoreProjectIconKey } from '@/projects/types.ts'
+import ProjectVisualIcon from '@/components/ProjectVisualIcon.vue'
 
 withDefaults(defineProps<{
   iconKey?: CoreProjectIconKey

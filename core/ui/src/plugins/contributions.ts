@@ -1,6 +1,6 @@
 import { reactive, readonly } from 'vue'
 
-import type { PluginRpc } from './types'
+import type { PluginRpc } from '@/plugins/types.ts'
 
 export type { PluginRpc }
 

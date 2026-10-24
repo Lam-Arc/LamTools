@@ -5,7 +5,7 @@ import type {
   CoreSubAgentRun,
   MessagePart,
   MessagePartStatus,
-} from '../types'
+} from '@/types.ts'
 
 interface MutableSubAgentRun extends CoreSubAgentRun {
   lastOrder: number

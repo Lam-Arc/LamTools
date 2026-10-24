@@ -201,10 +201,10 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, reactive, ref, type Component } from 'vue'
-import { useSettingsDraft } from '../composables/useSettingsDraftGuard'
+import { useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 import { BookOne, Receive } from '@icon-park/vue-next'
 import {
   BookOpen,

@@ -43,7 +43,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import ContextMenuPanel from './ContextMenuPanel.vue'
+import ContextMenuPanel from '@/components/context-menu/ContextMenuPanel.vue'
 import {
   closeContextMenu,
   contextMenuState,
@@ -51,8 +51,8 @@ import {
   installLongPressContextMenu,
   removeContextMenuGuard,
   removeLongPressContextMenu,
-} from './context-menu'
-import type { ContextMenuAnchor, ContextMenuEntry } from './types'
+} from '@/components/context-menu/context-menu.ts'
+import type { ContextMenuAnchor, ContextMenuEntry } from '@/components/context-menu/types.ts'
 
 interface SubmenuPanelState {
   path: number[]

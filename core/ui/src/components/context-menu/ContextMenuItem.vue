@@ -39,7 +39,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { Check } from 'lucide-vue-next'
-import type { ContextMenuAction } from './types'
+import type { ContextMenuAction } from '@/components/context-menu/types.ts'
 
 defineProps<{
   entry: ContextMenuAction

@@ -35,11 +35,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ChevronDown, ChevronRight, Copy, Image, Music, Video, type LucideIcon } from 'lucide-vue-next'
-import type { CoreProjectClient, CoreFileEntry } from '../../projects/client'
-import { copyText } from '../../helpers/clipboard'
-import { openContextMenu } from '../../components/context-menu/context-menu'
-import type { ContextMenuEntry } from '../../components/context-menu/types'
-import FileTreeNode from './FileTreeNode.vue'
+import type { CoreProjectClient, CoreFileEntry } from '@/projects/client.ts'
+import { copyText } from '@/helpers/clipboard.ts'
+import { openContextMenu } from '@/components/context-menu/context-menu.ts'
+import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
+import FileTreeNode from '@/archived/stage/FileTreeNode.vue'
 
 const props = defineProps<{
   entry: CoreFileEntry

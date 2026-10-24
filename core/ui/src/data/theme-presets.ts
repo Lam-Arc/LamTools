@@ -1,12 +1,12 @@
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 /** Shared, low-saturation theme presets. */
 import {
   SUNDAY_DARK_THEME,
   SUNDAY_LIGHT_THEME,
   type ThemeData,
   type ThemePreset,
-} from '../helpers/theme'
+} from '@/helpers/theme.ts'
 
 const theme = (overrides: Partial<ThemeData>): Partial<ThemeData> => overrides
 const solid = (color: string) => [{ color, position: 0 }]

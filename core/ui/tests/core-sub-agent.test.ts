@@ -567,7 +567,7 @@ describe('CoreSubAgentDialog and composer reuse', () => {
 
   it('keeps WorkspaceShell on the shared ComposerBar implementation', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/WorkspaceShell.vue'), 'utf8')
-    expect(source).toContain("import ComposerBar from './ComposerBar.vue'")
+    expect(source).toContain("import ComposerBar from '@/components/ComposerBar.vue'")
     expect(source).toContain('<ComposerBar')
   })
 

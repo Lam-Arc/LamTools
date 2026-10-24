@@ -5,7 +5,7 @@ import type {
   PluginWidget,
   PluginWidgetEntry,
   PluginWidgetLoader,
-} from './types'
+} from '@/plugins/types.ts'
 
 /** Generic registry for UI modes contributed by enabled plugins. */
 export class PluginUIRegistry {

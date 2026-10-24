@@ -1,7 +1,7 @@
 import { shallowReactive } from 'vue'
-import { t } from '../../i18n'
-import { copyText } from '../../helpers/clipboard'
-import type { ContextMenuAnchor, ContextMenuEntry, ContextMenuAttributes, OpenContextMenuOptions } from './types'
+import { t } from '@/i18n/index.ts'
+import { copyText } from '@/helpers/clipboard.ts'
+import type { ContextMenuAnchor, ContextMenuEntry, ContextMenuAttributes, OpenContextMenuOptions } from '@/components/context-menu/types.ts'
 
 export interface ContextMenuState {
   /** Changes for every open call, including replacement of an already open menu. */

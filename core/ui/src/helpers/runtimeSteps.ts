@@ -5,7 +5,7 @@
  * This factory avoids duplicating that structure.
  */
 
-import type { CoreRuntimeStepGroup } from '../types';
+import type { CoreRuntimeStepGroup } from '@/types.ts';
 
 /**
  * Create the standard loading step-group shown while session data is being

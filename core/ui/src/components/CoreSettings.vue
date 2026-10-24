@@ -980,20 +980,20 @@
   </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
-import { createSettingsDraftGuard, useSettingsDraft } from '../composables/useSettingsDraftGuard'
+import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
+import { createSettingsDraftGuard, useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
-import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '../data/provider-presets'
-import { THEME_PRESETS } from '../data/theme-presets'
+import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '@/data/provider-presets.ts'
+import { THEME_PRESETS } from '@/data/theme-presets.ts'
 import {
   CORE_PERMISSION_PRESET_DESCRIPTIONS,
   CORE_PERMISSION_PRESET_LABELS,
   type CoreModelCatalogView,
   type CorePermissionPreset,
-} from '../composer/execution'
+} from '@/composer/execution.ts'
 import {
   gradientFromStops,
   relativeLuminance,
@@ -1003,15 +1003,15 @@ import {
   type ThemePreset,
   type ThemeSchedule,
   type ThemeStop,
-} from '../helpers/theme'
-import { openUpdatePage } from '../helpers/update'
-import { openExternalUrl } from '../helpers/openUrl'
-import SettingsShell from './SettingsShell.vue'
-import { CORE_SETTINGS_SECTIONS, type SettingsSection } from './settingsSections'
-import ThemeEditor from './ThemeEditor.vue'
-import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
-import CoreGeneralEditor from './CoreGeneralEditor.vue'
-import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
+} from '@/helpers/theme.ts'
+import { openUpdatePage } from '@/helpers/update.ts'
+import { openExternalUrl } from '@/helpers/openUrl.ts'
+import SettingsShell from '@/components/SettingsShell.vue'
+import { CORE_SETTINGS_SECTIONS, type SettingsSection } from '@/components/settingsSections.ts'
+import ThemeEditor from '@/components/ThemeEditor.vue'
+import CoreSubAgentEditor from '@/components/CoreSubAgentEditor.vue'
+import CoreGeneralEditor from '@/components/CoreGeneralEditor.vue'
+import CoreLoadToolsEditor from '@/components/CoreLoadToolsEditor.vue'
 import MobileControlPanel, {
   type MobileControlAccountDevice,
   type MobileControlAccountPayload,
@@ -1019,16 +1019,16 @@ import MobileControlPanel, {
   type MobileControlGatewayStatus,
   type MobileControlIdentity,
   type MobileControlPairing,
-} from './MobileControlPanel.vue'
-import UiSelect from './UiSelect.vue'
-import CoreModelCatalogViewToggle from './CoreModelCatalogViewToggle.vue'
-import SettingsDraftDialog from './SettingsDraftDialog.vue'
+} from '@/components/MobileControlPanel.vue'
+import UiSelect from '@/components/UiSelect.vue'
+import CoreModelCatalogViewToggle from '@/components/CoreModelCatalogViewToggle.vue'
+import SettingsDraftDialog from '@/components/SettingsDraftDialog.vue'
 import {
   readUpdateAutoCheck,
   setUpdateAutoCheck,
   useCoreUpdateState,
   type CoreUpdateState,
-} from '../composables'
+} from '@/composables/index.ts'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 export type SettingsCatalogMutation = 'create-provider' | 'update-provider' | 'create-model' | 'update-model' | 'create-model-group' | 'update-model-group' | 'set-model-group-members' | 'create-model-with-provider'

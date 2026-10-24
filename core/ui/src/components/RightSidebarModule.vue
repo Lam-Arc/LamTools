@@ -108,12 +108,12 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { gsap } from 'gsap'
 import { computed, onMounted, onUnmounted, ref, useId } from 'vue'
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Circle, GripVertical } from 'lucide-vue-next'
-import type { RightSidebarModuleDefinition } from '../right-sidebar/types'
+import type { RightSidebarModuleDefinition } from '@/right-sidebar/types.ts'
 
 const props = withDefaults(defineProps<{
   module: RightSidebarModuleDefinition

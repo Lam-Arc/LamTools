@@ -53,10 +53,10 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 
 const props = withDefaults(defineProps<{
   open: boolean

@@ -216,16 +216,16 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
-import ThemeAreaEditor from './ThemeAreaEditor.vue'
-import ThemePreview from './ThemePreview.vue'
-import { gradientFromStops, themeForMode, DEFAULT_THEME_SCHEDULE, type ThemeArea, type ThemeMode, type ThemePreset, type ThemeSchedule, type ThemeStop } from '../helpers/theme'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+import ThemeAreaEditor from '@/components/ThemeAreaEditor.vue'
+import ThemePreview from '@/components/ThemePreview.vue'
+import { gradientFromStops, themeForMode, DEFAULT_THEME_SCHEDULE, type ThemeArea, type ThemeMode, type ThemePreset, type ThemeSchedule, type ThemeStop } from '@/helpers/theme.ts'
+import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 
 const props = withDefaults(defineProps<{
   productName?: string

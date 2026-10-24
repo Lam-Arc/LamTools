@@ -3,7 +3,7 @@ import {
   createDirectTransport,
   createLamToolsRuntime,
   LamToolsApp,
-} from '../index'
+} from '@/index.ts'
 
 const transport = createDirectTransport({
   apiBase: (window as Window & { __LAMTOOLS_API_BASE__?: string }).__LAMTOOLS_API_BASE__ || '/api/core',

@@ -810,9 +810,9 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
-import { loadUiLanguage } from '../i18n'
+import { loadUiLanguage } from '@/i18n/index.ts'
 import {
   computed,
   defineAsyncComponent,
@@ -854,27 +854,27 @@ import type {
   CoreSessionListItem,
   CoreSubAgentDurableRecord,
   CoreSubAgentRun,
-} from '../types'
-import { isInternalSession, isPluginOwnedSession } from '../sessions/visibility'
-import { createModeSessionState } from '../sessions/mode-state'
+} from '@/types.ts'
+import { isInternalSession, isPluginOwnedSession } from '@/sessions/visibility.ts'
+import { createModeSessionState } from '@/sessions/mode-state.ts'
 import {
   buildCoreProjectGroups,
   type CoreProject,
   type CoreProjectColorKey,
   type CoreProjectCreatePayload,
   type CoreProjectIconKey,
-} from '../projects/types'
-import { createCoreProjectClient } from '../projects/client'
-import { createCoreProjectWorkspaceActions } from '../projects/workspace'
+} from '@/projects/types.ts'
+import { createCoreProjectClient } from '@/projects/client.ts'
+import { createCoreProjectWorkspaceActions } from '@/projects/workspace.ts'
 import {
   lockedMessageIdsBeforeCompaction,
   selectVisiblePendingDecisions,
   type CoreQueuedInput,
-} from '../appServer'
-import type { LamToolsTransport, TransportHttpResponse } from '../transport'
-import type { LamToolsRuntime, RuntimeFileSource } from './runtime'
-import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
-import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
+} from '@/appServer/index.ts'
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
+import type { LamToolsRuntime, RuntimeFileSource } from '@/app/runtime.ts'
+import { buildCoreComposerHighlightSegments } from '@/composer/inputItems.ts'
+import { buildCurrentTurnChecklistGroups } from '@/runtime/checklist.ts'
 import {
   coreApplyHistoryScrollCeiling,
   coreHistoryAutoLoadThreshold,
@@ -889,44 +889,44 @@ import {
   useCoreUpdateState,
   createCoreConnectionErrorToastGate,
   showToast,
-} from '../composables'
+} from '@/composables/index.ts'
 
-import AttachmentTray from '../components/AttachmentTray.vue'
-import AttachmentSourceMenu from '../components/AttachmentSourceMenu.vue'
-import ChatThread from '../components/ChatThread.vue'
-import ChatOutlineNavigator from '../components/ChatOutlineNavigator.vue'
-import CommandPalette from '../components/CommandPalette.vue'
-import AppRail, { type AppRailView } from '../components/AppRail.vue'
-import CoreUpdateCard from '../components/CoreUpdateCard.vue'
-import CoreExecutionControls from '../components/CoreExecutionControls.vue'
-import CoreWorkspaceMenu from '../components/CoreWorkspaceMenu.vue'
-import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
-import CoreConfirmDialog from '../components/CoreConfirmDialog.vue'
-import CorePendingDecisionPanel from '../components/CorePendingDecisionPanel.vue'
-import CoreArrangeManager from '../components/CoreArrangeManager.vue'
-import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
-import CoreProjectCreate from '../components/CoreProjectCreate.vue'
-import CoreProjectPicker from '../components/CoreProjectPicker.vue'
-import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
-import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
-import { ContextMenuHost } from '../components/context-menu'
-import SelectionAssistant from '../study/SelectionAssistant.vue'
-import type { MarkAnchor } from '../study/types'
-import { selectionEvents } from '../study/annotations'
-import { openContextMenu } from '../components/context-menu/context-menu'
-import type { ContextMenuEntry } from '../components/context-menu/types'
-import OnboardingWizard from '../components/OnboardingWizard.vue'
-import PluginsShell from '../components/PluginsShell.vue'
-import FullAreaSidebarNav from '../components/FullAreaSidebarNav.vue'
-import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '../components/settingsSections'
-import AccountShell from '../components/AccountShell.vue'
-import SearchShell, { type SearchCommand, type StudySearchHit } from '../components/SearchShell.vue'
-import { type PlanLibraryEntry } from '../components/PlanLibraryView.vue'
-import LibraryHomeView from '../components/LibraryHomeView.vue'
+import AttachmentTray from '@/components/AttachmentTray.vue'
+import AttachmentSourceMenu from '@/components/AttachmentSourceMenu.vue'
+import ChatThread from '@/components/ChatThread.vue'
+import ChatOutlineNavigator from '@/components/ChatOutlineNavigator.vue'
+import CommandPalette from '@/components/CommandPalette.vue'
+import AppRail, { type AppRailView } from '@/components/AppRail.vue'
+import CoreUpdateCard from '@/components/CoreUpdateCard.vue'
+import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
+import CoreWorkspaceMenu from '@/components/CoreWorkspaceMenu.vue'
+import CoreQueuedInputTray from '@/components/CoreQueuedInputTray.vue'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import CorePendingDecisionPanel from '@/components/CorePendingDecisionPanel.vue'
+import CoreArrangeManager from '@/components/CoreArrangeManager.vue'
+import HistoryLoadingIndicator from '@/components/HistoryLoadingIndicator.vue'
+import CoreProjectCreate from '@/components/CoreProjectCreate.vue'
+import CoreProjectPicker from '@/components/CoreProjectPicker.vue'
+import CoreStartPage, { type CoreRecentProject } from '@/components/CoreStartPage.vue'
+import CoreSessionTitleEditor from '@/components/CoreSessionTitleEditor.vue'
+import { ContextMenuHost } from '@/components/context-menu/index.ts'
+import SelectionAssistant from '@/study/SelectionAssistant.vue'
+import type { MarkAnchor } from '@/study/types.ts'
+import { selectionEvents } from '@/study/annotations.ts'
+import { openContextMenu } from '@/components/context-menu/context-menu.ts'
+import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
+import OnboardingWizard from '@/components/OnboardingWizard.vue'
+import PluginsShell from '@/components/PluginsShell.vue'
+import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
+import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
+import AccountShell from '@/components/AccountShell.vue'
+import SearchShell, { type SearchCommand, type StudySearchHit } from '@/components/SearchShell.vue'
+import { type PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
+import LibraryHomeView from '@/components/LibraryHomeView.vue'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
-} from '../components/CoreSettings.vue'
+} from '@/components/CoreSettings.vue'
 import type {
   MobileControlAccountContext,
   MobileControlAccountDevice,
@@ -935,35 +935,35 @@ import type {
   MobileControlGatewayStatus,
   MobileControlIdentity,
   MobileControlPairing,
-} from '../components/MobileControlPanel.vue'
-import CoreProjectSettings from '../components/CoreProjectSettings.vue'
-import SundayLogo from '../components/SundayLogo.vue'
-import RuntimeChecklistCard from '../components/RuntimeChecklistCard.vue'
-import SessionSidebar, { type SessionExportFormat } from '../components/SessionSidebar.vue'
-import WorkspaceShell from '../components/WorkspaceShell.vue'
-import RightSidebarHost from '../components/RightSidebarHost.vue'
-import CoreSubAgentPane from '../components/CoreSubAgentPane.vue'
-import CoreSubAgentActivityIndicator from '../components/CoreSubAgentActivityIndicator.vue'
-import { selectCoreSubAgentRun, type CoreSubAgentRef } from '../agents/subAgentProjection'
-import { subAgentRunIdentity } from '../agents/subAgentDisplay'
-import TitleBar from '../components/TitleBar.vue'
-import PluginModeHost from '../components/PluginModeHost.vue'
-import PluginSystemContributions from '../components/PluginSystemContributions.vue'
-import { refreshPluginUIModes } from '../plugins/api'
-import { setContributionsRpc } from '../plugins/contributions'
-import { listModes } from '../plugins/registry'
+} from '@/components/MobileControlPanel.vue'
+import CoreProjectSettings from '@/components/CoreProjectSettings.vue'
+import SundayLogo from '@/components/SundayLogo.vue'
+import RuntimeChecklistCard from '@/components/RuntimeChecklistCard.vue'
+import SessionSidebar, { type SessionExportFormat } from '@/components/SessionSidebar.vue'
+import WorkspaceShell from '@/components/WorkspaceShell.vue'
+import RightSidebarHost from '@/components/RightSidebarHost.vue'
+import CoreSubAgentPane from '@/components/CoreSubAgentPane.vue'
+import CoreSubAgentActivityIndicator from '@/components/CoreSubAgentActivityIndicator.vue'
+import { selectCoreSubAgentRun, type CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
+import { subAgentRunIdentity } from '@/agents/subAgentDisplay.ts'
+import TitleBar from '@/components/TitleBar.vue'
+import PluginModeHost from '@/components/PluginModeHost.vue'
+import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
+import { refreshPluginUIModes } from '@/plugins/api.ts'
+import { setContributionsRpc } from '@/plugins/contributions.ts'
+import { listModes } from '@/plugins/registry.ts'
 import {
   provideCorePluginModeContext,
   readPluginSurface,
   createPluginModeRuntime,
-} from '../plugins/context'
-import type { PluginModeSurface } from '../plugins/context'
-import type { PluginMode } from '../plugins/types'
-import type { CoreModelCatalogView, CorePermissionPreset } from '../composer/execution'
-import { copyText } from '../helpers/clipboard'
-import { absoluteArtifactPath } from '../artifacts/model'
+} from '@/plugins/context.ts'
+import type { PluginModeSurface } from '@/plugins/context.ts'
+import type { PluginMode } from '@/plugins/types.ts'
+import type { CoreModelCatalogView, CorePermissionPreset } from '@/composer/execution.ts'
+import { copyText } from '@/helpers/clipboard.ts'
+import { absoluteArtifactPath } from '@/artifacts/model.ts'
 
-const CoreSettings = defineAsyncComponent(() => import('../components/CoreSettings.vue'))
+const CoreSettings = defineAsyncComponent(() => import('@/components/CoreSettings.vue'))
 
 type RawSession = {
   id: string
@@ -3540,7 +3540,7 @@ async function createProvider(payload: CoreSettingsProviderPayload) {
 
 /** Same catalog persistence as the event handlers, with errors propagated to
  * the still-open settings editor instead of treating emission as success. */
-async function persistSettingsCatalog(operation: import('../components/CoreSettings.vue').SettingsCatalogMutation, payload: Record<string, unknown>): Promise<void> {
+async function persistSettingsCatalog(operation: import('@/components/CoreSettings.vue').SettingsCatalogMutation, payload: Record<string, unknown>): Promise<void> {
   const methods = {
     'create-provider': 'config.provider.create', 'update-provider': 'config.provider.update',
     'create-model': 'config.models.upsert', 'update-model': 'config.models.upsert',

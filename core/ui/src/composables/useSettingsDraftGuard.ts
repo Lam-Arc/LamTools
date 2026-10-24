@@ -1,5 +1,5 @@
 import { computed, inject, onScopeDispose, provide, ref, shallowReactive, shallowRef, watch, type InjectionKey, type Ref } from 'vue'
-import { t } from '../i18n'
+import { t } from '@/i18n/index.ts'
 
 // Compare data, not input events: editing back to the saved value is clean.
 export function draftSnapshot(value: unknown): string {

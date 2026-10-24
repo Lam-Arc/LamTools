@@ -1,5 +1,5 @@
-import { bundledPluginModeLoader, bundledPluginWidgetLoader } from './bundled'
-import { getWidget, listWidgets, pluginUIRegistry, registerWidget, unregisterWidgets } from './registry'
+import { bundledPluginModeLoader, bundledPluginWidgetLoader } from '@/plugins/bundled.ts'
+import { getWidget, listWidgets, pluginUIRegistry, registerWidget, unregisterWidgets } from '@/plugins/registry.ts'
 import {
   PLUGIN_WIDGET_RPC_METHODS,
   type PluginRpc,
@@ -8,7 +8,7 @@ import {
   type PluginWidgetEntry,
   type PluginWidgetListPayload,
   type PluginWidgetInvokeParams,
-} from './types'
+} from '@/plugins/types.ts'
 
 export async function listPluginUI(requestRpc: PluginRpc): Promise<PluginUIListPayload> {
   return await requestRpc('plugin.ui.list', {}) as PluginUIListPayload

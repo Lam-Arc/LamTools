@@ -1,24 +1,24 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, defineAsyncComponent, markRaw, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { Node, ViewportTransform } from '@vue-flow/core'
 import { ArrowLeft, ChevronRight } from 'lucide-vue-next'
-import { useCorePluginModeContext, usePluginModeRuntime } from '../plugins/context'
-import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
-import StudySidebarHost from './StudySidebarHost.vue'
-import MarksPanel from './MarksPanel.vue'
-import NotesManager from './NotesManager.vue'
-import StudyNoteRelationGraph from './StudyNoteRelationGraph.vue'
-import type { Course, KnowledgeItem, Net, Relation, SessionBinding, StudyNoteTreeNode, StudyPin, StudySubject } from './types'
-import { normalizeKnowledgeItem, normalizeNet, normalizeSessionBinding, subjectParams } from './api'
-import type { StudyRpc } from './api'
-import { useStudyNotes } from './useStudyNotes'
-import { stableLayeredStudyLayout, STUDY_LAYOUT_LIMITS, type StudyLayoutPosition } from './layout'
-import { selectionEvents } from './annotations'
+import { useCorePluginModeContext, usePluginModeRuntime } from '@/plugins/context.ts'
+import HistoryLoadingIndicator from '@/components/HistoryLoadingIndicator.vue'
+import StudySidebarHost from '@/study/StudySidebarHost.vue'
+import MarksPanel from '@/study/MarksPanel.vue'
+import NotesManager from '@/study/NotesManager.vue'
+import StudyNoteRelationGraph from '@/study/StudyNoteRelationGraph.vue'
+import type { Course, KnowledgeItem, Net, Relation, SessionBinding, StudyNoteTreeNode, StudyPin, StudySubject } from '@/study/types.ts'
+import { normalizeKnowledgeItem, normalizeNet, normalizeSessionBinding, subjectParams } from '@/study/api.ts'
+import type { StudyRpc } from '@/study/api.ts'
+import { useStudyNotes } from '@/study/useStudyNotes.ts'
+import { stableLayeredStudyLayout, STUDY_LAYOUT_LIMITS, type StudyLayoutPosition } from '@/study/layout.ts'
+import { selectionEvents } from '@/study/annotations.ts'
 import './study.css'
 
-const StudyGraph = defineAsyncComponent(() => import('./StudyGraph.vue'))
+const StudyGraph = defineAsyncComponent(() => import('@/study/StudyGraph.vue'))
 
 const props = withDefaults(defineProps<{ pluginId?: string; modeId?: string }>(), { pluginId: 'study', modeId: 'study' })
 const ctx = useCorePluginModeContext()

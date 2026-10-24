@@ -16,9 +16,9 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
-import type { CoreModelCatalogView } from '../composer/execution'
+import type { CoreModelCatalogView } from '@/composer/execution.ts'
 
 defineProps<{
   modelValue: CoreModelCatalogView

@@ -1,9 +1,9 @@
-import type { CoreCommandCatalogItem, CoreInputItem } from '../types'
+import type { CoreCommandCatalogItem, CoreInputItem } from '@/types.ts'
 import {
   parseComposerInput,
   parseComposerSyntax,
   resolveComposerCommandKind,
-} from './syntax.ts'
+} from '@/composer/syntax.ts'
 
 export interface CoreComposerHighlightSegment {
   text: string

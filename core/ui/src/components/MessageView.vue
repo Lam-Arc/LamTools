@@ -936,10 +936,10 @@
 </template>
 
 <script setup lang="ts">
-import { t, uiLanguage } from '../i18n/index'
+import { t, uiLanguage } from '@/i18n/index.ts'
 
-import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '../types'
-import type { LamToolsTransport, TransportHttpResponse } from '../transport'
+import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '@/types.ts'
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type DirectiveBinding } from 'vue'
 import { gsap } from 'gsap'
 import {
@@ -981,28 +981,28 @@ import {
   coreDecisionOptions as decisionOptions,
   coreDecisionTitle as decisionTitle,
   projectAssistantMessageParts,
-} from '../appServer'
-import type { CoreDecisionOption as DecisionOption } from '../appServer'
-import { coreSubAgentRef, type CoreSubAgentRef } from '../agents/subAgentProjection'
-import { formatSubAgentElapsed, normalizeSubAgentType } from '../agents/subAgentDisplay'
-import { copyText } from '../helpers/clipboard'
-import { autoGrowTextarea } from '../helpers/autoGrowTextarea'
-import { workspaceRelativePath } from '../helpers/workspacePath'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
-import { useNarrowViewport } from '../composables/useNarrowViewport'
-import { useProcessSummaryClock } from '../composables/useProcessSummaryClock'
-import AutoTextarea from './AutoTextarea.vue'
-import MarkdownRenderer from './MarkdownRenderer.vue'
-import CoreSystemEventRow from './CoreSystemEventRow.vue'
-import { isCoreSystemEvent, type CoreSystemEvent } from '../appServer/systemEvents'
-import MessageAttachmentDeck from './MessageAttachmentDeck.vue'
-import { artifactListingReference, artifactPathsInText, normalizeArtifactReference, shouldListTurnArtifact, workspaceRelativeFromReportPath } from '../artifacts/model'
-import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
-import type { ContextMenuEntry } from './context-menu/types'
-import MessageView from './MessageView.vue'
-import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/autoFollowScroll'
-import { panelEnter, panelLeave } from '../motion/expandPanel'
-import { fadeSlideEnter, fadeSlideLeave } from '../motion/fadeSlide'
+} from '@/appServer/index.ts'
+import type { CoreDecisionOption as DecisionOption } from '@/appServer/index.ts'
+import { coreSubAgentRef, type CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
+import { formatSubAgentElapsed, normalizeSubAgentType } from '@/agents/subAgentDisplay.ts'
+import { copyText } from '@/helpers/clipboard.ts'
+import { autoGrowTextarea } from '@/helpers/autoGrowTextarea.ts'
+import { workspaceRelativePath } from '@/helpers/workspacePath.ts'
+import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
+import { useNarrowViewport } from '@/composables/useNarrowViewport.ts'
+import { useProcessSummaryClock } from '@/composables/useProcessSummaryClock.ts'
+import AutoTextarea from '@/components/AutoTextarea.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import CoreSystemEventRow from '@/components/CoreSystemEventRow.vue'
+import { isCoreSystemEvent, type CoreSystemEvent } from '@/appServer/systemEvents.ts'
+import MessageAttachmentDeck from '@/components/MessageAttachmentDeck.vue'
+import { artifactListingReference, artifactPathsInText, normalizeArtifactReference, shouldListTurnArtifact, workspaceRelativeFromReportPath } from '@/artifacts/model.ts'
+import { isNativeContextTarget, openContextMenu } from '@/components/context-menu/context-menu.ts'
+import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
+import MessageView from '@/components/MessageView.vue'
+import { autoFollowScrollDirective as vAutoFollowScroll } from '@/directives/autoFollowScroll.ts'
+import { panelEnter, panelLeave } from '@/motion/expandPanel.ts'
+import { fadeSlideEnter, fadeSlideLeave } from '@/motion/fadeSlide.ts'
 
 /**
  * 运行态标题流光（工具行 / sub-agent 行通用）：v-beam 挂在标题元素上，

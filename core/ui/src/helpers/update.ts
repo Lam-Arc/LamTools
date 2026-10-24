@@ -10,7 +10,7 @@
  * no-ops, so core/ui never hardcodes the app version.
  */
 
-import { openExternalUrl } from './openUrl'
+import { openExternalUrl } from '@/helpers/openUrl.ts'
 
 declare global {
   interface Window {

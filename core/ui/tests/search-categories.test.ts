@@ -48,7 +48,7 @@ function mountSearch(
 }
 
 const CATALOG = {
-  'plugin.list': {
+  'plugin.system.list': {
     plugins: [
       { name: 'imagegen', description: '生成图片', enabled: true },
       { name: 'study', description: '学习工作区', enabled: false },
@@ -263,7 +263,7 @@ describe('global search categories', () => {
     const onOpenFile = vi.fn()
     const wrapper = mountSearch({
       ...CATALOG,
-      'plugin.list': {
+      'plugin.system.list': {
         plugins: [{ name: 'lamtools-rag', description: '工作区索引', enabled: true }],
       },
       'rag.docs.search': {

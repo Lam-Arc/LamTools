@@ -7,7 +7,7 @@ export {
   type JsonRpcClientResponse,
   type JsonRpcRequest,
   type JsonRpcResponse,
-} from './client.ts'
+} from '@/appServer/client.ts'
 
 export {
   CORE_APP_SERVER_PROTOCOL_VERSION,
@@ -27,9 +27,9 @@ export {
   type CoreRuntimeTurn,
   type CoreSkillInputItem,
   type CoreTextInputItem,
-} from './protocol.ts'
+} from '@/appServer/protocol.ts'
 
-export { hydrateSnapshot } from './snapshot.ts'
+export { hydrateSnapshot } from '@/appServer/snapshot.ts'
 
 export {
   assistantSegmentTurnId,
@@ -41,7 +41,7 @@ export {
   type CoreAppServerChatMessage,
   type CoreTurnActionMode,
   type CoreTurnControl,
-} from './selectors.ts'
+} from '@/appServer/selectors.ts'
 
 export {
   countOutstandingSubAgents,
@@ -49,7 +49,7 @@ export {
   type CoreSessionActivity,
   type CoreSessionPhase,
   type SelectCoreSessionActivityOptions,
-} from './sessionActivity.ts'
+} from '@/appServer/sessionActivity.ts'
 
 export {
   coreSystemEventForItem,
@@ -58,7 +58,7 @@ export {
   type CoreSystemEvent,
   type CoreSystemEventEntry,
   type CoreSystemEventKind,
-} from './systemEvents.ts'
+} from '@/appServer/systemEvents.ts'
 
 export {
   coreAppItemInputPreview,
@@ -71,7 +71,7 @@ export {
   projectAssistantMessageParts,
   type CoreAppItemPartOptions,
   type AssistantMessagePartsProjection,
-} from './messageParts.ts'
+} from '@/appServer/messageParts.ts'
 
 export {
   coreMessageHasProcessParts,
@@ -89,7 +89,7 @@ export {
   type CoreWorkbenchMessageOptions,
   type CoreWorkbenchMessageProjection,
   type CoreWorkbenchProjectionCache,
-} from './workbenchProjection.ts'
+} from '@/appServer/workbenchProjection.ts'
 
 export {
   coreDecisionDetail,
@@ -114,7 +114,7 @@ export {
   type CoreDecisionOption,
   type CorePendingDecision,
   type SelectPendingCoreDecisionsOptions,
-} from './pendingDecisions.ts'
+} from '@/appServer/pendingDecisions.ts'
 
 export {
   createCoreAppServerRuntimeController,
@@ -125,7 +125,7 @@ export {
   type CoreAppServerRuntimeState,
   type CoreAppServerThreadSwitchOptions,
   type CoreSteerOutcome,
-} from './store.ts'
+} from '@/appServer/store.ts'
 
 export {
   compareSnapshotVersion,
@@ -135,7 +135,7 @@ export {
   snapshotStatus,
   type CoreSessionState,
   type SessionStateEventResult,
-} from './sessionState.ts'
+} from '@/appServer/sessionState.ts'
 
 export {
   coreAppServerDecision,
@@ -157,4 +157,4 @@ export {
   type CoreWorkbenchTurnStatus,
   type SubmitCoreComposerTaskOptions,
   type SubmitCoreComposerTaskResult,
-} from './workbenchActions.ts'
+} from '@/appServer/workbenchActions.ts'

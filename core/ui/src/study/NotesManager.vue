@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Braces, Code2, Eye, FilePlus2, GitBranch, ListTree, LockKeyhole, MessageSquare, Pencil, Quote, Save, Table2, UnlockKeyhole } from 'lucide-vue-next'
-import MarkdownRenderer from '../components/MarkdownRenderer.vue'
-import CoreConfirmDialog from '../components/CoreConfirmDialog.vue'
-import { openContextMenu, registerTextSelectionMenuContributor } from '../components/context-menu'
-import type { ContextMenuEntry, TextSelectionMenuContext } from '../components/context-menu'
-import { extractMarkdownHeadings } from './api'
-import StudyNoteReferences from './StudyNoteReferences.vue'
-import type { StudyMarkdownHeading } from './api'
-import type { StudyNote, StudyNoteLock, StudyNoteTreeNode } from './types'
-import type { NoteDocumentSaveMeta, NoteRange } from './useStudyNotes'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import { openContextMenu, registerTextSelectionMenuContributor } from '@/components/context-menu/index.ts'
+import type { ContextMenuEntry, TextSelectionMenuContext } from '@/components/context-menu/index.ts'
+import { extractMarkdownHeadings } from '@/study/api.ts'
+import StudyNoteReferences from '@/study/StudyNoteReferences.vue'
+import type { StudyMarkdownHeading } from '@/study/api.ts'
+import type { StudyNote, StudyNoteLock, StudyNoteTreeNode } from '@/study/types.ts'
+import type { NoteDocumentSaveMeta, NoteRange } from '@/study/useStudyNotes.ts'
 
 interface DraftState { content: string; revision: number; contentHash: string }
 type DraftMap = Record<string, DraftState>

@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 /**
  * AccountShell — 账号的独立界面。
@@ -86,11 +86,11 @@ import { t } from '../i18n/index'
  */
 import { computed, ref } from 'vue'
 import { ArrowLeft } from 'lucide-vue-next'
-import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
+import { gradientFromStops, relativeLuminance, type ThemeData } from '@/helpers/theme.ts'
 import type {
   MobileControlAccountDevice,
   MobileControlAccountStatus,
-} from './MobileControlPanel.vue'
+} from '@/components/MobileControlPanel.vue'
 
 const props = defineProps<{
   accountStatus?: MobileControlAccountStatus | null

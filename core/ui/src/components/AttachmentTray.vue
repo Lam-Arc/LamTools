@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { reactive, watch, type Component } from 'vue';
 import {
@@ -79,10 +79,10 @@ import {
   Trash2,
   X,
 } from 'lucide-vue-next';
-import type { CoreAttachment } from '../types';
-import type { LamToolsTransport, TransportHttpResponse } from '../transport';
-import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu';
-import type { ContextMenuEntry } from './context-menu/types';
+import type { CoreAttachment } from '@/types.ts';
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts';
+import { isNativeContextTarget, openContextMenu } from '@/components/context-menu/context-menu.ts';
+import type { ContextMenuEntry } from '@/components/context-menu/types.ts';
 
 const props = defineProps<{
   attachments: CoreAttachment[];

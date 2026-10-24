@@ -10,8 +10,8 @@ import {
   SquareTerminal,
   Target,
 } from 'lucide-vue-next'
-import { resolveComposerCommandKind } from './syntax.ts'
-import type { CoreCommandCatalogItem } from '../types.ts'
+import { resolveComposerCommandKind } from '@/composer/syntax.ts'
+import type { CoreCommandCatalogItem } from '@/types.ts'
 
 const icons: Record<string, Component> = {
   archive: Archive,

@@ -1,4 +1,4 @@
-import type { CoreSessionListItem } from '../types'
+import type { CoreSessionListItem } from '@/types.ts'
 
 export function isPluginOwnedSession(session: CoreSessionListItem | undefined): boolean {
   return typeof session?.metadata?.owner_plugin === 'string'

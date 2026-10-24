@@ -1,5 +1,5 @@
 import { computed, ref, toValue, watch, type MaybeRefOrGetter } from 'vue'
-import type { RightSidebarLayoutController, RightSidebarLayoutState } from '../right-sidebar/types'
+import type { RightSidebarLayoutController, RightSidebarLayoutState } from '@/right-sidebar/types.ts'
 
 export interface RightSidebarModuleDefaults {
   visible?: boolean

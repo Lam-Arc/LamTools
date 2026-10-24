@@ -15,13 +15,13 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { defineComponent, h, onBeforeUnmount, provide, ref, shallowRef, watch, type PropType } from 'vue'
 import type { Component } from 'vue'
-import { getMode } from '../plugins/registry'
-import { CORE_PLUGIN_MODE_CONTEXT, useCorePluginModeContext, type CorePluginModeContext } from '../plugins/context'
-import HistoryLoadingIndicator from './HistoryLoadingIndicator.vue'
+import { getMode } from '@/plugins/registry.ts'
+import { CORE_PLUGIN_MODE_CONTEXT, useCorePluginModeContext, type CorePluginModeContext } from '@/plugins/context.ts'
+import HistoryLoadingIndicator from '@/components/HistoryLoadingIndicator.vue'
 
 const props = defineProps<{
   modeId: string

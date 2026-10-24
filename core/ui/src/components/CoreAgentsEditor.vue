@@ -22,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'

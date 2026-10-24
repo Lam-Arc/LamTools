@@ -1,7 +1,7 @@
 import { computed, ref, watch, type Ref } from 'vue'
-import { coreInputToText } from '../appServer/workbenchProjection.ts'
-import type { CoreAppSnapshot } from '../appServer/protocol.ts'
-import type { CoreInputItem, MessagePart } from '../types'
+import { coreInputToText } from '@/appServer/workbenchProjection.ts'
+import type { CoreAppSnapshot } from '@/appServer/protocol.ts'
+import type { CoreInputItem, MessagePart } from '@/types.ts'
 
 export interface CorePendingGuidanceOptions {
   snapshot: Readonly<Ref<CoreAppSnapshot | null | undefined>>

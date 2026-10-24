@@ -128,18 +128,18 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { reconcileCoreSubAgentRun } from '../agents/subAgentProjection'
+import { reconcileCoreSubAgentRun } from '@/agents/subAgentProjection.ts'
 import { ArrowDown, ArrowLeft, LoaderCircle } from 'lucide-vue-next'
-import type { CoreSubAgentDurableRecord, CoreSubAgentRun } from '../types'
-import type { LamToolsTransport } from '../transport'
-import type { CoreDecisionOption } from '../appServer/pendingDecisions'
-import { formatSubAgentElapsed, normalizeSubAgentType, subAgentStatusLabel } from '../agents/subAgentDisplay'
-import { useCoreAutoFollowScroll } from '../composables/useCoreAutoFollowScroll'
-import ChatThread from './ChatThread.vue'
-import { buildCoreResourceSummary } from '../runtime/resources'
+import type { CoreSubAgentDurableRecord, CoreSubAgentRun } from '@/types.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
+import type { CoreDecisionOption } from '@/appServer/pendingDecisions.ts'
+import { formatSubAgentElapsed, normalizeSubAgentType, subAgentStatusLabel } from '@/agents/subAgentDisplay.ts'
+import { useCoreAutoFollowScroll } from '@/composables/useCoreAutoFollowScroll.ts'
+import ChatThread from '@/components/ChatThread.vue'
+import { buildCoreResourceSummary } from '@/runtime/resources.ts'
 
 const props = withDefaults(defineProps<{
   run: CoreSubAgentRun

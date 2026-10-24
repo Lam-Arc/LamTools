@@ -35,7 +35,7 @@
 </template>
 
 <script setup lang="ts">
-import { defaultUiText } from '../i18n/index'
+import { defaultUiText } from '@/i18n/index.ts'
 
 import type {
   CorePermissionPreset,
@@ -43,9 +43,9 @@ import type {
   CoreSelectOption,
   CoreThinkingMode,
   CoreThinkingModeOption,
-} from '../composer/execution'
-import CoreModelThinkingMenu from './CoreModelThinkingMenu.vue'
-import CoreRuntimeMenu from './CoreRuntimeMenu.vue'
+} from '@/composer/execution.ts'
+import CoreModelThinkingMenu from '@/components/CoreModelThinkingMenu.vue'
+import CoreRuntimeMenu from '@/components/CoreRuntimeMenu.vue'
 
 const props = withDefaults(defineProps<{
   modelValue?: string

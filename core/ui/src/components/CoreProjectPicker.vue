@@ -39,11 +39,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { ref } from 'vue'
-import type { CoreProject } from '../projects/types'
-import { useOutsidePointerDismiss } from '../composables/useOutsidePointerDismiss'
+import type { CoreProject } from '@/projects/types.ts'
+import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 
 withDefaults(defineProps<{
   projects?: CoreProject[]

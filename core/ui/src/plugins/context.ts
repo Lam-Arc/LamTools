@@ -9,13 +9,13 @@ import {
   type Ref,
   type Component,
 } from 'vue'
-import type { CoreAppEvent } from '../appServer'
-import type { CoreMessage, CoreSessionListItem, ProjectGroup } from '../types'
-import type { CoreProject } from '../projects/types'
-import type { CoreProjectClient } from '../projects/client'
-import type { LamToolsTransport } from '../transport'
-import type { PluginRpc } from './types'
-import type { RightSidebarPluginContribution } from '../right-sidebar/types'
+import type { CoreAppEvent } from '@/appServer/index.ts'
+import type { CoreMessage, CoreSessionListItem, ProjectGroup } from '@/types.ts'
+import type { CoreProject } from '@/projects/types.ts'
+import type { CoreProjectClient } from '@/projects/client.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
+import type { PluginRpc } from '@/plugins/types.ts'
+import type { RightSidebarPluginContribution } from '@/right-sidebar/types.ts'
 
 export interface PluginSidebarSurface {
   component?: Component

@@ -113,11 +113,11 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { Smartphone } from 'lucide-vue-next'
-import type { MobileControlAccountDevice, MobileControlAccountStatus } from './MobileControlPanel.vue'
+import type { MobileControlAccountDevice, MobileControlAccountStatus } from '@/components/MobileControlPanel.vue'
 
 const props = defineProps<{
   leftPinned?: boolean

@@ -86,19 +86,19 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, ref, watch } from 'vue'
 import type { Component } from 'vue'
-import { getPluginWidget, invokePluginWidget } from '../plugins/api'
-import { getWidget } from '../plugins/registry'
-import CoreConfirmDialog from './CoreConfirmDialog.vue'
+import { getPluginWidget, invokePluginWidget } from '@/plugins/api.ts'
+import { getWidget } from '@/plugins/registry.ts'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import type {
   PluginWidgetEntry,
   RightSidebarRpc,
   RightSidebarWidgetAction,
   RightSidebarWidgetSnapshot,
-} from '../right-sidebar/types'
+} from '@/right-sidebar/types.ts'
 
 const props = withDefaults(defineProps<{
   entry: PluginWidgetEntry

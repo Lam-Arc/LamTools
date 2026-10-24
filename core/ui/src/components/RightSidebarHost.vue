@@ -62,26 +62,26 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n/index'
+import { t } from '@/i18n/index.ts'
 
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { Bot, BookOpen, Gauge, Globe, ListChecks, ListTodo } from 'lucide-vue-next'
-import RightSidebarChecklist from './RightSidebarChecklist.vue'
-import RightSidebarWebSearch from './RightSidebarWebSearch.vue'
-import { ensureContributions, pluginEnabled } from '../plugins/contributions'
-import RightSidebarRag from './RightSidebarRag.vue'
-import RightSidebarProcesses from './RightSidebarProcesses.vue'
-import CoreResourceStats from './CoreResourceStats.vue'
-import CoreSubAgentPanel from './CoreSubAgentPanel.vue'
-import { reconcileCoreSubAgentRun, selectCoreSubAgentRuns } from '../agents/subAgentProjection'
-import { subAgentRunIdentity } from '../agents/subAgentDisplay'
-import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
+import RightSidebarChecklist from '@/components/RightSidebarChecklist.vue'
+import RightSidebarWebSearch from '@/components/RightSidebarWebSearch.vue'
+import { ensureContributions, pluginEnabled } from '@/plugins/contributions.ts'
+import RightSidebarRag from '@/components/RightSidebarRag.vue'
+import RightSidebarProcesses from '@/components/RightSidebarProcesses.vue'
+import CoreResourceStats from '@/components/CoreResourceStats.vue'
+import CoreSubAgentPanel from '@/components/CoreSubAgentPanel.vue'
+import { reconcileCoreSubAgentRun, selectCoreSubAgentRuns } from '@/agents/subAgentProjection.ts'
+import { subAgentRunIdentity } from '@/agents/subAgentDisplay.ts'
+import { buildCurrentTurnChecklistGroups } from '@/runtime/checklist.ts'
 import type {
   RightSidebarPluginContribution,
   RightSidebarRpc,
-} from '../right-sidebar/types'
-import type { CoreMessage, CoreSubAgentRun, CoreSubAgentDurableRecord } from '../types'
-import type { LamToolsTransport } from '../transport'
+} from '@/right-sidebar/types.ts'
+import type { CoreMessage, CoreSubAgentRun, CoreSubAgentDurableRecord } from '@/types.ts'
+import type { LamToolsTransport } from '@/transport/index.ts'
 
 // 竖栏悬停出卡：图标竖栏常驻贴边，指针进入竖栏（图标或图标之间的空白）即在其
 // 左侧浮出对应模块的高透玻璃卡；指针移进卡片保持显示，两侧都离开才收起。
@@ -235,7 +235,8 @@ function deleteSubAgent(run: CoreSubAgentRun): void {
 }
 
 // user:“右栏面板跟着插件走”+联网搜索模块的存在由 websearch 插件启停决定。
-const websearchEnabled = ref(false)
+// 未知时乐观显示：面板在查到“插件停用”前保持可见（含无 RPC 的测试环境）。
+const websearchEnabled = ref(true)
 
 const railModules = computed<RailModule[]>(() => [
   {
