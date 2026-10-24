@@ -51,7 +51,7 @@ class RuntimeArtifacts:
         )
 
 
-def _tool_spec(tool: PluginToolSpec) -> ToolSpec:
+def _tool_spec(tool: PluginToolSpec, dependencies: tuple[str, ...] = ()) -> ToolSpec:
     metadata: dict[str, Any] = {
         "category": "plugin",
         "handler": tool.handler,
@@ -60,16 +60,61 @@ def _tool_spec(tool: PluginToolSpec) -> ToolSpec:
         "visibility": tool.visibility,
         "skill": tool.skill,
     }
+    # user:“依赖缺失不静默降级”+插件声明的依赖随工具元数据下发，
+    # 工具箱据此换上带安装提示的占位 handler。
+    if dependencies:
+        metadata["dependencies"] = list(dependencies)
     if tool.timeout is not None:
         metadata["timeout"] = tool.timeout
+    description = tool.description
+    input_schema = dict(tool.input_schema)
+    output_schema = dict(tool.output_schema)
+    if not description or not input_schema:
+        # user:“换芯声明”+插件工具与核心工具同名时，缺的描述与 schema 从核心
+        # 工具表补全（handler 换成插件的，schema 沿用核心，字段必兼容）。
+        base = _core_tool_base(tool.name)
+        if base is not None:
+            description = description or str(getattr(base, "description", "") or "")
+            if not input_schema:
+                base_input = getattr(base, "input_schema", None)
+                input_schema = dict(base_input) if isinstance(base_input, dict) else {}
+            if not output_schema:
+                base_output = getattr(base, "output_schema", None)
+                output_schema = dict(base_output) if isinstance(base_output, dict) else {}
+            base_metadata = getattr(base, "metadata", None)
+            if isinstance(base_metadata, dict):
+                if base_metadata.get("display"):
+                    metadata["display"] = dict(base_metadata["display"])
+                # 半声明换芯：分类与故障说明沿用核心常量，避免作者抄一遍。
+                if base_metadata.get("category"):
+                    metadata["category"] = base_metadata["category"]
+                if base_metadata.get("failure_modes"):
+                    metadata["failure_modes"] = list(base_metadata["failure_modes"])
+                if base_metadata.get("recovery"):
+                    metadata["recovery"] = base_metadata["recovery"]
+            metadata["overrides_core_tool"] = True
     return ToolSpec(
         name=tool.name,
-        description=tool.description,
-        input_schema=dict(tool.input_schema),
-        output_schema=dict(tool.output_schema),
+        description=description,
+        input_schema=input_schema,
+        output_schema=output_schema,
         permission=tool.permission,
         metadata=metadata,
     )
+
+
+def _core_tool_base(name: str) -> Any | None:
+    try:
+        from lamtools_core.tool.default_toolbox import (
+            bundled_core_tool_specs,
+            default_core_tool_specs,
+        )
+    except Exception:  # noqa: BLE001 — 核心工具表不可用时按纯声明处理
+        return None
+    for spec in (*default_core_tool_specs(), *bundled_core_tool_specs()):
+        if getattr(spec, "name", "") == name:
+            return spec
+    return None
 
 
 class PluginSystemRuntime:
@@ -82,17 +127,32 @@ class PluginSystemRuntime:
         manifests = self.host.discover() if manifests is None else manifests
         assembly = assemble_capabilities(manifests)
         artifacts = RuntimeArtifacts(errors=[*self.host.errors, *assembly.errors])
-        artifacts.tools = [_tool_spec(tool) for tool in assembly.tools]
+        plugin_dependencies = self._declared_dependencies(manifests)
+        artifacts.tools = [
+            _tool_spec(tool, plugin_dependencies.get(tool.plugin, ()))
+            for tool in assembly.tools
+        ]
         artifacts.skills = list(assembly.skills)
-        artifacts.skill_roots = sorted(
-            {skill.root for skill in assembly.skills if skill.root is not None}
-        )
+        artifacts.skill_roots = sorted(set(assembly.skill_roots))
         artifacts.hooks = list(assembly.hooks)
         artifacts.mcp_files = list(assembly.mcp_files)
         artifacts.commands = list(assembly.commands)
         artifacts.context = list(assembly.context)
         return artifacts
 
+
+    def _declared_dependencies(self, manifests: list[Any]) -> dict[str, tuple[str, ...]]:
+        from .engine import read_engine
+
+        declared: dict[str, tuple[str, ...]] = {}
+        for manifest in manifests:
+            try:
+                engine = read_engine(manifest)
+            except Exception:  # noqa: BLE001 — 坏声明不阻断装配，错误走 assembly.errors
+                continue
+            if engine.dependencies:
+                declared[manifest.name] = engine.dependencies
+        return declared
 
     def agents(self, manifests: list[Any] | None = None) -> AgentAssembly:
         manifests = self.host.discover() if manifests is None else manifests

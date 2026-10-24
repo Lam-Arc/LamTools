@@ -1,16 +1,14 @@
-"""Track the live plugin context behind each v2 backend.
+"""Track the live plugin context behind each plugin backend.
 
-The legacy lifecycle loader is reused unchanged: a v2 plugin that declares a
-``backend`` gets the same factory, start hooks, health monitoring and services.
-This module only remembers which context belongs to which plugin so operation
-handlers and tools can reach it later in the same process.
-
-user:“插件可以有自己的后端”+不重造生命周期，沿用已有装载器，只补上下文查表。
+user:“装配与生命周期分层”+管理器唯一持有后端句柄，启停随插件开关走；
+装载与启动细节在 :mod:`plugin_system.lifecycle`。
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from .lifecycle import backend_entry
 
 _CONTEXTS: dict[str, Any] = {}
 
@@ -36,11 +34,10 @@ def remember_handles(handles: list[Any]) -> None:
 
 
 class V2RuntimeManager:
-    """Own the v2 backend handles and drive start/stop on enable transitions.
+    """Own the backend handles and drive start/stop on enable transitions.
 
-    The legacy manager resolves plugins through the legacy registry and cannot
-    see v2 manifests, so v2 gets its own small manager with the same shape:
-    ``get``, ``is_enabled``, ``start`` and ``stop``.
+    One manager per process is the goal (finish-up plan, step 2); this class
+    owns the ``get``/``is_enabled``/``start``/``stop`` surface hosts use.
     """
 
     def __init__(self, handles: list[Any], host: Any, context: Any) -> None:
@@ -64,11 +61,7 @@ class V2RuntimeManager:
         manifest = self.host.get(str(plugin)) if self.host is not None else None
         if manifest is None or not manifest.enabled:
             return False
-        raw = manifest.raw if isinstance(manifest.raw, dict) else {}
-        has_backend = bool(raw.get("backend")) or (
-            manifest.root / "backend" / "__init__.py"
-        ).is_file()
-        if not has_backend:
+        if backend_entry(manifest) is None:
             return True
         handle = self.get(plugin)
         if handle is None:
@@ -78,10 +71,7 @@ class V2RuntimeManager:
     async def start(self, plugin: str) -> bool:
         import asyncio
 
-        from lamtools_core.plugins.lifecycle import (
-            load_plugin_backend,
-            start_plugin_backend,
-        )
+        from .lifecycle import load_plugin_backend, start_plugin_backend
 
         name = str(plugin)
         lock = self._locks.setdefault(name, asyncio.Lock())
@@ -103,7 +93,7 @@ class V2RuntimeManager:
     async def stop(self, plugin: str) -> bool:
         import asyncio
 
-        from lamtools_core.plugins.lifecycle import stop_plugin_backend
+        from .lifecycle import stop_plugin_backend
 
         name = str(plugin)
         lock = self._locks.setdefault(name, asyncio.Lock())
@@ -119,6 +109,14 @@ class V2RuntimeManager:
 
 
 def register_manager(host: Any, handles: list[Any], context: Any) -> V2RuntimeManager:
+    # user:“后端生命周期进程级唯一”+同一宿主只建一个管理器；重复注册只
+    # 刷新句柄引用（装配每轮调用，管理器不能跟着换）。
+    existing = getattr(host, "backend_manager", None)
+    if isinstance(existing, V2RuntimeManager):
+        existing.handles = list(handles)
+        existing.context = context or existing.context
+        remember_handles(handles)
+        return existing
     manager = V2RuntimeManager(handles, host, context)
     remember_handles(handles)
     if context is not None and hasattr(context, "set_service"):

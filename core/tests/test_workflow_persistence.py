@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from lamtools_core.app.operation_catalog import OperationRequest
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 from lamtools_core.plugins.bundled.workflow.backend import operations
 from lamtools_core.plugins.bundled.workflow.backend.cache import WorkflowContentCache
 from lamtools_core.plugins.bundled.workflow.backend.durable import WorkflowRunEventStore

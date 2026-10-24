@@ -68,6 +68,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from
 import { Bot, BookOpen, Gauge, Globe, ListChecks, ListTodo } from 'lucide-vue-next'
 import RightSidebarChecklist from './RightSidebarChecklist.vue'
 import RightSidebarWebSearch from './RightSidebarWebSearch.vue'
+import { ensureContributions, pluginEnabled } from '../plugins/contributions'
 import RightSidebarRag from './RightSidebarRag.vue'
 import RightSidebarProcesses from './RightSidebarProcesses.vue'
 import CoreResourceStats from './CoreResourceStats.vue'
@@ -186,6 +187,11 @@ const railSpanStyle = computed<Record<string, string> | undefined>(() => (
 ))
 
 onMounted(() => {
+  if (props.requestRpc) {
+    void ensureContributions(props.requestRpc).then(() => {
+      websearchEnabled.value = pluginEnabled('websearch')
+    })
+  }
   if (typeof ResizeObserver === 'undefined' || !railRef.value) return
   // 只用回调带来的尺寸，不在观察回调里读 offsetHeight 触发同步重排。
   railObserver = new ResizeObserver((entries) => {
@@ -227,6 +233,9 @@ function openSubAgent(subSessionId: string): void {
 function deleteSubAgent(run: CoreSubAgentRun): void {
   emit('delete-sub-agent', run)
 }
+
+// user:“右栏面板跟着插件走”+联网搜索模块的存在由 websearch 插件启停决定。
+const websearchEnabled = ref(false)
 
 const railModules = computed<RailModule[]>(() => [
   {
@@ -303,7 +312,7 @@ const railModules = computed<RailModule[]>(() => [
       widgetEntry: null,
     },
   },
-])
+].filter((module) => module.id !== 'web-search' || websearchEnabled.value))
 
 const activeModule = computed<RailModule | null>(() => (
   cardVisible.value

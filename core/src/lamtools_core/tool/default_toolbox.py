@@ -1263,7 +1263,7 @@ class CoreToolbox:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for spec in self.plugin_tool_specs:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
-        from lamtools_core.plugins.manager_tools import plugin_manager_tool_specs
+        from lamtools_core.plugin_system.manager_tools import plugin_manager_tool_specs
 
         plugin_manager_specs = (
             plugin_manager_tool_specs() if (enable_plugin_manager and operation_executor is not None) else []
@@ -2259,7 +2259,7 @@ class CoreToolbox:
         # 供 plugin.list 报状态与诊断）。
         # 依赖缺失（§5：不静默降级）→ 注册占位 handler 返回明确错误附
         # 安装命令，让模型/用户知道怎么修，而不是 Unknown tool 黑盒。
-        from lamtools_core.plugins.deps import check_dependencies, install_command_hint
+        from lamtools_core.plugin_system.deps import check_dependencies, install_command_hint
 
         for spec in plugin_tool_specs or []:
             dependencies = [
@@ -2296,7 +2296,7 @@ class CoreToolbox:
             handlers[spec.name] = handler
         # 模型可调插件管理工具（F2：skill 引导安装的调用通道）
         if plugin_manager_specs and operation_executor is not None:
-            from lamtools_core.plugins.manager_tools import plugin_manager_tool_handlers
+            from lamtools_core.plugin_system.manager_tools import plugin_manager_tool_handlers
 
             handlers.update(
                 plugin_manager_tool_handlers(operation_executor, work_root=self.work_root)

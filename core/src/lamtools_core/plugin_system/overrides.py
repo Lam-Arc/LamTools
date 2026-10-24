@@ -1,7 +1,8 @@
 """Parse module overrides from a plugin manifest.
 
-user:“禁用我们的某一个文件，自己提供上去”+清单里写后端模块名和替换文件；
-同一模块只能一个插件接管，安全模式跳过全部覆盖。
+user:“双键族”+``lamtools_core.*`` 键走后端 boot 查找器；``@/...`` 键是
+前端模块（import map 替换，Core 返回页面时注入）。同一目标只能一个插件
+接管，安全模式跳过全部覆盖。
 """
 
 from __future__ import annotations
@@ -14,6 +15,9 @@ from .capabilities import CapabilityError
 from .manifest import PluginManifest
 
 HOST_MODULE_PREFIX = "lamtools_core."
+#: 前端覆盖键：应用源码内的裸模块说明符（构建后由 import map 解析）。
+FRONTEND_KEY_PREFIX = "@/"
+FRONTEND_SUFFIXES = (".js", ".mjs")
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,10 @@ class PluginOverrideSpec:
     path: Path
     root: Path
 
+    @property
+    def is_frontend(self) -> bool:
+        return self.target.startswith(FRONTEND_KEY_PREFIX)
+
 
 @dataclass
 class OverrideAssembly:
@@ -30,13 +38,21 @@ class OverrideAssembly:
     errors: list[dict[str, Any]] = field(default_factory=list)
     skipped: bool = False
 
+    def frontend_overrides(self) -> dict[str, PluginOverrideSpec]:
+        return {k: v for k, v in self.overrides.items() if v.is_frontend}
+
+    def backend_overrides(self) -> dict[str, PluginOverrideSpec]:
+        return {k: v for k, v in self.overrides.items() if not v.is_frontend}
+
 
 def _validate_target(plugin: str, value: Any) -> str:
     target = str(value or "").strip()
+    if target.startswith(FRONTEND_KEY_PREFIX):
+        return target
     if not target.startswith(HOST_MODULE_PREFIX):
         raise CapabilityError(
             plugin,
-            f"override target must start with '{HOST_MODULE_PREFIX}': {target or '(missing)'}",
+            f"override target must start with '{HOST_MODULE_PREFIX}' or '{FRONTEND_KEY_PREFIX}': {target or '(missing)'}",
         )
     if any(not part.isidentifier() for part in target.split(".")):
         raise CapabilityError(plugin, f"override target is not a module name: {target}")
@@ -68,9 +84,11 @@ def read_overrides(manifest: PluginManifest) -> list[PluginOverrideSpec]:
             raise CapabilityError(
                 manifest.name, f"override path is outside the plugin root: {text}"
             )
-        if candidate.suffix.lower() != ".py":
+        allowed = FRONTEND_SUFFIXES if target.startswith(FRONTEND_KEY_PREFIX) else (".py",)
+        if candidate.suffix.lower() not in allowed:
             raise CapabilityError(
-                manifest.name, f"override path must end with .py: {text}"
+                manifest.name,
+                f"override path must end with {' or '.join(allowed)}: {text}",
             )
         if not candidate.is_file():
             raise CapabilityError(manifest.name, f"override file is missing: {text}")

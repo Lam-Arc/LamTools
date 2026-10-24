@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 
 from .build_tools import workflow_build_tool_handlers, workflow_build_tool_specs
 from .adapters import (

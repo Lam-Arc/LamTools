@@ -2,7 +2,6 @@
   "name": "emotion-ball-pet",
   "version": "2.0.0",
   "description": "Emotion Ball desktop companion for Core questions and approvals",
-  "assembly": "v2",
   "model_scene": "desktop_pet",
   "ui": {
     "windows": [

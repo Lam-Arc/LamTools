@@ -2,9 +2,12 @@
   "name": "imagegen",
   "version": "2.0.0",
   "description": "生图工具（内置插件：generate_image；配置从 core 设置层迁入插件配置）",
-  "assembly": "v2",
-  "tools": ["./tools/tools.jsonc"],
-  "configSchema": "./config/schema.jsonc",
+  "tools": [
+    "./tools/tools.jsonc"
+  ],
   "builtin": true,
-  "platforms": "universal"
+  "platforms": "universal",
+  "config": {
+    "schema": "./config/schema.jsonc"
+  }
 }

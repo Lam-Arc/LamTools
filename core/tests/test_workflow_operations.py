@@ -27,8 +27,8 @@ from lamtools_core.plugins.bundled.workflow.backend.runtime import (
 from lamtools_core.plugins.bundled.workflow.backend.build_tools import workflow_build_tool_handlers
 from lamtools_core.plugins.bundled.workflow.backend.tools import workflow_tool_specs
 from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
-from lamtools_core.plugins.context import PluginContext
-from lamtools_core.plugins.registry import bundled_plugins_dir
+from lamtools_core.plugin_system.context import PluginContext
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 from lamtools_core.tool import ToolCall, ToolSpec
 from lamtools_core.tool.default_toolbox import build_core_toolbox
 from lamtools_core.runtime import RuntimeTaskRegistry
@@ -39,9 +39,7 @@ def _workflow_modes(catalog) -> list:
     from lamtools_core.plugin_system.ui import assemble_ui
 
     manifests = [
-        item
-        for item in catalog.plugin_system_host.discover()
-        if item.assembly == "v2"
+        item for item in catalog.plugin_system_host.discover()
     ]
     return [mode for mode in assemble_ui(manifests).modes if mode.plugin == "workflow"]
 

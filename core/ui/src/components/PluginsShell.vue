@@ -12,11 +12,7 @@
         >
           <template #default="{ activeSection }">
             <section v-if="activeSection === 'plugins'" class="settings-panel">
-              <CorePluginsEditor
-                :request-rpc="props.requestRpc"
-                :transport="props.transport"
-                @changed="(refreshDesktop) => $emit('capabilities-changed', refreshDesktop)"
-              />
+              <CorePluginSystemEditor :request-rpc="props.requestRpc" />
             </section>
             <section v-else-if="activeSection === 'skills'" class="settings-panel">
               <CoreSkillsEditor
@@ -41,7 +37,7 @@ import { t } from '../i18n/index'
  * PluginsShell — 与设置（CoreSettings）同级的插件管理全屏页。
  *
  * 插件 / 技能 / 钩子是插件管理体系的导航内页（用户共识）：
- * - 插件：插件列表 / 安装 / 详情资产 / 配置表单（CorePluginsEditor）
+ * - 插件：唯一插件页（CorePluginSystemEditor，列表/启停/卸载/配置）
  * - 技能：系统级技能管理（CoreSkillsEditor，含 create-plugin / plugin-manager）
  * - 钩子：系统级 Hook 管理（CoreHooksEditor，逐条信任）
  * 复用 SettingsShell 骨架（同一 overlay/侧边栏布局 + --settings-* token）。
@@ -49,7 +45,7 @@ import { t } from '../i18n/index'
 import { computed, ref } from 'vue'
 import SettingsShell from './SettingsShell.vue'
 import { PLUGIN_SHELL_SECTIONS, type SettingsSection } from './settingsSections'
-import CorePluginsEditor from './CorePluginsEditor.vue'
+import CorePluginSystemEditor from './CorePluginSystemEditor.vue'
 import CoreSkillsEditor from './CoreSkillsEditor.vue'
 import CoreHooksEditor from './CoreHooksEditor.vue'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'

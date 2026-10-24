@@ -30,8 +30,8 @@ from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowPort,
     WorkflowRunner,
 )
-from lamtools_core.plugins.context import PluginContext
-from lamtools_core.plugins.registry import bundled_plugins_dir
+from lamtools_core.plugin_system.context import PluginContext
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 
 
 def _node(

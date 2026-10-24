@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from lamtools_core.app import OperationCatalog
 from lamtools_core.plugin_system import PluginHost
 from lamtools_core.plugin_system.config_store import (
@@ -182,3 +184,50 @@ async def test_plugin_without_schema_accepts_any_object(tmp_path: Path) -> None:
     loaded = await catalog.execute("plugin.system.config.get", {"name": "plain"})
     assert loaded.payload["config"] == {"anything": True}
     assert loaded.payload["has_schema"] is False
+
+
+@pytest.mark.asyncio
+async def test_bundled_plugin_config_reads_and_writes_shared_location(tmp_path, monkeypatch):
+    """user:“内置插件配置走共享数据目录”+打包态 bundled 只读，值落在
+    {data_dir}/plugins/<name>.jsonc，与核心读取方（imagegen_store）同一处。"""
+    import json as _json
+
+    from lamtools_core.app import OperationCatalog
+    from lamtools_core.plugin_system import PluginHost, shared_host
+    from lamtools_core.plugin_system.hooks import HookTrustStore
+    from lamtools_core.plugin_system.host_operations import register_host_operations
+    from lamtools_core.plugin_system.operations import register_plugin_system_operations
+    from lamtools_core.plugin_system.paths import bundled_plugins_dir
+    from lamtools_core.skills import SkillStateStore
+
+    host = shared_host(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "data" / "plugin-system.jsonc",
+    )
+    catalog = OperationCatalog()
+    register_plugin_system_operations(catalog, host)
+    register_host_operations(
+        catalog,
+        host,
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        skill_state_store=SkillStateStore(tmp_path / "skill_state.json"),
+        skill_registry_factory=lambda: None,
+        hook_trust_store=HookTrustStore(tmp_path / "hook_trust.json"),
+    )
+
+    got = await catalog.execute("plugin.system.config.get", {"name": "imagegen"})
+    assert got.status == "ok", got.payload
+    assert got.payload["has_schema"] is True
+
+    saved = await catalog.execute(
+        "plugin.system.config.update",
+        {"name": "imagegen", "config": {"enabled": True}},
+    )
+    assert saved.status == "ok", saved.payload
+    shared = tmp_path / "data" / "plugins" / "imagegen.jsonc"
+    assert shared.exists()
+    assert _json.loads(shared.read_text(encoding="utf-8"))["enabled"] is True
+
+    again = await catalog.execute("plugin.system.config.get", {"name": "imagegen"})
+    assert again.payload["config"].get("enabled") is True

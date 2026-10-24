@@ -283,11 +283,20 @@ def test_windows_are_parsed(tmp_path: Path) -> None:
     assert window.plugin == "pet"
 
 
-def test_duplicate_window_ids_conflict(tmp_path: Path) -> None:
+def test_duplicate_window_ids_within_one_plugin_conflict(tmp_path: Path) -> None:
+    # user:“窗口 id 按插件命名空间”+跨插件同名合法（两颗都能叫 main），
+    # 同一颗插件里重复声明才冲突。
     first = make_plugin(
         tmp_path,
         "first",
-        manifest={"ui": {"windows": [{"id": "pet", "entry": "./window.html"}]}},
+        manifest={
+            "ui": {
+                "windows": [
+                    {"id": "pet", "entry": "./window.html"},
+                    {"id": "pet", "entry": "./window.html"},
+                ]
+            }
+        },
         files={"window.html": "<html></html>"},
     )
     second = make_plugin(
@@ -299,7 +308,7 @@ def test_duplicate_window_ids_conflict(tmp_path: Path) -> None:
 
     assembly = assemble_ui([load_manifest(first), load_manifest(second)])
 
-    assert [window.plugin for window in assembly.windows] == ["first"]
+    assert [window.plugin for window in assembly.windows] == ["first", "second"]
     assert "already declared" in assembly.errors[0]["error"]
 
 

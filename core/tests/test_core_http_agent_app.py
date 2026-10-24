@@ -1401,14 +1401,19 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
 def _write_desktop_plugin(root: Path, name: str) -> None:
     plugin_root = root / name
     (plugin_root / "desktop").mkdir(parents=True, exist_ok=True)
+    # user:"桌宠改成窗口插件"+桌面插件按 ui.windows 声明。
     (plugin_root / "plugin.json").write_text(
         '{\n'
         f'  "name": "{name}",\n'
         '  "version": "0.1.0",\n'
-        '  "desktop": {\n'
-        '    "entry": "./desktop/index.html",\n'
-        f'    "title": "{name}",\n'
-        '    "window": {}\n'
+        '  "ui": {\n'
+        '    "windows": [\n'
+        '      {\n'
+        '        "id": "main",\n'
+        f'        "title": "{name}",\n'
+        '        "entry": "./desktop/index.html"\n'
+        '      }\n'
+        '    ]\n'
         '  }\n'
         '}\n',
         encoding="utf-8",

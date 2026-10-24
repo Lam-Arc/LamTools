@@ -13,7 +13,7 @@ from lamtools_core.plugins.bundled.workflow.backend.durable import (
 )
 from lamtools_core.app.operation_catalog import OperationRequest
 from lamtools_core.plugins.bundled.workflow.backend.operations import workflow_run
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 from lamtools_core.plugins.bundled.workflow.backend.queue import WorkflowQueueItem, WorkflowQueueStore, WorkflowRunQueue
 from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,

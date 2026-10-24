@@ -212,6 +212,16 @@ def _skill_root(location: Path, roots: list[Path]) -> Path:
     return location.parent
 
 
+def declared_skill_roots(manifest: PluginManifest) -> list[Path]:
+    """user:“技能根也是资源根”+清单声明的 skills 目录无论有没有 SKILL.md
+    都进装配：技能索引只认 SKILL.md，但 read_file 的可搜索路径要认根。
+    """
+    try:
+        return [path for path in _declared_paths(manifest, "skills") if path.is_dir()]
+    except CapabilityError:
+        return []
+
+
 def _read_skills(manifest: PluginManifest) -> list[PluginSkillSpec]:
     roots = [path for path in _declared_paths(manifest, "skills") if path.is_dir()]
     if not roots:
@@ -375,6 +385,7 @@ class CapabilityAssembly:
     errors: list[dict[str, Any]] = field(default_factory=list)
     tools: list[PluginToolSpec] = field(default_factory=list)
     skills: list[PluginSkillSpec] = field(default_factory=list)
+    skill_roots: list[Path] = field(default_factory=list)
     hooks: list[PluginHookSpec] = field(default_factory=list)
     mcp_files: list[Path] = field(default_factory=list)
     commands: list[PluginCommandSpec] = field(default_factory=list)
@@ -396,6 +407,10 @@ def assemble_capabilities(manifests: list[PluginManifest]) -> CapabilityAssembly
             assembly.errors.append({"plugin": manifest.name, "error": exc.message})
             continue
         assembly.plugins[manifest.name] = capabilities
+        # 声明根全量进表（资源可达性），发现到的技能根必在其中。
+        for root in declared_skill_roots(manifest):
+            if root not in assembly.skill_roots:
+                assembly.skill_roots.append(root)
         for tool in capabilities.tools:
             if tool.name in seen_tools:
                 assembly.errors.append(

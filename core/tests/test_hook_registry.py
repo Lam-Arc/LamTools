@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from lamtools_core.plugins import HookRegistry, HookTrustStore, PluginManifest
+from lamtools_core.plugin_system import PluginHost
+from lamtools_core.plugin_system.hooks import HookRegistry, HookTrustStore, load_all_hooks
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -28,51 +29,55 @@ def test_hook_registry_loads_project_user_and_plugin_hooks(tmp_path: Path):
     write_json(project / ".lamtools" / "hooks.json", hook_body)
     write_json(user, hook_body)
     write_json(plugin_hooks, hook_body)
-
-    registry = HookRegistry(
-        project_root=project,
-        user_hooks_path=user,
-        plugins=[
-            PluginManifest(
-                name="repo-policy",
-                version="0.1.0",
-                root=plugin_root,
-                hook_files=[plugin_hooks],
-            )
-        ],
-        trust_store=HookTrustStore(tmp_path / "trust.json"),
+    write_json(
+        plugin_root / "plugin.json",
+        {"name": "repo-policy", "version": "0.1.0", "hooks": ["./hooks/hooks.json"]},
     )
 
-    hooks = registry.load()
+    # user:“钩子每轮重新加载”+文件钩子走注册表，插件钩子走清单装配，
+    # load_all_hooks 把两张表按定义顺序接起来。
+    host = PluginHost(
+        roots=[tmp_path / "plugins"],
+        state_path=tmp_path / "plugin-system.jsonc",
+    )
+    hooks = load_all_hooks(
+        project_root=project,
+        user_hooks_path=user,
+        trust_store=HookTrustStore(tmp_path / "trust.json"),
+        manifests=host.discover(),
+    )
 
     assert [hook.source for hook in hooks] == ["project", "user", "plugin"]
     assert {hook.event for hook in hooks} == {"PreToolUse"}
     assert {hook.matcher for hook in hooks} == {"run_command"}
-    assert all(hook.definition_hash for hook in hooks)
-    assert all(hook.trusted is False for hook in hooks)
-    assert all(hook.status == "pending_review" for hook in hooks)
+    file_hooks = [hook for hook in hooks if hook.source != "plugin"]
+    plugin_hooks_loaded = [hook for hook in hooks if hook.source == "plugin"]
+    assert all(hook.definition_hash for hook in file_hooks)
+    assert all(hook.trusted is False for hook in file_hooks)
+    assert all(hook.status == "pending_review" for hook in file_hooks)
+    # 插件钩子装即信任：安装插件是一次明确的信任行为。
+    assert all(hook.trusted is True for hook in plugin_hooks_loaded)
 
 
-def test_hook_registry_skips_disabled_plugin_hooks(tmp_path: Path):
+def test_disabled_plugin_hooks_are_not_loaded(tmp_path: Path):
     plugin_root = tmp_path / "plugins" / "disabled"
     plugin_hooks = plugin_root / "hooks" / "hooks.json"
     write_json(plugin_hooks, {
         "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "python x.py"}]}]}
     })
-
-    registry = HookRegistry(
-        plugins=[
-            PluginManifest(
-                name="disabled",
-                version="0.1.0",
-                root=plugin_root,
-                enabled=False,
-                hook_files=[plugin_hooks],
-            )
-        ],
+    write_json(
+        plugin_root / "plugin.json",
+        {"name": "disabled", "version": "0.1.0", "hooks": ["./hooks/hooks.json"]},
     )
 
-    assert registry.load() == []
+    host = PluginHost(
+        roots=[tmp_path / "plugins"],
+        state_path=tmp_path / "plugin-system.jsonc",
+    )
+    host.disable("disabled")
+    hooks = load_all_hooks(project_root=None, manifests=host.discover())
+
+    assert [hook for hook in hooks if hook.source == "plugin"] == []
 
 
 def test_hook_registry_marks_trusted_hooks(tmp_path: Path):
@@ -175,7 +180,7 @@ def test_hook_registry_loads_jsonc_hooks_file(tmp_path: Path):
 
 def test_shipped_hooks_file_is_loadable(tmp_path: Path):
     """随包文件本身必须能被加载器读出来（空配置也不报错）。"""
-    from lamtools_core.plugins._jsonc import load_jsonc_text
+    from lamtools_core.plugin_system.jsonc import load_jsonc_text
 
     shipped = Path(__file__).resolve().parent.parent / "config" / "resources" / "hooks.json"
 

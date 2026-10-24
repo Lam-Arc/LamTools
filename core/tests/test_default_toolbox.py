@@ -190,7 +190,7 @@ def test_all_model_tool_schemas_are_strict_compatible(tmp_path):
     from lamtools_core.tool.durable_tools import durable_tool_specs
     from lamtools_core.plugins.bundled.workflow.backend.build_tools import workflow_build_tool_specs
     from lamtools_core.plugins.bundled.workflow.backend.tools import workflow_tool_specs
-    from lamtools_core.plugins.manager_tools import plugin_manager_tool_specs
+    from lamtools_core.plugin_system.manager_tools import plugin_manager_tool_specs
 
     workflow = WorkflowDef(
         name="dynamic",
@@ -1153,18 +1153,21 @@ IMAGE_CONFIG = {
 
 
 def test_core_toolbox_exposes_generate_image_spec(tmp_path):
-    # S3：generate_image 经内置插件装配（半声明式：spec 从 core 常量按名补全）
-    from lamtools_core.plugins.models import PluginToolSpec
-    from lamtools_core.plugins.tools import complete_plugin_tool_specs
-    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs
+    # user:“换芯声明”+generate_image 经统一装配（同名核心工具按名补全）
+    from lamtools_core.plugin_system.capabilities import PluginToolSpec
+    from lamtools_core.plugin_system.runtime import _tool_spec
 
-    base_specs = {spec.name: spec for spec in bundled_core_tool_specs()}
-    plugin_specs = complete_plugin_tool_specs(
-        [PluginToolSpec(name="generate_image", permission="ask_user", handler="x:y")],
-        plugin_name="imagegen",
-        plugin_root=tmp_path,
-        base_specs_by_name=base_specs,
-    )
+    plugin_specs = [
+        _tool_spec(
+            PluginToolSpec(
+                name="generate_image",
+                permission="ask_user",
+                handler="x:y",
+                plugin="imagegen",
+                plugin_root=str(tmp_path),
+            )
+        )
+    ]
     assert plugin_specs[0].metadata["category"] == "image"  # 半声明式从 core 常量补全
     toolbox = build_core_toolbox(
         work_root=tmp_path,

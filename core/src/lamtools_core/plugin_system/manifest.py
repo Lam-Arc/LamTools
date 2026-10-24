@@ -38,9 +38,6 @@ class PluginManifest:
     root: Path = Path()
     enabled: bool = True
     scope: str = "global"
-    #: Migration marker: ``v2`` plugins are assembled by the new plugin system
-    #: and skipped by the legacy registry. Absent means ``v1``.
-    assembly: str = "v1"
     #: Every declared field, including ones this step does not consume yet.
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -88,9 +85,6 @@ def load_manifest(manifest_path: Path | str, *, enabled: bool = True) -> PluginM
             path,
             f"scope must be one of {', '.join(SUPPORTED_SCOPES)}",
         )
-    assembly = str(raw.get("assembly") or "v1").strip().lower()
-    if assembly not in ("v1", "v2"):
-        raise PluginManifestError(path, "assembly must be v1 or v2")
     return PluginManifest(
         name=name,
         version=version,
@@ -98,7 +92,6 @@ def load_manifest(manifest_path: Path | str, *, enabled: bool = True) -> PluginM
         root=path.parent.resolve(),
         enabled=enabled,
         scope=scope,
-        assembly=assembly,
         raw=dict(raw),
     )
 

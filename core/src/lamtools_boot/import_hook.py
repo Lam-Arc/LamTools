@@ -21,7 +21,7 @@ class OverrideLoader(importlib.abc.Loader):
         return None
 
     def exec_module(self, module: ModuleType) -> None:
-        source = self.path.read_text(encoding="utf-8")
+        source = self.path.read_text(encoding="utf-8-sig")
         code = compile(source, str(self.path), "exec")
         exec(code, module.__dict__)
 

@@ -60,7 +60,7 @@ def load_access_tools(path: Path | str) -> TierTools:
     tier_tools: TierTools = {"read_only": set(), "limited_edit": set(), "full_edit": set()}
     # 文件名叫 .jsonc、随包副本也带注释：严格 json.loads 会把整份 tier 静默
     # 清空（所有工具降级为需审批），2026-09-25 审计 P3。
-    from lamtools_core.plugins._jsonc import load_jsonc_text
+    from lamtools_core.plugin_system.jsonc import load_jsonc_text
 
     try:
         data = load_jsonc_text(path)

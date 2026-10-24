@@ -70,7 +70,7 @@ from lamtools_core.llm.retry import (
     complete_with_retry,
     stream_with_retry,
 )
-from lamtools_core.plugins import HookEvent
+from lamtools_core.plugin_system.hooks import HookEvent
 from lamtools_core.prompt.movable import (
     MOVABLE_CONTEXT_METADATA_KEY,
     is_movable_context_notice,

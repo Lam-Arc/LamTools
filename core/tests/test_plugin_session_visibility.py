@@ -1,4 +1,8 @@
-"""Plugin-owned session visibility follows the live plugin enabled state."""
+"""Plugin-owned session visibility follows the live plugin enabled state.
+
+user:“study 和 workflow 在新系统上跑起来”+会话可见性必须读唯一账本
+（plugin-system.jsonc），不再经过旧 v1 注册表。
+"""
 
 from __future__ import annotations
 
@@ -8,8 +12,9 @@ import pytest
 
 from lamtools_core.app.core_db import open_core_app_db
 from lamtools_core.app.core_session_store import CoreDbSessionStore
-from lamtools_core.plugins.registry import PluginStateStore, bundled_plugins_dir
-from lamtools_core.plugins.session_visibility import PluginSessionVisibility
+from lamtools_core.plugin_system import PluginHost
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
+from lamtools_core.plugin_system.session_visibility import PluginSessionVisibility
 from lamtools_core.session import MessageRecord, SessionRecord
 
 
@@ -20,11 +25,11 @@ async def test_disabled_plugin_sessions_are_not_materialized_or_listed(
 ) -> None:
     monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
     data_dir = tmp_path / "data"
-    state_store = PluginStateStore(data_dir / "plugins.jsonc")
-    visibility = PluginSessionVisibility(
-        plugin_roots=[bundled_plugins_dir()],
-        state_store=state_store,
+    host = PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=data_dir / "plugin-system.jsonc",
     )
+    visibility = PluginSessionVisibility(host=host)
     db = await open_core_app_db(tmp_path / "core.db")
     sessions = CoreDbSessionStore(lambda: db, session_visible=visibility)
     db.project_store.set_session_visibility(visibility)
@@ -80,7 +85,7 @@ async def test_disabled_plugin_sessions_are_not_materialized_or_listed(
         )
     )
 
-    state_store.set_enabled("workflow", False)
+    host.disable("workflow")
 
     assert await sessions.get("workflow:demo") is None
     assert await sessions.get("wf_legacy") is None
@@ -93,7 +98,7 @@ async def test_disabled_plugin_sessions_are_not_materialized_or_listed(
         session.id for session in await db.project_store.list_sessions(project.id)
     }
 
-    state_store.set_enabled("workflow", True)
+    host.enable("workflow")
 
     assert (await sessions.get("workflow:demo")).title == "Workflow"
     assert (await sessions.get("wf_legacy")).title == "Legacy Workflow"

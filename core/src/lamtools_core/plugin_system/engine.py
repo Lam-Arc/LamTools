@@ -97,10 +97,23 @@ def host_engine_info() -> dict[str, str]:
     }
 
 
+def _declared_dependencies(manifest_raw: dict[str, Any], engine_raw: dict[str, Any] | None) -> tuple[str, ...]:
+    # user:“依赖只用于检查，不触发安装”+设计 10.1 的文档形态是顶层
+    # ``dependencies``；engine 段里的写法同样接受。
+    for source in (manifest_raw.get("dependencies"), (engine_raw or {}).get("dependencies")):
+        if isinstance(source, list):
+            return tuple(
+                str(item).strip()
+                for item in source
+                if isinstance(item, str) and str(item).strip()
+            )
+    return ()
+
+
 def read_engine(manifest: PluginManifest) -> PluginEngine:
     raw = manifest.raw.get("engine")
     if raw is None:
-        return PluginEngine()
+        return PluginEngine(dependencies=_declared_dependencies(manifest.raw, None))
     if not isinstance(raw, dict):
         raise CapabilityError(manifest.name, "engine must be an object")
     runtime = str(raw.get("runtime") or "python").strip().lower()
@@ -109,16 +122,7 @@ def read_engine(manifest: PluginManifest) -> PluginEngine:
             manifest.name,
             f"engine runtime must be one of {', '.join(VALID_RUNTIMES)}: {runtime}",
         )
-    dependencies_raw = raw.get("dependencies")
-    dependencies = (
-        tuple(
-            str(item).strip()
-            for item in dependencies_raw
-            if isinstance(item, str) and str(item).strip()
-        )
-        if isinstance(dependencies_raw, list)
-        else ()
-    )
+    dependencies = _declared_dependencies(manifest.raw, raw)
     return PluginEngine(
         runtime=runtime,
         python=str(raw.get("python") or "").strip(),

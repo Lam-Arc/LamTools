@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from lamtools_core.plugins._jsonc import load_jsonc_text
+from lamtools_core.plugin_system.jsonc import load_jsonc_text
 
 
 STUDY_ROOT = (

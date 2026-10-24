@@ -55,7 +55,7 @@ def build_manifest(*, work_root: Path | None = None) -> dict[str, Any]:
             work_root=resolved_work_root,
             plugin_roots=[],
         )
-        plugin = next((item for item in assembly["plugins"] if item.id == PLUGIN_ID), None)
+        plugin = next((item for item in assembly["plugins"] if item.name == PLUGIN_ID), None)
         if plugin is None:
             raise RuntimeError("the plan plugin is not discovered in the default assembly")
         if not plugin.enabled:
@@ -75,9 +75,8 @@ def build_manifest(*, work_root: Path | None = None) -> dict[str, Any]:
 
         tool_names = {
             tool.name
-            for group in assembly["plugin_tool_groups"]
-            if group["name"] == PLUGIN_ID
-            for tool in group["tools"]
+            for tool in assembly["plugin_runtime_specs"]
+            if tool.metadata.get("plugin") == PLUGIN_ID
         }
         if tool_names:
             raise RuntimeError(

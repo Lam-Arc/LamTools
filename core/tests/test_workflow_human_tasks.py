@@ -20,7 +20,7 @@ from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowRunner,
 )
 from lamtools_core.plugins.bundled.workflow.backend.snapshots import WorkflowSnapshotStore
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 
 
 def _workflow(*, name: str = "review", timeout_seconds: float | None = None) -> WorkflowDef:

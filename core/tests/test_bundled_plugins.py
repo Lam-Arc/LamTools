@@ -1,5 +1,8 @@
 """内置插件化测试：bundled 插件根 / 装配全链（含 Workflow 与 Study）/
 禁用即消失 / 不可卸载。
+
+user:“删 v1 成单一系统”+所有断言走统一装配，不再有 assembly 过滤与
+半声明合并桥。
 """
 from __future__ import annotations
 
@@ -7,8 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from lamtools_core.plugins.registry import bundled_plugins_dir
-from lamtools_core.plugins.tools import complete_plugin_tool_specs
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool.default_toolbox import (
     bundled_core_tool_specs,
@@ -34,8 +36,7 @@ def test_plan_skills_load_through_the_v2_assembly(tmp_path):
         roots=[bundled_plugins_dir()],
         state_path=tmp_path / "plugin-system.jsonc",
     )
-    manifests = [item for item in host.discover() if item.assembly == "v2"]
-    artifacts = PluginSystemRuntime(host).assemble(manifests=manifests)
+    artifacts = PluginSystemRuntime(host).assemble(manifests=host.discover())
 
     names = {skill.name for skill in artifacts.skills}
     assert {"draft-plan", "refine-plan", "execute-plan"} <= names
@@ -55,35 +56,26 @@ def test_bundled_core_tool_specs_four_tools():
 
 def test_assemble_discovers_bundled_plugins(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
-    from lamtools_core.plugin_system import PluginHost
-    from lamtools_core.plugins.registry import bundled_plugins_dir
 
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
         work_root=tmp_path,
         plugin_roots=[],
     )
-    # 所有内置插件都已归新系统，旧注册表不再发现它们。
-    assert assembly["plugins"] == []
+    # user:“单一插件系统”+内置根永远在扫描链路里，装配直接发现全部插件；
+    # 半声明合并桥（plugin_tool_groups）已退役。
+    discovered = {item.name for item in assembly["plugins"]}
+    assert {"plan", "study", "workflow", "imagegen", "emotion-ball-pet"} <= discovered
     assert assembly["plugin_tool_groups"] == []
+    # websearch 默认关闭，启用后才进可用集。
+    enabled = {item.name for item in assembly["plugins"] if item.enabled}
+    assert "websearch" not in enabled
 
-    host = PluginHost(
-        roots=[bundled_plugins_dir()],
-        state_path=tmp_path / "data" / "plugin-system.jsonc",
-    )
-    v2_names = {
-        item.name for item in host.discover() if item.assembly == "v2" and item.enabled
-    }
-    assert {"plan", "study", "workflow", "imagegen", "emotion-ball-pet"} <= v2_names
-    # websearch 默认关闭，启用后才进装配。
-    assert "websearch" not in v2_names
-    host.enable("websearch")
-    assert "websearch" in {
-        item.name for item in host.discover() if item.assembly == "v2" and item.enabled
-    }
 
 def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.ui import assemble_ui
     from lamtools_core.skill_runtime import create_skill_runtime
 
     assembly = assemble_core_agent_plugins(
@@ -91,23 +83,17 @@ def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
         work_root=tmp_path,
         plugin_roots=[],
     )
-    from lamtools_core.plugin_system import PluginHost
-    from lamtools_core.plugin_system.ui import assemble_ui
-    from lamtools_core.plugins.registry import bundled_plugins_dir
-
     host = PluginHost(
         roots=[bundled_plugins_dir()],
         state_path=tmp_path / "data" / "plugin-system.jsonc",
     )
-    v2_manifests = [
-        item for item in host.discover() if item.assembly == "v2" and item.enabled
-    ]
-    study_root = next(item.root for item in v2_manifests if item.name == "study")
+    manifests = [item for item in host.discover() if item.enabled]
+    study_root = next(item.root for item in manifests if item.name == "study")
     study_roots = {(study_root / "skills").resolve(), (study_root / "future").resolve()}
     assert study_roots <= set(assembly["skill_modes"])
     assert all(assembly["skill_modes"][root] == ("study:study",) for root in study_roots)
     study_mode = next(
-        mode for mode in assemble_ui(v2_manifests).modes if mode.plugin == "study"
+        mode for mode in assemble_ui(manifests).modes if mode.plugin == "study"
     )
     assert "load_skill" in study_mode.tools
 
@@ -142,8 +128,6 @@ def test_study_tools_are_scoped_to_the_study_mode(tmp_path):
     对照组：workflow 模式未声明独占，它的工具在普通对话里照旧可用。
     """
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
-    from lamtools_core.plugins.tools import complete_plugin_tool_specs
-    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs, default_core_tool_specs
 
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
@@ -158,17 +142,8 @@ def test_study_tools_are_scoped_to_the_study_mode(tmp_path):
     assert "read_file" not in exclusive["study:study"]
     assert "workflow:workflow" not in exclusive
 
-    base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
+    # user:“换芯声明”+声明工具装配期已补全，直接归并即可。
     plugin_specs: list = list(assembly["plugin_runtime_specs"])
-    for group in assembly["plugin_tool_groups"]:
-        plugin_specs.extend(
-            complete_plugin_tool_specs(
-                group["tools"],
-                plugin_name=group["name"],
-                plugin_root=group["root"],
-                base_specs_by_name=base_specs,
-            )
-        )
 
     def build(active_mode=None):
         return build_core_toolbox(
@@ -205,14 +180,14 @@ def test_study_tools_are_scoped_to_the_study_mode(tmp_path):
 def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
     """默认装配包含基础工具和所有已启用内置插件的工具。
 
-    websearch 声明默认关闭，这里先在 v2 状态里启用。
+    websearch 声明默认关闭，这里先在账本里启用。
     """
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
-    from lamtools_core.plugin_system.state import PluginStateStore as V2StateStore
+    from lamtools_core.plugin_system.state import PluginStateStore
 
     state_path = tmp_path / "data" / "plugin-system.jsonc"
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    V2StateStore(state_path).set_enabled("websearch", True)
+    PluginStateStore(state_path).set_enabled("websearch", True)
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
         work_root=tmp_path,
@@ -245,11 +220,13 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
     search_spec = next(spec for spec in toolbox.tool_specs() if spec.name == "web_search")
     assert search_spec.permission == "auto_allow"
     assert search_spec.metadata["plugin"] == "websearch"
+    # user:“换芯声明”+web_search 的描述与 schema 从核心工具表补全。
+    assert search_spec.description
+    assert search_spec.input_schema
+
 
 def test_disable_bundled_plugin_removes_tools(tmp_path):
-    from lamtools_core.plugin_system import PluginHost
-    from lamtools_core.plugin_system.runtime import PluginSystemRuntime
-    from lamtools_core.plugins.registry import bundled_plugins_dir
+    from lamtools_core.plugin_system import PluginHost, PluginSystemRuntime
 
     host = PluginHost(
         roots=[bundled_plugins_dir()],
@@ -262,16 +239,19 @@ def test_disable_bundled_plugin_removes_tools(tmp_path):
 
 async def test_bundled_plugin_executes_via_core_assembly(tmp_path):
     """内置插件 handler 由 core 显式装配（不走动态导入）。"""
-    from lamtools_core.plugins.models import PluginToolSpec
+    from lamtools_core.plugin_system.capabilities import PluginToolSpec
+    from lamtools_core.plugin_system.runtime import _tool_spec
 
-    base_specs = {spec.name: spec for spec in bundled_core_tool_specs()}
-    specs = complete_plugin_tool_specs(
-        [PluginToolSpec(name="git_status", permission="auto_allow", handler="x:y")],
-        plugin_name="git",
-        plugin_root=tmp_path,
-        base_specs_by_name=base_specs,
+    spec = _tool_spec(
+        PluginToolSpec(
+            name="git_status",
+            permission="auto_allow",
+            handler="x:y",
+            plugin="git",
+            plugin_root=str(tmp_path),
+        )
     )
-    toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=specs)
+    toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=[spec])
     # handler 按名由 core 装配（git_status 不依赖动态导入，也不报导入错误）
     assert "git_status" not in toolbox._plugin_handler_errors
     result = await toolbox.execute(ToolCall(id="c1", name="git_status", arguments={}))
@@ -281,10 +261,7 @@ async def test_bundled_plugin_executes_via_core_assembly(tmp_path):
 
 
 def test_bundled_plugin_uninstall_rejected(tmp_path):
-    import pytest
-
     from lamtools_core.plugin_system import PluginHost
-    from lamtools_core.plugins.registry import bundled_plugins_dir
 
     host = PluginHost(
         roots=[bundled_plugins_dir()],
@@ -299,7 +276,7 @@ def test_bundled_plugin_uninstall_rejected(tmp_path):
 def test_imagegen_config_migrates_to_plugin_config(tmp_path):
     from lamtools_core.config.imagegen_store import load_imagegen_config
     from lamtools_core.config.root import core_config_file
-    from lamtools_core.plugins.config_store import read_plugin_config
+    from lamtools_core.plugin_system.plugin_data import read_plugin_config
 
     legacy = core_config_file("imagegen.jsonc")
     legacy.parent.mkdir(parents=True, exist_ok=True)
@@ -319,20 +296,26 @@ def test_imagegen_config_migrates_to_plugin_config(tmp_path):
 
 async def test_websearch_config_get_migrates_legacy(tmp_path):
     from lamtools_core.app import OperationCatalog
-    from lamtools_core.plugins.config_store import read_plugin_config
-    from lamtools_core.plugins.operations import build_plugin_operation_catalog
-    from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
+    from lamtools_core.config.root import core_config_file
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.hooks import HookTrustStore
+    from lamtools_core.plugin_system.host_operations import register_host_operations
+    from lamtools_core.plugin_system.plugin_data import read_plugin_config
+    from lamtools_core.skills import SkillStateStore
 
-    legacy = __import__("lamtools_core.config.root", fromlist=["core_config_file"]).core_config_file("websearch.jsonc")
+    legacy = core_config_file("websearch.jsonc")
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text('{"provider": "baidu", "limit": 3}', encoding="utf-8")
 
-    catalog = build_plugin_operation_catalog(
-        plugin_registry=PluginRegistry(plugin_roots=[]),
-        plugin_state_store=PluginStateStore(tmp_path / "plugin-state.json"),
-        hook_registry_factory=lambda: None,
-        hook_trust_store=type("T", (), {"untrust": lambda self, h: None})(),
+    catalog = OperationCatalog()
+    register_host_operations(
+        catalog,
+        PluginHost(roots=[], state_path=tmp_path / "plugin-system.jsonc"),
+        work_root=tmp_path,
         data_dir=tmp_path / "data",
+        skill_state_store=SkillStateStore(tmp_path / "skill_state.json"),
+        skill_registry_factory=lambda: None,
+        hook_trust_store=HookTrustStore(tmp_path / "hook_trust.json"),
     )
     result = await catalog.execute("websearch.config.get")
     assert result.status == "ok"

@@ -7,7 +7,7 @@ import pytest
 from lamtools_core.event import CollectingEventSink
 from lamtools_core.kernel.loop import CoreLoopKernel
 from lamtools_core.kernel.policy import LoopPolicy
-from lamtools_core.plugins import HookDecision, HookEvent
+from lamtools_core.plugin_system.hooks import HookDecision, HookEvent
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
 

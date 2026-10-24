@@ -10,7 +10,7 @@ import httpx
 
 from lamtools_core.config.network import httpx_client_kwargs, subprocess_env
 
-from .models import HookDecision, HookDefinition, HookEvent
+from .hooks import HookDecision, HookDefinition, HookEvent
 
 
 class MCPHookCaller(Protocol):

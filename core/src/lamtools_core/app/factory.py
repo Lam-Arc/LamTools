@@ -203,11 +203,18 @@ def create_app(
     return app
 
 
-def add_spa_fallback(app: FastAPI, frontend_dir: Path | str) -> None:
+def add_spa_fallback(
+    app: FastAPI,
+    frontend_dir: Path | str,
+    import_map_provider: Callable[[], dict[str, str]] | None = None,
+) -> None:
     """Register the SPA catch-all route — call *after* all API routes.
 
     Every unmatched GET request returns ``index.html`` (or ``index-core.html``)
     so that Vue Router (history mode) can handle client-side navigation.
+
+    user:“前端模块替换”+返回页面前把插件覆盖合并进 import map，注入位置
+    在任何模块脚本之前；启停插件后整页重载即拿到新映射。
     """
     resolved = Path(frontend_dir).resolve()
     index_path = resolved / "index.html"
@@ -229,7 +236,12 @@ def add_spa_fallback(app: FastAPI, frontend_dir: Path | str) -> None:
         if candidate == resolved or candidate.is_relative_to(resolved):
             if candidate.is_file():
                 return FileResponse(str(candidate))
-        return HTMLResponse(content=_index_html)
+        content = _index_html
+        if import_map_provider is not None:
+            from lamtools_core.plugin_system.import_map import inject_import_map
+
+            content = inject_import_map(content, import_map_provider())
+        return HTMLResponse(content=content)
 
 
 def _mount_frontend_assets(app: FastAPI, frontend_path: Path) -> None:

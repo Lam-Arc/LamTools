@@ -45,4 +45,38 @@ describe('MarkdownRenderer tables', () => {
     scrollbar.dispatchEvent(new Event('scroll'))
     expect(table.style.transform).toBe('translate3d(-120px, 0, 0)')
   })
+
+  // user:"md自动渲染可能存在bug，会出现被胶囊形边线包裹的空行"
+  // user:"全出来之后会消失，消失后就正常了"
+  // 流式逐块喂表格时，每一帧都会重建尾部分段；表格壳是插在表格前面的兄弟
+  // 节点，不随分段节点一起回收，会留下一叠空心圆角空壳，流完整体重渲染才
+  // 消失。验收：流式全程壳的数量不超出现存的表格数，结束后恰好一个壳。
+  it('does not leak empty table shells while a table streams in chunks', async () => {
+    const rows = ['| 工具 | 分类 |', '| --- | --- |']
+    for (let i = 1; i <= 6; i += 1) rows.push(`| tool_${i} | file_read |`)
+    const wrapper = mount(MarkdownRenderer, { props: { content: '', streaming: true } })
+    await wrapper.vm.$nextTick()
+
+    let content = '分类如下：\n\n'
+    for (const row of rows) {
+      content += `${row}\n`
+      await wrapper.setProps({ content })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.findAll('.markdown-table-shell').length, `after chunk: ${row}`).toBeLessThanOrEqual(1)
+    }
+
+    // 表格段收口后再来一段普通文字：旧尾部连同壳一起回收，新段只有一个壳。
+    content += '\n\n收尾说明。'
+    await wrapper.setProps({ content })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findAll('.markdown-table-shell')).toHaveLength(1)
+
+    // 流结束整体重渲染：恰好一个壳，壳里有完整表格。
+    await wrapper.setProps({ streaming: false })
+    await wrapper.vm.$nextTick()
+    const shells = wrapper.findAll('.markdown-table-shell')
+    expect(shells).toHaveLength(1)
+    expect(shells[0].findAll('tbody tr')).toHaveLength(6)
+    wrapper.unmount()
+  })
 })

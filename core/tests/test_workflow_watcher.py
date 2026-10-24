@@ -10,7 +10,7 @@ import pytest
 from lamtools_core.plugins.bundled.workflow.backend.watcher import WorkflowFileWatcher
 from lamtools_core.plugins.bundled.workflow.backend import WorkflowPluginRuntime
 from lamtools_core.plugins.bundled.workflow.backend.runtime import WorkflowManager, WorkflowRunner
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 
 
 class FakeHub:

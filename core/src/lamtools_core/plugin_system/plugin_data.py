@@ -1,12 +1,10 @@
-"""插件配置存储 + configSchema 轻量校验（B1/E5 共识）。
+"""Per-plugin config files under the shared data directory.
 
-- 存储：``{data_dir}/plugins/<name>.jsonc``，全局一份（照抄 ModelStore
-  "每实体一 jsonc" 模式）；读走 load_jsonc，写保注释能力不需要（配置
-  由 UI/CLI 键级写入）。
-- 校验：不引 jsonschema 依赖（项目无先例），轻量手写子集——支持
-  string/number/integer/boolean/enum/array(string)/object(properties)，
-  缺省值回退（仿 retry_store._coerce 的"逐键校验+缺省回退"模式）。
+user:“配置跟着插件走”+历史通道 ``{data_dir}/plugins/<name>.jsonc`` 仍被
+imagegen/websearch 使用（收尾方案步骤 3/5 迁到插件自己的 ``data/`` 前
+保持原位）；新代码请用 :mod:`plugin_system.config_store`。
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ._jsonc import load_jsonc_text
+from .jsonc import load_jsonc_text
 
 _logger = logging.getLogger(__name__)
 
@@ -139,3 +137,13 @@ def merged_with_defaults(config: dict[str, Any], schema: dict[str, Any]) -> dict
         if "default" in prop_schema:
             merged[key] = prop_schema["default"]
     return merged
+
+
+__all__ = [
+    "delete_plugin_config",
+    "merged_with_defaults",
+    "validate_config",
+    "plugin_config_path",
+    "read_plugin_config",
+    "write_plugin_config",
+]

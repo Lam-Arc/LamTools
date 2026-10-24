@@ -16,8 +16,8 @@ from lamtools_core.app.session_autotitle import is_default_title
 from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.event import RunItemEvent
 from lamtools_core.llm import LLMRequest, LLMResponse
-from lamtools_core.plugins.engine import HookEngine
-from lamtools_core.plugins.models import HookDefinition, HookEvent, HookHandler
+from lamtools_core.plugin_system.hook_engine import HookEngine
+from lamtools_core.plugin_system.hooks import HookDefinition, HookEvent, HookHandler
 from lamtools_core.runtime import RuntimeState
 from lamtools_core.session import SessionRecord
 from lamtools_core.tool import ToolCall

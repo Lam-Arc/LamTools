@@ -73,22 +73,9 @@ def _run() -> None:
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
 
-    # Module overrides must be installed before the first lamtools_core import.
-    # lamtools_boot is standard-library only for exactly this reason.
-    from lamtools_boot.overrides import apply_boot_overrides
-
-    apply_boot_overrides()
-
-    port = int(os.environ.get("LAMCORE_PORT", "5172"))
-    host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
-    from lamtools_core.app.api_access import CoreApiAccessPolicy
-
-    # The packaged sidecar is internal; LAN access belongs to a separate
-    # explicitly configured CLI listener or the authenticated Rust gateway.
-    access_policy = CoreApiAccessPolicy()
-    host = access_policy.validate_bind_host(host)
-
-    # --- data directory ------------------------------------------------
+    # --- data directory ----------------------------------------------
+    # 这段只用标准库，必须在第一个 lamtools_core 导入之前算好：
+    # 启动覆盖的根清单与账本路径都以它为单一来源（收尾方案步骤 4）。
     # Windows green/portable mode sets LAMTOOLS_HOME to the app-side .lam.
     # Linux desktop builds pass their XDG-backed Tauri app-data directory.
     # LAMTOOLS_CORE_DATA_DIR remains the exact override for both platforms.
@@ -100,7 +87,26 @@ def _run() -> None:
         data_dir = Path(lam_home_env)
     else:
         data_dir = _default_data_dir()
+
+    # Module overrides must be installed before the first lamtools_core import.
+    # lamtools_boot is standard-library only for exactly this reason.
+    from lamtools_boot.overrides import apply_boot_overrides, default_plugin_roots
+
+    # user:“boot 与运行时同一份根与账本”+显式传参，不做第二套默认推导。
+    apply_boot_overrides(
+        roots=default_plugin_roots(dict(os.environ)),
+        state_path=data_dir / "plugin-system.jsonc",
+    )
     data_dir.mkdir(parents=True, exist_ok=True)
+
+    port = int(os.environ.get("LAMCORE_PORT", "5172"))
+    host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
+    from lamtools_core.app.api_access import CoreApiAccessPolicy
+
+    # The packaged sidecar is internal; LAN access belongs to a separate
+    # explicitly configured CLI listener or the authenticated Rust gateway.
+    access_policy = CoreApiAccessPolicy()
+    host = access_policy.validate_bind_host(host)
 
     core_db = Path(
         os.environ.get("LAMTOOLS_CORE_DB")

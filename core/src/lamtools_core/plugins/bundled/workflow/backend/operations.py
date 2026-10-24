@@ -8,7 +8,7 @@ import uuid
 from typing import Any
 
 from lamtools_core.app.operation_catalog import OperationRequest, OperationResult
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 from lamtools_core.session import build_session_record
 
 from .runtime import WorkflowDef, WorkflowExecutionContext, WorkflowNodeState, WorkflowRunResult

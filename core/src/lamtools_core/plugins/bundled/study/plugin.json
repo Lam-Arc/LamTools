@@ -5,7 +5,6 @@
   "description": "Global learning workspace and text annotations",
   "model_scene": "study",
   "scope": "mode",
-  "assembly": "v2",
   "builtin": true,
   "backend": "./backend.py",
   "skills": [

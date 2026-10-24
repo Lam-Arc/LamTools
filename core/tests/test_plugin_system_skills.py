@@ -23,8 +23,10 @@ def test_create_plugin_documents_the_v2_contract() -> None:
     skill = load_skill("create-plugin")
     content = skill.content
 
-    assert "assembly" in content
+    # user:“单一系统不再需要 assembly 标记”+覆盖双键族与后果自负必须写清。
+    assert "assembly" not in content
     assert "overrides" in content
+    assert "@/" in content
     assert "config.schema" in content or "config/schema.jsonc" in content
     assert "run_command" in content
     assert "LamToolsPluginPanels" in content

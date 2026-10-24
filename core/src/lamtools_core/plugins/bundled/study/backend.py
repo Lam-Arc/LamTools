@@ -34,7 +34,7 @@ def _load_study_system_prompt() -> str:
     # plugin-owned prompts live under resources/plugins/bundled.  Resolving
     # through the registry preserves the same plugin root contract used by
     # discovery instead of assuming that data files sit beside the .pyc.
-    from lamtools_core.plugins.registry import bundled_plugins_dir
+    from lamtools_core.plugin_system.paths import bundled_plugins_dir
 
     packaged_path = bundled_plugins_dir() / 'study' / 'prompts' / 'study-system.md'
     return packaged_path.read_text(encoding='utf-8').strip()

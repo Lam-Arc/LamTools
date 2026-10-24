@@ -1,46 +1,29 @@
 """Generic visibility gate for sessions owned by plugins.
 
-Core sessions may be resources of an optional plugin.  When that plugin is
-disabled (or no longer installed), the host must not materialize the resource
-as an ordinary chat session: its runtime/UI contract is unavailable.
+user:“study/workflow 会话被误判禁用”+可见性必须读唯一账本（PluginHost），
+不再经过旧 v1 注册表；每判一次都重新发现，开关插件立刻生效。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
-from .registry import PluginRegistry, PluginStateStore
+from .host import PluginHost
 
 
 SessionVisibility = Callable[[str, dict[str, Any]], bool]
 
 
 class PluginSessionVisibility:
-    """Dynamically decide whether a plugin-owned session may be read.
+    """Dynamically decide whether a plugin-owned session may be read."""
 
-    The registry is intentionally discovered for each decision.  Plugin
-    enable/disable operations update the state file live, so a long-lived
-    session store must not retain an outdated enabled-plugin snapshot.
-    """
-
-    def __init__(
-        self,
-        *,
-        plugin_roots: list[Path | str],
-        state_store: PluginStateStore,
-    ) -> None:
-        self._plugin_roots = [Path(item) for item in plugin_roots]
-        self._state_store = state_store
+    def __init__(self, *, host: PluginHost) -> None:
+        self._host = host
 
     def __call__(self, session_id: str, metadata: dict[str, Any]) -> bool:
         owner = str(metadata.get("owner_plugin") or "").strip()
-        registry = PluginRegistry(
-            plugin_roots=self._plugin_roots,
-            state_store=self._state_store,
-        )
-        plugins = registry.discover()
+        plugins = self._host.discover()
         if owner:
             return any(
                 plugin.name == owner and plugin.enabled

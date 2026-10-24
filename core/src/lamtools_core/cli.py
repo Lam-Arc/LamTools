@@ -801,7 +801,7 @@ async def run_core_cli_task(
     )
     allow_outside_workdir = resolved_permissions.allow_access_outside_workdir
 
-    from lamtools_core.plugins.context import PluginContext
+    from lamtools_core.plugin_system.context import PluginContext
     from lamtools_core.runtime import RuntimeTaskRegistry
     from lamtools_core.tool.approval import ApprovalGate
     from lamtools_core.tool.permission import ASK_USER
@@ -949,29 +949,8 @@ async def run_core_cli_task(
             raise RuntimeError("operation catalog is not configured")
         return await operation_catalog.execute(name, payload, metadata=metadata)
 
-    # Complete declarative plugin tool manifests using the same generic
-    # loader path as the HTTP/GUI hosts.  Backend-provided specs win when a
-    # runtime intentionally supplies the implementation.
-    from lamtools_core.plugins.tools import complete_plugin_tool_specs
-    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs, default_core_tool_specs
-
-    runtime_plugin_specs = list(plugin_assembly.get("plugin_runtime_specs") or [])
-    runtime_plugin_names = {str(getattr(spec, "name", "")) for spec in runtime_plugin_specs}
-    base_specs = {
-        spec.name: spec
-        for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]
-    }
-    plugin_tool_specs: list[Any] = []
-    for group in plugin_assembly.get("plugin_tool_groups") or []:
-        declared = complete_plugin_tool_specs(
-            group.get("tools") or [],
-            plugin_name=str(group.get("name") or ""),
-            plugin_root=group.get("root"),
-            base_specs_by_name=base_specs,
-            dependencies=group.get("dependencies") or None,
-        )
-        plugin_tool_specs.extend(spec for spec in declared if spec.name not in runtime_plugin_names)
-    plugin_tool_specs.extend(runtime_plugin_specs)
+    # user:“换芯声明”+声明工具在装配期已补全，这里直接归并。
+    plugin_tool_specs: list[Any] = list(plugin_assembly.get("plugin_runtime_specs") or [])
 
     toolbox = build_core_toolbox(
         work_root=work_root,
@@ -1064,7 +1043,7 @@ async def run_core_cli_task(
             core_events_to_run_items(sink.events, thread_id=result.session_id),
         )
     finally:
-        from lamtools_core.plugins.lifecycle import shutdown_plugin_backends
+        from lamtools_core.plugin_system import shutdown_plugin_backends
 
         await shutdown_plugin_backends(plugin_assembly.get("plugin_runtimes") or [])
         await runtime_task_registry.shutdown()
@@ -2492,10 +2471,9 @@ def build_parser(
     load_context_set = load_context_sub.add_parser("set", help="Write global load_context from a JSON file or stdin")
     load_context_set.add_argument("source_file", help="Path to a JSON file, or '-' for stdin")
     load_context_set.set_defaults(func=cmd_load_context_set)
-    from lamtools_core.plugins.cli import (
-        load_plugin_cli_commands,
-        load_v2_plugin_cli_commands,
-    )
+    # user:“插件自己也提供 CLI 命令”+统一系统单一装载入口。
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.plugin_cli import load_plugin_cli_commands
 
     resolved_roots = (
         plugin_roots if plugin_roots is not None else _default_cli_plugin_roots()
@@ -2506,14 +2484,6 @@ def build_parser(
         else _default_cli_plugin_state_path()
     )
     load_plugin_cli_commands(
-        sub,
-        plugin_roots=resolved_roots,
-        state_path=resolved_state,
-    )
-    # user:“插件自己也提供操作”+新系统的插件命令也挂进同一个解析器。
-    from lamtools_core.plugin_system import PluginHost
-
-    load_v2_plugin_cli_commands(
         sub,
         host=PluginHost(roots=list(resolved_roots), state_path=resolved_state),
     )
@@ -6259,11 +6229,11 @@ def _default_cli_plugin_roots() -> list[Path]:
 
 
 def _default_cli_plugin_state_path() -> Path:
-    """Resolve the persistent plugin state location used by the HTTP host."""
+    """Resolve the persistent plugin ledger used by the HTTP host."""
     data_dir = os.environ.get("LAMTOOLS_CORE_DATA_DIR")
     if data_dir:
-        return Path(data_dir) / "plugins.jsonc"
-    return _resolve_core_db(None).resolve().parent / "core-agent" / "plugins.jsonc"
+        return Path(data_dir) / "plugin-system.jsonc"
+    return _resolve_core_db(None).resolve().parent / "core-agent" / "plugin-system.jsonc"
 
 
 def _default_work_root() -> Path:

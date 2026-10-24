@@ -43,7 +43,7 @@ def load_imagegen_config(data_dir: Path | str | None = None) -> dict[str, Any]:
     - ``data_dir`` 为 None 时保持旧行为（兼容未接 data_dir 的调用方）。
     """
     if data_dir is not None:
-        from lamtools_core.plugins.config_store import read_plugin_config, write_plugin_config
+        from lamtools_core.plugin_system.plugin_data import read_plugin_config, write_plugin_config
 
         config = read_plugin_config(data_dir, "imagegen")
         if config:
@@ -65,7 +65,7 @@ def save_imagegen_config(value: dict[str, Any], data_dir: Path | str | None = No
     D5：data_dir 给定时写插件配置位置（配置迁入插件），否则写旧位置。
     """
     if data_dir is not None:
-        from lamtools_core.plugins.config_store import write_plugin_config
+        from lamtools_core.plugin_system.plugin_data import write_plugin_config
 
         write_plugin_config(data_dir, "imagegen", value)
         return imagegen_config_path()

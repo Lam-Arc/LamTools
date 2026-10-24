@@ -2,8 +2,9 @@
   "name": "pipeline-checker",
   "version": "0.1.0",
   "description": "管线校验：比对原模块与插件替换文件，列出缺失和多出来的导出",
-  "assembly": "v2",
-  "tools": ["./tools.jsonc"],
+  "tools": [
+    "./tools.jsonc"
+  ],
   "ui": {
     "regions": [
       {

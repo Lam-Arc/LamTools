@@ -378,7 +378,8 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
     """Flatten enabled plugins' UI declarations with explicit errors."""
     assembly = UIAssembly()
     replaced: dict[str, str] = {}
-    window_owners: dict[str, str] = {}
+    # user:“窗口 id 按插件命名空间”+两颗插件可以都叫 "main"，与模式 id 同规。
+    window_owners: dict[tuple[str, str], str] = {}
     for manifest in manifests:
         if not manifest.enabled:
             continue
@@ -408,7 +409,7 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
                 replaced[region.region] = manifest.name
             assembly.regions.append(region)
         for window in spec.windows:
-            owner = window_owners.get(window.id)
+            owner = window_owners.get((manifest.name, window.id))
             if owner is not None:
                 assembly.errors.append(
                     {
@@ -417,7 +418,7 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
                     }
                 )
                 continue
-            window_owners[window.id] = manifest.name
+            window_owners[(manifest.name, window.id)] = manifest.name
             assembly.windows.append(window)
     assembly.regions.sort(key=lambda item: (item.order, item.plugin, item.region))
     assembly.modes.sort(key=lambda item: (item.order, item.plugin, item.id))

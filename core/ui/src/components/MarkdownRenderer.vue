@@ -733,10 +733,18 @@ function disposeTableEnhancements(): void {
 
 function disposeTableEnhancementsIn(scope: Node): void {
   if (!(scope instanceof Element)) return
-  const shells = [
+  const shells = new Set<Element>([
     ...(scope.matches('.markdown-table-shell') ? [scope] : []),
     ...Array.from(scope.querySelectorAll('.markdown-table-shell')),
-  ]
+  ])
+  // user:"全出来之后会消失，消失后就正常了"
+  // 表格被 enhanceTable 搬进壳里之后，壳是表格的祖先而非子孙；只按子孙搜
+  // 会在流式重建分段时漏掉要回收的壳，空壳留在消息里堆成一叠空心圆角条，
+  // 直到流结束整体重渲染才消失。这里按每个表格所在的壳（祖先）补齐回收。
+  for (const table of scope.matches('table') ? [scope] : Array.from(scope.querySelectorAll('table'))) {
+    const shell = table.closest('.markdown-table-shell')
+    if (shell) shells.add(shell)
+  }
   for (const shell of shells) {
     const dispose = tableCleanup.get(shell)
     if (dispose) {
@@ -814,6 +822,10 @@ function enhanceTable(table: HTMLTableElement): void {
     scrollbar.removeEventListener('scroll', syncTablePosition)
     resizeObserver?.disconnect()
     if (!resizeObserver) window.removeEventListener('resize', updateOverflow)
+    // user:"md自动渲染可能存在bug，会出现被胶囊形边线包裹的空行"
+    // 壳不在分段的 nodes 列表里（disposeSegment 删不到它），回收时必须
+    // 自己从 DOM 摘掉，否则流式期间每次重建都会留下一个空壳。
+    shell.remove()
   })
 }
 

@@ -46,6 +46,7 @@
         </template>
       </MessageView>
 
+      <PluginSystemContributions region="message" />
     <slot name="tail" />
   </div>
 </template>
@@ -57,6 +58,7 @@ import type { CoreAttachment, CoreMessage } from '../types'
 import type { LamToolsTransport } from '../transport'
 import type { CoreSubAgentRef } from '../agents/subAgentProjection'
 import MessageView from './MessageView.vue'
+import PluginSystemContributions from './PluginSystemContributions.vue'
 
 defineOptions({ name: 'ChatThread' })
 

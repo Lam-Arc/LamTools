@@ -1,7 +1,6 @@
-"""共享 JSONC 解析工具（plugins 包内复用，不引入 llm 包依赖）。
+"""共享 JSONC 解析工具（字符串感知的剥注释/尾逗号，不引入 llm 包依赖）。
 
-从 plugins/operations.py 的本地实现提升而来：同一套剥注释逻辑同时
-服务注册表（plugins.jsonc）与插件配置（{data_dir}/plugins/<name>.jsonc）。
+服务插件系统各处的 JSONC 读取：账本、插件配置与钩子文件。
 """
 from __future__ import annotations
 

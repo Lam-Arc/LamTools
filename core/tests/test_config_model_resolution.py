@@ -532,7 +532,7 @@ class TestNoGlobalDefaultModel:
         """A plugin gets its own scene's model even though the operation catalog
         is attached to the originating context *after* the backend is created."""
         from lamtools_core.app.operation_catalog import OperationCatalog
-        from lamtools_core.plugins.context import PluginContext
+        from lamtools_core.plugin_system.context import PluginContext
 
         _write_provider(isolated_config_root, "p-a", name="Provider A")
         _write_provider(isolated_config_root, "p-b", name="Provider B")
@@ -561,7 +561,7 @@ class TestNoGlobalDefaultModel:
         assert result.payload == {"ok": True}
 
     def test_plugin_scene_view_without_a_model_defers_to_an_explicit_error(self, isolated_config_root: Path):
-        from lamtools_core.plugins.context import PluginContext
+        from lamtools_core.plugin_system.context import PluginContext
 
         view = PluginContext(work_root=isolated_config_root).for_scene(ms.SCENE_STUDY)
         assert view.model_id == ""

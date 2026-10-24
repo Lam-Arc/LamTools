@@ -7,7 +7,8 @@ from threading import Thread
 
 import pytest
 
-from lamtools_core.plugins import HookDefinition, HookEngine, HookEvent, HookHandler
+from lamtools_core.plugin_system.hooks import HookDefinition, HookEvent, HookHandler
+from lamtools_core.plugin_system.hook_engine import HookEngine
 
 
 def make_script(path: Path, body: str) -> None:

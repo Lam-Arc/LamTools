@@ -674,7 +674,7 @@ onMounted(async () => {
   inputEl.value?.focus()
   void loadCatalog()
   try {
-    const result = await props.requestRpc('plugin.list')
+    const result = await props.requestRpc('plugin.system.list')
     const plugins = (result.plugins as { name: string; enabled: boolean }[]) || []
     ragEnabled.value = !!plugins.find((p) => p.name === 'lamtools-rag' && p.enabled)
   } catch {
@@ -685,7 +685,7 @@ onMounted(async () => {
 /** Three catalogues, fetched once, filtered locally: typing costs no RPC. */
 async function loadCatalog(): Promise<void> {
   const [plugins, skills, hooks] = await Promise.all([
-    safeCatalog(() => props.requestRpc('plugin.list')),
+    safeCatalog(() => props.requestRpc('plugin.system.list')),
     safeCatalog(() => props.requestRpc('skill.list')),
     safeCatalog(() => props.requestRpc('hook.list')),
   ])

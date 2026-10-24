@@ -2,7 +2,6 @@
   "name": "plan",
   "version": "0.2.0",
   "description": "方案：把一次需求变成可交付的方案，包括需求与边界、取舍、文档、分步清单、目标与风险",
-  "assembly": "v2",
   "skills": [
     "./skills"
   ]

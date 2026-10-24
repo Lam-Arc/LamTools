@@ -39,6 +39,7 @@
     ref="shellRef"
     product-name="Sunday"
     sidebar-title="Sunday"
+    :plugin-rpc="requestConfigOperation"
     :class="{ 'workspace-shell--sub-agent-split': Boolean(openSubAgentRun) }"
     :style="subAgentPaneWidthStyle"
     :storage-key="settingsStorageKey"
@@ -949,6 +950,7 @@ import TitleBar from '../components/TitleBar.vue'
 import PluginModeHost from '../components/PluginModeHost.vue'
 import PluginSystemContributions from '../components/PluginSystemContributions.vue'
 import { refreshPluginUIModes } from '../plugins/api'
+import { setContributionsRpc } from '../plugins/contributions'
 import { listModes } from '../plugins/registry'
 import {
   provideCorePluginModeContext,
@@ -4027,6 +4029,7 @@ function persistSessionPermissionPreset(preset: CorePermissionPreset): Promise<v
 
 async function refreshPluginModes(): Promise<void> {
   try {
+    setContributionsRpc(requestConfigOperation)
     await refreshPluginUIModes(requestConfigOperation)
     pluginModes.value = listModes()
     if (!appModes.value.some((mode) => modeKey(mode) === activeAppModeKey.value)) {

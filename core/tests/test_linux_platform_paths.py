@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import desktop_backend
-from lamtools_core.plugins import hook_config
+from lamtools_core.plugin_system import hooks as hook_config
 
 
 def test_backend_default_data_dir_uses_xdg_data_home() -> None:

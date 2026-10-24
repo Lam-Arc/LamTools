@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lamtools_core.plugins import HookTrustStore
+from lamtools_core.plugin_system.hooks import HookTrustStore
 
 
 def test_hook_trust_store_persists_hashes(tmp_path):

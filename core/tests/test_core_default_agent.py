@@ -18,9 +18,8 @@ from lamtools_core.app.base_agent import build_core_plugin_operation_catalog, co
 from lamtools_core.event import CoreEvent
 from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
-from lamtools_core.plugins.hook_config import HookRegistry
-from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
-from lamtools_core.plugins.trust import HookTrustStore
+from lamtools_core.plugin_system.hooks import HookRegistry
+from lamtools_core.plugin_system.hooks import HookTrustStore
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState
 
 
@@ -328,7 +327,7 @@ def test_core_agent_operations_include_core_plugin_and_hook_catalog(tmp_path):
         model_provider=_fake_model,
     )
 
-    assert {"plugin.list", "plugin.enable", "plugin.disable", "hook.list", "hook.trust"} <= set(catalog.list())
+    assert {"plugin.list", "plugin.system.enable", "plugin.system.disable", "hook.list", "hook.trust"} <= set(catalog.list())
 
 
 @pytest.mark.asyncio
@@ -1279,12 +1278,18 @@ async def test_core_agent_operation_runs_trusted_pre_tool_hook(tmp_path):
         ),
         encoding="utf-8",
     )
-    plugins = PluginRegistry(plugin_roots=[plugin_root]).discover()
-    hooks = HookRegistry(
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.hooks import load_all_hooks
+
+    hook_host = PluginHost(
+        roots=[plugin_root],
+        state_path=data_dir / "plugin-system.jsonc",
+    )
+    hooks = load_all_hooks(
         project_root=work_root,
-        plugins=plugins,
         trust_store=HookTrustStore(data_dir / "hook_trust.json"),
-    ).load()
+        manifests=hook_host.discover(),
+    )
     trust_store = HookTrustStore(data_dir / "hook_trust.json")
     trust_store.trust(hooks[0].definition_hash)
     llm = ScriptedCoreAgentLLM()
@@ -1325,13 +1330,13 @@ async def test_core_plugin_operation_catalog_uses_user_and_project_roots(tmp_pat
         include_user_plugins=True,
     )
     listed = await catalog.execute("plugin.list")
-    await catalog.execute("plugin.disable", {"name": "user-policy"})
+    await catalog.execute("plugin.system.disable", {"name": "user-policy"})
 
     # 缺口 #3/D3：catalog 统一扫内置根——bundled 插件也在列表中
     names = {item["name"] for item in listed.payload["plugins"]}
     assert {"user-policy", "project-policy"} <= names
     assert names >= {"user-policy", "project-policy"}
-    assert (data_dir / "plugins.jsonc").exists()
+    assert (data_dir / "plugin-system.jsonc").exists()
     assert not (data_dir / "core-plugin-state.json").exists()
 
 
@@ -1363,7 +1368,7 @@ def test_default_core_agent_plugin_roots_includes_user_root(tmp_path):
     """H 组缺口回归：default_core_agent_plugin_roots 默认链含用户级根；
     显式 include_user_plugins=False 仍可排除（向后兼容）。"""
     from lamtools_core.app.base_agent import default_core_agent_plugin_roots
-    from lamtools_core.plugins.registry import default_user_plugin_root
+    from lamtools_core.plugin_system.paths import default_user_plugin_root
 
     roots = default_core_agent_plugin_roots(work_root=tmp_path)
     assert default_user_plugin_root() in roots

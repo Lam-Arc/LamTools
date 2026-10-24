@@ -13,7 +13,7 @@ def test_optional_workflow_bootstrap_without_bundled_package(tmp_path):
     script = '''
 import importlib, importlib.util, sys
 from pathlib import Path
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 import lamtools_core.plugins.bundled as bundled
 # Reproduce the frozen runtime's exclusion of Workflow source/modules.
 bundled.__path__ = []

@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from lamtools_core.plugins._jsonc import strip_jsonc_comments
+from lamtools_core.plugin_system.jsonc import strip_jsonc_comments
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult, ToolResultStatus
 from lamtools_core.tool.search.protocol import SearchProvider, SearchResult
 from lamtools_core.tool.search.http_requests import SEARCH_TOTAL_TIMEOUT_SECONDS

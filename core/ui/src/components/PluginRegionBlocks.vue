@@ -4,13 +4,25 @@
       v-for="region in regions"
       :key="`${region.plugin}:${region.region}:${region.order}`"
       class="plugin-region-card"
+      :class="{ 'plugin-region-card--replaced': region.replace }"
       :data-plugin="region.plugin"
       :data-region-contribution="region.region"
     >
-      <header v-if="region.plugin" class="plugin-region-head">
+      <header v-if="region.plugin && !region.entryUrl" class="plugin-region-head">
         <strong>{{ region.plugin }}</strong>
         <span v-if="region.mode" class="plugin-region-mode">{{ region.mode }}</span>
       </header>
+
+      <!-- user:“自绘内容”+声明了 entry 的区域给插件一个空盒并注入模块脚本，
+           插件自己往盒子里画；脚本每地址只执行一次。 -->
+      <div
+        v-if="region.entryUrl"
+        class="plugin-region-entry"
+        :data-plugin-entry="region.plugin"
+        :data-entry-url="region.entryUrl"
+      >
+        <!-- 插件脚本自行填充此容器 -->
+      </div>
 
       <div
         v-for="(block, index) in region.blocks"
@@ -59,61 +71,159 @@
           class="small-btn"
           :class="{ 'is-danger': action.dangerous }"
           :disabled="busy === action.id"
+          :data-action="action.id"
           :title="action.mutates ? t('会修改数据') : undefined"
-          @click="invoke(action)"
+          @click="invoke(action, region)"
         >
           {{ action.title }}
         </button>
       </div>
+
+      <!-- user:“声明了入参的操作”+执行前收集参数：文本/数字/开关三型小表单。 -->
+      <form
+        v-if="pendingAction && pendingAction.region === region.region && pendingAction.plugin === region.plugin"
+        class="plugin-action-form"
+        @submit.prevent="submitPending()"
+      >
+        <label v-for="(field, name) in pendingFields" :key="name" class="plugin-action-field">
+          <span>{{ field.title || name }}</span>
+          <input
+            v-if="field.type === 'boolean'"
+            v-model="pendingValues[name]"
+            type="checkbox"
+          />
+          <input
+            v-else-if="field.type === 'number'"
+            v-model="pendingValues[name]"
+            type="number"
+            :required="field.required || undefined"
+          />
+          <input
+            v-else
+            v-model="pendingValues[name]"
+            type="text"
+            :required="field.required || undefined"
+          />
+        </label>
+        <div class="plugin-action-form-actions">
+          <button class="small-btn" type="submit" :disabled="busy !== ''">{{ t("执行") }}</button>
+          <button class="text-btn" type="button" @click="pendingAction = null">{{ t("取消") }}</button>
+        </div>
+      </form>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { t } from '../i18n/index'
+import { injectScript, type PluginAction, type PluginBlock, type PluginRegionContribution } from '../plugins/contributions'
 
-interface PluginBlock {
-  type: string
-  label: string
-  value: unknown
-  text: string
-  state: string
-  items: unknown[]
-  detail: string
-  max?: number
+interface RegionView extends PluginRegionContribution {
+  entryUrl: string
 }
-
-interface PluginAction {
-  id: string
-  title: string
-  operation: string
-  dangerous?: boolean
-  mutates?: boolean
-}
-
-interface PluginRegionContribution {
-  plugin: string
-  region: string
-  order: number
-  mode: string
-  replace: boolean
-  blocks: PluginBlock[]
-  actions: PluginAction[]
-}
-
-type PluginRpc = (
-  method: string,
-  params?: Record<string, unknown>,
-) => Promise<Record<string, unknown>>
 
 const props = defineProps<{
   regions: PluginRegionContribution[]
-  requestRpc: PluginRpc
+  requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 }>()
 
+const viewRegions = computed<RegionView[]>(() =>
+  props.regions.map((region) => ({ ...region, entryUrl: region.entry_url || '' })),
+)
+
+const regions = viewRegions
+
 const busy = ref('')
+
+// entry 脚本注入：每地址一次。
+watch(
+  () => viewRegions.value.map((region) => region.entryUrl).filter(Boolean),
+  (urls) => {
+    for (const url of urls) injectScript(url)
+  },
+  { immediate: true },
+)
+
+interface ActionField {
+  title: string
+  type: string
+  required: boolean
+}
+
+const pendingAction = ref<{ plugin: string; region: string; action: PluginAction } | null>(null)
+const pendingValues = ref<Record<string, unknown>>({})
+
+const pendingFields = computed<Record<string, ActionField>>(() => {
+  const action = pendingAction.value?.action
+  if (!action) return {}
+  const schema = action.input_schema
+  const properties =
+    schema && typeof schema === 'object' && (schema as { properties?: Record<string, Record<string, unknown>> }).properties
+      ? (schema as { properties: Record<string, Record<string, unknown>> }).properties
+      : {}
+  const fields: Record<string, ActionField> = {}
+  for (const [name, property] of Object.entries(properties)) {
+    fields[name] = {
+      title: String(property.title || property.description || name),
+      type: String(property.type || 'string'),
+      required: Boolean(property.required) || false,
+    }
+    pendingValues.value[name] = property.type === 'boolean' ? false : ''
+  }
+  return fields
+})
+
+function coerce(name: string, field: ActionField): unknown {
+  const value = pendingValues.value[name]
+  if (field.type === 'number') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  if (field.type === 'boolean') return Boolean(value)
+  return String(value ?? '')
+}
+
+async function runOperation(action: PluginAction, payload: Record<string, unknown>): Promise<void> {
+  busy.value = action.id
+  try {
+    await props.requestRpc(action.operation, payload)
+  } catch (cause) {
+    console.warn('[plugin-region] action failed:', action.operation, cause)
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function submitPending(): Promise<void> {
+  const pending = pendingAction.value
+  if (!pending) return
+  const payload: Record<string, unknown> = {}
+  for (const [name, field] of Object.entries(pendingFields.value)) {
+    if (field.required && coerce(name, field) === '') {
+      return
+    }
+    payload[name] = coerce(name, field)
+  }
+  pendingAction.value = null
+  await runOperation(pending.action, payload)
+}
+
+async function invoke(action: PluginAction, region: PluginRegionContribution): Promise<void> {
+  // user:“危险操作先确认”+dangerous 标记的按钮点击先弹确认再执行。
+  if (action.dangerous) {
+    const label = action.mutates ? t("确定执行 {0}？该操作会修改数据。", { 0: action.title }) : t("确定执行 {0}？", { 0: action.title })
+    if (!window.confirm(label)) return
+  }
+  const schema = action.input_schema as { properties?: Record<string, unknown> } | undefined
+  if (schema && schema.properties && Object.keys(schema.properties).length > 0) {
+    pendingValues.value = {}
+    pendingAction.value = { plugin: region.plugin, region: region.region, action }
+    return
+  }
+  await runOperation(action, {})
+}
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -152,17 +262,6 @@ function progressLabel(block: PluginBlock): string {
   const max = block.max && block.max > 0 ? block.max : 100
   return `${numberValue(block.value)} / ${max}`
 }
-
-async function invoke(action: PluginAction): Promise<void> {
-  busy.value = action.id
-  try {
-    await props.requestRpc(action.operation, {})
-  } catch (cause) {
-    console.warn('[plugin-region] action failed:', action.operation, cause)
-  } finally {
-    busy.value = ''
-  }
-}
 </script>
 
 <style scoped>
@@ -179,6 +278,10 @@ async function invoke(action: PluginAction): Promise<void> {
   gap: 8px;
 }
 
+.plugin-region-card--replaced {
+  border-style: dashed;
+}
+
 .plugin-region-head {
   display: flex;
   align-items: baseline;
@@ -188,6 +291,10 @@ async function invoke(action: PluginAction): Promise<void> {
 
 .plugin-region-mode {
   opacity: 0.6;
+}
+
+.plugin-region-entry {
+  min-height: 24px;
 }
 
 .plugin-block {
@@ -224,6 +331,24 @@ async function invoke(action: PluginAction): Promise<void> {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.plugin-action-form {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--theme-main-text) 15%, transparent);
+  padding-top: 6px;
+}
+
+.plugin-action-field {
+  display: grid;
+  gap: 2px;
+}
+
+.plugin-action-form-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .is-danger {

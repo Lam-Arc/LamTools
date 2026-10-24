@@ -1708,117 +1708,70 @@ def core_events_to_snapshot(events: list[CoreEvent], *, thread_id: str) -> dict[
     return reduce_run_item_events(thread_id, core_events_to_run_items(events, thread_id=thread_id))
 
 
-def _v2_hook_definitions(specs: Any, manifests: Any) -> list[Any]:
-    """Convert v2 hook declarations into the engine's HookDefinition shape."""
-    from lamtools_core.plugins.models import HookDefinition, HookHandler
-
-    roots = {item.name: item.root for item in manifests}
-    definitions: list[Any] = []
-    for index, spec in enumerate(specs):
-        plugin_root = roots.get(spec.plugin)
-        for handler_index, raw in enumerate(spec.handlers):
-            try:
-                timeout = float(raw.get("timeout") or 10)
-            except (TypeError, ValueError):
-                timeout = 10.0
-            handler = HookHandler(
-                type=str(raw.get("type") or "command"),
-                command=str(raw.get("command") or ""),
-                url=str(raw.get("url") or ""),
-                tool=str(raw.get("tool") or ""),
-                prompt=str(raw.get("prompt") or ""),
-                timeout=timeout,
-                required=bool(raw.get("required") or False),
-                status_message=str(
-                    raw.get("statusMessage") or raw.get("status_message") or ""
-                ),
-                raw=dict(raw),
-            )
-            definitions.append(
-                HookDefinition(
-                    id=f"v2:{spec.plugin}:{spec.event}:{index}:{handler_index}",
-                    event=spec.event,
-                    matcher=spec.matcher,
-                    source="plugin",
-                    source_name=spec.plugin,
-                    config_path=(plugin_root or Path()) / "plugin.json",
-                    plugin_name=spec.plugin,
-                    plugin_root=plugin_root,
-                    handler=handler,
-                    definition_hash="",
-                    trusted=True,
-                    status="trusted",
-                )
-            )
-    return definitions
-
-
 def assemble_core_agent_plugins(
     *,
     data_dir: str | Path,
     work_root: str | Path,
-    plugin_roots: list[Path | str] | tuple[Path | str, ...] | None,
+    plugin_roots: list[Path | str] | tuple[Path, str, ...] | None,
     include_user_plugins: bool = True,
     context: Any | None = None,
     plugin_runtimes: list[Any] | None = None,
     start_lifecycle: bool = False,
 ) -> dict[str, Any]:
-    from lamtools_core.plugins.engine import HookEngine
-    from lamtools_core.plugins.hook_config import HookRegistry
-    from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
-    from lamtools_core.plugins.trust import HookTrustStore
+    """Assemble the declarative plugin layer into agent-facing artifacts.
 
-    # H 组缺口修复（2026-08-16）：空/None 一律回退默认根集合（含用户级根，
-    # 与 plugin.install 默认安装到用户级根的产品语义对齐）；只有非空显式
-    # 列表才按调用方指定。include_user_plugins 保留显式覆盖（向后兼容）。
+    user:“装配与生命周期分层”+声明装配每轮可跑（纯读）；后端句柄优先复用
+    调用方传入的实例，只有第一次才加载，杜绝“每轮重启后端”。
+    """
+    from pathlib import Path as _Path
+
+    from lamtools_core.plugin_system import (
+        PluginContext,
+        PluginSystemRuntime,
+        load_enabled_plugin_backends,
+        plugin_backend_available,
+        shared_host,
+    )
+    from lamtools_core.plugin_system.backend_runtime import register_manager
+    from lamtools_core.plugin_system.hooks import HookTrustStore, load_all_hooks
+    from lamtools_core.plugin_system.hook_engine import HookEngine
+    from lamtools_core.plugin_system.paths import bundled_plugins_dir
+    from lamtools_core.plugin_system.ui import assemble_ui
+    from lamtools_core.config.root import core_plugins_root
+
+    # 空/None 一律回退默认根集合（含用户级根，与 plugin.install 默认装用户级
+    # 根的产品语义对齐）；只有非空显式列表才按调用方指定。
     roots: list[Path] = (
         [Path(item) for item in plugin_roots]
         if plugin_roots
         else default_core_agent_plugin_roots(work_root, include_user_plugins=include_user_plugins)
     )
-    # Unified config directory — user-modifiable after packaging
-    # (default_core_agent_plugin_roots 已含内置根；传了自定义 plugin_roots
-    # 时这里兜底补上，保证内置根永远在扫描链路里 — 缺口 #3 + D3)。
-    from lamtools_core.config.root import core_plugins_root
-    from lamtools_core.plugins.registry import bundled_plugins_dir
-
     if core_plugins_root() not in roots:
         roots.insert(0, core_plugins_root())
     if bundled_plugins_dir() not in roots:
         roots.append(bundled_plugins_dir())
-    state_store = PluginStateStore(Path(data_dir) / "plugins.jsonc")
-    plugins = PluginRegistry(plugin_roots=roots, state_store=state_store).discover()
-    enabled_plugins = [plugin for plugin in plugins if plugin.enabled]
-    plugin_mode_tool_sets: dict[str, set[str]] = {}
-    plugin_mode_ids: dict[str, list[str]] = {}
-    for plugin in enabled_plugins:
-        contribution = plugin.ui
-        if contribution is None:
-            continue
-        for mode in contribution.modes:
-            full_mode_id = f"{plugin.name}:{mode.id}"
-            plugin_mode_tool_sets[full_mode_id] = set(mode.tools)
-            plugin_mode_ids.setdefault(mode.id, []).append(full_mode_id)
-    # A short mode id is convenient for existing hosts, but only expose it
-    # when exactly one enabled plugin owns that id. Hosts with multiple
-    # contributors use the fully-qualified pluginId:modeId key.
-    for mode_id, full_ids in plugin_mode_ids.items():
-        if len(full_ids) == 1:
-            plugin_mode_tool_sets[mode_id] = set(plugin_mode_tool_sets[full_ids[0]])
-    from lamtools_core.plugins.context import PluginContext
-    from lamtools_core.plugins.lifecycle import load_enabled_plugin_backends, plugin_backend_available
 
+    host = shared_host(roots=roots, state_path=Path(data_dir) / "plugin-system.jsonc")
+    manifests = host.discover()
     plugin_context = context or PluginContext(work_root=Path(work_root), data_dir=Path(data_dir))
+
+    # 后端句柄进程内复用：调用方传了就用它的；没传就读共享管理器手里的；
+    # 只有第一次（进程内还没有管理器）才真正加载。
+    if plugin_runtimes is None:
+        manager = getattr(host, "backend_manager", None)
+        if manager is not None:
+            plugin_runtimes = list(manager.handles)
     if plugin_runtimes is None:
         plugin_runtimes = load_enabled_plugin_backends(
-            enabled_plugins,
+            [item for item in manifests if item.enabled],
             plugin_context,
             start=start_lifecycle,
         )
+    register_manager(host, plugin_runtimes, plugin_context)
+
     plugin_tool_handlers: dict[str, Any] = {}
     plugin_tool_providers: list[Any] = []
     plugin_runtime_specs: list[Any] = []
-    enabled_plugins = [plugin for plugin in enabled_plugins if plugin_backend_available(plugin, plugin_runtimes)]
     for handle in plugin_runtimes:
         if not plugin_backend_available(handle.plugin, plugin_runtimes):
             continue
@@ -1834,143 +1787,22 @@ def assemble_core_agent_plugins(
                     metadata.setdefault("plugin", handle.plugin.name)
                     metadata.setdefault("plugin_mode", handle.plugin.name)
             plugin_runtime_specs.extend(runtime_specs)
-    # Plugin code must be importable: handler entries (module:function) are
-    # resolved via importlib at toolbox build time, before any plugin code
-    # runs — so the enabled plugin roots go on sys.path here (append to the
-    # end to avoid shadowing stdlib; plugins are trusted, install = trust).
-    for plugin in enabled_plugins:
-        root = str(plugin.root)
-        if root not in sys.path:
-            sys.path.append(root)
-    skill_roots = [
-        root
-        for plugin in enabled_plugins
-        for root in plugin.skill_roots
-        if root.exists()
-    ]
-    skill_modes = {
-        root: modes
-        for plugin in enabled_plugins
-        for root, modes in plugin.skill_modes.items()
-        if root.exists()
-    }
-    # 原生工具声明（manifest tools 字段 → PluginToolSpec 列表，按插件
-    # 分组保留归属，供装配层补全 spec 时标注 plugin 来源）；
-    # 清单解析失败不阻断其他插件，错误随装配结果返回（plugin.list 报状态）。
-    plugin_tool_groups: list[dict[str, Any]] = []
-    plugin_tool_errors: list[dict[str, Any]] = []
-    declared_names_by_plugin: dict[str, set[str]] = {}
-    from lamtools_core.plugins.tools import load_plugin_tools
 
-    for plugin in enabled_plugins:
-        declared: list[Any] = []
-        for tool_file in plugin.tool_files:
-            if not tool_file.exists():
-                plugin_tool_errors.append(
-                    {"plugin": plugin.name, "path": str(tool_file), "error": "tool file not found"}
-                )
-                continue
-            try:
-                declared.extend(load_plugin_tools([tool_file], plugin_root=plugin.root))
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                _logger.warning(
-                    "[plugins:tools] plugin %s tool manifest unreadable: %s",
-                    plugin.name,
-                    tool_file,
-                    exc_info=True,
-                )
-                plugin_tool_errors.append(
-                    {"plugin": plugin.name, "path": str(tool_file), "error": str(exc)}
-                )
-        if declared:
-            declared_names_by_plugin[plugin.name] = {
-                str(getattr(decl, "name", "") or "") for decl in declared
-            }
-            plugin_tool_groups.append(
-                {
-                    "name": plugin.name,
-                    "root": plugin.root,
-                    "tools": declared,
-                    "dependencies": list(plugin.dependencies),
-                }
-            )
-    # 模式独占工具：声明了 exclusiveTools 的模式，其 tools 列表里属于本插件
-    # 自己的工具只在该模式激活时可用（generic 工具如 read_file 不受影响）。
-    plugin_mode_exclusive_tools: dict[str, set[str]] = {}
-    for plugin in enabled_plugins:
-        contribution = plugin.ui
-        if contribution is None:
-            continue
-        owned = declared_names_by_plugin.get(plugin.name, set())
-        if not owned:
-            continue
-        for mode in contribution.modes:
-            if not getattr(mode, "exclusive_tools", False):
-                continue
-            exclusive = set(mode.tools) & owned
-            if not exclusive:
-                continue
-            plugin_mode_exclusive_tools.setdefault(f"{plugin.name}:{mode.id}", set()).update(exclusive)
-            # 短别名与 plugin_mode_tool_sets 同规则：唯一归属时才暴露。
-            if len(plugin_mode_ids.get(mode.id, [])) == 1:
-                plugin_mode_exclusive_tools.setdefault(mode.id, set()).update(exclusive)
-    # ── v2 migration bridge ────────────────────────────────────────────────
-    # v2 plugins are skipped by the legacy registry. Their declarations are
-    # assembled here and merged into the same agent-facing artifacts.
-    from lamtools_core.plugin_system import PluginHost, PluginSystemRuntime
-
-    # 宿主和后端实例只建一次：操作目录已经装过就复用，避免每轮装配
-    # 再造一套学习/工作流运行时，导致 watcher 重复或上下文对不上。
-    v2_host = (
-        plugin_context.service("plugin.v2_host")
-        if plugin_context is not None
-        else None
-    )
-    if v2_host is None:
-        v2_host = PluginHost(
-            roots=roots,
-            state_path=Path(data_dir) / "plugin-system.jsonc",
-        )
-    v2_manifests = [item for item in v2_host.discover() if item.assembly == "v2"]
-    from lamtools_core.plugin_system.backend_runtime import register_manager
-
-    existing_manager = (
-        plugin_context.service("plugin.v2_runtime_manager")
-        if plugin_context is not None
-        else None
-    )
-    if existing_manager is not None and existing_manager.host is v2_host:
-        v2_backends = list(existing_manager.handles)
-    else:
-        # user:“插件可以有自己的后端”+第一次装配时装一次后端。
-        v2_backends = load_enabled_plugin_backends(
-            [item for item in v2_manifests if item.enabled],
-            plugin_context,
-            start=start_lifecycle,
-        )
-        register_manager(v2_host, v2_backends, plugin_context)
-    for v2_handle in v2_backends:
-        plugin_tool_handlers.update(v2_handle.tool_handlers)
-        plugin_tool_providers.extend(v2_handle.tool_providers)
-    v2_runtime = PluginSystemRuntime(v2_host)
-    v2_artifacts = v2_runtime.assemble(manifests=v2_manifests)
-    v2_agents = v2_runtime.agents(manifests=v2_manifests).agents
-    v2_hooks = _v2_hook_definitions(v2_artifacts.hooks, v2_manifests)
-    plugin_runtime_specs.extend(v2_artifacts.tools)
-    for skill_root in v2_artifacts.skill_roots:
-        if skill_root not in skill_roots:
-            skill_roots.append(skill_root)
-    v2_mcp_files = [path for path in v2_artifacts.mcp_files if path.exists()]
+    runtime = PluginSystemRuntime(host)
+    artifacts = runtime.assemble(manifests=manifests)
+    plugin_runtime_specs.extend(artifacts.tools)
+    plugin_agents = runtime.agents(manifests=manifests).agents
     plugin_context_files = [
         {"plugin": item.plugin, "file": str(item.file), "order": item.order}
-        for item in v2_artifacts.context
+        for item in artifacts.context
     ]
-    plugin_v2_commands = list(v2_artifacts.commands)
-    # user:“注册到模式切换，类似 study 和 workflow”+v2 模式沿用同一套
-    # 模式工具表和独占规则，技能作用域也从清单的 skillModes 接进来。
-    from lamtools_core.plugin_system.ui import assemble_ui
+    plugin_v2_commands = list(artifacts.commands)
 
-    v2_ui = assemble_ui([item for item in v2_manifests if item.enabled])
+    # user:“注册到模式切换，类似 study 和 workflow”+模式沿用同一套模式
+    # 工具表和独占规则，技能作用域也从清单的 skillModes 接进来。
+    plugin_mode_tool_sets: dict[str, set[str]] = {}
+    plugin_mode_exclusive_tools: dict[str, set[str]] = {}
+    v2_ui = assemble_ui([item for item in manifests if item.enabled])
     v2_mode_ids: dict[str, list[str]] = {}
     for mode in v2_ui.modes:
         full_mode_id = f"{mode.plugin}:{mode.id}"
@@ -1981,7 +1813,7 @@ def assemble_core_agent_plugins(
             continue
         owned = {
             spec.name
-            for spec in v2_artifacts.tools
+            for spec in artifacts.tools
             if spec.metadata.get("plugin") == mode.plugin
         }
         exclusive = owned & set(mode.tools)
@@ -1996,32 +1828,39 @@ def assemble_core_agent_plugins(
             plugin_mode_exclusive_tools.setdefault(mode_id, set()).update(
                 plugin_mode_exclusive_tools[full_ids[0]]
             )
-    for manifest in v2_manifests:
+
+    skill_roots = list(artifacts.skill_roots)
+    skill_modes: dict[Path, tuple[str, ...]] = {}
+    for manifest in manifests:
         if not manifest.enabled:
             continue
         declared_modes = manifest.raw.get("skillModes")
         if not isinstance(declared_modes, dict):
             continue
         for raw_root, modes in declared_modes.items():
-            root = (manifest.root / str(raw_root)[2:]).resolve() if str(raw_root).startswith("./") else (manifest.root / str(raw_root)).resolve()
+            raw_text = str(raw_root)
+            root = (
+                manifest.root / raw_text[2:]
+                if raw_text.startswith("./")
+                else manifest.root / raw_text
+            ).resolve()
             if root.exists() and isinstance(modes, list):
                 skill_modes[root] = tuple(str(item) for item in modes)
 
-    hook_registry = HookRegistry(
+    # 钩子每轮重新加载：文件钩子（信任判定）+ 插件声明钩子（装即信任）。
+    hooks = load_all_hooks(
         project_root=work_root,
-        plugins=enabled_plugins,
         trust_store=HookTrustStore(Path(data_dir) / "hook_trust.json"),
+        manifests=[item for item in manifests if item.enabled],
     )
-    hooks = hook_registry.load()
-    hooks.extend(v2_hooks)
     return {
-        "plugins": enabled_plugins,
+        "plugins": manifests,
         "plugin_roots": roots,
         "data_dir": str(data_dir),
         "skill_roots": skill_roots,
         "skill_modes": skill_modes,
-        "plugin_tool_groups": plugin_tool_groups,
-        "plugin_tool_errors": plugin_tool_errors,
+        "plugin_tool_groups": [],
+        "plugin_tool_errors": list(host.errors) + list(artifacts.errors),
         "plugin_context": plugin_context,
         "plugin_runtimes": plugin_runtimes,
         "plugin_tool_handlers": plugin_tool_handlers,
@@ -2029,14 +1868,8 @@ def assemble_core_agent_plugins(
         "plugin_runtime_specs": plugin_runtime_specs,
         "plugin_mode_tool_sets": plugin_mode_tool_sets,
         "plugin_mode_exclusive_tools": plugin_mode_exclusive_tools,
-        "mcp_files": [
-            path
-            for plugin in enabled_plugins
-            for path in plugin.mcp_files
-            if path.exists()
-        ]
-        + v2_mcp_files,
-        "plugin_agents": v2_agents,
+        "mcp_files": [path for path in artifacts.mcp_files if path.exists()],
+        "plugin_agents": plugin_agents,
         "plugin_context_files": plugin_context_files,
         "plugin_v2_commands": plugin_v2_commands,
         "hook_engine": HookEngine(hooks) if hooks else None,
@@ -2048,175 +1881,92 @@ def default_core_agent_plugin_roots(
     *,
     include_user_plugins: bool = True,
 ) -> list[Path]:
-    from lamtools_core.plugins.registry import (
-        bundled_plugins_dir,
-        default_project_plugin_root,
-        default_user_plugin_root,
-    )
-    from lamtools_core.config.root import core_plugins_root
+    from lamtools_core.plugin_system.paths import default_plugin_roots
 
-    roots: list[Path] = []
-    # 用户级根默认纳入扫描（H 组缺口修复：plugin.install 默认装用户级根，
-    # 安装即可见；显式 include_user_plugins=False 的调用方不受影响）。
-    if include_user_plugins:
-        roots.append(default_user_plugin_root())
-    roots.append(default_project_plugin_root(work_root))
-    # 内置插件根统一纳入扫描（缺口 #3 + D3：包内 bundled 插件）
-    roots.append(core_plugins_root())
-    roots.append(bundled_plugins_dir())
-    return roots
+    return default_plugin_roots(work_root, include_user_plugins=include_user_plugins)
 
 
 def build_core_plugin_operation_catalog(
     *,
     data_dir: str | Path,
     work_root: str | Path,
-    plugin_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
+    plugin_roots: list[Path | str] | tuple[Path, str, ...] | None = None,
     include_user_plugins: bool = True,
     context: Any | None = None,
     plugin_runtimes: list[Any] | None = None,
     start_lifecycle: bool = False,
 ):
-    from lamtools_core.plugins.hook_config import HookRegistry
-    from lamtools_core.plugins.operations import build_plugin_operation_catalog
-    from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore, default_user_plugin_root
-    from lamtools_core.plugins.trust import HookTrustStore
-    from lamtools_core.skills import SkillRegistry, SkillStateStore
+    """Build the one plugin operation catalog: plugin.system.*, plugin
+    operations, hook/skill management and the legacy aliases.
+
+    user:“单一插件系统”+一份账本一个宿主一张操作目录；钩子页与技能页的
+    正式操作从旧 v1 目录搬来，旧操作名以别名转发新实现。
+    """
+    from lamtools_core.config.root import core_plugins_root
+    from lamtools_core.plugin_system import PluginContext, shared_host
+    from lamtools_core.plugin_system.backend_runtime import register_manager
+    from lamtools_core.plugin_system.capabilities import assemble_capabilities
+    from lamtools_core.plugin_system.hooks import HookTrustStore
+    from lamtools_core.plugin_system.host_operations import register_host_operations
+    from lamtools_core.plugin_system.lifecycle import load_enabled_plugin_backends
+    from lamtools_core.plugin_system.operations import register_plugin_system_operations
+    from lamtools_core.plugin_system.paths import bundled_plugins_dir
+    from lamtools_core.skills import SkillStateStore
     from lamtools_core.skill_runtime import create_skill_runtime
 
-    # H 组缺口修复（2026-08-16）：空/None 一律回退默认根集合（含用户级根，
-    # 与 assemble_core_agent_plugins 同语义）；非空显式列表才按调用方指定。
     roots = (
         [Path(item) for item in plugin_roots]
         if plugin_roots
         else default_core_agent_plugin_roots(work_root, include_user_plugins=include_user_plugins)
     )
-    # 与 assemble_core_agent_plugins 同款兜底：内置根永远在扫描链路里
-    from lamtools_core.config.root import core_plugins_root
-    from lamtools_core.plugins.registry import bundled_plugins_dir
-
+    # user:“安装落用户可控根”+调用方根在前（install 取 roots[0]），内置根
+    # 追加在后只用于发现，不当安装目标。
     if core_plugins_root() not in roots:
-        roots.insert(0, core_plugins_root())
+        roots.append(core_plugins_root())
     if bundled_plugins_dir() not in roots:
         roots.append(bundled_plugins_dir())
     data_path = Path(data_dir)
-    plugin_state_store = PluginStateStore(data_path / "plugins.jsonc")
-    hook_trust_store = HookTrustStore(data_path / "hook_trust.json")
-    skill_state_store = SkillStateStore(data_path / "skill_state.json")
-    plugin_registry = PluginRegistry(plugin_roots=roots, state_store=plugin_state_store)
-    from lamtools_core.plugins.context import PluginContext
-    from lamtools_core.plugins.lifecycle import load_enabled_plugin_backends
-
+    host = shared_host(roots=roots, state_path=data_path / "plugin-system.jsonc")
     plugin_context = context or PluginContext(work_root=Path(work_root), data_dir=data_path)
-    plugins = plugin_registry.discover()
-    # Hosts that already assembled the generic plugin runtime (for example
-    # run-local CLI) can hand the handles back here.  Re-loading a backend
-    # would create a second store/watcher and make resource/session binding
-    # split across two plugin instances.
     if plugin_runtimes is None:
+        manifests = host.discover()
         plugin_runtimes = load_enabled_plugin_backends(
-            [item for item in plugins if item.enabled],
+            [item for item in manifests if item.enabled],
             plugin_context,
             start=start_lifecycle,
         )
+    register_manager(host, plugin_runtimes, plugin_context)
 
-    def hook_registry_factory() -> HookRegistry:
-        return HookRegistry(
-            project_root=work_root,
-            plugins=plugin_registry.discover(),
-            trust_store=hook_trust_store,
+    def skill_registry_factory() -> Any:
+        assembly = assemble_capabilities(host.discover())
+        plugin_skill_roots = sorted(
+            {
+                skill.root
+                for skill in assembly.skills
+                if skill.root is not None and skill.root.exists()
+            }
         )
-
-    def skill_registry_factory() -> SkillRegistry:
-        plugin_skill_roots = [
-            root
-            for plugin in plugin_registry.discover()
-            if plugin.enabled
-            for root in plugin.skill_roots
-            if root.exists()
-        ]
         return create_skill_runtime(plugin_skill_roots=plugin_skill_roots).registry
 
-    catalog = build_plugin_operation_catalog(
-        plugin_registry=plugin_registry,
-        plugin_state_store=plugin_state_store,
-        hook_registry_factory=hook_registry_factory,
-        hook_trust_store=hook_trust_store,
-        skill_state_store=skill_state_store,
-        skill_registry_factory=skill_registry_factory,
-        work_root=work_root,
+    from lamtools_core.app.operation_catalog import OperationCatalog
+
+    catalog = OperationCatalog()
+    register_plugin_system_operations(catalog, host)
+    register_host_operations(
+        catalog,
+        host,
+        work_root=Path(work_root),
         data_dir=data_path,
-        install_root=default_user_plugin_root(),
-        context=plugin_context,
-        plugin_runtimes=plugin_runtimes,
+        skill_state_store=SkillStateStore(data_path / "skill_state.json"),
+        skill_registry_factory=skill_registry_factory,
+        hook_trust_store=HookTrustStore(data_path / "hook_trust.json"),
     )
     if plugin_context.operation_catalog is None:
         plugin_context.operation_catalog = catalog
-    # user:“插件自己也提供操作”+插件目录里的操作表和插件系统操作都挂在
-    # 同一张目录上，v2 后端也在这里装一次，测试和 CLI 用的就是这份。
-    from lamtools_core.plugin_system import PluginHost
-    from lamtools_core.plugin_system.backend_runtime import register_manager
-    from lamtools_core.plugin_system.operation_bridge import register_plugin_operations
-
-    plugin_system_host = PluginHost(
-        roots=roots,
-        state_path=data_path / "plugin-system.jsonc",
-    )
-    v2_manifests = [
-        item for item in plugin_system_host.discover() if item.assembly == "v2"
-    ]
-    v2_backends = load_enabled_plugin_backends(
-        [item for item in v2_manifests if item.enabled],
-        plugin_context,
-        start=start_lifecycle,
-    )
-    register_manager(plugin_system_host, v2_backends, plugin_context)
-    register_plugin_operations(catalog, plugin_system_host)
-    # 这份目录也要能开关插件，测试和 CLI 直接用它。
-    from lamtools_core.plugin_system.operations import apply_plugin_enablement
-    from lamtools_core.app.operation_catalog import OperationResult
-
-    async def plugin_enable(request) -> OperationResult:
-        name = str(request.payload.get("name") or "").strip()
-        changed, backend_error = await apply_plugin_enablement(
-            plugin_system_host, name, True
-        )
-        if not changed:
-            return OperationResult(
-                name=request.name,
-                status="error",
-                payload={"error": f"plugin '{name}' is not installed"},
-            )
-        payload_out = {"name": name, "enabled": True}
-        if backend_error:
-            payload_out["backend_error"] = backend_error
-        return OperationResult(name=request.name, payload=payload_out)
-
-    async def plugin_disable(request) -> OperationResult:
-        name = str(request.payload.get("name") or "").strip()
-        changed, backend_error = await apply_plugin_enablement(
-            plugin_system_host, name, False
-        )
-        if not changed:
-            return OperationResult(
-                name=request.name,
-                status="error",
-                payload={"error": f"plugin '{name}' is not installed"},
-            )
-        payload_out = {"name": name, "enabled": False}
-        if backend_error:
-            payload_out["backend_error"] = backend_error
-        return OperationResult(name=request.name, payload=payload_out)
-
-    catalog.register("plugin.system.enable", plugin_enable, owner="plugin-system")
-    catalog.register("plugin.system.disable", plugin_disable, owner="plugin-system")
-    catalog.plugin_system_host = plugin_system_host
+    catalog.plugin_system_host = host
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = plugin_runtimes
-    catalog.plugin_registry = plugin_registry
-    catalog.plugin_state_store = plugin_state_store
     return catalog
-
 
 __all__ = [
     "assemble_core_agent_plugins",

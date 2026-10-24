@@ -41,8 +41,8 @@ class ComposerPluginHandle:
 
 
 def composer_plugin_handles(host: PluginHost) -> list[ComposerPluginHandle]:
-    """Expose enabled v2 commands in the legacy catalog's plugin shape."""
-    manifests = [manifest for manifest in host.discover() if manifest.assembly == "v2"]
+    """Expose enabled plugin commands in the legacy catalog's plugin shape."""
+    manifests = host.discover()
     assembly = assemble_capabilities(manifests)
     grouped: dict[str, list[ComposerCommandHandle]] = {}
     for command in assembly.commands:

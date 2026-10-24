@@ -1,4 +1,9 @@
-"""Generic plugin backend loading and lifecycle helpers."""
+"""Plugin backend loading and lifecycle helpers for the unified system.
+
+user:“装配与生命周期分层”+装载器按 v2 清单工作（backend 声明或
+backend/__init__.py 约定），句柄管理归 backend_runtime 的管理器；
+这里只负责“怎么加载、怎么启动、怎么停”。
+"""
 
 from __future__ import annotations
 
@@ -16,8 +21,7 @@ from types import ModuleType
 from typing import Any
 
 from .context import PluginContext
-from lamtools_core.config.model_selection import scene_for_plugin
-from .models import PluginManifest
+from .manifest import PluginManifest
 
 _logger = logging.getLogger(__name__)
 
@@ -215,7 +219,7 @@ def _load_module(plugin: PluginManifest, entry: Path) -> ModuleType:
 
 
 def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> PluginRuntimeHandle | None:
-    """Load a plugin's optional ``backend/__init__.py`` convention.
+    """Load a plugin's optional backend (``backend`` declaration or convention).
 
     A backend may expose ``create_plugin(context)`` or ``create_runtime``.
     Missing backends are normal for declarative-only plugins.
@@ -396,110 +400,10 @@ async def _stop_backend(handle: PluginRuntimeHandle) -> None:
 def plugin_backend_available(plugin: PluginManifest, handles: list[PluginRuntimeHandle]) -> bool:
     if not plugin.enabled:
         return False
-    if plugin.backend_entry is None:
+    if backend_entry(plugin) is None:
         return True
     handle = next((item for item in handles if item.plugin.name == plugin.name), None)
     return handle is not None and _resources_alive(handle)
-
-
-class PluginRuntimeManager:
-    """Own the live backend handles and support enable/disable transitions."""
-
-    def __init__(
-        self,
-        handles: list[PluginRuntimeHandle],
-        context: PluginContext,
-        *,
-        plugin_resolver: Any,
-    ) -> None:
-        self.handles = handles
-        self.context = context
-        self.plugin_resolver = plugin_resolver
-        # Keep stopped handles around so an enable transition can reactivate
-        # the same runtime object.  Existing toolboxes may still hold a bound
-        # provider; reusing the handle makes that provider recover on enable
-        # instead of leaving a stale, permanently disabled closure behind.
-        self._stopped_handles: dict[str, PluginRuntimeHandle] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-
-    def get(self, plugin_name: str) -> PluginRuntimeHandle | None:
-        return next((item for item in self.handles if item.plugin.name == plugin_name), None)
-
-    def is_enabled(self, plugin_name: str) -> bool:
-        """Return whether a plugin contribution may execute right now."""
-        plugin = self.plugin_resolver(plugin_name)
-        if plugin is None or not plugin.enabled:
-            return False
-        # Declarative-only plugins have no live handle and are available as
-        # soon as their manifest is enabled. Backends require an attached
-        # handle; a stopped backend is intentionally unavailable until start
-        # has reattached it.
-        if plugin.backend_entry is not None:
-            handle = self.get(plugin_name)
-            return handle is not None and _resources_alive(handle)
-        return True
-
-    async def stop(self, plugin_name: str) -> bool:
-        async with self._locks.setdefault(plugin_name, asyncio.Lock()):
-            return await self._stop_locked(plugin_name)
-
-    async def _stop_locked(self, plugin_name: str) -> bool:
-        handle = self.get(plugin_name)
-        if handle is None:
-            return False
-        await stop_plugin_backend(handle)
-        self.handles[:] = [item for item in self.handles if item is not handle]
-        self._stopped_handles[plugin_name] = handle
-        return True
-
-    async def start(self, plugin_name: str) -> bool:
-        async with self._locks.setdefault(plugin_name, asyncio.Lock()):
-            return await self._start_locked(plugin_name)
-
-    async def _start_locked(self, plugin_name: str) -> bool:
-        plugin = self.plugin_resolver(plugin_name)
-        if plugin is None or not plugin.enabled:
-            return False
-        if plugin.backend_entry is None:
-            return True
-        handle = self.get(plugin_name) or self._stopped_handles.pop(plugin_name, None)
-        if handle is not None and _resources_alive(handle):
-            return True
-        if handle is not None and handle.startup_task is not None and not handle.startup_task.done():
-            await asyncio.shield(handle.startup_task)
-            return self.is_enabled(plugin_name)
-        if handle is not None and handle.state == "failed" and handle.value is not None:
-            await stop_plugin_backend(handle)
-        if handle is None:
-            handle = PluginRuntimeHandle(plugin=plugin, value=None, context=self.context)
-            self.handles.append(handle)
-        elif handle not in self.handles:
-            self.handles.append(handle)
-        if handle.value is None:
-            try:
-                loaded = load_plugin_backend(plugin, self.context)
-            except Exception as exc:
-                raise _failed(handle, "load", exc) from exc
-            if loaded is None:
-                return plugin.backend_entry is None
-            handle.value = loaded.value
-            handle.tool_handlers, handle.tool_providers, handle.services = loaded.tool_handlers, loaded.tool_providers, loaded.services
-        await _start_managed(handle, self.context)
-        return True
-
-    def status(self, plugin_name: str) -> dict[str, Any]:
-        available = self.is_enabled(plugin_name)
-        plugin = self.plugin_resolver(plugin_name)
-        handle = self.get(plugin_name) or self._stopped_handles.get(plugin_name)
-        if handle is None:
-            return {"state": "not_loaded" if plugin and plugin.backend_entry else "not_required", "available": available, "error": None}
-        return {"state": handle.state, "available": available, "managed": handle.managed,
-                "attempts": handle.attempts, "error": handle.error, "last_error": handle.last_error}
-
-    async def shutdown(self) -> None:
-        await shutdown_plugin_backends(self.handles)
-        self.handles.clear()
-        self._stopped_handles.clear()
 
 
 def _schedule_start(handle: PluginRuntimeHandle, context: PluginContext) -> None:
@@ -564,6 +468,12 @@ async def shutdown_plugin_backends(handles: list[PluginRuntimeHandle]) -> None:
             _logger.warning("[plugins:backend] failed to stop %s", handle.plugin.name, exc_info=True)
 
 
+def scene_for_plugin(plugin: PluginManifest) -> str:
+    from lamtools_core.config.model_selection import scene_for_plugin as _scene_for_plugin
+
+    return _scene_for_plugin(plugin)
+
+
 __all__ = [
     "PluginRuntimeHandle",
     "PluginLifecycleError",
@@ -575,6 +485,5 @@ __all__ = [
     "attach_plugin_runtime",
     "start_plugin_backend",
     "stop_plugin_backend",
-    "PluginRuntimeManager",
     "shutdown_plugin_backends",
 ]

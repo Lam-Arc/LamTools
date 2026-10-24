@@ -151,8 +151,7 @@ def assemble_operations(
 def _load_handler_module(spec: PluginOperationSpec, module_name: str) -> Any:
     if "." in module_name:
         # Bundled and packaged plugins declare a dotted module path.  Import it
-        # normally after making the plugin root importable, like the legacy
-        # operation loader does.
+        # normally after making the plugin root importable.
         root = str(spec.root)
         if root not in sys.path:
             sys.path.append(root)
@@ -162,6 +161,10 @@ def _load_handler_module(spec: PluginOperationSpec, module_name: str) -> Any:
         raise ImportError(f"handler module is missing: {path}")
     mtime = path.stat().st_mtime
     cache_key = (str(path), mtime, module_name)
+    # user:“模块缓存按卸载清理”+同一键复用；插件目录被替换（mtime 变）自然
+    # 换键，旧条目定期清掉，不让缓存无界增长。
+    if len(_MODULE_CACHE) > 128:
+        _MODULE_CACHE.clear()
     cached = _MODULE_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -258,8 +261,8 @@ def build_handler(spec: PluginOperationSpec, host: PluginHost):
 
 
 def register_plugin_operations(catalog: Any, host: PluginHost) -> OperationAssembly:
-    """Mount every enabled v2 plugin operation behind its own availability guard."""
-    manifests = [item for item in host.discover() if item.assembly == "v2"]
+    """Mount every enabled plugin operation behind its own availability guard."""
+    manifests = host.discover()
     # Disabled plugins stay mounted behind the availability guard so a live
     # enable transition exposes them without rebuilding the catalog.
     assembly = assemble_operations(manifests, include_disabled=True)

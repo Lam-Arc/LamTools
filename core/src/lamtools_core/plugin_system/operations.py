@@ -252,61 +252,22 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
         )
 
     async def install_plugin(request: OperationRequest) -> OperationResult:
+        from .installer import run_install
+
         payload = request.payload if isinstance(request.payload, dict) else {}
-        source = str(payload.get("source") or "local").strip().lower()
-        path = str(payload.get("path") or "").strip()
-        if not path:
-            return OperationResult(
-                name=request.name, status="error", payload={"error": "path is required"}
-            )
-        try:
-            if source == "local":
-                installed = host.install_from_directory(path)
-            elif source == "zip":
-                installed = host.install_from_zip(path)
-            else:
-                return OperationResult(
-                    name=request.name,
-                    status="error",
-                    payload={"error": "source must be local or zip"},
-                )
-        except (OSError, ValueError) as exc:
-            return OperationResult(
-                name=request.name, status="error", payload={"error": str(exc)}
-            )
-        return OperationResult(
-            name=request.name,
-            payload={
-                "installed": True,
-                "name": installed.name,
-                "root": str(installed),
-            },
-        )
+        ok, result = run_install(host, payload)
+        if not ok:
+            return OperationResult(name=request.name, status="error", payload=result)
+        return OperationResult(name=request.name, payload=result)
 
     async def update_plugin(request: OperationRequest) -> OperationResult:
+        from .installer import run_update
+
         payload = request.payload if isinstance(request.payload, dict) else {}
-        source = str(payload.get("source") or "local").strip().lower()
-        path = str(payload.get("path") or "").strip()
-        if source != "local":
-            return OperationResult(
-                name=request.name,
-                status="error",
-                payload={"error": "update currently supports local directories"},
-            )
-        if not path:
-            return OperationResult(
-                name=request.name, status="error", payload={"error": "path is required"}
-            )
-        try:
-            updated = host.update_from_directory(path)
-        except (OSError, ValueError) as exc:
-            return OperationResult(
-                name=request.name, status="error", payload={"error": str(exc)}
-            )
-        return OperationResult(
-            name=request.name,
-            payload={"updated": True, "name": updated.name, "root": str(updated)},
-        )
+        ok, result = run_update(host, payload)
+        if not ok:
+            return OperationResult(name=request.name, status="error", payload=result)
+        return OperationResult(name=request.name, payload=result)
 
     async def config_get(request: OperationRequest) -> OperationResult:
         payload = request.payload if isinstance(request.payload, dict) else {}
@@ -328,13 +289,23 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
             return OperationResult(
                 name=request.name, status="error", payload={"error": exc.message}
             )
+        # user:“内置插件配置走共享数据目录”+打包态 bundled 目录只读，
+        # 值落在 {data_dir}/plugins/<name>.jsonc（与核心读取方同一处）。
+        from .paths import bundled_plugins_dir
+        from .plugin_data import read_plugin_config
+
+        data_dir = Path(host.state.path).parent
+        if manifest.root.parent == bundled_plugins_dir().resolve():
+            values = read_plugin_config(data_dir, name)
+        else:
+            values = read_config_values(manifest)
         return OperationResult(
             name=request.name,
             payload={
                 "name": name,
                 "version": manifest.version,
                 "description": manifest.description,
-                "config": read_config_values(manifest),
+                "config": values,
                 "schema": read_schema(manifest, spec),
                 "has_schema": spec.schema is not None,
                 # user:“每一个插件都应该有配置面板”+自定义面板按插件自己的脚本
@@ -378,7 +349,14 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                 status="error",
                 payload={"error": "; ".join(problems)},
             )
-        path = write_config_values(manifest, values)
+        from .paths import bundled_plugins_dir
+        from .plugin_data import plugin_config_path, write_plugin_config
+
+        if manifest.root.parent == bundled_plugins_dir().resolve():
+            write_plugin_config(Path(host.state.path).parent, name, values)
+            path = plugin_config_path(Path(host.state.path).parent, name)
+        else:
+            path = write_config_values(manifest, values)
         return OperationResult(
             name=request.name,
             payload={"name": name, "saved": True, "path": str(path)},
@@ -437,6 +415,26 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
     catalog.register("plugin.system.enable", enable_plugin, owner=OWNER)
     catalog.register("plugin.system.disable", disable_plugin, owner=OWNER)
     catalog.register("plugin.system.uninstall", uninstall_plugin, owner=OWNER)
+
+    async def behavior_table(request: OperationRequest) -> OperationResult:
+        # user:“行为表插件页可查”+条目要么是可替换模块，要么是内核。
+        payload_in = request.payload if isinstance(request.payload, dict) else {}
+        from .behavior_table import build_behavior_table, query_behavior_table
+        from .import_map import frontend_dir
+
+        table = build_behavior_table(frontend_dir())
+        term = str(payload_in.get("query") or "").strip()
+        items = query_behavior_table(table, term) if term else []
+        return OperationResult(
+            name=request.name,
+            payload={
+                "counts": table["counts"],
+                "entries": items[:100],
+                "total_matches": len(items),
+            },
+        )
+
+    catalog.register("plugin.system.behavior", behavior_table, owner=OWNER)
     # user:“插件自己也提供操作”+v2 插件在 operations.jsonc 里声明的 RPC 面
     # 在启动时挂进来，禁用插件后这些操作自动不可用。
     from .operation_bridge import register_plugin_operations

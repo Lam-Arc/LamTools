@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .schemas import MCPServerConfig
-from lamtools_core.plugins._jsonc import load_jsonc_text
+from lamtools_core.plugin_system.jsonc import load_jsonc_text
 
 _log = logging.getLogger(__name__)
 

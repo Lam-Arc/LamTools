@@ -331,15 +331,15 @@ def create_core_agent_operations(
         ).registry
 
     def command_plugin_manifests() -> list[Any]:
-        registry = getattr(plugin_operations, "plugin_registry", None)
-        if registry is None:
+        host = getattr(plugin_operations, "plugin_system_host", None)
+        if host is None:
             return []
-        from lamtools_core.plugins.lifecycle import plugin_backend_available
+        from lamtools_core.plugin_system import plugin_backend_available
 
         handles = getattr(plugin_operations, "plugin_runtimes", [])
         manifests = [
             plugin
-            for plugin in registry.discover()
+            for plugin in host.discover()
             if plugin_backend_available(plugin, handles)
         ]
         # user:“五类是斜杠命令”+v2 插件声明的命令和旧插件进同一张命令表，
@@ -2415,7 +2415,7 @@ def create_core_agent_operations(
             thread_snapshot_store=thread_snapshot_store,
             app_event_hub=app_event_hub,
         )
-    from lamtools_core.plugins.context import PluginContext
+    from lamtools_core.plugin_system.context import PluginContext
     from lamtools_core.tool.approval import ApprovalGate
     from lamtools_core.tool.permission import ASK_USER
 
@@ -2528,7 +2528,9 @@ def create_core_agent_operations(
     # 否则启用插件只会改账本，后端不会起来。
     plugin_system_host = getattr(plugin_operations, "plugin_system_host", None)
     if plugin_system_host is None:
-        plugin_system_host = PluginHost(
+        from lamtools_core.plugin_system import shared_host
+
+        plugin_system_host = shared_host(
             roots=(
                 [Path(item) for item in plugin_roots]
                 if plugin_roots
@@ -2540,8 +2542,6 @@ def create_core_agent_operations(
     catalog.plugin_system_host = plugin_system_host
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = getattr(plugin_operations, "plugin_runtimes", [])
-    catalog.plugin_registry = getattr(plugin_operations, "plugin_registry", None)
-    catalog.plugin_state_store = getattr(plugin_operations, "plugin_state_store", None)
     from lamtools_core.sub_agent_supervisor import register_sub_agent_lifecycle_operations
 
     register_sub_agent_lifecycle_operations(
@@ -3422,46 +3422,17 @@ async def _persist_core_event_live(
 def _plugin_toolbox_contributions(plugin_assembly: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize plugin tool declarations for main and child Agent toolboxes."""
 
-    from lamtools_core.plugins.tools import complete_plugin_tool_specs
-    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs, default_core_tool_specs
-
-    runtime_specs = list(plugin_assembly.get("plugin_runtime_specs") or [])
-    runtime_names = {str(getattr(spec, "name", "")) for spec in runtime_specs}
-    specs: list[ToolSpec] = []
-    plugin_groups = plugin_assembly.get("plugin_tool_groups") or []
-    if plugin_groups:
-        base_specs = {
-            spec.name: spec
-            for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]
-        }
-        for group in plugin_groups:
-            declared_specs = complete_plugin_tool_specs(
-                group.get("tools") or [],
-                plugin_name=str(group.get("name") or ""),
-                plugin_root=group.get("root"),
-                base_specs_by_name=base_specs,
-                dependencies=group.get("dependencies") or None,
-            )
-            specs.extend(spec for spec in declared_specs if spec.name not in runtime_names)
-    specs.extend(runtime_specs)
+    # user:“换芯声明”+半声明补全已在 plugin_system.runtime 的装配里完成，
+    # 这里只做归并：声明工具 + 后端动态工具 + 模式表 + 可用性。
+    specs = list(plugin_assembly.get("plugin_runtime_specs") or [])
 
     availability = None
     plugin_context = plugin_assembly.get("plugin_context")
     if plugin_context is not None:
-        runtime_manager = plugin_context.service("plugin.runtime_manager")
-        candidate = getattr(runtime_manager, "is_enabled", None)
+        manager = plugin_context.service("plugin.v2_runtime_manager")
+        candidate = getattr(manager, "is_enabled", None)
         if callable(candidate):
             availability = candidate
-        # user:“插件可以有自己的后端”+v2 插件由自己的运行时管理器
-        # 判断可用性，旧插件继续走旧管理器。
-        v2_manager = plugin_context.service("plugin.v2_runtime_manager")
-        if v2_manager is not None:
-            legacy = candidate if callable(candidate) else None
-
-            def availability(name: str, *, legacy=legacy, v2=v2_manager) -> bool:
-                if v2.owns(name):
-                    return bool(v2.is_enabled(name))
-                return bool(legacy(name)) if legacy is not None else True
     return {
         "specs": specs,
         "handlers": dict(plugin_assembly.get("plugin_tool_handlers") or {}),
@@ -3657,7 +3628,7 @@ async def _build_core_runtime_toolbox(
         overrides_path = Path(data_dir) / "tool_permissions.jsonc"
         if overrides_path.exists():
             try:
-                from lamtools_core.plugins._jsonc import load_jsonc_text
+                from lamtools_core.plugin_system.jsonc import load_jsonc_text
 
                 raw = load_jsonc_text(overrides_path)
                 perms = raw.get("permissions") if isinstance(raw, dict) else None

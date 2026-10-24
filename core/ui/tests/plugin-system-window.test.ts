@@ -68,7 +68,8 @@ describe('plugin system windows', () => {
     await flushPromises()
 
     const labels = wrapper.findAll('button.small-btn').map((item) => item.text())
-    expect(labels).toEqual(['禁用', '配置'])
+    // 安装表单（安装/更新）与行内按钮（禁用/配置/依赖）；没有窗口按钮。
+    expect(labels).toEqual(['安装', '更新（同名替换，data 保留）', '禁用', '配置', '依赖', '查询'])
   })
 
   it('keeps working without a desktop host and reports the limitation', async () => {

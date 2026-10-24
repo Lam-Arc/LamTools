@@ -12,38 +12,38 @@ import json
 import re
 from pathlib import Path
 
-from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore, bundled_plugins_dir
-from lamtools_core.plugins.tools import load_plugin_tools
+from lamtools_core.plugin_system import PluginHost, PluginSystemRuntime
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 
 
 def _plan_root():
     return bundled_plugins_dir() / "plan"
 
 
-def _registry(tmp_path) -> PluginRegistry:
-    return PluginRegistry(
-        plugin_roots=[bundled_plugins_dir()],
-        state_store=PluginStateStore(tmp_path / "plugins.jsonc"),
+def _host(tmp_path) -> PluginHost:
+    return PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "plugin-system.jsonc",
     )
 
 
 def test_the_plugin_ships_three_skills_and_no_tool(tmp_path):
-    registry = _registry(tmp_path)
-    plugin = next((item for item in registry.discover() if item.name == "plan"), None)
+    host = _host(tmp_path)
+    plugin = next((item for item in host.discover() if item.name == "plan"), None)
 
     assert plugin is not None, "the plan plugin is not discovered"
     # On by default: the capability the user asked for has to be there on a fresh
     # install, not behind a switch they have to find.
     assert plugin.enabled is True
-    assert plugin.platforms == "universal"
-    assert [Path(root).name for root in plugin.skill_roots] == ["skills"]
-    assert sorted(path.parent.name for path in Path(plugin.skill_roots[0]).glob("*/SKILL.md")) == [
+    artifacts = PluginSystemRuntime(host).assemble(manifests=[plugin])
+    plan_skills = [skill for skill in artifacts.skills if skill.plugin == "plan"]
+    assert sorted(skill.name for skill in plan_skills) == [
         "draft-plan",
         "execute-plan",
         "refine-plan",
     ]
     # Plans are files: the plugin declares no tool of its own any more.
-    assert load_plugin_tools(plugin.tool_files, plugin_root=Path(plugin.root)) == []
+    assert [tool for tool in artifacts.tools if tool.plugin == "plan"] == []
 
 
 def test_every_plan_skill_parses_and_declares_its_platform(tmp_path):

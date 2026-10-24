@@ -2,13 +2,52 @@
   <article class="setting-card plugin-system-preview">
     <header class="preview-head">
       <div>
-        <h3>{{ t("新插件系统（预览）") }}</h3>
-        <p class="muted">{{ t("与当前插件页互不影响。这里只验证清单、启停和卸载。") }}</p>
+        <h3>{{ t("插件") }}</h3>
+        <p class="muted">{{ t("清单、启停、安装、更新与卸载都在这里。") }}</p>
       </div>
       <button class="text-btn" type="button" :disabled="loading" @click="fetchPlugins()">
         {{ t("刷新") }}
       </button>
     </header>
+
+    <!-- user:“装、卸、启停、更新全部在本地完成”+三种来源同一条安装流程；
+         更新走同一表单，只换按钮（同名替换，data 保留）。 -->
+    <form class="preview-install" @submit.prevent="submitInstall(false)">
+      <div class="install-row">
+        <label><input v-model="installSource" type="radio" value="local" />{{ t("本地目录") }}</label>
+        <label><input v-model="installSource" type="radio" value="zip" />{{ t("压缩包") }}</label>
+        <label><input v-model="installSource" type="radio" value="url" />{{ t("链接") }}</label>
+      </div>
+      <div class="install-row">
+        <input
+          v-model="installTarget"
+          class="install-input"
+          type="text"
+          :placeholder="installSource === 'url' ? 'https://example.com/plugin.zip' : 'C:\path\to\plugin'"
+        />
+        <input
+          v-if="installSource === 'url'"
+          v-model="installSha256"
+          class="install-sha"
+          type="text"
+          :placeholder="t('sha256（可选）')"
+        />
+      </div>
+      <div class="install-row">
+        <button class="small-btn" type="submit" :disabled="installBusy || !installTarget">
+          {{ t("安装") }}
+        </button>
+        <button
+          class="small-btn"
+          type="button"
+          :disabled="installBusy || !installTarget"
+          @click="submitInstall(true)"
+        >
+          {{ t("更新（同名替换，data 保留）") }}
+        </button>
+        <span v-if="installBusy" class="muted">{{ t("处理中…") }}</span>
+      </div>
+    </form>
 
     <p v-if="error" class="preview-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="preview-notice">{{ notice }}</p>
@@ -62,6 +101,14 @@
             {{ configuring === plugin.name ? t("收起配置") : t("配置") }}
           </button>
           <button
+            class="small-btn"
+            type="button"
+            :data-deps-for="plugin.name"
+            @click="checkDeps(plugin)"
+          >
+            {{ t("依赖") }}
+          </button>
+          <button
             class="text-btn danger"
             type="button"
             :disabled="busy === plugin.name"
@@ -70,6 +117,9 @@
             {{ t("卸载") }}
           </button>
         </div>
+        <p v-if="depsFor(plugin.name)" class="preview-deps" :class="{ 'is-missing': depsMissing(plugin.name) }">
+          {{ depsFor(plugin.name) }}
+        </p>
         <PluginConfigPanel
           v-if="configuring === plugin.name"
           :plugin-name="plugin.name"
@@ -79,6 +129,27 @@
         />
       </div>
     </div>
+
+    <!-- user:“行为表插件页可查”+按名字查任意行为落在哪个模块/内核。 -->
+    <form class="preview-install" @submit.prevent="searchBehavior">
+      <div class="install-row">
+        <input
+          v-model="behaviorQuery"
+          class="install-input"
+          type="text"
+          :placeholder="t('查行为表：模块名或片段（如 prompt、plugin_system.host）')"
+        />
+        <button class="small-btn" type="submit" :disabled="!behaviorQuery.trim()">
+          {{ t("查询") }}
+        </button>
+        <span v-if="behaviorTotal >= 0" class="muted">
+          {{ t("{0} 条匹配", { 0: behaviorTotal }) }}
+        </span>
+      </div>
+      <p v-for="entry in behaviorEntries" :key="entry.module" class="preview-deps">
+        {{ entry.module }} — {{ entry.ownership === 'kernel' ? t('内核（不可替换）') : t('可替换模块') }}（{{ entry.layer }}）
+      </p>
+    </form>
 
     <details v-if="loadErrors.length" class="preview-errors">
       <summary>{{ t("加载错误 {0}", { 0: loadErrors.length }) }}</summary>
@@ -139,6 +210,14 @@ type PluginSystemRpc = (
 
 const props = defineProps<{ requestRpc: PluginSystemRpc }>()
 
+const behaviorQuery = ref('')
+const behaviorEntries = ref<Array<{ module: string; ownership: string; layer: string }>>([])
+const behaviorTotal = ref(-1)
+const installSource = ref<'local' | 'zip' | 'url'>('local')
+const installTarget = ref('')
+const installSha256 = ref('')
+const installBusy = ref(false)
+const depsReport = ref<Record<string, string>>({})
 const plugins = ref<PluginSystemEntry[]>([])
 const windows = ref<PluginSystemWindow[]>([])
 const configuring = ref('')
@@ -251,6 +330,91 @@ async function uninstall(plugin: PluginSystemEntry): Promise<void> {
   }
 }
 
+interface InstallResult {
+  installed?: boolean
+  updated?: boolean
+  name?: string
+  dependencies?: Array<{ name: string; status: string }>
+  missing_dependencies?: number
+}
+
+function describeDependencies(result: InstallResult): string {
+  const items = result.dependencies || []
+  if (!items.length) return ''
+  const missing = items.filter((item) => item.status === 'missing').map((item) => item.name)
+  const summary = items.map((item) => `${item.name}:${item.status === 'ok' ? '✓' : '缺失'}`).join(' · ')
+  return missing.length ? `${summary}（缺 ${missing.join('、')}，可用 pip 安装；不阻止安装）` : summary
+}
+
+async function submitInstall(isUpdate: boolean): Promise<void> {
+  const source = installSource.value
+  const payload: Record<string, unknown> = { source }
+  if (source === 'url') {
+    payload.url = installTarget.value.trim()
+    if (installSha256.value.trim()) payload.sha256 = installSha256.value.trim()
+  } else {
+    payload.path = installTarget.value.trim()
+  }
+  installBusy.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = (await props.requestRpc(
+      isUpdate ? 'plugin.system.update' : 'plugin.system.install',
+      payload,
+    )) as unknown as InstallResult
+    const verb = isUpdate ? '已更新' : '已安装'
+    const deps = describeDependencies(result)
+    notice.value = `${verb} ${result.name || ''}${deps ? `；依赖：${deps}` : ''}`
+    installTarget.value = ''
+    installSha256.value = ''
+    await fetchPlugins()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    installBusy.value = false
+  }
+}
+
+function depsFor(name: string): string {
+  return depsReport.value[name] || ''
+}
+
+function depsMissing(name: string): boolean {
+  return (depsReport.value[name] || '').includes('缺失')
+}
+
+async function checkDeps(plugin: PluginSystemEntry): Promise<void> {
+  busy.value = plugin.name
+  try {
+    const result = await props.requestRpc('plugin.deps-status', { name: plugin.name })
+    const items = Array.isArray(result.dependencies)
+      ? (result.dependencies as Array<{ name: string; status: string }>)
+      : []
+    depsReport.value[plugin.name] = items.length
+      ? items.map((item) => `${item.name}:${item.status === 'ok' ? '✓' : '缺失'}`).join(' · ')
+      : t('没有声明依赖')
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function searchBehavior(): Promise<void> {
+  const query = behaviorQuery.value.trim()
+  if (!query) return
+  try {
+    const result = await props.requestRpc('plugin.system.behavior', { query })
+    behaviorEntries.value = Array.isArray(result.entries)
+      ? (result.entries as Array<{ module: string; ownership: string; layer: string }>)
+      : []
+    behaviorTotal.value = Number(result.total_matches || 0)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
 onMounted(fetchPlugins)
 </script>
 
@@ -348,5 +512,41 @@ onMounted(fetchPlugins)
 
 .danger {
   color: var(--red);
+}
+
+.preview-install {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed color-mix(in srgb, var(--theme-main-text) 20%, transparent);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.install-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.install-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.install-sha {
+  width: 180px;
+}
+
+.preview-deps {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.preview-deps.is-missing {
+  color: var(--red);
+  opacity: 1;
 }
 </style>

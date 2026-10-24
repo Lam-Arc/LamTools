@@ -73,9 +73,7 @@ def build_manifest(*, work_root: Path | None = None) -> dict[str, Any]:
             roots=default_core_agent_plugin_roots(resolved_work_root),
             state_path=Path(data_dir) / "plugin-system.jsonc",
         )
-        v2_manifests = [
-            item for item in host.discover() if item.assembly == "v2" and item.enabled
-        ]
+        v2_manifests = [item for item in host.discover() if item.enabled]
         runtime = create_skill_runtime(
             plugin_skill_roots=assembly["skill_roots"],
             plugin_skill_modes=assembly["skill_modes"],

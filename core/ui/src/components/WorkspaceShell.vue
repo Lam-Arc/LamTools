@@ -65,6 +65,7 @@
 
     <!-- ===== App Rail（最左竖栏：整界面导航，常驻） ===== -->
     <slot name="app-rail" />
+    <PluginSystemContributions v-if="props.pluginRpc" :request-rpc="props.pluginRpc" region="appRail" />
 
     <!-- ===== Left Drawer ===== -->
     <LeftSidebarShell
@@ -97,6 +98,14 @@
       <template v-if="$slots['sidebar-footer']" #sidebar-footer>
         <slot name="sidebar-footer" />
       </template>
+      <template #sidebar-body>
+        <slot v-if="$slots['sidebar-body'] && !isRegionReplaced('left')" name="sidebar-body" />
+        <PluginSystemContributions
+          v-if="props.pluginRpc"
+          :request-rpc="props.pluginRpc"
+          region="left"
+        />
+      </template>
     </LeftSidebarShell>
 
     <!-- ===== Main Area ===== -->
@@ -112,11 +121,24 @@
         <slot name="runtime-overlay" />
       </div>
       <slot name="main-header" />
-      <slot name="main-content">
+      <PluginSystemContributions
+        v-if="props.pluginRpc"
+        :request-rpc="props.pluginRpc"
+        region="titlebar"
+      />
+      <!-- user:“replace 换主区”+有接管者时默认内容让位（保持挂载，隐藏即可）。 -->
+      <div v-show="!isRegionReplaced('main')" class="workspace-main-default">
+        <slot name="main-content">
         <section class="thread">
           <slot name="thread-content" />
         </section>
       </slot>
+      </div>
+      <PluginSystemContributions
+        v-if="props.pluginRpc"
+        :request-rpc="props.pluginRpc"
+        region="main"
+      />
     </main>
 
     <!-- ===== Floating Composer ===== -->
@@ -188,6 +210,11 @@
       </template>
       <template v-if="$slots['composer-extras']" #extras>
         <slot name="composer-extras" />
+        <PluginSystemContributions
+          v-if="props.pluginRpc"
+          :request-rpc="props.pluginRpc"
+          region="composerSide"
+        />
       </template>
     </ComposerBar>
 
@@ -205,7 +232,12 @@
         <strong>{{ defaultUiText(rightPanelTitle, '运行状态') }}</strong>
       </header>
       <div class="drawer-body right-body">
-        <slot name="right-panel" />
+        <slot v-if="!isRegionReplaced('right')" name="right-panel" />
+        <PluginSystemContributions
+          v-if="props.pluginRpc"
+          :request-rpc="props.pluginRpc"
+          region="right"
+        />
       </div>
     </aside>
 
@@ -216,6 +248,9 @@
 
 <script setup lang="ts">
 import { defaultUiText } from '../i18n/index'
+
+import PluginSystemContributions from './PluginSystemContributions.vue'
+import { isRegionReplaced } from '../plugins/contributions'
 
 import { t } from '../i18n/index'
 
@@ -241,6 +276,7 @@ import LeftSidebarShell from './LeftSidebarShell.vue'
 const props = withDefaults(
   defineProps<{
     productName: string
+    pluginRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
     sidebarTitle?: string
     showSidebarHeader?: boolean
     showSidebarHeaderAction?: boolean

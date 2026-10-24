@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from lamtools_core.plugin_system import PluginHost, PluginSystemRuntime
-from lamtools_core.plugins.registry import bundled_plugins_dir
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool.default_toolbox import build_core_toolbox
 
@@ -20,7 +20,7 @@ def assemble_spec(tmp_path: Path):
         roots=[bundled_plugins_dir()],
         state_path=tmp_path / "plugin-system.jsonc",
     )
-    manifests = [item for item in host.discover() if item.assembly == "v2"]
+    manifests = host.discover()
     artifacts = PluginSystemRuntime(host).assemble(manifests=manifests)
     return next(spec for spec in artifacts.tools if spec.name == "check_exports")
 

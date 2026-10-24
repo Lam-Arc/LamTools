@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from lamtools_core.cli import CoreCliRunOptions, run_core_cli_task
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
 from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
-from lamtools_core.plugins.context import PluginContext
-from lamtools_core.plugins.registry import bundled_plugins_dir
+from lamtools_core.plugin_system.context import PluginContext
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 
 DEFAULT_PROMPT = "帮我建一个新闻聚合工作流：从多个来源抓取新闻，去重翻译，质检后按质量分流，最后生成日报"
 THREAD_ID = "wf_build"  # session prefix; the model names the workflow itself

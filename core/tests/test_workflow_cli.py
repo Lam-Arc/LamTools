@@ -10,7 +10,7 @@ import pytest
 
 from lamtools_core.cli import build_parser
 from lamtools_core.plugins.bundled.workflow.backend import cli as workflow_cli
-from lamtools_core.plugins.registry import bundled_plugins_dir
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 
 
 class _FakeClient:

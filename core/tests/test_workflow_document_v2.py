@@ -28,8 +28,8 @@ from lamtools_core.plugins.bundled.workflow.backend.runtime import (
 )
 from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
-from lamtools_core.plugins.context import PluginContext
-from lamtools_core.plugins.registry import bundled_plugins_dir
+from lamtools_core.plugin_system.context import PluginContext
+from lamtools_core.plugin_system.paths import bundled_plugins_dir
 
 
 def _legacy() -> WorkflowDef:

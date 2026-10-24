@@ -45,9 +45,12 @@ from lamtools_core.runtime.observer import ObserverSupervisor
 from lamtools_core.runtime.persistent_process_store import PersistentProcessStore
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
-from lamtools_core.plugins.lifecycle import shutdown_plugin_backends
-from lamtools_core.plugins.registry import PluginStateStore, bundled_plugins_dir
-from lamtools_core.plugins.session_visibility import PluginSessionVisibility
+from lamtools_core.plugin_system import (
+    PluginHost,
+    PluginSessionVisibility,
+    bundled_plugins_dir,
+    shutdown_plugin_backends,
+)
 from lamtools_core.config.root import core_plugins_root
 
 from .base_agent import DEFAULT_CORE_INSTRUCTIONS, default_core_agent_plugin_roots
@@ -345,10 +348,20 @@ def create_core_agent_http_app(
         session_plugin_roots.insert(0, core_plugins_root())
     if bundled_plugins_dir() not in session_plugin_roots:
         session_plugin_roots.append(bundled_plugins_dir())
+    # user:“会话可见性读唯一账本”+一个宿主一个账本，且与装配共享同一实例。
+    from lamtools_core.plugin_system import shared_host
+
     plugin_session_visibility = PluginSessionVisibility(
-        plugin_roots=session_plugin_roots,
-        state_store=PluginStateStore(resolved_data_dir / "plugins.jsonc"),
+        host=shared_host(
+            roots=session_plugin_roots,
+            state_path=resolved_data_dir / "plugin-system.jsonc",
+        )
     )
+
+    if frontend_dir is not None:
+        from lamtools_core.plugin_system.import_map import set_frontend_dir
+
+        set_frontend_dir(frontend_dir)
 
     operations = OperationCatalog()
     app_state: dict[str, Any] = {}
@@ -489,7 +502,7 @@ def create_core_agent_http_app(
             attachment_service=app_state.get("attachment_store"),
             model_context_sink=capture_model_context,
         )
-        from lamtools_core.plugins.lifecycle import await_plugin_backends
+        from lamtools_core.plugin_system import await_plugin_backends
 
         app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
         await await_plugin_backends(app_state["plugin_runtimes"])
@@ -797,46 +810,37 @@ def create_core_agent_http_app(
         return {"providers": _list_llm_provider_configs()}
 
     async def _desktop_plugin_entries(*, enabled_only: bool = True) -> list[dict[str, Any]]:
-        actual = app_state.get("operations")
-        if not isinstance(actual, OperationCatalog):
-            raise HTTPException(status_code=503, detail="Core Agent is not ready")
-        result = await actual.execute("plugin.list", {})
-        if result.status != "ok":
-            raise HTTPException(status_code=503, detail=str(result.payload.get("error") or "Plugin registry unavailable"))
-        plugins = result.payload.get("plugins") if isinstance(result.payload, dict) else []
-        if not isinstance(plugins, list):
-            return []
-        merged = [item for item in plugins if isinstance(item, dict)]
-        # user:“桌宠还是旧插件”+新系统声明的窗口也进同一张桌面插件列表。
+        # user:“桌宠改成窗口插件”+桌面插件列表只由新系统的 ui.windows 声明
+        # 驱动，不再经过旧 plugin.list。
         host = app_state.get("plugin_system_host")
-        if host is not None:
-            from lamtools_core.plugin_system.ui import assemble_ui
+        if not isinstance(host, PluginHost):
+            return []
+        from lamtools_core.plugin_system.ui import assemble_ui
 
-            manifests = [item for item in host.discover() if item.assembly == "v2"]
-            for window in assemble_ui(manifests).windows:
-                manifest = next(
-                    (item for item in manifests if item.name == window.plugin),
-                    None,
-                )
-                if manifest is None:
-                    continue
-                merged.append(
-                    {
-                        "name": window.plugin,
-                        "enabled": manifest.enabled,
-                        "desktop": {
-                            "entry": str(window.entry),
-                            "title": window.title,
-                            "fileDrop": window.file_drop,
-                            "window": dict(window.window),
-                        },
-                    }
-                )
+        manifests = host.discover()
+        by_name = {item.name: item for item in manifests}
+        entries: list[dict[str, Any]] = []
+        for window in assemble_ui(manifests).windows:
+            manifest = by_name.get(window.plugin)
+            if manifest is None:
+                continue
+            entries.append(
+                {
+                    "name": window.plugin,
+                    "enabled": manifest.enabled,
+                    "available": manifest.enabled,
+                    "desktop": {
+                        "entry": str(window.entry),
+                        "title": window.title,
+                        "fileDrop": window.file_drop,
+                        "window": dict(window.window),
+                    },
+                }
+            )
         return [
             item
-            for item in merged
-            if isinstance(item.get("desktop"), dict)
-            and (not enabled_only or item.get("enabled") is True and item.get("available", True) is True)
+            for item in entries
+            if not enabled_only or item.get("enabled") is True
         ]
 
     @app.get("/api/core/desktop-plugins")
@@ -1076,7 +1080,13 @@ def create_core_agent_http_app(
 
     # Register SPA fallback LAST so API routes take precedence.
     if frontend_dir is not None:
-        add_spa_fallback(app, Path(frontend_dir))
+        from lamtools_core.plugin_system.import_map import import_map_provider_from_state
+
+        add_spa_fallback(
+            app,
+            Path(frontend_dir),
+            import_map_provider=import_map_provider_from_state(app_state, frontend_dir),
+        )
 
     return app
 
@@ -1558,7 +1568,7 @@ def _register_loadtools_operations(catalog: OperationCatalog) -> None:
         # normalized runtime handles exposed by the generic operation catalog
         # instead of importing any plugin implementation from Core.
         for handle in getattr(catalog, "plugin_runtimes", []) or []:
-            from lamtools_core.plugins.lifecycle import plugin_backend_available
+            from lamtools_core.plugin_system import plugin_backend_available
 
             if not plugin_backend_available(handle.plugin, catalog.plugin_runtimes):
                 continue

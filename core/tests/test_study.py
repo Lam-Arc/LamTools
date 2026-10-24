@@ -12,7 +12,7 @@ from lamtools_core.plugins.bundled.study.store import StudyScope, StudyStore
 from lamtools_core.plugins.bundled.study.exams import exam
 from lamtools_core.plugins.bundled.study.marks import SELECTION_PROMPT_VERSION, answer, dictionary, mark_operation
 from lamtools_core.plugins.bundled.study.backend import create_plugin, operation
-from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugin_system.context import PluginContext
 from lamtools_core.app.operation_catalog import OperationRequest
 from lamtools_core.session import build_session_record
 
@@ -563,7 +563,7 @@ async def test_plugin_mounts_and_fixed_session_has_no_project(tmp_path):
     from lamtools_core.plugin_system.ui import assemble_ui
 
     descriptors = assemble_ui(
-        [item for item in catalog.plugin_system_host.discover() if item.assembly == 'v2']
+        catalog.plugin_system_host.discover()
     ).modes
     descriptor = next(mode for mode in descriptors if mode.plugin == 'study')
     assert descriptor.id == 'study'
@@ -1087,7 +1087,6 @@ def test_study_v3_skill_references_and_all_eval_fixtures_are_host_readable(tmp_p
 @pytest.mark.asyncio
 async def test_study_v3_reference_is_readable_through_real_load_skill_tool(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
-    from lamtools_core.plugins.tools import complete_plugin_tool_specs
     from lamtools_core.skill_runtime import create_skill_runtime
     from lamtools_core.tool import ToolCall
     from lamtools_core.tool.default_toolbox import build_core_toolbox, bundled_core_tool_specs, default_core_tool_specs
@@ -1102,16 +1101,8 @@ async def test_study_v3_reference_is_readable_through_real_load_skill_tool(tmp_p
         plugin_skill_roots=assembly['skill_roots'],
         plugin_skill_modes=assembly['skill_modes'],
     )
-    base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
+    # user:“换芯声明”+装配期已补全，直接归并。
     plugin_specs = list(assembly['plugin_runtime_specs'])
-    plugin_specs.extend(
-        spec
-        for group in assembly['plugin_tool_groups']
-        for spec in complete_plugin_tool_specs(
-            group['tools'], plugin_name=group['name'], plugin_root=group['root'],
-            base_specs_by_name=base_specs,
-        )
-    )
     toolbox = build_core_toolbox(
         work_root=tmp_path,
         active_mode='study:study',
@@ -1141,7 +1132,6 @@ async def test_study_v3_reference_is_readable_through_real_load_skill_tool(tmp_p
 @pytest.mark.asyncio
 async def test_study_teach_group_members_load_by_name_and_expose_their_references(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
-    from lamtools_core.plugins.tools import complete_plugin_tool_specs
     from lamtools_core.skill_runtime import create_skill_runtime
     from lamtools_core.tool import ToolCall
     from lamtools_core.tool.default_toolbox import build_core_toolbox, bundled_core_tool_specs, default_core_tool_specs
@@ -1156,16 +1146,8 @@ async def test_study_teach_group_members_load_by_name_and_expose_their_reference
         plugin_skill_roots=assembly['skill_roots'],
         plugin_skill_modes=assembly['skill_modes'],
     )
-    base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
+    # user:“换芯声明”+装配期已补全，直接归并。
     plugin_specs = list(assembly['plugin_runtime_specs'])
-    plugin_specs.extend(
-        spec
-        for group in assembly['plugin_tool_groups']
-        for spec in complete_plugin_tool_specs(
-            group['tools'], plugin_name=group['name'], plugin_root=group['root'],
-            base_specs_by_name=base_specs,
-        )
-    )
     toolbox = build_core_toolbox(
         work_root=tmp_path,
         active_mode='study:study',
@@ -1211,7 +1193,7 @@ async def test_study_prompt_replaces_project_workflow_but_keeps_tool_protocol(tm
     work_root.mkdir()
     (work_root / 'AGENTS.md').write_text('PROJECT_WORKFLOW_MUST_NOT_LEAK', encoding='utf-8')
     from lamtools_core.plugin_system.agent import PluginAgentSpec
-    from lamtools_core.plugins.registry import bundled_plugins_dir
+    from lamtools_core.plugin_system.paths import bundled_plugins_dir
 
     study_prompt = (
         bundled_plugins_dir() / "study" / "prompts" / "study-system.md"

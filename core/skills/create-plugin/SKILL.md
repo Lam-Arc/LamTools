@@ -17,10 +17,10 @@ hello/
 ```
 
 ```json
-{ "name": "hello", "version": "0.1.0", "assembly": "v2" }
+{ "name": "hello", "version": "0.1.0" }
 ```
 
-Set `"assembly": "v2"` in every new plugin. The legacy plugin system skips v2 plugins, so only one system assembles it.
+There is one plugin system (`lamtools_core.plugin_system`); every `plugin.json` is assembled by it. No marker field is needed.
 
 Ask the user only what you cannot infer: what the plugin does, what it must remember, whether it needs a UI. Then pick the lightest mechanism below that can do the job.
 
@@ -44,7 +44,7 @@ Make a tool only when all three are true: it is called often, its return structu
 | `name` | string | required; one path segment, also the folder name |
 | `version` | string | required |
 | `description` | string | one line, shown in the plugin page |
-| `assembly` | `"v2"` | marks the plugin for the new system |
+| `overrides` | `{}` | module replacements: backend keys `lamtools_core.*` (loaded at boot), frontend keys `@/...` (import map). One plugin per target; a broken replacement fails startup on purpose — safe mode skips all overrides. Frontend overrides take effect after a full page reload. |
 | `scope` | `global` / `mode` / `session` | default `global`; required semantics for agent takeover |
 | `skills` | string[] | `./`-relative skill root directories |
 | `tools` | string[] | `./`-relative `tools.jsonc` files |
