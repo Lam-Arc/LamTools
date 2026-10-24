@@ -18,11 +18,27 @@ from lamtools_core.tool.default_toolbox import (
 from lamtools_core.tool.loadtools import default_load_tools
 
 
-def test_bundled_plugins_dir_has_three_plugins():
+def test_bundled_plugins_dir_has_migrated_plugins():
     root = bundled_plugins_dir()
-    assert (root / "git" / "plugin.json").exists()
+    # user:“git 插件删掉，run_command 就能做”+git 不再是内置插件。
+    assert not (root / "git").exists()
     assert (root / "websearch" / "plugin.json").exists()
     assert (root / "imagegen" / "plugin.json").exists()
+    assert (root / "plan" / "plugin.json").exists()
+
+
+def test_plan_skills_load_through_the_v2_assembly(tmp_path):
+    from lamtools_core.plugin_system import PluginHost, PluginSystemRuntime
+
+    host = PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "plugin-system.jsonc",
+    )
+    manifests = [item for item in host.discover() if item.assembly == "v2"]
+    artifacts = PluginSystemRuntime(host).assemble(manifests=manifests)
+
+    names = {skill.name for skill in artifacts.skills}
+    assert {"draft-plan", "refine-plan", "execute-plan"} <= names
 
 
 def test_bundled_core_tool_specs_four_tools():
@@ -49,10 +65,14 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
     names = {plugin.name for plugin in assembly["plugins"]}
     # websearch 声明 defaultEnabled=false：默认装配里不出现（要用去插件页启用），
     # 显式启用后回到装配结果里。
-    assert {"git", "imagegen"} <= names
+    assert "git" not in names
+    # plan 已是 v2 插件，由新系统装配技能，旧注册表不再看到它。
+    assert "plan" not in names
+    assert {"imagegen", "study", "workflow"} <= names
     assert "websearch" not in names
     group_names = {group["name"] for group in assembly["plugin_tool_groups"]}
-    assert {"git", "imagegen"} <= group_names
+    assert "git" not in group_names
+    assert "imagegen" in group_names
     assert "websearch" not in group_names
 
     PluginStateStore(tmp_path / "data" / "plugins.jsonc").set_enabled("websearch", True)
@@ -199,11 +219,13 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         )
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
     names = {spec.name for spec in toolbox.tool_specs()}
-    # 20 base + 4 bundled + 5 Workflow + 5 Study tools; the plan plugin ships
-    # skills only — plans are files in the project's 「方案/」 folder.
-    assert len(names) == 34
+    # 20 base + 3 bundled tools + 5 Workflow + 5 Study tools. git 插件已删除，
+    # 它的两个工具不再出现；plan 只发技能。
+    assert len(names) == 32
+    assert "git_status" not in names
+    assert "git_diff" not in names
     assert {'get_knowledge_net', 'build_knowledge_net', 'exam', 'sign', 'notes'} <= names
-    assert {"git_status", "git_diff", "web_search", "generate_image"} <= names
+    assert {"web_search", "generate_image"} <= names
     assert "plan_package" not in names
     assert {
         "workflow_graph",
@@ -218,10 +240,9 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
     assert operations_schema["maxItems"] == 100
     assert "build-map" in study_build.description
     # 半声明式补全：内置插件工具描述从 core 常量来
-    git_spec = next(spec for spec in toolbox.tool_specs() if spec.name == "git_status")
-    assert "git status" in git_spec.description.lower()
-    assert git_spec.permission == "auto_allow"
-    assert git_spec.metadata["plugin"] == "git"
+    search_spec = next(spec for spec in toolbox.tool_specs() if spec.name == "web_search")
+    assert search_spec.permission == "auto_allow"
+    assert search_spec.metadata["plugin"] == "websearch"
 
 
 def test_disable_bundled_plugin_removes_tools(tmp_path):
@@ -229,16 +250,16 @@ def test_disable_bundled_plugin_removes_tools(tmp_path):
     from lamtools_core.plugins.registry import PluginStateStore
 
     state = PluginStateStore(tmp_path / "data" / "plugins.jsonc")
-    state.set_enabled("git", False)
+    state.set_enabled("imagegen", False)
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
         work_root=tmp_path,
         plugin_roots=[],
     )
     names = {plugin.name for plugin in assembly["plugins"]}
-    assert "git" not in names
+    assert "imagegen" not in names
     group_names = {group["name"] for group in assembly["plugin_tool_groups"]}
-    assert "git" not in group_names
+    assert "imagegen" not in group_names
 
 
 async def test_bundled_plugin_executes_via_core_assembly(tmp_path):
@@ -269,7 +290,7 @@ async def test_bundled_plugin_uninstall_rejected(tmp_path):
         work_root=tmp_path,
         plugin_roots=[],
     )
-    result = await catalog.execute("plugin.uninstall", {"name": "git"})
+    result = await catalog.execute("plugin.uninstall", {"name": "imagegen"})
     assert result.status == "error"
     assert "bundled" in result.payload["error"]
 
@@ -332,7 +353,7 @@ def test_websearch_plugin_is_disabled_by_default(tmp_path):
     by_name = {plugin.name: plugin for plugin in registry.discover()}
     assert by_name["websearch"].enabled is False
     # 其它内置插件不受影响
-    assert by_name["git"].enabled is True
+    assert "git" not in by_name
     assert by_name["imagegen"].enabled is True
 
     store.set_enabled("websearch", True)
