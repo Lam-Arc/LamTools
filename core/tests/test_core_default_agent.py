@@ -420,7 +420,7 @@ async def test_enabled_plugin_command_is_catalogued_and_returns_validated_effect
         "plugin_id": "emotion-ball-pet",
     }]
 
-    await catalog.execute("plugin.disable", {"name": "emotion-ball-pet"})
+    await catalog.execute("plugin.system.disable", {"name": "emotion-ball-pet"})
     disabled = await catalog.execute("command.catalog", {})
     assert all(item["name"] != "pet" for item in disabled.payload["commands"])
 
@@ -1330,7 +1330,7 @@ async def test_core_plugin_operation_catalog_uses_user_and_project_roots(tmp_pat
     # 缺口 #3/D3：catalog 统一扫内置根——bundled 插件也在列表中
     names = {item["name"] for item in listed.payload["plugins"]}
     assert {"user-policy", "project-policy"} <= names
-    assert names >= {"emotion-ball-pet", "websearch"}
+    assert names >= {"user-policy", "project-policy"}
     assert (data_dir / "plugins.jsonc").exists()
     assert not (data_dir / "core-plugin-state.json").exists()
 

@@ -806,11 +806,36 @@ def create_core_agent_http_app(
         plugins = result.payload.get("plugins") if isinstance(result.payload, dict) else []
         if not isinstance(plugins, list):
             return []
+        merged = [item for item in plugins if isinstance(item, dict)]
+        # user:“桌宠还是旧插件”+新系统声明的窗口也进同一张桌面插件列表。
+        host = app_state.get("plugin_system_host")
+        if host is not None:
+            from lamtools_core.plugin_system.ui import assemble_ui
+
+            manifests = [item for item in host.discover() if item.assembly == "v2"]
+            for window in assemble_ui(manifests).windows:
+                manifest = next(
+                    (item for item in manifests if item.name == window.plugin),
+                    None,
+                )
+                if manifest is None:
+                    continue
+                merged.append(
+                    {
+                        "name": window.plugin,
+                        "enabled": manifest.enabled,
+                        "desktop": {
+                            "entry": str(window.entry),
+                            "title": window.title,
+                            "fileDrop": window.file_drop,
+                            "window": dict(window.window),
+                        },
+                    }
+                )
         return [
             item
-            for item in plugins
-            if isinstance(item, dict)
-            and isinstance(item.get("desktop"), dict)
+            for item in merged
+            if isinstance(item.get("desktop"), dict)
             and (not enabled_only or item.get("enabled") is True and item.get("available", True) is True)
         ]
 

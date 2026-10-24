@@ -1387,7 +1387,7 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert 'id="queuePreviewThird"' in html.text
         assert escaped.status_code == 404
 
-        (data_dir / "plugins.jsonc").write_text(
+        (data_dir / "plugin-system.jsonc").write_text(
             '{"plugins":{"emotion-ball-pet":{"enabled":false}}}',
             encoding="utf-8",
         )
@@ -1478,7 +1478,7 @@ def test_disabled_plugin_cannot_ensure_session(tmp_path: Path, isolated_config_r
     app = _desktop_session_test_app(tmp_path, isolated_config_root)
     data_dir = tmp_path / "core-data"
     with TestClient(app) as client:
-        (data_dir / "plugins.jsonc").write_text(
+        (data_dir / "plugin-system.jsonc").write_text(
             '{"plugins":{"emotion-ball-pet":{"enabled":false}}}',
             encoding="utf-8",
         )

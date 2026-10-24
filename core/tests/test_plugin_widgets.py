@@ -188,23 +188,21 @@ def test_component_widget_entry_must_stay_inside_plugin_root(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_bundled_websearch_widget_has_valid_snapshot(tmp_path: Path) -> None:
-    # websearch 默认关闭（清单 defaultEnabled=false），先显式启用再取快照。
-    state = PluginStateStore(tmp_path / "state.json")
-    state.set_enabled("websearch", True)
-    catalog = build_plugin_operation_catalog(
-        plugin_registry=PluginRegistry(plugin_roots=[bundled_plugins_dir()], state_store=state),
-        plugin_state_store=state,
-        hook_registry_factory=lambda: HookRegistry(),
-        hook_trust_store=HookTrustStore(tmp_path / "trust.json"),
-        work_root=tmp_path / "workspace",
-        data_dir=tmp_path / "data",
-    )
-    shown = await catalog.execute("plugin.widget.get", {"id": "websearch.engine"})
-    assert shown.status == "ok"
-    assert shown.payload["snapshot"]["schema_version"] == 1
-    assert shown.payload["snapshot"]["actions"] == [{"id": "test", "enabled": True}]
+async def test_bundled_websearch_snapshot_runs_as_a_v2_operation(tmp_path: Path) -> None:
+    # websearch 已迁到 v2：默认关闭，启用后快照操作可用。
+    from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
 
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path / "workspace",
+        plugin_roots=[bundled_plugins_dir()],
+    )
+    assert not catalog.has("websearch.widget.snapshot")
+    catalog.plugin_system_host.enable("websearch")
+    shown = await catalog.execute("websearch.widget.snapshot", {})
+    assert shown.status == "ok"
+    assert shown.payload["schema_version"] == 1
+    assert shown.payload["actions"] == [{"id": "test", "enabled": True}]
 
 def test_cli_parser_exposes_widget_commands() -> None:
     from lamtools_core.cli import build_parser, cmd_plugin_widget_action, cmd_plugin_widget_list, cmd_plugin_widget_show

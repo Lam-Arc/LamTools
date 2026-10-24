@@ -63,8 +63,8 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
         work_root=tmp_path,
         plugin_roots=[],
     )
-    # 旧注册表现在只剩桌宠和搜索，其余内置插件都归新系统。
-    assert {plugin.name for plugin in assembly["plugins"]} == {"emotion-ball-pet"}
+    # 所有内置插件都已归新系统，旧注册表不再发现它们。
+    assert assembly["plugins"] == []
     assert assembly["plugin_tool_groups"] == []
 
     host = PluginHost(
@@ -74,9 +74,13 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
     v2_names = {
         item.name for item in host.discover() if item.assembly == "v2" and item.enabled
     }
-    assert {"plan", "study", "workflow", "imagegen"} <= v2_names
-    # search 仍是旧插件，等右侧栏迁到 v2 之后再动。
+    assert {"plan", "study", "workflow", "imagegen", "emotion-ball-pet"} <= v2_names
+    # websearch 默认关闭，启用后才进装配。
     assert "websearch" not in v2_names
+    host.enable("websearch")
+    assert "websearch" in {
+        item.name for item in host.discover() if item.assembly == "v2" and item.enabled
+    }
 
 def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
@@ -201,33 +205,23 @@ def test_study_tools_are_scoped_to_the_study_mode(tmp_path):
 def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
     """默认装配包含基础工具和所有已启用内置插件的工具。
 
-    websearch 默认关闭，这里先启用，覆盖“启用后工具回到工具箱”。
+    websearch 声明默认关闭，这里先在 v2 状态里启用。
     """
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
     from lamtools_core.plugin_system.state import PluginStateStore as V2StateStore
-    from lamtools_core.plugins.registry import PluginStateStore
 
-    PluginStateStore(tmp_path / "data" / "plugins.jsonc").set_enabled("websearch", True)
     state_path = tmp_path / "data" / "plugin-system.jsonc"
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    V2StateStore(state_path)
+    V2StateStore(state_path).set_enabled("websearch", True)
     assembly = assemble_core_agent_plugins(
         data_dir=tmp_path / "data",
         work_root=tmp_path,
         plugin_roots=[],
     )
-    base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
-    plugin_specs: list = list(assembly["plugin_runtime_specs"])
-    for group in assembly["plugin_tool_groups"]:
-        plugin_specs.extend(
-            complete_plugin_tool_specs(
-                group["tools"],
-                plugin_name=group["name"],
-                plugin_root=group["root"],
-                base_specs_by_name=base_specs,
-            )
-        )
-    toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        plugin_tool_specs=list(assembly["plugin_runtime_specs"]),
+    )
     names = {spec.name for spec in toolbox.tool_specs()}
     # 20 个基础工具，加 Study、Workflow、管道校验、搜索和生图。
     assert len(names) == 33
@@ -349,23 +343,22 @@ async def test_websearch_config_get_migrates_legacy(tmp_path):
 
 def test_websearch_plugin_is_disabled_by_default(tmp_path):
     """搜索默认关闭：清单声明 defaultEnabled=false，插件页显式开关优先。"""
-    from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
+    from lamtools_core.plugin_system import PluginHost
 
-    state_path = tmp_path / "plugins.jsonc"
-    store = PluginStateStore(state_path)
-    registry = PluginRegistry(plugin_roots=[bundled_plugins_dir()], state_store=store)
+    host = PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "plugin-system.jsonc",
+    )
 
-    by_name = {plugin.name: plugin for plugin in registry.discover()}
+    by_name = {plugin.name: plugin for plugin in host.discover()}
     assert by_name["websearch"].enabled is False
-    assert by_name["emotion-ball-pet"].enabled is True
+    assert by_name["imagegen"].enabled is True
 
-    store.set_enabled("websearch", True)
-    by_name = {plugin.name: plugin for plugin in registry.discover()}
-    assert by_name["websearch"].enabled is True
+    host.enable("websearch")
+    assert {p.name: p for p in host.discover()}["websearch"].enabled is True
 
-    store.set_enabled("websearch", False)
-    by_name = {plugin.name: plugin for plugin in registry.discover()}
-    assert by_name["websearch"].enabled is False
+    host.disable("websearch")
+    assert {p.name: p for p in host.discover()}["websearch"].enabled is False
 
 def test_unsupported_search_kernel_does_not_break_the_toolbox(tmp_path, monkeypatch):
     """配置里写了不支持的内核名 → 工具箱照常装配（降级到内置默认内核）。

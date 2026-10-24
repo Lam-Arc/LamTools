@@ -91,6 +91,10 @@ class PluginWindowSpec:
     height: int = 620
     plugin: str = ""
     root: Path | None = None
+    #: Desktop host hints: drag/drop files onto the window.
+    file_drop: bool = False
+    #: Raw collapsed/expanded/card sizes for hosts that float the window.
+    window: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -311,6 +315,12 @@ def _parse_window(manifest: PluginManifest, raw: Any) -> PluginWindowSpec:
         height=_positive_int(manifest.name, raw.get("height"), key="height", default=620),
         plugin=manifest.name,
         root=manifest.root,
+        file_drop=bool(raw.get("fileDrop", False)),
+        window=(
+            {str(key): value for key, value in raw["window"].items()}
+            if isinstance(raw.get("window"), dict)
+            else {}
+        ),
     )
 
 
