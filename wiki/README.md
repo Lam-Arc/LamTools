@@ -104,6 +104,7 @@ Sunday 获得额外能力、长期知识和外部工具的四条途径。
 ### 插件机制
 
 - [插件](articles/plugins.md)
+- [插件案例](articles/plugin-cases.md)
 
 ### 内置插件
 
