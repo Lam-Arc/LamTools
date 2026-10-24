@@ -78,8 +78,8 @@ class PluginSystemRuntime:
     def __init__(self, host: PluginHost) -> None:
         self.host = host
 
-    def assemble(self) -> RuntimeArtifacts:
-        manifests = self.host.discover()
+    def assemble(self, manifests: list[Any] | None = None) -> RuntimeArtifacts:
+        manifests = self.host.discover() if manifests is None else manifests
         assembly = assemble_capabilities(manifests)
         artifacts = RuntimeArtifacts(errors=[*self.host.errors, *assembly.errors])
         artifacts.tools = [_tool_spec(tool) for tool in assembly.tools]
@@ -94,8 +94,9 @@ class PluginSystemRuntime:
         return artifacts
 
 
-    def agents(self) -> AgentAssembly:
-        return assemble_agents(self.host.discover())
+    def agents(self, manifests: list[Any] | None = None) -> AgentAssembly:
+        manifests = self.host.discover() if manifests is None else manifests
+        return assemble_agents(manifests)
 
     def agent_plan(
         self,
