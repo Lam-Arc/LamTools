@@ -516,15 +516,16 @@ class TestNoGlobalDefaultModel:
             ms.resolve_scene_model(ms.SCENE_CHAT)
 
     def test_plugin_scene_mapping_never_defaults_to_chat(self):
-        study = SimpleNamespace(name="study", raw={})
-        pet = SimpleNamespace(name="emotion-ball-pet", raw={})
+        # 场景只看清单声明，名字不再决定归属。
+        study = SimpleNamespace(name="study", raw={"model_scene": "study"})
+        pet = SimpleNamespace(name="emotion-ball-pet", raw={"model_scene": "desktop_pet"})
         other = SimpleNamespace(name="some-plugin", raw={})
-        declared = SimpleNamespace(name="some-plugin", raw={"model_scene": "study"})
+        legacy_name = SimpleNamespace(name="study", raw={})
 
         assert ms.scene_for_plugin(study) == ms.SCENE_STUDY
         assert ms.scene_for_plugin(pet) == ms.SCENE_DESKTOP_PET
         assert ms.scene_for_plugin(other) == ms.SCENE_BACKGROUND
-        assert ms.scene_for_plugin(declared) == ms.SCENE_STUDY
+        assert ms.scene_for_plugin(legacy_name) == ms.SCENE_BACKGROUND
 
     @pytest.mark.asyncio
     async def test_plugin_scene_view_keeps_late_bound_catalog_and_own_model(self, isolated_config_root: Path):

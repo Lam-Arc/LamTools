@@ -94,13 +94,9 @@ def scene_for_plugin(plugin: Any = None, *, name: str = "") -> str:
         declared = str(raw.get("model_scene") or "").strip().lower()
         if declared in SCENES:
             return declared
-    if not name:
-        name = str(getattr(plugin, "name", "") or getattr(plugin, "id", "") or "")
-    lowered = name.strip().lower()
-    if lowered.startswith("study"):
-        return SCENE_STUDY
-    if "pet" in lowered or lowered.startswith("emotion"):
-        return SCENE_DESKTOP_PET
+    # user:“study 和 workflow 不再有硬编码特例”+场景由清单声明，
+    # 没声明的一律落到后台，绝不落到对话。
+    del name
     return SCENE_BACKGROUND
 
 
