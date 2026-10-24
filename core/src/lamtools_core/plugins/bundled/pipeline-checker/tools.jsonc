@@ -1,0 +1,24 @@
+{
+  "tools": [
+    {
+      "name": "check_exports",
+      "description": "Compare a host module with the replacement file a plugin uses to override it. Returns the exports that are missing, plus extras. Static analysis only; nothing is imported.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Host module name, for example lamtools_core.app.base_agent"
+          },
+          "replacement": {
+            "type": "string",
+            "description": "Absolute path to the replacement .py file"
+          }
+        },
+        "required": ["target", "replacement"]
+      },
+      "permission": "auto_allow",
+      "handler": "tools:check_exports"
+    }
+  ]
+}

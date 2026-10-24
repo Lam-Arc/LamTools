@@ -1,0 +1,21 @@
+{
+  "name": "pipeline-checker",
+  "version": "0.1.0",
+  "description": "管线校验：比对原模块与插件替换文件，列出缺失和多出来的导出",
+  "assembly": "v2",
+  "tools": ["./tools.jsonc"],
+  "ui": {
+    "regions": [
+      {
+        "region": "settings",
+        "order": 90,
+        "blocks": [
+          {
+            "type": "text",
+            "text": "覆盖宿主模块之后，先跑一次 check_exports，确认接管文件没有少导出。"
+          }
+        ]
+      }
+    ]
+  }
+}
