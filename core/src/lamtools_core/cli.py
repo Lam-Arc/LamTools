@@ -712,7 +712,7 @@ async def run_core_cli_task(
 
         host = PluginHost(
             roots=default_plugin_roots(work_root),
-            state_path=core_db_path.parent / "plugin-system.jsonc",
+            state_path=run_dir / "plugin-system.jsonc",
         )
         profile_spec = resolve_profile(host.discover(), options.profile)
         # user:“运行档声明模型场景”+场景解析提前到模型配置装载之前。
