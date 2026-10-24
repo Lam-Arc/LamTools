@@ -1,0 +1,22 @@
+{
+  "name": "bili-scroll",
+  "version": "0.1.0",
+  "description": "每天替你刷一轮 B站：搜视频、读字幕判价值、写日报；复刻自 dsh-bili-scroll（MIT）",
+  "scope": "global",
+  "defaultEnabled": true,
+  "skills": ["./skills"],
+  "tools": ["./tools/tools.jsonc"],
+  "operations": ["./operations.jsonc"],
+  "commands": [
+    {
+      "name": "bili-duty",
+      "title": "刷B站：取今日值班参数",
+      "description": "返回今天的关键词、挑选限额、判重状态与日报位置，开始一轮值班",
+      "operation": "bili-scroll.duty.brief"
+    }
+  ],
+  "config": {
+    "schema": "./config/schema.jsonc"
+  },
+  "dependencies": ["httpx"]
+}

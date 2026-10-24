@@ -1,0 +1,14 @@
+{
+  "operations": [
+    {
+      "name": "bili-scroll.duty.brief",
+      "description": "今日值班参数：关键词、挑选限额、判重表近况、日报位置与登录状态",
+      "handler": "ops:duty_brief"
+    },
+    {
+      "name": "bili-scroll.reports.list",
+      "description": "列出已经写出的日报文件",
+      "handler": "ops:reports_list"
+    }
+  ]
+}

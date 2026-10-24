@@ -1,0 +1,55 @@
+{
+  "type": "object",
+  "properties": {
+    "keywords": {
+      "type": "array",
+      "title": "关注关键词",
+      "description": "每轮值班按这些词搜最近几天的视频；留空则自己在值班时提关键词",
+      "items": { "type": "string" },
+      "default": ["DeepSeek", "本地模型", "AI 工作流"]
+    },
+    "per_day": {
+      "type": "integer",
+      "title": "每天最多挑几条",
+      "description": "写进日报的条数上限；0 = 只手动跑",
+      "default": 5
+    },
+    "report_level": {
+      "type": "string",
+      "title": "日报写多细",
+      "enum": ["full", "brief", "off"],
+      "default": "full",
+      "description": "完整 = 为什么值得 + 一句话；薄版 = 值不值 + 链接；off = 只记判重表"
+    },
+    "auto_comment": {
+      "type": "boolean",
+      "title": "自动评论并 @ 我",
+      "default": false,
+      "description": "这是拿你的账号说话：打开后每轮才允许发评论，同一视频只发一次"
+    },
+    "mention_name": {
+      "type": "string",
+      "title": "要 @ 的人（昵称）",
+      "default": "",
+      "description": "评论里 @ 谁；留空则评论不带 @"
+    },
+    "comment_per_round": {
+      "type": "integer",
+      "title": "每轮最多发几条评论",
+      "default": 1,
+      "description": "上限 20；默认 1 条"
+    },
+    "sessdata": {
+      "type": "string",
+      "title": "SESSDATA（浏览器 Cookie）",
+      "default": "",
+      "description": "读 AI 字幕、发评论需要；以明文存在本机插件数据目录，介意则不填（只影响字幕与评论）"
+    },
+    "bili_jct": {
+      "type": "string",
+      "title": "bili_jct（浏览器 Cookie，发评论用）",
+      "default": "",
+      "description": "同一份 Cookie 里的 csrf 值；只发评论时需要"
+    }
+  }
+}

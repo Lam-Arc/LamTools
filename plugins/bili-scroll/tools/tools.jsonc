@@ -1,0 +1,117 @@
+{
+  "tools": [
+    {
+      "name": "bili_search",
+      "description": "按关键词搜索 B站 近几天的视频，返回 BV号、标题、UP主、时长与简介。值班轮用它找候选。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "keyword": { "type": "string", "description": "搜索关键词" },
+          "days": { "type": "integer", "description": "只看最近几天发布的，默认 3，最大 14" }
+        },
+        "required": ["keyword"]
+      },
+      "permission": "auto_allow",
+      "handler": "bili:bili_search",
+      "timeout": 20
+    },
+    {
+      "name": "bili_video_info",
+      "description": "读一条 B站 视频的完整信息：标题、简介、UP主、时长、播放/评论数、封面地址。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bvid": { "type": "string", "description": "BV 号，如 BV1d8pU6xEZX" }
+        },
+        "required": ["bvid"]
+      },
+      "permission": "auto_allow",
+      "handler": "bili:bili_video_info",
+      "timeout": 20
+    },
+    {
+      "name": "bili_subtitles",
+      "description": "读一条 B站 视频的字幕原文（逐句拼接）。B站 AI 字幕需要登录态：未配置 Cookie 时返回可读的说明而不是编造内容。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bvid": { "type": "string", "description": "BV 号" }
+        },
+        "required": ["bvid"]
+      },
+      "permission": "auto_allow",
+      "handler": "bili:bili_subtitles",
+      "timeout": 30
+    },
+    {
+      "name": "bili_comments",
+      "description": "读一条 B站 视频的热门评论（按热度排序，前 20 条）。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bvid": { "type": "string", "description": "BV 号" }
+        },
+        "required": ["bvid"]
+      },
+      "permission": "auto_allow",
+      "handler": "bili:bili_comments",
+      "timeout": 20
+    },
+    {
+      "name": "bili_save_report",
+      "description": "把一条视频的评估写进今天的日报（data/out/<日期>.md），段首固定为 \"### BV号\"。路径固定，不接受路径参数。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bvid": { "type": "string", "description": "BV 号，作为这一节的标题" },
+          "text": { "type": "string", "description": "这一节的正文：为什么值得 + 一句话介绍" }
+        },
+        "required": ["bvid", "text"]
+      },
+      "permission": "auto_allow",
+      "handler": "bili:bili_save_report",
+      "timeout": 10
+    },
+    {
+      "name": "bili_dedup",
+      "description": "判重表：action=\"list\" 看最近记了哪些视频（先看再挑，别重复评估）；action=\"mark\" 记一条（status = 挑了 / 跳过 / 评论）。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["list", "mark"] },
+          "bvid": { "type": "string" },
+          "title": { "type": "string" },
+          "up": { "type": "string" },
+          "status": { "type": "string", "enum": ["picked", "skipped", "commented"] }
+        },
+        "required": ["action"]
+      },
+      "permission": "auto_allow",
+      "handler": "bili:bili_dedup",
+      "timeout": 10
+    },
+    {
+      "name": "bili_post_comment",
+      "description": "在一条 B站 视频下发一条评论（同一视频只发一次，受设置里的开关与每轮限额约束）。需要登录凭证；需要用户确认。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bvid": { "type": "string", "description": "BV 号" },
+          "content": { "type": "string", "description": "评论正文；配置了 @ 对象时要 @ 到人" }
+        },
+        "required": ["bvid", "content"]
+      },
+      "permission": "ask_user",
+      "handler": "bili:bili_post_comment",
+      "timeout": 20
+    },
+    {
+      "name": "bili_account_status",
+      "description": "查当前 B站 登录状态：已登录返回用户名，未登录如实返回。值班开始前看一眼，决定能不能读字幕、能不能发评论。",
+      "input_schema": { "type": "object", "properties": {} },
+      "permission": "auto_allow",
+      "handler": "bili:bili_account_status",
+      "timeout": 15
+    }
+  ]
+}
