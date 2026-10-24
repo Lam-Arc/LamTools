@@ -21,6 +21,8 @@ OperationExecutor = Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[An
 PLUGIN_INSTALL_TOOL = "plugin_install"
 PLUGIN_DEPS_TOOL = "plugin_deps"
 PLUGIN_LIST_TOOL = "plugin_list"
+PLUGIN_CONFIG_TOOL = "plugin_config"
+PLUGIN_CONFIG_SAVE_TOOL = "plugin_config_save"
 
 
 def _args(call: ToolCall) -> dict[str, Any]:
@@ -106,6 +108,43 @@ def plugin_manager_tool_specs() -> list[ToolSpec]:
             permission=AUTO_ALLOW,
             metadata={"category": "plugin"},
         ),
+        ToolSpec(
+            name=PLUGIN_CONFIG_TOOL,
+            description=(
+                "Read one plugin's settings: current values, schema and the exact config file "
+                "path the runtime reads. This is the authoritative location — never write "
+                "config files by hand. Read-only; use plugin_config_save to change settings."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Plugin name"},
+                },
+                "required": ["name"],
+            },
+            permission=AUTO_ALLOW,
+            metadata={"category": "plugin"},
+        ),
+        ToolSpec(
+            name=PLUGIN_CONFIG_SAVE_TOOL,
+            description=(
+                "Save one plugin's settings (the full config object replaces the saved one). "
+                "Requires user confirmation. Use plugin_config first to read current values."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Plugin name"},
+                    "config": {
+                        "type": "object",
+                        "description": "Complete config object to save (merged by you from the current values)",
+                    },
+                },
+                "required": ["name", "config"],
+            },
+            permission=ASK_USER,
+            metadata={"category": "plugin"},
+        ),
     ]
 
 
@@ -141,10 +180,34 @@ def plugin_manager_tool_handlers(
         outcome = await execute_operation("plugin.list", {}, _operation_metadata(call))
         return _from_operation(call, outcome, default_error="plugin list failed")
 
+    async def plugin_config(call: ToolCall) -> ToolResult:
+        args = _args(call)
+        outcome = await execute_operation(
+            "plugin.system.config.get",
+            {"name": str(args.get("name") or "").strip()},
+            _operation_metadata(call),
+        )
+        return _from_operation(call, outcome, default_error="plugin config read failed")
+
+    async def plugin_config_save(call: ToolCall) -> ToolResult:
+        args = _args(call)
+        config = args.get("config")
+        outcome = await execute_operation(
+            "plugin.system.config.update",
+            {
+                "name": str(args.get("name") or "").strip(),
+                "config": config if isinstance(config, dict) else {},
+            },
+            _operation_metadata(call),
+        )
+        return _from_operation(call, outcome, default_error="plugin config save failed")
+
     return {
         PLUGIN_INSTALL_TOOL: plugin_install,
         PLUGIN_DEPS_TOOL: plugin_deps,
         PLUGIN_LIST_TOOL: plugin_list,
+        PLUGIN_CONFIG_TOOL: plugin_config,
+        PLUGIN_CONFIG_SAVE_TOOL: plugin_config_save,
     }
 
 

@@ -14,6 +14,7 @@ from lamtools_core.app import OperationCatalog, OperationRequest, OperationResul
 from .agent import assemble_agents, resolve_agent_plan
 from .capabilities import CapabilityError, assemble_capabilities
 from .config_store import (
+    config_path,
     read_config_values,
     read_schema,
     validate_config,
@@ -292,13 +293,15 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
         # user:“内置插件配置走共享数据目录”+打包态 bundled 目录只读，
         # 值落在 {data_dir}/plugins/<name>.jsonc（与核心读取方同一处）。
         from .paths import bundled_plugins_dir
-        from .plugin_data import read_plugin_config
+        from .plugin_data import plugin_config_path, read_plugin_config
 
         data_dir = Path(host.state.path).parent
         if manifest.root.parent == bundled_plugins_dir().resolve():
             values = read_plugin_config(data_dir, name)
+            config_file = plugin_config_path(data_dir, name)
         else:
             values = read_config_values(manifest)
+            config_file = config_path(manifest)
         return OperationResult(
             name=request.name,
             payload={
@@ -306,6 +309,9 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                 "version": manifest.version,
                 "description": manifest.description,
                 "config": values,
+                # user:“缺一个方式告诉模型配置在哪”+路径随读取一起返回，
+                # agent 不必再猜副本位置。
+                "path": str(config_file),
                 "schema": read_schema(manifest, spec),
                 "has_schema": spec.schema is not None,
                 # user:“每一个插件都应该有配置面板”+自定义面板按插件自己的脚本
