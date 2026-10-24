@@ -1,6 +1,6 @@
 {
   "name": "bili-scroll",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "每天替你刷一轮 B站：搜视频、读字幕判价值、写日报；复刻自 dsh-bili-scroll（MIT）",
   "scope": "global",
   "defaultEnabled": true,
@@ -26,5 +26,29 @@
   },
   "dependencies": [
     "httpx"
-  ]
+  ],
+  "profiles": {
+    "duty": {
+      "title": "值班轮",
+      "tools": [
+        "bili_brief",
+        "bili_search",
+        "bili_video_info",
+        "bili_subtitles",
+        "bili_comments",
+        "bili_save_report",
+        "bili_dedup",
+        "bili_post_comment",
+        "bili_account_status",
+        "bili_send_dm",
+        "bili_dm_inbox"
+      ],
+      "approval": "auto",
+      "modelScene": "background",
+      "budget": {
+        "maxToolCalls": 120,
+        "maxTokens": 300000
+      }
+    }
+  }
 }

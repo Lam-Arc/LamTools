@@ -574,6 +574,7 @@ class KernelSubAgentRunner:
         parent_call_id: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
+        profile_spec: Any | None = None,
         allowed_tools: list[str] | None = None,
         execution_context: Any | None = None,
         late_context: str = "",
@@ -599,6 +600,7 @@ class KernelSubAgentRunner:
                 parent_run_id=parent_run_id,
                 parent_turn_id=parent_turn_id,
                 allowed_tools=allowed_tools,
+                profile_spec=profile_spec,
                 execution_context=execution_context,
                 late_context=late_context,
                 guidance_source=guidance_source,
@@ -621,6 +623,7 @@ class KernelSubAgentRunner:
         parent_call_id: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
+        profile_spec: Any | None = None,
         allowed_tools: list[str] | None = None,
         execution_context: Any | None = None,
         late_context: str = "",
@@ -643,9 +646,26 @@ class KernelSubAgentRunner:
             else self.reasoning_level
         )
         effective_mode = self._resolve_mode(mode)
+        if profile_spec is not None and getattr(profile_spec, "model_scene", ""):
+            # user:“运行档声明模型场景”+无人值守的模型由运行档决定，调用方不可加宽。
+            from lamtools_core.config.model_selection import ModelResolutionError, resolve_scene_model
+
+            try:
+                effective_model = resolve_scene_model(profile_spec.model_scene).model_id
+            except ModelResolutionError as exc:
+                raise RuntimeError(
+                    f"profile '{profile_spec.full_name}' model scene '{profile_spec.model_scene}' has no model: {exc}"
+                ) from exc
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = self._disabled_tools()
-        if allowed_tools:
+        if profile_spec is not None:
+            # user:“运行档由宿主强制”+白名单以声明为准（覆盖调用方传入的
+            # allowed_tools），配合 apply_profile 的 fail closed 执行拒绝。
+            allowed = set(profile_spec.tools)
+            probe = self._build_toolbox(disabled_tools, active_mode=effective_mode)
+            full_names = {spec.name for spec in probe.tool_specs()}
+            disabled_tools |= full_names - allowed
+        elif allowed_tools:
             allowed = {str(name).strip() for name in allowed_tools if str(name).strip()}
             if allowed:
                 # An explicit tool allow-list: disable everything else.  The
@@ -656,6 +676,11 @@ class KernelSubAgentRunner:
                 full_names = {spec.name for spec in probe.tool_specs()}
                 disabled_tools |= full_names - allowed
         toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode)
+        if profile_spec is not None:
+            # 宿主强制：白名单可见面 + execute 拒绝 + 审批覆盖 + 预算计数。
+            from lamtools_core.plugin_system.profiles import apply_profile
+
+            apply_profile(toolbox, profile_spec)
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
             parent_sink=self.parent_event_sink,

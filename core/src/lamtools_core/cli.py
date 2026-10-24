@@ -705,6 +705,21 @@ async def run_core_cli_task(
     run_dir.mkdir(parents=True, exist_ok=True)
     work_root.mkdir(parents=True, exist_ok=True)
 
+    profile_spec = None
+    if getattr(options, "profile", ""):
+        from lamtools_core.plugin_system import PluginHost, resolve_profile
+        from lamtools_core.plugin_system.paths import default_plugin_roots
+
+        host = PluginHost(
+            roots=default_plugin_roots(work_root),
+            state_path=core_db_path.parent / "plugin-system.jsonc",
+        )
+        profile_spec = resolve_profile(host.discover(), options.profile)
+        # user:“运行档声明模型场景”+场景解析提前到模型配置装载之前。
+        if profile_spec.model_scene and not resolved_model_id:
+            from lamtools_core.config.model_selection import resolve_scene_model
+
+            resolved_model_id = resolve_scene_model(profile_spec.model_scene).model_id
     resolved_model_id = options.model_id
     context_window_tokens: int | None = None
     max_output_tokens = options.max_tokens
@@ -973,6 +988,11 @@ async def run_core_cli_task(
         artifact_store=getattr(core_db, "artifact_store", None),
         plugin_mode_exclusive_tools=plugin_assembly.get("plugin_mode_exclusive_tools") or {},
     )
+    # user:“运行档由宿主强制”+白名单可见面、execute 拒绝、审批覆盖、预算计数。
+    if profile_spec is not None:
+        from lamtools_core.plugin_system.profiles import apply_profile
+
+        apply_profile(toolbox, profile_spec)
     kit = CoreBaseAgentKit(
         work_root=work_root,
         config=CoreBaseAgentConfig(
@@ -1393,6 +1413,31 @@ def build_parser(
 
     run_local = sub.add_parser("run-local", help="Run a Sunday task directly without a server")
     run_local.add_argument("message", nargs="+")
+    run_local.add_argument("--profile", default="", help="Run under a declared run profile (plugin:profile or unique short name)")
+
+    profile_list = sub.add_parser("profile-list", help="List declared run profiles and their tool whitelists")
+    profile_list.add_argument("--work-root", default="", help="Project root for plugin discovery")
+
+    async def cmd_profile_list(args: argparse.Namespace) -> int:
+        from lamtools_core.plugin_system import PluginHost, available_profiles
+        from lamtools_core.plugin_system.paths import default_plugin_roots
+
+        work_root = args.work_root or str(_default_work_root())
+        host = PluginHost(
+            roots=default_plugin_roots(work_root),
+            state_path=_default_cli_plugin_state_path(),
+        )
+        specs = available_profiles(host.discover())
+        if not specs:
+            print("no run profiles declared")
+            return 0
+        for spec in sorted(specs, key=lambda item: item.full_name):
+            print(f"{spec.full_name}  [{spec.approval}]  {spec.title}")
+            for name in spec.tools:
+                print(f"  - {name}")
+        return 0
+
+    profile_list.set_defaults(func=cmd_profile_list)
     run_local.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
     run_local.add_argument("--thread-id", default="", help="Stable Core thread/session id")
     run_local.add_argument("--work-root", "--project", dest="work_root", default="")
@@ -3815,6 +3860,7 @@ async def cmd_run_local(args: argparse.Namespace) -> int:
     options = CoreCliRunOptions(
         message=" ".join(args.message),
         model_id=args.model_id or "",
+        profile=getattr(args, "profile", "") or "",
         work_root=args.work_root or _default_work_root(),
         run_dir=args.run_dir or None,
         core_db=args.core_db or None,

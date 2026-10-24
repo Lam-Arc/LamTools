@@ -73,6 +73,7 @@ from .overrides import (
     override_paths,
     read_overrides,
 )
+from .profiles import BudgetExhausted, ProfileBudget, ProfileSpec, apply_profile, available_profiles, read_profiles, resolve_profile
 from .paths import (
     bundled_plugins_dir,
     core_plugins_root,
@@ -125,6 +126,13 @@ __all__ = [
     "PluginSkillSpec",
     "PluginContext",
     "PluginHost",
+    "BudgetExhausted",
+    "ProfileBudget",
+    "ProfileSpec",
+    "apply_profile",
+    "available_profiles",
+    "read_profiles",
+    "resolve_profile",
     "shared_host",
     "PluginManifest",
     "PluginManifestError",
