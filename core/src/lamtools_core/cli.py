@@ -124,6 +124,12 @@ def _get_model_store() -> ModelStore:
 class CoreCliRunOptions:
     message: str
     model_id: str = ""
+    profile: str = ""
+    profile_tools: str = ""
+    profile_approval: str = ""
+    profile_budget_calls: int | None = None
+    profile_budget_tokens: int | None = None
+    profile_mode: str = ""
     work_root: Path | str = "."
     run_dir: Path | str | None = None
     core_db: Path | str | None = None
@@ -720,6 +726,47 @@ async def run_core_cli_task(
             from lamtools_core.config.model_selection import resolve_scene_model
 
             resolved_model_id = resolve_scene_model(profile_spec.model_scene).model_id
+    # user:"profile 支持后续参数与 CLI 即席定义"+声明档为基础，CLI 参数覆盖；
+    # --tools 即席构造（无需声明档）；--mode 走既有 active_mode 机制收窄（两者相交）。
+    has_cli_override = bool(
+        options.profile_tools
+        or options.profile_approval
+        or options.profile_budget_calls is not None
+        or options.profile_budget_tokens is not None
+    )
+    if options.profile_tools or has_cli_override or profile_spec is not None:
+        from lamtools_core.plugin_system.profiles import ProfileBudget, ProfileSpec
+
+        base = profile_spec
+        tools = (
+            tuple(item.strip() for item in options.profile_tools.split(",") if item.strip())
+            if options.profile_tools
+            else (base.tools if base is not None else ())
+        )
+        if tools or base is not None:
+            approval = options.profile_approval or (base.approval if base is not None else "auto")
+            budget = ProfileBudget(
+                max_tool_calls=(
+                    options.profile_budget_calls
+                    if options.profile_budget_calls is not None
+                    else (base.budget.max_tool_calls if base is not None else None)
+                ),
+                max_tokens=(
+                    options.profile_budget_tokens
+                    if options.profile_budget_tokens is not None
+                    else (base.budget.max_tokens if base is not None else None)
+                ),
+            )
+            profile_spec = ProfileSpec(
+                full_name=(base.full_name if base is not None else "cli:adhoc"),
+                plugin=(base.plugin if base is not None else "cli"),
+                profile=(base.profile if base is not None else "adhoc"),
+                title=(base.title if base is not None else "CLI ad-hoc run profile"),
+                tools=tools,
+                approval=approval,
+                model_scene=(base.model_scene if base is not None else ""),
+                budget=budget,
+            )
     resolved_model_id = options.model_id
     context_window_tokens: int | None = None
     max_output_tokens = options.max_tokens
@@ -1414,6 +1461,11 @@ def build_parser(
     run_local = sub.add_parser("run-local", help="Run a Sunday task directly without a server")
     run_local.add_argument("message", nargs="+")
     run_local.add_argument("--profile", default="", help="Run under a declared run profile (plugin:profile or unique short name)")
+    run_local.add_argument("--tools", default="", help="Comma-separated tool whitelist; defines the run surface without a declared profile")
+    run_local.add_argument("--mode", dest="profile_mode", default="", help="Use an already-declared mode's tool group as the run surface")
+    run_local.add_argument("--profile-approval", choices=("auto", "ask"), default=None, help="Unattended approval semantics under the profile (default auto)")
+    run_local.add_argument("--profile-budget-calls", type=int, default=None, help="Max tool calls under the profile")
+    run_local.add_argument("--profile-budget-tokens", type=int, default=None, help="Max tokens under the profile")
 
     profile_list = sub.add_parser("profile-list", help="List declared run profiles and their tool whitelists")
     profile_list.add_argument("--work-root", default="", help="Project root for plugin discovery")
@@ -3861,6 +3913,12 @@ async def cmd_run_local(args: argparse.Namespace) -> int:
         message=" ".join(args.message),
         model_id=args.model_id or "",
         profile=getattr(args, "profile", "") or "",
+        profile_tools=str(getattr(args, "tools", "") or ""),
+        profile_approval=getattr(args, "profile_approval", None) or "",
+        profile_budget_calls=getattr(args, "profile_budget_calls", None),
+        profile_budget_tokens=getattr(args, "profile_budget_tokens", None),
+        profile_mode=getattr(args, "profile_mode", "") or "",
+        active_mode=getattr(args, "profile_mode", "") or "",
         work_root=args.work_root or _default_work_root(),
         run_dir=args.run_dir or None,
         core_db=args.core_db or None,
