@@ -7,8 +7,8 @@ import sys
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from functools import lru_cache
 from pathlib import Path
+from functools import lru_cache
 from typing import Any, Mapping
 from copy import deepcopy
 
@@ -1967,6 +1967,46 @@ def assemble_core_agent_plugins(
         for item in v2_artifacts.context
     ]
     plugin_v2_commands = list(v2_artifacts.commands)
+    # user:“注册到模式切换，类似 study 和 workflow”+v2 模式沿用同一套
+    # 模式工具表和独占规则，技能作用域也从清单的 skillModes 接进来。
+    from lamtools_core.plugin_system.ui import assemble_ui
+
+    v2_ui = assemble_ui([item for item in v2_manifests if item.enabled])
+    v2_mode_ids: dict[str, list[str]] = {}
+    for mode in v2_ui.modes:
+        full_mode_id = f"{mode.plugin}:{mode.id}"
+        if mode.tools:
+            plugin_mode_tool_sets[full_mode_id] = set(mode.tools)
+        v2_mode_ids.setdefault(mode.id, []).append(full_mode_id)
+        if not mode.exclusive_tools:
+            continue
+        owned = {
+            spec.name
+            for spec in v2_artifacts.tools
+            if spec.metadata.get("plugin") == mode.plugin
+        }
+        exclusive = owned & set(mode.tools)
+        if exclusive:
+            plugin_mode_exclusive_tools.setdefault(full_mode_id, set()).update(exclusive)
+    for mode_id, full_ids in v2_mode_ids.items():
+        if len(full_ids) != 1:
+            continue
+        if full_ids[0] in plugin_mode_tool_sets:
+            plugin_mode_tool_sets[mode_id] = set(plugin_mode_tool_sets[full_ids[0]])
+        if full_ids[0] in plugin_mode_exclusive_tools:
+            plugin_mode_exclusive_tools.setdefault(mode_id, set()).update(
+                plugin_mode_exclusive_tools[full_ids[0]]
+            )
+    for manifest in v2_manifests:
+        if not manifest.enabled:
+            continue
+        declared_modes = manifest.raw.get("skillModes")
+        if not isinstance(declared_modes, dict):
+            continue
+        for raw_root, modes in declared_modes.items():
+            root = (manifest.root / str(raw_root)[2:]).resolve() if str(raw_root).startswith("./") else (manifest.root / str(raw_root)).resolve()
+            if root.exists() and isinstance(modes, list):
+                skill_modes[root] = tuple(str(item) for item in modes)
 
     hook_registry = HookRegistry(
         project_root=work_root,

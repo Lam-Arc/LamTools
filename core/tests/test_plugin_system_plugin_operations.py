@@ -99,6 +99,24 @@ async def test_disabling_the_plugin_hides_its_operation(tmp_path: Path) -> None:
         await catalog.execute("demo.hello", {})
 
 
+async def test_a_plugin_enabled_later_exposes_its_operation(tmp_path: Path) -> None:
+    root = tmp_path / "plugins"
+    make_plugin(root, "demo")
+    state = tmp_path / "data" / "plugin-system.jsonc"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    from lamtools_core.plugin_system.state import PluginStateStore
+
+    PluginStateStore(state).set_enabled("demo", False)
+    catalog, host = make_catalog(tmp_path, root)
+
+    assert "demo.hello" in catalog.registered()
+    assert catalog.has("demo.hello") is False
+    host.enable("demo")
+    assert catalog.has("demo.hello") is True
+    result = await catalog.execute("demo.hello", {})
+    assert result.status == "ok"
+
+
 async def test_duplicate_operation_names_are_refused_not_overwritten(tmp_path: Path) -> None:
     root = tmp_path / "plugins"
     make_plugin(root, "alpha")

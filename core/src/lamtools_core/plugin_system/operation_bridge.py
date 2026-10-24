@@ -117,11 +117,16 @@ def read_operations(manifest: PluginManifest) -> list[PluginOperationSpec]:
     return specs
 
 
-def assemble_operations(manifests: list[PluginManifest]) -> OperationAssembly:
+def assemble_operations(
+    manifests: list[PluginManifest],
+    *,
+    include_disabled: bool = False,
+) -> OperationAssembly:
+    """Collect declarations; the catalog can mount disabled ones behind a guard."""
     assembly = OperationAssembly()
     seen: dict[str, str] = {}
     for manifest in manifests:
-        if not manifest.enabled:
+        if not manifest.enabled and not include_disabled:
             continue
         try:
             specs = read_operations(manifest)
@@ -247,7 +252,9 @@ def build_handler(spec: PluginOperationSpec, host: PluginHost):
 def register_plugin_operations(catalog: Any, host: PluginHost) -> OperationAssembly:
     """Mount every enabled v2 plugin operation behind its own availability guard."""
     manifests = [item for item in host.discover() if item.assembly == "v2"]
-    assembly = assemble_operations(manifests)
+    # Disabled plugins stay mounted behind the availability guard so a live
+    # enable transition exposes them without rebuilding the catalog.
+    assembly = assemble_operations(manifests, include_disabled=True)
     if assembly.errors:
         errors = getattr(catalog, "plugin_operation_errors", None)
         if isinstance(errors, list):
