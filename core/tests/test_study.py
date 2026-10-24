@@ -519,8 +519,8 @@ async def test_plugin_mounts_and_fixed_session_has_no_project(tmp_path):
     assert record.title == '知识图谱'
     assert record.metadata['owner_plugin'] == 'study'
     assert not record.metadata.get('project_id') and not record.metadata.get('work_root')
-    handles = catalog.plugin_runtimes
-    handle = next(h for h in handles if h.plugin.name == 'study')
+    handle = context.service('plugin.v2_runtime_manager').get('study')
+    assert handle is not None
     assert set(handle.tool_handlers) == {'get_knowledge_net', 'build_knowledge_net', 'exam', 'sign', 'notes'}
     from lamtools_core.tool import ToolCall
     reply = await handle.tool_handlers['get_knowledge_net'](ToolCall(id='read', name='get_knowledge_net', arguments={}))
@@ -560,10 +560,14 @@ async def test_plugin_mounts_and_fixed_session_has_no_project(tmp_path):
     ))
     assert blocked.status == 'failed'
     assert 'NOTE_REGION_LOCKED' in blocked.error
-    ui = await catalog.execute('plugin.ui.list', {})
-    descriptor = next(mode for mode in ui.payload['modes'] if mode['pluginId'] == 'study')
-    assert descriptor['id'] == 'study'
-    assert {'read_file', 'web_search', 'web_fetch', 'exam', 'sign'} <= set(descriptor['tools'])
+    from lamtools_core.plugin_system.ui import assemble_ui
+
+    descriptors = assemble_ui(
+        [item for item in catalog.plugin_system_host.discover() if item.assembly == 'v2']
+    ).modes
+    descriptor = next(mode for mode in descriptors if mode.plugin == 'study')
+    assert descriptor.id == 'study'
+    assert {'read_file', 'web_search', 'web_fetch', 'exam', 'sign'} <= set(descriptor.tools)
 
 
 @pytest.mark.asyncio
@@ -1099,14 +1103,15 @@ async def test_study_v3_reference_is_readable_through_real_load_skill_tool(tmp_p
         plugin_skill_modes=assembly['skill_modes'],
     )
     base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
-    plugin_specs = [
+    plugin_specs = list(assembly['plugin_runtime_specs'])
+    plugin_specs.extend(
         spec
         for group in assembly['plugin_tool_groups']
         for spec in complete_plugin_tool_specs(
             group['tools'], plugin_name=group['name'], plugin_root=group['root'],
             base_specs_by_name=base_specs,
         )
-    ]
+    )
     toolbox = build_core_toolbox(
         work_root=tmp_path,
         active_mode='study:study',
@@ -1152,14 +1157,15 @@ async def test_study_teach_group_members_load_by_name_and_expose_their_reference
         plugin_skill_modes=assembly['skill_modes'],
     )
     base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
-    plugin_specs = [
+    plugin_specs = list(assembly['plugin_runtime_specs'])
+    plugin_specs.extend(
         spec
         for group in assembly['plugin_tool_groups']
         for spec in complete_plugin_tool_specs(
             group['tools'], plugin_name=group['name'], plugin_root=group['root'],
             base_specs_by_name=base_specs,
         )
-    ]
+    )
     toolbox = build_core_toolbox(
         work_root=tmp_path,
         active_mode='study:study',
@@ -1204,12 +1210,26 @@ async def test_study_prompt_replaces_project_workflow_but_keeps_tool_protocol(tm
     work_root = tmp_path / 'work'
     work_root.mkdir()
     (work_root / 'AGENTS.md').write_text('PROJECT_WORKFLOW_MUST_NOT_LEAK', encoding='utf-8')
+    from lamtools_core.plugin_system.agent import PluginAgentSpec
+    from lamtools_core.plugins.registry import bundled_plugins_dir
+
+    study_prompt = (
+        bundled_plugins_dir() / "study" / "prompts" / "study-system.md"
+    ).read_text(encoding="utf-8").strip()
     kit = CoreBaseAgentKit(
         work_root=work_root,
         config=CoreBaseAgentConfig(
             instructions='GENERIC PROJECT AGENT',
             active_mode='study:study',
         ),
+        plugin_agents=[
+            PluginAgentSpec(
+                plugin="study",
+                scope="mode",
+                mode="study",
+                prompt_text=study_prompt,
+            )
+        ],
     )
     request = await kit.build_model_request(
         RuntimeState(session_id='study:main'),

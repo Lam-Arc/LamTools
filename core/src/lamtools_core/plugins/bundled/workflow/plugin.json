@@ -1,8 +1,10 @@
 {
   "id": "workflow",
   "name": "workflow",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Deterministic node-graph workflows",
+  "model_scene": "background",
+  "assembly": "v2",
   "builtin": true,
   "backend": "./bootstrap.py",
   "tools": ["./tools.jsonc"],

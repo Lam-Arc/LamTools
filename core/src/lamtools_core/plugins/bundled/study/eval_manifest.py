@@ -65,13 +65,25 @@ def build_manifest(*, work_root: Path | None = None) -> dict[str, Any]:
             work_root=resolved_work_root,
             plugin_roots=[],
         )
-        study = next(plugin for plugin in assembly["plugins"] if plugin.id == "study")
+        from lamtools_core.plugin_system import PluginHost
+        from lamtools_core.plugin_system.ui import assemble_ui
+        from lamtools_core.app.base_agent import default_core_agent_plugin_roots
+
+        host = PluginHost(
+            roots=default_core_agent_plugin_roots(resolved_work_root),
+            state_path=Path(data_dir) / "plugin-system.jsonc",
+        )
+        v2_manifests = [
+            item for item in host.discover() if item.assembly == "v2" and item.enabled
+        ]
         runtime = create_skill_runtime(
             plugin_skill_roots=assembly["skill_roots"],
             plugin_skill_modes=assembly["skill_modes"],
         )
 
-        study_mode = next(mode for mode in study.ui.modes if mode.id == "study")
+        study_mode = next(
+            mode for mode in assemble_ui(v2_manifests).modes if mode.plugin == "study"
+        )
         mode_tools = set(study_mode.tools)
         missing_tools = sorted(REQUIRED_TOOLS - mode_tools)
         if missing_tools:

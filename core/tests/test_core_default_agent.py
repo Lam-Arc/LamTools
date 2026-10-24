@@ -294,10 +294,13 @@ async def test_core_agent_operations_expose_turn_start(tmp_path):
 
 @pytest.mark.asyncio
 async def test_disabled_workflow_operation_is_mounted_for_live_reenable(tmp_path, monkeypatch):
-    """The host catalog must expose a disabled plugin after it is re-enabled."""
+    """The v2 catalog must expose a disabled plugin after it is re-enabled."""
+    from lamtools_core.plugin_system.state import PluginStateStore as V2StateStore
+
     monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
     data_dir = tmp_path / "data"
-    PluginStateStore(data_dir / "plugins.jsonc").set_enabled("workflow", False)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    V2StateStore(data_dir / "plugin-system.jsonc").set_enabled("workflow", False)
     catalog = create_core_agent_operations(
         spec=CoreAgentSpec(),
         paths=CoreAgentPaths(data_dir=data_dir, work_root=tmp_path / "work"),
@@ -305,7 +308,7 @@ async def test_disabled_workflow_operation_is_mounted_for_live_reenable(tmp_path
     )
 
     assert not catalog.has("workflow.run")
-    enabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    enabled = await catalog.execute("plugin.system.enable", {"name": "workflow"})
     assert enabled.payload["enabled"] is True
     assert catalog.has("workflow.run")
 
@@ -314,7 +317,7 @@ async def test_disabled_workflow_operation_is_mounted_for_live_reenable(tmp_path
     run = await catalog.execute("workflow.run", {"name": "live-reenable", "run_id": "live-run"})
     assert run.payload["run"]["status"] == "completed"
 
-    await catalog.execute("plugin.disable", {"name": "workflow"})
+    await catalog.execute("plugin.system.disable", {"name": "workflow"})
     assert not catalog.has("workflow.run")
 
 
@@ -1327,7 +1330,7 @@ async def test_core_plugin_operation_catalog_uses_user_and_project_roots(tmp_pat
     # 缺口 #3/D3：catalog 统一扫内置根——bundled 插件也在列表中
     names = {item["name"] for item in listed.payload["plugins"]}
     assert {"user-policy", "project-policy"} <= names
-    assert {"git", "websearch", "imagegen"} <= names
+    assert {"websearch", "imagegen"} <= names
     assert (data_dir / "plugins.jsonc").exists()
     assert not (data_dir / "core-plugin-state.json").exists()
 

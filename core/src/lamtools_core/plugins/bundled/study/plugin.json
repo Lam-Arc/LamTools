@@ -1,8 +1,11 @@
 {
   "id": "study",
   "name": "study",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Global learning workspace and text annotations",
+  "model_scene": "study",
+  "scope": "mode",
+  "assembly": "v2",
   "builtin": true,
   "backend": "./backend.py",
   "skills": [
@@ -116,6 +119,26 @@
           }
         ]
       }
+    ]
+  },
+  "agent": {
+    "mode": "study",
+    "prompt": "./prompts/study-system.md",
+    "approval": "ask",
+    "exclusiveTools": true,
+    "tools": [
+      "get_knowledge_net",
+      "build_knowledge_net",
+      "sign",
+      "exam",
+      "notes",
+      "read_file",
+      "list_dir",
+      "search_files",
+      "search_content",
+      "load_skill",
+      "web_search",
+      "web_fetch"
     ]
   },
   "platforms": "universal"

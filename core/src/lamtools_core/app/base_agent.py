@@ -8,7 +8,6 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from functools import lru_cache
 from typing import Any, Mapping
 from copy import deepcopy
 
@@ -86,19 +85,6 @@ from lamtools_core.config.subagent_prompt import (
 )
 
 _logger = logging.getLogger(__name__)
-
-
-@lru_cache(maxsize=1)
-def _bundled_study_system_prompt() -> str:
-    """Resolve the packaged Study identity for every Study-mode entrypoint."""
-    try:
-        from lamtools_core.plugins.registry import bundled_plugins_dir
-
-        return (
-            bundled_plugins_dir() / "study" / "prompts" / "study-system.md"
-        ).read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
 
 
 _MODEL_TOOL_EVIDENCE_LIMIT = 12_000
@@ -695,11 +681,9 @@ class CoreBaseAgentKit:
         return model_id or display
 
     def _study_mode_and_instructions(self) -> tuple[bool, str]:
-        study_mode = self.config.active_mode == "study:study"
-        effective_instructions = self.config.instructions
-        if study_mode:
-            effective_instructions = _bundled_study_system_prompt() or effective_instructions
-        return study_mode, effective_instructions
+        # user:“study 和 workflow 不再有硬编码特例”+学习身份由插件 Agent
+        # 声明，宿主这里只判断是不是学习模式。
+        return self.config.active_mode == "study:study", self.config.instructions
 
     def _apply_plugin_agent_approval(self, approval: str | None) -> None:
         """Let the active plugin agent decide its own approval stance."""
@@ -1947,9 +1931,9 @@ def assemble_core_agent_plugins(
         plugin_context,
         start=start_lifecycle,
     )
-    from lamtools_core.plugin_system.backend_runtime import remember_handles
+    from lamtools_core.plugin_system.backend_runtime import register_manager
 
-    remember_handles(v2_backends)
+    register_manager(v2_host, v2_backends, plugin_context)
     for v2_handle in v2_backends:
         plugin_tool_handlers.update(v2_handle.tool_handlers)
         plugin_tool_providers.extend(v2_handle.tool_providers)
@@ -2156,7 +2140,7 @@ def build_core_plugin_operation_catalog(
     # user:“插件自己也提供操作”+插件目录里的操作表和插件系统操作都挂在
     # 同一张目录上，v2 后端也在这里装一次，测试和 CLI 用的就是这份。
     from lamtools_core.plugin_system import PluginHost
-    from lamtools_core.plugin_system.backend_runtime import remember_handles
+    from lamtools_core.plugin_system.backend_runtime import register_manager
     from lamtools_core.plugin_system.operation_bridge import register_plugin_operations
 
     plugin_system_host = PluginHost(
@@ -2171,8 +2155,46 @@ def build_core_plugin_operation_catalog(
         plugin_context,
         start=start_lifecycle,
     )
-    remember_handles(v2_backends)
+    register_manager(plugin_system_host, v2_backends, plugin_context)
     register_plugin_operations(catalog, plugin_system_host)
+    # 这份目录也要能开关插件，测试和 CLI 直接用它。
+    from lamtools_core.plugin_system.operations import apply_plugin_enablement
+    from lamtools_core.app.operation_catalog import OperationResult
+
+    async def plugin_enable(request) -> OperationResult:
+        name = str(request.payload.get("name") or "").strip()
+        changed, backend_error = await apply_plugin_enablement(
+            plugin_system_host, name, True
+        )
+        if not changed:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"plugin '{name}' is not installed"},
+            )
+        payload_out = {"name": name, "enabled": True}
+        if backend_error:
+            payload_out["backend_error"] = backend_error
+        return OperationResult(name=request.name, payload=payload_out)
+
+    async def plugin_disable(request) -> OperationResult:
+        name = str(request.payload.get("name") or "").strip()
+        changed, backend_error = await apply_plugin_enablement(
+            plugin_system_host, name, False
+        )
+        if not changed:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"plugin '{name}' is not installed"},
+            )
+        payload_out = {"name": name, "enabled": False}
+        if backend_error:
+            payload_out["backend_error"] = backend_error
+        return OperationResult(name=request.name, payload=payload_out)
+
+    catalog.register("plugin.system.enable", plugin_enable, owner="plugin-system")
+    catalog.register("plugin.system.disable", plugin_disable, owner="plugin-system")
     catalog.plugin_system_host = plugin_system_host
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = plugin_runtimes

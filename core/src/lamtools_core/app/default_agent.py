@@ -2497,6 +2497,9 @@ def create_core_agent_operations(
     # outer Core catalog. The outer wrapper applies the same guard, while
     # list and has still hide unavailable operations from clients.
     for operation_name in plugin_operations.registered():
+        # plugin.system.* 由外层自己注册，内层已经挂过一次，不能重复。
+        if operation_name.startswith("plugin.system."):
+            continue
         operation_owner = plugin_operations.owner_of(operation_name)
         async def execute_plugin_operation(
             request: OperationRequest,
@@ -2521,14 +2524,18 @@ def create_core_agent_operations(
     from lamtools_core.plugin_system import PluginHost
     from lamtools_core.plugin_system.operations import register_plugin_system_operations
 
-    plugin_system_host = PluginHost(
-        roots=(
-            [Path(item) for item in plugin_roots]
-            if plugin_roots
-            else default_core_agent_plugin_roots(paths.work_root)
-        ),
-        state_path=Path(paths.data_dir) / "plugin-system.jsonc",
-    )
+    # 内层插件目录已经建过同一份 v2 宿主和后端管理器；复用它，
+    # 否则启用插件只会改账本，后端不会起来。
+    plugin_system_host = getattr(plugin_operations, "plugin_system_host", None)
+    if plugin_system_host is None:
+        plugin_system_host = PluginHost(
+            roots=(
+                [Path(item) for item in plugin_roots]
+                if plugin_roots
+                else default_core_agent_plugin_roots(paths.work_root)
+            ),
+            state_path=Path(paths.data_dir) / "plugin-system.jsonc",
+        )
     register_plugin_system_operations(catalog, plugin_system_host)
     catalog.plugin_system_host = plugin_system_host
     catalog.plugin_context = plugin_context
@@ -3445,6 +3452,16 @@ def _plugin_toolbox_contributions(plugin_assembly: Mapping[str, Any]) -> dict[st
         candidate = getattr(runtime_manager, "is_enabled", None)
         if callable(candidate):
             availability = candidate
+        # user:“插件可以有自己的后端”+v2 插件由自己的运行时管理器
+        # 判断可用性，旧插件继续走旧管理器。
+        v2_manager = plugin_context.service("plugin.v2_runtime_manager")
+        if v2_manager is not None:
+            legacy = candidate if callable(candidate) else None
+
+            def availability(name: str, *, legacy=legacy, v2=v2_manager) -> bool:
+                if v2.owns(name):
+                    return bool(v2.is_enabled(name))
+                return bool(legacy(name)) if legacy is not None else True
     return {
         "specs": specs,
         "handlers": dict(plugin_assembly.get("plugin_tool_handlers") or {}),

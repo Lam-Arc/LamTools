@@ -34,6 +34,17 @@ from lamtools_core.tool.default_toolbox import build_core_toolbox
 from lamtools_core.runtime import RuntimeTaskRegistry
 
 
+
+def _workflow_modes(catalog) -> list:
+    from lamtools_core.plugin_system.ui import assemble_ui
+
+    manifests = [
+        item
+        for item in catalog.plugin_system_host.discover()
+        if item.assembly == "v2"
+    ]
+    return [mode for mode in assemble_ui(manifests).modes if mode.plugin == "workflow"]
+
 def _definition(name: str = "demo") -> WorkflowDef:
     return WorkflowDef(
         name=name,
@@ -587,7 +598,7 @@ async def test_workflow_project_switch_uses_current_root_for_operations_and_dyna
         ("shared", "project B")
     ]
 
-    runtime = context.service("plugin.runtime_manager").get("workflow").value
+    runtime = context.service("plugin.v2_runtime_manager").get("workflow").value
     tools_a = runtime.workflow_tool_provider(str(project_a)).specs
     tools_b = runtime.workflow_tool_provider(str(project_b)).specs
     assert [(spec.metadata["workflow_name"], spec.description) for spec in tools_a] == [
@@ -603,10 +614,11 @@ async def test_workflow_disabled_at_start_can_reenable_and_restart_watcher(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
-    from lamtools_core.plugins.registry import PluginStateStore
+    from lamtools_core.plugin_system.state import PluginStateStore
 
     data_dir = tmp_path / "data"
-    state = PluginStateStore(data_dir / "plugins.jsonc")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    state = PluginStateStore(data_dir / "plugin-system.jsonc")
     state.set_enabled("workflow", False)
     store = WorkflowStore()
     await store.save(_definition("survives-disable"))
@@ -627,14 +639,13 @@ async def test_workflow_disabled_at_start_can_reenable_and_restart_watcher(
         plugin_roots=[bundled_plugins_dir()],
         context=context,
     )
-    manager = context.service("plugin.runtime_manager")
+    manager = context.service("plugin.v2_runtime_manager")
 
     assert manager.get("workflow") is None
     assert not catalog.has("workflow.run")
-    modes = (await catalog.execute("plugin.ui.list")).payload["modes"]
-    assert {mode["pluginId"] for mode in modes} == {"study"}
+    assert _workflow_modes(catalog) == []
 
-    enabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    enabled = await catalog.execute("plugin.system.enable", {"name": "workflow"})
     assert enabled.payload["enabled"] is True
     handle = manager.get("workflow")
     assert handle is not None
@@ -643,14 +654,14 @@ async def test_workflow_disabled_at_start_can_reenable_and_restart_watcher(
     listed = await catalog.execute("workflow.list")
     assert [item["name"] for item in listed.payload["workflows"]] == ["survives-disable"]
 
-    disabled = await catalog.execute("plugin.disable", {"name": "workflow"})
+    disabled = await catalog.execute("plugin.system.disable", {"name": "workflow"})
     assert disabled.payload["enabled"] is False
     assert handle.value.watcher is None
     assert not catalog.has("workflow.run")
     # Disable/re-enable only affects capabilities; it never deletes workflow data.
     assert (await store.get("survives-disable")) is not None
 
-    reenabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    reenabled = await catalog.execute("plugin.system.enable", {"name": "workflow"})
     assert reenabled.payload["enabled"] is True
     restored = await catalog.execute("workflow.list")
     assert [item["name"] for item in restored.payload["workflows"]] == ["survives-disable"]
@@ -676,7 +687,7 @@ async def test_workflow_disable_removes_old_toolbox_capabilities_and_reenable_re
         plugin_roots=[bundled_plugins_dir()],
         context=context,
     )
-    manager = context.service("plugin.runtime_manager")
+    manager = context.service("plugin.v2_runtime_manager")
     handle = manager.get("workflow")
     assert handle is not None
     runtime = handle.value
@@ -701,10 +712,9 @@ async def test_workflow_disable_removes_old_toolbox_capabilities_and_reenable_re
     assert "workflow_graph" in {spec.name for spec in toolbox.tool_specs()}
     assert "workflow_exposed" in {spec.name for spec in toolbox.tool_specs()}
 
-    ui_before = await catalog.execute("plugin.ui.list")
-    assert any(item["pluginId"] == "workflow" for item in ui_before.payload["modes"])
+    assert _workflow_modes(catalog)
 
-    disabled = await catalog.execute("plugin.disable", {"name": "workflow"})
+    disabled = await catalog.execute("plugin.system.disable", {"name": "workflow"})
     assert disabled.payload["enabled"] is False
     assert not catalog.has("workflow.run")
     with pytest.raises(KeyError):
@@ -713,17 +723,15 @@ async def test_workflow_disable_removes_old_toolbox_capabilities_and_reenable_re
     assert "workflow_graph" not in {spec.name for spec in toolbox.tool_specs()}
     blocked = await toolbox.execute(ToolCall(id="disabled", name="workflow_graph", arguments={}))
     assert blocked.status == "blocked"
-    ui_after_disable = await catalog.execute("plugin.ui.list")
-    assert not any(item["pluginId"] == "workflow" for item in ui_after_disable.payload["modes"])
+    assert _workflow_modes(catalog) == []
 
-    enabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    enabled = await catalog.execute("plugin.system.enable", {"name": "workflow"})
     assert enabled.payload["enabled"] is True
     assert catalog.has("workflow.run")
     assert manager.get("workflow").value is runtime
     assert "workflow_graph" in {spec.name for spec in toolbox.tool_specs()}
     assert "workflow_exposed" in {spec.name for spec in old_provider(str(tmp_path)).specs}
-    ui_after_enable = await catalog.execute("plugin.ui.list")
-    assert any(item["pluginId"] == "workflow" for item in ui_after_enable.payload["modes"])
+    assert _workflow_modes(catalog)
 
 
 @pytest.mark.asyncio

@@ -173,12 +173,22 @@ async def test_prior_wake_stays_in_history_for_manual_turn_and_current_wake_tail
 
 @pytest.mark.asyncio
 async def test_study_host_prompt_is_english_and_omits_coding_delivery_rules(monkeypatch, tmp_path):
-    monkeypatch.setattr(base_agent, "_bundled_study_system_prompt", lambda: "You are Study.")
+    # user:“study 和 workflow 不再有硬编码特例”+学习身份由插件 Agent 声明。
+    from lamtools_core.plugin_system.agent import PluginAgentSpec
+
     kit = _isolated_kit(
         monkeypatch,
         tmp_path,
         config=CoreBaseAgentConfig(active_mode="study:study"),
     )
+    kit.plugin_agents = [
+        PluginAgentSpec(
+            plugin="study",
+            scope="mode",
+            mode="study",
+            prompt_text="You are Study.",
+        )
+    ]
 
     request = await kit.build_model_request(
         RuntimeState(session_id="study-1"), PromptContext(session_id="study-1")

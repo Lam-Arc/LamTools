@@ -26,6 +26,27 @@ from .ui import assemble_ui
 OWNER = "plugin-system"
 
 
+async def apply_plugin_enablement(
+    host: PluginHost, name: str, enabled: bool
+) -> tuple[bool, str]:
+    """Flip the ledger, then start or stop the plugin backend."""
+    changed = host.enable(name) if enabled else host.disable(name)
+    if not changed:
+        return False, ""
+    manager = getattr(host, "backend_manager", None)
+    if manager is None:
+        return True, ""
+    try:
+        if enabled:
+            await manager.start(name)
+        else:
+            await manager.stop(name)
+    except Exception as exc:  # noqa: BLE001 - the ledger already changed
+        return True, f"{type(exc).__name__}: {exc}"
+    return True, ""
+
+
+
 def _capability_summary(capabilities: Any) -> dict[str, list[str]]:
     if capabilities is None:
         return {
@@ -369,16 +390,19 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
             return OperationResult(
                 name=request.name, status="error", payload={"error": "name is required"}
             )
-        changed = host.enable(name) if enabled else host.disable(name)
+        # user:“插件可以有自己的后端”+开关插件时同步启停后端，工具面和
+        # 后台任务一起回来或一起消失。
+        changed, backend_error = await apply_plugin_enablement(host, name, enabled)
         if not changed:
             return OperationResult(
                 name=request.name,
                 status="error",
-                payload={"error": f"plugin '{name}' is not installed"},
+                payload={"error": f"plugin {chr(39)}{name}{chr(39)} is not installed"},
             )
-        return OperationResult(
-            name=request.name, payload={"name": name, "enabled": enabled}
-        )
+        payload_out: dict[str, Any] = {"name": name, "enabled": enabled}
+        if backend_error:
+            payload_out["backend_error"] = backend_error
+        return OperationResult(name=request.name, payload=payload_out)
 
     async def enable_plugin(request: OperationRequest) -> OperationResult:
         return await set_enabled(request, True)

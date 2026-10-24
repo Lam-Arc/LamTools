@@ -2492,12 +2492,30 @@ def build_parser(
     load_context_set = load_context_sub.add_parser("set", help="Write global load_context from a JSON file or stdin")
     load_context_set.add_argument("source_file", help="Path to a JSON file, or '-' for stdin")
     load_context_set.set_defaults(func=cmd_load_context_set)
-    from lamtools_core.plugins.cli import load_plugin_cli_commands
+    from lamtools_core.plugins.cli import (
+        load_plugin_cli_commands,
+        load_v2_plugin_cli_commands,
+    )
 
+    resolved_roots = (
+        plugin_roots if plugin_roots is not None else _default_cli_plugin_roots()
+    )
+    resolved_state = (
+        plugin_state_path
+        if plugin_state_path is not None
+        else _default_cli_plugin_state_path()
+    )
     load_plugin_cli_commands(
         sub,
-        plugin_roots=(plugin_roots if plugin_roots is not None else _default_cli_plugin_roots()),
-        state_path=plugin_state_path if plugin_state_path is not None else _default_cli_plugin_state_path(),
+        plugin_roots=resolved_roots,
+        state_path=resolved_state,
+    )
+    # user:“插件自己也提供操作”+新系统的插件命令也挂进同一个解析器。
+    from lamtools_core.plugin_system import PluginHost
+
+    load_v2_plugin_cli_commands(
+        sub,
+        host=PluginHost(roots=list(resolved_roots), state_path=resolved_state),
     )
     return parser
 

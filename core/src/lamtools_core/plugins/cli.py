@@ -67,6 +67,41 @@ def load_plugin_cli_commands(
     return errors
 
 
+def load_v2_plugin_cli_commands(
+    subparsers: Any,
+    *,
+    host: Any,
+) -> list[dict[str, str]]:
+    """Mount ``cli`` trees declared by enabled v2 plugins.
+
+    The legacy mounter already owns the argparse protocol; this adapter
+    only gives it the same contribution shape from a v2 manifest.
+    """
+    from types import SimpleNamespace
+
+    parser_registry = PluginRegistry(plugin_roots=[])
+    plugins: list[Any] = []
+    for manifest in host.discover():
+        if manifest.assembly != "v2" or not manifest.enabled:
+            continue
+        value = manifest.raw.get("cli")
+        if not isinstance(value, dict):
+            continue
+        contribution = parser_registry._cli_contribution(
+            value, manifest.root / "plugin.json"
+        )
+        if contribution is None:
+            continue
+        plugins.append(
+            SimpleNamespace(
+                name=manifest.name,
+                root=manifest.root,
+                enabled=True,
+                cli=contribution,
+            )
+        )
+    return load_plugin_cli_commands(subparsers, plugins=plugins)
+
 def _mount_command(
     parent: Any,
     command: PluginCLICommand,

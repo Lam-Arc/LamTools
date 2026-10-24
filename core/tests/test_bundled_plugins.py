@@ -66,9 +66,9 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
     # websearch 声明 defaultEnabled=false：默认装配里不出现（要用去插件页启用），
     # 显式启用后回到装配结果里。
     assert "git" not in names
-    # plan 已是 v2 插件，由新系统装配技能，旧注册表不再看到它。
-    assert "plan" not in names
-    assert {"imagegen", "study", "workflow"} <= names
+    # plan、study、workflow 都已迁到 v2，由新系统装配。
+    assert not ({"plan", "study", "workflow"} & names)
+    assert "imagegen" in names
     assert "websearch" not in names
     group_names = {group["name"] for group in assembly["plugin_tool_groups"]}
     assert "git" not in group_names
@@ -95,10 +95,24 @@ def test_study_skills_are_scoped_by_the_real_plugin_assembly(tmp_path):
         work_root=tmp_path,
         plugin_roots=[],
     )
-    study = next(plugin for plugin in assembly["plugins"] if plugin.id == "study")
-    assert len(study.skill_roots) == 2
-    assert all(study.skill_modes[root] == ("study:study",) for root in study.skill_roots)
-    study_mode = next(mode for mode in study.ui.modes if mode.id == "study")
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.ui import assemble_ui
+    from lamtools_core.plugins.registry import bundled_plugins_dir
+
+    host = PluginHost(
+        roots=[bundled_plugins_dir()],
+        state_path=tmp_path / "data" / "plugin-system.jsonc",
+    )
+    v2_manifests = [
+        item for item in host.discover() if item.assembly == "v2" and item.enabled
+    ]
+    study_root = next(item.root for item in v2_manifests if item.name == "study")
+    study_roots = {(study_root / "skills").resolve(), (study_root / "future").resolve()}
+    assert study_roots <= set(assembly["skill_modes"])
+    assert all(assembly["skill_modes"][root] == ("study:study",) for root in study_roots)
+    study_mode = next(
+        mode for mode in assemble_ui(v2_manifests).modes if mode.plugin == "study"
+    )
     assert "load_skill" in study_mode.tools
 
     runtime = create_skill_runtime(
@@ -149,7 +163,7 @@ def test_study_tools_are_scoped_to_the_study_mode(tmp_path):
     assert "workflow:workflow" not in exclusive
 
     base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
-    plugin_specs: list = []
+    plugin_specs: list = list(assembly["plugin_runtime_specs"])
     for group in assembly["plugin_tool_groups"]:
         plugin_specs.extend(
             complete_plugin_tool_specs(
@@ -207,7 +221,7 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         plugin_roots=[],
     )
     base_specs = {spec.name: spec for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
-    plugin_specs: list = []
+    plugin_specs: list = list(assembly["plugin_runtime_specs"])
     for group in assembly["plugin_tool_groups"]:
         plugin_specs.extend(
             complete_plugin_tool_specs(
@@ -219,9 +233,9 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         )
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
     names = {spec.name for spec in toolbox.tool_specs()}
-    # 20 base + 3 bundled tools + 5 Workflow + 5 Study tools. git 插件已删除，
-    # 它的两个工具不再出现；plan 只发技能。
-    assert len(names) == 32
+    # 20 个基础工具加 generate_image、web_search，再加 v2 的 Study、
+    # Workflow 和管道校验器工具；plan 只发技能。
+    assert len(names) == 33
     assert "git_status" not in names
     assert "git_diff" not in names
     assert {'get_knowledge_net', 'build_knowledge_net', 'exam', 'sign', 'notes'} <= names

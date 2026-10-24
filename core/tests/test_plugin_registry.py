@@ -259,30 +259,34 @@ def test_ui_mode_capabilities_reject_invalid_declarations(tmp_path: Path):
 
 
 def test_bundled_study_mode_declares_the_note_vault_capability():
+    import asyncio
+
+    from lamtools_core.app import OperationCatalog
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.operations import register_plugin_system_operations
+    from lamtools_core.plugin_system.ui import assemble_ui
+
     bundled = Path(__file__).resolve().parents[1] / "src" / "lamtools_core" / "plugins" / "bundled"
-    modes = {
-        f"{manifest.name}:{mode.id}": mode
-        for manifest in PluginRegistry(plugin_roots=[bundled]).discover()
-        if manifest.ui is not None
-        for mode in manifest.ui.modes
-    }
-    # The desktop Study mode owns the Note vault, so its workspace stays offered.
-    assert modes["study:study"].capabilities == ["notes"]
-    # Workflow makes no claim, which keeps its surfaces available everywhere.
-    assert modes["workflow:workflow"].capabilities is None
+    state_path = bundled / "_tmp-plugin-system.jsonc"
+    host = PluginHost(roots=[bundled], state_path=state_path)
+    try:
+        manifests = [item for item in host.discover() if item.assembly == "v2" and item.enabled]
+        modes = {f"{mode.plugin}:{mode.id}": mode for mode in assemble_ui(manifests).modes}
+        # The desktop Study mode owns the Note vault, so its workspace stays offered.
+        assert modes["study:study"].capabilities == ("notes",)
+        # Workflow makes no claim, which keeps its surfaces available everywhere.
+        assert modes["workflow:workflow"].capabilities is None
 
-    # The declaration must also survive the plugin.ui.list boundary, because
-    # that payload is what the shared UI gates its surfaces on.
-    payloads = {
-        manifest.name: operations._ui_payload(manifest)
-        for manifest in PluginRegistry(plugin_roots=[bundled]).discover()
-    }
-    study_mode = payloads["study"]["modes"][0]
-    assert study_mode["capabilities"] == ["notes"]
-    # An undeclared mode omits the field entirely, which the UI reads as "make
-    # no claim" rather than "supports nothing".
-    assert "capabilities" not in payloads["workflow"]["modes"][0]
-
+        catalog = OperationCatalog()
+        register_plugin_system_operations(catalog, host)
+        payload = asyncio.run(catalog.execute("plugin.system.ui", {}))
+        by_key = {
+            f"{item['pluginId']}:{item['id']}": item for item in payload.payload["modes"]
+        }
+        assert by_key["study:study"]["capabilities"] == ["notes"]
+        assert "capabilities" not in by_key["workflow:workflow"]
+    finally:
+        state_path.unlink(missing_ok=True)
 
 def test_the_platform_class_is_declared_per_plugin_and_defaults_to_universal(tmp_path: Path):
     """平台分类：未声明 = 通用，取值非法按清单错误报出。"""
@@ -341,13 +345,13 @@ def test_every_bundled_plugin_declares_its_platform_class():
     # "没写" 会被当成通用，而内置插件的平台归属是一次明确的决定，不是默认值。
     assert [item.name for item in discovered if "platforms" not in item.raw] == []
     assert {item.name: item.platforms for item in discovered} == {
-        # 工作流的执行面和桌宠窗口都在桌面。
+        # 桌宠窗口在桌面。
         "emotion-ball-pet": "desktop",
-        "workflow": "desktop",
         "imagegen": "universal",
-        "study": "universal",
         "websearch": "universal",
     }
+    # study 和 workflow 已经迁到 v2，不再由旧注册表发现。
+    assert not ({"study", "workflow"} & {item.name for item in discovered})
     # git 已删除；plan 已迁到 v2，不再由旧注册表发现。
     assert "git" not in {item.name for item in discovered}
     assert "plan" not in {item.name for item in discovered}
