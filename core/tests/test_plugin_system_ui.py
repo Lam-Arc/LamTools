@@ -324,3 +324,57 @@ def test_window_entry_must_exist(tmp_path: Path) -> None:
 
     with pytest.raises(CapabilityError, match="missing"):
         read_ui(load_manifest(manifest_path))
+
+
+def test_modes_are_parsed_like_the_legacy_plugins(tmp_path: Path) -> None:
+    """user:“注册到模式切换，类似 study 和 workflow”+模式描述要和旧插件同形。"""
+    manifest_path = make_plugin(
+        tmp_path,
+        "study",
+        manifest={
+            "ui": {
+                "modes": [
+                    {
+                        "id": "study",
+                        "title": "Study",
+                        "entry": "./ui/index.ts",
+                        "icon": "book-open",
+                        "order": 10,
+                        "capabilities": ["notes"],
+                        "tools": ["notes", "read_file"],
+                        "exclusiveTools": True,
+                    }
+                ]
+            }
+        },
+        files={"ui/index.ts": "export default {}"},
+    )
+
+    spec = read_ui(load_manifest(manifest_path))
+
+    assert [mode.id for mode in spec.modes] == ["study"]
+    mode = spec.modes[0]
+    assert mode.title == "Study"
+    assert mode.icon == "book-open"
+    assert mode.order == 10
+    assert mode.capabilities == ("notes",)
+    assert mode.tools == ("notes", "read_file")
+    assert mode.exclusive_tools is True
+    assert mode.entry is not None and mode.entry.name == "index.ts"
+
+
+def test_modes_from_two_plugins_do_not_conflict(tmp_path: Path) -> None:
+    for name in ("alpha", "beta"):
+        make_plugin(
+            tmp_path,
+            name,
+            manifest={"ui": {"modes": [{"id": "main", "title": name}]}},
+        )
+    manifests = [load_manifest(tmp_path / name / "plugin.json") for name in ("alpha", "beta")]
+
+    assembly = assemble_ui(manifests)
+
+    assert [(mode.plugin, mode.id) for mode in assembly.modes] == [
+        ("alpha", "main"),
+        ("beta", "main"),
+    ]

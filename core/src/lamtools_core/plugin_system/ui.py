@@ -64,6 +64,25 @@ class PluginUIRegion:
 
 
 @dataclass(frozen=True)
+class PluginUIMode:
+    """A full-page mode: the host swaps the main surface for this plugin.
+
+    user:“注册到模式切换，类似 study 和 workflow”+模式是插件声明的界面，
+    组件本身仍由前端随包编译，后端只发描述。
+    """
+
+    id: str
+    title: str
+    entry: Path | None = None
+    icon: str = ""
+    order: int = 50
+    capabilities: tuple[str, ...] | None = None
+    tools: tuple[str, ...] = ()
+    exclusive_tools: bool = False
+    plugin: str = ""
+
+
+@dataclass(frozen=True)
 class PluginWindowSpec:
     id: str
     title: str
@@ -81,6 +100,7 @@ class PluginUISpec:
     regions: list[PluginUIRegion] = field(default_factory=list)
     script: "PluginAssetSpec | None" = None
     windows: list[PluginWindowSpec] = field(default_factory=list)
+    modes: list[PluginUIMode] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -97,6 +117,7 @@ class UIAssembly:
     styles: list[PluginAssetSpec] = field(default_factory=list)
     scripts: list[PluginAssetSpec] = field(default_factory=list)
     windows: list[PluginWindowSpec] = field(default_factory=list)
+    modes: list[PluginUIMode] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -228,6 +249,48 @@ def _positive_int(plugin: str, value: Any, *, key: str, default: int) -> int:
     return value
 
 
+def _parse_mode(manifest: PluginManifest, raw: Any) -> PluginUIMode:
+    if not isinstance(raw, dict):
+        raise CapabilityError(manifest.name, "ui mode must be an object")
+    mode_id = str(raw.get("id") or "").strip()
+    if not mode_id or any(character.isspace() for character in mode_id):
+        raise CapabilityError(manifest.name, "ui mode id must be one token")
+    entry: Path | None = None
+    if raw.get("entry") is not None:
+        entry = _asset(
+            manifest,
+            raw.get("entry"),
+            key=f"ui mode '{mode_id}' entry",
+            suffixes=(".ts", ".tsx", ".js", ".mjs", ".vue", ".html"),
+        ).path
+    capabilities_raw = raw.get("capabilities")
+    capabilities: tuple[str, ...] | None = None
+    if isinstance(capabilities_raw, list):
+        capabilities = tuple(
+            str(item).strip() for item in capabilities_raw if str(item).strip()
+        )
+    tools_raw = raw.get("tools")
+    tools = (
+        tuple(str(item).strip() for item in tools_raw if str(item).strip())
+        if isinstance(tools_raw, list)
+        else ()
+    )
+    order_raw = raw.get("order", 50)
+    if isinstance(order_raw, bool) or not isinstance(order_raw, int):
+        raise CapabilityError(manifest.name, f"ui mode '{mode_id}' order must be an integer")
+    return PluginUIMode(
+        id=mode_id,
+        title=str(raw.get("title") or mode_id),
+        entry=entry,
+        icon=str(raw.get("icon") or ""),
+        order=order_raw,
+        capabilities=capabilities,
+        tools=tools,
+        exclusive_tools=bool(raw.get("exclusiveTools", False)),
+        plugin=manifest.name,
+    )
+
+
 def _parse_window(manifest: PluginManifest, raw: Any) -> PluginWindowSpec:
     if not isinstance(raw, dict):
         raise CapabilityError(manifest.name, "ui window must be an object")
@@ -286,12 +349,18 @@ def read_ui(manifest: PluginManifest) -> PluginUISpec:
         raise CapabilityError(manifest.name, "ui.windows must be an array")
     windows = [_parse_window(manifest, item) for item in (windows_raw or [])]
 
+    modes_raw = raw.get("modes")
+    if modes_raw is not None and not isinstance(modes_raw, list):
+        raise CapabilityError(manifest.name, "ui.modes must be an array")
+    modes = [_parse_mode(manifest, item) for item in (modes_raw or [])]
+
     return PluginUISpec(
         plugin=manifest.name,
         styles=styles,
         regions=regions,
         script=script,
         windows=windows,
+        modes=modes,
     )
 
 
@@ -312,6 +381,9 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
         assembly.styles.extend(spec.styles)
         if spec.script is not None:
             assembly.scripts.append(spec.script)
+        # Modes are keyed by plugin:id, so two plugins may both call their mode
+        # "main" without a conflict.
+        assembly.modes.extend(spec.modes)
         for region in spec.regions:
             if region.replace:
                 owner = replaced.get(region.region)
@@ -338,6 +410,7 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
             window_owners[window.id] = manifest.name
             assembly.windows.append(window)
     assembly.regions.sort(key=lambda item: (item.order, item.plugin, item.region))
+    assembly.modes.sort(key=lambda item: (item.order, item.plugin, item.id))
     return assembly
 
 
@@ -347,6 +420,7 @@ __all__ = [
     "PluginAssetSpec",
     "PluginUIAction",
     "PluginUIBlock",
+    "PluginUIMode",
     "PluginUIRegion",
     "PluginUISpec",
     "PluginWindowSpec",

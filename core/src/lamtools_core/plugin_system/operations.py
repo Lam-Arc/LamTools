@@ -181,6 +181,30 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                     }
                     for window in assembly.windows
                 ],
+                # user:“注册到模式切换，类似 study 和 workflow”+模式描述和旧
+                # 插件同形，前端沿用同一张加载表，后端只负责声明。
+                "modes": [
+                    {
+                        "pluginId": mode.plugin,
+                        "plugin": mode.plugin,
+                        "id": mode.id,
+                        "title": mode.title,
+                        "entry": str(mode.entry or ""),
+                        "entry_url": _asset_url(
+                            mode.plugin, roots.get(mode.plugin), mode.entry
+                        ),
+                        "icon": mode.icon,
+                        "order": mode.order,
+                        "tools": list(mode.tools),
+                        "enabled": True,
+                        **(
+                            {"capabilities": list(mode.capabilities)}
+                            if mode.capabilities is not None
+                            else {}
+                        ),
+                    }
+                    for mode in assembly.modes
+                ],
                 "errors": list(assembly.errors),
             },
         )
@@ -389,6 +413,11 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
     catalog.register("plugin.system.enable", enable_plugin, owner=OWNER)
     catalog.register("plugin.system.disable", disable_plugin, owner=OWNER)
     catalog.register("plugin.system.uninstall", uninstall_plugin, owner=OWNER)
+    # user:“插件自己也提供操作”+v2 插件在 operations.jsonc 里声明的 RPC 面
+    # 在启动时挂进来，禁用插件后这些操作自动不可用。
+    from .operation_bridge import register_plugin_operations
+
+    register_plugin_operations(catalog, host)
 
 
 __all__ = ["OWNER", "register_plugin_system_operations"]

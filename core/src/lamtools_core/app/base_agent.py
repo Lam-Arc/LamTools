@@ -1940,6 +1940,19 @@ def assemble_core_agent_plugins(
         state_path=Path(data_dir) / "plugin-system.jsonc",
     )
     v2_manifests = [item for item in v2_host.discover() if item.assembly == "v2"]
+    # user:“插件可以有自己的后端”+v2 插件沿用同一套后端装载器，
+    # 工具 handler、动态工具提供者和操作上下文都从这里来。
+    v2_backends = load_enabled_plugin_backends(
+        [item for item in v2_manifests if item.enabled],
+        plugin_context,
+        start=start_lifecycle,
+    )
+    from lamtools_core.plugin_system.backend_runtime import remember_handles
+
+    remember_handles(v2_backends)
+    for v2_handle in v2_backends:
+        plugin_tool_handlers.update(v2_handle.tool_handlers)
+        plugin_tool_providers.extend(v2_handle.tool_providers)
     v2_runtime = PluginSystemRuntime(v2_host)
     v2_artifacts = v2_runtime.assemble(manifests=v2_manifests)
     v2_agents = v2_runtime.agents(manifests=v2_manifests).agents

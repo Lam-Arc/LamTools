@@ -120,8 +120,32 @@ export async function refreshPluginUIWidgets(
 
 /** Refresh enabled plugin modes and register the bundled component loaders. */
 export async function refreshPluginUIModes(requestRpc: PluginRpc): Promise<PluginUIEntry[]> {
-  const payload = await listPluginUI(requestRpc)
-  const entries = Array.isArray(payload.modes) ? payload.modes : []
+  // user:“注册到模式切换，类似 study 和 workflow”+新插件系统的模式描述
+  // 和旧插件同形，两边都取，按 pluginId:id 去重。
+  const [legacyResult, systemResult] = await Promise.allSettled([
+    listPluginUI(requestRpc),
+    requestRpc('plugin.system.ui', {}),
+  ])
+  if (legacyResult.status === 'rejected' && systemResult.status === 'rejected') {
+    throw legacyResult.reason
+  }
+  const payload = legacyResult.status === 'fulfilled' ? legacyResult.value : {}
+  const merged = new Map<string, PluginUIEntry>()
+  const addEntries = (value: unknown): void => {
+    if (!Array.isArray(value)) return
+    for (const raw of value as PluginUIEntry[]) {
+      if (!raw || typeof raw !== 'object') continue
+      const pluginId = String(raw.pluginId || (raw as unknown as { plugin?: string }).plugin || '').trim()
+      const id = String(raw.id || '').trim()
+      if (!pluginId || !id) continue
+      merged.set(`${pluginId}:${id}`, { ...raw, pluginId, id })
+    }
+  }
+  addEntries(payload.modes)
+  if (systemResult.status === 'fulfilled') {
+    addEntries((systemResult.value as { modes?: unknown }).modes)
+  }
+  const entries = [...merged.values()]
   const enabledPlugins = new Set(entries.map((entry) => entry.pluginId))
   for (const mode of pluginUIRegistry.listModes()) {
     if (!enabledPlugins.has(mode.pluginId)) pluginUIRegistry.unregisterPlugin(mode.pluginId)
