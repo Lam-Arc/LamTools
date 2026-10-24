@@ -31,6 +31,7 @@ Install it (section 13), confirm it appears enabled on the plugin page, then gro
 | Need | Use |
 | --- | --- |
 | Knowledge, a repeatable procedure, a one-off script | a skill plus `run_command` |
+| A capability needing heavy dependencies (ML models, compiled libs, another language) | a script in the plugin folder + a setup operation that bootstraps its own environment (e.g. uv + venv under the plugin's `data/`), executed via `run_command` or a dedicated tool. Whether it runs depends on the user's machine, not the host packaging — declare the requirement in config |
 | A slash-command trigger for an action | `commands` + an operation |
 | Frequent calls with a strict return shape, or work that must bypass the highest command permission gate | a native tool |
 | An RPC other surfaces (blocks, commands, the model) call | `operations` |
