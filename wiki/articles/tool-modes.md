@@ -113,7 +113,7 @@
 
 1. [工具模式设置](../../core/ui/src/components/CoreLoadToolsEditor.vue)
 2. [设置分区清单](../../core/ui/src/components/settingsSections.ts)
-3. [插件设置](../../core/ui/src/components/CorePluginsEditor.vue)
+3. [插件设置](../../core/ui/src/components/CorePluginSystemEditor.vue)
 
 ## 分类
 

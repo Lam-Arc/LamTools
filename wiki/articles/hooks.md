@@ -110,9 +110,9 @@
 
 以下为本条目引用的来源：
 
-1. [钩子配置解析](../../core/src/lamtools_core/plugins/hook_config.py)
+1. [钩子配置解析](../../core/src/lamtools_core/plugin_system/hooks.py)
 2. [钩子编辑界面](../../core/ui/src/components/CoreHooksEditor.vue)
-3. [插件设置](../../core/ui/src/components/CorePluginsEditor.vue)
+3. [插件设置](../../core/ui/src/components/CorePluginSystemEditor.vue)
 
 ## 分类
 

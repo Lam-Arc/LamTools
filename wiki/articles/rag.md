@@ -107,7 +107,7 @@ RAG 返回空结果只说明当前索引没有匹配，不能证明相关知识�
 
 1. [RAG 状态组件](../../core/ui/src/components/RightSidebarRag.vue)
 2. [右侧栏宿主](../../core/ui/src/components/RightSidebarHost.vue)
-3. [插件注册](../../core/src/lamtools_core/plugins/registry.py)
+3. [插件发现与启停](../../core/src/lamtools_core/plugin_system/host.py)
 
 ## 分类
 
