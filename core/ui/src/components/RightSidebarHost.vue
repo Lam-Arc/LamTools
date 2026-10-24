@@ -65,10 +65,11 @@
 import { t } from '@/i18n/index.ts'
 
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
-import { Bot, BookOpen, Gauge, Globe, ListChecks, ListTodo } from 'lucide-vue-next'
+import { Bot, BookOpen, Gauge, Globe, ListChecks, ListTodo, Puzzle } from 'lucide-vue-next'
 import RightSidebarChecklist from '@/components/RightSidebarChecklist.vue'
 import RightSidebarWebSearch from '@/components/RightSidebarWebSearch.vue'
-import { ensureContributions, pluginEnabled } from '@/plugins/contributions.ts'
+import { contributionsFor, ensureContributions, pluginEnabled, type PluginRegionContribution } from '@/plugins/contributions.ts'
+import PluginRegionBlocks from '@/components/PluginRegionBlocks.vue'
 import RightSidebarRag from '@/components/RightSidebarRag.vue'
 import RightSidebarProcesses from '@/components/RightSidebarProcesses.vue'
 import CoreResourceStats from '@/components/CoreResourceStats.vue'
@@ -238,7 +239,41 @@ function deleteSubAgent(run: CoreSubAgentRun): void {
 // 未知时乐观显示：面板在查到“插件停用”前保持可见（含无 RPC 的测试环境）。
 const websearchEnabled = ref(true)
 
-const railModules = computed<RailModule[]>(() => [
+// user:“右侧栏可以添加图标注册一个项”+插件的 right 贡献注册成 rail 项：
+// 图标用插件名首字母占位，悬停卡渲染该贡献的块与动作；replace 接管者除外
+// （它整块接管抽屉本体，不走 rail）。
+const pluginRailModules = computed<RailModule[]>(() => {
+  const items: RailModule[] = []
+  // 声明式贡献（plugin.system.ui 的 right 区域）：图标占位，卡渲染块与动作。
+  contributionsFor('right')
+    .filter((item: PluginRegionContribution) => !item.replace)
+    .forEach((item: PluginRegionContribution, index: number) => {
+      items.push({
+        id: `plugin-${item.plugin}-${index}`,
+        title: item.plugin,
+        icon: Puzzle,
+        component: PluginRegionBlocks,
+        componentProps: {
+          regions: [item],
+          requestRpc: props.requestRpc,
+        },
+      })
+    })
+  // 进程内贡献（随包模式宿主自带组件）：直接入栏。
+  for (const entry of props.pluginContributions ?? []) {
+    if (!entry.component) continue
+    items.push({
+      id: `plugin-${entry.id}`,
+      title: entry.title,
+      icon: entry.icon ?? Puzzle,
+      component: entry.component,
+      componentProps: entry.componentProps ?? {},
+    })
+  }
+  return items
+})
+
+const railModules = computed<RailModule[]>(() => ([
   {
     id: 'checklist',
     title: 'Checklist',
@@ -313,7 +348,9 @@ const railModules = computed<RailModule[]>(() => [
       widgetEntry: null,
     },
   },
-].filter((module) => module.id !== 'web-search' || websearchEnabled.value))
+] as RailModule[])
+  .filter((module) => module.id !== 'web-search' || websearchEnabled.value)
+  .concat(pluginRailModules.value))
 
 const activeModule = computed<RailModule | null>(() => (
   cardVisible.value
@@ -334,6 +371,14 @@ const activeModule = computed<RailModule | null>(() => (
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-2) 0;
+  /* 滚动兜底：插件项多了列内滚动，不外溢；滚动条按右栏惯例隐藏。 */
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.right-sidebar-rail::-webkit-scrollbar {
+  display: none;
 }
 .right-sidebar-rail-btn {
   display: inline-flex;

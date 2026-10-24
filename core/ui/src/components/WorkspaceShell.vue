@@ -92,19 +92,18 @@
       <template v-if="$slots.primary" #primary>
         <slot name="primary" />
       </template>
-      <template v-if="$slots['sidebar-body']" #sidebar-body>
-        <slot name="sidebar-body" />
-      </template>
-      <template v-if="$slots['sidebar-footer']" #sidebar-footer>
-        <slot name="sidebar-footer" />
-      </template>
       <template #sidebar-body>
         <slot v-if="$slots['sidebar-body'] && !isRegionReplaced('left')" name="sidebar-body" />
         <PluginSystemContributions
           v-if="props.pluginRpc"
           :request-rpc="props.pluginRpc"
           region="left"
+          replacer-only
         />
+      </template>
+      <template #sidebar-footer>
+        <slot v-if="$slots['sidebar-footer']" name="sidebar-footer" />
+        <LeftPluginDock v-if="props.pluginRpc" :request-rpc="props.pluginRpc" />
       </template>
     </LeftSidebarShell>
 
@@ -237,6 +236,7 @@
           v-if="props.pluginRpc"
           :request-rpc="props.pluginRpc"
           region="right"
+          replacer-only
         />
       </div>
     </aside>
@@ -250,6 +250,7 @@
 import { defaultUiText } from '@/i18n/index.ts'
 
 import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
+import LeftPluginDock from '@/components/LeftPluginDock.vue'
 import { isRegionReplaced } from '@/plugins/contributions.ts'
 
 import { t } from '@/i18n/index.ts'

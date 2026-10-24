@@ -42,7 +42,7 @@ afterEach(() => {
       attachTo: document.body,
     })
 
-    // 竖栏 = 内置模块，一模块一图标，按固定顺序排列；插件/表面条目不入栏。
+    // 竖栏 = 内置模块 + 插件注册的图标项；无组件的进程内贡献不入栏。
     const railIds = wrapper.findAll('[data-right-rail-module]').map(b => b.attributes('data-right-rail-module'))
     expect(railIds).toEqual(['checklist', 'resources', 'sub-agents', 'web-search', 'processes', 'rag'])
     // 未悬停时不出卡。
@@ -119,6 +119,49 @@ afterEach(() => {
     await wrapper.vm.$nextTick()
     expect(cardElement()).toBeNull()
 
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('registers plugin right-region contributions as rail items with hover cards', async () => {
+    vi.useFakeTimers()
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'plugin.system.ui') {
+        return {
+          styles: [],
+          scripts: [],
+          regions: [
+            {
+              plugin: 'notesync',
+              region: 'right',
+              order: 50,
+              mode: '',
+              replace: false,
+              blocks: [
+                { type: 'status', label: 'State', value: 'synced', text: '', state: '', items: [], detail: '' },
+              ],
+              actions: [],
+            },
+          ],
+          windows: [],
+          modes: [],
+          errors: [],
+        }
+      }
+      return {}
+    })
+    const wrapper = mount(RightSidebarHost, { props: { requestRpc: rpc }, attachTo: document.body })
+    await vi.advanceTimersByTimeAsync(0)
+    await flushPromises()
+
+    // user:“右侧栏可以添加图标注册一个项”+插件贡献注册成 rail 图标项。
+    const btn = wrapper.find('[data-right-rail-module="plugin-notesync-0"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('title')).toBe('notesync')
+
+    await btn.trigger('mouseenter')
+    const card = new DOMWrapper(document.querySelector('[data-right-sidebar-card]') as HTMLElement)
+    expect(card.text()).toContain('synced')
     wrapper.unmount()
     vi.useRealTimers()
   })

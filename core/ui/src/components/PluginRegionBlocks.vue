@@ -1,5 +1,5 @@
 <template>
-  <div v-if="regions.length" class="plugin-region-blocks">
+  <div v-if="regions.length" class="plugin-region-blocks" :class="{ 'plugin-region-blocks--fill': props.fill }">
     <section
       v-for="region in regions"
       :key="`${region.plugin}:${region.region}:${region.order}`"
@@ -127,6 +127,8 @@ interface RegionView extends PluginRegionContribution {
 const props = defineProps<{
   regions: PluginRegionContribution[]
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  /** 整栏接管场景：容器撑满并自带滚动，内容再多也不溢出。 */
+  fill?: boolean
 }>()
 
 const viewRegions = computed<RegionView[]>(() =>
@@ -268,6 +270,14 @@ function progressLabel(block: PluginBlock): string {
 .plugin-region-blocks {
   display: grid;
   gap: 8px;
+}
+
+.plugin-region-blocks--fill {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding-right: 2px;
 }
 
 .plugin-region-card {
