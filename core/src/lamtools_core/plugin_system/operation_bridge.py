@@ -267,7 +267,13 @@ def register_plugin_operations(catalog: Any, host: PluginHost) -> OperationAssem
         errors = getattr(catalog, "plugin_operation_errors", None)
         if isinstance(errors, list):
             errors.extend(assembly.errors)
+    registered = set(catalog.registered()) if hasattr(catalog, "registered") else set()
     for spec in assembly.operations:
+        # 外层目录会把内层已经挂过的操作原样搬过来，这里跳过，避免
+        # 把“已注册”误记成插件错误。
+        if spec.name in registered:
+            continue
+
         def available(plugin_name: str = spec.plugin) -> bool:
             manifest = host.get(plugin_name)
             return manifest is not None and manifest.enabled

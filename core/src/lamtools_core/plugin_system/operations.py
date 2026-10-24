@@ -419,7 +419,7 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
         keep_data = bool(request.payload.get("keep_data", True))
         try:
             host.uninstall(name, keep_data=keep_data)
-        except KeyError as exc:
+        except (KeyError, ValueError) as exc:
             return OperationResult(
                 name=request.name, status="error", payload={"error": str(exc)}
             )

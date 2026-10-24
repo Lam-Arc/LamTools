@@ -84,10 +84,9 @@ def scene_label(scene: str) -> str:
 def scene_for_plugin(plugin: Any = None, *, name: str = "") -> str:
     """Map a plugin to its model scene.
 
-    A manifest may declare ``model_scene`` explicitly; otherwise the bundled
-    Study / desktop-pet plugins are recognised by name and every other plugin
-    defaults to ``background`` (never ``chat`` — a plugin must not be handed
-    the conversation's model by accident).
+    A manifest declares ``model_scene`` explicitly; everything else defaults
+    to ``background`` (never ``chat`` — a plugin must not be handed the
+    conversation's model by accident).
     """
     raw = getattr(plugin, "raw", None)
     if isinstance(raw, dict):
