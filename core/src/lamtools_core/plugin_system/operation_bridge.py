@@ -149,6 +149,14 @@ def assemble_operations(
 
 
 def _load_handler_module(spec: PluginOperationSpec, module_name: str) -> Any:
+    if "." in module_name:
+        # Bundled and packaged plugins declare a dotted module path.  Import it
+        # normally after making the plugin root importable, like the legacy
+        # operation loader does.
+        root = str(spec.root)
+        if root not in sys.path:
+            sys.path.append(root)
+        return importlib.import_module(module_name)
     path = (spec.root / f"{module_name}.py").resolve()
     if not path.is_file():
         raise ImportError(f"handler module is missing: {path}")

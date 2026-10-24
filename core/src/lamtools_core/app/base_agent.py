@@ -2153,6 +2153,27 @@ def build_core_plugin_operation_catalog(
     )
     if plugin_context.operation_catalog is None:
         plugin_context.operation_catalog = catalog
+    # user:“插件自己也提供操作”+插件目录里的操作表和插件系统操作都挂在
+    # 同一张目录上，v2 后端也在这里装一次，测试和 CLI 用的就是这份。
+    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system.backend_runtime import remember_handles
+    from lamtools_core.plugin_system.operation_bridge import register_plugin_operations
+
+    plugin_system_host = PluginHost(
+        roots=roots,
+        state_path=data_path / "plugin-system.jsonc",
+    )
+    v2_manifests = [
+        item for item in plugin_system_host.discover() if item.assembly == "v2"
+    ]
+    v2_backends = load_enabled_plugin_backends(
+        [item for item in v2_manifests if item.enabled],
+        plugin_context,
+        start=start_lifecycle,
+    )
+    remember_handles(v2_backends)
+    register_plugin_operations(catalog, plugin_system_host)
+    catalog.plugin_system_host = plugin_system_host
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = plugin_runtimes
     catalog.plugin_registry = plugin_registry
