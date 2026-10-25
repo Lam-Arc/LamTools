@@ -47,6 +47,10 @@
       @start-plan="emit('start-plan', $event)"
       @heading="onChildHeading"
     />
+    <WikiView
+      v-else-if="section === 'wiki'"
+      :request-rpc="requestRpc"
+    />
   </div>
 </template>
 
@@ -104,16 +108,17 @@ const emit = defineEmits<{
   heading: [payload: { title: string; subtitle: string }]
 }>()
 
-type SectionId = 'materials' | 'memory' | 'plans'
+type SectionId = 'materials' | 'memory' | 'plans' | 'wiki';
 const SECTIONS: Array<{ id: SectionId; label: string }> = [
   { id: 'materials', get label() { return t("资料") } },
   { id: 'memory', get label() { return t("记忆") } },
   { id: 'plans', get label() { return t("方案") } },
+  { id: 'wiki', get label() { return t("Wiki") } },
 ]
 
 const section = ref<SectionId>('materials')
 const childHeading = ref<{ title: string; subtitle: string } | null>(null)
-const sectionRef = ref<{ handleBack?: () => boolean; isEditing?: () => boolean } | null>(null)
+const sectionRef = ref<{ handleBack?: () => boolean; isEditing?: () => boolean; hasUnsavedChanges?: () => boolean; savePendingChanges?: () => Promise<boolean>; discardPendingChanges?: () => void } | null>(null)
 
 /** 正在写的草稿不该被一次分区切换吞掉：编辑中先不让切走。 */
 function selectSection(next: SectionId): void {
@@ -148,5 +153,6 @@ watch(heading, (value) => emit('heading', { ...value }), { immediate: true })
 function handleBack(): boolean {
   return sectionRef.value?.handleBack?.() ?? false
 }
-defineExpose({ handleBack })
+// user:“内置文本编辑器”+(分屏关闭资料库时也要保护正在编辑的记忆与方案)。
+defineExpose({ handleBack, hasUnsavedChanges: () => sectionRef.value?.hasUnsavedChanges?.() || false, savePendingChanges: () => sectionRef.value?.savePendingChanges?.() ?? Promise.resolve(true), discardPendingChanges: () => sectionRef.value?.discardPendingChanges?.() })
 </script>

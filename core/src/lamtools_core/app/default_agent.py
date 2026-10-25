@@ -414,6 +414,12 @@ def create_core_agent_operations(
         ).strip()
         if not thread_id:
             return OperationResult(name=request.name, status="error", payload={"error": "thread_id is required"})
+        # user:“做成真正的“主聊天助手””+(所有开始、队列与继续路径都在模型调用前读取真实来源；附加信息不混入用户正文)。
+        from .auxiliary_chat import prepare_auxiliary_request
+        try:
+            request = replace(request, payload=await prepare_auxiliary_request(session_store, runtime_state_store, request.payload))
+        except (ValueError, OSError) as error:
+            return OperationResult(name=request.name, status="error", payload={"error": str(error)})
         # A continuation of a paused turn starts from the committed history and
         # deliberately carries no new text; queued member events are appended
         # below, so it is only empty when there is genuinely nothing to run on.
@@ -464,7 +470,7 @@ def create_core_agent_operations(
         if db_session_factory is not None:
             from .steering import pending_steering
             recovered_steering = await pending_steering(db_session_factory, thread_id)
-            if recovered_steering:
+            if recovered_steering and not is_continuation:
                 prior = "\n\n".join(item["content"] for item in recovered_steering)
                 message = f"[Previously accepted steering not yet checkpointed]\n{prior}\n\n[Current user input]\n{message}"
         if goal_id:
@@ -534,6 +540,8 @@ def create_core_agent_operations(
             async def live_callback(event: Any) -> None:
                 await _persist_core_event_live(
                     event,
+                    artifact_store=artifact_store,
+                    work_root=runtime_work_root,
                     thread_id=thread_id,
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
@@ -707,6 +715,27 @@ def create_core_agent_operations(
                     attachment_service=attachment_service,
                     capability=runtime_options.capability,
                 )
+                # user:“把它作为一个引导信息发进去”+(恢复补充复用普通引导的
+                # 入历史、回执和界面事件，不生成每次请求都移到末尾的 system 指令)。
+                if is_continuation:
+                    from .queue_state import input_item_attachment_ids
+                    for item in recovered_steering:
+                        attachment_ids = input_item_attachment_ids(item.get("input") or [])
+                        guidance_text = item["content"] or (
+                            "附件：" + ", ".join(attachment_ids) if attachment_ids else ""
+                        )
+                        content, deferred = await _build_attachment_user_content(
+                            message=guidance_text,
+                            attachment_ids=attachment_ids,
+                            attachment_service=attachment_service,
+                            capability=runtime_options.capability,
+                        )
+                        deferred_attachments.extend(deferred)
+                        runtime_task_registry.inject_guidance(
+                            thread_id, guidance_text, run_id=guidance_run_id,
+                            guidance_id=item["id"],
+                            metadata={"user_content": content} if content else {},
+                        )
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
                         user_message=message,
@@ -731,7 +760,7 @@ def create_core_agent_operations(
                                 *[str(item["id"]) for item in member_events],
                                 *[str(item["id"]) for item in child_messages],
                             ],
-                            "initial_guidance_ids": [item["id"] for item in recovered_steering],
+                            "initial_guidance_ids": [] if is_continuation else [item["id"] for item in recovered_steering],
                             "session_metadata": session_metadata,
                             **(
                                 {
@@ -837,6 +866,8 @@ def create_core_agent_operations(
             run_items = core_events_to_run_items(sink.events, thread_id=thread_id)
             snapshot = await _persist_run_items(
                 run_items,
+                artifact_store=artifact_store,
+                work_root=runtime_work_root,
                 db_session_factory=db_session_factory,
                 app_event_store=app_event_store,
                 thread_snapshot_store=thread_snapshot_store,
@@ -1025,6 +1056,9 @@ def create_core_agent_operations(
                 active_mode = runtime_snapshot.get("active_mode")
                 if not isinstance(active_mode, str) or not active_mode.strip():
                     active_mode = None
+                if runtime_snapshot.get("auxiliary_read_only") is True:
+                    turn_instructions = runtime_snapshot.get("instructions") or turn_instructions
+                    request_local_late_context = runtime_snapshot.get("request_local_late_context") or request_local_late_context
                 allow_access_outside_workdir = bool(
                     runtime_snapshot.get("allow_access_outside_workdir", False)
                 )
@@ -1141,6 +1175,8 @@ def create_core_agent_operations(
                 guidance=decision.guidance_text,
                 persist_run_items=lambda run_items: _persist_run_items(
                     run_items,
+                    artifact_store=artifact_store,
+                    work_root=runtime_work_root,
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
@@ -1399,6 +1435,8 @@ def create_core_agent_operations(
                 async def delegated_live_callback(event: Any) -> None:
                     await _persist_core_event_live(
                         event,
+                        artifact_store=artifact_store,
+                        work_root=runtime_work_root,
                         thread_id=event_thread_id,
                         db_session_factory=db_session_factory,
                         app_event_store=app_event_store,
@@ -1547,6 +1585,8 @@ def create_core_agent_operations(
                         run_items = core_events_to_run_items(events, thread_id=event_thread_id)
                         snapshot = await _persist_run_items(
                             run_items,
+                            artifact_store=artifact_store,
+                            work_root=runtime_work_root,
                             db_session_factory=db_session_factory,
                             app_event_store=app_event_store,
                             thread_snapshot_store=thread_snapshot_store,
@@ -1594,6 +1634,8 @@ def create_core_agent_operations(
                         )
                         snapshot = await _persist_run_items(
                             run_items,
+                            artifact_store=artifact_store,
+                            work_root=runtime_work_root,
                             db_session_factory=db_session_factory,
                             app_event_store=app_event_store,
                             thread_snapshot_store=thread_snapshot_store,
@@ -1763,6 +1805,8 @@ def create_core_agent_operations(
                 try:
                     snapshot = await _persist_run_items(
                         run_items,
+                        artifact_store=artifact_store,
+                        work_root=runtime_work_root,
                         db_session_factory=db_session_factory,
                         app_event_store=app_event_store,
                         thread_snapshot_store=thread_snapshot_store,
@@ -2021,6 +2065,8 @@ def create_core_agent_operations(
             async def approval_live_callback(event: Any) -> None:
                 await _persist_core_event_live(
                     event,
+                    artifact_store=artifact_store,
+                    work_root=runtime_work_root,
                     thread_id=thread_id,
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
@@ -2198,6 +2244,8 @@ def create_core_agent_operations(
             try:
                 snapshot = await _persist_run_items(
                     run_items,
+                    artifact_store=artifact_store,
+                    work_root=runtime_work_root,
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
@@ -2428,6 +2476,8 @@ def create_core_agent_operations(
         event_thread_id = str(getattr(event, "thread_id", "") or paths.work_root)
         await _persist_core_event_live(
             event,
+            artifact_store=artifact_store,
+            work_root=paths.work_root,
             thread_id=event_thread_id,
             db_session_factory=db_session_factory,
             app_event_store=app_event_store,
@@ -2539,6 +2589,23 @@ def create_core_agent_operations(
             state_path=Path(paths.data_dir) / "plugin-system.jsonc",
         )
     register_plugin_system_operations(catalog, plugin_system_host)
+
+    # user:“wiki 内置进 library，作为第四项”+只读文档集经操作通道出。
+    from lamtools_core.app.wiki_library import read_wiki_article, scan_wiki
+
+    async def library_wiki_list(request: OperationRequest) -> OperationResult:
+        return OperationResult(name=request.name, payload={"articles": scan_wiki()})
+
+    async def library_wiki_read(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        try:
+            article = read_wiki_article(str(payload.get("slug") or ""))
+        except ValueError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload=article)
+
+    catalog.register("library.wiki.list", library_wiki_list, owner="library")
+    catalog.register("library.wiki.read", library_wiki_read, owner="library")
     catalog.plugin_system_host = plugin_system_host
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = getattr(plugin_operations, "plugin_runtimes", [])
@@ -2730,6 +2797,11 @@ def _runtime_snapshot_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]
         for key in _RUNTIME_OPTION_KEYS:
             if key in raw and raw[key] is not None:
                 snapshot[key] = deepcopy(raw[key])
+        if raw.get("auxiliary_read_only") is True:
+            # The hard cap and bound source must survive approval reconstruction.
+            for key in ("auxiliary_read_only", "auxiliary_parent_session_id", "auxiliary_additional_information", "instructions", "request_local_late_context"):
+                if key in raw:
+                    snapshot[key] = deepcopy(raw[key])
         return snapshot
 
     # Old internal callers already provide the resolved fields.  Preserve
@@ -3106,9 +3178,18 @@ async def _persist_run_items(
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
     app_event_hub: Any | None = None,
     write_coordinator: Any | None = None,
+    artifact_store: Any | None = None,
+    work_root: Path | str | None = None,
 ) -> dict[str, Any] | None:
     if not run_items or db_session_factory is None or app_event_store is None or thread_snapshot_store is None:
         return None
+    # user:“调整为自动检验输出的 绝对地址和项目相对地址”+(登记先于投影，实时事件与最终落库保持一致)。
+    if artifact_store is not None and work_root is not None:
+        for item in run_items:
+            try:
+                await artifact_store.ingest_run_item(item, work_root=work_root)
+            except Exception:
+                _logger.warning("[artifact] outcome indexing failed thread=%s", getattr(item, "thread_id", ""), exc_info=True)
     persistence = AppPersistenceHost(
         app_event_store,
         thread_snapshot_store,
@@ -3349,6 +3430,8 @@ async def _persist_core_event_live(
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
     app_event_hub: Any | None,
     write_coordinator: Any | None = None,
+    artifact_store: Any | None = None,
+    work_root: Path | str | None = None,
 ) -> None:
     if getattr(event, "metadata", {}).get("delivery") == "transient":
         if app_event_hub is None:
@@ -3377,6 +3460,13 @@ async def _persist_core_event_live(
     run_items = core_events_to_run_items([event], thread_id=thread_id)
     if not run_items:
         return
+    # user:“调整为自动检验输出的 绝对地址和项目相对地址”+(登记先于投影，实时事件与最终落库保持一致)。
+    if artifact_store is not None and work_root is not None:
+        for item in run_items:
+            try:
+                await artifact_store.ingest_run_item(item, work_root=work_root)
+            except Exception:
+                _logger.warning("[artifact] outcome indexing failed thread=%s", getattr(item, "thread_id", ""), exc_info=True)
     persistence = AppPersistenceHost(
         app_event_store,
         thread_snapshot_store,
@@ -3644,6 +3734,11 @@ async def _build_core_runtime_toolbox(
                     overrides_path,
                     exc,
                 )
+    # user:“做成真正的“主聊天助手””+(在普通工具箱内注册来源聊天只读查询，保留统一的工具执行和审批通道)。
+    from .auxiliary_chat import auxiliary_tool_contributions, lock_auxiliary_toolbox
+    auxiliary_specs, auxiliary_handlers = auxiliary_tool_contributions(runtime_snapshot, sub_agent_state_store)
+    plugin_tool_specs = [*plugin_tool_specs, *auxiliary_specs]
+    plugin_tool_handlers = {**plugin_tool_handlers, **auxiliary_handlers}
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=normalized_policy,
@@ -3678,6 +3773,8 @@ async def _build_core_runtime_toolbox(
         data_dir=data_dir,
         artifact_store=artifact_store,
     )
+    if (runtime_snapshot or {}).get("auxiliary_read_only") is True:
+        lock_auxiliary_toolbox(toolbox)
     return toolbox, registry
 
 
