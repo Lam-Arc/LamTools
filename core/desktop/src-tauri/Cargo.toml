@@ -1,6 +1,6 @@
 [package]
 name = "lamcore"
-version = "0.3.22"
+version = "0.3.22-a1"
 description = "Sunday desktop app"
 authors = ["Lam"]
 edition = "2021"
@@ -20,7 +20,7 @@ mdns-sd = "0.13"
 local-ip-address = "0.6"
 tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "unstable"] }
 tauri-plugin-single-instance = "2"
 rfd = "0.17"
 # Opens URLs/files in the OS default application. Used to route clicked
