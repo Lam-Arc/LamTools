@@ -73,6 +73,11 @@ let globalRpc: PluginRpc | null = null
 
 export function setContributionsRpc(rpc: PluginRpc | null): void {
   globalRpc = rpc
+  // user:“自绘 entry 要能调自己的操作”+把请求通道挂为全局桥，
+  // entry 脚本经 window.LamToolsPluginRPC 调插件自己的操作。
+  if (typeof window !== 'undefined' && rpc && !window.LamToolsPluginRPC) {
+    ;(window as unknown as { LamToolsPluginRPC: PluginRpc }).LamToolsPluginRPC = rpc
+  }
 }
 
 export function contributionsRpc(): PluginRpc | null {
