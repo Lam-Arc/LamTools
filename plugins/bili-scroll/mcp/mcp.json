@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "bilibili": {
+      "command": "{{BILI_VENV_PYTHON}}",
+      "args": ["{{PLUGIN_DIR}}/server/bili_server.py"]
+    }
+  }
+}

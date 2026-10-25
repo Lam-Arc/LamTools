@@ -37,6 +37,9 @@ class ProfileSpec:
     tools: tuple[str, ...] = ()
     approval: str = "auto"  # auto | ask
     model_scene: str = ""  # 空值 = 不覆盖模型
+    # 拉起的会话需激活的 MCP 服务器名（如 {"bilibili"}）；白名单里的 MCP
+    # 工具只有在其服务器激活后才真的可用。
+    mcp_servers: tuple[str, ...] = ()
     budget: ProfileBudget = ProfileBudget()
 
 
@@ -81,6 +84,12 @@ def read_profiles(manifest: PluginManifest) -> dict[str, ProfileSpec]:
                 manifest.name,
                 f"profile '{short}' approval must be one of {', '.join(VALID_APPROVALS)}: {approval}",
             )
+        servers_raw = body.get("mcpServers") or body.get("mcp_servers")
+        servers = (
+            tuple(str(item).strip() for item in servers_raw if str(item).strip())
+            if isinstance(servers_raw, list)
+            else ()
+        )
         budget_raw = body.get("budget") if isinstance(body.get("budget"), dict) else {}
         budget = ProfileBudget(
             max_tool_calls=_positive_int(budget_raw.get("maxToolCalls"), label="maxToolCalls"),
@@ -94,6 +103,7 @@ def read_profiles(manifest: PluginManifest) -> dict[str, ProfileSpec]:
             tools=tools,
             approval=approval,
             model_scene=str(body.get("modelScene") or "").strip(),
+            mcp_servers=servers,
             budget=budget,
         )
     return profiles

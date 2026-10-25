@@ -21,6 +21,24 @@
       "default": "full",
       "description": "完整 = 为什么值得 + 一句话；薄版 = 值不值 + 链接；off = 只记判重表"
     },
+    "peak_valley": {
+      "type": "boolean",
+      "title": "峰谷自动刷",
+      "default": false,
+      "description": "打开后插件内置定时器在优惠时段自动拉起值班轮（每天每时段最多一轮）"
+    },
+    "noon": {
+      "type": "boolean",
+      "title": "中午时段（12–14 点）",
+      "default": true,
+      "description": "峰谷自动刷的子开关"
+    },
+    "night": {
+      "type": "boolean",
+      "title": "晚间时段（18 点–次日 9 点）",
+      "default": true,
+      "description": "峰谷自动刷的子开关"
+    },
     "auto_comment": {
       "type": "boolean",
       "title": "自动评论并 @ 我",

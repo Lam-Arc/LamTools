@@ -9,6 +9,21 @@
       "name": "bili-scroll.reports.list",
       "description": "列出已经写出的日报文件",
       "handler": "ops:reports_list"
+    },
+    {
+      "name": "bili-scroll.setup",
+      "description": "装依赖：建插件自管环境并写回 MCP 配置",
+      "handler": "ops:setup"
+    },
+    {
+      "name": "bili-scroll.selfcheck",
+      "description": "环境自检：venv / mcp.json / 凭证 / whisper / ffmpeg",
+      "handler": "ops:selfcheck"
+    },
+    {
+      "name": "bili-scroll.run_now",
+      "description": "现在跑一轮：按运行档拉起值班子代理",
+      "handler": "ops:run_now"
     }
   ]
 }

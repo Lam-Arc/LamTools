@@ -7,9 +7,6 @@
   "skills": [
     "./skills"
   ],
-  "tools": [
-    "./tools/tools.jsonc"
-  ],
   "operations": [
     "./operations.jsonc"
   ],
@@ -31,24 +28,65 @@
     "duty": {
       "title": "值班轮",
       "tools": [
-        "bili_brief",
-        "bili_search",
-        "bili_video_info",
-        "bili_subtitles",
-        "bili_comments",
-        "bili_save_report",
-        "bili_dedup",
-        "bili_post_comment",
-        "bili_account_status",
-        "bili_send_dm",
-        "bili_dm_inbox"
+        "mcp__bilibili__brief",
+        "mcp__bilibili__search",
+        "mcp__bilibili__video_info",
+        "mcp__bilibili__subtitles",
+        "mcp__bilibili__comments",
+        "mcp__bilibili__save_report",
+        "mcp__bilibili__dedup",
+        "mcp__bilibili__post_comment",
+        "mcp__bilibili__account_status",
+        "mcp__bilibili__send_dm",
+        "mcp__bilibili__dm_inbox",
+        "mcp__bilibili__transcribe"
       ],
       "approval": "auto",
       "modelScene": "background",
+      "mcpServers": [
+        "bilibili"
+      ],
       "budget": {
         "maxToolCalls": 120,
-        "maxTokens": 300000
+        "maxTokens": 150000
       }
     }
+  },
+  "mcp": [
+    "./mcp/mcp.json"
+  ],
+  "backend": "./backend/__init__.py",
+  "ui": {
+    "regions": [
+      {
+        "region": "settings",
+        "order": 10,
+        "blocks": [
+          {
+            "type": "status",
+            "label": "值班状态",
+            "value": "峰谷自动刷见配置",
+            "state": "idle"
+          }
+        ],
+        "actions": [
+          {
+            "id": "run-now",
+            "title": "现在跑一轮",
+            "operation": "bili-scroll.run_now"
+          },
+          {
+            "id": "setup",
+            "title": "装依赖",
+            "operation": "bili-scroll.setup"
+          },
+          {
+            "id": "check",
+            "title": "测一下",
+            "operation": "bili-scroll.selfcheck"
+          }
+        ]
+      }
+    ]
   }
 }

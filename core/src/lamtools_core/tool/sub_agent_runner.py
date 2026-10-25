@@ -659,6 +659,12 @@ class KernelSubAgentRunner:
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = self._disabled_tools()
         if profile_spec is not None:
+            # user:“白名单里的 MCP 工具要服务器激活才可用”+运行档声明的
+            # MCP 服务器并入本次激活集——必须在构建工具箱之前，否则声明的
+            # 工具面进不了这次会话。
+            declared_servers = tuple(getattr(profile_spec, "mcp_servers", ()) or ())
+            if declared_servers:
+                self.activated_mcp_servers = set(self.activated_mcp_servers or ()) | set(declared_servers)
             # user:“运行档由宿主强制”+白名单以声明为准（覆盖调用方传入的
             # allowed_tools），配合 apply_profile 的 fail closed 执行拒绝。
             allowed = set(profile_spec.tools)

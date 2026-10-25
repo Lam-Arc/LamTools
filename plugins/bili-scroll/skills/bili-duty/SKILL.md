@@ -9,11 +9,11 @@ description: 替使用者值一班 B站 的岗——按关键词搜最近几天�
 
 ## 值班轮以子代理运行（主会话的模型这样派活）
 
-用宿主现成的 sub_agent 工具拉起值班子代理：`task` 写"按 bili-duty 章程替使用者值一班岗，先调 bili_brief 取参数，再按章程流程执行"；`agent` 填 `bili-duty`；`allowed_tools` 收窄到九个 bili 工具（bili_brief / bili_search / bili_video_info / bili_subtitles / bili_comments / bili_save_report / bili_dedup / bili_post_comment / bili_account_status）。子代理有独立会话与判重表视图，跑完把日报摘要交回主会话。主会话模型不亲自跑这一轮。
+值班轮由插件后端的峰谷定时器或“现在跑一轮”按钮按运行档拉起（独立受限会话）；在会话里手动派活时，用宿主现成的 sub_agent 工具拉起值班子代理：`task` 写"按 bili-duty 章程替使用者值一班岗，先调 bili_brief 取参数，再按章程流程执行"；`agent` 填 `bili-duty`；工具面按运行档 bili-scroll:duty 的白名单收窄为 bilibili MCP 的十二个工具（brief / search / video_info / subtitles / comments / save_report / dedup / post_comment / account_status / send_dm / dm_inbox / transcribe）。子代理有独立会话与判重表视图，跑完把日报摘要交回主会话。主会话模型不亲自跑这一轮。
 
 ## 开工先取参数（子代理内）
 
-第一件事：调用工具 `bili_brief`，拿今天的参数——关键词、每天限额、判重表近况、日报位置、登录状态。参数以它的返回为准，不要自己猜关键词，也不要跳过判重表直接开挑。
+第一件事：调用 bilibili 的 brief 工具（MCP），拿今天的参数——关键词、每天限额、判重表近况、日报位置、登录状态。参数以它的返回为准，不要自己猜关键词，也不要跳过判重表直接开挑。
 
 ## 这一轮的节奏
 
