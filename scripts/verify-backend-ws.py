@@ -105,7 +105,8 @@ def verify_ws(port: int) -> tuple[bool, str]:
             if websearch is None:
                 return False, "websearch is missing from the packaged plugin registry"
             if websearch.get("enabled") is not True:
-                enabled, enable_error = await call(ws, 3, "plugin.enable", {"name": "websearch"})
+                # user:“删 v1 成单一系统”+开关操作已并入 plugin.system.*。
+                enabled, enable_error = await call(ws, 3, "plugin.system.enable", {"name": "websearch"})
                 if enabled is None:
                     return False, enable_error
 
@@ -155,7 +156,7 @@ def main() -> int:
         ws_ok, ws_error = verify_ws(args.port)
         if ws_ok:
             print(
-                "[OK] WebSocket initialize + plugin.enable(websearch) + study.session + "
+                "[OK] WebSocket initialize + plugin.system.enable(websearch) + study.session + "
                 "websearch.widget.snapshot round-trip succeeded"
             )
             return 0
