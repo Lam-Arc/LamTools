@@ -60,7 +60,9 @@ try {
             exit 1
         }
     }
-    foreach ($RequiredPlugin in @("git", "imagegen", "websearch")) {
+    # user:“git 插件删掉，run_command 就能做”+git 已随插件系统重构删除，
+    # 必需清单同步为 imagegen / websearch（与 test_bundled_plugins 断言一致）。
+    foreach ($RequiredPlugin in @("imagegen", "websearch")) {
         $RequiredPluginDir = "$BundledPluginsDir\$RequiredPlugin"
         if (-not (Test-Path -LiteralPath $RequiredPluginDir)) {
             Write-Host "[FAIL] Required bundled plugin is missing: $RequiredPluginDir" -ForegroundColor Red
