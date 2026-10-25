@@ -116,7 +116,7 @@ _datas: list[tuple[str, str]] = [
     (str(_PROJECT_ROOT / "config" / "command"), "config/command"),
     (str(_PROJECT_ROOT / "config" / "llm_adapters"), "config/llm_adapters"),
     # user:“wiki 内置进 library，随版本走”+只读文档集随包分发。
-    (str(_PROJECT_ROOT / "wiki"), "resources/wiki"),
+    (str(_PROJECT_ROOT.parent / "wiki"), "resources/wiki"),
 ]
 
 # Built-in Skills and their shared companion runtimes. Add files explicitly so
