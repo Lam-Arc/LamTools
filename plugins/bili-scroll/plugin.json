@@ -1,6 +1,6 @@
 {
   "name": "bili-scroll",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "刷B站：每天替你刷一轮 B 站 —— 读字幕挑出值得的、写一份日报，值得的就私信或 @ 你。能力来自随包内置的 bilibili-mcp 服务器（MCP 配置照搬原版，未改写为进程内工具）。",
   "scope": "global",
   "defaultEnabled": true,

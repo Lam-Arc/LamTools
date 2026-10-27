@@ -115,7 +115,12 @@ def _spawn_detached(script: str, extra: list[str], log_name: str) -> dict:
     script_path = ROOT / "scripts" / script
     if not script_path.exists():
         return {"ok": False, "error": f"缺脚本 {script_path}"}
-    base = _base_python() or [sys.executable]
+    # user:“安装的时候直接从 GitHub 上”+(冻结宿主不是独立 Python，缺运行环境时明确提示)。
+    base = _base_python()
+    if not base:
+        if getattr(sys, "frozen", False):
+            return {"ok": False, "error": "未找到可用的 Python 3.10 或更高版本，请安装后重试安装主依赖。"}
+        base = [sys.executable]
     creation = 0
     if os.name == "nt":
         creation = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
@@ -142,7 +147,9 @@ def _base_python() -> list[str]:
     for candidate in (["py", "-3"], ["python"], ["python3"]):
         try:
             probe = subprocess.run(candidate + ["--version"], capture_output=True, text=True, timeout=20)
-            if probe.returncode == 0:
+            # user:“该修修”+(安装依赖只使用满足最低版本要求的 Python)。
+            version = re.search(r"Python\s+(\d+)\.(\d+)", probe.stdout + "\n" + probe.stderr)
+            if probe.returncode == 0 and version and tuple(map(int, version.groups())) >= (3, 10):
                 return candidate
         except Exception:
             continue
