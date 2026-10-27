@@ -326,12 +326,16 @@ jobs:
         run: |
           [[ "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.linux_only && format('refs/tags/v{0}', inputs.expected_version) || github.ref }}
 
       - name: Verify pinned release version
         if: inputs.linux_only == true
-        run: python3 -c "import json, os; assert json.load(open('core/desktop/src-tauri/tauri.conf.json'))['version'] == os.environ['EXPECTED_VERSION']"
+        run: |
+          # user:“修完打包发布新版本”+(允许更新构建工具，但应用与 wiki 源码必须与已发布标签完全一致)。
+          release_ref="refs/tags/v$EXPECTED_VERSION"
+          git fetch --depth=1 origin "$release_ref:$release_ref"
+          test "$(git rev-parse HEAD:core)" = "$(git rev-parse "$release_ref:core")"
+          test "$(git rev-parse HEAD:wiki)" = "$(git rev-parse "$release_ref:wiki")"
+          python3 -c "import json, os; assert json.load(open('core/desktop/src-tauri/tauri.conf.json'))['version'] == os.environ['EXPECTED_VERSION']"
 
       - name: Install Linux desktop build dependencies
         run: |

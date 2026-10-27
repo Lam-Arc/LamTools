@@ -107,6 +107,7 @@ done
 info "Staging source into the WSL filesystem: $SOURCE_ROOT"
 remove_tool_path "$SOURCE_ROOT"
 mkdir -p "$SOURCE_ROOT"
+# user:“修完打包发布新版本”+(冻结后端会读取仓库根目录的 wiki，Linux 暂存区必须同时保留这些资源)。
 tar -C "$ROOT" \
   --exclude='.git' \
   --exclude='*/node_modules' \
@@ -129,7 +130,7 @@ tar -C "$ROOT" \
   --exclude='*/.pytest_cache' \
   -cf - core/desktop core/ui core/src core/config core/skills \
   core/pyproject.toml core/lamtools-core-backend.spec core/desktop_backend.py \
-  scripts/package-linux.sh scripts/verify-backend-ws.py \
+  scripts/package-linux.sh scripts/verify-backend-ws.py wiki \
   | tar -C "$SOURCE_ROOT" -xf -
 
 for _icon_path in "${TAURI_ICON_PATHS[@]}"; do
