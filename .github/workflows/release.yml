@@ -9,12 +9,22 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      verify_public_only:
+        description: 'Only verify installation from the published GitHub update channel'
+        type: boolean
+        default: false
+      expected_version:
+        description: 'Version expected from the public update channel'
+        type: string
+        default: ''
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_public_only != true }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -275,6 +285,26 @@ jobs:
         with:
           name: sunday-installer
           path: core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe
+
+  # user:“修完打包发布新版本”+(在没有开发版单实例锁的干净 Windows 环境验收真实公开下载和安装后自动重启)。
+  verify-public-update:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_public_only == true }}
+    runs-on: windows-latest
+    env:
+      EXPECTED_VERSION: ${{ inputs.expected_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public GitHub update installation and automatic restart
+        shell: pwsh
+        run: |
+          if ($env:EXPECTED_VERSION) {
+            $release = Invoke-RestMethod 'https://api.github.com/repos/Lam-Arc/LamTools/releases/latest'
+            if ($release.tag_name -ne "v$env:EXPECTED_VERSION") { throw 'Public release version does not match the requested acceptance version' }
+          }
+          $root = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
+          $install = [IO.Path]::GetFullPath((Join-Path $root 'sunday-public-update-acceptance'))
+          if (-not $install.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe acceptance directory' }
+          ./scripts/verify-update-install.ps1 -InstallDir $install -KeepInstall
 
   build-linux:
     # package-linux.sh builds the native x64 sidecar and Tauri bundles. Windows

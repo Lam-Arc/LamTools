@@ -125,7 +125,7 @@ try {
         $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Lam-Arc/LamTools/releases/latest' -TimeoutSec 60
         $asset = $release.assets | Where-Object { $_.name -match '^Sunday_.*_x64-setup\.exe$' } | Select-Object -First 1
         if (-not $asset) { Fail 'GitHub release has no Windows installer' }
-        $manifest = [pscustomobject]@{ version = $release.tag_name.TrimStart('v'); download_url = $asset.browser_download_url; sha256 = ([string]$asset.digest).Replace('sha256:', ''); size = $asset.size }
+        $manifest = [pscustomobject]@{ version = $release.tag_name.TrimStart('v'); download_url = $asset.url; sha256 = ([string]$asset.digest).Replace('sha256:', ''); size = $asset.size }
     }
     $version = [string]$manifest.version
     $downloadUrl = [string]$manifest.download_url
@@ -142,7 +142,7 @@ try {
     $progressBackup = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is unusably slow with the progress bar
     try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $installer -TimeoutSec 1800 -UseBasicParsing
+        Invoke-WebRequest -Uri $downloadUrl -Headers @{ Accept = 'application/octet-stream' } -OutFile $installer -TimeoutSec 1800 -UseBasicParsing
     } finally {
         $ProgressPreference = $progressBackup
     }
