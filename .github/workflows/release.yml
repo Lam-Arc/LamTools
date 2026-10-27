@@ -14,6 +14,10 @@ on:
         description: 'Only verify installation from the published GitHub update channel'
         type: boolean
         default: false
+      linux_only:
+        description: 'Rebuild Linux assets from an existing release tag using bounded HTTPS mirrors'
+        type: boolean
+        default: false
       expected_version:
         description: 'Version expected from the public update channel'
         type: string
@@ -24,7 +28,7 @@ permissions:
 
 jobs:
   build-windows:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_public_only != true }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.verify_public_only != true && inputs.linux_only != true) }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -312,14 +316,33 @@ jobs:
     # Waiting for it also gives the two tag uploads one deterministic Release
     # creator and preserves the existing Windows release sequence.
     needs: build-windows
+    if: ${{ always() && inputs.verify_public_only != true && (needs.build-windows.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.linux_only == true)) }}
     runs-on: ubuntu-22.04
+    env:
+      EXPECTED_VERSION: ${{ inputs.expected_version }}
     steps:
+      - name: Validate Linux-only release target
+        if: inputs.linux_only == true
+        run: |
+          [[ "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.linux_only && format('refs/tags/v{0}', inputs.expected_version) || github.ref }}
+
+      - name: Verify pinned release version
+        if: inputs.linux_only == true
+        run: python3 -c "import json, os; assert json.load(open('core/desktop/src-tauri/tauri.conf.json'))['version'] == os.environ['EXPECTED_VERSION']"
 
       - name: Install Linux desktop build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          # user:“自动优化网络…尽快”+(构建镜像源慢时使用官方 HTTPS 镜像，下载请求有明确重试次数)。
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://security.ubuntu.com/ubuntu|g' "$source"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y \
             build-essential \
             curl \
             wget \
@@ -357,9 +380,10 @@ jobs:
       # Tag runs add both Linux assets to the same release created by the
       # Windows job. Manual runs remain validation-only and upload artifacts.
       - name: Upload Linux bundles to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.linux_only == true
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.linux_only && format('v{0}', inputs.expected_version) || github.ref_name }}
           files: |
             core/desktop/src-tauri/target/release/bundle/appimage/Sunday_*_amd64.AppImage
             core/desktop/src-tauri/target/release/bundle/deb/Sunday_*_amd64.deb
@@ -367,7 +391,7 @@ jobs:
           fail_on_unmatched_files: true
           # Same rule as the Windows job: this asset set lands on the release the
           # Windows job created, and a beta must stay a beta.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(inputs.linux_only && inputs.expected_version || github.ref_name, '-') }}
 
       - name: Upload Linux bundles as build artifact (manual run)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
