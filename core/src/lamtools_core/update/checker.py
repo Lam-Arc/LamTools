@@ -326,6 +326,8 @@ def _github_candidate() -> dict[str, Any]:
         "published_at": str(release.get("published_at") or ""),
         "sha256": digest if re.fullmatch(r"[0-9a-f]{64}", digest) else "",
         "size": asset.get("size") or 0,
+        "api_download_url": str(asset.get("url") or ""),
+        "file_name": str(asset.get("name") or ""),
     }
 
 
@@ -402,6 +404,10 @@ def check_update() -> dict[str, Any]:
     base["status"] = "update_available"
     base["release_notes"] = candidates[notes_key]["release_notes"]
     base["download_url"] = chosen["download_url"]
+    # user:“尽快摆脱对官网的依赖”+(同一 GitHub 资产提供 API 与主站入口，下载时可自动回退)。
+    if chosen.get("api_download_url"):
+        base["api_download_url"] = chosen["api_download_url"]
+        base["file_name"] = chosen.get("file_name", "")
     base["release_url"] = chosen["release_url"]
     base["published_at"] = chosen["published_at"]
     # The in-app install needs a digest to verify against, and a platform with a

@@ -27,7 +27,8 @@ def source_directory(payload):
             url = str(payload.get("url") or "")
             if not url:
                 raise ValueError("url is required")
-            downloaded = download_archive(url, str(payload.get("sha256") or ""))
+            fallback = str(payload.get("fallback_url") or "")
+            downloaded = download_archive(url, str(payload.get("sha256") or ""), **({"fallback_url": fallback} if fallback else {}))
             path = downloaded
         elif source not in {"local", "zip"}:
             raise ValueError("source must be local, zip or url")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import httpx
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -35,7 +36,20 @@ def validate_catalog(data):
 
 
 def load_catalog():
-    return validate_catalog(get_json(CATALOG_URL))
+    # user:“从 GitHub 等平台下载并安装”+(API 资产入口避免依赖 github.com 主站连通性，仍以同一发布包摘要校验)。
+    try:
+        release = get_json(f"https://api.github.com/repos/{REPOSITORY}/releases/latest")
+        assets = {row["name"]: row for row in release.get("assets", [])}
+        catalog_asset = assets["catalog.json"]
+        catalog = validate_catalog(get_json(catalog_asset["url"], headers={"Accept": "application/octet-stream"}))
+        for row in catalog["plugins"]:
+            asset = assets.get(row["url"].rsplit("/", 1)[-1], {})
+            api_url = str(asset.get("url") or "")
+            if api_url.startswith(f"https://api.github.com/repos/{REPOSITORY}/releases/assets/"):
+                row["api_url"] = api_url
+        return catalog
+    except (OSError, ValueError, KeyError, httpx.HTTPError):
+        return validate_catalog(get_json(CATALOG_URL))
 
 
 async def list_market(host):
@@ -78,7 +92,7 @@ async def install_market_plugin(host, name):
     row = next((row for row in data["plugins"] if row["id"] == name), None)
     if row is None:
         raise ValueError("暂时无法获取该插件的发布包，请刷新后重试")
-    return await install_or_update(host, {"source": "url", "url": row["url"], "sha256": row["sha256"],
+    return await install_or_update(host, {"source": "url", "url": row.get("api_url") or row["url"], "fallback_url": row["url"] if row.get("api_url") else "", "sha256": row["sha256"],
                                          "expected_name": name, "expected_version": row["version"]}, update=host.get(name) is not None)
 
 

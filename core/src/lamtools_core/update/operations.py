@@ -61,7 +61,8 @@ def build_update_operation_catalog() -> OperationCatalog:
         # Returns immediately: a 90 MB download must not hold the request open.
         # The caller polls update.status for progress.
         snapshot = await asyncio.to_thread(
-            start_download, str(checked.get("download_url") or ""), digest
+            start_download, str(checked.get("api_download_url") or checked.get("download_url") or ""), digest,
+            str(checked.get("file_name") or ""), str(checked.get("download_url") or "") if checked.get("api_download_url") else ""
         )
         return OperationResult(
             name="update.download",

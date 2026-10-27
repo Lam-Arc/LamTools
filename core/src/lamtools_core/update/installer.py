@@ -107,7 +107,7 @@ def _set_progress(**fields: Any) -> None:
         _PROGRESS.update(fields)
 
 
-def start_download(url: str, sha256: str, file_name: str = "") -> dict[str, Any]:
+def start_download(url: str, sha256: str, file_name: str = "", fallback_url: str = "") -> dict[str, Any]:
     """Begin a download in a worker thread and return at once.
 
     Long downloads must not hold the UI's request open: the caller polls
@@ -120,7 +120,7 @@ def start_download(url: str, sha256: str, file_name: str = "") -> dict[str, Any]
     _CANCEL.clear()
     _set_progress(state="downloading", received=0, total=0, name="", sha256="", path="", error="")
     threading.Thread(
-        target=_download_worker, args=(url, sha256, file_name), daemon=True, name="sunday-update-download"
+        target=_download_worker, args=(url, sha256, file_name, fallback_url), daemon=True, name="sunday-update-download"
     ).start()
     return progress_snapshot()
 
@@ -139,9 +139,9 @@ def cancel_download() -> dict[str, Any]:
     return progress_snapshot()
 
 
-def _download_worker(url: str, sha256: str, file_name: str) -> None:
+def _download_worker(url: str, sha256: str, file_name: str, fallback_url: str = "") -> None:
     try:
-        result = download_update(url, sha256, file_name)
+        result = download_update(url, sha256, file_name, fallback_url)
     except UpdateCancelled:
         _set_progress(state="cancelled", error="")
     except UpdateInstallError as exc:
@@ -160,7 +160,7 @@ def _download_worker(url: str, sha256: str, file_name: str) -> None:
         )
 
 
-def download_update(url: str, sha256: str, file_name: str = "") -> dict[str, Any]:
+def download_update(url: str, sha256: str, file_name: str = "", fallback_url: str = "") -> dict[str, Any]:
     """Stream ``url`` into the update directory, verifying ``sha256``.
 
     Returns ``{"path", "name", "bytes", "sha256"}`` for the verified file. A
@@ -183,35 +183,17 @@ def download_update(url: str, sha256: str, file_name: str = "") -> dict[str, Any
     digest = hashlib.sha256()
     received = 0
     try:
-        # user:“整个商店的应用更新还是插件更新…自动通过网络拓展加速”+(保留现有摘要、大小、进度和取消校验，只统一下载路由)。
-        from lamtools_core.distribution import stream_get
-        with stream_get(
-            url,
-            timeout=DOWNLOAD_TIMEOUT_SECONDS,
-            headers={"User-Agent": _user_agent(), "Accept": "application/octet-stream"},
-        ) as response:
-            response.raise_for_status()
-            length = response.headers.get("content-length", "")
-            if length.isdigit() and int(length) > MAX_ARTIFACT_BYTES:
-                raise UpdateInstallError("安装包超出预期大小")
-            declared = int(length) if length.isdigit() else 0
-            _set_progress(received=0, total=declared)
-            with open(partial, "wb") as handle:
-                for chunk in response.iter_bytes(CHUNK_BYTES):
-                    if _CANCEL.is_set():
-                        raise UpdateCancelled("下载已取消")
-                    if not chunk:
-                        continue
-                    received += len(chunk)
-                    if received > MAX_ARTIFACT_BYTES:
-                        raise UpdateInstallError("安装包超出预期大小")
-                    digest.update(chunk)
-                    handle.write(chunk)
-                    _set_progress(received=received)
-        if _CANCEL.is_set():
-            raise UpdateCancelled("下载已取消")
-        if digest.hexdigest() != expected:
-            raise UpdateInstallError("下载的安装包与清单摘要不一致，已丢弃")
+        # user:“整个商店的应用更新还是插件更新…自动通过网络拓展加速”+(统一从零重试，保留进度、取消与摘要校验)。
+        from lamtools_core.distribution import download_file
+        def check_cancelled():
+            if _CANCEL.is_set():
+                raise UpdateCancelled("下载已取消")
+        result = download_file(url, partial, expected_sha256=expected, max_bytes=MAX_ARTIFACT_BYTES,
+                               timeout=DOWNLOAD_TIMEOUT_SECONDS,
+                               headers={"User-Agent": _user_agent(), "Accept": "application/octet-stream"},
+                               progress=lambda count, total: _set_progress(received=count, total=total),
+                               cancel=check_cancelled, fallback_urls=(fallback_url,) if fallback_url else ())
+        received = result["bytes"]
         os.replace(partial, target)
     except UpdateInstallError:
         raise

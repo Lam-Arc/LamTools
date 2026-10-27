@@ -17,37 +17,17 @@ from .engine import read_engine
 from .host import PluginHost
 
 
-def download_archive(url: str, expected_sha256: str = "") -> Path:
-    """Download one archive to a temp file, verifying sha256 when given."""
-    from lamtools_core.distribution import stream_get
-
-    handle, temp_name = tempfile.mkstemp(prefix="lamtools-plugin-download-", suffix=".zip")
-    temp_path = Path(temp_name)
-    try:
-        import os
-
-        with os.fdopen(handle, "wb") as sink:
-            # user:“都试一试”+(Release 下载会重定向到资产域名，仍须完成校验再安装)。
-            # user:“插件更新…自动通过网络拓展加速”+(插件包与应用安装包共用路由，流式校验并约束包大小)。
-            digest = hashlib.sha256()
-            received = 0
-            with stream_get(url, timeout=60.0) as response:
-                for chunk in response.iter_bytes():
-                    received += len(chunk)
-                    if received > 256 * 1024 * 1024:
-                        raise ValueError("plugin archive exceeds 256 MiB")
-                    sink.write(chunk)
-                    digest.update(chunk)
-        if expected_sha256:
-            actual = digest.hexdigest()
-            if actual.lower() != str(expected_sha256).lower():
-                raise ValueError(
-                    f"sha256 mismatch: expected {expected_sha256}, got {actual}"
-                )
-        return temp_path
-    except BaseException:
-        temp_path.unlink(missing_ok=True)
-        raise
+def download_archive(url: str, expected_sha256: str = "", *, fallback_url: str = "") -> Path:
+    """Download one bounded archive through the shared verified transfer path."""
+    import os
+    from lamtools_core.distribution import download_file
+    handle, name = tempfile.mkstemp(prefix="lamtools-plugin-download-", suffix=".zip")
+    os.close(handle)
+    target = Path(name)
+    # user:“插件更新…自动通过网络拓展加速”+(完整传输重试与应用安装包共用实现，失败后不保留半包)。
+    download_file(url, target, expected_sha256=expected_sha256, max_bytes=256 * 1024 * 1024,
+                  headers={"Accept": "application/octet-stream"}, fallback_urls=(fallback_url,) if fallback_url else ())
+    return target
 
 
 def dependency_report(host: PluginHost, name: str) -> dict[str, Any]:
