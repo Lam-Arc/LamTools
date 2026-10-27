@@ -344,6 +344,9 @@
 </template>
 
 <script setup lang="ts">
+import { useSplitKeyboardScope } from '@/split/keyboardScope'
+const splitKeyboardActive = useSplitKeyboardScope()
+
 import { t } from '@/i18n/index.ts'
 
 /**
@@ -926,7 +929,8 @@ function handleBack(): boolean {
 function onBackClick(): void {
   if (!handleBack()) emit('back')
 }
-defineExpose({ handleBack, isEditing: () => mode.value === 'editor' })
+// user:“内置文本编辑器”+(通用分屏关闭前可保存或保留记忆草稿)。
+defineExpose({ handleBack, isEditing: () => mode.value === 'editor', hasUnsavedChanges: () => dirty.value || saving.value, savePendingChanges: async () => { if (saving.value) return false; await saveEditor(); return !dirty.value }, discardPendingChanges: leaveEditor })
 
 const heading = computed(() => {
   const root = rootLabel.value
@@ -948,6 +952,7 @@ const heading = computed(() => {
 watch(heading, (value) => emit('heading', { ...value }), { immediate: true })
 
 function onKeydown(event: KeyboardEvent): void {
+  if (!splitKeyboardActive()) return
   if (event.key !== 'Escape') return
   if (pendingDiscard.value) { pendingDiscard.value = false; return }
   if (pendingDelete.value) { pendingDelete.value = null; return }

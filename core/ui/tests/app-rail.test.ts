@@ -1,7 +1,25 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import AppRail from '../src/components/AppRail.vue'
+import { setPluginPageEntries } from '../src/plugins/contributions'
+
+function pluginPage(id: string, title: string, order = 50) {
+  return {
+    plugin: 'demo',
+    id,
+    title,
+    entry_url: `/api/core/plugin-system/demo/assets/${id}.mjs`,
+    navigation: true,
+    order,
+  }
+}
+
+function seedPluginPages(count: number) {
+  setPluginPageEntries(Array.from({ length: count }, (_, index) => pluginPage(String.fromCharCode(97 + index), `页面 ${String.fromCharCode(97 + index)}`, index)))
+}
+
+afterEach(() => setPluginPageEntries([]))
 
 describe('AppRail', () => {
   it('renders the section entries icon-only and marks the active one', async () => {
@@ -81,5 +99,58 @@ describe('AppRail', () => {
       props: { active: 'chat', updateAvailable: true, updateBusy: true },
     })
     expect(downloading.get('[data-rail-update]').attributes('data-rail-update-state')).toBe('busy')
+  })
+
+  // user:“左竖栏多余的插件提供的按钮折叠进一个···，悬浮时再右侧弹一个透明抽屉”
+  // +“一个都不常驻”+(插件导航按钮全部收进“更多”，竖栏不再逐个占用图标位；
+  // 抽屉默认不出现在 DOM 里，避免空占位挡住左侧会话栏。)
+  it('folds every plugin navigation page into a more entry', () => {
+    seedPluginPages(5)
+    const wrapper = mount(AppRail, { props: { active: 'chat' } })
+
+    expect(wrapper.findAll('[data-plugin-rail]')).toHaveLength(0)
+    const more = wrapper.get('[data-rail-plugin-more]')
+    expect(more.attributes('aria-label')).toBe('更多插件')
+    expect(more.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('[data-rail-plugin-drawer]').exists()).toBe(false)
+  })
+
+  it('shows the more entry as soon as one plugin page is registered', () => {
+    seedPluginPages(1)
+    const single = mount(AppRail, { props: { active: 'chat' } })
+    expect(single.findAll('[data-plugin-rail]')).toHaveLength(0)
+    expect(single.find('[data-rail-plugin-more]').exists()).toBe(true)
+
+    setPluginPageEntries([])
+    const empty = mount(AppRail, { props: { active: 'chat' } })
+    expect(empty.find('[data-rail-plugin-more]').exists()).toBe(false)
+  })
+
+  it('opens a transparent drawer on the right on hover and opens a folded page', async () => {
+    seedPluginPages(5)
+    const wrapper = mount(AppRail, { props: { active: 'chat' } })
+
+    await wrapper.get('[data-rail-plugin-more-wrap]').trigger('mouseenter')
+
+    const drawer = wrapper.get('[data-rail-plugin-drawer]')
+    expect(drawer.classes()).toEqual(expect.arrayContaining(['app-rail__more-drawer', 'optical-glass']))
+    expect(drawer.attributes('role')).toBe('menu')
+    expect(wrapper.get('[data-rail-plugin-more]').attributes('aria-expanded')).toBe('true')
+    expect(drawer.findAll('[data-rail-plugin-drawer-item]').map(item => item.attributes('data-rail-plugin-drawer-item'))).toEqual([
+      'demo:a', 'demo:b', 'demo:c', 'demo:d', 'demo:e',
+    ])
+    expect(drawer.text()).toContain('页面 a')
+    expect(drawer.text()).toContain('页面 e')
+
+    await drawer.get('[data-rail-plugin-drawer-item="demo:a"]').trigger('click')
+    expect(wrapper.emitted('open-plugin-page')?.[0]?.[0]).toMatchObject({ plugin: 'demo', id: 'a', title: '页面 a' })
+    expect(wrapper.find('[data-rail-plugin-drawer]').exists()).toBe(false)
+  })
+
+  it('marks the more entry as pressed when the active plugin page is folded', () => {
+    seedPluginPages(5)
+    const wrapper = mount(AppRail, { props: { active: 'chat', activePluginPage: 'demo:e' } })
+
+    expect(wrapper.get('[data-rail-plugin-more]').attributes('aria-pressed')).toBe('true')
   })
 })

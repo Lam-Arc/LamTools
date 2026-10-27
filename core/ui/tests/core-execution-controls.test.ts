@@ -46,14 +46,16 @@ describe('CoreExecutionControls', () => {
 
     const modelThinkingTrigger = wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger')
     await modelThinkingTrigger.trigger('click')
-    expect(wrapper.findAll('[data-model-thinking-section]')).toHaveLength(2)
+    const card = wrapper.get('[data-model-thinking-card]')
+    expect(card.find('[data-core-thinking-slider]').exists()).toBe(true)
+    expect(card.findAll('[data-model-thinking-model-option]')).toHaveLength(2)
+    expect(wrapper.find('[data-model-thinking-section]').exists()).toBe(false)
     expect(wrapper.find('[data-model-thinking-submenu]').exists()).toBe(false)
-    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter')
-    expect(wrapper.find('[data-model-thinking-submenu="model"]').exists()).toBe(true)
-    const options = wrapper.findAll('[data-model-thinking-model-option]')
+    const options = card.findAll('[data-model-thinking-model-option]')
     await options[1].trigger('click')
 
     expect(wrapper.emitted('update:modelValue')).toEqual([['model-2']])
+    expect(wrapper.find('[data-model-thinking-card]').exists()).toBe(true)
 
     expect(wrapper.find('[data-model-thinking-shallow-option]').exists()).toBe(false)
     expect(wrapper.emitted('update:shallowThinkingEnabled')).toBeUndefined()
@@ -70,7 +72,7 @@ describe('CoreExecutionControls', () => {
       },
     })
     await wrapper.get('.core-model-thinking-menu__trigger').trigger('click')
-    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter')
+    expect(wrapper.find('[data-model-thinking-card]').exists()).toBe(true)
     expect(wrapper.get('[data-model-catalog-view="group"]').attributes('aria-pressed')).toBe('true')
     await wrapper.get('[data-model-catalog-view="provider"]').trigger('click')
     expect(wrapper.emitted('update:catalogView')).toEqual([['provider']])

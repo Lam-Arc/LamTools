@@ -3,6 +3,7 @@ import { t } from '@/i18n/index.ts'
 
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, render, watch } from 'vue'
 import { Bookmark, Languages, Lightbulb, MessageCircle, Send, X } from 'lucide-vue-next'
+import { useAuxiliaryWorkspace } from '@/auxiliary/workspace'
 import { useCorePluginModeContext } from '@/plugins/context.ts'
 import { registerTextSelectionMenuContributor } from '@/components/context-menu/index.ts'
 import type { ContextMenuEntry, TextSelectionMenuContext } from '@/components/context-menu/index.ts'
@@ -15,6 +16,7 @@ import './study.css'
 
 const props = defineProps<{ sessionId: string | null; mode: string; themeMode: string; jump: (anchor: MarkAnchor) => Promise<void> }>()
 const ctx = useCorePluginModeContext()
+const auxiliary = useAuxiliaryWorkspace()
 const selected = ref<StudyMark | null>(null)
 type DisplayAction = Exclude<TextAction, 'mark'>
 const action = ref<DisplayAction>('explain')
@@ -36,6 +38,12 @@ const ranges = new Map<string, Range>()
 const decorations = new Map<string, HTMLSpanElement>()
 const content = computed(() => selected.value?.[action.value === 'ask' ? 'explain' : action.value] || '')
 const titles: Record<DisplayAction, string> = { explain: '解释', translate: '翻译', ask: '询问' }
+const visibleTitles = computed(() => auxiliary ? { explain: titles.explain, translate: titles.translate } : titles)
+// user:“询问、翻译、解释这些功能你也看情况重构”+(快速结果保留轻量预览，多轮讨论统一交给辅助对话，并带入已有问答)。
+function continueInPane(mark = selected.value) {
+  if (!mark || !auxiliary) return
+  if (auxiliary.open({ anchor: mark.anchor, mark })) close()
+}
 const FORM_LABELS: Record<string, string> = { pl: '复数', pt: '过去式', pp: '过去分词', ing: '现在分词', '3sg': '第三人称单数', comparative: '比较级', superlative: '最高级' }
 
 /** British and American IPA, collapsed to one value when they agree. */
@@ -115,7 +123,7 @@ function contributeSelectionMenu(context: TextSelectionMenuContext): ContextMenu
   return [
     { get label() { return t("标记") }, icon: Bookmark, action: () => createPureMark(anchor) },
     { get label() { return t("解释") }, icon: Lightbulb, action: () => create(anchor, 'explain', context.event) },
-    { get label() { return t("询问") }, icon: MessageCircle, action: () => create(anchor, 'ask', context.event) },
+    { get label() { return auxiliary ? t("辅助对话") : t("询问") }, icon: MessageCircle, action: () => { if (auxiliary) auxiliary.open({ anchor }); else return create(anchor, 'ask', context.event) } },
     { get label() { return t("翻译") }, icon: Languages, action: () => create(anchor, 'translate', context.event) },
   ]
 }
@@ -153,7 +161,8 @@ function restore() {
   clearDecorations()
   ranges.clear()
   for (const mark of marks.value) {
-    if (mark.anchor.session_id && mark.anchor.session_id !== props.sessionId) continue
+    if (mark.anchor.session_id && mark.anchor.session_id !== props.sessionId
+      && !document.querySelector(`[data-source-session-id="${CSS.escape(mark.anchor.session_id)}"]`)) continue
     if (mark.anchor.document_id.startsWith('view:') && !mark.anchor.document_id.startsWith(`view:${props.mode}:`)) continue
     const range = anchorRange(mark.anchor)
     const startElement = range?.startContainer instanceof Element ? range.startContainer : range?.startContainer.parentElement
@@ -190,7 +199,8 @@ function click(event: MouseEvent) {
   if ((event.target as Element)?.closest('.selection-card,[data-context-menu-panel],.study-mark-icon')) return
   if (window.getSelection()?.toString().trim()) return
   const mark = hit(event)
-  if (mark) open(mark, mark.thread.length ? 'ask' : mark.explain ? 'explain' : 'translate', event.clientX, event.clientY)
+  if (mark?.thread.length && auxiliary) continueInPane(mark)
+  else if (mark) open(mark, mark.thread.length ? 'ask' : mark.explain ? 'explain' : 'translate', event.clientX, event.clientY)
   else close()
 }
 function move(event: MouseEvent) {
@@ -235,7 +245,8 @@ async function loadMarks() {
 }
 function handleOpen(event: Event) {
   const detail = (event as CustomEvent<{ mark: StudyMark; action: TextAction }>).detail
-  if (detail.action !== 'mark') open(detail.mark, detail.action)
+  if (detail.action === 'ask' && auxiliary) continueInPane(detail.mark)
+  else if (detail.action !== 'mark') open(detail.mark, detail.action)
 }
 async function handleJump(event: Event) {
   const mark = (event as CustomEvent<StudyMark>).detail
@@ -296,7 +307,8 @@ onBeforeUnmount(() => {
     <section v-if="selected" ref="card" class="selection-card optical-glass optical-glass--low-trans"
       :style="{ left: x + 'px', top: y + 'px' }" role="dialog" :aria-label="titles[action]" @mouseenter="keepOpen" @pointerdown="hover = false">
       <header>
-        <button v-for="(title, kind) in titles" :key="kind" class="text-btn" :aria-pressed="action === kind" :disabled="busy" @click="action = kind; hover = false; error = ''">{{ title }}</button>
+        <button v-for="(title, kind) in visibleTitles" :key="kind" class="text-btn" :aria-pressed="action === kind" :disabled="busy" @click="action = kind; hover = false; error = ''">{{ title }}</button>
+        <button v-if="auxiliary" class="text-btn" type="button" title="带入原文和当前结果，继续追问" :disabled="busy" @click="continueInPane()"><MessageCircle :size="13" /> 辅助对话</button>
         <button class="text-btn selection-close" :aria-label="t('关闭')" @click="close"><X :size="15" /></button>
       </header>
       <blockquote>{{ selected.anchor.quote }}</blockquote>

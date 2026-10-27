@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,29 @@ def load_mcp_server_configs(
             continue
         raw_servers = data.get("mcpServers", data.get("servers", data)) if isinstance(data, dict) else {}
         if isinstance(raw_servers, dict):
-            servers.update(raw_servers)
+            # user:“通过 command 运行”+(本机路径运行时解析，安装/升级不改写发布配置)。
+            # user:“该调的模块就是该写的东西”+(任意插件可声明自管环境，路径不绑定某个插件或 mcp/ 层级)。
+            root = next((parent for parent in path.resolve().parents if (parent / "plugin.json").is_file()), path.resolve().parent.parent)
+            try:
+                values = load_jsonc_text(root / "data" / "config.jsonc")
+            except (OSError, ValueError):
+                values = {}
+            explicit_python = str(values.get("pythonPath") or "").strip() if isinstance(values, dict) else ""
+            def interpreter(match):
+                if explicit_python:
+                    return explicit_python
+                environment = match.group(1) or "./data/venv"
+                return str(root / environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+            def expand(value):
+                if isinstance(value, str):
+                    value = re.sub(r"\{\{PLUGIN_PYTHON(?::([^}]+))?\}\}", interpreter, value)
+                    return value.replace("{{PLUGIN_DIR}}", str(root)).replace("{{PLUGIN_DATA_DIR}}", str((root / "data").resolve()))
+                if isinstance(value, dict):
+                    return {key: expand(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [expand(item) for item in value]
+                return value
+            servers.update(expand(raw_servers))
 
     configs: list[MCPServerConfig] = []
     for name, raw in servers.items():
@@ -44,18 +67,23 @@ def load_mcp_server_configs(
         command = str(raw.get("command", "")).strip()
         if not command:
             continue
-        configs.append(
-            MCPServerConfig(
-                name=str(raw.get("name") or name),
-                command=command,
-                args=[str(arg) for arg in raw.get("args", [])],
-                env={str(key): str(value) for key, value in (raw.get("env", {}) or {}).items()},
-                timeout_seconds=float(raw.get("timeout_seconds", raw.get("timeout", 30)) or 30),
-                permission=raw.get("permission", "ask_user"),
-                enabled=bool(raw.get("enabled", True)),
-                transport=raw.get("transport", "headers"),
+        try:
+            configs.append(
+                MCPServerConfig(
+                    name=str(raw.get("name") or name),
+                    command=command,
+                    args=[str(arg) for arg in raw.get("args", [])],
+                    env={str(key): str(value) for key, value in (raw.get("env", {}) or {}).items()},
+                    timeout_seconds=float(raw.get("timeout_seconds", raw.get("timeout", 30)) or 30),
+                    permission=raw.get("permission", "ask_user"),
+                    enabled=bool(raw.get("enabled", True)),
+                    transport=raw.get("transport", "headers"),
+                    level=raw.get("level", 3),
+                    tool_levels=raw.get("toolLevels", {}),
+                )
             )
-        )
+        except ValueError:
+            _log.warning("Skipping invalid MCP server config %s", name)
     configs = [config for config in configs if config.enabled]
     if include_builtin_playwright:
         configs.extend(

@@ -1,3 +1,4 @@
+/* user:“专门对小屏或者说分屏状态做一下适配”+(资料、记忆、方案按当前页面宽度切换密度)。 */
 /* The shared surface recipe for the two library-shaped full-area views
    (资料库 and 记忆): toolbar, filter tabs, card grid, list rows, reader,
    editor, dialogs and buttons. Every rule is rooted at `.library-surface`,
@@ -257,7 +258,7 @@
   font-size: 12.5px;
 }
 
-@media (max-width: 640px) {
+@container app-page (max-width: 640px) {
   .library-surface .materials-title { font-size: 19px; }
   .library-surface .materials-tools { flex-basis: auto; }
   .library-surface .materials-search { max-width: none; }
@@ -958,10 +959,10 @@
 .library-surface .library-dialog-enter-from .dialog-card, .library-surface .library-dialog-leave-to .dialog-card { transform: translateY(8px) scale(.98); }
 .library-surface button:disabled { cursor: default; opacity: .5; }
 /* 桌面：标题与返回键由顶部条承担，手机头整块收起。 */
-@media (min-width: 641px) {
+@container app-page (min-width: 641px) {
   .library-surface .library-mobile-head { display: none; }
 }
-@media (max-width: 640px) {
+@container app-page (max-width: 640px) {
   .library-surface { padding-top: 16px; }
   .library-surface .plan-grid, .library-surface .folder-grid { grid-template-columns: 1fr 1fr; }
   .library-surface .library-search { max-width: none; }

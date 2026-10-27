@@ -10,7 +10,7 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, turnStatus, activeTurnId, lockedMessageIds, autoPlotMath]"
+      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, turnStatus, activeTurnId, lockedMessageIds, autoPlotMath, decisionsDisabled]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabelForMessage(msg)"
@@ -25,6 +25,7 @@
       :locked-message-ids="lockedMessageIds"
       :auto-plot-math="autoPlotMath"
       :sub-agent-rows-inert="subAgentRowsInert"
+      :decisions-disabled="decisionsDisabled"
       @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
         @fork-message="onForkMessage"
@@ -101,6 +102,8 @@ const props = withDefaults(
     autoPlotMath?: boolean
     /** 面板内部：子代理行明确不可点（点击不抛事件、无障碍标注不可交互）。 */
     subAgentRowsInert?: boolean
+    /** user:“多界面分屏”+(跨聊天过程可读，审批须在来源聊天处理)。 */
+    decisionsDisabled?: boolean
   }>(),
   {
     showEmptyState: true,

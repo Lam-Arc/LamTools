@@ -33,6 +33,7 @@ export {
 export {
   CORE_EXECUTION_CONTROLS_STORAGE_KEYS,
   useCoreExecutionControlsState,
+  type CoreComposerControls,
   type CoreExecutionControlsStorage,
   type CoreExecutionControlsState,
   type CoreExecutionControlsStateInitial,

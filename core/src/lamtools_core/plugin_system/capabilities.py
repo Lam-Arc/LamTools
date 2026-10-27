@@ -133,6 +133,9 @@ def _load_jsonc(manifest: PluginManifest, path: Path) -> Any:
 
 
 def _read_tools(manifest: PluginManifest) -> list[PluginToolSpec]:
+    from .process_runtime import process_runtime_spec
+
+    process_runtime = process_runtime_spec(manifest) is not None
     tools: list[PluginToolSpec] = []
     seen: set[str] = set()
     for path in _declared_paths(manifest, "tools"):
@@ -148,7 +151,12 @@ def _read_tools(manifest: PluginManifest) -> list[PluginToolSpec]:
             if not name:
                 raise CapabilityError(manifest.name, f"{path.name} tool #{index} is missing name")
             if not handler:
-                raise CapabilityError(manifest.name, f"tool '{name}' is missing handler")
+                if process_runtime:
+                    # user:“外部进程插件运行时”+(工具处理函数在子进程里，
+                    # 清单只需要声明工具名和参数结构)。
+                    handler = f"process:{name}"
+                else:
+                    raise CapabilityError(manifest.name, f"tool '{name}' is missing handler")
             if name in seen:
                 raise CapabilityError(manifest.name, f"duplicate tool name '{name}'")
             seen.add(name)

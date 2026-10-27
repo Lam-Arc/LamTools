@@ -1,0 +1,101 @@
+{
+  "name": "qq-bot",
+  "version": "0.1.0",
+  "description": "QQ 机器人：把 LamTools 接入 QQ 私聊与群聊。移植自腾讯官方 @tencent-connect/dsh-qqbot 0.5.3，保留其全部能力并在宿主侧补齐持久会话、审批/问答续跑、文件投递和端内配置。",
+  "scope": "global",
+  "defaultEnabled": true,
+  "engine": {
+    "python": ">=3.10",
+    "app": ">=0.3.23"
+  },
+  "dependencies": [
+    "httpx",
+    "websockets",
+    "cryptography"
+  ],
+  "backend": "./backend/__init__.py",
+  "operations": [
+    "./operations.jsonc"
+  ],
+  "tools": [
+    "./tools/tools.jsonc"
+  ],
+  "skills": [
+    "./skills"
+  ],
+  "agentPresets": [
+    {
+      "id": "qq-default",
+      "title": "默认",
+      "description": "完整工具面，由宿主默认审批策略控制。",
+      "mode": "",
+      "tools": [],
+      "prompt": ""
+    },
+    {
+      "id": "qq-readonly",
+      "title": "只读",
+      "description": "只能读取、搜索和联网查询，不写文件、不执行命令。",
+      "mode": "low",
+      "tools": [
+        "read_file",
+        "list_dir",
+        "search_files",
+        "search_content",
+        "load_skill",
+        "web_search",
+        "web_fetch"
+      ],
+      "prompt": "这一轮只允许读取和搜索，不要修改文件或执行有副作用的命令。"
+    },
+    {
+      "id": "qq-careful",
+      "title": "谨慎执行",
+      "description": "保留完整工具面，但要求先说明再执行有副作用的操作。",
+      "mode": "medium",
+      "tools": [],
+      "prompt": "执行有副作用的操作前先用一句话说明你要做什么；能只读就先只读。"
+    }
+  ],
+  "config": {
+    "schema": "./config/schema.jsonc"
+  },
+  "ui": {
+    "styles": [
+      "./ui/style.css"
+    ],
+    "pages": [
+      {
+        "id": "qq-bot",
+        "title": "QQ 机器人",
+        "entry": "./ui/page.mjs",
+        "navigation": true,
+        "order": 60
+      },
+      {
+        "id": "qq-bot-bind",
+        "title": "QQ 机器人绑定",
+        "entry": "./ui/page.mjs",
+        "navigation": false,
+        "order": 61
+      }
+    ],
+    "windows": [
+      {
+        "id": "qq-bot-bind",
+        "title": "QQ 机器人",
+        "entry": "./ui/window.html",
+        "width": 560,
+        "height": 800
+      }
+    ],
+    "regions": [
+      {
+        "region": "right",
+        "order": 60,
+        "entry": "./ui/panel.js"
+      }
+    ]
+  },
+  "repository": "https://github.com/Lam-Arc/Sunday-Plugins"
+}

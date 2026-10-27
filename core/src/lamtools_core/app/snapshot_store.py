@@ -274,7 +274,10 @@ class CoreAppSnapshotProjector:
         if not turn_id:
             return
         turn = self._turn(state, turn_id)
-        turn.update({key: value for key, value in payload.items() if key != "status"})
+        # user:“把它作为一个引导信息发进去”+(引导是追加输入，不得覆盖原任务；
+        # 早停后重启仍须能分别恢复原任务与未消费的引导)。
+        turn.update({key: value for key, value in payload.items()
+                     if key not in {"status", "input", "runtime_input"}})
         turn["seq"] = event.seq
         turn["last_seq"] = event.seq
         turn["last_method"] = event.method

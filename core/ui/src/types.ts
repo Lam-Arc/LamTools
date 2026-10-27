@@ -340,6 +340,8 @@ export interface CoreRuntimeEvent {
 export type CoreAttachmentStatus = 'uploading' | 'uploaded' | 'failed';
 
 export interface CoreAttachment {
+  // user:“实际为一个 绝对地址”+(文件引用保留真实位置)。
+  path?: string;
   id: string;
   filename: string;
   label?: string;
@@ -352,6 +354,7 @@ export interface CoreAttachment {
 }
 
 export interface CoreAttachmentInputItem {
+  path?: string;
   type: 'attachment';
   attachment_id: string;
   filename?: string;

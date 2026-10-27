@@ -43,15 +43,31 @@ function makeRpc() {
   return { rpc, calls }
 }
 
+const wrappers: Array<ReturnType<typeof mount>> = []
+
+function mountEditor(rpc: ReturnType<typeof makeRpc>['rpc']) {
+  const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
+  wrappers.push(wrapper)
+  return wrapper
+}
+
 afterEach(() => {
+  while (wrappers.length) wrappers.pop()?.unmount()
   vi.restoreAllMocks()
 })
 
 describe('plugin system editor install surface', () => {
-  it('installs from a url and surfaces the dependency report', async () => {
+  it('opens the install tray and installs from a url with the dependency report', async () => {
     const { rpc, calls } = makeRpc()
-    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
+    const wrapper = mountEditor(rpc)
     await flushPromises()
+
+    const toggle = wrapper.get('[data-install-toggle]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('.install-tray').exists()).toBe(true)
+    expect(wrapper.find('form.preview-install').exists()).toBe(true)
 
     // 选择链接来源，填入地址与校验值后安装。
     const urlRadio = wrapper.find('input[type="radio"][value="url"]')
@@ -78,16 +94,15 @@ describe('plugin system editor install surface', () => {
 
   it('updates through the same form with data kept', async () => {
     const { rpc, calls } = makeRpc()
-    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
+    const wrapper = mountEditor(rpc)
     await flushPromises()
 
+    await wrapper.get('[data-install-toggle]').trigger('click')
     await wrapper.find('input[type="radio"][value="zip"]').setValue()
     await wrapper.find('.install-input').setValue('C:/downloads/demo-2.zip')
-    const updateButton = wrapper
-      .findAll('button')
-      .find((button) => button.text().includes('更新'))
-    expect(updateButton).toBeTruthy()
-    await updateButton!.trigger('click')
+    const updateButton = wrapper.get('[data-install-update]')
+    expect(updateButton.text()).toContain('更新')
+    await updateButton.trigger('click')
     await flushPromises()
 
     const update = calls.find((call) => call.method === 'plugin.system.update')
@@ -96,9 +111,9 @@ describe('plugin system editor install surface', () => {
     expect(wrapper.text()).toContain('已更新 demo')
   })
 
-  it('queries dependency status per plugin', async () => {
+  it('queries dependency status per plugin and shows the report in the card drawer', async () => {
     const { rpc, calls } = makeRpc()
-    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
+    const wrapper = mountEditor(rpc)
     await flushPromises()
 
     const depsButton = wrapper.find('[data-deps-for="demo"]')

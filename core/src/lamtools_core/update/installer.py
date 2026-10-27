@@ -183,13 +183,12 @@ def download_update(url: str, sha256: str, file_name: str = "") -> dict[str, Any
     digest = hashlib.sha256()
     received = 0
     try:
-        with httpx.stream(
-            "GET",
+        # user:“整个商店的应用更新还是插件更新…自动通过网络拓展加速”+(保留现有摘要、大小、进度和取消校验，只统一下载路由)。
+        from lamtools_core.distribution import stream_get
+        with stream_get(
             url,
             timeout=DOWNLOAD_TIMEOUT_SECONDS,
-            follow_redirects=True,
             headers={"User-Agent": _user_agent(), "Accept": "application/octet-stream"},
-            **httpx_client_kwargs(url),
         ) as response:
             response.raise_for_status()
             length = response.headers.get("content-length", "")

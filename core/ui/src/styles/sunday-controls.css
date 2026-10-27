@@ -1,0 +1,401 @@
+/* user:"把红换成白，然后用这套组件做成可复用的 sunday 样式并投入使用，注意浅暗色模式与文字颜色，白底必须黑字，反之同理" */
+/*
+  Sunday interaction controls — the reusable half of the control kit.
+  Filled states always use the control pair (solid + text), so a label on a
+  filled surface is always the inverse of that surface. Hover/active neutral
+  states keep using the shared --alpha-* tokens.
+*/
+
+/* ---------- Switch ---------- */
+
+.sunday-switch {
+  --sunday-signal: var(--settings-control-solid, var(--theme-control-solid, var(--theme-control-background, #fbf7f0)));
+  --sunday-signal-ink: var(--settings-control-text, var(--theme-control-text, #2e3138));
+  --sunday-area-text: var(--settings-main-text, var(--theme-main-text, #f2efeb));
+  --sunday-w: 40px;
+  --sunday-h: 24px;
+  --sunday-pad: 3px;
+  --sunday-thumb: 16px;
+  --sunday-travel: calc(var(--sunday-w) - 2px - (var(--sunday-pad) * 2) - var(--sunday-thumb));
+
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  cursor: pointer;
+}
+
+.sunday-switch--sm {
+  --sunday-w: 34px;
+  --sunday-h: 20px;
+  --sunday-pad: 2px;
+  --sunday-thumb: 14px;
+  --sunday-travel: calc(var(--sunday-w) - 2px - (var(--sunday-pad) * 2) - var(--sunday-thumb));
+}
+
+.sunday-switch__input {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.sunday-switch__input:disabled {
+  cursor: not-allowed;
+}
+
+.sunday-switch__track {
+  position: relative;
+  flex: none;
+  width: var(--sunday-w);
+  height: var(--sunday-h);
+  border: 1px solid color-mix(in srgb, var(--sunday-area-text) 18%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--sunday-area-text) 6%, transparent);
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+.sunday-switch__thumb {
+  position: absolute;
+  top: var(--sunday-pad);
+  left: var(--sunday-pad);
+  width: var(--sunday-thumb);
+  height: var(--sunday-thumb);
+  border-radius: calc(var(--radius-sm) / 2);
+  background: color-mix(in srgb, var(--sunday-area-text) 46%, transparent);
+  transition:
+    transform var(--dur-slow) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out);
+}
+
+.sunday-switch:hover .sunday-switch__track {
+  border-color: color-mix(in srgb, var(--sunday-area-text) 32%, transparent);
+}
+
+.sunday-switch:hover .sunday-switch__thumb {
+  background: color-mix(in srgb, var(--sunday-area-text) 62%, transparent);
+}
+
+.sunday-switch__input:checked + .sunday-switch__track {
+  border-color: var(--sunday-signal);
+  background: var(--sunday-signal);
+}
+
+.sunday-switch__input:checked + .sunday-switch__track .sunday-switch__thumb {
+  background: var(--sunday-signal-ink);
+  transform: translateX(var(--sunday-travel));
+}
+
+.sunday-switch:hover .sunday-switch__input:checked + .sunday-switch__track {
+  border-color: color-mix(in srgb, var(--sunday-signal) 92%, var(--sunday-signal-ink));
+  background: color-mix(in srgb, var(--sunday-signal) 92%, var(--sunday-signal-ink));
+}
+
+.sunday-switch__input:focus-visible + .sunday-switch__track {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.sunday-switch:has(.sunday-switch__input:disabled) {
+  cursor: not-allowed;
+}
+
+.sunday-switch__input:disabled + .sunday-switch__track {
+  border-color: color-mix(in srgb, var(--sunday-area-text) 10%, transparent);
+  background: color-mix(in srgb, var(--sunday-area-text) 4%, transparent);
+}
+
+.sunday-switch__input:disabled + .sunday-switch__track .sunday-switch__thumb {
+  background: color-mix(in srgb, var(--sunday-area-text) 24%, transparent);
+}
+
+.sunday-switch__input:disabled:checked + .sunday-switch__track {
+  border-color: color-mix(in srgb, var(--sunday-area-text) 12%, transparent);
+  background: color-mix(in srgb, var(--sunday-area-text) 12%, transparent);
+}
+
+.sunday-switch__input:disabled:checked + .sunday-switch__track .sunday-switch__thumb {
+  background: color-mix(in srgb, var(--sunday-area-text) 44%, transparent);
+  transform: translateX(var(--sunday-travel));
+}
+
+/* ---------- Segmented ---------- */
+
+.sunday-segmented {
+  --sunday-signal: var(--settings-control-solid, var(--theme-control-solid, var(--theme-control-background, #fbf7f0)));
+  --sunday-signal-ink: var(--settings-control-text, var(--theme-control-text, #2e3138));
+  --sunday-area-text: var(--settings-main-text, var(--theme-main-text, #f2efeb));
+
+  position: relative;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--sunday-area-text) var(--alpha-active), transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--sunday-area-text) 4%, transparent);
+  isolation: isolate;
+}
+
+.sunday-segmented__indicator {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  z-index: 0;
+  width: 0;
+  height: calc(100% - 4px);
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: var(--sunday-signal);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sunday-segmented[data-ready="true"] .sunday-segmented__indicator {
+  opacity: 1;
+  transition:
+    transform var(--dur-slow) var(--ease-emphasized),
+    width var(--dur-slow) var(--ease-emphasized),
+    opacity var(--dur-fast) linear;
+}
+
+.sunday-segmented__item {
+  position: relative;
+  z-index: 1;
+  height: var(--interaction-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: color-mix(in srgb, var(--sunday-area-text) 66%, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-base) var(--ease-out);
+}
+
+.sunday-segmented__item:hover {
+  color: var(--sunday-area-text);
+}
+
+.sunday-segmented__item[aria-checked="true"] {
+  color: var(--sunday-signal-ink);
+}
+
+.sunday-segmented__item:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.sunday-segmented:not([data-ready="true"]) .sunday-segmented__item[aria-checked="true"] {
+  background: var(--sunday-signal);
+  color: var(--sunday-signal-ink);
+}
+
+/* ---------- Range ---------- */
+
+.sunday-range {
+  --sunday-signal: var(--settings-control-solid, var(--theme-control-solid, var(--theme-control-background, #fbf7f0)));
+  --sunday-signal-ink: var(--settings-control-text, var(--theme-control-text, #2e3138));
+  --sunday-area-text: var(--settings-main-text, var(--theme-main-text, #f2efeb));
+
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.sunday-range--bare {
+  display: block;
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.sunday-range__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sunday-range__label {
+  color: color-mix(in srgb, var(--sunday-area-text) 72%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sunday-range__value {
+  color: var(--sunday-area-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sunday-range__track {
+  position: relative;
+  height: 18px;
+}
+
+.sunday-range__track::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: var(--interaction-track);
+  border-radius: var(--interaction-track-radius);
+  background: color-mix(in srgb, var(--sunday-area-text) 16%, transparent);
+  transform: translateY(-50%);
+}
+
+.sunday-range__fill {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: var(--sunday-range-fill, 0%);
+  height: var(--interaction-track);
+  border-radius: var(--interaction-track-radius);
+  background: var(--sunday-signal);
+  transform: translateY(-50%);
+}
+
+.sunday-range__input {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sunday-range__input:focus {
+  outline: none;
+}
+
+.sunday-range__input::-webkit-slider-runnable-track {
+  height: 18px;
+  background: transparent;
+}
+
+.sunday-range__input::-webkit-slider-thumb {
+  box-sizing: border-box;
+  width: var(--interaction-thumb);
+  height: var(--interaction-thumb);
+  margin-top: 1px;
+  border: 1.5px solid var(--sunday-signal-ink);
+  border-radius: 50%;
+  background: var(--sunday-signal);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: border-color var(--dur-base) var(--ease-out);
+}
+
+.sunday-range__input:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.sunday-range__input::-moz-range-track {
+  height: 18px;
+  background: transparent;
+}
+
+.sunday-range__input::-moz-range-thumb {
+  box-sizing: border-box;
+  width: var(--interaction-thumb);
+  height: var(--interaction-thumb);
+  border: 1.5px solid var(--sunday-signal-ink);
+  border-radius: 50%;
+  background: var(--sunday-signal);
+  cursor: pointer;
+}
+
+@supports (-moz-appearance: none) {
+  .sunday-range__input:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--blue);
+    outline-offset: 4px;
+  }
+}
+
+.sunday-range:has(.sunday-range__input:disabled) .sunday-range__label,
+.sunday-range:has(.sunday-range__input:disabled) .sunday-range__value {
+  color: color-mix(in srgb, var(--sunday-area-text) 45%, transparent);
+}
+
+.sunday-range:has(.sunday-range__input:disabled) .sunday-range__fill {
+  background: color-mix(in srgb, var(--sunday-area-text) 16%, transparent);
+}
+
+.sunday-range__input:disabled {
+  cursor: not-allowed;
+}
+
+.sunday-range__input:disabled::-webkit-slider-thumb {
+  border-color: color-mix(in srgb, var(--sunday-area-text) 24%, transparent);
+  background: color-mix(in srgb, var(--sunday-area-text) 8%, transparent);
+  cursor: not-allowed;
+}
+
+.sunday-range__input:disabled::-moz-range-thumb {
+  border-color: color-mix(in srgb, var(--sunday-area-text) 24%, transparent);
+  background: color-mix(in srgb, var(--sunday-area-text) 8%, transparent);
+}
+
+/* ---------- Progress ---------- */
+
+.sunday-progress {
+  position: relative;
+  width: 100%;
+  height: var(--interaction-progress-height);
+  overflow: hidden;
+  border-radius: var(--interaction-track-radius);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #f2efeb)) 14%, transparent);
+}
+
+.sunday-progress__fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--settings-control-solid, var(--theme-control-solid, var(--theme-control-background, #fbf7f0)));
+  transition: width var(--dur-slow) var(--ease-out);
+}
+
+/* ---------- Press feedback for the existing shared buttons ---------- */
+
+:where(.small-btn, .text-btn, .btn-primary, .btn-primary-sm) {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+:where(.small-btn, .text-btn, .btn-primary, .btn-primary-sm):not(:disabled):active {
+  transform: translateY(1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sunday-switch__track,
+  .sunday-switch__thumb,
+  .sunday-segmented__indicator,
+  .sunday-segmented__item,
+  .sunday-range__input::-webkit-slider-thumb,
+  .sunday-progress__fill {
+    transition: none;
+  }
+
+  :where(.small-btn, .text-btn, .btn-primary, .btn-primary-sm):not(:disabled):active {
+    transform: none;
+  }
+}

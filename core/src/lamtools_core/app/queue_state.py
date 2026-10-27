@@ -61,7 +61,8 @@ def build_queue_guidance_plan(
         else input_items
     )
     if replacement_text is not None and replacement_text.strip():
-        input_items = [{"type": "text", "text": replacement_text.strip()}]
+        # user:“是否会把附件带上”+(修改引导文字时保留文件引用)。
+        input_items = [{"type": "text", "text": replacement_text.strip()}, *[i for i in input_items if i.get("type") == "attachment"]]
         runtime_input_items = input_items
     if not input_items:
         return QueueGuidancePlan(False, "queue_input_unavailable", [], [], ())
@@ -114,6 +115,12 @@ def build_queue_update_plan(
     ) if isinstance(queue, list) else None
     if item is None or str(item.get("status") or "") != "queued":
         return QueueUpdatePlan(False, "queue_item_unavailable")
+    # user:“是否会把附件带上”+(旧版纯文字编辑请求也不能删除附件引用)。
+    if not any(i.get("type") == "attachment" for i in input_items):
+        retained = [dict(i) for i in item.get("input", []) if i.get("type") == "attachment"]
+        input_items = [*input_items, *retained]
+        if runtime_input_items is not None:
+            runtime_input_items = [*runtime_input_items, *retained]
     return QueueUpdatePlan(
         True,
         "",

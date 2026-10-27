@@ -13,6 +13,8 @@ export type LamToolsPlatform = 'desktop' | 'mobile' | 'web'
 export type RuntimeFileSource = 'file' | 'photos' | 'camera'
 
 export interface RuntimeFileCapabilities {
+  // user:“若此附件真实存在于计算机则添加绝对路径”+(桌面选择器直接返回原件路径)。
+  pickPaths?(): Promise<string[] | null>
   pick(options?: {
     multiple?: boolean
     accept?: string

@@ -56,6 +56,7 @@ from .base_agent import (
     core_events_to_snapshot,
 )
 from .command_execution import CommandActionHandler, compact_runtime_history, execute_command_action
+from .composer_state import overlay_composer_controls
 from .approval_resolution import ApprovalResolutionLifecycle
 from .agent_app import AgentApp, AgentSpec, ModelProvider, ModelTurnOutput, TurnInput
 from .event_store import AppEventEnvelope, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
@@ -690,6 +691,7 @@ def create_core_agent_operations(
                         plugin_agents=plugin_assembly.get("plugin_agents") or [],
                         plugin_context_files=plugin_assembly.get("plugin_context_files") or [],
                         verification_policy=kit.verification_policy(),
+                        prompt_waterfall=plugin_assembly.get("prompt_waterfall"),
                     ),
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
@@ -751,6 +753,12 @@ def create_core_agent_operations(
                             thread_id,
                             run_id=guidance_run_id,
                             include_metadata=True,
+                        ),
+                        # user:“模式、权限、思考强度在下一步生效（即时生效）”+(运行中
+                        # 的回合每步来取一次最新的输入参数组；模型不在补丁里)。
+                        settings_source=runtime_task_registry.settings_source(
+                            thread_id,
+                            run_id=guidance_run_id,
                         ),
                         metadata={
                             **_runtime_metadata(request.metadata),
@@ -1039,14 +1047,35 @@ def create_core_agent_operations(
                 )
             if state is None:
                 return OperationResult(name=request.name, status="error", payload={"error": "thread state not found"})
-            # Model/thinking options remain tied to the paused turn, while
-            # permission fields come from the session's current live state.
+            # user:“模式、权限、思考强度在下一步生效（即时生效）”+(权限跟随会话
+            # 实时状态；模式/思考/浅层也从会话参数组刷新，模型保持暂停回合的值。
+            # 没有 composer_state 的旧会话/插件会话不套用产品默认值)。
             persisted_snapshot = _runtime_snapshot_from_payload(state.metadata)
             if persisted_snapshot is not None:
                 live_permission_snapshot = runtime_snapshot or {}
                 runtime_snapshot = overlay_runtime_permissions(
                     persisted_snapshot, live_permission_snapshot
                 )
+                try:
+                    stored_session = session_store.get(thread_id)
+                    if inspect.isawaitable(stored_session):
+                        stored_session = await stored_session
+                    stored_metadata = getattr(stored_session, "metadata", None)
+                except Exception:  # noqa: BLE001 — metadata is optional context
+                    stored_metadata = None
+                if isinstance(stored_metadata, dict):
+                    runtime_snapshot = overlay_composer_controls(
+                        runtime_snapshot, stored_metadata
+                    )
+                    if isinstance(state.metadata, dict):
+                        state.metadata["runtime_snapshot"] = deepcopy(runtime_snapshot)
+                        for live_key in (
+                            "active_mode",
+                            "reasoning_level",
+                            "shallow_thinking_enabled",
+                        ):
+                            if live_key in runtime_snapshot:
+                                state.metadata[live_key] = runtime_snapshot[live_key]
                 approval_policy = str(runtime_snapshot.get("approval_policy") or "require")
                 active_tier = runtime_snapshot.get("active_tier")
                 if active_tier not in ("read_only", "limited_edit", "full_edit"):
@@ -1239,6 +1268,9 @@ def create_core_agent_operations(
             original_task = str(state.metadata.get("original_user_message") or "")
             tool_name = str(pending_call.get("name") or "")
             tool_args = pending_call.get("arguments") if isinstance(pending_call.get("arguments"), dict) else {}
+
+            if decision.trust:
+                pending_call = {**pending_call, "metadata": {**dict(pending_call.get("metadata") or {}), "trust_requested": True}}
 
             skipped = decision.action == "skip"
             deny_without_terminal = False
@@ -1916,6 +1948,8 @@ def create_core_agent_operations(
                             "approval": {"approved": True, "auto_approved": True},
                         },
                     )
+                    if decision.trust:
+                        toolbox.approval_gate.trust_operation(tool_name, tool_args)
                     call = toolbox.prepare_approved_call(call)
                     tool_result = await toolbox.execute(call)
                 except BaseException as exc:
@@ -2149,6 +2183,7 @@ def create_core_agent_operations(
                         plugin_agents=plugin_assembly.get("plugin_agents") or [],
                         plugin_context_files=plugin_assembly.get("plugin_context_files") or [],
                         verification_policy=kit.verification_policy(),
+                        prompt_waterfall=plugin_assembly.get("prompt_waterfall"),
                     ),
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
@@ -2485,7 +2520,7 @@ def create_core_agent_operations(
             app_event_hub=app_event_hub,
         )
 
-    def plugin_sub_agent_runner_factory() -> Any:
+    def plugin_sub_agent_runner_factory(*, work_root: str | Path | None = None) -> Any:
         """Provide a host-owned sub-agent runner to plugin backends on demand."""
         from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
@@ -2502,11 +2537,17 @@ def create_core_agent_operations(
         )
         plugin_tooling = _plugin_toolbox_contributions(plugin_assembly)
 
+        from .runtime_permissions import load_global_runtime_controls
+        controls = load_global_runtime_controls()
         return KernelSubAgentRunner(
-            work_root=paths.work_root,
+            work_root=Path(work_root) if work_root else paths.work_root,
             llm_client=model_provider,
             model_id=_background_scene_model(),
+            # user:“把 MCP 从 toolbox 里面拿出去，通过 command 运行”+(后台入口同样交给命令服务装配，连接归单轮所有)。
+            mcp_config_files=plugin_assembly.get("mcp_files") or [],
             approval_policy="require",
+            permission_preset=controls["permission_preset"],
+            active_tier=controls["base_tier"],
             session_prefix="plugin-sub-agent",
             state_store=runtime_state_store,
             artifact_store=artifact_store,
@@ -2517,6 +2558,34 @@ def create_core_agent_operations(
             plugin_tool_providers=plugin_tooling["providers"],
             plugin_mode_tool_sets=plugin_tooling["mode_tool_sets"],
             plugin_availability=plugin_tooling["availability"],
+            agent_presets=plugin_assembly.get("agent_presets"),
+            prompt_waterfall=plugin_assembly.get("prompt_waterfall"),
+        )
+
+    async def plugin_run_profile(
+        *,
+        profile: str,
+        task: str,
+        agent: str = "",
+        **kwargs: Any,
+    ) -> Any:
+        """Resolve a declared run profile and start one headless sub-agent round."""
+        from lamtools_core.app.base_agent import default_core_agent_plugin_roots
+        from lamtools_core.plugin_system import resolve_profile, shared_host
+
+        roots = (
+            [Path(item) for item in plugin_roots]
+            if plugin_roots
+            else default_core_agent_plugin_roots(paths.work_root)
+        )
+        host = shared_host(roots=roots, state_path=Path(paths.data_dir) / "plugin-system.jsonc")
+        spec = resolve_profile(host.discover(), profile)
+        runner = plugin_sub_agent_runner_factory()
+        return await runner.run(
+            task=task,
+            agent=agent or spec.profile,
+            profile_spec=spec,
+            **kwargs,
         )
 
     plugin_context = PluginContext(
@@ -2532,6 +2601,7 @@ def create_core_agent_operations(
             "session_store": session_store,
             "sub_agent_runner": None,
             "sub_agent_runner_factory": plugin_sub_agent_runner_factory,
+            "run_profile": plugin_run_profile,
         },
     )
     plugin_operations = build_core_plugin_operation_catalog(
@@ -2547,8 +2617,8 @@ def create_core_agent_operations(
     # outer Core catalog. The outer wrapper applies the same guard, while
     # list and has still hide unavailable operations from clients.
     for operation_name in plugin_operations.registered():
-        # plugin.system.* 由外层自己注册，内层已经挂过一次，不能重复。
-        if operation_name.startswith("plugin.system."):
+        # plugin.system.* 与 plugin.market.* 由外层自己注册，内层已经挂过一次，不能重复。
+        if operation_name.startswith(("plugin.system.", "plugin.market.")):
             continue
         operation_owner = plugin_operations.owner_of(operation_name)
         async def execute_plugin_operation(
@@ -2588,13 +2658,49 @@ def create_core_agent_operations(
             ),
             state_path=Path(paths.data_dir) / "plugin-system.jsonc",
         )
-    register_plugin_system_operations(catalog, plugin_system_host)
+    # user:“重启，我看”+(启动路径里 base_agent 已经注册过同一份插件操作；跳过重复注册，避免 plugin.market.list 冲突导致后端退出)。
+    if "plugin.system.list" not in catalog.registered():
+        register_plugin_system_operations(catalog, plugin_system_host)
+
+    # user:“我们提供了 new chat 接口吗？或者 profile 接口？”+运行档的只读 RPC：
+    # 插件和界面不再只能靠 CLI 或 import 宿主内部模块来发现/解析运行档。
+    from dataclasses import asdict
+    from lamtools_core.plugin_system import available_profiles, resolve_profile
+
+    def _profile_payload(spec: Any) -> dict[str, Any]:
+        payload = asdict(spec)
+        for key in ("tools", "mcp_servers", "mcp_tools", "skills", "approved_tools"):
+            payload[key] = list(payload.get(key) or ())
+        return payload
+
+    async def profile_list(request: OperationRequest) -> OperationResult:
+        specs = available_profiles(plugin_system_host.discover())
+        return OperationResult(
+            name=request.name,
+            payload={"profiles": [_profile_payload(spec) for spec in specs]},
+        )
+
+    async def profile_resolve(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        name = str(payload.get("name") or payload.get("profile") or "")
+        try:
+            spec = resolve_profile(plugin_system_host.discover(), name)
+        except ValueError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"profile": _profile_payload(spec)})
+
+    if not catalog.has("profile.list"):
+        catalog.register("profile.list", profile_list, owner="profile")
+    if not catalog.has("profile.resolve"):
+        catalog.register("profile.resolve", profile_resolve, owner="profile")
 
     # user:“wiki 内置进 library，作为第四项”+只读文档集经操作通道出。
-    from lamtools_core.app.wiki_library import read_wiki_article, scan_wiki
+    # user:“建议以左侧以窄栏显示文件层级”+README 的目录结构随列表一起给出，UI 直接渲染层级。
+    from lamtools_core.app.wiki_library import read_wiki_article, scan_wiki, wiki_tree
 
     async def library_wiki_list(request: OperationRequest) -> OperationResult:
-        return OperationResult(name=request.name, payload={"articles": scan_wiki()})
+        articles = scan_wiki()
+        return OperationResult(name=request.name, payload={"articles": articles, "navigation": wiki_tree(articles)})
 
     async def library_wiki_read(request: OperationRequest) -> OperationResult:
         payload = request.payload if isinstance(request.payload, dict) else {}
@@ -2604,6 +2710,20 @@ def create_core_agent_operations(
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(name=request.name, payload=article)
 
+    from lamtools_core.tool.operation_trust import OperationTrustStore
+
+    async def trust_list(request: OperationRequest) -> OperationResult:
+        return OperationResult(name=request.name, payload={"entries": OperationTrustStore().list()})
+
+    async def trust_revoke(request: OperationRequest) -> OperationResult:
+        key = str(request.payload.get("key") or "")
+        if not key:
+            return OperationResult(name=request.name, status="error", payload={"error": "key is required"})
+        OperationTrustStore().revoke(key)
+        return OperationResult(name=request.name, payload={"revoked": True})
+
+    catalog.register("permissions.trust.list", trust_list, owner="permissions")
+    catalog.register("permissions.trust.revoke", trust_revoke, owner="permissions")
     catalog.register("library.wiki.list", library_wiki_list, owner="library")
     catalog.register("library.wiki.read", library_wiki_read, owner="library")
     catalog.plugin_system_host = plugin_system_host
@@ -3163,10 +3283,14 @@ def _model_provider_for_runtime(model_provider: Any, *, runtime_options: CoreAge
             )
         if maybe_provider is not None:
             provider = maybe_provider
-    if runtime_options.shallow_thinking_enabled:
-        from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
+    # user:“模式、权限、思考强度在下一步生效（即时生效）”+(浅层思考包装器常驻，
+    # 由 enabled 决定是否注入提示，这样运行中可以在步边界切换)。
+    from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
 
-        provider = ShallowThinkingClient(provider)
+    provider = ShallowThinkingClient(
+        provider,
+        enabled=bool(runtime_options.shallow_thinking_enabled),
+    )
     return provider
 
 
@@ -3578,12 +3702,13 @@ async def _build_core_runtime_toolbox(
     from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools
     from lamtools_core.artifact import ArtifactRegistry
 
-    registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [])
-    await registry.load()
-    mcp_tool_specs = registry.tool_specs()
+    registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [],
+        plugin_host=getattr(plugin_assembly.get("plugin_context"), "service", lambda *_: None)("plugin.v2_host"))
+    from lamtools_core.mcp.command_service import MCPCommandService
+    mcp_service = MCPCommandService(registry)
     hook_engine = plugin_assembly.get("hook_engine")
     if hook_engine is not None:
-        hook_engine.set_mcp_caller(registry if mcp_tool_specs else None)
+        hook_engine.set_mcp_caller(mcp_service)
     normalized_policy = approval_policy if approval_policy in {"require", "auto_approve"} else "require"
     skill_runtime = create_skill_runtime(
         plugin_skill_roots=plugin_assembly.get("skill_roots") or [],
@@ -3626,8 +3751,7 @@ async def _build_core_runtime_toolbox(
             tier_tools=tier_tools,
             loaded_skill_roots=skill_roots,
             skill_registry=skill_runtime.registry,
-            mcp_caller=registry if mcp_tool_specs else None,
-            mcp_tool_specs=mcp_tool_specs,
+            mcp_config_files=plugin_assembly.get("mcp_files") or [],
             context_window_tokens=context_window_tokens,
             compact_trigger_tokens=compact_trigger_tokens,
             compact_limit_tokens=compact_limit_tokens,
@@ -3646,6 +3770,8 @@ async def _build_core_runtime_toolbox(
             runtime_snapshot=runtime_snapshot,
             model_context_sink=model_context_sink,
             parent_guidance_sink=parent_guidance_sink,
+            agent_presets=plugin_assembly.get("agent_presets"),
+            prompt_waterfall=plugin_assembly.get("prompt_waterfall"),
         )
     async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
         if operation_catalog is None:
@@ -3746,8 +3872,7 @@ async def _build_core_runtime_toolbox(
         permission_preset=permission_preset,
         loaded_skill_roots=skill_roots,
         skill_registry=skill_runtime.registry,
-        mcp_caller=registry if mcp_tool_specs else None,
-        mcp_tool_specs=mcp_tool_specs,
+        mcp_service=mcp_service,
         sub_agent_runner=sub_agent_runner,
         operation_executor=execute_operation if operation_catalog is not None else None,
         enable_goal_tool=enable_goal_tool,

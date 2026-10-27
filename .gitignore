@@ -1,4 +1,8 @@
 # Build outputs
+# user:“并完成验证”+(本次测试的登录凭证、二维码、环境与本地报告不进入版本库)。
+/.build/plugin-rebuild/
+/.build/dsh-bili-scroll-upstream/
+bili_credential.json
 node_modules/
 dist/
 build/
@@ -165,6 +169,9 @@ core/_swap_checkboxes.py
 !core/mobile/android/app/src/main/res/**/splash.png
 !core/mobile/ios/App/App/Assets.xcassets/**/*.png
 dist-plugins/
+# user:“单开一个插件项目”+(独立仓库暂存与本机构建产物不进入主仓库)。
+/.build/
+*.locked
 
 # Local E2E workspaces and packaged release artifacts
 /.e2e/

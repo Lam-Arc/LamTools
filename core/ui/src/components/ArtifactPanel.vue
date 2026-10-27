@@ -111,7 +111,7 @@
             <component :is="kindIcon(item.kind, item.name)" :size="14" :stroke-width="1.8" aria-hidden="true" />
           </span>
           <span class="artifact-item-copy">
-            <span class="artifact-name" :title="item.path || item.uri || item.name">{{ item.name }}</span>
+            <span class="artifact-name" :title="item.path || item.uri || item.name">{{ item.kind === 'link' ? item.name : '@' + item.name }}</span>
             <span class="artifact-item-meta">
               {{ roleLabel(item.role) }} · {{ kindLabel(item.kind, item.name) }}
             </span>
@@ -198,6 +198,8 @@
 </template>
 
 <script setup lang="ts">
+import { useReferenceActions } from '@/helpers/referenceActions'
+
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref, watch } from 'vue'
@@ -455,28 +457,15 @@ function toggleDetails(item: ProjectArtifact): void {
 }
 
 function openArtifactInStage(item: ProjectArtifact): void {
+  if (item.kind === 'link') { void referenceActions.open(item.path || item.uri || ''); return }
   selectedArtifact.value = item
   emit('open-artifact', item)
   void props.openArtifact?.(item)
 }
 
+const referenceActions = useReferenceActions(props.transport)
 function onArtifactContextMenu(event: MouseEvent, item: ProjectArtifact): void {
-  if (isNativeContextTarget(event.target)) return
-  openContextMenu({
-    event,
-    items: [
-      { id: 'open', get label() { return t("打开视窗") }, icon: ExternalLink, action: () => openArtifactInStage(item) },
-      { type: 'separator', id: 'artifact-path-separator' },
-      { id: 'copy-path', get label() { return t("复制路径") }, icon: Copy, action: () => copyText(item.path || item.uri || '').catch(() => undefined) },
-      { type: 'separator', id: 'artifact-danger-separator' },
-      item.deleted
-        ? { id: 'restore', get label() { return t("恢复到成果库") }, icon: RotateCcw, action: () => restoreArtifact(item) }
-        : { id: 'remove', get label() { return t("从成果库移除") }, icon: Trash2, destructive: true, action: () => removeArtifact(item) },
-    ],
-    ownerId: `artifact:${item.artifact_id}`,
-    ariaLabel: t("{0} 成果操作", { 0: item.name }),
-    panelAttributes: { 'data-artifact-menu': item.artifact_id },
-  })
+  referenceActions.menu(event, item.path || item.uri || '')
 }
 
 /** 移出资料库的确认（应用内，替代系统弹窗）。 */
@@ -650,4 +639,9 @@ onMounted(() => { void fetchArtifacts() })
   .artifact-icon-button, .artifact-check { min-width: 34px; min-height: 34px; }
 }
 @media (prefers-reduced-motion: reduce) { .artifact-state-spinner { animation: none; } }
+</style>
+
+<style scoped>
+/* user:“样式也要重做，追求简单。实用。干净。柔和”+(成果名称采用统一的柔和蓝色引用)。 */
+.artifact-name { color: var(--blue); }
 </style>

@@ -114,6 +114,9 @@ class ToolApprovalDecision:
     #: Command confirmation remains in automatic mode; explicit full access
     #: settles it together with other approval requests.
     command_confirmation: bool = False
+    level: int = 0
+    auto_approve_level: int = 1
+    available_level: int = 3
 
 
 def normalize_command_policies(raw: dict[str, object] | None) -> dict[CommandPermissionGroup, CommandApprovalPolicy]:
@@ -174,7 +177,24 @@ class ApprovalGate:
         manifest_hard_block_tools: set[str] | None = None,
         resource_roots: Callable[[], Iterable[Path]] | Iterable[Path] | None = None,
         plugin_approval: str | None = None,
+        operation_levels: dict[str, int] | None = None,
+        auto_approve_level: int | None = None,
+        available_level: int | None = None,
+        mcp_operation_level: Callable[[str], int] | None = None,
+        mcp_call_level: Callable[[str, dict[str, Any]], int] | None = None,
+        mcp_approved_tools: Iterable[str] | None = None,
+        trust_store: Any | None = None,
     ) -> None:
+        from .operation_trust import OperationTrustStore
+        self.trust_store = trust_store or OperationTrustStore()
+        self.operation_levels = dict(operation_levels or {})
+        self.auto_approve_level = auto_approve_level
+        self.available_level = available_level
+        self.mcp_operation_level = mcp_operation_level
+        self.mcp_call_level = mcp_call_level
+        # user:“值守的时候…有什么办法能开放吗”+(运行档只精确放行指定的
+        # MCP 写工具；不降低目标工具的等级，也不越过能力上限)。
+        self.mcp_approved_tools = set(mcp_approved_tools or ())
         self.work_root = Path(work_root).resolve()
         self.tool_permissions = dict(tool_permissions)
         self.auto_approve_read = auto_approve_read
@@ -224,127 +244,64 @@ class ApprovalGate:
         return (self.work_root, *extra)
 
     def check(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:
-        """Resolve one call and apply the session preset in the same place.
-
-        The preset used to be applied again by ``CoreToolbox`` after this gate,
-        which meant command approvals bypassed the documented precedence table.
-        It is now the last step of the single authority.
-        """
-        decision = self._check_decision(tool_name, params)
-        if self.approval_policy == "auto_approve" and not decision.blocked:
-            # user:“处于完全访问状态，但是它运行命令的时候弹审批了”+(完全访问授权包含命令确认，普通自动模式保留确认)。
-            if decision.requires_approval and (
-                not decision.command_confirmation or self.permission_preset == "full_access"
-            ):
-                return replace(
-                    decision,
-                    allowed=True,
-                    requires_approval=False,
-                    reason="Auto-approved by permission preset",
-                    auto_approved=True,
-                )
-            if decision.allowed and not decision.auto_approved:
-                return replace(decision, auto_approved=True)
-        return self._apply_plugin_approval(decision)
-
-    def _apply_plugin_approval(
-        self, decision: ToolApprovalDecision
-    ) -> ToolApprovalDecision:
-        """Apply the active plugin agent approval stance last."""
-        if decision.blocked or self.plugin_approval is None:
-            return decision
-        if self.plugin_approval == "auto" and decision.requires_approval:
-            return replace(
-                decision,
-                allowed=True,
-                requires_approval=False,
-                command_confirmation=False,
-                auto_approved=True,
-                reason="Auto-approved by plugin agent",
-            )
-        if self.plugin_approval == "block" and decision.requires_approval:
-            return replace(
-                decision,
-                allowed=False,
-                requires_approval=False,
-                command_confirmation=False,
-                blocked=True,
-                reason="Blocked by plugin agent approval policy",
-            )
-        return decision
-
-    def _check_decision(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:
+        # user:“工具权限是改成 123 级，不一棒子按工具类型打死了”+(硬拦截后按操作等级、能力上限、免问线依次判断)。
+        from .operation_levels import AUTO_APPROVE_LEVELS, CAPABILITY_LEVELS, operation_level, valid_level
         params = params or {}
-        if tool_name in self.manifest_hard_block_tools:
-            return ToolApprovalDecision(
-                False,
-                f"Tool '{tool_name}' is hard-blocked by its manifest",
-                HARD_BLOCK,
-                blocked=True,
-            )
+        threshold = self.auto_approve_level
+        if threshold is None:
+            preset = self.permission_preset
+            threshold = AUTO_APPROVE_LEVELS.get(preset, 1)
+        if self.plugin_approval == "auto":
+            threshold = max(threshold, 2)
+        cap = self.available_level if self.available_level is not None else CAPABILITY_LEVELS.get(self.active_tier, 3)
+        if self.plugin_approval == "block":
+            cap = min(cap, threshold)
+        hard = (tool_name in self.manifest_hard_block_tools
+                or self.manifest_tool_permissions.get(tool_name) == HARD_BLOCK
+                or self.tool_permissions.get(tool_name) == HARD_BLOCK)
+        reason = self._check_hard_blocks(tool_name, params)
+        if hard or reason:
+            return ToolApprovalDecision(False, reason or f"Tool '{tool_name}' is hard-blocked", HARD_BLOCK,
+                                        blocked=True, level=0, auto_approve_level=threshold, available_level=cap)
+        try:
+            level = operation_level(tool_name, params, levels=self.operation_levels,
+                                    mcp_level=self.mcp_operation_level,
+                                    mcp_call_level=self.mcp_call_level)
+            if not valid_level(level):
+                raise ValueError("Operation level must be a non-negative integer")
+        except ValueError as exc:
+            return ToolApprovalDecision(False, str(exc), HARD_BLOCK, blocked=True,
+                                        level=0, auto_approve_level=threshold, available_level=cap)
+        mcp_target = ""
+        if tool_name == "mcp" and str(params.get("action") or "") == "run":
+            mcp_target = str(params.get("tool_name") or "")
+        # Trust and approval are keyed by the target MCP tool, never by the
+        # generic ``mcp`` entry tool: trusting ``mcp`` would trust every server.
+        key = self._trust_key(tool_name, params)
+        level = self.trust_store.level(key, level)
+        approved_mcp = bool(mcp_target and mcp_target in self.mcp_approved_tools)
+        blocked = level == 0 or level > cap
+        ask = not blocked and not approved_mcp and level > threshold
+        allowed = not blocked and not ask
+        reason = (f"操作等级 {level} 超过当前能力上限 {cap}" if blocked else
+                  f"操作等级 {level}，运行档已授权" if approved_mcp else
+                  f"操作等级 {level} 超过免问线 {threshold}，需要确认" if ask else f"操作等级 {level}，自动放行")
+        return ToolApprovalDecision(allowed, reason, HARD_BLOCK if blocked else ASK_USER if ask else AUTO_ALLOW,
+                                    requires_approval=ask, blocked=blocked, auto_approved=allowed,
+                                    command_confirmation=ask and tool_name in {"run_command", "command"},
+                                    level=level, auto_approve_level=threshold, available_level=cap)
 
-        # A manifest declaration is a higher-precedence source than user
-        # overrides/defaults.  This is intentionally resolved here as well as
-        # in CoreToolbox so direct ApprovalGate users get the same boundary.
-        base_tier = self.manifest_tool_permissions.get(
-            tool_name,
-            self.tool_permissions.get(tool_name, HARD_BLOCK),
-        )
-        if base_tier == HARD_BLOCK:
-            return ToolApprovalDecision(False, f"Action '{tool_name}' is hard-blocked", base_tier, blocked=True)
+    def trust_operation(self, tool_name: str, params: dict[str, Any]) -> int:
+        decision = self.check(tool_name, params)
+        if decision.blocked or decision.level == 0:
+            raise ValueError("Hard-blocked or unavailable operations cannot be trusted")
+        key = self._trust_key(tool_name, params)
+        return self.trust_store.lower(key, decision.level)
 
-        block_reason = self._check_hard_blocks(tool_name, params)
-        if block_reason:
-            return ToolApprovalDecision(False, block_reason, base_tier, blocked=True)
-
-        # Capability/tier access is a hard boundary.  It is evaluated before
-        # manifest approval and before the Composer approval preset.  A
-        # full_edit empty list is the documented all-tools sentinel; for
-        # read_only/limited_edit an empty list grants nothing.
-        if self.active_tier is not None and self.tier_tools is not None:
-            access_set = self.tier_tools.get(self.active_tier, set())
-            tier_allows = self.active_tier == "full_edit" and not access_set
-            if not tier_allows and tool_name not in access_set:
-                return ToolApprovalDecision(
-                    False,
-                    f"Action '{tool_name}' is outside the {self.active_tier} capability tier",
-                    base_tier,
-                    blocked=True,
-                )
-
-        # Reaching outside the workspace is no longer a consent question: the
-        # product decision (2026-09-27) is that the agent may read, write and
-        # execute anywhere the operating system allows.  ``outside_workdir``
-        # stays on the decision for audit/compat but is never set here.
-        if tool_name == "run_command":
-            command = params.get("command", "")
-            if isinstance(command, str) and command.strip():
-                decision = command_permission_decision(command, self.command_policies)
-                if decision.requires_approval:
-                    return ToolApprovalDecision(
-                        False,
-                        decision.reason or "Command requires user confirmation",
-                        base_tier,
-                        requires_approval=True,
-                        command_confirmation=True,
-                    )
-                if base_tier == AUTO_ALLOW:
-                    return ToolApprovalDecision(True, f"Auto-approved {decision.group} command", base_tier)
-
-        if self.auto_approve_read and base_tier == AUTO_ALLOW:
-            return ToolApprovalDecision(True, "Auto-approved (read-only)", base_tier)
-
-        if base_tier == ASK_USER:
-            if self.approval_policy == "auto_approve":
-                return ToolApprovalDecision(True, "Auto-approved by permission preset", base_tier)
-            return ToolApprovalDecision(
-                False,
-                f"Action '{tool_name}' requires user confirmation",
-                base_tier,
-                requires_approval=True,
-            )
-
-        return ToolApprovalDecision(False, f"Action '{tool_name}' is hard-blocked", base_tier, blocked=True)
+    def _trust_key(self, tool_name: str, params: dict[str, Any]) -> str:
+        # user:“该修修 如果是架构问题就重构”+(信任写入与检查共用目标标识，只授权所选 MCP 工具)。
+        target = str(params.get("tool_name") or "").strip() if tool_name == "mcp" and params.get("action") == "run" else tool_name
+        return self.trust_store.selector(self.work_root, target or tool_name, params)
 
     def _check_hard_blocks(self, tool_name: str, params: dict[str, Any]) -> str:
         if tool_name in {"write_file", "edit_file"}:

@@ -27,10 +27,6 @@ use crate::{HostPlatform, PLATFORM_UNIVERSAL};
 /// second list saying so.
 const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     (
-        "emotion-ball-pet",
-        include_str!("../../src/lamtools_core/plugins/bundled/emotion-ball-pet/plugin.json"),
-    ),
-    (
         "git",
         include_str!("../../src/lamtools_core/plugins/bundled/git/plugin.json"),
     ),
@@ -354,8 +350,8 @@ mod tests {
             .into_iter()
             .map(|plugin| plugin.name)
             .collect();
-        // imagegen / study / websearch / plan declare `universal`; git, workflow and
-        // the desktop pet declare `desktop`, so the phone does not offer them at all.
+        // imagegen / study / websearch / plan declare `universal`; git and
+        // workflow declare `desktop`, so the phone does not offer them at all.
         assert_eq!(names, ["imagegen", "plan", "study", "websearch"], "{names:?}");
     }
 
@@ -370,7 +366,6 @@ mod tests {
         assert_eq!(
             names,
             [
-                "emotion-ball-pet",
                 "git",
                 "imagegen",
                 "plan",

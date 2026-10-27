@@ -12,8 +12,23 @@ from .agent import (
     read_agent,
     resolve_agent_plan,
 )
+from .agent_presets import (
+    AgentPreset,
+    AgentPresetRegistry,
+    PresetComposition,
+    build_agent_preset_registry,
+)
+from .model_catalog import ModelCatalogService, ModelInfo
+from .process_runtime import ProcessBackend, ProcessBackendError, process_runtime_spec
+from .secrets import PluginSecretStore, PluginSecrets, SecretStoreError
+from .prompt_waterfall import (
+    PromptAssembly,
+    PromptContext,
+    PromptSection,
+    SystemPromptWaterfall,
+)
 from .assets import resolve_plugin_asset
-from .backend_runtime import V2RuntimeManager, register_manager
+from .backend_runtime import PluginSupervisor, V2RuntimeManager, register_manager
 from .capabilities import (
     CapabilityAssembly,
     CapabilityError,
@@ -89,6 +104,7 @@ from .ui import (
     PluginAssetSpec,
     PluginUIAction,
     PluginUIBlock,
+    PluginUIPage,
     PluginUIRegion,
     PluginUISpec,
     PluginWindowSpec,
@@ -106,6 +122,22 @@ __all__ = [
     "assemble_agents",
     "read_agent",
     "resolve_agent_plan",
+    "AgentPreset",
+    "AgentPresetRegistry",
+    "PresetComposition",
+    "build_agent_preset_registry",
+    "ModelCatalogService",
+    "ModelInfo",
+    "ProcessBackend",
+    "ProcessBackendError",
+    "process_runtime_spec",
+    "PluginSecretStore",
+    "PluginSecrets",
+    "SecretStoreError",
+    "PromptAssembly",
+    "PromptContext",
+    "PromptSection",
+    "SystemPromptWaterfall",
     "PluginConfigSpec",
     "read_config",
     "PluginEngine",
@@ -171,6 +203,7 @@ __all__ = [
     "PluginUIRegion",
     "PluginUISpec",
     "PluginWindowSpec",
+    "PluginUIPage",
     "UIAssembly",
     "assemble_ui",
     "read_ui",
@@ -183,6 +216,7 @@ __all__ = [
     "PluginToolSpec",
     "RuntimeArtifacts",
     "V2RuntimeManager",
+    "PluginSupervisor",
     "assemble_capabilities",
     "load_manifest",
     "read_capabilities",

@@ -616,7 +616,7 @@ function requestStateForId(snapshot: CoreAppSnapshot, requestId: string): CoreAp
 function coreDecisionToWaitingResponse(decision: string, guidance: string): Record<string, unknown> {
   if (decision === 'deny') return { action: 'deny', response: guidance || 'deny' }
   if (decision === 'other_guidance') return { action: 'guide', response: guidance || 'guide' }
-  if (decision === 'approve_once' || decision === 'approve_for_session') {
+  if (decision === 'approve_once' || decision === 'approve_for_session' || decision === 'trust') {
     return { action: 'approve', response: decision }
   }
   return { action: decision || 'handled', response: guidance || decision }

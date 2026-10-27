@@ -11,6 +11,7 @@
 - [安装、启动与版本](articles/install.md)
 - [检查和安装桌面更新](articles/updates.md)
 - [桌面窗口与导航](articles/desktop-controls.md)
+- [分屏](articles/split-pane.md)
 - [界面外观](articles/appearance.md)
 - [快捷键与快速定位](articles/shortcuts.md)
 - [设置总览](articles/settings.md)
@@ -60,6 +61,7 @@
 - [看懂运行状态与工具记录](articles/runtime-status.md)
 - [子代理](articles/sub-agents.md)
 - [子代理消息](articles/sub-agent-messages.md)
+- [智能体预设与系统提示词流水线](articles/agent-presets-and-prompt-waterfall.md)
 
 ## 六、暂停、审批与恢复
 
@@ -105,6 +107,7 @@ Sunday 获得额外能力、长期知识和外部工具的四条途径。
 
 - [插件](articles/plugins.md)
 - [插件案例](articles/plugin-cases.md)
+- [插件宿主运行时能力](articles/plugin-host-runtime.md)
 
 ### 内置插件
 
@@ -130,10 +133,6 @@ Sunday 获得额外能力、长期知识和外部工具的四条途径。
 - [网页搜索](articles/web-search.md)
 - [生成或编辑图片](articles/imagegen.md)
 - [查看 Git 状态和改动](articles/git.md)
-
-#### 桌面
-
-- [桌宠 Emotion Ball](articles/desktop-pet.md)
 
 ## 十一、实践教程
 

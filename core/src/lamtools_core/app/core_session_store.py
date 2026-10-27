@@ -73,12 +73,9 @@ class CoreDbSessionStore:
         )
 
     async def _publish_sync_changes(self, change_ids: list[str]) -> None:
-        if self._sync_journal is None or self._sync_publisher is None:
-            return
-        for change_id in change_ids:
-            change = await self._sync_journal.get_change(change_id)
-            if change is not None:
-                await self._sync_publisher({"method": "sync/change", "params": change})
+        # user:“错误发生在宿主自己的写入/同步路径上”+(通知失败不能覆盖已经提交的会话写入结果)。
+        from .sync_notifications import publish_committed_changes
+        await publish_committed_changes(self._sync_journal, self._sync_publisher, change_ids)
 
     def _is_visible(self, session_id: str, metadata: dict[str, Any]) -> bool:
         try:
@@ -93,6 +90,9 @@ class CoreDbSessionStore:
         return self._is_visible(str(row.thread_id), _session_metadata(row.snapshot_json))
 
     async def create(self, session: SessionRecord) -> SessionRecord:
+        # user:“做成真正的“主聊天助手””+(来源项目和只读权限在创建时绑定，切换主区项目不会串到辅助会话)。
+        from .auxiliary_chat import bind_auxiliary_session
+        await bind_auxiliary_session(self, session)
         db = self._db_provider()
         if not self._is_visible(session.id, session.metadata):
             raise ValueError("Session owner plugin is disabled or unavailable")

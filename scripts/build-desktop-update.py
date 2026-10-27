@@ -39,8 +39,9 @@ BUNDLE = DESKTOP / "src-tauri" / "target" / "release" / "bundle"
 REPO_MANIFEST = DESKTOP / "update-manifest.json"
 TAURI_CONF = DESKTOP / "src-tauri" / "tauri.conf.json"
 
-DEFAULT_BASE_URL = "https://ainarit.com/downloads"
-DEFAULT_RELEASE_URL = "https://ainarit.com/sunday.html"
+# user:“尽快摆脱对官网的依赖”+(构建清单默认指向 GitHub Release，允许显式覆盖兼容站点)。
+DEFAULT_BASE_URL = "https://github.com/Lam-Arc/LamTools/releases/download/v{version}"
+DEFAULT_RELEASE_URL = "https://github.com/Lam-Arc/LamTools/releases/tag/v{version}"
 
 SETUP_NAME = re.compile(
     r"^Sunday_(?P<version>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)_x64-setup\.exe$"
@@ -88,14 +89,14 @@ def build_manifest(args: argparse.Namespace, installer: Path | None = None) -> d
             f"installer is {version} but tauri.conf.json says {tree}: rebuild, or pass "
             "--allow-version-mismatch when packaging an older artifact on purpose"
         )
-    base = args.base_url.rstrip("/")
+    base = args.base_url.format(version=version).rstrip("/")
     notes = args.notes
     if args.notes_file:
         notes = Path(args.notes_file).read_text(encoding="utf-8").strip()
     manifest = {
         "version": version,
         "download_url": f"{base}/{installer.name}",
-        "release_url": args.release_url,
+        "release_url": args.release_url.format(version=version),
         "release_notes": notes or f"Sunday {version}",
         "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         # The digest is what the host verifies a download against before the

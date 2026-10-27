@@ -1,129 +1,166 @@
-"""bili-scroll 的操作处理器（RPC 面）。
+# user:“对比原版，能力应当只增不减”+(保留完整移植能力，并使用宿主独立模块空间)。
+"""bili-scroll —— 操作层（按钮 / 命令 / 面板的 RPC 入口）。
 
-user:“命令与面板都走 operation”+值班参数、日报列表、装依赖、跑一轮、
-自检从这里出，与斜杠命令共用同一条通道。
+模型不能调操作；要给模型的能力在 tools.py 里（同一份 service 实现）。
+每个操作都返回 OperationResult，payload 是可序列化的 dict。
 """
 
 from __future__ import annotations
 
-import json
-import os
-import shutil
-import subprocess
 import sys
-import venv as _venv
-from datetime import datetime
 from pathlib import Path
-from typing import Any
 
-from lamtools_core.app import OperationRequest, OperationResult
-from lamtools_core.plugin_system.jsonc import load_jsonc_text
+ROOT = Path(__file__).resolve().parent
 
-_PLUGIN_ROOT = Path(__file__).resolve().parent
-_DATA_DIR = _PLUGIN_ROOT / "data"
-_OUT_DIR = _DATA_DIR / "out"
-_MCP_JSON = _PLUGIN_ROOT / "mcp" / "mcp.json"
-_VENV_DIR = _DATA_DIR / "venv"
+from lamtools_core.app import OperationResult  # noqa: E402
+
+from . import service  # noqa: E402
 
 
-def _venv_python() -> Path:
-    return _VENV_DIR / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+def _ok(name: str, payload: dict) -> OperationResult:
+    status = "ok" if payload.get("ok", True) else "error"
+    return OperationResult(name=name, status=status, payload=payload)
 
 
-def _config() -> dict[str, Any]:
-    try:
-        data = load_jsonc_text(_DATA_DIR / "config.jsonc")
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+async def status(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.status", await service.run_io(service.status))
 
 
-async def duty_brief(request: OperationRequest) -> OperationResult:
-    # 与 MCP 的 brief 工具共用同一份载荷（单一事实来源）。
-    from bili_core import duty_brief_payload
-
-    return OperationResult(name=request.name, payload=duty_brief_payload())
+async def run_round(request, *, work_root=None, data_dir=None) -> OperationResult:
+    why = str((getattr(request, "payload", {}) or {}).get("why") or "manual")
+    return _ok("bili-scroll.run_round", service.run_round(why))
 
 
-async def reports_list(request: OperationRequest) -> OperationResult:
-    reports = []
-    if _OUT_DIR.is_dir():
-        for path in sorted(_OUT_DIR.glob("*.md"), reverse=True):
-            reports.append(
-                {
-                    "file": path.name,
-                    "path": str(path),
-                    "bytes": path.stat().st_size,
-                }
-            )
-    return OperationResult(name=request.name, payload={"reports": reports, "count": len(reports)})
+async def round_instruction(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.round_instruction", await service.run_io(service.run_instruction))
 
 
-async def setup(request: OperationRequest) -> OperationResult:
-    """装依赖：建插件自管 venv（httpx + mcp），把解析后的绝对路径写回 mcp.json。
+async def setup(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.setup", await service.run_io(service.setup_deps))
 
-    user:“装主依赖”+原版的引导按钮；本操作跑在宿主进程里，用
-    sys.executable 建 venv，服务端依赖装进 venv——与宿主打包无关。
-    """
-    python_exe = _venv_python()
-    if not python_exe.exists():
-        _venv.create(str(_VENV_DIR), with_pip=True)
-    result = subprocess.run(
-        [str(python_exe), "-m", "pip", "install", "--quiet", "httpx", "mcp"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return OperationResult(
-            name=request.name,
-            status="error",
-            payload={"error": f"依赖安装失败：{(result.stdout + result.stderr)[-300:]}"},
-        )
 
-    # user:“静态 mcp.json 指不到动态 venv 路径”+setup 把解析后的绝对路径
-    # 写回安装副本的 mcp.json；写回前 MCP 起不来（工具暂缺，宿主优雅降级）。
-    template = _MCP_JSON.read_text(encoding="utf-8")
-    resolved = template.replace("{{BILI_VENV_PYTHON}}", str(python_exe)).replace(
-        "{{PLUGIN_DIR}}", str(_PLUGIN_ROOT)
-    )
-    _MCP_JSON.write_text(resolved, encoding="utf-8")
-    return OperationResult(
-        name=request.name,
-        payload={
-            "installed": True,
-            "venv": str(_VENV_DIR),
-            "mcp_json": str(_MCP_JSON),
-            "note": "MCP 服务端将在下一次会话激活时以新路径启动。",
-        },
+async def install_asr(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.install_asr", await service.run_io(service.install_asr))
+
+
+async def install_log(request, *, work_root=None, data_dir=None) -> OperationResult:
+    payload = getattr(request, "payload", {}) or {}
+    kind = "asr" if str(payload.get("kind") or "") == "asr" else "main"
+    return _ok("bili-scroll.install_log", await service.run_io(service.install_log,kind, int(payload.get("tail") or 40)))
+
+
+async def login_start(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.login_start", await service.run_io(service.login_start))
+
+
+async def login_poll(request, *, work_root=None, data_dir=None) -> OperationResult:
+    payload = getattr(request, "payload", {}) or {}
+    return _ok("bili-scroll.login_poll", await service.run_io(service.login_poll,str(payload.get("key") or "")))
+
+
+async def import_cookie(request, *, work_root=None, data_dir=None) -> OperationResult:
+    payload = getattr(request, "payload", {}) or {}
+    return _ok(
+        "bili-scroll.import_cookie",
+        await service.run_io(service.import_cookie,
+            str(payload.get("sessdata") or ""),
+            str(payload.get("bili_jct") or ""),
+            str(payload.get("dedeuserid") or ""),
+            str(payload.get("buvid3") or ""),
+        ),
     )
 
 
-async def selfcheck(request: OperationRequest) -> OperationResult:
-    """环境自检：venv、mcp.json、凭证、whisper、ffmpeg 逐项报告。"""
-    checks = {
-        "venv": _venv_python().exists(),
-        "mcp_json_resolved": _MCP_JSON.exists() and "{{" not in _MCP_JSON.read_text(encoding="utf-8"),
-        "credentials": bool(_config().get("sessdata")),
-        "whisper": shutil.which("whisper") is not None,
-        "ffmpeg": shutil.which("ffmpeg") is not None,
-    }
-    return OperationResult(
-        name=request.name,
-        payload={"checks": checks, "all_ok": all(checks.values())},
-    )
+async def config_get(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.config_get", await service.run_io(service.config_get))
 
 
-async def run_now(request: OperationRequest, *, context: Any = None) -> OperationResult:
-    """现在跑一轮：按运行档 bili-scroll:duty 拉起值班子代理。
+async def config_update(request, *, work_root=None, data_dir=None) -> OperationResult:
+    payload = getattr(request, "payload", {}) or {}
+    patch = payload.get("patch") if isinstance(payload.get("patch"), dict) else payload
+    return _ok("bili-scroll.config_update", await service.run_io(service.config_update,patch))
 
-    user:“现在跑一轮”+值班轮由 backend 的运行时在后台执行，操作立即返回；
-    进度与结果经日报与卡片墙查看。
-    """
-    service = context.service("bili-scroll.duty") if context is not None else None
-    if service is None:
-        return OperationResult(
-            name=request.name,
-            status="error",
-            payload={"error": "值班运行时未就绪（backend 未启用或宿主未注入）"},
-        )
-    return OperationResult(name=request.name, payload={"started": True, **service.trigger_now()})
+
+async def report_read(request, *, work_root=None, data_dir=None) -> OperationResult:
+    payload = getattr(request, "payload", {}) or {}
+    return _ok("bili-scroll.report_read", await service.run_io(service.report_read,str(payload.get("day") or "")))
+
+
+async def reports_list(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.reports_list", await service.run_io(service.reports_list))
+
+
+async def pick_cards(request, *, work_root=None, data_dir=None) -> OperationResult:
+    payload = getattr(request, "payload", {}) or {}
+    return _ok("bili-scroll.pick_cards", await service.run_io(service.pick_cards,str(payload.get("day") or "")))
+
+
+async def seen_list(request, *, work_root=None, data_dir=None) -> OperationResult:
+    payload = getattr(request, "payload", {}) or {}
+    return _ok("bili-scroll.seen_list", await service.run_io(service.seen_list,
+        str(payload.get("day") or ""), str(payload.get("status") or ""), int(payload.get("limit") or 200)))
+
+
+async def diagnose(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.diagnose", await service.run_io(service.diagnose))
+
+
+async def open_home(request, *, work_root=None, data_dir=None) -> OperationResult:
+    return _ok("bili-scroll.open_home", await service.run_io(service.open_home, str((request.payload or {}).get("what") or "home")))
+
+
+async def cover_data(request, **kwargs):
+    return _ok(request.name, await service.run_io(service.cover_data, str((request.payload or {}).get("bvid") or "")))
+
+
+async def fav_folders(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.fav_folders", await service.run_io(service.fav_call,["folders"]))
+
+
+async def fav_add_today(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.fav_add_today", await service.run_io(service.fav_add_today))
+
+
+async def dm_scan(request, *, work_root=None, data_dir=None) -> OperationResult:
+    del request, work_root, data_dir
+    return _ok("bili-scroll.dm_scan", await service.run_io(service.dm_scan))
+
+
+async def watched(request, **kwargs):
+    p = request.payload
+    return _ok(request.name, await service.run_io(service.watched,p.get("tier", ""), p.get("state", ""), p.get("offset", 0), p.get("limit", 60)))
+
+
+async def verify(request, **kwargs):
+    import asyncio
+    return _ok(request.name, await asyncio.to_thread(service.verify))
+
+
+async def selfcheck(request, **kwargs):
+    return _ok(request.name, await service.run_io(service.selfcheck))
+
+
+async def check(request, **kwargs):
+    import asyncio
+    return _ok(request.name, await asyncio.to_thread(service.check))
+
+
+async def update_check(request, **kwargs):
+    import asyncio
+    return _ok(request.name, await asyncio.to_thread(service.update_check))
+
+
+async def stop_round(request, **kwargs):
+    if service.RUNTIME is None:
+        return _ok(request.name, {"ok": True, "stopped": True})
+    return _ok(request.name, await service.RUNTIME.stop_round())

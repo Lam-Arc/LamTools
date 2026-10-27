@@ -1,16 +1,13 @@
-"""Update check — read the official site manifest, fall back to GitHub Releases.
+"""Update check — read GitHub Releases, fall back to the legacy site manifest.
 
 The desktop app and CLI both call :func:`check_update` to learn whether a newer
 release exists and where to download it. Verified updates can be installed
 in the app after the user chooses to update.
 
-The official site is the primary *download* channel: ``downloads/desktop-update.json``
-sits next to the installers the project publishes, so it points at a download that
-works in the same regions. GitHub is consulted only when the official manifest
-is unavailable or has no installer for this platform. Network/parse
-failures are folded into a ``check_failed`` result instead of raising, so a
-temporary outage never breaks the app or the CLI — and when both sources fail,
-the error names both.
+GitHub Releases is the primary discovery and download channel. Network
+Exploration supplies an optional loopback accelerator; the legacy website is
+consulted only if GitHub is unavailable. Transport or metadata failures become
+an explicit check_failed result rather than breaking the application.
 """
 
 from __future__ import annotations
@@ -166,21 +163,15 @@ def _log_request_failure(url: str, routing: dict[str, Any], exc: Exception, elap
 
 def _http_get_json(url: str) -> dict[str, Any]:
     """GET ``url`` and parse it as JSON, raising on any failure."""
-    import httpx
+    from lamtools_core.distribution import get_json
 
     accept = "application/vnd.github+json" if "api.github.com" in url else "application/json"
     routing = httpx_client_kwargs(url)
     started = time.monotonic()
     try:
-        with httpx.Client(
-            timeout=REQUEST_TIMEOUT_SECONDS,
-            follow_redirects=True,
-            headers={"User-Agent": _USER_AGENT, "Accept": accept},
-            **routing,
-        ) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            data = response.json()
+        # user:“尽快摆脱对官网的依赖”+(GitHub 查询复用网络拓展路由，官网仅保留兼容回退)。
+        data = get_json(url, timeout=REQUEST_TIMEOUT_SECONDS,
+                        headers={"User-Agent": _USER_AGENT, "Accept": accept})
     except Exception as exc:
         _log_request_failure(url, routing, exc, time.monotonic() - started)
         raise
@@ -339,7 +330,7 @@ def _github_candidate() -> dict[str, Any]:
 
 
 def check_update() -> dict[str, Any]:
-    """Check the official Sunday website, using GitHub only as a fallback.
+    """Check GitHub Releases, using the legacy website only as a fallback.
 
     Returns one of:
 
@@ -356,9 +347,8 @@ def check_update() -> dict[str, Any]:
     - ``{"status": "check_failed", "current_version", "error"}`` — both
       sources failed; the error names each one. Never raises.
 
-    A usable official manifest supplies the version, download and release notes
-    without depending on GitHub availability. Website publication determines
-    when a release becomes available on the primary channel.
+    A usable GitHub release supplies the version, installer, digest, and notes
+    without requiring website publication.
     """
     base: dict[str, Any] = {"current_version": __version__}
     candidates: dict[str, dict[str, Any]] = {}
@@ -366,8 +356,8 @@ def check_update() -> dict[str, Any]:
     reported_version = ""
     reported_source = ""
     for name, key, loader in (
-        ("official site", SOURCE_SITE, _site_candidate),
         ("GitHub", SOURCE_GITHUB, _github_candidate),
+        ("official site", SOURCE_SITE, _site_candidate),
     ):
         try:
             candidates[key] = loader()

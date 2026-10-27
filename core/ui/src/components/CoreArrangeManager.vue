@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSplitKeyboardScope } from '@/split/keyboardScope'
+const splitKeyboardActive = useSplitKeyboardScope()
+
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -464,6 +467,7 @@ watch(heading, (value) => emit('heading', { ...value }), { immediate: true })
 onMounted(loadJobs)
 
 function onKeydown(e: KeyboardEvent) {
+  if (!splitKeyboardActive()) return
   if (e.key === 'Escape') onBackClick()
 }
 onMounted(() => document.addEventListener('keydown', onKeydown))
@@ -755,6 +759,8 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </template>
 
 <style scoped>
+/* user:“专门对小屏或者说分屏状态做一下适配”+(按页面实际宽度调整布局，宽窗口中的窄分屏也能独立折叠)。 */
+
 /* ── 整版界面：内容落在与会话同一条轴线上（full-area-column） ── */
 .arrange-view {
   --text: var(--theme-main-text);
@@ -1127,13 +1133,13 @@ button { font: inherit; }
 button:disabled { cursor: default; opacity: .5; }
 
 /* 桌面：标题与返回键由顶部条承担，手机头整块收起。 */
-@media (min-width: 641px) {
+@container app-page (min-width: 641px) {
   .arrange-mobile-head {
     display: none;
   }
 }
 
-@media (max-width: 700px) {
+@container app-page (max-width: 700px) {
   .arrange-page { padding: 24px 18px; }
   .arrange-card, .template-card { padding: 14px 16px; }
   .template-grid { grid-template-columns: 1fr; }

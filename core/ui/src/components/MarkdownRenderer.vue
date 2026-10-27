@@ -3,14 +3,28 @@
        content node is filled; it never swaps the root or content container. -->
   <div class="markdown-renderer" :class="{ 'markdown-renderer--streaming': streaming }">
     <div ref="contentRoot" class="markdown-renderer__content markdown-body" />
+    <Teleport v-for="block in replyBlocks" :key="block.id" :to="block.target">
+      <InlineVisualization v-if="block.kind === 'interactive'" :source="block.source" />
+      <WritingBlock v-else :source="block.source" :title="block.title || ''" :variant="block.variant || 'standard'">
+        <template #default="{ content }"><MarkdownRenderer :content="content" :interactive="false" /></template>
+      </WritingBlock>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
+import { linkifyTextNodes } from '@/helpers/webLinks'
+import { renderFileReferenceNodes } from '@/helpers/fileReferenceRendering'
+import { useReferenceActions } from '@/helpers/referenceActions'
+
 import { t, uiLanguage } from '@/i18n/index.ts'
 
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { marked, type Renderer } from 'marked'
+import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue'
+import InlineVisualization from './InlineVisualization.vue'
+// user:“总的来说就是样式块”+(成稿组件按需加载，预览由插槽提供以保持模块依赖单向)。
+const WritingBlock = defineAsyncComponent(() => import('./WritingBlock.vue'))
+import { messageStyleExtension, addAlertRenderer } from './messageStyleBlocks'
+import { marked, Marked, type Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
@@ -19,6 +33,7 @@ import { renderAutoMathPlot } from '@/components/mathAutoPlot.ts'
 import { getCachedMarkdown, setCachedMarkdown } from '@/components/markdownRenderCache.ts'
 import { fadeStreamingText, type StreamingTextFade } from '@/components/streamingTextFade.ts'
 
+const referenceActions = useReferenceActions()
 defineOptions({ name: 'MarkdownRenderer' })
 
 // Force every rendered anchor to open externally with safe rel attributes.
@@ -64,15 +79,46 @@ const props = withDefaults(
      *  avoid jitter from incomplete Markdown during streaming. Full Markdown
      *  rendering is applied when streaming ends. */
     streaming?: boolean
+    /** Turn markdown links that look like file paths into file-reference
+     *  buttons. Chat wants that; a document reader navigating its own `.md`
+     *  links must keep the original anchors. */
+    fileReferences?: boolean
+    /** Only assistant reply surfaces may run explicit interactive-html fences. */
+    interactive?: boolean
   }>(),
   {
     mermaid: true,
     autoPlotMath: false,
     streaming: false,
+    fileReferences: true,
+    interactive: false,
   },
 )
 
 const contentRoot = ref<HTMLElement | null>(null)
+type ReplyBlock = { id: number; target: HTMLElement; kind: 'interactive' | 'writing'; source: string; title?: string; variant?: string }
+const replyBlocks = shallowRef<ReplyBlock[]>([])
+let replyBlockSequence = 0
+function disposeInteractiveBlocks() {
+  replyBlocks.value = []
+}
+function mountInteractiveBlocks() {
+  if (!props.interactive || props.streaming) return
+  const blocks: ReplyBlock[] = []
+  for (const placeholder of contentRoot.value?.querySelectorAll<HTMLElement>('[data-inline-visualization]') || []) {
+    const source = placeholder.querySelector('.code-source')?.textContent || ''
+    const mount = document.createElement('div')
+    placeholder.prepend(mount)
+    blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'interactive', source })
+  }
+  for (const placeholder of contentRoot.value?.querySelectorAll<HTMLElement>('[data-writing-block]') || []) {
+    const mount = document.createElement('div')
+    const source = placeholder.querySelector('.writing-source')?.textContent || ''
+    placeholder.prepend(mount)
+    blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'writing', source, title: placeholder.dataset.writingTitle, variant: placeholder.dataset.writingVariant })
+  }
+  replyBlocks.value = blocks
+}
 // Table shell → dispose callback. Keyed by shell so removing a streaming
 // segment can dispose exactly the observers of the tables it owned.
 const tableCleanup = new Map<Element, () => void>()
@@ -265,7 +311,7 @@ function copyButtonHtml(source: string): string {
   // this comment — the SFC parser treats it as the end of the script block.)
   return (
     `<button type="button" class="code-copy" data-code-copy aria-label="${escapeHtml(t('复制代码'))}" title="${escapeHtml(t('复制代码'))}">${COPY_ICON}${DONE_ICON}</button>` +
-    `<span class="code-source" hidden>${escapeHtml(source)}</span>`
+    `<span class="code-source" hidden data-no-linkify>${escapeHtml(source)}</span>`
   )
 }
 
@@ -283,13 +329,23 @@ function renderSegmentHtml(source: string, heavy: boolean): string {
   try {
     const math = protectMath(source, heavy)
     const renderer = createMermaidRenderer(heavy)
-    const html = marked.parse(math.content, {
+    const parser = new Marked({ extensions: [messageStyleExtension(
+      body => renderSegmentHtml(body, heavy), props.interactive && heavy,
+      body => math.tokens.reduce((value, item) => value.replaceAll(item.token, () => item.source), body),
+    )] })
+    addAlertRenderer(renderer, body => renderSegmentHtml(body, heavy))
+    const html = parser.parse(math.content, {
       renderer,
       async: false,
       breaks: false,
       gfm: true,
     }) as string
-    return DOMPurify.sanitize(restoreMath(html, math.tokens))
+    const clean = DOMPurify.sanitize(restoreMath(html, math.tokens))
+    const host = document.createElement('div')
+    host.innerHTML = clean
+    linkifyTextNodes(host)
+    if (props.fileReferences) renderFileReferenceNodes(host, referenceActions.absolute(''))
+    return host.innerHTML
   } catch {
     return `<p>${escapeHtml(source)}</p>`
   }
@@ -297,6 +353,8 @@ function renderSegmentHtml(source: string, heavy: boolean): string {
 
 function createMermaidRenderer(heavy: boolean): Renderer {
   const renderer = new marked.Renderer()
+  // user:“不要出错”+(内部挂载标记仅由专用块产生，原始 HTML 不能伪造可执行内容)。
+  renderer.html = ({ text }) => text.replace(/\bdata-(inline-visualization|writing-block)\b/gi, 'data-disabled-$1')
 
   renderer.image = function ({ href, title, text }: { href: string; title?: string | null; text: string }): string {
     const remote = /^https?:\/\//i.test(href)
@@ -308,7 +366,13 @@ function createMermaidRenderer(heavy: boolean): Renderer {
     return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${titleAttr}${studyAttr}>`
   }
 
-  renderer.code = function ({ text, lang }: { text: string; lang?: string }): string {
+  renderer.code = function ({ text, lang, raw }: { text: string; lang?: string; raw?: string }): string {
+    // user:“Sunday也可以实现吗？去实现”+(仅显式交互块在回复完成后启动，原始脚本始终作为转义文本经过净化)。
+    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(raw || '')?.[1]
+    const closed = fence && new RegExp(`\\n {0,3}${fence[0]}{${fence.length},}[ \\t]*(?:\\r?\\n)?$`).test(raw || '')
+    if (props.interactive && heavy && lang === 'interactive-html' && closed) {
+      return `<div class="code-block" data-inline-visualization>${copyButtonHtml(text)}</div>`
+    }
     if (props.mermaid && heavy && lang === 'mermaid') {
       const id = `mermaid-${mermaidSeq++}`
       mermaidBlocks.push({ id, code: text })
@@ -360,19 +424,26 @@ function renderLatex(source: string, displayMode: boolean): string {
 interface MathToken {
   token: string
   html: string
+  source: string
 }
 
 function splitFencedCode(content: string): Array<{ code: boolean; text: string }> {
   const result: Array<{ code: boolean; text: string }> = []
-  const pattern = /```[\s\S]*?```/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(content)) !== null) {
-    if (match.index > lastIndex) result.push({ code: false, text: content.slice(lastIndex, match.index) })
-    result.push({ code: true, text: match[0] })
-    lastIndex = match.index + match[0].length
+  let lastIndex = 0, offset = 0, codeStart = 0, fence = ''
+  // user:“不要出错”+(反引号和波浪线代码围栏里的源码都不参与公式转换)。
+  for (const line of content.match(/[^\n]*(?:\n|$)/g) || []) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1]
+    if (!fence && marker) {
+      if (offset > lastIndex) result.push({ code: false, text: content.slice(lastIndex, offset) })
+      codeStart = offset; fence = marker
+    } else if (fence && new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`).test(line.trimEnd())) {
+      result.push({ code: true, text: content.slice(codeStart, offset + line.length) })
+      lastIndex = offset + line.length; fence = ''
+    }
+    offset += line.length
   }
-  if (lastIndex < content.length) result.push({ code: false, text: content.slice(lastIndex) })
+  if (fence) result.push({ code: true, text: content.slice(codeStart) })
+  else if (lastIndex < content.length) result.push({ code: false, text: content.slice(lastIndex) })
   return result
 }
 
@@ -388,7 +459,8 @@ function protectMath(content: string, heavy: boolean): { content: string; tokens
       inlineMathPlots.push({ id, html: plot })
       plotHtml = `<span class="math-auto-plot-anchor" data-math-auto-plot-id="${id}"></span>`
     }
-    tokens.push({ token, html: renderLatex(expression, displayMode) + plotHtml })
+    // user:“总的来说就是样式块”+(成稿保留原始公式源码，避免编辑时丢失公式标记)。
+    tokens.push({ token, html: renderLatex(expression, displayMode) + plotHtml, source })
     return token
   }
   const transformed = splitFencedCode(content).map((segment) => {
@@ -397,7 +469,7 @@ function protectMath(content: string, heavy: boolean): { content: string; tokens
       .replace(/\\\[([\s\S]+?)\\\]/g, (_match, expression) => protect(_match, expression, true))
       .replace(/\$\$([\s\S]+?)\$\$/g, (_match, expression) => protect(_match, expression, true))
       .replace(/\\\(([\s\S]+?)\\\)/g, (_match, expression) => protect(_match, expression, false))
-      .replace(/(^|[^\\$])\$([^\n$]+?)\$/g, (_match, prefix, expression) => `${prefix}${protect(_match, expression, false)}`)
+      .replace(/(^|[^\\$])\$([^\n$]+?)\$/g, (_match, prefix, expression) => `${prefix}${protect(`$${expression}$`, expression, false)}`)
   }).join('')
   return { content: transformed, tokens }
 }
@@ -663,7 +735,7 @@ const renderedHtml = computed(() => {
   // toggles and re-renders (part auto-collapse, process groups) re-run this
   // computed with unchanged content; re-parsing marked + sanitizing on every
   // toggle made those interactions produce ~60ms long tasks on large messages.
-  const cacheKey = `${uiLanguage.value}:${props.mermaid ? 'm1' : 'm0'}:${props.autoPlotMath ? 'p1' : 'p0'}:${props.content}`
+  const cacheKey = `${referenceActions.absolute('')}:${uiLanguage.value}:${props.mermaid ? 'm1' : 'm0'}:${props.autoPlotMath ? 'p1' : 'p0'}:${props.fileReferences ? 'f1' : 'f0'}:${props.interactive ? 'i1' : 'i0'}:${props.content}`
   const cached = getCachedMarkdown(cacheKey)
   if (cached) {
     mermaidBlocks.length = 0
@@ -695,7 +767,9 @@ function renderStaticHtml(html: string): void {
   if (!contentRoot.value) return
   clearStreamedSegments()
   disposeTableEnhancements()
+  disposeInteractiveBlocks()
   contentRoot.value.innerHTML = html
+  mountInteractiveBlocks()
   renderInlineMathPlots()
   enhanceTables()
 }
@@ -874,6 +948,7 @@ watch(uiLanguage, () => {
 // contents with the finished render; entering it (a message going live again)
 // starts from a clean segment list.
 watch(() => props.streaming, (streaming) => {
+  if (streaming) disposeInteractiveBlocks()
   clearStreamedSegments()
   if (streaming && contentRoot.value) syncStreamingSegments(props.content, true)
 }, { flush: 'post' })
@@ -929,12 +1004,22 @@ function onRootClick(event: MouseEvent) {
   }
   const target = element?.closest?.('a')
   if (!target) return
+  if (target instanceof HTMLElement && target.dataset.filePath) {
+    event.preventDefault(); event.stopPropagation(); void referenceActions.open(target.dataset.filePath); return
+  }
   const href = target.getAttribute('href') ?? ''
   if (!isExternalUrl(href)) return
   // Hand off to the OS browser and block the in-app navigation.
   event.preventDefault()
   event.stopPropagation()
   openExternalUrl(href)
+}
+
+function onReferenceContextMenu(event: MouseEvent) {
+  const target = (event.target as HTMLElement)?.closest('a')
+  if (!target) return
+  const path = target.dataset.filePath || target.getAttribute('href') || ''
+  if (path && (target.dataset.filePath || isExternalUrl(path))) referenceActions.menu(event, path)
 }
 
 function onRootImageError(event: Event) {
@@ -951,6 +1036,7 @@ function onRootImageError(event: Event) {
 
 onMounted(async () => {
   contentRoot.value?.addEventListener('click', onRootClick, true)
+  contentRoot.value?.addEventListener('contextmenu', onReferenceContextMenu, true)
   contentRoot.value?.addEventListener('error', onRootImageError, true)
   if (props.streaming) syncStreamingSegments(props.content, true)
   else renderStaticHtml(renderedHtml.value)
@@ -958,7 +1044,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  disposeInteractiveBlocks()
   contentRoot.value?.removeEventListener('click', onRootClick, true)
+  contentRoot.value?.removeEventListener('contextmenu', onReferenceContextMenu, true)
   contentRoot.value?.removeEventListener('error', onRootImageError, true)
   clearStreamedSegments()
   disposeTableEnhancements()
@@ -971,6 +1059,22 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 </script>
 
 <style scoped>
+/* user:“辅助说明块呢？总的来说就是样式块”+(说明块使用主题语义色和文本标签，详情保留原生键盘操作)。 */
+.markdown-body :deep(.message-style-block) {
+  --text: var(--theme-main-text);
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  color: var(--text);
+  background: var(--theme-main-soft-background);
+  border-inline-start: 3px solid color-mix(in srgb, var(--text) 45%, transparent);
+}
+.markdown-body :deep(.message-style-title) { display: block; margin-bottom: var(--space-2); }
+.markdown-body :deep([data-style-block="tip"]), .markdown-body :deep([data-style-block="success"]) { border-inline-start-color: var(--green); }
+.markdown-body :deep([data-style-block="warning"]) { border-inline-start-color: var(--orange); }
+.markdown-body :deep([data-style-block="danger"]) { border-inline-start-color: var(--red); }
+.markdown-body :deep([data-style-block="info"]) { border-inline-start-color: var(--blue); }
+.markdown-body :deep(.message-style-block > :last-child) { margin-bottom: 0; }
+.markdown-body :deep(.message-style-block summary) { color: var(--theme-main-text); }
 .markdown-body :deep(.stream-text-fade) {
   animation: stream-text-reveal var(--dur-base, 180ms) var(--ease-out, ease-out) both;
   animation-delay: calc(-1 * var(--stream-fade-age, 0ms));
@@ -1370,3 +1474,9 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 }
 </style>
 
+
+<style scoped>
+/* user:“都把这个链接标蓝可跳转”+(显式与无协议链接保持统一可见性)。 */
+:deep(a[href]) { color: var(--blue); text-decoration-color: color-mix(in srgb, var(--blue) 45%, transparent); text-underline-offset: 3px; }
+:deep(a[href]:hover) { text-decoration: underline; }
+</style>

@@ -118,6 +118,9 @@ export class DirectTransport implements LamToolsTransport {
     this.createSocket = options.webSocketFactory || ((url) => new WebSocket(url))
   }
 
+  // user:“辅助对话”+(共享连接配置和认证，独立拥有请求、事件订阅与关闭生命周期)。
+  fork(): DirectTransport { return new DirectTransport({ ...this.options }) }
+
   async connect(): Promise<void> {
     if (this.socket?.readyState === WebSocket.OPEN && this.state === 'connected') return
     if (this.connectPromise) return await this.connectPromise

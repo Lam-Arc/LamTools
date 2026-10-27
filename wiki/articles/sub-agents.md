@@ -129,6 +129,8 @@
 
 ## 参见
 
+- [分屏](split-pane.md)
+
 - [回合状态机](turn-state-machine.md)
 - [子代理消息](sub-agent-messages.md)
 - [决策池](decision-pool.md)

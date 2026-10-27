@@ -36,6 +36,12 @@ class PluginContext:
     model_id: str = ""
     event_sink: PluginEventSink | None = None
     services: dict[str, Any] = field(default_factory=dict)
+    #: Services visible only to this context view (not shared with other
+    #: plugin backends).  The host uses this for per-plugin secret views.
+    scoped_services: dict[str, Any] = field(default_factory=dict)
+    #: Host-owned secret store.  It is deliberately not a service: exposing the
+    #: store would let one plugin read another plugin's namespace.
+    _secret_store: Any = field(default=None, repr=False)
     metadata: dict[str, Any] = field(default_factory=dict)
     #: The context this view was derived from (set by :meth:`for_scene`).
     #: Late-bound fields assigned on the original *after* the view was created
@@ -51,6 +57,8 @@ class PluginContext:
             self.app_data_dir = Path(self.app_data_dir).resolve()
 
     def service(self, name: str, default: Any = None) -> Any:
+        if name in self.scoped_services:
+            return self.scoped_services[name]
         return self.services.get(name, default)
 
     def set_service(self, name: str, value: Any) -> None:
@@ -58,6 +66,34 @@ class PluginContext:
 
     def remove_service(self, name: str) -> None:
         self.services.pop(name, None)
+
+    def set_scoped_service(self, name: str, value: Any) -> None:
+        self.scoped_services[name] = value
+
+    def remove_scoped_service(self, name: str) -> None:
+        self.scoped_services.pop(name, None)
+
+    def refresh_from(self, other: "PluginContext") -> "PluginContext":
+        """Refresh host-level fields from a newer context, keeping scoped views.
+
+        A backend keeps its plugin-scoped context (and therefore its secret
+        view) across disable/enable and restart, while the host may hand in a
+        context with a newer work root, catalog or service map.
+        """
+        self.work_root = Path(other.work_root)
+        self.data_dir = Path(other.data_dir) if other.data_dir is not None else None
+        self.app_data_dir = Path(other.app_data_dir) if other.app_data_dir is not None else None
+        self.operation_catalog = other.operation_catalog
+        self.permission_service = other.permission_service
+        self.event_bus = other.event_bus
+        self.runtime_task_registry = other.runtime_task_registry
+        self.llm_client = other.llm_client
+        self.model_id = other.model_id
+        self.event_sink = other.event_sink
+        self.services = other.services
+        if other._secret_store is not None:
+            self._secret_store = other._secret_store
+        return self
 
     def for_work_root(self, work_root: str | Path | None) -> "PluginContext":
         """Return a shallow context view for the active project root."""
@@ -75,6 +111,8 @@ class PluginContext:
             model_id=self.model_id,
             event_sink=self.event_sink,
             services=self.services,
+            scoped_services=dict(self.scoped_services),
+            _secret_store=self._secret_store,
             metadata=self.metadata,
         )
 
@@ -82,10 +120,10 @@ class PluginContext:
         """Return a view whose ``model_id`` is the model of ``scene``.
 
         Each plugin backend is handed its own scene's model (Study → study,
-        the desktop pet → desktop_pet, anything else → background) so a
-        plugin's model calls never inherit the main conversation's model by
-        accident.  The ``services`` dict is shared by reference, so services
-        registered after the backend is created stay visible.
+        anything else → background) so a plugin's model calls never inherit
+        the main conversation's model by accident.  The ``services`` dict is
+        shared by reference, so services registered after the backend is
+        created stay visible.
         """
         view = self.for_work_root(self.work_root)
         if view is self:
@@ -100,6 +138,8 @@ class PluginContext:
                 llm_client=self.llm_client,
                 event_sink=self.event_sink,
                 services=self.services,
+                scoped_services=dict(self.scoped_services),
+                _secret_store=self._secret_store,
                 metadata=self.metadata,
             )
         from lamtools_core.config.model_selection import ModelResolutionError, resolve_scene_model

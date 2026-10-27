@@ -2,7 +2,7 @@
   <div v-if="commands.length" class="command-palette" role="listbox" :aria-label="t('命令')">
     <div class="command-list">
       <section v-for="group in groupedCommands" :key="group.kind" class="command-group">
-        <div class="command-group-label">{{ group.label }}</div>
+        <div v-if="!commands.some(c => c.metadata?.reference_path)" class="command-group-label">{{ group.label }}</div>
         <button
           v-for="item in group.items"
           :key="item.command.name"
@@ -13,13 +13,14 @@
           :aria-selected="item.index === activeIndex"
           :aria-label="commandLabel(item.command)"
           :data-command-name="item.command.name"
+          @mousedown.prevent
           @click.prevent="$emit('select', item.command)"
         >
           <span class="command-icon" aria-hidden="true">
             <component :is="commandIcon(item.command)" :size="17" :stroke-width="1.8" />
           </span>
           <span class="command-copy">
-            <strong>/{{ item.command.name }}</strong>
+            <strong>{{ item.command.metadata?.reference_path ? (item.command.metadata.context ? '#' : '@') : '/' }}{{ item.command.name }}</strong>
             <small>{{ item.command.description || item.command.title }}</small>
           </span>
           <span class="command-source">{{ commandSourceLabel(item.command) }}</span>
@@ -83,6 +84,7 @@ function commandIcon(command: CoreCommandCatalogItem): Component {
 }
 
 function commandSourceLabel(command: CoreCommandCatalogItem): string {
+  if (command.metadata?.reference_path) return command.metadata.context ? t("上下文") : t("文件")
   if (resolveComposerCommandKind(command) === 'skill') return t("技能")
   if (command.source === 'plugin') {
     return String(command.metadata?.plugin_title || command.metadata?.plugin_name || t("插件"))
@@ -93,7 +95,7 @@ function commandSourceLabel(command: CoreCommandCatalogItem): string {
 
 function commandLabel(command: CoreCommandCatalogItem): string {
   const detail = command.description || command.title || command.name
-  return `/${command.name}: ${detail}`
+  return `${command.metadata?.reference_path ? '@' : '/'}${command.name}: ${detail}`
 }
 </script>
 
@@ -142,9 +144,9 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   gap: var(--space-2);
   align-items: center;
   width: 100%;
-  min-height: 48px;
+  min-height: 40px;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   padding: var(--space-2);
   background: transparent;
   color: var(--text);
@@ -176,9 +178,9 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   place-items: center;
   width: var(--space-6);
   height: var(--space-6);
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: transparent;
   color: color-mix(in srgb, var(--text) 72%, transparent);
 }
 

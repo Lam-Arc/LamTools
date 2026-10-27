@@ -87,7 +87,8 @@ def mode_tool_set(
         ``set[str]`` – the whitelist of tool names.
         ``None`` – mode not recognised or full-access mode → no filtering needed.
     """
-    if not active_mode:
+    # user:“不一棒子按工具类型打死了”+(consider 的只读边界改由操作一级上限控制，不再按工具名称删 command)。
+    if not active_mode or active_mode == "consider":
         return None
     mode = load_tools.get(active_mode)
     if mode is None:

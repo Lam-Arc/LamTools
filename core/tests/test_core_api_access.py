@@ -182,7 +182,7 @@ def test_actual_core_routes_and_rpc_require_auth(tmp_path):
     from lamtools_core.app.http_agent_app import create_core_agent_http_app
     app = create_core_agent_http_app(core_db=tmp_path / "core.db", data_dir=tmp_path / "data", access_policy=CoreApiAccessPolicy(True, TOKEN))
     with TestClient(app, client=("192.168.1.8", 50000)) as client:
-        for path in ["/api/core/sessions", "/api/core/projects", "/api/core/config/models", "/api/core/config/providers", "/api/core/desktop-plugins/example/assets/index.html", "/api/core/sessions/example/attachments"]:
+        for path in ["/api/core/sessions", "/api/core/projects", "/api/core/config/models", "/api/core/config/providers", "/api/core/plugin-system/example/assets/index.html", "/api/core/sessions/example/attachments"]:
             assert client.get(path).status_code == 401
             assert client.post(path, json={}).status_code == 401
         with pytest.raises(WebSocketDisconnect):

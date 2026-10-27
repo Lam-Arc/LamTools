@@ -36,7 +36,8 @@ class _CoreAttachmentRepository:
             raise LookupError("Invalid attachment session id")
         return AttachmentSession(
             id=value,
-            storage_root=self.data_dir / "attachments" / _session_storage_key(value),
+            # user:“否则把附件创建到 artifact 目录内”+(所有会话共用内容寻址的托管文件)。
+            storage_root=self.data_dir / "artifact" / "attachments",
         )
 
     async def create(self, record: AttachmentRecord) -> AttachmentRecord:

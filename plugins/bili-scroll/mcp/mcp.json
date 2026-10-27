@@ -1,8 +1,55 @@
 {
   "mcpServers": {
     "bilibili": {
-      "command": "{{BILI_VENV_PYTHON}}",
-      "args": ["{{PLUGIN_DIR}}/server/bili_server.py"]
+      "command": "{{PLUGIN_PYTHON:./data/duty/.venv}}",
+      "transport": "json_lines",
+      "args": [
+        "{{PLUGIN_DIR}}/data/duty/mcp_server.py"
+      ],
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "BILI_DUTY_HOME": "{{PLUGIN_DIR}}/data/duty",
+        "BILI_MCP_TOOLS": "bili_login,bili_login_check,bili_check_credential,bili_search,bili_comments,bili_subtitle,bili_danmaku,bili_video_info,bili_reply,bili_crawl,bili_video_zones,bili_hot_videos,bili_hot_buzzwords,bili_weekly_hot,bili_rank,bili_user_info,bili_user_videos,bili_favorite_lists,bili_favorite_content,bili_send_message,bili_unread_messages,bili_received_replies,bili_received_at_and_likes,duty_paths,duty_report_append,duty_seen_append,duty_seen_recent,duty_digest_append,bili_transcribe,bili_transcribe_start,bili_transcribe_result,bili_cover,bili_frames,bili_recommend",
+        "BILI_PLUGIN_ROOT": "{{PLUGIN_DIR}}"
+      },
+      "level": 3,
+      "toolLevels": {
+        "bili_login": 2,
+        "bili_login_check": 1,
+        "bili_check_credential": 1,
+        "bili_search": 1,
+        "bili_comments": 1,
+        "bili_subtitle": 1,
+        "bili_danmaku": 1,
+        "bili_video_info": 1,
+        "bili_reply": 3,
+        "bili_crawl": 1,
+        "bili_video_zones": 1,
+        "bili_hot_videos": 1,
+        "bili_hot_buzzwords": 1,
+        "bili_weekly_hot": 1,
+        "bili_rank": 1,
+        "bili_user_info": 1,
+        "bili_user_videos": 1,
+        "bili_favorite_lists": 1,
+        "bili_favorite_content": 1,
+        "bili_send_message": 3,
+        "bili_unread_messages": 1,
+        "bili_received_replies": 1,
+        "bili_received_at_and_likes": 1,
+        "duty_paths": 1,
+        "duty_report_append": 2,
+        "duty_seen_append": 2,
+        "duty_seen_recent": 1,
+        "duty_digest_append": 2,
+        "bili_transcribe": 2,
+        "bili_transcribe_start": 2,
+        "bili_transcribe_result": 2,
+        "bili_cover": 1,
+        "bili_frames": 1,
+        "bili_recommend": 1
+      }
     }
   }
 }

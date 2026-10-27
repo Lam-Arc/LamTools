@@ -463,14 +463,14 @@ class TestNoGlobalDefaultModel:
     def test_scenes_do_not_share_models(self, isolated_config_root: Path):
         _write_provider(isolated_config_root, "p-a", name="Provider A")
         _write_provider(isolated_config_root, "p-b", name="Provider B")
-        _write_model(isolated_config_root, "cheap-pet-model", provider_id="p-b", provider_name="Provider B")
+        _write_model(isolated_config_root, "cheap-background-model", provider_id="p-b", provider_name="Provider B")
         _write_model(isolated_config_root, "main-model", provider_id="p-a", provider_name="Provider A")
 
-        ms.remember_scene_model(ms.SCENE_DESKTOP_PET, "cheap-pet-model")
+        ms.remember_scene_model(ms.SCENE_BACKGROUND, "cheap-background-model")
         ms.remember_scene_model(ms.SCENE_CHAT, "main-model")
 
         assert ms.resolve_scene_model(ms.SCENE_CHAT).model_id == "main-model"
-        assert ms.resolve_scene_model(ms.SCENE_DESKTOP_PET).model_id == "cheap-pet-model"
+        assert ms.resolve_scene_model(ms.SCENE_BACKGROUND).model_id == "cheap-background-model"
         # A scene with nothing remembered still refuses rather than borrowing.
         with pytest.raises(ms.ModelResolutionError):
             ms.resolve_scene_model(ms.SCENE_STUDY)
@@ -518,12 +518,12 @@ class TestNoGlobalDefaultModel:
     def test_plugin_scene_mapping_never_defaults_to_chat(self):
         # 场景只看清单声明，名字不再决定归属。
         study = SimpleNamespace(name="study", raw={"model_scene": "study"})
-        pet = SimpleNamespace(name="emotion-ball-pet", raw={"model_scene": "desktop_pet"})
+        background = SimpleNamespace(name="some-background-plugin", raw={"model_scene": "background"})
         other = SimpleNamespace(name="some-plugin", raw={})
         legacy_name = SimpleNamespace(name="study", raw={})
 
         assert ms.scene_for_plugin(study) == ms.SCENE_STUDY
-        assert ms.scene_for_plugin(pet) == ms.SCENE_DESKTOP_PET
+        assert ms.scene_for_plugin(background) == ms.SCENE_BACKGROUND
         assert ms.scene_for_plugin(other) == ms.SCENE_BACKGROUND
         assert ms.scene_for_plugin(legacy_name) == ms.SCENE_BACKGROUND
 
@@ -537,13 +537,13 @@ class TestNoGlobalDefaultModel:
         _write_provider(isolated_config_root, "p-a", name="Provider A")
         _write_provider(isolated_config_root, "p-b", name="Provider B")
         _write_model(isolated_config_root, "main-model", provider_id="p-a", provider_name="Provider A")
-        _write_model(isolated_config_root, "pet-model", provider_id="p-b", provider_name="Provider B")
+        _write_model(isolated_config_root, "background-model", provider_id="p-b", provider_name="Provider B")
         ms.remember_scene_model(ms.SCENE_CHAT, "main-model")
-        ms.remember_scene_model(ms.SCENE_DESKTOP_PET, "pet-model")
+        ms.remember_scene_model(ms.SCENE_BACKGROUND, "background-model")
 
         context = PluginContext(work_root=isolated_config_root)
-        view = context.for_scene(ms.SCENE_DESKTOP_PET)
-        assert view.model_id == "pet-model"
+        view = context.for_scene(ms.SCENE_BACKGROUND)
+        assert view.model_id == "background-model"
         assert view.model_id != ms.scene_recent_models(ms.SCENE_CHAT)[0]
 
         catalog = OperationCatalog()

@@ -19,7 +19,7 @@ from sqlalchemy import Boolean, DateTime, Float, Index, Integer, JSON, String, U
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from lamtools_core.event import RunItemEvent
 from lamtools_core.runtime import RuntimeState, RuntimeStateConflictError
@@ -890,11 +890,9 @@ class SqlAlchemyRuntimeStateStore:
         self._sync_publisher = publisher
 
     async def _publish_sync_change(self, change_id: str | None) -> None:
-        if not change_id or self._sync_journal is None or self._sync_publisher is None:
-            return
-        change = await self._sync_journal.get_change(change_id)
-        if change is not None:
-            await self._sync_publisher({"method": "sync/change", "params": change})
+        # user:“失败点是读取 sync 变更”+(运行状态提交后，通知读取失败不能让执行路径报写入失败)。
+        from .sync_notifications import publish_committed_changes
+        await publish_committed_changes(self._sync_journal, self._sync_publisher, [change_id] if change_id else [])
 
     async def get(self, session_id: str) -> RuntimeState | None:
         async with self.session_factory() as db:
@@ -2131,10 +2129,13 @@ async def open_core_app_db(
     async with _database_startup_phase("path and engine setup"):
         db_path = Path(path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        # user:“长回合 + 多子代理时数据库被锁死”+(复用有上限的连接，避免每次读写重复建连、设置 PRAGMA 和关闭最后连接时的检查点)。
         engine = create_async_engine(
             _sqlite_url(db_path),
             future=True,
-            poolclass=NullPool,
+            poolclass=AsyncAdaptedQueuePool,
+            pool_size=4,
+            max_overflow=4,
         )
         configure_sqlite_engine(engine)
 

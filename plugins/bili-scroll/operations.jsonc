@@ -1,29 +1,139 @@
 {
   "operations": [
     {
-      "name": "bili-scroll.duty.brief",
-      "description": "今日值班参数：关键词、挑选限额、判重表近况、日报位置与登录状态",
-      "handler": "ops:duty_brief"
+      "name": "bili-scroll.status",
+      "description": "刷B站 的状态：今天挑了几条、额度剩多少、窗口开没开、环境/登录就绪没",
+      "handler": "ops:status"
     },
     {
-      "name": "bili-scroll.reports.list",
-      "description": "列出已经写出的日报文件",
-      "handler": "ops:reports_list"
+      "name": "bili-scroll.run_round",
+      "description": "现在跑一轮（不等谷时窗口）",
+      "handler": "ops:run_round"
+    },
+    {
+      "name": "bili-scroll.round_instruction",
+      "description": "把这一轮的完整指令写到 data/duty/round.md 并返回路径",
+      "handler": "ops:round_instruction"
     },
     {
       "name": "bili-scroll.setup",
-      "description": "装依赖：建插件自管环境并写回 MCP 配置",
+      "description": "装主依赖：在插件数据区建独立 venv 并装 bilibili-mcp 的依赖（后台跑）",
       "handler": "ops:setup"
     },
     {
+      "name": "bili-scroll.install_asr",
+      "description": "装转写依赖（faster-whisper + yt-dlp，后台跑）",
+      "handler": "ops:install_asr"
+    },
+    {
+      "name": "bili-scroll.install_log",
+      "description": "读安装日志尾部",
+      "handler": "ops:install_log"
+    },
+    {
+      "name": "bili-scroll.login_start",
+      "description": "开始 B站 扫码登录，返回 key + 二维码 PNG 路径",
+      "handler": "ops:login_start"
+    },
+    {
+      "name": "bili-scroll.login_poll",
+      "description": "查扫码结果（waiting / scanned / ok / expired）",
+      "handler": "ops:login_poll"
+    },
+    {
+      "name": "bili-scroll.import_cookie",
+      "description": "从浏览器 cookie 导入登录（sessdata / bili_jct / dedeuserid / buvid3）",
+      "handler": "ops:import_cookie"
+    },
+    {
+      "name": "bili-scroll.config_get",
+      "description": "读当前设置",
+      "handler": "ops:config_get"
+    },
+    {
+      "name": "bili-scroll.config_update",
+      "description": "改设置（只认 schema 里的字段）",
+      "handler": "ops:config_update"
+    },
+    {
+      "name": "bili-scroll.report_read",
+      "description": "读某天的日报（默认今天）",
+      "handler": "ops:report_read"
+    },
+    {
+      "name": "bili-scroll.reports_list",
+      "description": "列出最近的日报",
+      "handler": "ops:reports_list"
+    },
+    {
+      "name": "bili-scroll.pick_cards",
+      "description": "把日报里的 ### BV号 段解析成卡片（标题/档位/链接）",
+      "handler": "ops:pick_cards"
+    },
+    {
+      "name": "bili-scroll.seen_list",
+      "description": "它刷过的视频（判重表，可按天/状态筛）",
+      "handler": "ops:seen_list"
+    },
+    {
+      "name": "bili-scroll.diagnose",
+      "description": "复制诊断信息：环境、配置、日志尾部",
+      "handler": "ops:diagnose"
+    },
+    {
+      "name": "bili-scroll.open_home",
+      "description": "打开它的地盘（报告 / 判重表 / 日志）",
+      "handler": "ops:open_home"
+    },
+    {
+      "name": "bili-scroll.fav_folders",
+      "description": "列账号的收藏夹（给设置页选 favFolderId）",
+      "handler": "ops:fav_folders"
+    },
+    {
+      "name": "bili-scroll.fav_add_today",
+      "description": "把今天挑中的收进设置的收藏夹",
+      "handler": "ops:fav_add_today"
+    },
+    {
+      "name": "bili-scroll.dm_scan",
+      "description": "扫一遍私信会话，看主人有没有发来未读",
+      "handler": "ops:dm_scan"
+    },
+    {
+      "name": "bili-scroll.watched",
+      "description": "watched",
+      "handler": "ops:watched"
+    },
+    {
+      "name": "bili-scroll.verify",
+      "description": "verify",
+      "handler": "ops:verify"
+    },
+    {
       "name": "bili-scroll.selfcheck",
-      "description": "环境自检：venv / mcp.json / 凭证 / whisper / ffmpeg",
+      "description": "selfcheck",
       "handler": "ops:selfcheck"
     },
     {
-      "name": "bili-scroll.run_now",
-      "description": "现在跑一轮：按运行档拉起值班子代理",
-      "handler": "ops:run_now"
+      "name": "bili-scroll.check",
+      "description": "check",
+      "handler": "ops:check"
+    },
+    {
+      "name": "bili-scroll.update_check",
+      "description": "update_check",
+      "handler": "ops:update_check"
+    },
+    {
+      "name": "bili-scroll.stop_round",
+      "description": "stop_round",
+      "handler": "ops:stop_round"
+    },
+    {
+      "name": "bili-scroll.cover_data",
+      "description": "原版视频卡片封面（由宿主代理读取）",
+      "handler": "ops:cover_data"
     }
   ]
 }

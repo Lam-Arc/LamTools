@@ -1,6 +1,9 @@
 import { reactive, readonly } from 'vue'
 
 import type { PluginRpc } from '@/plugins/types.ts'
+import type { PluginPageEntry } from './pages'
+import { consentRpc } from './consent'
+import { pluginAssetUrl } from './assets'
 
 export type { PluginRpc }
 
@@ -56,6 +59,7 @@ export interface PluginContributionState {
   scripts: PluginScriptEntry[]
   regions: PluginRegionContribution[]
   enabledPlugins: Set<string>
+  pages: PluginPageEntry[]
 }
 
 const state = reactive<PluginContributionState>({
@@ -64,7 +68,18 @@ const state = reactive<PluginContributionState>({
   scripts: [],
   regions: [],
   enabledPlugins: new Set<string>(),
+  pages: [],
 })
+
+// user:“支持一下”+(分屏只读取后端目录中的页面，不执行存储标签内自带的地址)。
+export function setPluginPageEntries(raw: unknown): void {
+  state.pages = (Array.isArray(raw) ? raw : []).filter((entry): entry is PluginPageEntry => {
+    if (!entry || typeof entry !== 'object') return false
+    const value = entry as PluginPageEntry
+    return [value.plugin, value.id, value.title, value.entry_url].every(item => typeof item === 'string' && item.length > 0)
+      && value.entry_url.startsWith(`/api/core/plugin-system/${encodeURIComponent(value.plugin)}/assets/`)
+  }).sort((a, b) => (a.order ?? 50) - (b.order ?? 50) || a.plugin.localeCompare(b.plugin) || a.id.localeCompare(b.id))
+}
 
 let inflight: Promise<void> | null = null
 
@@ -72,11 +87,13 @@ let inflight: Promise<void> | null = null
 let globalRpc: PluginRpc | null = null
 
 export function setContributionsRpc(rpc: PluginRpc | null): void {
-  globalRpc = rpc
+  globalRpc = rpc ? consentRpc(rpc) : null
   // user:“自绘 entry 要能调自己的操作”+把请求通道挂为全局桥，
   // entry 脚本经 window.LamToolsPluginRPC 调插件自己的操作。
-  if (typeof window !== 'undefined' && rpc && !window.LamToolsPluginRPC) {
-    ;(window as unknown as { LamToolsPluginRPC: PluginRpc }).LamToolsPluginRPC = rpc
+  // user:“该修修”+(连接切换和退出时同步桥，插件不保留旧连接)。
+  if (typeof window !== 'undefined') {
+    if (globalRpc) window.LamToolsPluginRPC = globalRpc
+    else delete window.LamToolsPluginRPC
   }
 }
 
@@ -90,6 +107,7 @@ const injectedStyles = new Set<string>()
 const injectedScripts = new Set<string>()
 
 function injectStyle(url: string): void {
+  url = pluginAssetUrl(url)
   if (!url || injectedStyles.has(url)) return
   const link = document.createElement('link')
   link.rel = 'stylesheet'
@@ -100,6 +118,7 @@ function injectStyle(url: string): void {
 }
 
 function injectScript(url: string): void {
+  url = pluginAssetUrl(url)
   if (!url || injectedScripts.has(url)) return
   if (document.querySelector(`script[data-plugin-system-script="${url}"]`)) {
     injectedScripts.add(url)
@@ -120,6 +139,7 @@ async function refreshOnce(requestRpc: PluginRpc): Promise<void> {
   inflight = (async () => {
     try {
       const payload = await requestRpc('plugin.system.ui', {})
+      setPluginPageEntries(payload.pages)
       const styles = Array.isArray(payload.styles) ? (payload.styles as PluginStyleEntry[]) : []
       for (const style of styles) injectStyle(String(style.url || ''))
       const scripts = Array.isArray(payload.scripts) ? (payload.scripts as PluginScriptEntry[]) : []
@@ -138,6 +158,7 @@ async function refreshOnce(requestRpc: PluginRpc): Promise<void> {
     } catch {
       // 插件声明加载失败不阻断界面；下一次挂载会重试。
       state.regions = []
+      state.pages = []
       state.enabledPlugins = new Set()
     } finally {
       inflight = null

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sunday",
-  "version": "0.3.22-a3",
+  "version": "0.3.23",
   "identifier": "com.lamtools.lamcore",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -22,50 +22,25 @@
         "shadow": true,
         "dragDropEnabled": false,
         "additionalBrowserArgs": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-tabs"
-      },
-      {
-        "label": "desktop-plugin-host",
-        "create": true,
-        "url": "desktop-plugin-host.html",
-        "title": "Sunday Desktop Plugin",
-        "width": 256,
-        "height": 288,
-        "minWidth": 96,
-        "minHeight": 96,
-        "visible": false,
-        "decorations": false,
-        "transparent": true,
-        "backgroundColor": "#00000000",
-        "shadow": false,
-        "skipTaskbar": true,
-        "resizable": false,
-        "maximizable": false,
-        "minimizable": false,
-        "dragDropEnabled": true,
-        "additionalBrowserArgs": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-tabs"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* https://47.114.43.99.nip.io wss://47.114.43.99.nip.io tauri:; frame-src http://127.0.0.1:*; img-src 'self' asset: http://127.0.0.1:* https: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* https://47.114.43.99.nip.io wss://47.114.43.99.nip.io tauri:; frame-src http://127.0.0.1:*; img-src 'self' asset: http://127.0.0.1:* https: data: blob:; style-src 'self' 'unsafe-inline' blob:; font-src 'self' data: http://127.0.0.1:* http://localhost:*; script-src 'self' http://127.0.0.1:* http://localhost:*",
       "assetProtocol": {
         "enable": true,
-        "scope": [".lam/**", "lam_projects/**"]
+        "scope": [
+          ".lam/**",
+          "lam_projects/**"
+        ]
       },
       "capabilities": [
         {
           "identifier": "default",
-          "windows": ["main"],
+          "windows": [
+            "main"
+          ],
           "permissions": [
             "core:window:allow-start-dragging",
-            "core:event:default"
-          ]
-        },
-        {
-          "identifier": "desktop-plugins",
-          "description": "Allows the local desktop plugin host to call Sunday host commands.",
-          "local": true,
-          "windows": ["desktop-plugin-*"],
-          "permissions": [
             "core:event:default"
           ]
         }
@@ -74,7 +49,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb"],
+    "targets": [
+      "appimage",
+      "deb"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -198,24 +198,8 @@ def _load_module(plugin: PluginManifest, entry: Path) -> ModuleType:
     bundled_name = _bundled_module_name(entry)
     if bundled_name:
         return importlib.import_module(bundled_name)
-    digest = hashlib.sha1(str(entry).encode("utf-8")).hexdigest()[:12]
-    package_name = f"_lamtools_plugin_{plugin.name.replace('-', '_')}_{digest}"
-    spec = importlib.util.spec_from_file_location(
-        package_name,
-        entry,
-        submodule_search_locations=[str(entry.parent)],
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load plugin backend: {entry}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[package_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        if sys.modules.get(package_name) is module:
-            sys.modules.pop(package_name, None)
-        raise
-    return module
+    from .loading import load_entry
+    return load_entry(plugin.root, entry)
 
 
 def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> PluginRuntimeHandle | None:
@@ -224,6 +208,28 @@ def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> Plugi
     A backend may expose ``create_plugin(context)`` or ``create_runtime``.
     Missing backends are normal for declarative-only plugins.
     """
+    from .safety import safe_mode
+    if safe_mode():
+        return None
+    from .process_runtime import ProcessBackend, process_runtime_spec
+
+    # Hand each backend its own scene's model so a plugin never inherits the
+    # main conversation's model (see PluginContext.for_scene).  Scoped services
+    # stay private to this plugin even though the shared services dict is not.
+    plugin_context = context.for_scene(scene_for_plugin(plugin))
+    secret_store = getattr(context, "_secret_store", None)
+    if secret_store is not None and hasattr(secret_store, "view"):
+        plugin_context.set_scoped_service("secrets", secret_store.view(plugin.name))
+
+    process_spec = process_runtime_spec(plugin)
+    if process_spec is not None:
+        backend = ProcessBackend(plugin, process_spec, plugin_context)
+        return PluginRuntimeHandle(
+            plugin=plugin,
+            value=backend,
+            tool_handlers=backend.tool_handlers,
+            context=plugin_context,
+        )
     entry = backend_entry(plugin)
     if entry is None:
         return None
@@ -231,9 +237,6 @@ def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> Plugi
         raise ValueError(f"plugin backend entry does not exist: {entry}")
     module = _load_module(plugin, entry)
     factory = getattr(module, "create_plugin", None) or getattr(module, "create_runtime", None)
-    # Hand each backend its own scene's model so a plugin never inherits the
-    # main conversation's model (see PluginContext.for_scene).
-    plugin_context = context.for_scene(scene_for_plugin(plugin))
     value = factory(plugin_context) if callable(factory) else module
     if inspect.isawaitable(value):
         if inspect.iscoroutine(value):
@@ -242,7 +245,7 @@ def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> Plugi
     if value is None:
         value = module
     if isinstance(value, PluginRuntimeHandle):
-        value.context = context
+        value.context = plugin_context
         return value
     if isinstance(value, dict):
         return PluginRuntimeHandle(
@@ -251,7 +254,7 @@ def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> Plugi
             tool_handlers=dict(value.get("tool_handlers") or {}),
             tool_providers=list(value.get("tool_providers") or []),
             services=dict(value.get("services") or {}),
-            context=context,
+            context=plugin_context,
         )
     return PluginRuntimeHandle(
         plugin=plugin,
@@ -259,7 +262,7 @@ def load_plugin_backend(plugin: PluginManifest, context: PluginContext) -> Plugi
         tool_handlers=dict(getattr(value, "tool_handlers", {}) or {}),
         tool_providers=list(getattr(value, "tool_providers", []) or []),
         services=dict(getattr(value, "services", {}) or {}),
-        context=context,
+        context=plugin_context,
     )
 
 
@@ -269,6 +272,9 @@ def load_enabled_plugin_backends(
     *,
     start: bool = False,
 ) -> list[PluginRuntimeHandle]:
+    from .safety import safe_mode
+    if safe_mode():
+        return []
     handles: list[PluginRuntimeHandle] = []
     for plugin in plugins:
         if not plugin.enabled:
@@ -290,7 +296,7 @@ def load_enabled_plugin_backends(
             # Public synchronous assembly has always offered factory-only
             # embedding. Its host opts out of start hooks explicitly.
             handle.state = "ready"
-            attach_plugin_runtime(handle, context)
+            attach_plugin_runtime(handle, handle.context or context)
             _monitor(handle)
     return handles
 
@@ -303,13 +309,16 @@ def attach_plugin_runtime(handle: PluginRuntimeHandle, context: PluginContext) -
 
 async def start_plugin_backend(handle: PluginRuntimeHandle, context: PluginContext) -> None:
     async with handle.lock:
+        if handle.value is None:
+            raise PluginLifecycleError(handle.plugin.name, "start", RuntimeError("backend failed to load; reload required"))
         if handle.stop_requested:
             raise PluginLifecycleError(handle.plugin.name, "start", RuntimeError("backend is stopping"), code="PLUGIN_BACKEND_BUSY")
         if handle.started and _resources_alive(handle):
             return
         if any(not task.done() for task in handle.pending_tasks):
             raise PluginLifecycleError(handle.plugin.name, "start", RuntimeError("previous lifecycle task has not terminated"), code="PLUGIN_BACKEND_BUSY")
-        handle.context = context
+        runtime_context = handle.context.refresh_from(context) if handle.context is not None else context
+        handle.context = runtime_context
         handle.managed = True
         handle.state = "starting"
         handle.started = False
@@ -320,7 +329,7 @@ async def start_plugin_backend(handle: PluginRuntimeHandle, context: PluginConte
         start = _member(handle, "start") or _member(handle, "on_load")
         try:
             if callable(start):
-                await _bounded(handle, start(context) if _accepts_context(start) else start(), "start")
+                await _bounded(handle, start(runtime_context) if _accepts_context(start) else start(), "start")
             await _health(handle)
             handle.state = "ready"
             if not _resources_alive(handle):
@@ -337,7 +346,7 @@ async def start_plugin_backend(handle: PluginRuntimeHandle, context: PluginConte
             raise error from exc
         handle.started = True
         handle.error = None
-        attach_plugin_runtime(handle, context)
+        attach_plugin_runtime(handle, runtime_context)
         _monitor(handle)
 
 
@@ -398,7 +407,8 @@ async def _stop_backend(handle: PluginRuntimeHandle) -> None:
 
 
 def plugin_backend_available(plugin: PluginManifest, handles: list[PluginRuntimeHandle]) -> bool:
-    if not plugin.enabled:
+    from .safety import safe_mode
+    if safe_mode() or not plugin.enabled:
         return False
     if backend_entry(plugin) is None:
         return True

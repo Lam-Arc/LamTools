@@ -351,6 +351,82 @@
   outline-offset: 1px;
 }
 
+/* 插件按钮一个都不常驻竖栏：所有插件入口收进“更多”，悬浮或键盘聚焦时从
+   竖栏右侧弹出低透玻璃抽屉。抽屉不参与 flex 布局，也不占竖栏宽度；鼠标
+   离开时留 140ms 让指针跨过竖栏与抽屉之间的缝隙（时长由 AppRail 控制）。 */
+.app-rail__more-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-rail__more-drawer {
+  --text: var(--theme-backdrop-text);
+  --optical-glass-surface: var(--theme-backdrop-solid);
+  --optical-glass-overlay: transparent;
+  position: absolute;
+  top: 0;
+  left: calc(100% + var(--space-2));
+  z-index: var(--z-popover);
+  display: grid;
+  gap: 2px;
+  min-width: 156px;
+  max-width: 260px;
+  max-height: min(60vh, 420px);
+  padding: var(--space-1);
+  overflow-y: auto;
+  color: var(--text);
+  animation: app-rail-more-in var(--dur-fast) var(--ease-out);
+}
+
+.app-rail__more-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 74%, transparent);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.app-rail__more-item:hover,
+.app-rail__more-item:focus-visible {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+
+.app-rail__more-item.active {
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  color: var(--text);
+}
+
+.app-rail__more-item:focus-visible { outline: 0; }
+
+.app-rail__more-item svg { flex: 0 0 auto; }
+
+.app-rail__more-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@keyframes app-rail-more-in {
+  from { opacity: 0; transform: translateX(calc(var(--space-1) * -1)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-rail__more-drawer { animation: none; }
+}
+
 /* 更新入口（账号上方，只在新版本出现时渲染）：竖栏里唯一「有事可做」的一枚，
    所以复用竖栏按钮的配方，只改两件事——圆角放大到 --radius-lg（18px 压在 34px 上，
    接近圆角方块），以及默认就带一层底色（状态色仍走同一套 --alpha-*，hover 恰好是

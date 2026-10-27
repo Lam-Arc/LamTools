@@ -41,12 +41,14 @@
     <label class="field width-field">
       <span>{{ t("渐变角度") }}<em>{{ angle }}deg</em></span>
       <div class="width-control">
-        <input
-          v-model.number="angleModel"
-          type="range"
-          min="0"
-          max="360"
-          step="5"
+        <SundayRange
+          bare
+          :model-value="angleModel"
+          :min="0"
+          :max="360"
+          :step="5"
+          :label="t('渐变角度')"
+          @update:model-value="angleModel = Number($event)"
         />
         <input
           v-model.number="angleModel"
@@ -60,12 +62,15 @@
     <label v-if="showOpacity" class="field width-field">
       <span>{{ t("透明度") }}<em>{{ opacityPct }}</em></span>
       <div class="width-control">
-        <input
-          v-model.number="opacityModel"
-          type="range"
-          min="0.1"
-          max="1"
-          step="0.05"
+        <SundayRange
+          bare
+          :model-value="opacityModel"
+          :min="0.1"
+          :max="1"
+          :step="0.05"
+          :decimals="2"
+          :label="t('透明度')"
+          @update:model-value="opacityModel = Number($event)"
         />
         <input
           v-model.number="opacityModel"
@@ -101,6 +106,7 @@ import { t } from '@/i18n/index.ts'
  */
 import { computed } from 'vue'
 import type { ThemeStop } from '@/helpers/theme.ts'
+import SundayRange from '@/components/SundayRange.vue'
 
 const props = defineProps<{
   label: string

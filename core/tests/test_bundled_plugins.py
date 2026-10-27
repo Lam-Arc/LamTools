@@ -65,7 +65,7 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
     # user:“单一插件系统”+内置根永远在扫描链路里，装配直接发现全部插件；
     # 半声明合并桥（plugin_tool_groups）已退役。
     discovered = {item.name for item in assembly["plugins"]}
-    assert {"plan", "study", "workflow", "imagegen", "emotion-ball-pet"} <= discovered
+    assert {"plan", "study", "workflow", "imagegen"} <= discovered
     assert assembly["plugin_tool_groups"] == []
     # websearch 默认关闭，启用后才进可用集。
     enabled = {item.name for item in assembly["plugins"] if item.enabled}

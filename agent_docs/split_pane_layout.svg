@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <title>Split Pane 分屏布局设计示意</title>
+  <desc>静态设计示意，示例内容。左侧聊天，右上资料库，右下文件树与文本编辑器。每块屏都有独立标签，支持左右上下组合。</desc>
+  <defs>
+    <style>
+      text{font-family:'Segoe UI','Microsoft YaHei',sans-serif;fill:#fbf7f0;font-size:13px}
+      .muted{fill:#aaa9a7}.faint{fill:#85868b}.label{font-size:11px;letter-spacing:1px}.title{font-size:15px;font-weight:600}
+      .icon{fill:none;stroke:#aaa9a7;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+      .line{stroke:#fbf7f0;stroke-opacity:.09;fill:none}.mono{font-family:Consolas,'Microsoft YaHei',monospace;font-size:12px}
+    </style>
+    <clipPath id="surface"><rect x="278" y="132" width="1278" height="758" rx="18"/></clipPath>
+    <symbol id="split" viewBox="0 0 20 20"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M11 4v12"/></symbol>
+    <symbol id="plus" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></symbol>
+    <symbol id="dots" viewBox="0 0 20 20"><path d="M4 10h.1M10 10h.1M16 10h.1" stroke-width="3"/></symbol>
+  </defs>
+  <rect width="1600" height="1000" fill="#141619"/>
+  <text x="36" y="46" style="font-size:24px;font-weight:600">Split Pane</text>
+  <text x="182" y="45" class="muted" style="font-size:17px">分屏</text>
+  <text x="1560" y="44" text-anchor="end" class="muted">布局设计示意 · 示例内容 · 非应用截图</text>
+  <rect x="24" y="84" width="1552" height="828" rx="22" fill="#3a3b3f" stroke="#5c5e64"/>
+  <text x="46" y="114" class="muted" style="font-size:12px">Sunday</text>
+  <path d="M1466 106h12M1506 101h10v10h-10zM1544 101l10 10m0-10-10 10" class="icon"/>
+  <!-- App Rail and existing Left Sidebar remain outside the split layout. -->
+  <path d="m42 162 8-7 8 7v11H42z" class="icon"/>
+  <rect x="34" y="147" width="32" height="36" rx="6" fill="#fbf7f0" fill-opacity=".08"/>
+  <rect x="42" y="204" width="16" height="15" rx="2" class="icon"/>
+  <path d="M42 209h16M46 201v6m8-6v6M42 249h16v15H42zM46 249v15M44 295h12v9H44zm4 9v5m4-5v5" class="icon"/>
+  <circle cx="50" cy="849" r="7" class="icon"/>
+  <rect x="76" y="132" width="196" height="758" rx="18" fill="#292b30"/>
+  <text x="94" y="164" class="title">Agent</text><text x="244" y="164" class="muted">⌄</text>
+  <text x="94" y="207">＋　新建聊天</text>
+  <text x="94" y="254" class="faint" style="font-size:11px">项目</text>
+  <text x="94" y="287">⌄　LamTools</text>
+  <rect x="84" y="303" width="180" height="34" rx="6" fill="#fbf7f0" fill-opacity=".08"/>
+  <text x="110" y="325">设计分屏工作区</text>
+  <text x="110" y="362" class="muted">整理项目资料</text>
+  <text x="110" y="400" class="muted">继续开发</text>
+  <text x="94" y="861" class="faint" style="font-size:12px">E:\LamTools</text>
+  <!-- One outer contour; inner panes share the same surface. -->
+  <rect x="278" y="132" width="1278" height="758" rx="18" fill="#1b1d22" stroke="#696b72"/>
+  <g clip-path="url(#surface)">
+    <rect x="278" y="132" width="1278" height="36" fill="#202227"/>
+    <rect x="290" y="138" width="190" height="30" rx="6" fill="#1b1d22"/>
+    <text x="303" y="158">设计分屏工作区</text><text x="458" y="158" class="faint">×</text>
+    <use href="#plus" x="487" y="140" width="20" height="20" class="icon"/>
+    <use href="#split" x="793" y="140" width="20" height="20" class="icon"/>
+    <use href="#dots" x="825" y="140" width="20" height="20" class="icon"/>
+    <path d="M278 168h1278" class="line"/>
+    <!-- Chat, continuously usable alongside other app views. -->
+    <text x="318" y="214" class="muted" style="font-size:12px">LamTools　/　设计分屏工作区</text>
+    <rect x="414" y="251" width="398" height="76" rx="12" fill="#fbf7f0" fill-opacity=".06"/>
+    <text x="434" y="280">边聊天，边查阅资料与编辑文件。</text>
+    <text x="434" y="304">每块屏都能放我当前需要的内容。</text>
+    <text x="318" y="379" class="title">让内容自然地并排展开</text>
+    <text x="318" y="415" class="muted">聊天留在左侧，右侧打开资料库。</text>
+    <text x="318" y="443" class="muted">把文件拖到下方，继续拆出一个编辑空间。</text>
+    <text x="318" y="471" class="muted">各自导航、各自滚动，彼此保持连接。</text>
+    <path d="M318 505h494" class="line"/>
+    <text x="318" y="539" class="muted">⌄　查看子代理过程</text>
+    <text x="318" y="572" class="faint" style="font-size:12px">在分屏中打开，不打断当前聊天</text>
+    <rect x="310" y="754" width="516" height="106" rx="18" fill="#22242a" stroke="#fbf7f0" stroke-opacity=".1"/>
+    <text x="330" y="787" class="faint">继续聊聊你的想法…</text>
+    <text x="330" y="838" class="muted" style="font-size:12px">＋　 Agent　⌄</text>
+    <circle cx="798" cy="833" r="15" fill="#fbf7f0"/>
+    <path d="m793 834 5-5 5 5m-5-5v10" stroke="#22242a" fill="none" stroke-width="1.6"/>
+    <!-- Library pane with an inactive browser tab. -->
+    <rect x="872" y="138" width="106" height="30" rx="6" fill="#1b1d22"/>
+    <text x="885" y="158">▤　资料库</text><text x="962" y="158" class="faint">×</text>
+    <text x="994" y="158" class="muted">◎　浏览器</text>
+    <use href="#plus" x="1100" y="140" width="20" height="20" class="icon"/>
+    <use href="#dots" x="1519" y="140" width="20" height="20" class="icon"/>
+    <text x="893" y="210" class="title">资料库</text>
+    <rect x="1329" y="186" width="198" height="30" rx="6" fill="#22242a"/>
+    <text x="1342" y="206" class="faint" style="font-size:12px">搜索资料…</text>
+    <text x="893" y="252">资料</text><text x="946" y="252" class="muted">记忆</text><text x="999" y="252" class="muted">方案</text>
+    <path d="M893 264h634" class="line"/>
+    <text x="905" y="302">分屏交互笔记</text><text x="1517" y="302" text-anchor="end" class="faint" style="font-size:12px">刚刚</text>
+    <text x="905" y="328" class="muted" style="font-size:12px">入口、标签与多界面导航</text>
+    <path d="M893 348h634" class="line"/>
+    <text x="905" y="382">项目设计规范</text><text x="1517" y="382" text-anchor="end" class="faint" style="font-size:12px">今天</text>
+    <text x="905" y="408" class="muted" style="font-size:12px">主题、间距、控件与状态</text>
+    <text x="893" y="454" class="faint" style="font-size:12px">资料库的导航只影响这块屏</text>
+    <!-- Bottom right: tree and editor, independently splittable. -->
+    <rect x="864" y="488" width="692" height="36" fill="#202227"/>
+    <text x="883" y="511">▱　文件</text>
+    <use href="#plus" x="1023" y="496" width="20" height="20" class="icon"/>
+    <text x="883" y="560" class="muted" style="font-size:12px">⌄　LamTools</text>
+    <text x="897" y="596" class="muted">⌄　agent_docs</text>
+    <rect x="875" y="609" width="190" height="32" rx="6" fill="#fbf7f0" fill-opacity=".08"/>
+    <text x="912" y="630" style="font-size:12px">split_pane_design.md</text>
+    <text x="897" y="667" class="muted">›　core</text>
+    <text x="897" y="704" class="muted">›　website</text>
+    <text x="883" y="867" class="faint" style="font-size:11px">项目文件</text>
+    <rect x="1088" y="494" width="224" height="30" rx="6" fill="#1b1d22"/>
+    <text x="1100" y="514" style="font-size:12px">split_pane_design.md</text>
+    <circle cx="1297" cy="509" r="3" fill="#aaa9a7"/>
+    <use href="#plus" x="1320" y="496" width="20" height="20" class="icon"/>
+    <use href="#dots" x="1519" y="496" width="20" height="20" class="icon"/>
+    <text x="1100" y="555" class="faint" style="font-size:11px">agent_docs / split_pane_design.md</text>
+    <text x="1100" y="600" class="mono faint">1</text><text x="1130" y="600" class="mono"># Split Pane · 分屏</text>
+    <text x="1100" y="629" class="mono faint">2</text>
+    <text x="1100" y="658" class="mono faint">3</text><text x="1130" y="658" class="mono">## 体验原则</text>
+    <text x="1100" y="687" class="mono faint">4</text>
+    <text x="1100" y="716" class="mono faint">5</text><text x="1130" y="716" class="mono">每块屏都有自己的内容和导航。</text>
+    <text x="1100" y="745" class="mono faint">6</text><text x="1130" y="745" class="mono">左右、上下，自由组合。</text>
+    <text x="1100" y="774" class="mono faint">7</text><text x="1130" y="774" class="mono">界面退后，让内容留在眼前。</text>
+    <path d="M1078 849h478" class="line"/>
+    <text x="1100" y="872" class="faint" style="font-size:11px">Markdown</text><text x="1535" y="872" text-anchor="end" class="faint" style="font-size:11px">未保存　 UTF-8</text>
+    <!-- Thin dividers; handles are shown only on hover in the actual design. -->
+    <rect x="862" y="132" width="2" height="758" fill="#3a3b3f"/>
+    <rect x="864" y="486" width="692" height="2" fill="#3a3b3f"/>
+    <rect x="1076" y="488" width="2" height="402" fill="#3a3b3f"/>
+    <path d="M864 524h692" class="line"/>
+  </g>
+  <text x="38" y="953" class="muted">01　标题栏打开分屏</text>
+  <text x="430" y="953" class="muted">02　每块屏独立导航与标签</text>
+  <text x="880" y="953" class="muted">03　拖到边缘拆分，拖到中间合并</text>
+  <text x="1560" y="982" text-anchor="end" class="faint" style="font-size:11px">延续 LamTools 现有主题 · 细分隔 · 轻标签 · 无额外玻璃层</text>
+</svg>

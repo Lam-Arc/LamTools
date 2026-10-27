@@ -31,19 +31,11 @@ async def apply_plugin_enablement(
     host: PluginHost, name: str, enabled: bool
 ) -> tuple[bool, str]:
     """Flip the ledger, then start or stop the plugin backend."""
-    changed = host.enable(name) if enabled else host.disable(name)
-    if not changed:
-        return False, ""
-    manager = getattr(host, "backend_manager", None)
-    if manager is None:
-        return True, ""
+    from .management import set_enabled
     try:
-        if enabled:
-            await manager.start(name)
-        else:
-            await manager.stop(name)
-    except Exception as exc:  # noqa: BLE001 - the ledger already changed
-        return True, f"{type(exc).__name__}: {exc}"
+        await set_enabled(host, name, enabled)
+    except Exception as exc:
+        return host.get(name) is not None, f"{type(exc).__name__}: {exc}"
     return True, ""
 
 
@@ -161,6 +153,9 @@ def _agent_payload(agent: Any) -> dict[str, Any]:
 
 def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHost) -> None:
     """Register the preview surface used by the plugin page."""
+    # user:“插件页再加上插件市场的界面”+(市场和已安装插件共用宿主操作目录)。
+    from .market import register_market_operations
+    register_market_operations(catalog, host)
 
     async def list_plugins(request: OperationRequest) -> OperationResult:
         del request
@@ -169,15 +164,48 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
         return OperationResult(
             name="plugin.system.list",
             payload={
-                "plugins": [_plugin_payload(plugin, assembly) for plugin in plugins],
+                "plugins": [{**_plugin_payload(plugin, assembly), "id": plugin.name,
+                             "available": host.available(plugin.name),
+                             "backend": getattr(host, "backend_manager", None).status(plugin.name) if getattr(host, "backend_manager", None) else {"state": "not_loaded", "available": host.available(plugin.name)}} for plugin in plugins],
                 "errors": list(host.errors),
                 "capability_errors": list(assembly.errors),
             },
         )
 
+    async def list_presets(request: OperationRequest) -> OperationResult:
+        """List host-owned agent presets for settings UIs and tooling."""
+        manager = getattr(host, "backend_manager", None)
+        context = getattr(manager, "context", None)
+        registry = context.service("agent_presets") if context is not None else None
+        if registry is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "agent preset registry is not available"},
+            )
+        return OperationResult(
+            name=request.name,
+            payload={
+                "default": registry.default_id,
+                "presets": [
+                    {
+                        "id": preset.id,
+                        "title": preset.title,
+                        "description": preset.description,
+                        "mode": preset.mode,
+                        "tools": list(preset.tools),
+                        "model": preset.model,
+                        "plugin": preset.plugin,
+                        "metadata": dict(preset.metadata),
+                    }
+                    for preset in registry.list()
+                ],
+            },
+        )
+
     async def list_ui(request: OperationRequest) -> OperationResult:
         del request
-        manifests = host.discover()
+        manifests = host.runtime_manifests()
         assembly = assemble_ui(manifests)
         roots = {manifest.name: manifest.root for manifest in manifests}
         return OperationResult(
@@ -192,6 +220,13 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                     for asset in assembly.scripts
                 ],
                 "regions": [_region_payload(region, roots) for region in assembly.regions],
+                # user:“支持一下”+(只发布已启用插件的页面标识和受控资源地址)。
+                "pages": [
+                    {"plugin": page.plugin, "id": page.id, "title": page.title, "order": page.order, "navigation": page.navigation,
+                     "version": next(manifest.version for manifest in manifests if manifest.name == page.plugin),
+                     "entry_url": _asset_url(page.plugin, roots.get(page.plugin), page.entry), "file_extensions": list(page.file_extensions)}
+                    for page in assembly.pages
+                ],
                 "windows": [
                     {
                         "plugin": window.plugin,
@@ -233,7 +268,7 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
 
     async def get_agent(request: OperationRequest) -> OperationResult:
         payload = request.payload if isinstance(request.payload, dict) else {}
-        assembly = assemble_agents(host.discover())
+        assembly = assemble_agents(host.runtime_manifests())
         plan = resolve_agent_plan(
             assembly.agents,
             active_mode=str(payload.get("active_mode") or ""),
@@ -253,22 +288,20 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
         )
 
     async def install_plugin(request: OperationRequest) -> OperationResult:
-        from .installer import run_install
-
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        ok, result = run_install(host, payload)
-        if not ok:
-            return OperationResult(name=request.name, status="error", payload=result)
-        return OperationResult(name=request.name, payload=result)
+        from .management import install_or_update
+        try:
+            result = await install_or_update(host, request.payload)
+            return OperationResult(name=request.name, payload=result)
+        except Exception as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
 
     async def update_plugin(request: OperationRequest) -> OperationResult:
-        from .installer import run_update
-
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        ok, result = run_update(host, payload)
-        if not ok:
-            return OperationResult(name=request.name, status="error", payload=result)
-        return OperationResult(name=request.name, payload=result)
+        from .management import install_or_update
+        try:
+            result = await install_or_update(host, request.payload, update=True)
+            return OperationResult(name=request.name, payload=result)
+        except Exception as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
 
     async def config_get(request: OperationRequest) -> OperationResult:
         payload = request.payload if isinstance(request.payload, dict) else {}
@@ -316,8 +349,9 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                 "has_schema": spec.schema is not None,
                 # user:“每一个插件都应该有配置面板”+自定义面板按插件自己的脚本
                 # 挂载，没有脚本时前端用默认表单；两种情况身份信息都由宿主补。
-                "panel_url": _asset_url(name, manifest.root, spec.panel),
-                "has_panel": spec.panel is not None,
+                # user:“该重建就重建”+(后端失败时仍能用默认表单修复配置)。
+                "panel_url": _asset_url(name, manifest.root, spec.panel) if host.available(name) else None,
+                "has_panel": spec.panel is not None and host.available(name),
             },
         )
 
@@ -384,9 +418,16 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                 payload={"error": f"plugin {chr(39)}{name}{chr(39)} is not installed"},
             )
         payload_out: dict[str, Any] = {"name": name, "enabled": enabled}
+        payload_out["available"] = host.available(name)
+        # user:“该重建就重建”+(模块覆盖和界面脚本的开关需要提示重启边界)。
+        manifest = host.get(name)
+        payload_out["restart_required"] = bool(manifest and (manifest.raw.get("overrides") or manifest.raw.get("ui")))
         if backend_error:
-            payload_out["backend_error"] = backend_error
-        return OperationResult(name=request.name, payload=payload_out)
+            payload_out["backend_error"] = payload_out["error"] = backend_error
+        manager = getattr(host, "backend_manager", None)
+        if manager:
+            payload_out["backend"] = manager.status(name)
+        return OperationResult(name=request.name, status="error" if backend_error else "ok", payload=payload_out)
 
     async def enable_plugin(request: OperationRequest) -> OperationResult:
         return await set_enabled(request, True)
@@ -400,16 +441,39 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
             return OperationResult(
                 name=request.name, status="error", payload={"error": "name is required"}
             )
-        keep_data = bool(request.payload.get("keep_data", True))
+        from .management import uninstall
         try:
-            host.uninstall(name, keep_data=keep_data)
-        except (KeyError, ValueError) as exc:
-            return OperationResult(
-                name=request.name, status="error", payload={"error": str(exc)}
-            )
-        return OperationResult(
-            name=request.name, payload={"name": name, "uninstalled": True}
-        )
+            result = await uninstall(host, name, keep_data=bool(request.payload.get("keep_data", True)))
+            return OperationResult(name=request.name, payload=result)
+        except Exception as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+
+    async def reload_plugin(request: OperationRequest) -> OperationResult:
+        """Stop, unload and reload one plugin's code without restarting Core.
+
+        user:“该做就做”+(改插件代码后显式重载；模块缓存、后端实例和操作
+        目录一起换代，不要求用户重启整个应用)。
+        """
+        name = str(request.payload.get("name") or "").strip()
+        if not name:
+            return OperationResult(name=request.name, status="error", payload={"error": "name is required"})
+        manifest = host.get(name)
+        if manifest is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"plugin '{name}' is not installed"})
+        if not manifest.enabled:
+            return OperationResult(name=request.name, status="error", payload={"error": f"plugin '{name}' is disabled"})
+        manager = getattr(host, "backend_manager", None)
+        if manager is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "plugin supervisor is not available"})
+
+        # user:“该修修 如果是架构问题就重构”+(RPC 只负责结果转换，重载统一交给生命周期管理)。
+        from .management import reload
+        try:
+            return OperationResult(name=request.name, payload=await reload(host, name))
+        except Exception as exc:
+            return OperationResult(name=request.name, status="error", payload={
+                "error": f"{type(exc).__name__}: {exc}", "backend": manager.status(name),
+            })
 
     catalog.register("plugin.system.list", list_plugins, owner=OWNER)
     catalog.register("plugin.system.ui", list_ui, owner=OWNER)
@@ -420,6 +484,8 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
     catalog.register("plugin.system.config.update", config_update, owner=OWNER)
     catalog.register("plugin.system.enable", enable_plugin, owner=OWNER)
     catalog.register("plugin.system.disable", disable_plugin, owner=OWNER)
+    catalog.register("plugin.system.reload", reload_plugin, owner=OWNER)
+    catalog.register("plugin.system.presets.list", list_presets, owner=OWNER)
     catalog.register("plugin.system.uninstall", uninstall_plugin, owner=OWNER)
 
     async def behavior_table(request: OperationRequest) -> OperationResult:

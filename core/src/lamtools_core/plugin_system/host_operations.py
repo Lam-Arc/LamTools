@@ -71,7 +71,7 @@ class _LiveHookRegistry:
         return load_all_hooks(
             project_root=self._work_root,
             trust_store=self._store,
-            manifests=self._host.discover(),
+            manifests=self._host.runtime_manifests(),
         )
 
 
@@ -444,47 +444,18 @@ def register_host_operations(
 
     # ── legacy aliases（旧名转发新实现，调用方不必改）─────────────────────
 
-    async def plugin_list_alias(request: OperationRequest) -> OperationResult:
-        del request
-        manifests = host.discover()
-        return OperationResult(
-            name="plugin.list",
-            payload={
-                "plugins": [
-                    {
-                        "name": manifest.name,
-                        "id": manifest.name,
-                        "version": manifest.version,
-                        "description": manifest.description,
-                        "enabled": manifest.enabled,
-                        "available": manifest.enabled,
-                    }
-                    for manifest in manifests
-                ],
-                "errors": list(host.errors),
-            },
-        )
+    # user:“该重建就重建”+(旧名称只转发同一宿主入口，不能另建安装/卸载实现)。
+    async def forward(request, method):
+        return await catalog.execute(method, request.payload, metadata=request.metadata)
 
-    async def plugin_install_alias(request: OperationRequest) -> OperationResult:
-        from .installer import run_install
+    async def plugin_list_alias(request):
+        return await forward(request, "plugin.system.list")
 
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        ok, result = run_install(host, payload)
-        if not ok:
-            return OperationResult(name=request.name, status="error", payload=result)
-        return OperationResult(name=request.name, payload=result)
+    async def plugin_install_alias(request):
+        return await forward(request, "plugin.system.install")
 
-    async def plugin_uninstall_alias(request: OperationRequest) -> OperationResult:
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        name = str(payload.get("name") or "").strip()
-        keep_data = bool(payload.get("keep_data", True))
-        if not name:
-            return OperationResult(name=request.name, status="error", payload={"error": "name is required"})
-        try:
-            host.uninstall(name, keep_data=keep_data)
-        except (KeyError, ValueError, OSError) as exc:
-            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
-        return OperationResult(name=request.name, payload={"name": name, "uninstalled": True})
+    async def plugin_uninstall_alias(request):
+        return await forward(request, "plugin.system.uninstall")
 
     async def plugin_deps_status_alias(request: OperationRequest) -> OperationResult:
         import importlib.util
@@ -525,6 +496,13 @@ def register_host_operations(
     catalog.register("plugin.install", plugin_install_alias, owner=OWNER)
     catalog.register("plugin.uninstall", plugin_uninstall_alias, owner=OWNER)
     catalog.register("plugin.deps-status", plugin_deps_status_alias, owner=OWNER)
+    for alias, target in {"plugin.enable": "plugin.system.enable", "plugin.disable": "plugin.system.disable",
+                          "plugin.update": "plugin.system.update", "plugin.reload": "plugin.system.reload",
+                          "plugin.config.get": "plugin.system.config.get",
+                          "plugin.config.update": "plugin.system.config.update"}.items():
+        async def invoke(request, method=target):
+            return await forward(request, method)
+        catalog.register(alias, invoke, owner=OWNER)
 
 
 __all__ = ["register_host_operations"]

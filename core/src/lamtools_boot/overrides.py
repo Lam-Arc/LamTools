@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .import_hook import OverrideFinder, install_overrides
+from .contract import protected_target
 
 SAFE_MODE_ENV = "LAMTOOLS_SAFE_MODE"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -115,12 +116,12 @@ def _default_state_path(environ: Mapping[str, str]) -> Path | None:
     return None
 
 
-def _is_enabled(state: Mapping[str, Any], name: str) -> bool:
+def _is_enabled(state: Mapping[str, Any], name: str, default: bool = True) -> bool:
     plugins = state.get("plugins")
     entry = plugins.get(name) if isinstance(plugins, dict) else None
     if isinstance(entry, dict) and isinstance(entry.get("enabled"), bool):
         return entry["enabled"]
-    return True
+    return default
 
 
 def load_boot_overrides(
@@ -146,7 +147,7 @@ def load_boot_overrides(
         for manifest_path in sorted(root.glob("*/plugin.json")):
             data = _read_json(manifest_path)
             name = str(data.get("name") or manifest_path.parent.name).strip()
-            if not name or not _is_enabled(state, name):
+            if not name or not _is_enabled(state, name, data.get("defaultEnabled") is not False):
                 continue
             declared = data.get("overrides")
             if not isinstance(declared, dict):
@@ -159,6 +160,9 @@ def load_boot_overrides(
                     continue
                 if not target.startswith(HOST_PREFIX):
                     errors.append(f"{name}: override target must start with '{HOST_PREFIX}': {target}")
+                    continue
+                if protected_target(target):
+                    errors.append(f"{name}: recovery kernel cannot be overridden: {target}")
                     continue
                 text = str(raw_value or "").strip()
                 if not text.startswith("./"):

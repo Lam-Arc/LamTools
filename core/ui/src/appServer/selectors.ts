@@ -1048,6 +1048,7 @@ function inputAttachments(value: unknown): CoreAppServerChatMessage['attachments
       mime_type: String(record.mime_type || record.mimeType || 'application/octet-stream'),
       size: Number(record.size || 0),
       preview_type: String(record.preview_type || record.previewType || 'external'),
+      path: String(record.path || ''),
       status: 'uploaded' as const,
     }]
   })

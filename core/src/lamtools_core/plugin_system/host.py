@@ -44,19 +44,10 @@ class PluginHost:
 
 
     def _sweep_stale_staging(self) -> None:
-        """清扫旧版本崩溃残留的 .update-*/.backup-* 目录（一次性、宽容错）。"""
+        from .storage import recover_transactions
         for root in self.roots:
-            try:
-                children = list(root.iterdir())
-            except OSError:
-                continue
-            for child in children:
-                if not child.name.startswith((".",)):
-                    continue
-                if child.is_dir() and (
-                    child.name.startswith(".update-") or child.name.startswith(".backup-")
-                ):
-                    shutil.rmtree(child, ignore_errors=True)
+            if root.is_dir():
+                recover_transactions(root)
 
     # ── 指纹缓存 ─────────────────────────────────────────────────────
 
@@ -167,6 +158,13 @@ class PluginHost:
         target_root: Path | str | None = None,
     ) -> Path:
         """Copy one local plugin folder into a plugin root after validating it."""
+        transaction = self.begin_install(source, target_root=target_root)
+        transaction.commit()
+        self._invalidate()
+        return transaction.target
+
+    def begin_install(self, source: Path | str, *, target_root: Path | str | None = None):
+        # user:“修完打包发布新版本”+(首次安装与更新一样，运行时验证前保留可跨进程恢复的事务)。
         source_path = Path(source).resolve()
         manifest_path = source_path / MANIFEST_FILENAME
         if not manifest_path.is_file():
@@ -183,91 +181,75 @@ class PluginHost:
         if root is None:
             raise ValueError("no plugin root is configured")
         target = (root / manifest.name).resolve()
-        if target.exists():
+        if target.exists() and (target / MANIFEST_FILENAME).exists():
             raise ValueError(f"plugin '{manifest.name}' already exists: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source_path, target)
-        try:
-            load_manifest(target / MANIFEST_FILENAME)
-        except BaseException:
-            shutil.rmtree(target, ignore_errors=True)
-            raise
+        from .storage import CodeTransaction
+        transaction = CodeTransaction(target, source_path, self.data_path(manifest.name))
         self._invalidate()
-        return target
+        return transaction
+
+    def data_path(self, name: str) -> Path:
+        # user:“该重建就重建”+(数据不属于代码目录，卸载与更新不能改变其身份)。
+        from .manifest import _validate_name
+        _validate_name(name, self.state.path)
+        return (self.state.path.parent / "plugin-data" / name).resolve()
+
+    def available(self, name: str) -> bool:
+        from .safety import safe_mode
+        if safe_mode():
+            return False
+        manifest = self.get(name)
+        if manifest is None or not manifest.enabled:
+            return False
+        manager = getattr(self, "backend_manager", None)
+        if manager is not None:
+            return manager.is_enabled(name)
+        from .lifecycle import backend_entry
+        return backend_entry(manifest) is None
+
+    def runtime_manifests(self) -> list[PluginManifest]:
+        return [item for item in self.discover() if self.available(item.name)]
 
     def uninstall(self, name: str, *, keep_data: bool = True) -> None:
-        """Remove a plugin; ``keep_data`` preserves its ``data/`` directory."""
         manifest = self.get(name)
         if manifest is None:
             raise KeyError(f"plugin '{name}' is not installed")
-        # 随包插件属于应用本体，卸载只会把安装目录弄坏。
-        try:
-            from .paths import bundled_plugins_dir
-
-            if manifest.root.parent == bundled_plugins_dir().resolve():
-                raise ValueError(f"plugin '{name}' is bundled and cannot be uninstalled")
-        except ImportError:
-            pass
-        if keep_data:
-            for child in manifest.root.iterdir():
-                if child.name == "data":
-                    continue
-                if child.is_symlink() or child.is_file():
-                    child.unlink()
-                else:
-                    shutil.rmtree(child)
-        else:
-            shutil.rmtree(manifest.root)
+        self._assert_mutable(manifest)
+        from .storage import prepare_data, remove_tree
+        prepare_data(manifest.root, self.data_path(name))
+        remove_tree(manifest.root)
+        if not keep_data:
+            remove_tree(self.data_path(name))
         self.state.forget(name)
         self._invalidate()
 
+    def _assert_mutable(self, manifest: PluginManifest) -> None:
+        from .paths import bundled_plugins_dir
+        if manifest.root.parent == bundled_plugins_dir().resolve():
+            raise ValueError(f"plugin '{manifest.name}' is bundled; update the application")
 
-    def update_from_directory(self, source: Path | str) -> Path:
-        """Replace code and resources while keeping the plugin's ``data/``."""
+    def begin_update(self, source: Path | str):
         source_path = Path(source).resolve()
-        manifest_path = source_path / MANIFEST_FILENAME
-        if not manifest_path.is_file():
-            raise PluginManifestError(manifest_path, "plugin.json is missing")
-        incoming = load_manifest(manifest_path)
+        incoming = load_manifest(source_path / MANIFEST_FILENAME)
         problems = check_engine(read_engine(incoming))
         if problems:
-            raise ValueError(
-                f"plugin '{incoming.name}' cannot run on this host: {'; '.join(problems)}"
-            )
+            raise ValueError('; '.join(problems))
         existing = self.get(incoming.name)
         if existing is None:
-            raise ValueError(
-                f"plugin '{incoming.name}' is not installed; update cannot change the name"
-            )
-        # user:“更新失败 data 在原位”+staging 与 backup 都放系统临时目录，
-        # 失败回滚把 data 挪回本体，插件根里永远不留 .update-/.backup- 残留。
-        target = existing.root
-        work = Path(tempfile.mkdtemp(prefix=f"lamtools-update-{incoming.name}-"))
-        staging = work / "staging"
-        backup = work / "backup"
-        backup.mkdir()
-        try:
-            shutil.copytree(source_path, staging)
-            data = target / "data"
-            data_moved = False
-            if data.is_dir():
-                staged_data = staging / "data"
-                if staged_data.exists():
-                    shutil.rmtree(staged_data)
-                shutil.move(str(data), str(staged_data))
-                data_moved = True
-            os.replace(target, backup / incoming.name)
-            try:
-                os.replace(staging, target)
-            except BaseException:
-                os.replace(backup / incoming.name, target)
-                if data_moved:
-                    shutil.move(str(staging / "data"), str(target / "data"))
-                raise
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+            raise ValueError(f"plugin '{incoming.name}' is not installed")
+        self._assert_mutable(existing)
+        from .storage import CodeTransaction
+        transaction = CodeTransaction(existing.root, source_path, self.data_path(incoming.name))
         self._invalidate()
-        return target.resolve()
+        return transaction
+
+    def update_from_directory(self, source: Path | str) -> Path:
+        # user:“该重建就重建”+(离线文件操作同样使用可回滚、同磁盘事务)。
+        transaction = self.begin_update(source)
+        transaction.commit()
+        self._invalidate()
+        return transaction.target
 
     def update_from_zip(self, archive: Path | str) -> Path:
         """Extract one plugin root from a zip and update from it."""

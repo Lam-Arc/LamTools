@@ -1,0 +1,42 @@
+/* user:“更适配新的UI”+(辅助对话沿用分屏外框，内容不再叠加卡片；原文可展开，输入固定于窗格底部)。 */
+.auxiliary-chat { --text: var(--theme-main-text); display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; position: relative; color: var(--text); container: auxiliary-chat / size; }
+.auxiliary-toolbar { justify-content: space-between; }
+.auxiliary-caption { font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); white-space: nowrap; }
+.auxiliary-origin { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3); color: color-mix(in srgb, var(--text) 65%, transparent); font-size: 11px; }
+.auxiliary-origin .split-text-button { font-size: 11px; padding: 0; background: transparent; }
+.auxiliary-reference { flex-shrink: 0; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--theme-main-border); font-size: 12px; }
+.auxiliary-reference summary { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; color: color-mix(in srgb, var(--text) 65%, transparent); list-style: none; }
+.auxiliary-reference summary > span:first-of-type { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.auxiliary-reference summary svg, .auxiliary-reference-label { flex-shrink: 0; }
+.auxiliary-reference-chevron { transition: transform var(--dur-fast) var(--ease-out); }
+.auxiliary-reference[open] .auxiliary-reference-chevron { transform: rotate(180deg); }
+.auxiliary-reference blockquote { margin: var(--space-2) 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.auxiliary-reference[open] { max-height: 35%; overflow: auto; }
+.auxiliary-previous { display: grid; gap: var(--space-2); margin-block: var(--space-2); overflow-wrap: anywhere; }
+.auxiliary-transcript { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--space-3); }
+.auxiliary-scroll-area { display: flex; flex: 1; min-height: 0; position: relative; }
+.auxiliary-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; gap: var(--space-3); text-align: center; font-size: 13px; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.auxiliary-empty small { font-size: 11px; line-height: 1.6; }
+/* user:“辅助会话的输入栏样式与正常版一样就行”+(只负责窗格内尺寸，输入卡与控件样式由共享组件提供)。 */
+.auxiliary-chat > .auxiliary-composer { flex: 0 0 auto; box-sizing: border-box; width: auto; margin: var(--space-2) var(--space-3) var(--space-3); }
+.auxiliary-chat .composer-root--embedded > .floating-composer { position: relative; inset: auto; width: 100%; transform: none; }
+.auxiliary-consider { color: color-mix(in srgb, var(--theme-composer-text) 65%, transparent); font-size: 11px; }
+.auxiliary-latest { position: absolute; display: inline-flex; align-items: center; gap: var(--space-1); right: var(--space-3); bottom: var(--space-2); box-shadow: var(--shadow-sm); }
+@container auxiliary-chat (max-width: 360px) { .auxiliary-consider { display: none; } }
+/* user:“多界面分屏”+(上下分屏同时按可用高度收紧原文和输入，避免输入区被挤出窗格)。 */
+@container auxiliary-chat (max-height: 360px) {
+  .auxiliary-reference[open] { max-height: 25%; }
+  .auxiliary-composer .cm-scroller { max-height: 64px !important; }
+}
+@container auxiliary-chat (max-height: 260px) {
+  .auxiliary-reference[open] { max-height: 48px; }
+  .auxiliary-chat > .auxiliary-composer { margin: var(--space-1) var(--space-2) var(--space-2); }
+  .auxiliary-composer .cm-scroller { max-height: 40px !important; }
+}
+@container auxiliary-chat (max-width: 640px) {
+  .auxiliary-chat .decision-option-group { grid-template-columns: auto minmax(0, 1fr); }
+  .auxiliary-chat .decision-option-desc { grid-column: 2; }
+  .auxiliary-chat .decision-guide-fields { grid-template-columns: minmax(0, 1fr); }
+  .auxiliary-chat .tool-output { white-space: pre-wrap; word-break: break-word; }
+}
+@media (prefers-reduced-motion: reduce) { .auxiliary-chat * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

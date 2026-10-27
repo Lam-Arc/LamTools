@@ -124,7 +124,7 @@ class PluginSystemRuntime:
         self.host = host
 
     def assemble(self, manifests: list[Any] | None = None) -> RuntimeArtifacts:
-        manifests = self.host.discover() if manifests is None else manifests
+        manifests = self.host.runtime_manifests() if manifests is None else manifests
         assembly = assemble_capabilities(manifests)
         artifacts = RuntimeArtifacts(errors=[*self.host.errors, *assembly.errors])
         plugin_dependencies = self._declared_dependencies(manifests)
@@ -155,7 +155,7 @@ class PluginSystemRuntime:
         return declared
 
     def agents(self, manifests: list[Any] | None = None) -> AgentAssembly:
-        manifests = self.host.discover() if manifests is None else manifests
+        manifests = self.host.runtime_manifests() if manifests is None else manifests
         return assemble_agents(manifests)
 
     def agent_plan(

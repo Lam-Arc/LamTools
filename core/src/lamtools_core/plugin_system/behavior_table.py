@@ -14,14 +14,8 @@ from typing import Any
 import lamtools_core
 
 #: 内核（不可替换）：加载器与清单、账本、安全模式、日志。
-KERNEL_BACKEND = {
-    "lamtools_core.plugin_system.host",
-    "lamtools_core.plugin_system.manifest",
-    "lamtools_core.plugin_system.state",
-    "lamtools_core.plugin_system.import_map",
-    "lamtools_core.logging_setup",
-}
-KERNEL_FRONTEND_PREFIXES = ("@/plugins/contributions",)
+from lamtools_boot.contract import KERNEL_BACKEND, KERNEL_FRONTEND_PREFIXES
+
 
 CORE_PACKAGE = "lamtools_core"
 

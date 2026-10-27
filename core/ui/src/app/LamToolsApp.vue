@@ -40,8 +40,8 @@
     product-name="Sunday"
     sidebar-title="Sunday"
     :plugin-rpc="requestConfigOperation"
-    :class="{ 'workspace-shell--sub-agent-split': Boolean(openSubAgentRun) }"
-    :style="subAgentPaneWidthStyle"
+    :class="{ 'workspace-shell--split': splitEnabled }"
+    :style="splitShellStyle"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
@@ -69,6 +69,8 @@
     :empty-session="isEmptySession"
     :composer-session-key="activeSessionId"
     :composer-session-ready="!historyLoading"
+    @pointerdown.capture="activateSplitMain"
+    @focusin.capture="activateSplitMain"
     @new-session="handleShellNewSession"
     @update:left-open="onLeftDrawerChange"
     @update:left-pinned="syncLeftPinned"
@@ -84,11 +86,15 @@
       <AppRail
         ref="appRailRef"
         :active="railActiveView"
+        :active-plugin-page="fullAreaView === 'plugin' ? mainPluginPage ? `${mainPluginPage.plugin}:${mainPluginPage.id}` : '' : ''"
         :update-available="updateStatus === 'update_available'"
         :update-action="updateRailAction"
         :update-busy="updateInstallState === 'downloading'"
         :update-label="updateRailLabel"
         @open="onRailOpen"
+        @open-split="openRailSplit"
+        @open-plugin-page="openMainPluginPage"
+        @split-plugin-page="openPluginPageSplit"
         @update="onRailUpdate"
       />
       <!-- 更新卡片：点竖栏那枚图标后从它身上长出来（动效在组件内部，走 GSAP）。 -->
@@ -272,6 +278,7 @@
     </template>
 
     <template #main-header>
+      <button v-if="appRuntime.platform !== 'mobile'" class="split-entry split-icon-button" type="button" :title="splitWorkspace.state.hidden ? t('恢复分屏') : t('向右分屏')" :aria-label="splitWorkspace.state.hidden ? t('恢复分屏') : t('向右分屏')" @click="splitWorkspace.splitRight()"><Columns2 :size="16" :stroke-width="1.6" /></button>
       <!-- 整版界面：顶部标题跟着切换，返回键就放在标题原来的位置。
            设置 / 插件例外：会话栏已经写着页名并列出分区，标题条整条撤掉，内容独占一页
            （整版界面这一层仍然成立，不会被下面的插件头部顶替）。 -->
@@ -309,188 +316,9 @@
 
     <template #main-content>
       <!-- 整版界面：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出。 -->
-      <template v-if="fullAreaView">
-        <CoreArrangeManager
-          v-if="showArrange"
-          ref="arrangeRef"
-          class="full-area-view"
-          :band-actions="appRuntime.platform !== 'mobile'"
-
-          :work-root="currentWorkRoot()"
-          :request-rpc="requestConfigOperation"
-          @back="closeFullArea"
-          @heading="arrangeHeading = $event"
-        />
-        <SearchShell
-          v-else-if="showSearch"
-          class="full-area-view"
-          :band-actions="appRuntime.platform !== 'mobile'"
-          
-          :request-rpc="requestConfigOperation"
-          :sessions="sessions"
-          :on-jump="jumpToSearchedMessage"
-          :active-mode-id="activeAppModeKey"
-          :on-study-hit="jumpToStudySearchHit"
-          :theme="theme"
-          :on-open-session="openSessionFromSearch"
-          :on-open-plugins="openPluginsFromSearch"
-          :on-open-file="openFileFromSearch"
-          :commands="searchCommands"
-          @close="closeFullArea"
-        />
-        <!-- 资料库 = 一个入口三个分区（资料 / 记忆 / 方案），见 LibraryHomeView。 -->
-        <LibraryHomeView
-          v-else-if="showLibrary"
-          ref="libraryRef"
-          class="full-area-view"
-          :band-actions="appRuntime.platform !== 'mobile'"
-          :client="projectClient"
-          :project-id="activeProjectId ?? selectedProjectId"
-          :work-root="currentWorkRoot()"
-          :transport="transport"
-          :request-rpc="requestConfigOperation"
-          :artifact-signal="lastWorkbenchEvent"
-          :upload-files="uploadArtifactFiles"
-          :refresh-signal="libraryRefreshTick"
-          :platform="appRuntime.platform"
-          @back="closeFullArea"
-          @start-plan="startPlanFromLibrary"
-          @heading="libraryHeading = $event"
-        />
-        <CoreSettings
-          ref="settingsRef"
-          v-else-if="showSettings"
-            class="full-area-view full-area-wide"
-          :models="availableModels"
-          :providers="availableProviders"
-          :model-groups="modelGroups"
-          :catalog-view="modelCatalogView"
-          :section="settingsSection"
-          :active-section="settingsSection"
-          :persist-catalog="persistSettingsCatalog"
-          :hide-nav="appRuntime.platform !== 'mobile'"
-          :density="density"
-          :theme="theme"
-          :content-width="contentWidth"
-          :show-right-panel-header="false"
-          :theme-mode="themeMode"
-          :theme-schedule="themeSchedule"
-          :effective-theme-mode="effectiveThemeMode"
-          :permission-preset="defaultPermissionPreset"
-          :allow-access-outside-workdir="allowAccessOutsideWorkdir"
-          :command-shell-platform="commandShellPlatform"
-          :request-rpc="requestConfigOperation"
-          :update-state="updateState"
-          :remote-gateway-status="remoteGatewayStatus"
-          :remote-pairing="remotePairing"
-          :remote-gateway-loading="remoteGatewayLoading"
-          :remote-gateway-error="effectiveAccountError || remoteGatewayError"
-          :remote-gateway-available="remoteGatewayAvailable"
-          :remote-account-status="effectiveAccountStatus"
-          :remote-account-identity="remoteAccountIdentity"
-          :remote-account-loading="effectiveAccountLoading"
-          :remote-account-devices="effectiveAccountDevices"
-          @close="closeFullArea"
-          @section-change="settingsSection = $event"
-          @update:density="uiPreferences.setDensity"
-          @update:content-width="uiPreferences.setContentWidth"
-          @update:theme-mode="uiPreferences.setThemeMode"
-          @update:theme-schedule="uiPreferences.setThemeSchedule"
-          @reset-theme="uiPreferences.resetTheme"
-          @apply-preset="uiPreferences.applyThemePreset"
-          @update-stops="uiPreferences.updateThemeStops"
-          @update-angle="uiPreferences.updateThemeAngle"
-          @update-opacity="uiPreferences.updateThemeOpacity"
-          @update-text-color="uiPreferences.updateThemeText"
-          @update-process-icon-color="uiPreferences.updateProcessIconColor"
-          @add-stop="uiPreferences.addStop"
-          @remove-stop="uiPreferences.removeStop"
-          @sort-stops="uiPreferences.sortStops"
-          @update-permission-preset="updatePermissionPreset"
-          @update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"
-          @create-provider="createProvider"
-          @update-provider="updateProvider"
-          @delete-provider="deleteProvider"
-          @create-model="createModel"
-          @update-model="updateModel"
-          @delete-model="deleteModel"
-          @set-default-model="setDefaultModel"
-          @update:catalog-view="updateModelCatalogView"
-          @create-model-group="createModelGroup"
-          @update-model-group="updateModelGroup"
-          @delete-model-group="deleteModelGroup"
-          @set-model-group-members="setModelGroupMembers"
-          @create-model-with-provider="createModelWithProvider"
-          @remote-gateway-start="startRemoteGateway"
-          @remote-gateway-stop="stopRemoteGateway"
-          @remote-pairing-create="createRemotePairing"
-          @remote-device-revoke="revokeRemoteDevice"
-          @remote-account-submit="submitEffectiveAccount"
-          @remote-account-logout="logoutEffectiveAccount"
-          @reopen-onboarding="reopenOnboarding"
-          />
-        <PluginsShell
-          v-else-if="showPlugins"
-            class="full-area-view full-area-wide"
-            :band-actions="appRuntime.platform !== 'mobile'"
-          :request-rpc="requestConfigOperation"
-          :transport="transport"
-          :theme="theme"
-          :initial-section="pluginsSection"
-          :active-section="pluginsSection"
-          :hide-nav="appRuntime.platform !== 'mobile'"
-          @capabilities-changed="handleCapabilitiesChanged"
-          @section-change="pluginsSection = $event"
-          @close="closeFullArea"
-          />
-        <AccountShell
-          v-else-if="showAccount"
-            class="full-area-view"
-            :band-actions="appRuntime.platform !== 'mobile'"
-          :account-status="effectiveAccountStatus"
-          :devices="effectiveAccountDevices"
-          :loading="remoteAccountLoading"
-          :error="remoteGatewayError"
-          :theme="theme"
-          :on-logout="logoutEffectiveAccount"
-          :on-open-settings="openAccountSettings"
-          :on-refresh="refreshRemoteAccount"
-          @close="closeFullArea"
-          />
-        <CoreProjectSettings
-          ref="projectSettingsRef"
-          v-else-if="showProjectView && selectedProject && !activePluginMode"
-            class="full-area-view full-area-wide"
-          :project="{
-            id: selectedProject.id,
-            name: selectedProject.name,
-            workRoot: selectedProject.workRoot,
-            iconKey: selectedProject.iconKey,
-            colorKey: selectedProject.colorKey,
-          }"
-          :session-id="projectSettingsSessionId"
-          :theme="theme"
-          :request-rpc="requestConfigOperation"
-          :models="availableModels"
-          :project-name-draft="projectNameDraft"
-          :agents-content="agentsContent"
-          :agents-loading="agentsLoading"
-          :agents-saving="agentsSaving"
-          :persist-agents="saveAgents"
-          :persist-name="renameProject"
-          :agents-error="agentsError"
-          :project-action-loading="projectActionLoading"
-          :project-action-error="projectActionError"
-          :active-section="projectSettingsSection"
-          :hide-nav="appRuntime.platform !== 'mobile'"
-          @section-change="projectSettingsSection = $event"
-          @close="closeProjectSettings"
-          @rename-project="renameProject"
-          @update-project-visual="updateProjectVisual"
-          @save-agents="saveAgents"
-          @refresh-agents="refreshAgentsContent"
-          />
-      </template>
+      <CoreSplitPluginPage v-if="fullAreaView === 'plugin' && mainPluginTab" :tab="mainPluginTab" :visible="true"
+        :work-root="currentWorkRoot()" :request-rpc="requestConfigOperation" @open-page="openRelatedPluginPage" @open-file="openMainPluginFile" />
+      <CoreAppPage v-else-if="fullAreaView" :page="fullAreaView" :bindings="pageBindings" />
       <div
         v-if="activePluginMode"
         v-show="!pluginUsesCoreThread && !fullAreaView"
@@ -525,6 +353,7 @@
         <section
           ref="threadScrollEl"
           class="thread"
+          :data-source-session-id="activeSessionId || undefined"
           :class="{ 'thread--empty-session': isEmptySession }"
           @scroll.passive="handleThreadScroll"
           @wheel="handleThreadWheel"
@@ -612,26 +441,15 @@
           aria-hidden="true"
         ></div>
         </section>
-        <CoreSubAgentPane
-          v-if="openSubAgentRun"
-          :key="openSubAgentRun.subSessionId || openSubAgentRun.id"
-          :run="openSubAgentRun"
-          :transport="transport"
-          :durable-record="effectiveSubAgentRecords[openSubAgentRun.name.toLowerCase()] ?? null"
-          :width="subAgentPaneWidth"
-          :member-wait-known="sessionActivity.memberWaitKnown"
-          :running-member-names="sessionActivity.runningMemberNames"
-          :main-running="activeTurnRunning"
-          :member-statuses="sessionActivity.memberStatuses"
-          :member-status-records="sessionActivity.memberStatusRecords"
-          @close="closeSubAgentPane"
-          @resize="subAgentPaneWidth = $event"
-          @decision-select="handlePendingDecisionSelect"
-        />
       </template>
     </template>
 
     <template #modals>
+      <CoreSplitWorkspace v-if="appRuntime.platform !== 'mobile'" :controller="splitWorkspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
+        <template #default="{ tab, pane, visible }">
+          <CoreSplitContent :tab="tab" :pane="pane" :visible="visible" :controller="splitWorkspace" :documents="splitDocuments" :bindings="pageBindings" :work-root="splitWorkRoot" :transport="transport" :messages="messages" :active-session-id="activeSessionId || ''" :member-statuses="sessionActivity.memberStatuses" :member-status-records="sessionActivity.memberStatusRecords" :durable-records="effectiveSubAgentRecords" :member-wait-known="sessionActivity.memberWaitKnown" :running-member-names="sessionActivity.runningMemberNames" :main-running="activeTurnRunning" @dirty="setSplitDirty" @decision-select="handlePendingDecisionSelect" />
+        </template>
+      </CoreSplitWorkspace>
       <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
     </template>
 
@@ -677,30 +495,26 @@
         @decision-select="handlePendingDecisionSelect"
       />
       <template v-else>
-        <AttachmentTray
+        <InlineFileComposer
+          ref="composerTextareaEl"
+          v-model="composerText"
           :attachments="pendingAttachments"
-          :transport="transport"
-          @remove="removeAttachment"
-          @retry="retryPendingAttachment"
-          @preview="previewPendingAttachment"
-          @open="openPendingAttachment"
+          :suggestions="composerReferenceSuggestions"
+          :disabled="composerInputDisabled"
+          :placeholder="composerPlaceholder"
+          @input="handleComposerInput"
+          @click="updateComposerCursor"
+          @keyup="handleComposerKeyup"
+          @keydown="handleComposerKeydown"
+          @paste="handleComposerPaste"
+          @contextmenu="openComposerContextMenu"
+          @request-suggestions="loadComposerReferenceSuggestions"
+          @reference-file="registerComposerReference"
+          @retry-file="retryComposerReference"
+          @preview-file="previewComposerPath"
+          @reveal-file="revealComposerPath"
         />
-        <div class="composer-input-wrap">
-          <textarea
-            ref="composerTextareaEl"
-            v-model="composerText"
-            :class="{ 'composer-input--recognized': hasComposerRecognizedCommand }"
-            :disabled="composerInputDisabled"
-            :placeholder="composerPlaceholder"
-            rows="1"
-            @input="handleComposerInput"
-            @click="updateComposerCursor"
-            @keyup="handleComposerKeyup"
-            @keydown="handleComposerKeydown"
-            @paste="handleComposerPaste"
-            @contextmenu="openComposerContextMenu"
-          />
-        </div>
+        <ReferenceItems ref="composerPreview" preview-only :attachments="pendingAttachments" :transport="transport" :project-id="activeProjectId" :work-root="activeProject?.workRoot" />
       </template>
     </template>
 
@@ -728,6 +542,7 @@
           <AttachmentSourceMenu
             :categorized="appRuntime.platform === 'mobile'"
             :disabled="!appRuntime.capabilities.files"
+            @pointerdown.capture="rememberAttachmentSelection"
             @select="chooseAttachments"
           />
         </template>
@@ -810,11 +625,18 @@
 </template>
 
 <script setup lang="ts">
+import { encodeMultipartFile } from '@/composer/upload'
+import ReferenceItems from '@/components/ReferenceItems.vue'
+import InlineFileComposer, { type ComposerEditorHandle } from '@/components/InlineFileComposer.vue'
+import { fileReference, insertReferences, replaceReference, referenceSpans, type ReferenceSelection } from '@/composer/fileReferences'
+import { readComposerDraft, writeComposerDraft, resolveComposerDraftStorage } from '@/composer/drafts'
+
 import { t } from '@/i18n/index.ts'
 
 import { loadUiLanguage } from '@/i18n/index.ts'
 import {
   computed,
+  provide,
   defineAsyncComponent,
   nextTick,
   onBeforeUnmount,
@@ -889,6 +711,7 @@ import {
   useCoreUpdateState,
   createCoreConnectionErrorToastGate,
   showToast,
+  type CoreComposerControls,
 } from '@/composables/index.ts'
 
 import AttachmentTray from '@/components/AttachmentTray.vue'
@@ -903,7 +726,6 @@ import CoreWorkspaceMenu from '@/components/CoreWorkspaceMenu.vue'
 import CoreQueuedInputTray from '@/components/CoreQueuedInputTray.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import CorePendingDecisionPanel from '@/components/CorePendingDecisionPanel.vue'
-import CoreArrangeManager from '@/components/CoreArrangeManager.vue'
 import HistoryLoadingIndicator from '@/components/HistoryLoadingIndicator.vue'
 import CoreProjectCreate from '@/components/CoreProjectCreate.vue'
 import CoreProjectPicker from '@/components/CoreProjectPicker.vue'
@@ -916,13 +738,10 @@ import { selectionEvents } from '@/study/annotations.ts'
 import { openContextMenu } from '@/components/context-menu/context-menu.ts'
 import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import OnboardingWizard from '@/components/OnboardingWizard.vue'
-import PluginsShell from '@/components/PluginsShell.vue'
 import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
 import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
-import AccountShell from '@/components/AccountShell.vue'
 import SearchShell, { type SearchCommand, type StudySearchHit } from '@/components/SearchShell.vue'
 import { type PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
-import LibraryHomeView from '@/components/LibraryHomeView.vue'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
@@ -936,13 +755,19 @@ import type {
   MobileControlIdentity,
   MobileControlPairing,
 } from '@/components/MobileControlPanel.vue'
-import CoreProjectSettings from '@/components/CoreProjectSettings.vue'
 import SundayLogo from '@/components/SundayLogo.vue'
 import RuntimeChecklistCard from '@/components/RuntimeChecklistCard.vue'
 import SessionSidebar, { type SessionExportFormat } from '@/components/SessionSidebar.vue'
 import WorkspaceShell from '@/components/WorkspaceShell.vue'
 import RightSidebarHost from '@/components/RightSidebarHost.vue'
-import CoreSubAgentPane from '@/components/CoreSubAgentPane.vue'
+import CoreAppPage from '@/components/CoreAppPage.vue'
+import { useCorePageBindings } from '@/app/useCorePageBindings'
+import CoreSplitWorkspace from '@/components/CoreSplitWorkspace.vue'
+import CoreSplitContent from '@/components/CoreSplitContent.vue'
+import { useSplitWorkspace } from '@/split/useSplitWorkspace'
+import { createAuxiliaryWorkspace, AuxiliaryWorkspaceKey } from '@/auxiliary/workspace'
+import { createSplitDocuments } from '@/split/documents'
+import { Columns2 } from 'lucide-vue-next'
 import CoreSubAgentActivityIndicator from '@/components/CoreSubAgentActivityIndicator.vue'
 import { selectCoreSubAgentRun, type CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
 import { subAgentRunIdentity } from '@/agents/subAgentDisplay.ts'
@@ -950,7 +775,10 @@ import TitleBar from '@/components/TitleBar.vue'
 import PluginModeHost from '@/components/PluginModeHost.vue'
 import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
 import { refreshPluginUIModes } from '@/plugins/api.ts'
-import { setContributionsRpc } from '@/plugins/contributions.ts'
+import { contributionState, ensureContributions, setContributionsRpc } from '@/plugins/contributions.ts'
+import { findPluginFilePage, pluginPageKey, type PluginPageEntry } from '@/plugins/pages'
+import CoreSplitPluginPage from '@/components/CoreSplitPluginPage.vue'
+import type { SplitTab } from '@/split/layout'
 import { listModes } from '@/plugins/registry.ts'
 import {
   provideCorePluginModeContext,
@@ -960,10 +788,11 @@ import {
 import type { PluginModeSurface } from '@/plugins/context.ts'
 import type { PluginMode } from '@/plugins/types.ts'
 import type { CoreModelCatalogView, CorePermissionPreset } from '@/composer/execution.ts'
+import { coreModelSelectOptions } from '@/composer/execution.ts'
+import { readSessionComposerControls, sessionComposerParams } from '@/composer/sessionComposer.ts'
 import { copyText } from '@/helpers/clipboard.ts'
 import { absoluteArtifactPath } from '@/artifacts/model.ts'
 
-const CoreSettings = defineAsyncComponent(() => import('@/components/CoreSettings.vue'))
 
 type RawSession = {
   id: string
@@ -1052,6 +881,11 @@ const commandShellPlatform = (() => {
 const workbench = appRuntime.workbench
 const transport = appRuntime.transport
 const projectClient = appRuntime.projectClient || createCoreProjectClient(transport)
+// user:“右键弹窗与右键成果一致”+(所有引用共享当前连接和工作目录)。
+provide('lamtools-reference-transport', transport)
+provide('lamtools-reference-root', () => activeProject.value?.workRoot || '')
+provide('lamtools-reference-notice', (message: string) => setRuntimeStatus(message))
+
 const connectionErrorToastGate = createCoreConnectionErrorToastGate({
   isConnected: () => workbench.connectionState.value === 'open',
 })
@@ -1077,7 +911,7 @@ const snapshot = workbench.snapshot
 const lastWorkbenchEvent = workbench.lastEvent
 const composerText = workbench.composerText
 const composerCursor = workbench.composerCursor
-const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
+const composerTextareaEl = ref<ComposerEditorHandle | null>(null)
 const composerErrorText = ref('')
 
 // Status/error notifications go through the global toast service (single
@@ -1173,8 +1007,36 @@ const settingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requ
 const projectSettingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requestSection: (id: string) => void } | null>(null)
 // 整版界面状态：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
-type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project'
+type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
 const fullAreaView = ref<FullAreaViewId | null>(null)
+// user:“实现这个插件，也正好实验我们的新插件架构”+(主界面与分屏使用相同的自绘页面加载器；服务不属于页面)。
+const mainPluginPage = ref<PluginPageEntry | null>(null)
+const mainPluginTab = computed<SplitTab | null>(() => mainPluginPage.value ? {
+  id: 'main-plugin-page', kind: 'plugin', title: mainPluginPage.value.title,
+  resource: pluginPageKey(mainPluginPage.value.plugin, mainPluginPage.value.id), root: currentWorkRoot(),
+} : null)
+function openMainPluginPage(page: PluginPageEntry) { requestSettingsNavigation(() => { mainPluginPage.value = page; fullAreaView.value = 'plugin' }) }
+function openRelatedPluginPage(target: { plugin: string; id: string }) {
+  const page = contributionState().pages.find(page => page.plugin === target.plugin && page.id === target.id)
+  if (page) openMainPluginPage(page)
+}
+// user:“该修就修，不用停下”+(主界面插件链接也使用挂载时绑定的项目打开文件)。
+async function openMainPluginFile(path: string, scope: {workRoot: string; projectId?: string; sessionId?: string}) {
+  if (!contributionState().loaded) await ensureContributions(requestConfigOperation)
+  const page = findPluginFilePage(contributionState().pages, path)
+  if (page) splitWorkspace.openPluginPage(page, undefined, {...scope, filePath:path})
+  else splitWorkspace.add('editor', path, path.split(/[\\/]/).pop() || path, undefined, scope.sessionId, scope.workRoot, scope.projectId)
+}
+function onPluginPageRequest(event: Event) {
+  const target = (event as CustomEvent<{ plugin?: string; id?: string }>).detail
+  if (target && typeof target.plugin === 'string' && typeof target.id === 'string') openRelatedPluginPage({ plugin: target.plugin, id: target.id })
+}
+onMounted(() => window.addEventListener('sunday:open-plugin-page', onPluginPageRequest))
+onBeforeUnmount(() => window.removeEventListener('sunday:open-plugin-page', onPluginPageRequest))
+function openPluginPageSplit(page: PluginPageEntry, edge: 'right' | 'bottom') {
+  const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
+  if (pane) splitWorkspace.openPluginPage(page, pane)
+}
 const showSearch = computed(() => fullAreaView.value === 'search')
 const showArrange = computed(() => fullAreaView.value === 'arrange')
 const showLibrary = computed(() => fullAreaView.value === 'library')
@@ -1217,6 +1079,7 @@ watch(showLibrary, (active) => {
 // 顶部标题（整版界面）：标题与说明跟着当前界面走，不再停留在会话标题上。
 const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
   switch (fullAreaView.value) {
+    case 'plugin': return { title: mainPluginPage.value?.title || t('插件'), subtitle: '' }
     case 'search':
       return { get title() { return t("搜索") }, get subtitle() { return t("跨项目查找会话、消息、方案与文件。") } }
     case 'library':
@@ -1258,9 +1121,14 @@ function requestSettingsNavigation(proceed: () => void): void {
 const railActiveView = computed<AppRailView>(() => {
   const view = fullAreaView.value
   // 项目设置是聊天所在项目的内页，竖栏仍停在聊天区。'search' 同理。
-  if (!view || view === 'search' || view === 'project') return 'chat'
+  if (!view || view === 'search' || view === 'project' || view === 'plugin') return 'chat'
   return view
 })
+function openRailSplit(view: AppRailView, edge: 'right' | 'bottom' = 'right') {
+  if (view === 'chat') return
+  const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
+  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), arrange: t('定时任务'), plugins: t('插件'), account: t('账号') })[view], pane)
+}
 function onRailOpen(view: AppRailView): void {
   if (view === 'chat') {
     closeFullArea()
@@ -1771,6 +1639,7 @@ const composerSendDisabled = computed(() => {
   // would look like an answer without answering anything.
   if (composerTakenOver.value) return true
   return composerInputDisabled.value
+    || hasBlockingFailure.value
     || !activeSessionId.value
     || (!composerText.value.trim() && pendingAttachments.value.length === 0)
 })
@@ -1878,13 +1747,29 @@ const defaultModelId = ref('')
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
 const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
 const allowAccessOutsideWorkdir = ref(false)
-const { pendingAttachments, attachmentInputItems, addUploaded, markFailed, removeAttachment, clearAttachments } = usePendingAttachments()
+const { pendingAttachments, attachmentInputItems, hasBlockingFailure, addProcessing, addUploaded, markFailed, removeAttachment, clearAttachments, setSession: setAttachmentSession } = usePendingAttachments()
 watch(attachmentInputItems, (items) => {
   workbench.attachments.value = items
 }, { immediate: true })
+// user:“输入信息包含待发附件，按会话保存且重启恢复”+(托盘本身在组合式里按会话
+// 落 localStorage；这里只负责把可发送的附件同步给 workbench)。
 watch(workbench.attachments, (items) => {
   if (items.length === 0 && pendingAttachments.value.length > 0) clearAttachments()
 })
+watch(composerText, text => {
+  const paths = new Set(referenceSpans(text).map(s => s.path))
+  for (const item of pendingAttachments.value) {
+    if (item.path && !paths.has(item.path.replace(/\\/g, '/'))) removeAttachment(item.id)
+  }
+})
+function handleNativeAttachmentDrop(event: Event) {
+  const paths = (event as CustomEvent<string[]>).detail
+  if (!paths?.length) return
+  const files = paths.map(path => ({ path, name: path.split(/[\\/]/).pop() || path }))
+  if (!auxiliaryWorkspace.routeAttachmentDrop(files)) void uploadFiles(files)
+}
+window.addEventListener('lamtools:drop-files', handleNativeAttachmentDrop)
+onBeforeUnmount(() => window.removeEventListener('lamtools:drop-files', handleNativeAttachmentDrop))
 const threadScrollEl = ref<HTMLElement | null>(null)
 const threadBottomSentinel = ref<HTMLElement | null>(null)
 const outlineNavigator = ref<{ updateScroll: () => void } | null>(null)
@@ -2058,7 +1943,7 @@ const executionControls = useCoreExecutionControlsState({
   defaultModel,
   storage: window.localStorage,
   initial: { thinkingMode: 'high', permissionPreset: defaultPermissionPreset.value },
-  onPermissionPresetSelected: persistSessionPermissionPreset,
+  onControlsChanged: persistSessionComposerControls,
   onModelAutoReplaced: (fromModelId: string, toModelId: string) => {
     const label = (id: string) => {
       const model = availableModels.value.find((item) => item.id === id)
@@ -2319,6 +2204,9 @@ workbench.setTurnOptionsProvider(async () => {
     allow_access_outside_workdir: _allowOutsideWorkdir,
     ...safePluginOptions
   } = pluginOptions
+  // user:“架构调整，输入框的信息作为‘输入参数组’按会话持久化保存”
+  // +(发送时把这一回合实际使用的一组参数补记到会话上，旧会话也会因此获得初值。)
+  void persistSessionComposerControls(executionControls.controls())
   return { ...executionControls.turnOptions(), ...safePluginOptions }
 })
 workbench.setComposerCallbacks({
@@ -2335,7 +2223,6 @@ workbench.setComposerCallbacks({
   },
   // 提交一有结果就收掉占位：引导与排队不会立刻产生用户消息，只等消息出现会一直挂着
   onSubmitSettled: () => { pendingPlaceholder.value = null },
-  onCommandResult: applyCommandEffects,
 })
 watch(shallowThinkingEnabled, (value) => workbench.setShallowThinking(value))
 const composerHighlightSegments = computed(() => (
@@ -2375,25 +2262,28 @@ watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
-// ── 子代理分屏 ──
-// 只记身份，不存运行快照：每次消息更新都从当前投影重新解析，所以子代理运行中
-// 这一屏会跟着流式更新；分屏关闭时不做任何投影计算。
-const openSubAgentRef = ref<CoreSubAgentRef | null>(null)
-/** 子代理面板宽度（px）：拖过之后由这一层持有，聊天区按它让位；未拖过时为 null，
- *  CSS 的 clamp 默认值生效。不跨会话记忆（是否记住用户拖过的宽度另行决策）。 */
-const subAgentPaneWidth = ref<number | null>(null)
-const subAgentPaneWidthStyle = computed(() => (
-  subAgentPaneWidth.value ? { '--sub-agent-pane-width': `${Math.round(subAgentPaneWidth.value)}px` } : undefined
-))
-
-const openSubAgentRun = computed(() => {
-  const ref = openSubAgentRef.value
-  if (!ref || (!ref.subSessionId && !ref.name)) return undefined
-  // 定点解析：分屏打开期间每帧只投影这一个运行，不再把整个会话的所有运行
-  // （含已完成的）重建一遍再丢掉。
-  return selectCoreSubAgentRun(messages.value, ref)
+// user:“主区无需标签”+(主区保持原有标题，新增内容由独立分屏宿主管理)。
+const splitStorageKey = computed(() => `${settingsStorageKey}:split-workspace`)
+const splitWorkRoot = computed(() => currentWorkRoot() || activeProject.value?.workRoot || selectedProject.value?.workRoot || '')
+const splitWorkspace = useSplitWorkspace(splitStorageKey, splitWorkRoot, computed(() => activeProjectId.value ?? selectedProjectId.value))
+// user:“搭配这个测评，实现”辅助对话”功能”+(独立侧屏承接自由对话与选文追问，不切换主区会话)。
+const auxiliaryWorkspace = createAuxiliaryWorkspace(splitWorkspace, {
+  transport, modelId: selectedModelId, models: modelOptions, sourceSessionId: activeSessionId,
+  executionModels: availableModels, thinkingMode: selectedThinkingMode, files: appRuntime.capabilities.files, request: appRuntime.request,
+  shallowThinking: shallowThinkingEnabled,
+  modelOptionsForView: view => coreModelSelectOptions({ models: availableModels.value, providers: availableProviders.value, groups: modelGroups.value, view, defaultModel: defaultModel.value }),
+  workRoot: splitWorkRoot, projectId: computed(() => activeProjectId.value ?? selectedProjectId.value),
+  openMain: selectSession, jump: jumpToStudyMark, refreshSessions,
 })
-
+if (appRuntime.platform !== 'mobile') provide(AuxiliaryWorkspaceKey, auxiliaryWorkspace)
+const splitDocuments = createSplitDocuments()
+const splitShellStyle = ref<Record<string, string>>({})
+const splitDirtyTabs = ref(new Set<string>())
+function setSplitDirty(id: string, value: boolean) { if (value) splitDirtyTabs.value.add(id); else splitDirtyTabs.value.delete(id) }
+const splitEnabled = computed(() => Object.keys(splitWorkspace.state.panes).length > 0)
+function activateSplitMain(event: Event) { if (event.target instanceof Element && event.target.closest('.workspace-main, .composer-root--floating')) splitWorkspace.activate('main') }
+const openSubAgentRef = ref<CoreSubAgentRef | null>(null)
+const openSubAgentRun = computed(() => openSubAgentRef.value ? selectCoreSubAgentRun(messages.value, openSubAgentRef.value) : undefined)
 // 每个会话共享同一份监督者记录：卡片、分屏和后台工作指示器同时刷新，
 // 不以分屏是否打开为条件。只在会话/连接边界拉取，并保持原有低频轮询。
 let subAgentRecordsTimer: ReturnType<typeof setInterval> | null = null
@@ -2467,6 +2357,8 @@ function openSubAgentPane(target: CoreSubAgentRef | string): void {
   const ref = typeof target === 'string' ? { subSessionId: target, name: '' } : target
   if (!ref.subSessionId && !ref.name) return
   openSubAgentRef.value = ref
+  const run = selectCoreSubAgentRun(messages.value, ref)
+  if (run) splitWorkspace.add('agent', run.subSessionId || run.id, run.name, undefined, activeSessionId.value || '')
 }
 
 function closeSubAgentPane(): void {
@@ -2482,9 +2374,7 @@ watch(activeSessionId, () => {
   // 删除只对当前会话生效：换会话后由新会话自己的记录决定列表内容。
   dismissedSubAgentIdentities.value = []
 })
-watch(fullAreaView, (view) => {
-  if (view) closeSubAgentPane()
-})
+
 
 // Messages the backend already replaced with a context summary: their original
 // text is gone, so edit/fork/rollback must not be offered.
@@ -2962,8 +2852,9 @@ async function selectSession(id: string) {
       rememberRecentProject(project)
     }
   }
-  restoreSessionModel(id)
-  restoreSessionPermissionPreset(id)
+  restoreSessionComposer(id)
+  // Park the outgoing session's unsent attachments and restore this one's.
+  setAttachmentSession(id)
   liveComposerController.resetForThreadChange()
   composerErrorText.value = ''
   setRuntimeStatus('', 0)
@@ -3057,21 +2948,16 @@ async function locateMessage(messageId: string): Promise<void> {
   showToast('error', t("未找到该消息（可能已被删除或属于子会话）"), 5000)
 }
 
-// Session-scoped model memory: each session remembers its own model choice,
-// so switching sessions restores that session's model instead of sharing a
-// single global selection. The chosen model is persisted into the session's
-// metadata by the selectedModelId watcher below.
-function restoreSessionModel(id: string) {
+// user:“架构调整，输入框的信息作为‘输入参数组’按会话持久化保存包括模式权限模型思考”
+// +(每个会话记住自己的一组输入参数：切换会话时整组恢复，并且恢复过程不回写，
+// 避免把刚切走的会话参数盖到新会话上)。
+function restoreSessionComposer(id: string) {
   const session = sessions.value.find((item) => item.id === id)
   if (isPluginOwnedSession(session)) return
-  const storedModelId = session?.metadata?.model_id
-  if (
-    typeof storedModelId === 'string'
-    && storedModelId
-    && availableModels.value.some((model) => model.id === storedModelId)
-  ) {
-    executionControls.selectModel(storedModelId)
-  }
+  executionControls.restoreControls(readSessionComposerControls(session?.metadata || {}, {
+    defaultPermissionPreset: defaultPermissionPreset.value,
+    availableModelIds: availableModels.value.map((model) => model.id),
+  }))
 }
 
 async function refreshAfterRollback() {
@@ -3198,6 +3084,7 @@ async function submitComposer() {
     }
     return
   }
+  if (hasBlockingFailure.value || /pending:\/\//.test(composerText.value)) return
   const text = composerText.value.trim()
   const attachmentOnly = activePluginMode.value
     ? readPluginSurface(activePluginSurface.value?.allowAttachmentOnlySubmit, false)
@@ -3223,33 +3110,120 @@ async function submitComposer() {
 }
 
 
-async function uploadFiles(files: FileList | File[]) {
+let attachmentSelection: ReferenceSelection | null = null
+function rememberAttachmentSelection() {
+  const editor = composerTextareaEl.value
+  attachmentSelection = editor?.hasFocus() ? { start: editor.selectionStart, end: editor.selectionEnd } : null
+}
+const composerReferenceSuggestions = ref<{ name: string; path: string; description?: string; context?: boolean }[]>([])
+let referenceSuggestionGeneration = 0
+async function loadComposerReferenceSuggestions(trigger: string, query: string) {
+  const generation = ++referenceSuggestionGeneration
+  const project = activeProject.value
+  if (trigger === '#') {
+    composerReferenceSuggestions.value = project ? [{ name: project.name, path: project.workRoot, description: '当前项目', context: true }] : []
+    return
+  }
+  if (!project) { composerReferenceSuggestions.value = []; return }
+  try {
+    const response = await appRuntime.request({ kind: 'http', method: 'GET', path: `/projects/${encodeURIComponent(project.id)}/references?q=${encodeURIComponent(query)}` })
+    if (generation !== referenceSuggestionGeneration) return
+    if (response.status !== 200) throw new Error('reference search failed')
+    composerReferenceSuggestions.value = JSON.parse(new TextDecoder().decode(response.body)).items
+  } catch { if (generation === referenceSuggestionGeneration) composerReferenceSuggestions.value = [] }
+}
+const composerPreview = ref<InstanceType<typeof ReferenceItems> | null>(null)
+const failedReferenceSources = new Map<string, File | { path: string; name: string }>()
+function previewComposerPath(path: string) { composerPreview.value?.previewPath(path) }
+function retryComposerReference(path: string) {
+  const source = failedReferenceSources.get(path)
+  const span = referenceSpans(composerText.value).find(s => s.path === path)
+  if (!source || !span) return
+  attachmentSelection = { start: span.from, end: span.to }
+  const failed = pendingAttachments.value.find(a => a.path === path)
+  if (failed) removeAttachment(failed.id)
+  failedReferenceSources.delete(path)
+  void uploadFiles([source])
+}
+async function registerComposerReference(path: string) {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
+  const id = `processing:${crypto.randomUUID()}`
+  addProcessing(id, path.split(/[\\/]/).pop() || path, path)
+  try {
+    const query = activeProjectId.value ? `?project_id=${encodeURIComponent(activeProjectId.value)}` : ''
+    const response = await appRuntime.request({ kind: 'http', method: 'POST', path: `/sessions/${encodeURIComponent(sessionId)}/attachments/reference${query}`, headers: { 'Content-Type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify({ path })) })
+    if (response.status < 200 || response.status >= 300) throw new Error('文件引用登记失败')
+    const record = JSON.parse(new TextDecoder().decode(response.body)) as CoreAttachment
+    removeAttachment(id)
+    if (activeSessionId.value === sessionId && referenceSpans(composerText.value).some(s => s.path === path)) addUploaded(record)
+  } catch (error) {
+    if (activeSessionId.value === sessionId && pendingAttachments.value.some(a => a.id === id)) {
+      markFailed(id, path.split(/[\\/]/).pop() || path, messageFromError(error))
+      failedReferenceSources.set(path, { path, name: path.split(/[\\/]/).pop() || path })
+    }
+  }
+}
+
+function revealComposerPath(path: string) {
+  void appRuntime.request({ kind: 'http', method: 'POST', path: '/files/open-reference', headers: { 'Content-Type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify({ path, reveal: true })) })
+}
+
+async function uploadFiles(files: FileList | (File | { path: string; name: string })[]) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
     composerErrorText.value = t("请先选择会话")
     return
   }
-  for (const file of Array.from(files)) {
-    const failedId = `failed:${file.name}:${Date.now()}`
+  const projectId = activeProjectId.value
+  const values = Array.from(files as ArrayLike<File | { path: string; name: string }>)
+  const slots = values.map(file => ({ file, id: `processing:${crypto.randomUUID()}`, path: `pending://${crypto.randomUUID()}/${file.name}` }))
+  const editor = composerTextareaEl.value
+  const selection = attachmentSelection || (editor?.hasFocus() ? { start: editor.selectionStart, end: editor.selectionEnd } : null)
+  attachmentSelection = null
+  const inserted = insertReferences(composerText.value, slots.map(s => s.path), selection)
+  composerText.value = inserted.text
+  composerCursor.value = inserted.cursor
+  for (const slot of slots) addProcessing(slot.id, slot.file.name, slot.path)
+  await nextTick()
+  composerTextareaEl.value?.setSelectionRange(inserted.cursor, inserted.cursor)
+  composerTextareaEl.value?.focus()
+  // user:“在添加时的光标位置插入”+(先插稳定占位，再原位替换；异步完成不挪动引用)。
+  const replaceSlot = (from: string, to: string): boolean => {
+    if (activeSessionId.value === sessionId) {
+      const update = replaceReference(composerText.value, from, to)
+      composerText.value = update.text
+      return update.replaced
+    }
+    const storage = resolveComposerDraftStorage()
+    const update = replaceReference(readComposerDraft(storage, sessionId), from, to)
+    writeComposerDraft(storage, sessionId, update.text)
+    return update.replaced
+  }
+  for (const slot of slots) {
+    const file = slot.file
     try {
-      const projectQuery = !activePluginMode.value && activeProjectId.value
-        ? `?project_id=${encodeURIComponent(activeProjectId.value)}`
-        : ''
-      const multipart = await encodeMultipartFile(file)
+      const projectQuery = !activePluginMode.value && projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
+      const nativePath = (file as File & { path?: string }).path
+      const multipart = !nativePath ? await encodeMultipartFile(file as File) : null
       const response = await appRuntime.request({
-        kind: 'http',
-        method: 'POST',
-        path: `/sessions/${encodeURIComponent(sessionId)}/attachments${projectQuery}`,
-        headers: { 'Content-Type': multipart.contentType },
-        body: multipart.body,
+        kind: 'http', method: 'POST',
+        path: `/sessions/${encodeURIComponent(sessionId)}/attachments${nativePath ? '/reference' : ''}${projectQuery}`,
+        headers: { 'Content-Type': nativePath ? 'application/json' : multipart!.contentType },
+        body: nativePath ? new TextEncoder().encode(JSON.stringify({ path: nativePath })) : multipart!.body,
       })
-      if (response.status < 200 || response.status >= 300) {
-        throw new Error(new TextDecoder().decode(response.body) || t("上传失败"))
-      }
-      addUploaded(JSON.parse(new TextDecoder().decode(response.body)) as CoreAttachment)
+      if (response.status < 200 || response.status >= 300) throw new Error(new TextDecoder().decode(response.body) || t("上传失败"))
+      const result = JSON.parse(new TextDecoder().decode(response.body)) as CoreAttachment
+      if (!result.path) throw new Error('附件未返回绝对路径')
+      const stillReferenced = replaceSlot(slot.path, result.path)
+      removeAttachment(slot.id)
+      if (stillReferenced && activeSessionId.value === sessionId) addUploaded(result)
     } catch (error) {
-      markFailed(failedId, file.name, messageFromError(error))
-      composerErrorText.value = t("附件上传失败：{0}", { 0: file.name })
+      failedReferenceSources.set(slot.path, file)
+      if (activeSessionId.value === sessionId && pendingAttachments.value.some(a => a.id === slot.id)) {
+        markFailed(slot.id, file.name, messageFromError(error))
+        composerErrorText.value = t("附件上传失败：{0}", { 0: file.name })
+      }
     }
   }
 }
@@ -3261,6 +3235,11 @@ async function chooseAttachments(source: RuntimeFileSource = 'file') {
     return
   }
   try {
+    if (picker.pickPaths && appRuntime.platform === 'desktop') {
+      const paths = await picker.pickPaths()
+      if (paths?.length) await uploadFiles(paths.map(path => ({ path, name: path.split(/[\\/]/).pop() || path })))
+      return
+    }
     const files = await picker.pick({
       source,
       multiple: source !== 'camera',
@@ -3302,7 +3281,8 @@ function handleWindowDrop() {
 
 function handleAttachmentDrop(event: DragEvent) {
   dragActive.value = false
-  if (event.dataTransfer?.files.length) void uploadFiles(event.dataTransfer.files)
+  const files = event.dataTransfer?.files
+  if (files?.length && !auxiliaryWorkspace.routeAttachmentDrop(files)) void uploadFiles(files)
 }
 
 // ── 粘贴上传：输入框聚焦时 Ctrl+V 图片/文件 → 复用上传管线；纯文本不受影响 ──
@@ -3322,7 +3302,7 @@ function handleComposerPaste(event: ClipboardEvent) {
     const dropped = event.clipboardData?.files
     if (dropped?.length) files.push(...Array.from(dropped))
   }
-  if (files.length) void uploadFiles(files)
+  if (files.length) { event.preventDefault(); void uploadFiles(files) }
 }
 
 function retryPendingAttachment(id: string) {
@@ -3351,12 +3331,16 @@ async function openPendingAttachment(id: string) {
 }
 
 async function handleComposerKeydown(event: KeyboardEvent) {
+  if (hasBlockingFailure.value || /pending:\/\//.test(composerText.value)) {
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); composerErrorText.value = '附件尚未准备好，请重试或移除失败的引用'; return }
+  }
   if (sendingDisabled.value) return
   updateComposerCursor()
   await liveComposerController.handleKeydown(event)
 }
 
 async function handleComposerKeyup(event: KeyboardEvent) {
+  if (hasBlockingFailure.value || /pending:\/\//.test(composerText.value)) return
   if (sendingDisabled.value) return
   updateComposerCursor()
   await liveComposerController.handleKeyup(event)
@@ -3379,7 +3363,7 @@ type ComposerSelection = {
   value: string
 }
 
-function restoreComposerSelection(selection: ComposerSelection): HTMLTextAreaElement | null {
+function restoreComposerSelection(selection: ComposerSelection): ComposerEditorHandle | null {
   const textarea = composerTextareaEl.value
   if (!textarea) return null
   textarea.focus({ preventScroll: true })
@@ -3510,20 +3494,12 @@ function clearComposerAfterPersisted(expectedText: string) {
 }
 
 function resizeComposerTextarea() {
-  const element = composerTextareaEl.value
-  if (!element) return
-  element.style.height = 'auto'
-  const style = window.getComputedStyle(element)
-  const lineHeight = Number.parseFloat(style.lineHeight) || 22
-  const paddingTop = Number.parseFloat(style.paddingTop) || 0
-  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
-  const maxHeight = lineHeight * COMPOSER_MAX_ROWS + paddingTop + paddingBottom
-  element.style.height = `${Math.min(element.scrollHeight, maxHeight)}px`
-  element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  composerTextareaEl.value?.resize()
 }
 
 function setShallowThinking(enabled: boolean) {
-  shallowThinkingEnabled.value = enabled
+  // Route through the composable so the whole group is persisted once.
+  executionControls.selectShallowThinking(enabled)
 }
 
 async function createProvider(payload: CoreSettingsProviderPayload) {
@@ -3982,55 +3958,48 @@ async function updatePermissionPreset(preset: CorePermissionPreset) {
   }
 }
 
-function restoreSessionPermissionPreset(id: string): void {
-  const session = sessions.value.find((item) => item.id === id)
-  const preferences = session?.metadata?.runtime_preferences
-  const preset = preferences && typeof preferences === 'object' && !Array.isArray(preferences)
-    ? (preferences as Record<string, unknown>).permission_preset
-    : undefined
-  // A legacy session is canonicalized by the backend on listing. If an old
-  // client still returns no preference block, use the safe UI default; never
-  // copy the currently selected session's preset across the boundary.
-  executionControls.restorePermissionPreset(preset ?? defaultPermissionPreset.value)
-}
+let composerPersistence = Promise.resolve()
+let composerPersistenceGeneration = 0
 
-let permissionPersistence = Promise.resolve()
-let permissionPersistenceGeneration = 0
-
-function persistSessionPermissionPreset(preset: CorePermissionPreset): Promise<void> {
+/**
+ * Persist the whole "input parameter group" for the active session.
+ *
+ * user:“模式、权限、思考强度在下一步生效（即时生效）”+(同一个 RPC 既落库又通知
+ * 运行中的回合；后端在没有任何运行时会忽略即时应用的部分)。
+ */
+function persistSessionComposerControls(controls: CoreComposerControls): Promise<void> {
   const sessionId = activeSessionId.value
   const session = sessions.value.find((item) => item.id === sessionId)
-  if (!sessionId || !session) return Promise.resolve()
-  const generation = ++permissionPersistenceGeneration
+  if (!sessionId || !session || isPluginOwnedSession(session)) return Promise.resolve()
+  const generation = ++composerPersistenceGeneration
 
-  permissionPersistence = permissionPersistence.then(async () => {
-    // Keep writes ordered so a quick ask → auto → full_access sequence cannot
-    // leave the session with an older response that arrived last.
+  composerPersistence = composerPersistence.then(async () => {
+    // Keep writes ordered so a quick mode → permission → thinking sequence
+    // cannot leave the session with an older response that arrived last.
     try {
-      const result = await requestConfigOperation('session.permissions.set', {
-        thread_id: sessionId,
-        permission_preset: preset,
-      })
+      const result = await requestConfigOperation(
+        'session.composer.set',
+        sessionComposerParams(sessionId, controls),
+      )
       const updated = result.session as RawSession
-      if (generation !== permissionPersistenceGeneration) return
+      if (generation !== composerPersistenceGeneration) return
       sessions.value = sessions.value.map((item) => (
         item.id === sessionId ? { ...item, metadata: updated.metadata } : item
       ))
     } catch (error) {
-      // Keep the chain usable for a later selection and surface the failed
-      // session write without touching global runtimeControls.
-      if (generation === permissionPersistenceGeneration) {
-        composerErrorText.value = t("权限偏好保存失败：{0}", { 0: messageFromError(error) })
+      if (generation === composerPersistenceGeneration) {
+        composerErrorText.value = t("输入参数保存失败：{0}", { 0: messageFromError(error) })
       }
     }
   })
-  return permissionPersistence
+  return composerPersistence
 }
 
 async function refreshPluginModes(): Promise<void> {
   try {
     setContributionsRpc(requestConfigOperation)
-    await refreshPluginUIModes(requestConfigOperation)
+    // user:“实现这个插件，也正好实验我们的新插件架构”+(连接就绪后重新发现页面入口，不能只依赖侧栏首次挂载时的未就绪请求)。
+    await Promise.all([refreshPluginUIModes(requestConfigOperation), ensureContributions(requestConfigOperation)])
     pluginModes.value = listModes()
     if (!appModes.value.some((mode) => modeKey(mode) === activeAppModeKey.value)) {
       activeAppModeKey.value = 'core:agent'
@@ -4056,52 +4025,9 @@ async function refreshPluginModes(): Promise<void> {
   }
 }
 
-async function handleCapabilitiesChanged(refreshDesktop: boolean): Promise<void> {
-  const refreshDesktopPlugins = (window as {
-    __LAMTOOLS_REFRESH_DESKTOP_PLUGINS__?: () => Promise<void>
-  }).__LAMTOOLS_REFRESH_DESKTOP_PLUGINS__
-  if (refreshDesktop && refreshDesktopPlugins) await refreshDesktopPlugins()
+async function handleCapabilitiesChanged(_refreshDesktop = false): Promise<void> {
   await refreshPluginModes()
   if (activeSessionId.value) await liveComposerController.loadCommandCatalog(activeSessionId.value)
-}
-
-async function applyCommandEffects(result: Record<string, unknown>): Promise<void> {
-  const effects = Array.isArray(result.effects) ? result.effects : []
-  for (const rawEffect of effects) {
-    if (!rawEffect || typeof rawEffect !== 'object') continue
-    const effect = rawEffect as Record<string, unknown>
-    if (effect.type !== 'desktop_plugin' || effect.action !== 'show') {
-      throw new Error(t("命令返回了当前版本不支持的界面操作"))
-    }
-    const pluginId = String(effect.plugin_id || '').trim()
-    const showDesktopPlugin = (window as {
-      __LAMTOOLS_SHOW_DESKTOP_PLUGIN__?: (pluginId: string) => Promise<void>
-    }).__LAMTOOLS_SHOW_DESKTOP_PLUGIN__
-    if (!pluginId || !showDesktopPlugin) {
-      throw new Error(t("桌宠命令仅能在 LamTools 桌面端执行"))
-    }
-    try {
-      await showDesktopPlugin(pluginId)
-    } catch (initialError) {
-      const refreshDesktopPlugins = (window as {
-        __LAMTOOLS_REFRESH_DESKTOP_PLUGINS__?: () => Promise<void>
-      }).__LAMTOOLS_REFRESH_DESKTOP_PLUGINS__
-      if (!refreshDesktopPlugins) throw initialError
-      await refreshDesktopPlugins()
-      let latestError: unknown = initialError
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await new Promise(resolve => window.setTimeout(resolve, 100))
-        try {
-          await showDesktopPlugin(pluginId)
-          latestError = null
-          break
-        } catch (error) {
-          latestError = error
-        }
-      }
-      if (latestError) throw latestError
-    }
-  }
 }
 
 const switchModeSession = createModeSessionState({
@@ -4285,6 +4211,11 @@ const searchCommands = computed<SearchCommand[]>(() => {
   if (appRuntime.platform !== 'mobile') {
     commands.push(
       
+      { id: 'auxiliary-chat', label: t('辅助对话'), group: '面板', icon: Columns2, run: () => { auxiliaryWorkspace.open() } },
+      { id: 'split-right', label: t('向右分屏'), group: '面板', icon: Columns2, run: () => { splitWorkspace.split(splitWorkspace.state.activePane, 'right') } },
+      { id: 'split-bottom', label: t('向下分屏'), group: '面板', icon: Columns2, run: () => { splitWorkspace.split(splitWorkspace.state.activePane, 'bottom') } },
+      { id: 'split-toggle', label: t('收起 / 恢复分屏'), group: '面板', icon: Columns2, run: () => splitWorkspace.toggle() },
+      { id: 'split-focus', label: t('聚焦 / 还原当前屏'), group: '面板', icon: Columns2, run: () => splitWorkspace.focus(splitWorkspace.state.activePane) },
       { id: 'toggle-right-panel', get label() { return t("切换右侧栏") }, group: '面板', icon: PanelRight, run: () => toggleRightPinned() },
     )
   }
@@ -4407,49 +4338,13 @@ async function loadModelGroups() {
   }
 }
 
-async function encodeMultipartFile(file: File): Promise<{ body: Uint8Array; contentType: string }> {
-  const boundary = `----LamToolsBoundary${globalThis.crypto?.randomUUID?.() || Date.now()}`
-  const encoder = new TextEncoder()
-  const filename = file.name.replace(/["\r\n]/g, '_')
-  const head = encoder.encode(
-    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`,
-  )
-  const content = new Uint8Array(await file.arrayBuffer())
-  const tail = encoder.encode(`\r\n--${boundary}--\r\n`)
-  const body = new Uint8Array(head.length + content.length + tail.length)
-  body.set(head)
-  body.set(content, head.length)
-  body.set(tail, head.length + content.length)
-  return { body, contentType: `multipart/form-data; boundary=${boundary}` }
-}
 
 watch(composerText, () => {
   void nextTick(resizeComposerTextarea)
 })
 
-// Persist the model chosen while a session is active into that session's
-// metadata (PATCH /sessions/:id) — the per-session model memory that
-// restoreSessionModel() reads back on every session switch. Best-effort: a
-// failed save must not undo the local selection.
-watch(selectedModelId, (modelId) => {
-  const sessionId = activeSessionId.value
-  const session = sessions.value.find((item) => item.id === sessionId)
-  if (!sessionId || !session || isPluginOwnedSession(session)) return
-  const metadata: Record<string, unknown> = { ...(session.metadata || {}) }
-  if (modelId) metadata.model_id = modelId
-  else delete metadata.model_id
-  void requestJson(`/sessions/${encodeURIComponent(sessionId)}`, {
-    method: 'PATCH',
-    body: { metadata },
-  })
-    .then((updated) => {
-      const raw = updated as RawSession
-      sessions.value = sessions.value.map((item) =>
-        item.id === sessionId ? { ...item, metadata: raw.metadata } : item,
-      )
-    })
-    .catch(() => { /* best-effort persistence */ })
-})
+// user:“架构调整，输入框的信息作为‘输入参数组’按会话持久化保存”
+// +(模型的会话记忆并入整组写入，不再单独 PATCH；由 onControlsChanged 触发。)
 
 // 只为"新用户消息落地即收占位"存在。浅层监听即可：投影在消息增删时都会
 // 产出新数组，引用变化就会触发；deep 会在每个流式 tick 全窗口深遍历所有
@@ -4540,6 +4435,30 @@ function handleStudyOpenSearch(): void {
   openSearch()
 }
 
+
+// user:“将大的前端文件拆分成小块”+(主应用只把共享状态交给页面适配器)。
+const pageBindings = useCorePageBindings({
+  activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading,
+  agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef,
+  availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform,
+  contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider,
+  createRemotePairing, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup,
+  deleteProvider, density, effectiveAccountDevices, effectiveAccountError, effectiveAccountLoading,
+  effectiveAccountStatus, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit,
+  lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, logoutEffectiveAccount,
+  modelCatalogView, modelGroups, openAccountSettings, openFileFromSearch, openPluginsFromSearch,
+  openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading,
+  projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
+  refreshAgentsContent, refreshRemoteAccount, remoteAccountIdentity, remoteAccountLoading, remoteGatewayAvailable,
+  remoteGatewayError, remoteGatewayLoading, remoteGatewayStatus, remotePairing, renameProject,
+  reopenOnboarding, requestConfigOperation, revokeRemoteDevice, saveAgents, searchCommands,
+  selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers,
+  settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway,
+  submitEffectiveAccount, theme, themeMode, themeSchedule, transport,
+  uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
+  updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles,
+})
+
 defineExpose({
   openLeftSidebar,
   cycleAppMode,
@@ -4616,6 +4535,7 @@ onUnmounted(() => {
 @import '../styles/layout.css';
 @import '../styles/theme-editor.css';
 @import '../styles/library-surface.css';
+@import '../styles/sunday-controls.css';
 
 .plugin-mode-surface {
   flex: 1 1 auto;

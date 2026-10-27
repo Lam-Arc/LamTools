@@ -2,7 +2,8 @@ import type { MarkAnchor } from '@/study/types.ts'
 import { codePointToUtf16, expandEnglishWord, utf16ToCodePoint } from '@/study/selection.ts'
 
 const BLOCKS = '.markdown-renderer__content, .user-bubble, [data-selection-block], p, pre, li, h1, h2, h3, td, label'
-const SURFACES = ['.editor-overlay', '.drawer-left', '.drawer-right', '.workspace-main']
+// user:“更适配新的UI”+(侧屏中的选文也使用真实来源身份，避免错误归入当前主聊天)。
+const SURFACES = ['.editor-overlay', '.drawer-left', '.drawer-right', '.split-tab-content', '.workspace-main']
 
 function element(node: Node | null): Element | null { return node instanceof Element ? node : node?.parentElement || null }
 
@@ -60,6 +61,7 @@ export function captureAnchor(selection: Selection, sessionId: string, view: str
   if (!selection.rangeCount || selection.isCollapsed) return null
   const range = selection.getRangeAt(0)
   const startEl = element(range.startContainer)
+  sessionId = startEl?.closest('[data-source-session-id]')?.getAttribute('data-source-session-id') || sessionId
   if (startEl?.closest('input,textarea,[contenteditable],.selection-card,[data-context-menu-panel]')) return null
   const message = startEl?.closest('[data-message-id]')
   const surface = SURFACES.find(selector => startEl?.closest(selector))
@@ -175,7 +177,10 @@ function rangeInBlock(block: Element, anchor: MarkAnchor): Range | null {
 export function anchorRange(anchor: MarkAnchor): Range | null {
   const surface = SURFACES.find(selector => anchor.document_id.endsWith(':' + selector))
   const root = anchor.source_type === 'message'
-    ? document.querySelector(`[data-message-id="${CSS.escape(anchor.document_id)}"]`)
+    ? Array.from(document.querySelectorAll(`[data-message-id="${CSS.escape(anchor.document_id)}"]`)).find(el => {
+      const owner = el.closest('[data-source-session-id]')?.getAttribute('data-source-session-id')
+      return !owner || !anchor.session_id || owner === anchor.session_id
+    })
     : document.querySelector(`[data-selection-document="${CSS.escape(anchor.document_id)}"]`) || (surface ? document.querySelector(surface) : null)
   if (!root) return null
   const fragments = anchor.segments

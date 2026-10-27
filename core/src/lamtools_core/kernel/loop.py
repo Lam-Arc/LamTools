@@ -582,6 +582,10 @@ class CoreLoopKernel:
     # Fire-and-forget finalizers spawned by the external-cancel path so the
     # cancelled turn task exits immediately while persistence continues.
     _background_finalizers: set[asyncio.Task[None]] = field(default_factory=set, init=False, repr=False)
+    # Generation of the composer settings patch already applied to this run.
+    # user:“模式、权限、思考强度在下一步生效（即时生效）”+(同一步内重复取到同一个
+    # 补丁时不再重复应用；新补丁的 generation 更大)。
+    _applied_settings_generation: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._base_event_sink = self.event_sink
@@ -930,6 +934,9 @@ class CoreLoopKernel:
                     break
 
                 await self._consume_guidance(state, turn_input, history, index)
+                # user:“模式、权限、思考强度在下一步生效（即时生效）”+(先落参数组，
+                # 再构建下一步的提示词、工具数组与模型请求)。
+                await self._apply_runtime_settings(state, turn_input)
 
                 # 5.2 Build context
                 # Pre-sampling history compaction (OpenAI-style): trim history
@@ -1060,6 +1067,12 @@ class CoreLoopKernel:
                     run_id=state.run_id,
                     tags=["usage"],
                 ))
+                # user:“该修修”+(模型真实用量由执行循环记账，缺失时保守估算；耗尽立即停止)。
+                run_budget = getattr(self.kit.toolbox, "run_budget", None) if hasattr(self.kit, "toolbox") else None
+                if run_budget is not None:
+                    tool_text = json.dumps([{"name": call.name, "arguments": call.arguments} for call in response.tool_calls], ensure_ascii=False)
+                    estimate = max(1, (sum(len(str(message.content)) for message in request.messages) + len(response.content or "") + len(tool_text)) // 3)
+                    run_budget.record_model_usage(response.usage, estimated_tokens=estimate)
                 # user:“有真实 usage 时使用真实 usage，无真实 usage 使用兜底估算值”
                 # +把上一次成功响应的 prompt tokens 记下来，下一次触发直接用它。
                 self._record_context_usage(state, request, response)
@@ -1326,6 +1339,8 @@ class CoreLoopKernel:
                             else {}
                         )
                         question_context = str(question_args.get("context") or "").strip()
+                        raw_questions = question_args.get("questions")
+                        questions_payload = raw_questions if isinstance(raw_questions, list) else []
                         request_kind = (
                             "question" if waiting_call.name == "question" else "permission"
                         )
@@ -1359,6 +1374,7 @@ class CoreLoopKernel:
                                     if question_context
                                     else {}
                                 ),
+                                **({"questions": questions_payload} if questions_payload else {}),
                             },
                         }
                         state.metadata["pending_waiting_request"] = {
@@ -1375,6 +1391,7 @@ class CoreLoopKernel:
                             # offered different (or no) choices.
                             "options": request_options,
                             **({"context": question_context} if question_context else {}),
+                            **({"questions": questions_payload} if questions_payload else {}),
                         }
                         step.metadata["pending_approval"] = state.metadata["pending_approval"]
                         decision = "wait"
@@ -1682,24 +1699,6 @@ class CoreLoopKernel:
                 else:
                     consecutive_failure_rounds = 0
 
-                # 5.9b Track MCP server activation from mcp_activate tool calls
-                for result in tool_results:
-                    if (
-                        result.name == "mcp_activate"
-                        and result.status == "ok"
-                        and isinstance(result.metadata, dict)
-                    ):
-                        server = str(result.metadata.get("activated_server") or "").strip()
-                        if server:
-                            activated = [
-                                s
-                                for s in state.metadata.get("activated_mcp_servers", [])
-                                if isinstance(s, str)
-                            ]
-                            if server not in activated:
-                                activated.append(server)
-                                state.metadata["activated_mcp_servers"] = activated
-
                 # 5.10 Verify (non-blocking: verification failure does NOT
                 #     trigger automatic repair retry. The model receives tool
                 #     results directly and self-corrects on the next turn.)
@@ -1848,6 +1847,11 @@ class CoreLoopKernel:
                 final_decision = "failed"
                 break
             except Exception as e:
+                if getattr(e, "budget_exhausted", False):
+                    error_msg = str(e)
+                    step.error = error_msg
+                    final_decision = "failed"
+                    break
                 _logger.exception("[kernel:_run] unexpected error sid=%s step=%d",
                                   state.session_id, index)
                 error_msg = f"Unexpected error: {e}"
@@ -2933,7 +2937,9 @@ class CoreLoopKernel:
             if guidance_id and guidance_id in known_ids:
                 continue
             history.append(ChatMessage(
-                role="user", content=content,
+                # user:“把它作为一个引导信息发进去”+(带附件的恢复补充也以同一条
+                # 引导入历史，文字仍用于界面显示，内容块用于模型实际读取)。
+                role="user", content=metadata.get("user_content") or content,
                 metadata={"guidance_ids": [guidance_id]} if guidance_id else {},
             ))
             if guidance_id:
@@ -2944,7 +2950,8 @@ class CoreLoopKernel:
                 payload={
                     "content": content,
                     "response_index": response_index,
-                    **({"metadata": metadata} if metadata else {}),
+                    **({"metadata": {key: value for key, value in metadata.items()
+                                     if key != "user_content"}} if metadata else {}),
                 },
                 session_id=state.session_id,
                 run_id=state.run_id,
@@ -2980,6 +2987,73 @@ class CoreLoopKernel:
             if metadata.get("guidance_id")
         ])
         return True
+
+    async def _apply_runtime_settings(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+    ) -> None:
+        """Apply the newest composer parameter group before the next step.
+
+        user:“模式、权限、思考强度在下一步生效（即时生效）”+(运行中的回合在步边界
+        取走最新值；模型不在此列，仍按回合生效)。
+        """
+        source = getattr(turn_input, "settings_source", None)
+        if not callable(source):
+            return
+        try:
+            result = source(self._applied_settings_generation)
+        except Exception:  # noqa: BLE001 — settings must never break a run
+            _logger.warning(
+                "[kernel:_run] settings pull failed sid=%s", state.session_id, exc_info=True
+            )
+            return
+        if not result:
+            return
+        generation, patch = result
+        if not isinstance(patch, dict) or not patch:
+            return
+        self._applied_settings_generation = int(generation)
+
+        applier = getattr(self.kit, "apply_runtime_settings", None)
+        if not callable(applier):
+            return
+        try:
+            changed = set(applier(state, patch) or ())
+        except Exception:  # noqa: BLE001 — a bad patch must not break the run
+            _logger.warning(
+                "[kernel:_run] settings apply failed sid=%s", state.session_id, exc_info=True
+            )
+            return
+        if not changed:
+            return
+
+        # Mode and permission change which tools exist.  Dropping the frozen
+        # array is what makes the next request advertise the new set; the
+        # leading prompt stays frozen and the differences ride the existing
+        # tail notices.
+        if changed & {"active_mode", "permission_preset"}:
+            reset_session_tool_freeze(state.session_id)
+
+        if "shallow_thinking_enabled" in changed:
+            setter = getattr(self.llm_client, "set_enabled", None)
+            if callable(setter):
+                setter(bool(patch.get("shallow_thinking_enabled")))
+
+        labels: list[str] = []
+        if "active_mode" in changed:
+            labels.append(f"mode={state.metadata.get('active_mode')}")
+        if "reasoning_level" in changed:
+            labels.append(f"thinking={state.metadata.get('reasoning_level')}")
+        if "shallow_thinking_enabled" in changed:
+            labels.append(f"shallow={state.metadata.get('shallow_thinking_enabled')}")
+        if "permission_preset" in changed:
+            labels.append(f"permission={state.metadata.get('permission_preset')}")
+        await self._emit_state_event(
+            state,
+            "runtime.settings_applied",
+            "settings applied at next step" + (": " + ", ".join(labels) if labels else ""),
+        )
 
     # ── 子代理事件：只上报”仍在运行”，绝不在此消费 ──────────────────
     #
@@ -3409,6 +3483,9 @@ class CoreLoopKernel:
                 error=f"Tool timed out after {timeout} seconds",
             )
         except Exception as exc:
+            # user:“一次性处理干净 不要留尾巴”+(预算耗尽是运行终止信号，不降级为可重试的工具失败)。
+            if getattr(exc, "budget_exhausted", False):
+                raise
             return ToolResult(
                 call_id=call.id,
                 name=call.name,
@@ -3877,8 +3954,19 @@ class CoreLoopKernel:
                 async with sem:
                     return await self._execute_tool(state, c, forensic_step=forensic_step)
 
-            return list(await asyncio.gather(*(_bounded(c) for c in calls)))
-        return list(await asyncio.gather(*(self._execute_tool(state, c, forensic_step=forensic_step) for c in calls)))
+            coroutines = [_bounded(c) for c in calls]
+        else:
+            coroutines = [self._execute_tool(state, c, forensic_step=forensic_step) for c in calls]
+        tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+        try:
+            return list(await asyncio.gather(*tasks))
+        except BaseException:
+            # Terminal budget/cancellation must leave no sibling tools running.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     def _copy_state(self, state: RuntimeState) -> RuntimeState:
         return RuntimeState(
@@ -4596,6 +4684,21 @@ class CoreLoopKernel:
             tags=["tool"],
         )
         await self.event_sink.emit(event)
+        if result.artifacts:
+            # user:“该做就做”+(工具产物同时作为交付物事件发出，通道和 UI 不
+            # 必只靠扫描 tool.finished 才发现文件)。
+            await self.event_sink.emit(CoreEvent(
+                name="deliverables/presented",
+                category="artifact",
+                payload={
+                    "files": [artifact.to_dict() for artifact in result.artifacts],
+                    "tool_name": call.name,
+                    "call_id": call.id,
+                },
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["artifact", "deliverable"],
+            ))
         # Also emit a part event for rich UI rendering
         part_status = "error" if result.status == "failed" else "completed"
         await self.event_sink.emit(CoreEvent(
@@ -4740,8 +4843,20 @@ class CoreLoopKernel:
         """
         if call.name == "question":
             args = call.arguments if isinstance(call.arguments, dict) else {}
-            message = str(args.get("question") or "等待用户确认")
-            raw_options = args.get("options")
+            raw_questions = args.get("questions")
+            first_question = (
+                raw_questions[0]
+                if isinstance(raw_questions, list)
+                and raw_questions
+                and isinstance(raw_questions[0], dict)
+                else None
+            )
+            if first_question is not None:
+                message = str(first_question.get("question") or "等待用户确认")
+                raw_options = first_question.get("options")
+            else:
+                message = str(args.get("question") or "等待用户确认")
+                raw_options = args.get("options")
             if isinstance(raw_options, list) and raw_options:
                 options = [
                     {
@@ -4786,6 +4901,10 @@ class CoreLoopKernel:
                 "response": "deny",
             },
         ]
+        # user:“一次性处理干净 不要留尾巴”+(同一个审批选项同时进入聊天卡片和确认面板)。
+        approval = call.metadata.get("approval", {})
+        if isinstance(approval.get("level"), int) and approval["level"] > 1 and not approval.get("blocked"):
+            options.insert(1, {"id": "trust", "label": "批准并信任", "description": "执行这次操作，并将完全相同操作的等级永久降低一级。", "response": "trust"})
         return options, self._approval_request_message(call)
 
     @staticmethod

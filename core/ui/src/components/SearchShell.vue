@@ -739,6 +739,8 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 </script>
 
 <style scoped>
+/* user:“专门对小屏或者说分屏状态做一下适配”+(按页面实际宽度调整布局，宽窗口中的窄分屏也能独立折叠)。 */
+
 /* 整版界面：输入与结果落在与会话同一条轴线上（full-area-column）。 */
 .search-view {
   --text: var(--settings-card-text, var(--settings-main-text, #fff));
@@ -1008,7 +1010,7 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   text-align: center;
 }
 
-@media (max-width: 560px) {
+@container app-page (max-width: 560px) {
   .search-row-meta {
     display: none;
   }
@@ -1019,7 +1021,7 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
 }
 
 /* 桌面：返回键在顶部条里；这里只留搜索输入行。 */
-@media (min-width: 641px) {
+@container app-page (min-width: 641px) {
   .search-back {
     display: none;
   }

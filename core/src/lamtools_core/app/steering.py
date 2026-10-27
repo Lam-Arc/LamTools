@@ -21,5 +21,8 @@ async def pending_steering(session_factory: Any, thread_id: str) -> list[dict[st
     consumed = {str(guidance_id) for value in metadata if isinstance(value, dict)
                 for guidance_id in value.get("guidance_ids", [])}
     from .live_operations import input_items_text
-    return [{"id": str(event.client_message_id), "content": input_items_text(event.payload_json.get("runtime_input") or event.payload_json.get("input") or [])}
+    # user:“把它作为一个引导信息发进去”+(恢复时保留原始输入中的附件引用)。
+    return [{"id": str(event.client_message_id),
+             "input": event.payload_json.get("runtime_input") or event.payload_json.get("input") or [],
+             "content": input_items_text(event.payload_json.get("runtime_input") or event.payload_json.get("input") or [])}
             for event in accepted if event.client_message_id and str(event.client_message_id) not in consumed]

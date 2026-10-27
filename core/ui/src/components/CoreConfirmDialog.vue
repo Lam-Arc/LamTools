@@ -217,18 +217,20 @@ useOutsidePointerDismiss({
   font-weight: 680;
 }
 
+/* 取消是浮在主区胶囊上的文字动作：用主区文字色，不能借控件文字色——
+   深色主题里控件是亮底深字，直接复用会让“取消”消失在深色胶囊里。 */
 .core-confirm__cancel {
   background: transparent;
-  color: color-mix(in srgb, var(--theme-control-text) 65%, transparent);
+  color: color-mix(in srgb, var(--text) 65%, transparent);
 }
 
 .core-confirm__cancel:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), transparent);
-  color: var(--theme-control-text);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
 }
 
 .core-confirm__cancel:active:not(:disabled) {
-  background: color-mix(in srgb, var(--theme-control-text) var(--alpha-active), transparent);
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
 }
 
 .core-confirm__submit {

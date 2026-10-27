@@ -7,7 +7,7 @@ const config = JSON.parse(
 )
 
 test('main window lets the responsive workspace own its width', () => {
-  const mainWindow = config.app.windows.find((window) => window.label !== 'desktop-plugin-host')
+  const mainWindow = config.app.windows[0]
 
   assert.ok(mainWindow)
   assert.equal('minWidth' in mainWindow, false)

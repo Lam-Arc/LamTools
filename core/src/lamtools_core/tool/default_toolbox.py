@@ -27,13 +27,12 @@ from lamtools_core.tool.command import run_subprocess
 from lamtools_core.tool.command_tools import CommandToolHandlers
 from lamtools_core.tool.durable_tools import (
     OperationExecutor,
-    arrange_requires_approval,
     durable_tool_handlers,
     durable_tool_specs,
 )
 from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
 from lamtools_core.tool.image_tools import make_generate_image_handler
-from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
+from lamtools_core.tool.mcp_tools import MCPToolCaller
 from lamtools_core.tool.outside_access import (
     GRANT_METADATA_KEY,
     call_has_outside_grant,
@@ -205,8 +204,7 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "web_search": AUTO_ALLOW,
     "web_fetch": ASK_USER,
     "generate_image": ASK_USER,
-    "mcp_tool": ASK_USER,
-    "mcp_activate": AUTO_ALLOW,
+    "mcp": AUTO_ALLOW,
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
     SUB_AGENT_MESSAGE_TOOL_NAME: AUTO_ALLOW,
     "write_checklist": AUTO_ALLOW,
@@ -233,8 +231,7 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "web_search",
     "web_fetch",
     "generate_image",
-    "mcp_activate",
-    "mcp_tool",
+    "mcp",
     SUB_AGENT_TOOL_NAME,
     SUB_AGENT_MESSAGE_TOOL_NAME,
     "write_checklist",
@@ -261,8 +258,7 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "web_search": "web",
     "web_fetch": "web",
     "generate_image": "image",
-    "mcp_tool": "mcp",
-    "mcp_activate": "mcp",
+    "mcp": "mcp",
     SUB_AGENT_TOOL_NAME: "agent",
     SUB_AGENT_MESSAGE_TOOL_NAME: "agent",
     "write_checklist": "control",
@@ -341,13 +337,7 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "no_image_in_response", "message": "生图响应中没有解析出图片"},
         {"type": "reference_missing", "message": "参考图文件不存在: {path}"},
     ],
-    "mcp_activate": [
-        {"type": "server_not_found", "message": "MCP server not found"},
-    ],
-    "mcp_tool": [
-        {"type": "mcp_error", "message": "MCP TOOL ERROR: {reason}"},
-        {"type": "tool_not_found", "message": "MCP tool not found"},
-    ],
+    "mcp": [{"type": "mcp_error", "message": "MCP query failed: {reason}"}],
     "question": [],
 }
 
@@ -370,8 +360,7 @@ DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "generate_image": (
         "Check 设置 → 生图 已启用且 API 地址正确；生成较慢可重试；参考图需为可访问 URL 或工作区内文件"
     ),
-    "mcp_activate": "Check the server name against available MCP servers; use exact names listed in the system prompt.",
-    "mcp_tool": "Check tool name and arguments, verify MCP server status",
+    "mcp": "Query tool schemas; execute through core mcp call with run_command.",
     "question": "Rephrase the question, simplify options, or proceed with a reasonable default",
 }
 
@@ -660,28 +649,18 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "name": "mcp_activate",
+        "name": "mcp",
         "description": (
-            "Activate an MCP (Model Context Protocol) tool server to gain access to its full tool set. "
-            "Call this first when you need browser automation or other MCP-provided tools. "
-            "The server's full tool definitions will be available on the next turn. "
-            "Returns a complete list of available tools from that server."
+            "Inspect MCP servers/tools/schemas, or run one MCP tool. "
+            "Run with action=run, tool_name='mcp__server__tool', arguments={...}. "
+            "MCP tools are not in the tool list; each run is gated by that tool's declared level."
         ),
-        "input_schema": _schema(
-            {"server_name": {"type": "string", "description": "Name of the MCP server to activate (e.g. 'playwright')"}},
-            ["server_name"],
-        ),
-    },
-    {
-        "name": "mcp_tool",
-        "description": "Call an MCP-registered tool.",
-        "input_schema": _schema(
-            {
-                "tool_name": {"type": "string", "description": "MCP tool name"},
-                "arguments": {"type": "object", "description": "Tool arguments"},
-            },
-            ["tool_name"],
-        ),
+        "input_schema": _schema({
+            "action": {"type": "string", "enum": ["servers", "tools", "schema", "run"]},
+            "server_name": {"type": "string"},
+            "tool_name": {"type": "string"},
+            "arguments": {"type": "object", "additionalProperties": True},
+        }, ["action"]),
     },
     {
         "name": "write_checklist",
@@ -753,35 +732,73 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "name": "question",
         "description": (
-            "Ask the user a question or request confirmation when you need "
-            "clarification, a decision between options, or explicit approval "
-            "before proceeding. The run pauses until the user responds."
+            "Ask the user one or more questions, or request confirmation, when you need "
+            "clarification, a decision between options, or explicit approval before "
+            "proceeding. The run pauses until the user responds. Use `questions` to ask "
+            "several questions in one call; they are presented one at a time."
         ),
-        "input_schema": _schema(
-            {
-                "question": {
-                    "type": "string",
-                    "description": "The question or confirmation prompt to present to the user.",
-                },
-                "options": {
-                    "type": "array",
-                    "description": "Selectable choices. Omit for a simple confirm/deny question.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "label": {"type": "string", "description": "Short option label."},
-                            "description": {"type": "string", "description": "Optional detail."},
+        "input_schema": {
+            **_schema(
+                {
+                    "question": {
+                        "type": "string",
+                        "description": "The question or confirmation prompt to present to the user.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "description": "Selectable choices. Omit for a simple confirm/deny question.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "Short option label."},
+                                "description": {"type": "string", "description": "Optional detail."},
+                            },
+                            "required": ["label"],
                         },
-                        "required": ["label"],
+                    },
+                    "questions": {
+                        "type": "array",
+                        "description": "Several questions to present one at a time in this same paused turn.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "header": {
+                                    "type": "string",
+                                    "description": "Short heading for this question.",
+                                },
+                                "question": {
+                                    "type": "string",
+                                    "description": "The question or confirmation prompt.",
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "description": "Selectable choices for this question.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": {"type": "string"},
+                                            "description": {"type": "string"},
+                                        },
+                                        "required": ["label"],
+                                    },
+                                },
+                                "multiSelect": {
+                                    "type": "boolean",
+                                    "description": "Allow selecting more than one option.",
+                                },
+                            },
+                            "required": ["question"],
+                        },
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional context or background for the question.",
                     },
                 },
-                "context": {
-                    "type": "string",
-                    "description": "Optional context or background for the question.",
-                },
-            },
-            ["question"],
-        ),
+                [],
+            ),
+            "anyOf": [{"required": ["question"]}, {"required": ["questions"]}],
+        },
     },
     deepcopy(SUB_AGENT_TOOL_SPEC),
     deepcopy(SUB_AGENT_MESSAGE_TOOL_SPEC),
@@ -1123,6 +1140,7 @@ class CoreToolbox:
         loaded_skill_roots: set[Path] | None = None,
         skill_registry: SkillRegistry | None = None,
         mcp_caller: MCPToolCaller | None = None,
+        mcp_service: Any | None = None,
         mcp_tool_specs: list[ToolSpec] | None = None,
         sub_agent_runner: SubAgentRunner | None = None,
         command_policies: dict[str, object] | None = None,
@@ -1164,7 +1182,12 @@ class CoreToolbox:
         else:
             self.loaded_skill_roots = {Path(item).resolve() for item in loaded_skill_roots or set()}
         self.loaded_skill_names: set[str] = set()
-        self.mcp_caller = mcp_caller
+        # user:“把 MCP 从 toolbox 里面拿出去，通过 command 运行”+(工具箱只接查询/命令服务，不注册协议工具)。
+        from lamtools_core.mcp.command_service import MCPCommandService
+        self.mcp_service = mcp_service or (MCPCommandService(mcp_caller, loaded=True) if mcp_caller is not None else None)
+        # user:“值守的时候…有什么办法能开放吗”+(运行档 approvedTools 的授权集；
+        # 只跳过这些 MCP 写工具的确认，等级与能力上限照常判断)。
+        self.approved_mcp_tools: set[str] = set()
         self.sub_agent_runner = sub_agent_runner
         self._failed_sub_agent_calls: dict[tuple[str, str], dict[str, Any]] = {}
         self.approval_policy = approval_policy
@@ -1173,7 +1196,6 @@ class CoreToolbox:
         self.disabled_tools = set(disabled_tools or set())
         self.load_tools = load_tools or {}
         self.active_mode = active_mode
-        self.activated_mcp_servers = activated_mcp_servers or set()
         self.imagegen_config = imagegen_config
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         # Manifest permissions are a separate authority from user overrides.
@@ -1194,6 +1216,8 @@ class CoreToolbox:
         self.plugin_availability = plugin_availability
         # v2 agent plan: when set, only these tools are visible and executable.
         self.agent_tool_whitelist: set[str] | None = None
+        # user:“工具组可以用consider模式（只读）”+(宿主能力上限独立于可变的插件 Agent 白名单)。
+        self.capability_tool_whitelist: frozenset[str] | None = None
         self.plugin_mode_tool_sets = {
             str(mode): {str(name) for name in names}
             for mode, names in (plugin_mode_tool_sets or {}).items()
@@ -1214,7 +1238,7 @@ class CoreToolbox:
         self._plugin_conflicts: dict[str, str] = {}
         core_spec_names = {
             spec.name for spec in default_core_tool_specs()
-        } | {spec.name for spec in mcp_tool_specs or []} | {
+        } | {
             spec.name for spec in durable_tool_specs(
                 goal=enable_goal_tool and operation_executor is not None,
                 arrange=enable_arrange_tool and operation_executor is not None,
@@ -1252,9 +1276,6 @@ class CoreToolbox:
             for spec in self.plugin_tool_specs
             if spec.metadata.get("timeout") is not None
         }
-        self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
-        for spec in mcp_tool_specs or []:
-            self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         durable_specs = durable_tool_specs(
             goal=enable_goal_tool and operation_executor is not None,
             arrange=enable_arrange_tool and operation_executor is not None,
@@ -1286,7 +1307,11 @@ class CoreToolbox:
             work_root=self.work_root,
             tool_permissions=self.tool_permissions,
             command_policies=command_policies,
+            mcp_operation_level=getattr(self.mcp_service, "level_for_command", None) if self.mcp_service is not None else None,
+            mcp_call_level=self._mcp_call_level,
+            mcp_approved_tools=self.approved_mcp_tools,
             active_tier=active_tier,
+            available_level=1 if active_mode == "consider" else None,
             tier_tools=tier_tools,
             allow_access_outside_workdir=allow_access_outside_workdir,
             approval_policy=approval_policy,
@@ -1303,7 +1328,6 @@ class CoreToolbox:
         self.permission_resolver = PermissionResolver(self.approval_gate)
         self._specs = [
             *default_core_tool_specs(),
-            *list(mcp_tool_specs or []),
             *durable_specs,
             *plugin_manager_specs,
             *self.plugin_tool_specs,
@@ -1436,6 +1460,14 @@ class CoreToolbox:
         """
         return True
 
+    def refresh_runtime_permissions(self) -> None:
+        """Public boundary for the kernel's step-level settings refresh.
+
+        user:“模式、权限、思考强度在下一步生效（即时生效）”+(权限变化时由 Kit
+        在下一步开始前主动刷新审批门，而不是等下一次工具调用才刷新)。
+        """
+        self._refresh_runtime_permissions()
+
     def _refresh_runtime_permissions(self) -> None:
         """Apply the latest session permission state before each tool boundary."""
         if self.runtime_permissions_provider is None:
@@ -1466,9 +1498,8 @@ class CoreToolbox:
     ) -> list[dict[str, Any]]:
         self._refresh_runtime_permissions()
         effective_exclude = set(exclude_tools or set())
-        if self.mcp_caller is None:
-            # No MCP tools were loaded, so neither gateway can be used.
-            effective_exclude.update({"mcp_activate", "mcp_tool"})
+        if self.mcp_service is None:
+            effective_exclude.add("mcp")
         # Apply loadtools active_mode filtering
         if active_mode and self.load_tools:
             allowed = self._mode_tool_set(active_mode)
@@ -1492,19 +1523,11 @@ class CoreToolbox:
                 for spec in self.tool_specs()
                 if spec.name not in self.agent_tool_whitelist
             }
-        # Filter out MCP tools from non-activated servers
-        # Activated servers have their full mcp__{server}__* tools exposed;
-        # unactivated servers only expose the mcp_activate gateway tool.
-        for spec in self.tool_specs():
-            name = spec.name
-            if not name.startswith("mcp__"):
-                continue
-            # name format: mcp__{server}__{tool_name}
-            parts = name.split("__", 2)
-            if len(parts) >= 2:
-                server = parts[1]
-                if server not in self.activated_mcp_servers:
-                    effective_exclude.add(name)
+        if self.capability_tool_whitelist is not None:
+            effective_exclude |= {
+                spec.name for spec in self.tool_specs()
+                if spec.name not in self.capability_tool_whitelist
+            }
         # Lazy exposure（惰性暴露，§4 共识）：visibility=on_load 的工具在
         # 对应 skill 加载前不进入模型可见列表（loaded_skill_roots 追踪
         # 同款语义；加载后全套生效）。只影响模型侧，执行时权限照常。
@@ -1524,6 +1547,18 @@ class CoreToolbox:
         except TypeError:
             # Backward-compatible seam for injected third-party registries.
             return self.skill_registry.prompt_index(self.work_root, self.skill_state_store)
+
+    def _mcp_call_level(self, tool_name: str, arguments: dict[str, Any]) -> int:
+        """Level of the MCP tool targeted by ``mcp action=run`` (never the entry tool)."""
+        if self.mcp_service is None:
+            return 3
+        level_for_tool = getattr(self.mcp_service, "level_for_tool", None)
+        if level_for_tool is None:
+            return 3
+        try:
+            return int(level_for_tool(tool_name, arguments))
+        except Exception:
+            return 3
 
     def _mode_block_reason(self, name: str) -> str | None:
         """Return the fixed mode-enforcement error when ``name`` is not allowed
@@ -1575,6 +1610,13 @@ class CoreToolbox:
 
     def prepare_call(self, call: ToolCall) -> ToolCall:
         self._refresh_runtime_permissions()
+        # user:“把 MCP 从 toolbox 里面拿出去”+(旧会话中的协议工具立即拒绝，不再要求一次无效审批)。
+        if call.name in {"mcp_activate", "mcp_tool"} or call.name.startswith("mcp__"):
+            return replace(call, requires_approval=False, metadata={**dict(call.metadata or {}), "approval": {
+                "tier": HARD_BLOCK, "blocked": True, "requires_approval": False,
+                "reason": "Unknown tool: MCP execution moved to run_command (core mcp call)"}})
+        if self.capability_tool_whitelist is not None and call.name not in self.capability_tool_whitelist:
+            return replace(call, requires_approval=False, metadata={**dict(call.metadata or {}), "approval": {"tier": "blocked", "blocked": True, "requires_approval": False, "reason": "This assistant has read-only tools"}})
         # Plugin handlers have no closure-injected workspace context (core
         # tools receive work_root/data_dir via factory closures); inject it
         # into call.metadata so plugin tools are first-class citizens.
@@ -1634,15 +1676,11 @@ class CoreToolbox:
 
         args = call.arguments if isinstance(call.arguments, dict) else {}
         decision = self.permission_resolver.resolve(call.name, args)
-        if call.name == "arrange" and not arrange_requires_approval(args) and not decision.blocked:
-            decision = replace(
-                decision,
-                allowed=True,
-                reason="Auto-approved read-only Arrange action",
-                requires_approval=False,
-            )
         approval = {
             "tier": decision.permission_tier,
+            "level": decision.level,
+            "auto_approve_level": decision.auto_approve_level,
+            "available_level": decision.available_level,
             "reason": decision.reason,
             "blocked": decision.blocked,
             "requires_approval": decision.requires_approval,
@@ -1692,6 +1730,8 @@ class CoreToolbox:
 
     async def execute(self, call: ToolCall, context: ToolContext | None = None) -> ToolResult:
         self._refresh_runtime_permissions()
+        if self.capability_tool_whitelist is not None and call.name not in self.capability_tool_whitelist:
+            return ToolResult(call_id=call.id, name=call.name, status="blocked", error="This assistant has read-only tools")
         # Refresh dynamic declarations before any direct execution path.  This
         # keeps a newly registered manifest hard_block effective even when a
         # caller presents a serialized call without going through
@@ -1738,7 +1778,7 @@ class CoreToolbox:
         # configured, an unprepared direct call must pass the same tier and
         # approval gate; otherwise an ``auto_allow`` plugin could bypass the
         # active capability boundary simply by calling execute() directly.
-        if not isinstance(approval, dict) and self.active_tier is not None and self.tier_tools is not None:
+        if not isinstance(approval, dict):
             call = self.prepare_call(call)
             approval = call.metadata.get("approval") if isinstance(call.metadata, dict) else None
             if isinstance(approval, dict) and approval.get("blocked"):
@@ -1772,8 +1812,6 @@ class CoreToolbox:
                 error=f"Plugin disabled: {plugin_name}",
             )
         handler = self._handlers.get(call.name)
-        if handler is None and call.name in self._dynamic_mcp_tool_names:
-            handler = self._handlers.get("mcp_tool")
         if handler is None:
             for provider in self.plugin_tool_providers:
                 try:
@@ -1829,6 +1867,7 @@ class CoreToolbox:
         for root in self.loaded_skill_roots:
             read_tools.add_resource_root(root)
         command_handlers = CommandToolHandlers(
+            mcp_service=self.mcp_service,
             work_root=self.work_root,
             command_timeout=command_timeout,
             loaded_skill_roots=self.loaded_skill_roots,
@@ -1836,43 +1875,35 @@ class CoreToolbox:
             allow_access_outside_workdir=self._outside_access_allowed,
         )
 
-        async def call_mcp(call: ToolCall) -> ToolResult:
-            return await execute_mcp_tool_call(call, caller=self.mcp_caller)
-
-        async def activate_mcp(call: ToolCall) -> ToolResult:
-            args = call.arguments if isinstance(call.arguments, dict) else {}
-            server_name = str(args.get("server_name") or "").strip()
-            if not server_name:
-                return ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    status="failed",
-                    error="Missing 'server_name' argument",
-                )
-            if self.mcp_caller is None:
-                return ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    status="failed",
-                    error="MCP tool caller not available",
-                )
-            if not hasattr(self.mcp_caller, "tool_summary"):
-                return ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    status="failed",
-                    error="MCP registry does not support tool summaries",
-                )
-            summary = self.mcp_caller.tool_summary(server_name)
-            not_found = "not found" in summary.lower() and "available servers:" in summary.lower()
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed" if not_found else "ok",
-                content=summary,
-                error="" if not not_found else f"MCP server '{server_name}' not found",
-                metadata={"activated_server": server_name} if not not_found else {},
-            )
+        async def inspect_mcp(call: ToolCall) -> ToolResult:
+            if self.mcp_service is None:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="MCP is not configured")
+            args = call.arguments or {}
+            action = str(args.get("action") or "servers")
+            if action == "run":
+                # user:“mcp run 名 参”+(执行也走 mcp 入口；目标工具的等级在
+                # prepare_call 已经按 MCP 声明判过，这里只做白名单和实调)。
+                tool_name = str(args.get("tool_name") or "").strip()
+                arguments = args.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments) if arguments.strip() else {}
+                    except ValueError as exc:
+                        return ToolResult(call_id=call.id, name=call.name, status="failed",
+                                          error=f"arguments must be a JSON object: {exc}")
+                if not isinstance(arguments, dict):
+                    return ToolResult(call_id=call.id, name=call.name, status="failed",
+                                      error="arguments must be a JSON object")
+                try:
+                    result = await self.mcp_service.execute_tool(tool_name, arguments)
+                    return ToolResult(call_id=call.id, name=call.name, content=result)
+                except (ValueError, RuntimeError) as exc:
+                    return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+            try:
+                payload = await self.mcp_service.inspect(action, str(args.get("server_name") or ""), str(args.get("tool_name") or ""))
+                return ToolResult(call_id=call.id, name=call.name, content=json.dumps(payload, ensure_ascii=False))
+            except (ValueError, RuntimeError) as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
 
         async def load_skill(call: ToolCall) -> ToolResult:
             args = call.arguments if isinstance(call.arguments, dict) else {}
@@ -2244,8 +2275,7 @@ class CoreToolbox:
                 str(self.work_root),
                 artifact_registry=self.imagegen_config.get("artifact_registry") if isinstance(imagegen_config, dict) else None,
             ),
-            "mcp_tool": call_mcp,
-            "mcp_activate": activate_mcp,
+            "mcp": inspect_mcp,
             SUB_AGENT_TOOL_NAME: call_sub_agent,
             SUB_AGENT_MESSAGE_TOOL_NAME: call_sub_agent_message,
             "write_checklist": _write_checklist_handler,
@@ -2301,6 +2331,22 @@ class CoreToolbox:
             handlers.update(
                 plugin_manager_tool_handlers(operation_executor, work_root=self.work_root)
             )
+        # user:“该重建就重建”+(运行中的工具参与排空，旧工具箱不能执行新代际的旧闭包)。
+        manager = getattr(self.plugin_availability, "__self__", None)
+        if manager is not None and hasattr(manager, "lease"):
+            for spec in plugin_tool_specs or []:
+                name = str(spec.metadata.get("plugin") or "")
+                handler = handlers.get(spec.name)
+                if not name or handler is None:
+                    continue
+                generation = manager.generation.get(name, 0)
+                async def guarded(call, fn=handler, plugin=name, expected=generation):
+                    if not manager.is_enabled(plugin) or manager.generation.get(plugin, 0) != expected:
+                        return ToolResult(call_id=call.id, name=call.name, status="blocked", error="插件已停用或已更新，请刷新本轮工具组")
+                    async with manager.lease(plugin):
+                        value = fn(call)
+                        return await value if inspect.isawaitable(value) else value
+                handlers[spec.name] = guarded
         return handlers
 
     def _bundled_plugin_handler(
@@ -2356,41 +2402,10 @@ class CoreToolbox:
         the next toolbox rebuild. A unique module name per plugin root keeps
         each handler attached to its own file.
         """
-        import importlib
-        import importlib.util
-
-        root = str(spec.metadata.get("plugin_root") or "").strip()
-        cache_key = (root, module_name)
-        cached = _PLUGIN_MODULE_CACHE.get(cache_key)
-        if cached is not None:
-            return cached
-        if root and "." not in module_name:
-            path = Path(root) / f"{module_name}.py"
-            if path.is_file():
-                digest = hashlib.sha1(root.encode("utf-8")).hexdigest()[:12]
-                unique_name = f"_lam_plugin_{digest}_{module_name}"
-                module = sys.modules.get(unique_name)
-                if module is None:
-                    module_spec = importlib.util.spec_from_file_location(unique_name, path)
-                    if module_spec is None or module_spec.loader is None:
-                        raise ImportError(f"cannot load plugin module from {path}")
-                    module = importlib.util.module_from_spec(module_spec)
-                    sys.modules[unique_name] = module
-                    try:
-                        module_spec.loader.exec_module(module)
-                    except BaseException:
-                        sys.modules.pop(unique_name, None)
-                        raise
-                _PLUGIN_MODULE_CACHE[cache_key] = module
-                return module
-        # Dotted modules keep the legacy import path, but the plugin root must
-        # be importable. Package-name collisions remain the plugin author's
-        # responsibility (e.g. rag_engine.tools is already namespaced).
-        if root and root not in sys.path:
-            sys.path.append(root)
-        module = importlib.import_module(module_name)
-        _PLUGIN_MODULE_CACHE[cache_key] = module
-        return module
+        # user:“该重建就重建”+(工具与操作共用按插件身份隔离的模块装载器)。
+        from lamtools_core.plugin_system.loading import load_module
+        root = Path(str(spec.metadata.get("plugin_root") or "."))
+        return load_module(root, module_name)
 
     def _import_plugin_handler(self, spec: ToolSpec) -> ToolHandler | None:
         entry = str(spec.metadata.get("handler") or "")

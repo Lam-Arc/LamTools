@@ -135,7 +135,7 @@ export async function submitCoreComposerTask(
   // Guidance mode reaches for the live turn first; every refusal ends in the
   // queue rather than in a dropped message.
   const guideOrQueue = async (inputItems: CoreInputItem[]): Promise<SubmitCoreComposerTaskResult> => {
-    if (!options.forceGuide || attachments.length > 0 || !options.activeTurnId || !options.steerTurn) {
+    if (!options.forceGuide || !options.activeTurnId || !options.steerTurn) {
       await options.queueInput(options.threadId, inputItems, options.turnOptions, options.clientMessageId)
       return { status: 'queued', inputItems }
     }
@@ -269,6 +269,8 @@ export function normalizeCoreCommandCatalogItem(item: unknown): CoreCommandCatal
 
 export function coreAppServerDecision(value: string): string {
   const normalized = value.trim().toLowerCase()
+  // user:“一次性处理干净 不要留尾巴”+(保留明确的信任选择，不降成普通引导消息)。
+  if (normalized === 'trust') return 'trust'
   if (normalized === 'approve' || normalized === 'accept' || normalized === 'approve_once') return 'approve_once'
   if (normalized === 'approve_for_session' || normalized === 'acceptforsession') return 'approve_for_session'
   if (normalized === 'deny' || normalized === 'decline' || normalized === 'cancel') return 'deny'

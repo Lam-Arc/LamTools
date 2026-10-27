@@ -19,8 +19,15 @@ _SPEC_ROOT = Path(__file__).resolve().parent if "__file__" in globals() else Pat
 _PROJECT_ROOT = _SPEC_ROOT
 _BUNDLED_PLUGINS_ROOT = _PROJECT_ROOT / "src" / "lamtools_core" / "plugins" / "bundled"
 _BUILTIN_SKILLS_ROOT = _PROJECT_ROOT / "skills"
-_EXCLUDED_BUNDLED_PLUGINS = {"emotion-ball-pet", "workflow"}
+_EXCLUDED_BUNDLED_PLUGINS = {"workflow"}
 _IS_WINDOWS = os.name == "nt"
+# user:“建议还是集成一下吧，尽量不把这些安装操作留给用户”+(正式 Windows 包内必须包含控制器、已校验内核和许可证)。
+if _IS_WINDOWS:
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, str(_PROJECT_ROOT.parent / "scripts" / "prepare-network-plugin.py")], check=True)
+else:
+    _EXCLUDED_BUNDLED_PLUGINS.add("network-exploration")
 _BACKEND_NAME = "LamCore.exe" if _IS_WINDOWS else "LamCore"
 # PyInstaller only embeds executable icons on Windows/macOS.  Passing a PNG
 # on Linux makes older bootloader versions attempt an unsupported conversion;
@@ -134,9 +141,8 @@ for _skill_file in sorted(_BUILTIN_SKILLS_ROOT.rglob("*")):
         )
     )
 
-# Core-owned bundled plugins ship with the backend.  The desktop pet and
-# workflow remain optional source plugins and must not be embedded in the
-# installer.
+# Core-owned bundled plugins ship with the backend.  The workflow plugin
+# remains optional source-only and must not be embedded in the installer.
 for _plugin_dir in sorted(_BUNDLED_PLUGINS_ROOT.iterdir()):
     if not _plugin_dir.is_dir() or _plugin_dir.name in _EXCLUDED_BUNDLED_PLUGINS:
         continue
@@ -196,6 +202,8 @@ _hiddenimports = [
     "multiprocessing",
     "asyncio",
     "websockets",
+    # user:“QQ…安装的时候直接从 GitHub 上”+(只带共享运行依赖，不内置市场插件)。
+    "cryptography.hazmat.primitives.ciphers.aead",
 
     # === lamtools_core top-level modules ===
     "lamtools_core",

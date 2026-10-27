@@ -101,3 +101,11 @@ __all__ = [
     "rpc_result",
     "snapshot_notification",
 ]
+
+
+# user:“审查后端大文件并拆分”+(按职责独立维护实现，原模块保留导入入口以兼容现有调用。)
+def int_param(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

@@ -1,0 +1,169 @@
+{
+  "operations": [
+    {
+      "name": "network-exploration.status",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: status"
+    },
+    {
+      "name": "network-exploration.settings.update",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: settings.update"
+    },
+    {
+      "name": "network-exploration.connections",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: connections"
+    },
+    {
+      "name": "network-exploration.interfaces",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: interfaces"
+    },
+    {
+      "name": "network-exploration.lan",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: lan"
+    },
+    {
+      "name": "network-exploration.diagnose",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: diagnose"
+    },
+    {
+      "name": "network-exploration.rules.save",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: rules.save"
+    },
+    {
+      "name": "network-exploration.rules.test",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: rules.test"
+    },
+    {
+      "name": "network-exploration.proxy.start",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.start"
+    },
+    {
+      "name": "network-exploration.proxy.stop",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.stop"
+    },
+    {
+      "name": "network-exploration.proxy.inspect",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.inspect"
+    },
+    {
+      "name": "network-exploration.proxy.select",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.select"
+    },
+    {
+      "name": "network-exploration.proxy.delay",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.delay"
+    },
+    {
+      "name": "network-exploration.proxy.optimize",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.optimize"
+    },
+    {
+      "name": "network-exploration.proxy.mode",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.mode"
+    },
+    {
+      "name": "network-exploration.proxy.config",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: proxy.config"
+    },
+    {
+      "name": "network-exploration.accelerator.start",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: accelerator.start"
+    },
+    {
+      "name": "network-exploration.accelerator.stop",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: accelerator.stop"
+    },
+    {
+      "name": "network-exploration.transfer.add",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: transfer.add"
+    },
+    {
+      "name": "network-exploration.transfer.list",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: transfer.list"
+    },
+    {
+      "name": "network-exploration.transfer.action",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: transfer.action"
+    },
+    {
+      "name": "network-exploration.transfer.verify",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: transfer.verify"
+    },
+    // user:“network-exploration.system.apply 修改或恢复所选网络配置；我不希望这个东西再出现了，桌面可把它自动允许掉”+(桌面端的本机加速开关直接应用/恢复系统代理，不再逐次弹审批；只放开 apply 与 restore)。
+    {
+      "name": "network-exploration.system.apply",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: system.apply",
+      "impact": "修改或恢复所选网络配置；影响所选接口、应用或当前 Windows 用户的系统代理。原始配置会保存，恢复时检查外部修改。",
+      "permission": "auto_allow",
+      "approvalFields": [
+        "kind",
+        "interface_index",
+        "servers",
+        "program",
+        "bits_per_second"
+      ]
+    },
+    {
+      "name": "network-exploration.system.restore",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: system.restore",
+      "impact": "修改或恢复所选网络配置；影响所选接口、应用或当前 Windows 用户的系统代理。原始配置会保存，恢复时检查外部修改。",
+      "permission": "auto_allow",
+      "approvalFields": [
+        "id"
+      ]
+    },
+    {
+      "name": "network-exploration.system.inspect",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: system.inspect"
+    },
+    {
+      "name": "network-exploration.automation.save",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: automation.save"
+    },
+    {
+      "name": "network-exploration.automation.run",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: automation.run"
+    },
+    {
+      "name": "network-exploration.export",
+      "handler": "ops:dispatch",
+      "description": "Network Exploration: export"
+    },
+    {
+      "description": "恢复已保存的任务（暂停状态）",
+      "handler": "ops:dispatch",
+      "name": "network-exploration.transfer.recover"
+    },
+    {
+      "name": "network-exploration.dns.query",
+      "handler": "ops:dispatch",
+      "description": "系统 DNS / DoH 查询与测时"
+    }
+  ]
+}

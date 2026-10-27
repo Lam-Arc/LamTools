@@ -1,4 +1,4 @@
-import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, nextTick, ref, watch, type ComputedRef, type Ref } from 'vue'
 import {
   coreModelSelectOptions,
   coreThinkingModeOptions,
@@ -47,6 +47,20 @@ export interface CoreExecutionControlsStateLabels {
   fallbackProviderLabel?: string
 }
 
+/**
+ * The Composer's per-session "input parameter group".
+ *
+ * user:“输入框的信息作为‘输入参数组’按会话持久化保存包括模式权限模型思考”
+ * +(整组一起读写，避免模型、权限、模式各走一条保存路径而互相覆盖)。
+ */
+export interface CoreComposerControls {
+  modelId: string
+  thinkingMode: CoreThinkingMode
+  shallowThinkingEnabled: boolean
+  activeMode: string
+  permissionPreset: CorePermissionPreset
+}
+
 export interface UseCoreExecutionControlsStateOptions<
   TModel extends CoreExecutionModelSource,
   TProvider extends CoreExecutionProviderSource,
@@ -62,6 +76,12 @@ export interface UseCoreExecutionControlsStateOptions<
   labels?: CoreExecutionControlsStateLabels
   onModelSelected?(model: TModel): void | Promise<void>
   onPermissionPresetSelected?(preset: CorePermissionPreset): void | Promise<void>
+  /**
+   * Called with the whole group after a user change (and after automatic
+   * corrections such as a thinking level the model no longer offers).
+   * Session persistence belongs to the host, not to this composable.
+   */
+  onControlsChanged?(controls: CoreComposerControls): void | Promise<void>
   /**
    * Called when the model that was in use disappeared and the scene's
    * inherited model takes over. The replacement must always be visible —
@@ -84,8 +104,12 @@ export interface CoreExecutionControlsState<TModel extends CoreExecutionModelSou
   selectModel(modelId: string): void
   selectThinkingMode(mode: string): void
   selectMode(mode: string): void
+  selectShallowThinking(enabled: boolean): void
   selectPermissionPreset(preset: string): void
   restorePermissionPreset(preset: unknown): void
+  /** Restore the whole group without echo-writing it back to the session. */
+  restoreControls(controls: Partial<CoreComposerControls> | null | undefined): void
+  controls(): CoreComposerControls
   turnOptions(): Record<string, unknown>
 }
 
@@ -189,6 +213,41 @@ export function useCoreExecutionControlsState<
     writeStoredModelId(options.storage, storageKeys.modelId, modelId)
   })
 
+  // user:“每个会话各自记各自的”+(任何一项变化都把整组交给宿主保存；自动降档
+  // 也算一次真实变化，必须落库，否则下次切回会话会又变回不支持的档位)。
+  let restoringControls = false
+
+  function controls(): CoreComposerControls {
+    return {
+      modelId: selectedModelId.value,
+      thinkingMode: selectedThinkingMode.value,
+      shallowThinkingEnabled: shallowThinkingEnabled.value,
+      activeMode: activeMode.value,
+      permissionPreset: permissionPreset.value,
+    }
+  }
+
+  function notifyControlsChanged(): void {
+    if (restoringControls) return
+    const callback = options.onControlsChanged
+    if (!callback) return
+    try {
+      const result = callback(controls())
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        void (result as Promise<void>).catch(() => {
+          // Persistence is product-owned; keep the local selection.
+        })
+      }
+    } catch {
+      // Persistence failure must never undo the Composer selection.
+    }
+  }
+
+  watch(
+    [selectedModelId, selectedThinkingMode, shallowThinkingEnabled, activeMode, permissionPreset],
+    () => { notifyControlsChanged() },
+  )
+
   let modelSelectionGeneration = 0
   let modelPersistence = Promise.resolve()
 
@@ -216,6 +275,10 @@ export function useCoreExecutionControlsState<
     try { options.storage?.setItem(storageKeys.activeMode, mode) } catch { /* noop */ }
   }
 
+  function selectShallowThinking(enabled: boolean): void {
+    shallowThinkingEnabled.value = enabled === true
+  }
+
   function selectPermissionPreset(preset: string): void {
     const normalized = normalizeCorePermissionPreset(preset)
     if (permissionPreset.value === normalized) return
@@ -234,6 +297,27 @@ export function useCoreExecutionControlsState<
 
   function restorePermissionPreset(preset: unknown): void {
     permissionPreset.value = normalizeCorePermissionPreset(preset)
+  }
+
+  function restoreControls(group: Partial<CoreComposerControls> | null | undefined): void {
+    const next = group || {}
+    // Keep the suppression through the watcher flush triggered by this batch;
+    // `nextTick` resolves after that flush, so switching sessions never writes
+    // the restored values back as if the user had changed them.
+    restoringControls = true
+    if (typeof next.modelId === 'string') selectedModelId.value = next.modelId
+    if (next.thinkingMode) selectedThinkingMode.value = normalizeCoreThinkingMode(next.thinkingMode)
+    if (typeof next.shallowThinkingEnabled === 'boolean') {
+      shallowThinkingEnabled.value = next.shallowThinkingEnabled
+    }
+    if (typeof next.activeMode === 'string' && next.activeMode) {
+      activeMode.value = next.activeMode
+      try { options.storage?.setItem(storageKeys.activeMode, next.activeMode) } catch { /* noop */ }
+    }
+    if (next.permissionPreset) {
+      permissionPreset.value = normalizeCorePermissionPreset(next.permissionPreset)
+    }
+    void nextTick(() => { restoringControls = false })
   }
 
   // Restore persisted activeMode on mount
@@ -256,8 +340,11 @@ export function useCoreExecutionControlsState<
     selectModel,
     selectThinkingMode,
     selectMode,
+    selectShallowThinking,
     selectPermissionPreset,
     restorePermissionPreset,
+    restoreControls,
+    controls,
   turnOptions: () => ({
     ...payload.value,
     shallow_thinking_enabled: shallowThinkingEnabled.value,

@@ -5,6 +5,8 @@
  * 其它宿主（浏览器预览、测试环境）没有 Tauri 时安静跳过，不抛错。
  */
 
+import { pluginAssetUrl } from '@/plugins/assets'
+
 export interface PluginWindowTarget {
   plugin: string
   id: string
@@ -38,9 +40,12 @@ export function pluginWindowLabel(target: Pick<PluginWindowTarget, 'plugin' | 'i
 export async function openPluginWindow(target: PluginWindowTarget): Promise<boolean> {
   const invoke = tauriInvoke()
   if (!invoke || !target.url) return false
+  // user:“点击之后没反应”+(宿主的 plugin.system.ui 给的是 /api/... 相对地址，
+  // Tauri 的 Url::parse 只认绝对地址，直接传会失败；这里按后台实际地址补全。)
+  const url = pluginAssetUrl(target.url)
   await invoke('open_plugin_window', {
     label: pluginWindowLabel(target),
-    url: target.url,
+    url,
     title: target.title || target.id,
     width: target.width ?? 420,
     height: target.height ?? 620,

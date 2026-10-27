@@ -1,14 +1,17 @@
 <template>
   <section class="plugin-config-panel" :data-plugin="pluginName">
-    <header class="config-identity">
+    <header v-if="showIdentity" class="config-identity">
       <strong>{{ pluginName }}</strong>
       <span class="config-version">{{ version }}</span>
     </header>
-    <p v-if="description" class="config-description">{{ description }}</p>
+    <p v-if="showIdentity && description" class="config-description">{{ description }}</p>
 
     <p v-if="error" class="config-error" role="alert">{{ error }}</p>
-    <p v-if="notice" class="config-notice">{{ notice }}</p>
-    <p v-if="!loaded" class="muted">{{ t("加载配置中…") }}</p>
+    <p v-if="notice" class="config-notice" role="status">{{ notice }}</p>
+    <p v-if="!loaded" class="config-loading" role="status">
+      <span class="config-loading-dot" aria-hidden="true"></span>
+      {{ t("加载配置中…") }}
+    </p>
 
     <!-- user:“作者可以自定义样式”+自定义面板挂在这块空地方，宿主只提供取值存值接口。 -->
     <div
@@ -19,22 +22,27 @@
     ></div>
 
     <form v-if="loaded && !panelActive" class="config-form" @submit.prevent="save()">
-      <label v-for="field in fields" :key="field.key" class="config-field">
-        <span class="config-label">{{ field.label }}</span>
-        <select
+      <label
+        v-for="field in fields"
+        :key="field.key"
+        class="config-field"
+        :class="{ 'is-boolean': field.type === 'boolean' }"
+      >
+        <span class="config-label-row">
+          <span class="config-label">{{ field.label }}</span>
+          <small v-if="field.description" class="config-hint">{{ field.description }}</small>
+        </span>
+        <!-- user:“配置界面里面自带的那些样式……比如选中键、下拉框之类的”+
+             枚举值走统一的下拉控件，选中行、展开动画和主题色都与设置页一致。 -->
+        <UiSelect
           v-if="field.enumValues.length"
-          :value="String(draft[field.key] ?? '')"
-          class="config-input"
-          @change="onEnumChange(field, $event)"
-        >
-          <option
-            v-for="value in field.enumValues"
-            :key="String(value)"
-            :value="value as string | number"
-          >
-            {{ String(value) }}
-          </option>
-        </select>
+          class="config-select"
+          :model-value="String(draft[field.key] ?? '')"
+          :options="enumOptions(field)"
+          :aria-label="field.label"
+          :menu-min-width="0"
+          @update:model-value="onEnumSelect(field, $event)"
+        />
         <input
           v-else-if="field.type === 'boolean'"
           v-model="draft[field.key]"
@@ -60,12 +68,11 @@
           class="config-input config-textarea"
           rows="3"
         ></textarea>
-        <small v-if="field.description" class="config-hint">{{ field.description }}</small>
       </label>
 
-      <p v-if="!fields.length" class="muted">{{ t("这个插件没有可配置项。") }}</p>
+      <p v-if="!fields.length" class="config-empty">{{ t("这个插件没有可配置项。") }}</p>
       <div v-if="fields.length" class="config-actions">
-        <button class="small-btn" type="submit" :disabled="saving">
+        <button class="small-btn primary" type="submit" :disabled="saving">
           {{ saving ? t("保存中…") : t("保存配置") }}
         </button>
       </div>
@@ -74,7 +81,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { consentRpc } from '@/plugins/consent'
+import { pluginAssetUrl } from '@/plugins/assets'
+import UiSelect from '@/components/UiSelect.vue'
 
 import { t } from '@/i18n/index.ts'
 
@@ -91,10 +101,12 @@ interface PluginPanelApi {
   config: Record<string, unknown>
   schema: Record<string, unknown>
   save: (values: Record<string, unknown>) => Promise<void>
+  rpc: PluginRpc
+  signal: AbortSignal
 }
 
 interface PluginPanelModule {
-  mount?: (root: HTMLElement, api: PluginPanelApi) => void
+  mount?: (root: HTMLElement, api: PluginPanelApi) => void | (() => void) | Promise<void | (() => void)>
 }
 
 type PluginRpc = (
@@ -102,12 +114,19 @@ type PluginRpc = (
   params?: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   pluginName: string
   version: string
   description: string
   requestRpc: PluginRpc
-}>()
+  /** 插件页的卡片已经展示身份，抽屉里只留表单本身。 */
+  showIdentity?: boolean
+}>(), {
+  showIdentity: true,
+})
+const panelController = new AbortController()
+let panelCleanup: (() => void) | undefined
+onBeforeUnmount(() => { panelController.abort(); panelCleanup?.() })
 
 const loaded = ref(false)
 const saving = ref(false)
@@ -162,9 +181,14 @@ function applyValues(values: Record<string, unknown>): void {
   }
 }
 
-function onEnumChange(field: PluginConfigField, event: Event): void {
-  const select = event.target as HTMLSelectElement
-  draft[field.key] = draftValue(field.enumValues[select.selectedIndex])
+function enumOptions(field: PluginConfigField): Array<{ value: string; label: string }> {
+  return field.enumValues.map(value => ({ value: String(value), label: String(value) }))
+}
+
+function onEnumSelect(field: PluginConfigField, value: string): void {
+  // 枚举值可能是数字/布尔，回到原始类型再写进草稿，提交时不被改成字符串。
+  const original = field.enumValues.find(item => String(item) === value)
+  draft[field.key] = draftValue(original !== undefined ? original : value)
 }
 
 function collectValues(): Record<string, unknown> {
@@ -215,16 +239,23 @@ function panelModule(): PluginPanelModule | null {
 }
 
 function loadPanelScript(url: string): Promise<void> {
+  url = pluginAssetUrl(url)
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[data-plugin-config-panel="${url}"]`)) {
-      resolve()
+      const existing = document.querySelector<HTMLScriptElement>(`script[data-plugin-config-panel="${url}"]`)!
+      if (existing.dataset.loaded === 'true') resolve()
+      else if (existing.dataset.failed === 'true') reject(new Error(t('自定义配置面板加载失败')))
+      else {
+        existing.addEventListener('load', () => resolve(), { once: true })
+        existing.addEventListener('error', () => reject(new Error(t('自定义配置面板加载失败'))), { once: true })
+      }
       return
     }
     const script = document.createElement('script')
     script.src = url
     script.dataset.pluginConfigPanel = url
-    script.onload = () => resolve()
-    script.onerror = () => reject(new Error(t("自定义配置面板加载失败：{0}", { 0: url })))
+    script.onload = () => { script.dataset.loaded = 'true'; resolve() }
+    script.onerror = () => { script.dataset.failed = 'true'; reject(new Error(t("自定义配置面板加载失败：{0}", { 0: url }))) }
     document.head.appendChild(script)
   })
 }
@@ -237,7 +268,8 @@ async function mountPanel(): Promise<void> {
     if (!module?.mount || !panelRoot.value) return
     panelActive.value = true
     await nextTick()
-    module.mount(panelRoot.value, {
+    if (panelController.signal.aborted) return
+    const cleanup = await module.mount(panelRoot.value, {
       plugin: {
         name: props.pluginName,
         version: props.version,
@@ -245,10 +277,16 @@ async function mountPanel(): Promise<void> {
       },
       config: { ...draft },
       schema: schema.value,
+      rpc: consentRpc(props.requestRpc, panelController.signal),
+      signal: panelController.signal,
       save: async (values: Record<string, unknown>) => {
         await save(values)
       },
     })
+    if (typeof cleanup === 'function') {
+      if (panelController.signal.aborted) cleanup()
+      else panelCleanup = cleanup
+    }
   } catch (cause) {
     panelActive.value = false
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -275,72 +313,232 @@ onMounted(async () => {
 
 <style scoped>
 .plugin-config-panel {
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
-  border-radius: var(--radius);
-  padding: 10px 12px;
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--settings-main-text, var(--text));
 }
 
 .config-identity {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
+}
+
+.config-identity strong {
+  font-size: 13px;
 }
 
 .config-version {
-  font-size: 12px;
-  opacity: 0.6;
+  color: color-mix(in srgb, var(--settings-main-text, var(--text)) 48%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
 }
 
 .config-description {
   margin: 0;
-  font-size: 12px;
-  opacity: 0.8;
+  color: color-mix(in srgb, var(--settings-main-text, var(--text)) 60%, transparent);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.config-error,
+.config-notice {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 .config-error {
-  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 24%, transparent);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  color: color-mix(in srgb, var(--red) 68%, var(--settings-main-text, var(--text)));
 }
 
 .config-notice {
-  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 22%, transparent);
+  background: color-mix(in srgb, var(--green) 7%, transparent);
+  color: color-mix(in srgb, var(--green) 58%, var(--settings-main-text, var(--text)));
+}
+
+.config-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: color-mix(in srgb, var(--settings-main-text, var(--text)) 52%, transparent);
+  font-size: 11.5px;
+}
+
+.config-loading-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: config-loading-pulse 1.3s var(--ease-out) infinite;
 }
 
 .config-form {
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
 }
 
 .config-field {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.config-label-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .config-label {
+  color: color-mix(in srgb, var(--settings-main-text, var(--text)) 78%, transparent);
+  font-size: 11.5px;
+  font-weight: 640;
+}
+
+/* 下拉复用 UiSelect，只把控件色映射到设置卡片，避免亮底按钮混在暗色表单里。 */
+.config-select {
+  --settings-control-solid: var(--settings-card-background, #1b1c1c);
+  --settings-control-text: var(--settings-main-text, var(--text));
+}
+
+.config-select :deep(.ui-select-trigger) {
+  min-height: 32px;
   font-size: 12px;
-  opacity: 0.8;
 }
 
 .config-input {
   width: 100%;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--text)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--text)) 3.5%, transparent);
+  color: var(--settings-main-text, var(--text));
+  font: inherit;
+  font-size: 12px;
+}
+
+textarea.config-input {
+  min-height: 64px;
+  padding: var(--space-2);
+  resize: vertical;
+  line-height: 1.5;
+}
+
+/* 布尔项排成一行：说明在左，选中键在右，不再把复选框单独丢到下一行。 */
+.config-field.is-boolean {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+}
+
+.config-field.is-boolean .config-label-row {
+  grid-column: 1;
+}
+
+.config-field.is-boolean .config-checkbox {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .config-checkbox {
-  width: auto;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  display: grid;
+  place-content: center;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--text)) 26%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--text)) 5%, transparent);
+  color: var(--settings-main-text, var(--text));
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
-.config-textarea {
-  resize: vertical;
+.config-checkbox::before {
+  content: '';
+  width: 10px;
+  height: 5px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg) scale(0);
+  transform-origin: center;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.config-checkbox:hover {
+  border-color: color-mix(in srgb, var(--settings-main-text, var(--text)) 42%, transparent);
+}
+
+.config-checkbox:checked {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--green) 76%, var(--settings-card-background, #1b1c1c));
+}
+
+.config-checkbox:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+
+.config-checkbox:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 
 .config-hint {
-  font-size: 11px;
-  opacity: 0.6;
+  color: color-mix(in srgb, var(--settings-main-text, var(--text)) 46%, transparent);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.config-empty {
+  margin: 0;
+  padding: var(--space-2) 0;
+  color: color-mix(in srgb, var(--settings-main-text, var(--text)) 50%, transparent);
+  font-size: 11.5px;
 }
 
 .config-actions {
   display: flex;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.config-actions .small-btn:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.config-custom-panel[hidden] {
+  display: none;
+}
+
+@keyframes config-loading-pulse {
+  0%, 100% { opacity: .35; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-loading-dot {
+    animation: none;
+  }
+
+  .config-checkbox,
+  .config-checkbox::before {
+    transition: none;
+  }
 }
 </style>

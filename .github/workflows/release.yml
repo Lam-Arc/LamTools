@@ -113,14 +113,15 @@ jobs:
         shell: pwsh
         run: |
           $plugins = "core/dist/LamCore/_internal/resources/plugins/bundled"
-          foreach ($name in @("emotion-ball-pet", "workflow")) {
+          # user:“网络拓展作为新的内置插件，其他不作为新的内置插件”+(CI 与本地打包验证同一边界)。
+          foreach ($name in @("workflow", "qq-bot", "bili-scroll", "excalidraw")) {
             $excluded = "$plugins/$name"
             if (Test-Path -LiteralPath $excluded) {
               Write-Error "Excluded bundled plugin must not be embedded in the installer: $excluded"
               exit 1
             }
           }
-          foreach ($name in @("git", "imagegen", "websearch")) {
+          foreach ($name in @("imagegen", "websearch", "network-exploration")) {
             $required = "$plugins/$name"
             if (-not (Test-Path -LiteralPath $required)) {
               Write-Error "Required bundled plugin is missing: $required"
@@ -181,10 +182,15 @@ jobs:
           python -c "import websockets" 2>$null
           if ($LASTEXITCODE -ne 0) { pip install websockets }
           python scripts/verify-backend-ws.py --exe "core/dist/LamCore/LamCore.exe" --port $((Get-Random -Minimum 5300 -Maximum 5900))
+
           if ($LASTEXITCODE -ne 0) {
             Write-Error "WebSocket smoke test failed — missing websockets/wsproto in bundle?"
             exit 1
           }
+
+      # user:“安装的时候直接从 GitHub 上”+(发布前使用隔离数据目录验证实际市场安装和更新，不携带账号凭据)。
+      - name: Verify GitHub plugin market against packaged backend
+        run: python scripts/verify-plugin-market.py --exe "core/dist/LamCore/LamCore.exe"
 
       # ---------- 3. Tauri 只构建应用，不调用官方 NSIS bundler ----------
       - name: Build Tauri application executable
@@ -253,7 +259,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe
+          files: |
+            core/desktop/src-tauri/target/release/bundle/inno/Sunday_*_x64-setup.exe
+            core/desktop/src-tauri/target/release/bundle/inno/desktop-update.json
           generate_release_notes: true
           fail_on_unmatched_files: true
           # A hyphenated tag (v0.3.7-beta.1) is a test build. Without this it

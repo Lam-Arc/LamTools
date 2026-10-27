@@ -21,6 +21,8 @@ const year = new Date().getFullYear()
         <a href="#product">产品</a>
         <a href="#capabilities">能力</a>
         <a href="#download">下载</a>
+        <!-- user:“实现这个插件，也正好实验我们的新插件架构”+(官网提供当前版本的网络插件使用说明)。 -->
+        <a href="/docs/network-exploration.md">网络拓展文档</a>
       </nav>
       <p>© {{ year }} LamTools</p>
     </div>

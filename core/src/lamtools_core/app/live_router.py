@@ -962,7 +962,7 @@ class CoreLiveConnection:
                 params = {**params}
                 params.pop("approval_policy", None)
                 params.pop("approvalPolicy", None)
-        if method in {"approval.respond", "session.permissions.set"}:
+        if method in {"approval.respond", "session.permissions.set", "session.composer.set"}:
             # Bind the response to the subscribed thread: a connection may
             # only answer an approval request for the thread it is watching.
             thread_id = _thread_id_from_params(params)
@@ -1010,6 +1010,7 @@ def _normalize_method(method: str) -> str:
         "turn/steer": "turn.steer",
         "approval/respond": "approval.respond",
         "session/permissions/set": "session.permissions.set",
+        "session/composer/set": "session.composer.set",
         "queue/create": "queue.create",
         "queue/update": "queue.update",
         "queue/delete": "queue.delete",

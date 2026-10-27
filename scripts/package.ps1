@@ -53,7 +53,8 @@ try {
         exit 1
     }
     $BundledPluginsDir = "$Root\core\dist\LamCore\_internal\resources\plugins\bundled"
-    foreach ($ExcludedPlugin in @("emotion-ball-pet", "workflow")) {
+    # user:“网络拓展作为新的内置插件，其他不作为新的内置插件”+(市场插件永不进入主程序安装包)。
+    foreach ($ExcludedPlugin in @("workflow", "qq-bot", "bili-scroll", "excalidraw")) {
         $ExcludedPluginDir = "$BundledPluginsDir\$ExcludedPlugin"
         if (Test-Path -LiteralPath $ExcludedPluginDir) {
             Write-Host "[FAIL] Excluded bundled plugin was embedded in the backend bundle: $ExcludedPluginDir" -ForegroundColor Red
@@ -62,7 +63,7 @@ try {
     }
     # user:“git 插件删掉，run_command 就能做”+git 已随插件系统重构删除，
     # 必需清单同步为 imagegen / websearch（与 test_bundled_plugins 断言一致）。
-    foreach ($RequiredPlugin in @("imagegen", "websearch")) {
+    foreach ($RequiredPlugin in @("imagegen", "websearch", "network-exploration")) {
         $RequiredPluginDir = "$BundledPluginsDir\$RequiredPlugin"
         if (-not (Test-Path -LiteralPath $RequiredPluginDir)) {
             Write-Host "[FAIL] Required bundled plugin is missing: $RequiredPluginDir" -ForegroundColor Red

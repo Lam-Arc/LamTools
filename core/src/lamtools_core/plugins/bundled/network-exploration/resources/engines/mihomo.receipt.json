@@ -1,0 +1,11 @@
+{
+  "binary": "mihomo",
+  "repo": "MetaCubeX/mihomo",
+  "version": "v1.19.33",
+  "asset": "mihomo-windows-amd64-compatible-v1.19.33.zip",
+  "sha256": "7aaf636a4f2172dcd8ec34ac4f52797b059195e5afd6409508c963e545f8864d",
+  "license": "GPL-3.0",
+  "checksum_source": "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v1.19.33",
+  "source": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-windows-amd64-compatible-v1.19.33.zip",
+  "binary_sha256": "926bfea2ce48a247d6a7ce4cf641980e416202d5e40fe4ee5c949089ace0e197"
+}

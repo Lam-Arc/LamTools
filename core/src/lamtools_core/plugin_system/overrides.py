@@ -47,6 +47,9 @@ class OverrideAssembly:
 
 def _validate_target(plugin: str, value: Any) -> str:
     target = str(value or "").strip()
+    from lamtools_boot.contract import protected_target
+    if protected_target(target):
+        raise CapabilityError(plugin, f"recovery kernel cannot be overridden: {target}")
     if target.startswith(FRONTEND_KEY_PREFIX):
         return target
     if not target.startswith(HOST_MODULE_PREFIX):

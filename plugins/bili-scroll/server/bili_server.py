@@ -10,6 +10,8 @@ ValueError 转成可读文本返回，模型据此决定下一步。
 
 from __future__ import annotations
 
+from functools import wraps
+from typing import Any
 import asyncio
 import json
 import sys
@@ -31,6 +33,8 @@ def _json(value: Any) -> str:
 def _guard(func):
     """ValueError（预期失败）转可读文本；其余异常带类型原样抛出。"""
 
+    # user:“该修修”+(保留原始签名，协议能正确发现每个工具的参数)。
+    @wraps(func)
     async def wrapper(*args, **kwargs):
         try:
             return await func(*args, **kwargs)
@@ -123,7 +127,7 @@ async def dm_inbox() -> str:
 @_guard
 async def transcribe(bvid: str) -> str:
     """本地转写一条无字幕视频的语音为文字（慢，分钟级）。需要先装转写依赖（Whisper）并配置登录凭证；未就绪时返回缺什么。"""
-    from .transcribe import run_transcribe  # 延迟导入：转写依赖单独装
+    from transcribe import run_transcribe  # 延迟导入：转写依赖单独装
 
     return await run_transcribe(bvid)
 

@@ -38,7 +38,7 @@ def resolve_plugin_asset(
     path must stay inside that plugin's root.
     """
     plugin = host.get(plugin_name)
-    if plugin is None or not plugin.enabled:
+    if plugin is None or not host.available(plugin_name):
         return None
     root = plugin.root.resolve()
     target = (root / asset_path).resolve()

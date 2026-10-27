@@ -36,21 +36,29 @@ function stubTauri() {
   return invoke
 }
 
+const wrappers: Array<ReturnType<typeof mount>> = []
+
+function mountEditor(rpc: ReturnType<typeof makeRpc>) {
+  const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: rpc } })
+  wrappers.push(wrapper)
+  return wrapper
+}
+
 afterEach(() => {
+  while (wrappers.length) wrappers.pop()?.unmount()
   delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  vi.restoreAllMocks()
 })
 
 describe('plugin system windows', () => {
   it('opens a declared window through the desktop host', async () => {
     const invoke = stubTauri()
-    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: makeRpc() } })
+    const wrapper = mountEditor(makeRpc())
     await flushPromises()
 
-    const button = wrapper
-      .findAll('button.small-btn')
-      .find((item) => item.text().includes('Hello 面板'))
-    expect(button).toBeTruthy()
-    await button!.trigger('click')
+    const button = wrapper.get('[data-window-for="hello"]')
+    expect(button.text()).toContain('Hello 面板')
+    await button.trigger('click')
     await flushPromises()
 
     expect(invoke).toHaveBeenCalledWith('open_plugin_window', {
@@ -62,24 +70,19 @@ describe('plugin system windows', () => {
     })
   })
 
-  it('shows no window button when nothing is declared', async () => {
+  it('shows no window entry when nothing is declared', async () => {
     stubTauri()
-    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: makeRpc([]) } })
+    const wrapper = mountEditor(makeRpc([]))
     await flushPromises()
 
-    const labels = wrapper.findAll('button.small-btn').map((item) => item.text())
-    // 安装表单（安装/更新）与行内按钮（禁用/配置/依赖）；没有窗口按钮。
-    expect(labels).toEqual(['安装', '更新（同名替换，data 保留）', '禁用', '配置', '依赖', '查询'])
+    expect(wrapper.find('[data-window-for]').exists()).toBe(false)
   })
 
   it('keeps working without a desktop host and reports the limitation', async () => {
-    const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc: makeRpc() } })
+    const wrapper = mountEditor(makeRpc())
     await flushPromises()
 
-    const button = wrapper
-      .findAll('button.small-btn')
-      .find((item) => item.text().includes('Hello 面板'))
-    await button!.trigger('click')
+    await wrapper.get('[data-window-for="hello"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('插件窗口只能在桌面端打开')

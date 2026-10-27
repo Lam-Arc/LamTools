@@ -13,7 +13,7 @@ PACKAGE_SCRIPT = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
 RELEASE_WORKFLOW = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 RELEASE_SKILL = (ROOT / ".agents" / "skills" / "release-lamtools" / "SKILL.md").read_text(encoding="utf-8")
 
-EXCLUDED_PLUGINS = {"emotion-ball-pet", "workflow"}
+EXCLUDED_PLUGINS = {"workflow"}
 
 
 def _spec_excluded_plugins(spec: str) -> set[str]:
@@ -34,17 +34,16 @@ def test_spec_embeds_manifest_declared_websearch_python_handler() -> None:
 
 
 def test_local_packaging_boundary_checks_excluded_and_required_plugins() -> None:
-    assert 'foreach ($ExcludedPlugin in @("emotion-ball-pet", "workflow"))' in PACKAGE_SCRIPT
+    assert 'foreach ($ExcludedPlugin in @("workflow"))' in PACKAGE_SCRIPT
     assert 'foreach ($RequiredPlugin in @("git", "imagegen", "websearch"))' in PACKAGE_SCRIPT
 
 
 def test_release_workflow_boundary_checks_excluded_and_required_plugins() -> None:
-    assert 'foreach ($name in @("emotion-ball-pet", "workflow"))' in RELEASE_WORKFLOW
+    assert 'foreach ($name in @("workflow"))' in RELEASE_WORKFLOW
     assert 'foreach ($name in @("git", "imagegen", "websearch"))' in RELEASE_WORKFLOW
 
 
 def test_release_skill_documents_the_same_plugin_boundary() -> None:
-    assert "`resources/plugins/bundled/emotion-ball-pet`" in RELEASE_SKILL
     assert "`resources/plugins/bundled/workflow`" in RELEASE_SKILL
     required_line = re.search(r"(?m)^- Still contains (.+)$", RELEASE_SKILL)
     assert required_line, "release skill must explicitly list the required bundled plugins"

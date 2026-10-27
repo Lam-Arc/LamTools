@@ -5941,3 +5941,96 @@ class TestStaleFailureDetail:
         assert failed == []
         done = [e for e in sink.events if e.name == "runtime.done"]
         assert done and "failure_code" not in done[0].payload
+
+
+class TestKernelRuntimeSettings:
+    """user:“模式、权限、思考强度在下一步生效（即时生效）”
+
+    The kernel pulls the newest composer patch at each step boundary, before
+    the next prompt/tool array/model request is built.
+    """
+
+    @pytest.mark.asyncio
+    async def test_settings_patch_applies_before_the_next_model_request(self):
+        calls = {"model": 0}
+
+        class _CountingLLM(MockLLMClient):
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                calls["model"] += 1
+                return await super().complete(request)
+
+        class _SettingsKit(MockRuntimeKit):
+            def __init__(self) -> None:
+                super().__init__(steps=[MockKitStep(decision="continue"), MockKitStep(decision="done")])
+                self.applied: list[dict[str, Any]] = []
+                self.order: list[str] = []
+
+            async def build_model_request(self, state, context):
+                self.order.append("build")
+                return await super().build_model_request(state, context)
+
+            def apply_runtime_settings(self, state, patch):
+                self.order.append("apply")
+                self.applied.append(dict(patch))
+                return set(patch)
+
+        def source(applied_generation: int):
+            # Nothing newer before the first model call; after it, the user
+            # changed the thinking level while the turn was running.
+            if calls["model"] >= 1 and applied_generation == 0:
+                return 1, {"reasoning_level": "high"}
+            return None
+
+        kit = _SettingsKit()
+        kernel = _make_kernel(kit, llm_client=_CountingLLM())
+        turn_input = RuntimeTurnInput(
+            user_message="hello",
+            metadata={"session_id": "test-session"},
+            settings_source=source,
+        )
+
+        await kernel.run(turn_input)
+
+        assert kit.applied == [{"reasoning_level": "high"}]
+        assert kit.order == ["build", "apply", "build"]
+        # The same generation is never applied twice.
+        assert len(kit.applied) == 1
+
+    @pytest.mark.asyncio
+    async def test_mode_change_resets_the_frozen_tool_array(self):
+        from lamtools_core.app.tool_freeze import (
+            freeze_tool_specs,
+            frozen_tool_names,
+            reset_tool_freeze_cache,
+        )
+
+        class _ModeKit(MockRuntimeKit):
+            def apply_runtime_settings(self, state, patch):
+                return {"active_mode"}
+
+        reset_tool_freeze_cache()
+        freeze_tool_specs(
+            "test-session",
+            "static",
+            [{"type": "function", "function": {"name": "write_file"}}],
+        )
+        assert frozen_tool_names("test-session", "static") == {"write_file"}
+
+        def source(applied_generation: int):
+            if applied_generation == 0:
+                return 1, {"active_mode": "consider"}
+            return None
+
+        kit = _ModeKit(steps=[MockKitStep(decision="continue"), MockKitStep(decision="done")])
+        kernel = _make_kernel(kit)
+        await kernel.run(
+            RuntimeTurnInput(
+                user_message="hello",
+                metadata={"session_id": "test-session"},
+                settings_source=source,
+            )
+        )
+
+        # The next request must advertise the new mode's tools, so the old
+        # frozen array has to be dropped.
+        assert frozen_tool_names("test-session", "static") is None

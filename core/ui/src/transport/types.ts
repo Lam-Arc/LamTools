@@ -75,6 +75,8 @@ export interface TransportMessage {
 }
 
 export interface LamToolsTransport {
+  /** user:“辅助对话”+(侧屏使用独立连接，订阅和关闭都不影响主聊天)。 */
+  fork?(): LamToolsTransport
   connect(): Promise<void>
   close(): Promise<void> | void
   request<TResponse = unknown>(request: TransportRequest): Promise<TResponse>

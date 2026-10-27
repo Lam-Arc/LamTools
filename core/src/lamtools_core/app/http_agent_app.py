@@ -12,9 +12,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 import logging
-from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request
 from fastapi.responses import FileResponse
 
 from lamtools_core.cli import (
@@ -46,7 +45,6 @@ from lamtools_core.runtime.persistent_process_store import PersistentProcessStor
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
 from lamtools_core.plugin_system import (
-    PluginHost,
     PluginSessionVisibility,
     bundled_plugins_dir,
     shutdown_plugin_backends,
@@ -56,7 +54,6 @@ from lamtools_core.config.root import core_plugins_root
 from .base_agent import DEFAULT_CORE_INSTRUCTIONS, default_core_agent_plugin_roots
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
-from .desktop_plugin_session_store import DesktopPluginSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
 from .event_store import AppEventInput
@@ -372,8 +369,6 @@ def create_core_agent_http_app(
         session_visible=plugin_session_visibility,
         fallback_work_root=resolved_work_root,
     )
-    desktop_plugin_session_store = DesktopPluginSessionStore(resolved_data_dir / "desktop-plugin-sessions.json")
-    desktop_plugin_session_lock = asyncio.Lock()
 
     async def execute_core_operation(request: OperationRequest) -> OperationResult:
         actual = app_state.get("operations")
@@ -801,6 +796,16 @@ def create_core_agent_http_app(
     )
     app.include_router(create_core_live_router(live_context), prefix="/api/core")
 
+    # user:“该调的模块就是该写的东西”+(独立插件窗口走同一操作目录与后端状态)。
+    from lamtools_core.plugin_system.http import create_plugin_router
+    app.include_router(create_plugin_router(lambda: app_state.get("plugin_system_host"), lambda: app_state.get("operations")), prefix="/api/core")
+    # user:“该做就做”+(插件声明的 webhook/OAuth 回调由宿主统一鉴权和分发)。
+    from lamtools_core.plugin_system.plugin_http import create_plugin_http_router
+    app.include_router(
+        create_plugin_http_router(lambda: app_state.get("plugin_system_host"), lambda: app_state.get("operations")),
+        prefix="/api/core",
+    )
+
     @app.get("/api/core/config/models")
     async def list_config_models() -> dict[str, Any]:
         return {"models": list_llm_model_configs()}
@@ -808,119 +813,6 @@ def create_core_agent_http_app(
     @app.get("/api/core/config/providers")
     async def list_config_providers() -> dict[str, Any]:
         return {"providers": _list_llm_provider_configs()}
-
-    async def _desktop_plugin_entries(*, enabled_only: bool = True) -> list[dict[str, Any]]:
-        # user:“桌宠改成窗口插件”+桌面插件列表只由新系统的 ui.windows 声明
-        # 驱动，不再经过旧 plugin.list。
-        host = app_state.get("plugin_system_host")
-        if not isinstance(host, PluginHost):
-            return []
-        from lamtools_core.plugin_system.ui import assemble_ui
-
-        manifests = host.discover()
-        by_name = {item.name: item for item in manifests}
-        entries: list[dict[str, Any]] = []
-        for window in assemble_ui(manifests).windows:
-            manifest = by_name.get(window.plugin)
-            if manifest is None:
-                continue
-            entries.append(
-                {
-                    "name": window.plugin,
-                    "enabled": manifest.enabled,
-                    "available": manifest.enabled,
-                    "desktop": {
-                        "entry": str(window.entry),
-                        "title": window.title,
-                        "fileDrop": window.file_drop,
-                        "window": dict(window.window),
-                    },
-                }
-            )
-        return [
-            item
-            for item in entries
-            if not enabled_only or item.get("enabled") is True
-        ]
-
-    @app.get("/api/core/desktop-plugins")
-    async def list_desktop_plugins() -> dict[str, Any]:
-        plugins: list[dict[str, Any]] = []
-        for item in await _desktop_plugin_entries():
-            desktop = dict(item["desktop"])
-            entry = Path(str(desktop.get("entry") or ""))
-            if not entry.is_file():
-                continue
-            name = str(item.get("name") or "")
-            plugins.append({
-                "name": name,
-                "title": str(desktop.get("title") or name),
-                "entry_url": (
-                    f"/api/core/desktop-plugins/{quote(name, safe='')}/assets/"
-                    f"{quote(entry.name, safe='')}"
-                ),
-                "window": desktop.get("window") if isinstance(desktop.get("window"), dict) else {},
-                "fileDrop": desktop.get("fileDrop") is True,
-            })
-        return {"plugins": plugins}
-
-    @app.post("/api/core/desktop-plugins/{plugin_id}/session")
-    async def ensure_desktop_plugin_session(plugin_id: str) -> dict[str, Any]:
-        plugin_id = str(plugin_id).strip()
-        candidates = await _desktop_plugin_entries(enabled_only=False)
-        plugin = next(
-            (item for item in candidates if str(item.get("name") or "") == plugin_id),
-            None,
-        )
-        if plugin is None or plugin.get("enabled") is not True:
-            raise HTTPException(status_code=404, detail="Enabled desktop plugin not found")
-
-        async with desktop_plugin_session_lock:
-            mapped_session_id = desktop_plugin_session_store.get(plugin_id)
-            if mapped_session_id:
-                existing = await session_store.get(mapped_session_id)
-                if existing is not None:
-                    return {
-                        "plugin_id": plugin_id,
-                        "session_id": existing.id,
-                        "created": False,
-                        "session": existing.to_dict(),
-                    }
-                desktop_plugin_session_store.delete(plugin_id)
-
-            desktop = plugin.get("desktop") if isinstance(plugin.get("desktop"), dict) else {}
-            record = build_session_record(
-                member_id=runtime_spec.member_id,
-                title=str(desktop.get("title") or plugin_id),
-                metadata={"desktop_plugin_id": plugin_id, "source": "desktop_plugin"},
-            )
-            await session_store.create(record)
-            desktop_plugin_session_store.set(plugin_id, record.id)
-            return {
-                "plugin_id": plugin_id,
-                "session_id": record.id,
-                "created": True,
-                "session": record.to_dict(),
-            }
-
-    @app.get("/api/core/desktop-plugins/{plugin_name}/assets/{asset_path:path}")
-    async def desktop_plugin_asset(plugin_name: str, asset_path: str) -> FileResponse:
-        plugin = next(
-            (item for item in await _desktop_plugin_entries() if str(item.get("name") or "") == plugin_name),
-            None,
-        )
-        if plugin is None:
-            raise HTTPException(status_code=404, detail="Desktop plugin not found")
-        desktop = plugin.get("desktop")
-        entry = Path(str(desktop.get("entry") or "")).resolve() if isinstance(desktop, dict) else Path()
-        desktop_root = entry.parent
-        target = (desktop_root / asset_path).resolve()
-        if not target.is_relative_to(desktop_root) or not target.is_file():
-            raise HTTPException(status_code=404, detail="Desktop plugin asset not found")
-        # Desktop plugins can be updated independently while Core keeps the
-        # same loopback route. Do not let WebView2 pin stale HTML/JS in its
-        # memory cache across host reloads.
-        return FileResponse(target, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/core/plugin-system/{plugin_name}/assets/{asset_path:path}")
     async def plugin_system_asset(plugin_name: str, asset_path: str) -> FileResponse:
@@ -960,6 +852,72 @@ def create_core_agent_http_app(
         record = await attachment_store().create(session_id, file.filename or "attachment", await file.read(), file.content_type)
         await register_uploaded_artifact(record, project_id)
         return record
+
+    @app.post("/api/core/sessions/{session_id}/attachments/reference")
+    async def reference_attachment(session_id: str, request: Request, project_id: str | None = Query(default=None)) -> dict[str, Any]:
+        # user:“若此附件真实存在于计算机则添加绝对路径”+(桌面原件只登记，不经 multipart 复制)。
+        payload = await request.json()
+        try:
+            record = await attachment_store().reference(session_id, str(payload.get("path") or ""))
+        except (LookupError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await register_uploaded_artifact(record, project_id)
+        return record
+
+    @app.get("/api/core/projects/{project_id}/references")
+    async def search_file_references(project_id: str, q: str = "") -> dict[str, Any]:
+        # user:“比如空格加/@#触发”+(文件补全来自真实工作区和 Library，扫描有明确数量上限)。
+        import os
+        project = await app_state["core_db"].project_store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        root = Path(project.work_root).resolve()
+        records = await app_state["core_db"].artifact_store.list(project_id)
+        def search():
+            found = {}
+            query = q.casefold()
+            def add(path, name):
+                candidate = Path(path)
+                if candidate.is_absolute() and candidate.is_file() and query in (name + ' ' + str(path)).casefold():
+                    found[str(candidate.resolve())] = {"name": name, "path": candidate.resolve().as_posix()}
+            for record in records:
+                raw = record.path
+                add(root / raw.removeprefix("workspace://") if raw.startswith("workspace://") else raw, record.name)
+            visited = 0
+            for folder, dirs, files in os.walk(root):
+                dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d not in {'node_modules', 'target', 'dist', '__pycache__'})
+                for name in sorted(files):
+                    visited += 1
+                    add(Path(folder) / name, name)
+                    if visited >= 5000 or len(found) >= 30:
+                        return list(found.values())[:30]
+            return list(found.values())[:30]
+        import asyncio
+        return {"items": await asyncio.to_thread(search)}
+
+    @app.get("/api/core/files/read-reference")
+    async def read_file_reference(path: str) -> FileResponse:
+        # user:“‘@文件名’实际为一个 绝对地址”+(恢复后的消息仍可按原路径预览，不依赖旧 UI 附件状态)。
+        import mimetypes
+        candidate = Path(path)
+        if not candidate.is_absolute() or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="原文件不存在")
+        return FileResponse(candidate, media_type=mimetypes.guess_type(candidate.name)[0], filename=candidate.name)
+
+    @app.post("/api/core/files/open-reference")
+    async def open_file_reference(request: Request) -> dict[str, Any]:
+        # user:“使用默认应用打开文件、打开文件夹、复制路径”+(桌面文件操作统一走真实绝对路径)。
+        import asyncio
+        from lamtools_core.attachment.files import open_with_default_app
+        payload = await request.json()
+        path = Path(str(payload.get("path") or ""))
+        if not path.is_absolute() or not (path.parent.is_dir() if payload.get("reveal") else path.is_file()):
+            raise HTTPException(status_code=404, detail="原文件不存在")
+        try:
+            await asyncio.to_thread(open_with_default_app, path.parent if payload.get("reveal") else path)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "opened"}
 
     @app.post("/api/core/projects/{project_id}/artifacts")
     async def upload_project_artifact(
@@ -1029,31 +987,27 @@ def create_core_agent_http_app(
         return FileResponse(target, media_type=record.mime_type or None, filename=record.name)
 
     async def register_uploaded_artifact(record: dict[str, Any], project_id: str | None) -> None:
-        """上传即登记为项目输入 Artifact（best-effort，失败不影响上传）。"""
+        # user:“然后将索引加入libary”+(登记是添加附件的一部分，失败必须显示，不能静默丢失)。
+        store: ArtifactStore = app_state["core_db"].artifact_store
         if not project_id:
-            return
-        artifact_id = str(record.get("id") or "")
-        if not artifact_id:
-            return
+            project_id = await store.resolve_project_id(resolved_work_root)
+        project = await app_state["core_db"].project_store.get(project_id) if project_id else None
+        if project is None:
+            raise HTTPException(status_code=400, detail="无法确定附件所属项目")
+        artifact_id = str(record["id"])
         try:
-            project = await app_state["core_db"].project_store.get(project_id)
-            if project is None:
-                return
-            store: ArtifactStore = app_state["core_db"].artifact_store
-            await store.register(
-                project_id=project_id,
-                work_root=project.work_root,
+            registered = await store.register(
+                project_id=project.id, work_root=project.work_root,
                 kind=kind_from_mime(str(record.get("mime_type") or "")),
                 mime_type=str(record.get("mime_type") or ""),
                 name=str(record.get("filename") or artifact_id),
-                path=f"attachment://{artifact_id}",
-                source="user_upload",
-                role="input",
-                preferred_id=artifact_id,
+                path=str(record.get("path") or f"attachment://{artifact_id}"),
+                source="user_upload", role="input", preferred_id=artifact_id,
                 provenance={"attachment_id": artifact_id},
             )
-        except Exception:  # noqa: BLE001 — registration must never break uploads
-            pass
+            record["artifact_id"] = registered.artifact_id
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="附件索引登记失败：" + str(exc)) from exc
 
     @app.get("/api/core/sessions/{session_id}/attachments")
     async def list_attachments(session_id: str) -> dict[str, Any]:
@@ -1356,7 +1310,8 @@ def _register_core_artifact_operations(
         root = Path(project.work_root).resolve()
         candidate = (root / artifact_path.removeprefix("workspace://")).resolve()
         try:
-            candidate.relative_to(root)
+            if record is None:
+                candidate.relative_to(root)
             if not candidate.is_file():
                 raise FileNotFoundError(candidate)
             from lamtools_core.attachment import open_with_default_app
@@ -2424,7 +2379,11 @@ def _list_llm_provider_configs() -> list[dict[str, Any]]:
     ]
 
 
-def create_default_core_agent_http_app(*, access_policy: CoreApiAccessPolicy | None = None) -> FastAPI:
+def create_default_core_agent_http_app(
+    *,
+    access_policy: CoreApiAccessPolicy | None = None,
+    frontend_dir: Path | str | None = None,
+) -> FastAPI:
     # No built-in "default-model" anymore: empty model_id means "unconfigured",
     # and the app boots with a placeholder until the user sets up a model.
     model_id = os.environ.get("LAMTOOLS_CORE_MODEL_ID") or ""
@@ -2433,6 +2392,7 @@ def create_default_core_agent_http_app(*, access_policy: CoreApiAccessPolicy | N
     work_root = os.environ.get("LAMTOOLS_CORE_WORK_ROOT") or None
     return create_core_agent_http_app(
         access_policy=access_policy,
+        frontend_dir=frontend_dir,
         model_id=model_id,
         core_db=core_db,
         data_dir=data_dir,

@@ -33,8 +33,8 @@
       <p v-if="notes" class="core-update-card__notes" data-update-notes>{{ notes }}</p>
 
       <div v-if="installBusy || downloaded" class="core-update-card__progress" data-update-progress>
-        <div class="core-update-card__bar" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
-          <span class="core-update-card__fill" :style="{ width: `${percent}%` }" />
+        <div class="core-update-card__bar sunday-progress" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
+          <span class="core-update-card__fill sunday-progress__fill" :style="{ width: `${percent}%` }" />
         </div>
         <span class="core-update-card__percent" data-update-percent>{{ percentLabel }}</span>
       </div>
@@ -333,19 +333,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
-}
-.core-update-card__bar {
-  height: 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--theme-main-text, var(--text)) 12%, transparent);
-  overflow: hidden;
-}
-.core-update-card__fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--theme-control-background, color-mix(in srgb, var(--theme-main-text, var(--text)) 70%, transparent));
-  transition: width 200ms var(--ease-out);
 }
 .core-update-card__percent {
   color: color-mix(in srgb, var(--theme-main-text, var(--text)) 72%, transparent);

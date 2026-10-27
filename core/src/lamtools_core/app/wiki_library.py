@@ -7,9 +7,19 @@ user:“wiki 内置进 library，作为方案/记忆之外的第四项”+版本
 
 from __future__ import annotations
 
+import posixpath
+import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
+
+# user:“wiki中的UI并没有良好的表现层级关系，建议以左侧以窄栏显示文件层级”+
+# README 就是随包文档手写的目录：按它的 H2 分类和链接顺序生成左栏层级。
+_README_SLUG = "README"
+_HEADING_RE = re.compile(r"^(#{2,6})\s+(.+?)\s*$")
+_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
 def wiki_root() -> Path:
@@ -69,6 +79,94 @@ def scan_wiki() -> list[dict[str, Any]]:
     return articles
 
 
+def _wiki_slug_from_link(target: str, base_dir: str = "") -> str:
+    """README 里的链接 → 文章 slug；不是 wiki 内的 markdown 就返回空串。"""
+    path = target.split("#", 1)[0].split("?", 1)[0].strip()
+    if not path:
+        return ""
+    path = unquote(path).replace("\\", "/")
+    if path.startswith("/"):
+        joined = path.lstrip("/")
+    else:
+        joined = posixpath.join(base_dir, path) if base_dir else path
+    normalized = posixpath.normpath(joined)
+    if normalized.startswith("../") or normalized == ".." or not normalized.lower().endswith(".md"):
+        return ""
+    slug = normalized[:-3]
+    return "" if slug == _README_SLUG else slug
+
+
+def _fallback_groups(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """没有 README 时按所在目录分组，保证左栏仍有层级可看。"""
+    buckets: dict[str, list[str]] = {}
+    for article in articles:
+        slug = str(article.get("slug") or "")
+        if not slug or slug == _README_SLUG:
+            continue
+        section = str(article.get("section") or "")
+        buckets.setdefault(section, []).append(slug)
+    return [
+        {"id": f"group-{index}", "title": section or "文档", "articles": slugs}
+        for index, (section, slugs) in enumerate(buckets.items())
+    ]
+
+
+def wiki_tree(articles: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """随包 wiki 的导航树：README 的 H2 分类 → 文章列表。
+
+    返回 ``{"index": <索引 slug 或空串>, "groups": [{"id","title","articles"}]}``。
+    README 缺失或不可读时退回「按目录分组」，UI 不因缺少索引而空白。
+    """
+    root = wiki_root()
+    articles = articles if articles is not None else scan_wiki()
+    readme = root / f"{_README_SLUG}.md"
+    index_slug = _README_SLUG if readme.is_file() else ""
+    if not index_slug:
+        return {"index": "", "groups": _fallback_groups(articles)}
+
+    try:
+        text = readme.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {"index": "", "groups": _fallback_groups(articles)}
+
+    known = {str(article.get("slug") or "") for article in articles}
+    groups: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    current_title = ""
+    in_fence = False
+    for line in text.splitlines():
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        heading = _HEADING_RE.match(line)
+        if heading:
+            level = len(heading.group(1))
+            if level == 2:
+                current_title = heading.group(2).strip()
+                groups.append({"id": f"group-{len(groups)}", "title": current_title, "articles": []})
+            # 更深的小节（###/####）仍归在当前 H2 分类下，左栏保持两级。
+            continue
+        if not current_title:
+            continue
+        for target in _LINK_RE.findall(line):
+            slug = _wiki_slug_from_link(target)
+            if not slug or slug in seen or slug not in known:
+                continue
+            seen.add(slug)
+            groups[-1]["articles"].append(slug)
+
+    groups = [group for group in groups if group["articles"]]
+    # README 里没列到的文章不能丢：补到末尾的「其他文档」。
+    leftovers = sorted(known - seen - {_README_SLUG})
+    if leftovers:
+        groups.append({"id": f"group-{len(groups)}", "title": "其他文档", "articles": leftovers})
+    if not groups:
+        return {"index": "", "groups": _fallback_groups(articles)}
+    return {"index": index_slug, "groups": groups}
+
+
 def read_wiki_article(slug: str) -> dict[str, str]:
     root = wiki_root().resolve()
     target = (root / f"{str(slug).strip()}.md").resolve()
@@ -80,4 +178,4 @@ def read_wiki_article(slug: str) -> dict[str, str]:
     return {"slug": slug, "title": title, "content": text}
 
 
-__all__ = ["read_wiki_article", "scan_wiki", "wiki_root"]
+__all__ = ["read_wiki_article", "scan_wiki", "wiki_root", "wiki_tree"]

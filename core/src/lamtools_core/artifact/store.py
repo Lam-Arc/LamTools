@@ -13,6 +13,7 @@ import mimetypes
 import os
 import re
 import uuid
+from urllib.parse import urlsplit, urlunsplit, unquote
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ from lamtools_core.app.sqlite_write import SQLiteWriteCoordinator
 
 from .registry import ATTACHMENT_PREFIX, WORKSPACE_PREFIX, ArtifactRecord, kind_from_mime
 
-ELIGIBLE_OUTPUT_KINDS = {"file_change", "image"}
+ELIGIBLE_OUTPUT_KINDS = {"file_change", "image", "memory", "link"}
 EXCLUDED_KINDS = {
     "command_output", "file_read", "web_fetch", "web_fetch_content",
     "web_search", "web_search_result", "test_evidence", "verification",
@@ -220,7 +221,7 @@ class ArtifactStore:
             if not path:
                 canonical.append(raw)
                 continue
-            if _workspace_candidate(Path(work_root).resolve(), path) is None:
+            if not Path(path).is_absolute() and not _web_link(path) and _workspace_candidate(Path(work_root).resolve(), path) is None:
                 # An approved out-of-workspace file is not a project artifact:
                 # the library only means something inside the project.  Keep the
                 # tool's own entry (the file card still renders) instead of
@@ -302,21 +303,27 @@ class ArtifactStore:
             for raw in canonical
             if isinstance(raw, dict)
         }
+        previously_registered = {r.path: r for r in await self.list(project_id)}
         for candidate in _existing_workspace_paths(content, root):
-            relative = candidate.relative_to(root).as_posix()
-            workspace_path = f"{WORKSPACE_PREFIX}{relative}"
+            try:
+                relative = candidate.relative_to(root).as_posix()
+                workspace_path = f"{WORKSPACE_PREFIX}{relative}"
+            except ValueError:
+                relative = candidate.as_posix()
+                workspace_path = relative
             if relative in existing_paths or workspace_path in existing_paths:
                 continue
             mime_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+            previous = previously_registered.get(workspace_path)
             record = await self.register(
                 project_id=project_id,
                 work_root=root,
                 path=relative,
-                kind="file_change",
+                kind=previous.kind if previous else "file_change",
                 mime_type=mime_type,
                 name=candidate.name,
-                source="agent_generated",
-                role="deliverable",
+                source=previous.source if previous else "agent_generated",
+                role=previous.role if previous else "deliverable",
                 provenance={
                     "event_id": str(getattr(item, "event_id", "") or ""),
                     "thread_id": str(getattr(item, "thread_id", "") or ""),
@@ -328,7 +335,7 @@ class ArtifactStore:
             )
             canonical.append({
                 "artifact_id": record.artifact_id,
-                "kind": "file_change",
+                "kind": record.kind,
                 "name": record.name,
                 "path": record.path,
                 "uri": relative,
@@ -343,6 +350,21 @@ class ArtifactStore:
                 },
             })
             existing_paths.update({relative, workspace_path})
+        # user:“这一轮被操作进libary的文件、变更的memory”+(最终成果包含本轮已经登记的文件和记忆)。
+        provenance = {
+            "thread_id": str(getattr(item, "thread_id", "") or ""),
+            "turn_id": str(getattr(item, "turn_id", "") or ""),
+            "item_id": str(getattr(item, "item_id", "") or ""),
+            "tool_name": "agent_final_response",
+        }
+        for url in _output_links(content):
+            await self.register(project_id=project_id, work_root=root, path=url, kind="link", name=urlsplit(url).hostname or url, source="agent_generated", provenance=provenance)
+        known = {str(a.get("artifact_id") or "") for a in canonical if isinstance(a, dict)}
+        for record in await self.list(project_id):
+            if record.turn_id != provenance["turn_id"] or record.thread_id != provenance["thread_id"] or not record.turn_id or record.artifact_id in known:
+                continue
+            canonical.append({"artifact_id": record.artifact_id, "kind": record.kind, "name": record.name, "path": record.path, "uri": record.path, "mime_type": record.mime_type, "metadata": {"path": record.path, "mime_type": record.mime_type}})
+            known.add(record.artifact_id)
         item.artifacts = canonical
         return item
 
@@ -393,6 +415,8 @@ class ArtifactStore:
                 candidate = _safe_workspace_path(Path(record.work_root), relative)
             except ValueError:
                 return None
+        elif Path(path).is_absolute():
+            candidate = Path(path).resolve()
         else:
             return None
         return candidate if candidate.is_file() else None
@@ -533,6 +557,16 @@ def _normalize_path(work_root: Path, value: str) -> tuple[str, str, Path | None]
     if raw.startswith(ATTACHMENT_PREFIX):
         attachment_id = raw.removeprefix(ATTACHMENT_PREFIX).strip()
         return f"attachment:{attachment_id}", f"{ATTACHMENT_PREFIX}{attachment_id}", None
+    # user:“自动检验输出的 绝对地址和项目相对地址”+(绝对路径可指向项目外的真实文件)。
+    url = _web_link(raw)
+    if url:
+        return "url:" + url, url, None
+    if Path(raw).is_absolute():
+        candidate = Path(raw).resolve()
+        try:
+            candidate.relative_to(work_root)
+        except ValueError:
+            return "absolute:" + os.path.normcase(str(candidate)), candidate.as_posix(), candidate
     candidate = _workspace_candidate(work_root, raw)
     if candidate is None:
         raise ValueError("Artifact path escapes project")
@@ -615,6 +649,8 @@ def _artifact_record(row: CoreArtifact) -> ArtifactRecord:
 def _content_exists(row: CoreArtifact) -> bool:
     """工作区成果看文件在不在；附件与别的形态交给读取时判定。"""
     path = str(row.path or "")
+    if Path(path).is_absolute():
+        return Path(path).is_file()
     if not path.startswith(WORKSPACE_PREFIX):
         return True
     try:
@@ -633,6 +669,8 @@ def _existing_workspace_paths(content: str, root: Path) -> list[Path]:
         *(match.group(1) for match in _MARKDOWN_LINK_PATH.finditer(content)),
         *(match.group(1) for match in _INLINE_CODE_PATH.finditer(content)),
         *(match.group(1) for match in _WINDOWS_ABSOLUTE_PATH.finditer(content)),
+        *(line.strip().removeprefix("- ").strip('"') for line in content.splitlines()),
+        *re.findall(r"(?<![\w])(?:[\w.\u0080-\uffff-]+[/\\])*[\w.\u0080-\uffff-]+\.[A-Za-z0-9]{1,16}(?=$|[\s,;，。；])", content),
     ]
     resolved: list[Path] = []
     seen: set[str] = set()
@@ -642,17 +680,13 @@ def _existing_workspace_paths(content: str, root: Path) -> list[Path]:
             continue
         if value.startswith(WORKSPACE_PREFIX):
             value = value.removeprefix(WORKSPACE_PREFIX)
-        value = value.replace("%20", " ")
+        value = unquote(value)
         candidate = Path(value)
         if not candidate.is_absolute():
             candidate = root / candidate
         candidate = candidate.resolve()
         if not candidate.is_file() and _LINE_SUFFIX.search(str(candidate)):
             candidate = Path(_LINE_SUFFIX.sub("", str(candidate))).resolve()
-        try:
-            candidate.relative_to(root)
-        except ValueError:
-            continue
         if not candidate.is_file():
             continue
         key = os.path.normcase(str(candidate))
@@ -661,3 +695,29 @@ def _existing_workspace_paths(content: str, root: Path) -> list[Path]:
         seen.add(key)
         resolved.append(candidate)
     return resolved
+
+
+# user:“无论带不带https的链接”+(识别域名并补齐协议，不把普通文件名当成链接，也不访问外网)。
+_WEB_TLDS = "[a-z]{2,63}|xn--[a-z0-9-]{2,59}"
+_FILE_SUFFIXES = set("md txt pdf png jpg jpeg gif svg webp bmp avif heic csv tsv xls xlsx doc docx ppt pptx zip tar gz json jsonc yaml yml toml xml ini cfg log ts tsx js jsx py rs vue css html htm exe dll ps1 bat cmd sh sql".split())
+_WEB_HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _WEB_TLDS + r")(?::\d+)?(?:[/#?]|$)", re.I)
+_WEB_SCAN = re.compile(r"(?<![\w/@:\\.-])(?:https?://|//)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _WEB_TLDS + r")(?::\d+)?(?:[/#?][^\s<>\"'，。；！？]*)?", re.I)
+
+def _web_link(value: str) -> str | None:
+    raw = value.strip().rstrip(".,;，。；")
+    explicit = raw.lower().startswith(("http://", "https://"))
+    if not raw or re.search(r"[\s\\]", raw) or (not explicit and not _WEB_HOST.match(raw.removeprefix("//"))):
+        return None
+    if not explicit and re.split(r"[/:?#]", raw.removeprefix("//"))[0].rsplit(".", 1)[-1].lower() in _FILE_SUFFIXES:
+        return None
+    try:
+        parts = urlsplit(raw if explicit else "https://" + raw.removeprefix("//"))
+        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+            return None
+        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path or "/", parts.query, parts.fragment))
+    except ValueError:
+        return None
+
+def _output_links(content: str) -> list[str]:
+    values = [match.group(1) for match in _MARKDOWN_LINK_PATH.finditer(content)] + [match.group(0) for match in _WEB_SCAN.finditer(content)]
+    return list(dict.fromkeys(url for value in values if (url := _web_link(value.rstrip(")]")))))

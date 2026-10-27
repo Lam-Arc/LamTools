@@ -151,10 +151,15 @@ def _run() -> None:
     # --- FastAPI app --------------------------------------------------------
     from lamtools_core.app.http_agent_app import create_default_core_agent_http_app
 
-    app = create_default_core_agent_http_app(access_policy=access_policy)
-    if frontend_dir:
-        from lamtools_core.app.factory import add_spa_fallback
-        add_spa_fallback(app, Path(frontend_dir))
+    # The factory owns the SPA fallback when a frontend directory is supplied:
+    # it also registers the directory for the import map and injects the map
+    # merged with plugin overrides. Adding a bare fallback here would shadow
+    # that injected page.
+    # user:“前端模块替换”+(打包后端返回页面时同样按启用插件注入 import map)
+    app = create_default_core_agent_http_app(
+        access_policy=access_policy,
+        frontend_dir=frontend_dir or None,
+    )
 
     _log.info("Starting LamCore backend on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)

@@ -47,10 +47,12 @@
           </div>
           <template v-else>
             <div class="user-bubble" data-context-selection-scope>
-              {{ msg.content }}
+              <!-- user:“更适配新的UI”+(辅助对话的引用在原文栏展示，气泡保留真实语义文本供后续选文定位)。 -->
+              <UserReferenceText :text="msg.content" :folded-prefix="typeof msg.metadata?.auxiliary_reference_prefix === 'string' ? msg.metadata.auxiliary_reference_prefix : undefined" />
             </div>
           </template>
-          <MessageAttachmentDeck
+          <ReferenceItems
+            compact
             v-if="messageAttachments(msg).length"
             :attachments="messageAttachments(msg)"
             :transport="transport"
@@ -619,6 +621,7 @@
                       class="part-text-content"
                       :content="group.part.content ?? ''"
                       :streaming="isLiveMessage(msg)"
+                      :interactive="true"
                     />
                   </div>
 
@@ -716,8 +719,9 @@
                         <button
                           type="button"
                           class="decision-option"
+                          :disabled="decisionsDisabled"
                           :class="{
-                            'decision-option--approve': option.id === 'approve',
+                            'decision-option--approve': option.id === 'approve' || option.id === 'trust',
                             'decision-option--deny': option.id === 'deny',
                           }"
                           @click="emit('decision-select', { partId: group.part.id, option, response: decisionOptionResponse(group.part, option) })"
@@ -727,7 +731,7 @@
                         <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
                       </li>
                     </ol>
-                    <details v-if="canGuideDecision(group.part)" class="decision-guide">
+                    <details v-if="!decisionsDisabled && canGuideDecision(group.part)" class="decision-guide">
                       <summary class="decision-guide-toggle">{{ t("其他处理方式") }}</summary>
                       <div class="decision-guide-fields">
                         <textarea
@@ -848,19 +852,19 @@
 
             <div v-if="answerContent(msg)" class="assistant-answer" data-part="conclusion">
               <slot name="assistant-content" :content="answerContent(msg)" :live="isLiveMessage(msg)">
-                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" />
+                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
               </slot>
             </div>
           </template>
 
           <!-- Fallback: no parts → render flat content -->
           <slot v-else name="assistant-content" :content="answerContent(msg)">
-            <MarkdownRenderer class="assistant-answer" data-part="conclusion" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" />
+            <MarkdownRenderer class="assistant-answer" data-part="conclusion" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
           </slot>
 
           <!-- 本轮 artifact 产出统一挂到消息结尾；父级抑制避免子代理嵌套重复。 -->
           <Transition :css="false" @enter="artifactsEnter" @leave="fadeSlideLeave">
-            <MessageAttachmentDeck
+            <ReferenceItems
               v-if="messageArtifacts.length && !artifactsPanelSuppressed"
               class="message-artifacts"
               :artifacts="messageArtifacts"
@@ -936,6 +940,9 @@
 </template>
 
 <script setup lang="ts">
+import { referenceSpans } from '@/composer/fileReferences'
+import { inferredKind } from '@/artifacts/model'
+
 import { t, uiLanguage } from '@/i18n/index.ts'
 
 import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '@/types.ts'
@@ -996,6 +1003,8 @@ import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import CoreSystemEventRow from '@/components/CoreSystemEventRow.vue'
 import { isCoreSystemEvent, type CoreSystemEvent } from '@/appServer/systemEvents.ts'
 import MessageAttachmentDeck from '@/components/MessageAttachmentDeck.vue'
+import ReferenceItems from '@/components/ReferenceItems.vue'
+import UserReferenceText from '@/components/UserReferenceText.vue'
 import { artifactListingReference, artifactPathsInText, normalizeArtifactReference, shouldListTurnArtifact, workspaceRelativeFromReportPath } from '@/artifacts/model.ts'
 import { isNativeContextTarget, openContextMenu } from '@/components/context-menu/context-menu.ts'
 import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
@@ -1123,6 +1132,8 @@ const props = withDefaults(
     suppressArtifactsPanel?: boolean
   /** 面板内部：子代理行明确不可点（面板不消费"打开子代理"事件，别让用户以为点了没反应）。 */
   subAgentRowsInert?: boolean
+  /** user:“多界面分屏”+(来源聊天之外不允许向当前聊天误发审批决定)。 */
+  decisionsDisabled?: boolean
     /** Automatically plot supported display-math formulas in final answers. */
     autoPlotMath?: boolean
   }>(),
@@ -1540,9 +1551,16 @@ function attachmentFromPart(part: MessagePart): CoreAttachment | null {
 }
 
 function messageAttachments(message: CoreMessage): CoreAttachment[] {
-  return attachmentParts(message)
+  const records = attachmentParts(message)
     .map(part => attachmentFromPart(part))
     .filter((attachment): attachment is CoreAttachment => attachment !== null)
+  // user:“气泡下方不要用行，用小图标可以吗”+(恢复的纯路径消息也能重建附件图标)。
+  for (const span of referenceSpans(message.content || '')) {
+    if (records.some(r => r.path?.replace(/\\/g, '/') === span.path)) continue
+    const kind = inferredKind('file', span.name)
+    records.push({ id: 'path:' + span.path, path: span.path, filename: span.name, mime_type: kind === 'image' ? 'image/' + (span.name.split('.').pop() || 'png') : /\.(md|txt|log|jsonc?|ya?ml|csv)$/i.test(span.name) ? 'text/plain' : 'application/octet-stream', preview_type: kind, size: 0 })
+  }
+  return records
 }
 
 function toggleToolWrap(partId: string) {
@@ -3109,7 +3127,7 @@ function collectOutputArtifacts(
     // Command/file-read evidence belongs to the process timeline, not to the
     // message-local成果 deck, even when an old snapshot carries an image URI.
     if (artifact.kind === 'file_read' || artifact.kind === 'command_output') continue
-    if (artifact.kind === 'file_change' || isImageArtifact(artifact)) out.push(artifact)
+    if (artifact.artifact_id || artifact.kind === 'memory' || artifact.kind === 'link' || artifact.kind === 'file_change' || isImageArtifact(artifact)) out.push(artifact)
   }
   const subLineParts = (part.metadata as { subLineParts?: MessagePart[] } | undefined)?.subLineParts
   if (Array.isArray(subLineParts)) {

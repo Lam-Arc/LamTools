@@ -301,11 +301,8 @@ describe('CoreExecutionControls', () => {
     });
 
     await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
-    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter');
     await wrapper.findAll('[data-model-thinking-model-option]')[1].trigger('click');
-    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
-    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter');
-    await wrapper.findAll('[data-model-thinking-level-option]')[1].trigger('click');
+    await wrapper.get('[data-model-thinking-level-option="max"]').trigger('click');
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['model-1']);
     expect(wrapper.emitted('update:thinkingMode')?.[0]).toEqual(['max']);
     expect(wrapper.find('[data-model-thinking-shallow-option]').exists()).toBe(false);

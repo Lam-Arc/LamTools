@@ -8,7 +8,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const articles = join(root, 'articles')
 const files = readdirSync(articles).filter(file => file.endsWith('.md'))
 const index = readFileSync(join(root, 'README.md'), 'utf8')
-const required = ['welcome', 'quick-start', 'projects', 'sessions', 'models', 'attachments', 'approvals', 'skills', 'plugins', 'mcp', 'sub-agents', 'memory', 'compaction', 'arrange', 'workflow', 'study', 'library', 'web-search', 'imagegen', 'desktop-pet', 'updates', 'privacy', 'troubleshooting', 'glossary', 'queued-messages', 'runtime-status', 'artifacts']
+const required = ['welcome', 'quick-start', 'projects', 'sessions', 'models', 'attachments', 'approvals', 'skills', 'plugins', 'mcp', 'sub-agents', 'memory', 'compaction', 'arrange', 'workflow', 'study', 'library', 'web-search', 'imagegen', 'updates', 'privacy', 'troubleshooting', 'glossary', 'queued-messages', 'runtime-status', 'artifacts']
 const errors = []
 function check(condition, message) { if (!condition) errors.push(message) }
 check(files.length >= 55, `功能词条不足：${files.length}，目标至少 55`)

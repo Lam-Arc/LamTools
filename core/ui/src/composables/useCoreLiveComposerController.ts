@@ -513,6 +513,14 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   }
 
   async function handleKeydown(event: KeyboardEvent): Promise<boolean> {
+    // user:“极简、可靠、功能性强”+(输入法确认键不触发菜单或发送)。
+    if (event.isComposing) return false
+    if (paletteVisible.value && event.key === 'Tab') {
+      event.preventDefault()
+      const command = commandPalette.selected()
+      if (command) await selectCommand(command)
+      return true
+    }
     if (paletteVisible.value) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
@@ -544,7 +552,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   }
 
   async function handleKeyup(event: KeyboardEvent, fallbackMs = 750): Promise<boolean> {
-    if (event.key !== 'Enter' || event.shiftKey || Date.now() - lastEnterHandledAt.value < fallbackMs) return false
+    if (event.isComposing || event.key !== 'Enter' || event.shiftKey || Date.now() - lastEnterHandledAt.value < fallbackMs) return false
     event.preventDefault()
     lastEnterHandledAt.value = Date.now()
     if (paletteVisible.value) {

@@ -137,6 +137,8 @@ const settingsThemeStyle = computed(() => {
 </script>
 
 <style scoped>
+/* user:“专门对小屏或者说分屏状态做一下适配”+(按页面实际宽度调整布局，宽窗口中的窄分屏也能独立折叠)。 */
+
 .account-card {
   display: flex;
   flex-direction: column;
@@ -196,7 +198,7 @@ const settingsThemeStyle = computed(() => {
 .account-action:disabled { opacity: .45; cursor: default; }
 
 /* 桌面：标题与返回键由顶部条承担，这里只留登录状态。 */
-@media (min-width: 641px) {
+@container app-page (min-width: 641px) {
   .account-back,
   .account-head-title {
     display: none;

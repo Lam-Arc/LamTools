@@ -1,11 +1,13 @@
 import './frontendConsoleLog'
 import { waitForBackendApiBase } from './backendReady'
+import { createDesktopFilePicker } from '@/app/desktopFilePicker'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event'
 import { createApp } from 'vue'
 import { createDirectTransport } from '@/transport/index.ts'
 import { createLamToolsRuntime } from '@/app/runtime.ts'
 import LamToolsApp from '@/app/LamToolsApp.vue'
+import { setPluginAssetBase } from '@/plugins/assets'
 import {
   completeStartupSplash,
   startStartupSplash,
@@ -41,6 +43,8 @@ async function resolveBackendApiBase(): Promise<string | null> {
 
 async function init() {
   const apiBase = await resolveBackendApiBase()
+  // user:“那你重启吧”+(重启后所有插件资源连接 Rust 选择的实际后台端口)。
+  setPluginAssetBase(apiBase)
   if (apiBase) {
     // In Tauri, wait for Rust to publish the dynamically chosen backend port
     // before constructing the direct transport. Packaged windows never rely
@@ -86,6 +90,11 @@ async function init() {
     listen('lamtools://window/maximize-click', () => invoke('toggle_maximize_window')),
   ])
 
+  // user:“若此附件真实存在于计算机则添加绝对路径”+(原生拖入保留路径，不转成临时字节附件)。
+  await listen<{ paths: string[] }>('tauri://drag-drop', ({ payload }) => {
+    window.dispatchEvent(new CustomEvent('lamtools:drop-files', { detail: payload.paths }))
+  })
+
   // Native directory picker: returns selected path or null (cancelled)
   ;(window as any).__LAMTOOLS_PICK_DIRECTORY = async (): Promise<string | null> => {
     return await invoke<string | null>('pick_directory')
@@ -109,14 +118,6 @@ async function init() {
   // cannot replace this app's files while it is up.
   ;(window as any).__LAMTOOLS_QUIT__ = async (): Promise<void> => {
     await invoke('quit_app')
-  }
-
-  ;(window as any).__LAMTOOLS_SHOW_DESKTOP_PLUGIN__ = async (pluginId: string): Promise<void> => {
-    await invoke('show_desktop_plugin_window', { pluginId })
-  }
-
-  ;(window as any).__LAMTOOLS_REFRESH_DESKTOP_PLUGINS__ = async (): Promise<void> => {
-    await invoke('reload_desktop_plugin_window')
   }
 
   // Mobile Control bridge.  Core UI keeps these callbacks optional so the
@@ -164,6 +165,8 @@ async function init() {
     platform: 'desktop',
     capabilities: {
       filePicker: true,
+      // user:“修”+(聊天附件保留原件路径选择，同时恢复资料库上传需要的文件字节选择)。
+      files: createDesktopFilePicker(() => invoke<string[] | null>('pick_files')),
       notifications: true,
       desktopWindow: true,
       sessionExports: {

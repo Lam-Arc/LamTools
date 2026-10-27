@@ -14,7 +14,7 @@ from pathlib import Path
 
 from lamtools_core.mem import library as memory_library
 from lamtools_core.mem.library import MemoryError
-from lamtools_core.tool import ToolCall, ToolResult
+from lamtools_core.tool import ToolCall, ToolResult, ToolArtifact
 
 MEMORY_TOOL_NAME = "memory"
 
@@ -119,7 +119,7 @@ def _format_entries(entries: list[memory_library.MemoryEntry]) -> str:
 def make_memory_handler(work_root: str | Path | None):
     """Build the ``memory`` tool handler bound to *work_root*."""
 
-    async def memory(call: ToolCall) -> ToolResult:
+    async def execute_memory(call: ToolCall) -> ToolResult:
         args = call.arguments if isinstance(call.arguments, dict) else {}
         action = str(args.get("action") or "").strip().lower()
         if not action:
@@ -239,6 +239,18 @@ def make_memory_handler(work_root: str | Path | None):
         except OSError as exc:
             return _failed(call, str(exc), "memory_io_error")
         return _failed(call, f"Unknown memory action '{action}'", "invalid_action")
+
+    async def memory(call: ToolCall) -> ToolResult:
+        result = await execute_memory(call)
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        action = str(args.get("action") or "").lower()
+        # user:“这一轮被操作进libary的文件、变更的memory”+(只把实际写入、删除或改名的记忆列为成果)。
+        if result.status == "ok" and action in {"write", "append", "edit", "delete", "rename"}:
+            scope = str(result.metadata.get("scope") or args.get("scope") or "project")
+            path = str(result.metadata.get("path") or args.get("path") or "")
+            absolute = memory_library.resolve_memory_path(scope, work_root, path)
+            result.artifacts.append(ToolArtifact(kind="memory", uri=absolute.as_posix(), metadata={"path": absolute.as_posix(), "mime_type": "text/markdown", "operation": action, "scope": scope}))
+        return result
 
     return memory
 

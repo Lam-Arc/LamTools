@@ -1,0 +1,55 @@
+{
+  // user:“把 download 给做成一个工具，传参下载链接，可指定为前台和后台，以及路径”+(复用现有下载队列；前台等待完成或超时，后台立即返回任务号)。
+  "tools": [
+    {
+      "name": "network_download",
+      "description": "Queue an HTTP/HTTPS file download through the network plugin. Background mode returns a gid immediately. Foreground mode waits until the task completes, fails, or reaches wait_seconds, then returns the status and local path. The default target directory is the plugin's private download folder.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "HTTP or HTTPS download URL"
+          },
+          "directory": {
+            "type": "string",
+            "description": "Absolute target directory. Omit to use the plugin's private download folder."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Optional filename. Derived from the URL when omitted."
+          },
+          "foreground": {
+            "type": "boolean",
+            "default": false,
+            "description": "Wait for completion when true; return a gid immediately when false."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 900,
+            "default": 300,
+            "description": "Foreground wait limit; the download keeps running after a timeout."
+          },
+          "connections": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16,
+            "default": 8,
+            "description": "aria2 split connections"
+          },
+          "proxy": {
+            "type": "boolean",
+            "default": false,
+            "description": "Download through the running Mihomo proxy"
+          }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+      },
+      "permission": "ask_user",
+      "timeout": 960,
+      "handler": "lamtools_core.plugins.bundled.network-exploration.backend:manifest_tool"
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "tools": [
+    {
+      "name": "bili_status",
+      "description": "刷B站 今天的状态：跑了没跑、挑了几条、额度剩多少、谷时窗口开没开、venv/登录就绪没、报告在哪。B站 数据本身不在这里 —— 那是 mcp 服务器 bilibili 的工具（先 load_skill bili-scroll 看怎么调）。",
+      "input_schema": { "type": "object", "properties": {}, "required": [] },
+      "permission": "auto_allow",
+      "handler": "tools:bili_status"
+    },
+    {
+      "name": "bili_config",
+      "description": "读 / 改「刷B站」的设置。不给 patch 就是读；给了就改（只认配置 schema 里的字段，例如 {\"perDay\":5,\"peakValley\":true,\"autoComment\":false,\"dmMode\":\"only\"}）。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "patch": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "要改的字段（可省）"
+          }
+        },
+        "required": []
+      },
+      "permission": "ask_user",
+      "handler": "tools:bili_config"
+    },
+    {
+      "name": "bili_setup",
+      "description": "给「刷B站」装运行环境：在插件自己的数据区建独立 venv、装 bilibili-mcp 的 Python 依赖（第一次用之前跑一次）。起完就返回，进度看 install.log。",
+      "input_schema": { "type": "object", "properties": {}, "required": [] },
+      "permission": "ask_user",
+      "handler": "tools:bili_setup"
+    },
+    {
+      "name": "bili_run",
+      "description": "立刻跑一轮（不等谷时窗口）：把这一轮的设置 + 值班章程交给一个后台会话去刷、写日报。自动起会话不可用时，它会把完整指令写到 data/duty/round.md 并告诉你为什么。",
+      "input_schema": {
+        "type": "object",
+        "properties": { "why": { "type": "string", "description": "触发原因（手动 / 窗口 / 技能），只用于日志" } },
+        "required": []
+      },
+      "permission": "ask_user",
+      "handler": "tools:bili_run"
+    },
+    {
+      "name": "bili_login_start",
+      "description": "开始 B站 扫码登录：出二维码（画成 PNG 存在插件家目录，返回路径 + 登录 URL）和一个 key。二维码约 180 秒有效，出码后马上用手机扫。",
+      "input_schema": { "type": "object", "properties": {}, "required": [] },
+      "permission": "ask_user",
+      "visibility": "on_load",
+      "skill": "bili-scroll",
+      "handler": "tools:bili_login_start"
+    },
+    {
+      "name": "bili_login_poll",
+      "description": "查扫码结果：waiting 还没扫 / scanned 扫了待确认 / ok 成功 / expired 过期。成功时凭证写进插件家目录的 bili_credential.json。",
+      "input_schema": {
+        "type": "object",
+        "properties": { "key": { "type": "string", "description": "bili_login_start 返回的那个 key" } },
+        "required": ["key"]
+      },
+      "permission": "auto_allow",
+      "visibility": "on_load",
+      "skill": "bili-scroll",
+      "handler": "tools:bili_login_poll"
+    },
+    {
+      "name": "bili_login_cookie",
+      "description": "从浏览器 cookie 导入登录：传 sessdata（必需）和 bili_jct / dedeuserid / buvid3。凭证写进插件家目录的 bili_credential.json，MCP 服务器直接复用。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "sessdata": { "type": "string", "description": "B站 SESSDATA" },
+          "bili_jct": { "type": "string", "description": "bili_jct（写操作要）" },
+          "dedeuserid": { "type": "string", "description": "DedeUserID" },
+          "buvid3": { "type": "string", "description": "buvid3（可空，缺了自动补）" }
+        },
+        "required": ["sessdata"]
+      },
+      "permission": "auto_allow",
+      "visibility": "on_load",
+      "skill": "bili-scroll",
+      "handler": "tools:bili_login_cookie"
+    },
+    {
+      "name": "bili_diagnose",
+      "description": "复制诊断信息：环境（venv/转写/登录）、配置、文件位置、duty.log 与 install.log 尾部。遇到装不上 / 跑不动时先跑它。",
+      "input_schema": { "type": "object", "properties": {}, "required": [] },
+      "permission": "auto_allow",
+      "visibility": "on_load",
+      "skill": "bili-scroll",
+      "handler": "tools:bili_diagnose"
+    }
+  ]
+}

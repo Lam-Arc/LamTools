@@ -1,5 +1,11 @@
 # Plugin backend readiness and recovery
 
+The rebuilt lifecycle and transaction authority are documented in
+[plugin host rebuild](../../agent_docs/plugin_host_rebuild.md). `plugin.*` management
+operations forward to `plugin.system.*`; the same supervisor owns operations, tools
+and MCP shutdown. See the linked acceptance report for current verification limits.
+<!-- user:“该重建就重建”+(生命周期文档指向实际重建后的统一入口)。 -->
+
 An installed plugin and its enabled preference are not evidence that its backend
 is running. `plugin.list` preserves `enabled` and adds `available` plus a `backend`
 object: `state`, `available`, `managed`, `attempts`, `error`, and `last_error`.
@@ -10,7 +16,7 @@ in the installation/configuration ledger.
 Managed backends move through `starting → ready`, or `failed` on load, startup,
 health or cleanup errors. Stop revokes availability and services before awaiting
 cleanup. A failed descriptor remains inspectable; it is not a working backend.
-Backend-dependent tools, operations, UI modes/widgets, desktop entries and newly
+Backend-dependent tools, operations, UI modes/widgets, UI windows and newly
 assembled skills/hooks/MCP contributions require readiness. Declaration inventories
 in plugin.list remain visible for diagnosis. Ordinary tool input/operation errors
 do not by themselves mean the entire backend crashed.
@@ -59,6 +65,83 @@ synchronous assembly retains the historical `start_lifecycle=False` factory-only
 mode: its successfully constructed runtime is usable with `managed: false`, and
 startup hooks are intentionally not run. Hosts opting into managed lifecycle must
 await `await_plugin_backends(handles)` before advertising readiness.
+
+## External-process backends
+
+A plugin may declare a process instead of a Python backend:
+
+```jsonc
+"runtime": {
+  "kind": "process",
+  "command": ["node", "dist/server.js"],
+  "cwd": ".",
+  "env": {"NODE_ENV": "production"},
+  "startupTimeoutMs": 15000,
+  "requestTimeoutMs": 60000
+}
+```
+
+The host starts the child with the same supervisor, readiness, health, stop and
+restart rules. The child speaks newline-delimited JSON-RPC 2.0 over stdio:
+`initialize`, `tools/call`, `operations/call`, `health`, `shutdown`. Tool and
+operation names are still declared in `tools.jsonc` / `operations.jsonc`; for a
+process runtime the `handler` field may be omitted because the child implements
+it. `cwd` defaults to the plugin root, and `env` is merged over the host
+environment. Non-JSON stdout is rejected; stderr is logged under the plugin name.
+Process backends do not receive host callbacks yet.
+
+## Plugin HTTP routes
+
+A manifest may declare a small HTTP surface:
+
+```jsonc
+"http": {
+  "routes": [
+    {"method": "POST", "path": "/webhook", "operation": "demo.webhook"}
+  ]
+}
+```
+
+Routes mount under `/api/core/plugin-http/<plugin>/<path>` and dispatch to the
+named operation with `{method, path, query, body, headers}`. `auth` defaults to
+`token`: the host generates a bearer token in the plugin's secret store under
+`httpToken`, and callers send `X-Plugin-Token` or `Authorization: Bearer …`.
+`auth: "none"` is available for local-only routes. The operation must belong to
+the plugin and be `auto_allow`; interactive approvals cannot be answered over
+HTTP. Paths are exact and cannot escape the route prefix.
+
+## Reloading plugin code
+
+`plugin.system.reload` (alias `plugin.reload`) stops the backend, invalidates
+imported modules, loads the current files, starts the backend and remounts the
+plugin's operations. It is an explicit no-restart path after editing an
+installed plugin; it is not an automatic file watcher. Use `plugin.system.update`
+when replacing the plugin directory itself.
+
+## Host services for channel and session plugins
+
+Plugins should use these contracts instead of importing host internals:
+
+- `model_catalog`: list/resolve/default/capability/providers.
+- `agent_presets`: list/has/resolve/compose plus per-preset
+  `register_service` / `service_for`. The runner exposes
+  `preset_service("compaction", preset_id)`; the built-in service has
+  `compact_now(session_id)`.
+- `system_prompt_waterfall`: synchronous append/replace sections.
+- `sub_agent_runner_factory`: accepts `work_root` for a plugin-owned directory.
+- `channel_host`: builds a `ChannelRuntime` from a `ChannelAdapter`; the runtime
+  owns per-peer sessions, merge queues, commands, approvals/questions, streaming,
+  usage and compact/fork/reset.
+- `secrets`: a per-plugin secret view (`get` / `set` / `delete` / `keys`), backed
+  by `PluginSecretStore`. Values are DPAPI-protected on Windows and isolated by
+  plugin; the shared store is never exposed as a service.
+- `deliverables/presented`: emitted after a tool returns artifacts, with
+  `{files, tool_name, call_id}`. Channel plugins receive it through the
+  sub-agent event forwarder; consumers should deduplicate against
+  `runtime.tool.finished` artifacts.
+
+`KernelSubAgentRunner` also exposes `compact`, `fork` and `session_info` for
+manual child-session operations.
 
 ## Task 3 coordination and limits
 

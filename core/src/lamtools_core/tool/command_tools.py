@@ -3,7 +3,7 @@ from __future__ import annotations
 import shlex
 import sys
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from lamtools_core.config.network import subprocess_env as network_subprocess_env
 from lamtools_core.event import CoreEvent
@@ -155,11 +155,13 @@ class CommandToolHandlers:
         *,
         work_root: Path,
         command_timeout: int,
+        mcp_service: Any | None = None,
         loaded_skill_roots: set[Path],
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
         background_process_registry: BackgroundProcessRegistry | None = None,
         allow_access_outside_workdir: bool | Callable[[], bool] = False,
     ) -> None:
+        self._mcp_service = mcp_service
         self._work_root = work_root
         self._command_timeout = command_timeout
         self._loaded_skill_roots = loaded_skill_roots
@@ -203,6 +205,17 @@ class CommandToolHandlers:
                 call_id=call.id, name=call.name,
                 status="failed", error="Missing or invalid 'command' argument",
             )
+        # user:“把 MCP 从 toolbox 里面拿出去，通过 command 运行”+(已走普通 command 审批；参数直接解析，不经过 shell 展开)。
+        if self._mcp_service is not None:
+            try:
+                parsed = self._mcp_service.check_command(command)
+                if parsed is not None:
+                    if background or persistent or readiness_url:
+                        raise ValueError("MCP commands cannot run as detached shell processes")
+                    result = await self._mcp_service.execute_command(command)
+                    return ToolResult(call_id=call.id, name=call.name, content=result)
+            except (ValueError, RuntimeError) as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
         if readiness_url is not None and not isinstance(readiness_url, str):
             return ToolResult(
                 call_id=call.id, name=call.name,

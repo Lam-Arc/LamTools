@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -31,6 +32,10 @@ def frontend_dir() -> Path | None:
     return _FRONTEND_DIR
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 BASE_MAP_FILENAME = "importmap.base.json"
+_IMPORT_MAP_TAG = re.compile(
+    r'<script\b[^>]*\btype=["\']importmap["\'][^>]*>.*?</script>',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _safe_mode() -> bool:
@@ -91,12 +96,19 @@ def inject_import_map(html: str, imports: dict[str, str]) -> str:
     """Insert the import map tag before the first module script.
 
     Import maps must appear before any module loads; when the page has no
-    script tag the map is placed before ``</head>``.
+    script tag the map is placed before ``</head>``. A page built for the
+    desktop shell already carries the base map so it can boot straight from
+    Tauri's embedded assets; the merged map replaces it in place instead of
+    adding a second map (browsers only honour maps loaded before the module
+    graph starts, and older engines allow just one).
     """
     if not imports:
         return html
     payload = json.dumps({"imports": imports}, ensure_ascii=False)
     tag = f'<script type="importmap">{payload}</script>'
+    existing = _IMPORT_MAP_TAG.search(html)
+    if existing is not None:
+        return html[: existing.start()] + tag + html[existing.end() :]
     lowered = html.lower()
     script_at = lowered.find("<script")
     if script_at != -1:

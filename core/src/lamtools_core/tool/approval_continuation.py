@@ -9,6 +9,7 @@ from typing import Any
 class ResolvedWaitingRequest:
     action: str
     guidance_text: str = ""
+    trust: bool = False
 
 
 @dataclass
@@ -39,11 +40,12 @@ def normalize_waiting_action(value: str) -> str:
 
 
 def resolve_waiting_decision(action: str, response: str = "") -> ResolvedWaitingRequest:
-    normalized_action = normalize_waiting_action(action or response)
+    trust = (action or response).strip().lower() == "trust"
+    normalized_action = "approve" if trust else normalize_waiting_action(action or response)
     guidance_text = (response or "").strip()
     if normalized_action == "guide" and not guidance_text:
         raise ValueError("Guidance decision requires response text")
-    return ResolvedWaitingRequest(action=normalized_action, guidance_text=guidance_text)
+    return ResolvedWaitingRequest(action=normalized_action, guidance_text=guidance_text, trust=trust)
 
 
 def guidance_continuation_prompt(

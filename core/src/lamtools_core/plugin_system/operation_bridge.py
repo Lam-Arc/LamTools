@@ -38,6 +38,9 @@ class PluginOperationSpec:
     handler: str
     plugin: str
     root: Path
+    permission: str = "auto_allow"
+    impact: str = ""
+    approval_fields: tuple[str, ...] = ()
 
 
 @dataclass
@@ -68,6 +71,9 @@ def read_operations(manifest: PluginManifest) -> list[PluginOperationSpec]:
         raise CapabilityError(manifest.name, "operations must be an array")
     specs: list[PluginOperationSpec] = []
     seen: set[str] = set()
+    from .process_runtime import process_runtime_spec
+
+    process_runtime = process_runtime_spec(manifest) is not None
     for index, item in enumerate(raw):
         if isinstance(item, str):
             path = _resolve(manifest, item, key=f"operations[{index}]")
@@ -99,12 +105,23 @@ def read_operations(manifest: PluginManifest) -> list[PluginOperationSpec]:
             if not name:
                 raise CapabilityError(manifest.name, "operation entry is missing name")
             if not handler or ":" not in handler:
-                raise CapabilityError(
-                    manifest.name, f"operation '{name}' needs a module:function handler"
-                )
+                if process_runtime:
+                    # user:“外部进程插件运行时”+(进程插件在 operations.jsonc 里
+                    # 只声明名字，处理函数在子进程里，不需要 Python 模块路径)。
+                    handler = f"process:{name}"
+                else:
+                    raise CapabilityError(
+                        manifest.name, f"operation '{name}' needs a module:function handler"
+                    )
             if name in seen:
                 raise CapabilityError(manifest.name, f"duplicate operation '{name}'")
             seen.add(name)
+            permission = entry.get("permission", "auto_allow")
+            if permission not in {"auto_allow", "ask_user", "hard_block"}:
+                raise CapabilityError(manifest.name, f"invalid operation permission: {permission}")
+            approval_fields = entry.get("approvalFields", [])
+            if not isinstance(approval_fields, list) or len(approval_fields) > 12 or any(not isinstance(key, str) or not key or len(key) > 80 for key in approval_fields):
+                raise CapabilityError(manifest.name, "approvalFields must contain at most 12 field names")
             specs.append(
                 PluginOperationSpec(
                     name=name,
@@ -112,6 +129,9 @@ def read_operations(manifest: PluginManifest) -> list[PluginOperationSpec]:
                     handler=handler,
                     plugin=manifest.name,
                     root=manifest.root,
+                    permission=permission,
+                    impact=str(entry.get("impact") or entry.get("description") or name),
+                    approval_fields=tuple(approval_fields),
                 )
             )
     return specs
@@ -149,40 +169,9 @@ def assemble_operations(
 
 
 def _load_handler_module(spec: PluginOperationSpec, module_name: str) -> Any:
-    if "." in module_name:
-        # Bundled and packaged plugins declare a dotted module path.  Import it
-        # normally after making the plugin root importable.
-        root = str(spec.root)
-        if root not in sys.path:
-            sys.path.append(root)
-        return importlib.import_module(module_name)
-    path = (spec.root / f"{module_name}.py").resolve()
-    if not path.is_file():
-        raise ImportError(f"handler module is missing: {path}")
-    mtime = path.stat().st_mtime
-    cache_key = (str(path), mtime, module_name)
-    # user:“模块缓存按卸载清理”+同一键复用；插件目录被替换（mtime 变）自然
-    # 换键，旧条目定期清掉，不让缓存无界增长。
-    if len(_MODULE_CACHE) > 128:
-        _MODULE_CACHE.clear()
-    cached = _MODULE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    unique_name = f"_lam_plugin_op_{abs(hash(str(path))):x}_{module_name}"
-    module = sys.modules.get(unique_name)
-    if module is None:
-        module_spec = importlib.util.spec_from_file_location(unique_name, path)
-        if module_spec is None or module_spec.loader is None:
-            raise ImportError(f"cannot load plugin operation module: {path}")
-        module = importlib.util.module_from_spec(module_spec)
-        sys.modules[unique_name] = module
-        try:
-            module_spec.loader.exec_module(module)
-        except BaseException:
-            sys.modules.pop(unique_name, None)
-            raise
-    _MODULE_CACHE[cache_key] = module
-    return module
+    # user:“该重建就重建”+(工具、操作和后端共享同一模块空间与卸载时机)。
+    from .loading import load_module
+    return load_module(spec.root, module_name)
 
 
 def _accepted_kwargs(func: Callable[..., Any]) -> set[str]:
@@ -214,8 +203,64 @@ def _work_root(request: OperationRequest) -> Path:
     return Path(value).expanduser().resolve() if value else Path.cwd()
 
 
-def build_handler(spec: PluginOperationSpec, host: PluginHost):
+def _process_backend(host: PluginHost, plugin: str) -> Any | None:
+    """Return the live process backend for a plugin, if it declares one.
+
+    user:“外部进程插件运行时”+(Node 等插件由宿主托管，操作也走同一条进程，
+    不再要求操作实现必须是 Python 模块)。
+    """
+    from .process_runtime import ProcessBackend, process_runtime_spec
+
+    manifest = host.get(plugin)
+    if manifest is None or process_runtime_spec(manifest) is None:
+        return None
+    manager = getattr(host, "backend_manager", None)
+    handle = manager.get(plugin) if manager is not None else None
+    if handle is None or not getattr(handle, "started", False):
+        return None
+    value = getattr(handle, "value", None)
+    return value if isinstance(value, ProcessBackend) else None
+
+
+def build_handler(spec: PluginOperationSpec, host: PluginHost, consent: Any = None):
     async def run(request: OperationRequest) -> OperationResult:
+        # user:“继续”+(审批在宿主后台先于导入和执行；自绘面板也不能绕过)。
+        if spec.permission != "auto_allow":
+            if consent is None:
+                return OperationResult(name=spec.name, status="blocked", payload={"error": "操作审批服务不可用"})
+            denied = consent.check(spec, request)
+            if denied is not None:
+                return denied
+        backend = _process_backend(host, spec.plugin)
+        if backend is not None:
+            try:
+                value = await backend.call_operation(spec.name, request.payload or {}, request.metadata or {})
+            except Exception as exc:  # noqa: BLE001 - a dead process must not kill the catalog
+                return OperationResult(
+                    name=spec.name,
+                    status="error",
+                    payload={"error": f"{type(exc).__name__}: {exc}"},
+                )
+            if isinstance(value, OperationResult):
+                return value
+            status = str(value.get("status") or "ok")
+            payload = value.get("payload")
+            return OperationResult(
+                name=spec.name,
+                status=status,
+                payload=dict(payload) if isinstance(payload, dict) else {"result": payload},
+            )
+        from .process_runtime import process_runtime_spec
+
+        manifest = host.get(spec.plugin)
+        if manifest is not None and process_runtime_spec(manifest) is not None:
+            # A declared process plugin must not silently fall back to importing
+            # a Python module that does not exist.
+            return OperationResult(
+                name=spec.name,
+                status="error",
+                payload={"error": f"plugin '{spec.plugin}' process backend is not running"},
+            )
         module_name, _, function_name = spec.handler.partition(":")
         try:
             module = _load_handler_module(spec, module_name)
@@ -235,7 +280,7 @@ def build_handler(spec: PluginOperationSpec, host: PluginHost):
         if "context" in accepted:
             from .backend_runtime import context_for
 
-            context = context_for(spec.plugin)
+            context = context_for(spec.plugin, host)
             if context is not None:
                 kwargs["context"] = context
         try:
@@ -257,11 +302,26 @@ def build_handler(spec: PluginOperationSpec, host: PluginHost):
             payload={"result": value},
         )
 
-    return run
+    async def leased(request):
+        manager = getattr(host, "backend_manager", None)
+        if manager is None:
+            return await run(request)
+        async with manager.lease(spec.plugin):
+            return await run(request)
+    return leased
 
 
-def register_plugin_operations(catalog: Any, host: PluginHost) -> OperationAssembly:
+def register_plugin_operations(catalog: Any, host: PluginHost, *, refresh: bool = False) -> OperationAssembly:
     """Mount every enabled plugin operation behind its own availability guard."""
+    import weakref
+    if not hasattr(host, "operation_catalogs"):
+        host.operation_catalogs = weakref.WeakSet()
+    host.operation_catalogs.add(catalog)
+    if refresh:
+        for name in catalog.registered():
+            owner = catalog.owner_of(name)
+            if owner.startswith("plugin:"):
+                catalog.unregister_owner(owner)
     manifests = host.discover()
     # Disabled plugins stay mounted behind the availability guard so a live
     # enable transition exposes them without rebuilding the catalog.
@@ -271,6 +331,13 @@ def register_plugin_operations(catalog: Any, host: PluginHost) -> OperationAssem
         if isinstance(errors, list):
             errors.extend(assembly.errors)
     registered = set(catalog.registered()) if hasattr(catalog, "registered") else set()
+    from .operation_consent import OperationConsent
+
+    consent = getattr(host, "operation_consent", None)
+    if consent is None:
+        consent = host.operation_consent = OperationConsent(host)
+    if "plugin.system.operation.respond" not in registered:
+        catalog.register("plugin.system.operation.respond", consent.respond, owner=OWNER)
     for spec in assembly.operations:
         # 外层目录会把内层已经挂过的操作原样搬过来，这里跳过，避免
         # 把“已注册”误记成插件错误。
@@ -279,13 +346,13 @@ def register_plugin_operations(catalog: Any, host: PluginHost) -> OperationAssem
 
         def available(plugin_name: str = spec.plugin) -> bool:
             manifest = host.get(plugin_name)
-            return manifest is not None and manifest.enabled
+            return host.available(plugin_name)
 
         try:
             catalog.register(
                 spec.name,
-                build_handler(spec, host),
-                owner=OWNER,
+                build_handler(spec, host, consent),
+                owner=f"plugin:{spec.plugin}",
                 availability=available,
             )
         except ValueError as exc:

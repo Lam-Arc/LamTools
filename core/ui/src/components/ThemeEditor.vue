@@ -113,25 +113,23 @@
                     <strong>{{ t("界面密度") }}</strong>
                     <span>{{ t("调整内容区的信息密度。") }}</span>
                   </div>
-                  <div class="density-options" role="group" :aria-label="t('界面密度')">
-                    <button
-                      v-for="option in densityOptions"
-                      :key="option.value"
-                      type="button"
-                      :data-density="option.value"
-                      :class="{ active: density === option.value }"
-                      @click="$emit('update:density', option.value)"
-                    >{{ option.label }}</button>
-                  </div>
-                  <label v-if="contentWidth" class="field theme-width-field">{{ t("内容宽度") }}<input
-                      :value="contentWidth"
-                      type="range"
-                      min="560"
-                      max="1120"
-                      step="20"
-                      @input="$emit('update:content-width', Number(($event.target as HTMLInputElement).value))"
+                  <SundaySegmented
+                    :model-value="density"
+                    :options="densityOptions"
+                    :label="t('界面密度')"
+                    @update:model-value="$emit('update:density', $event)"
+                  />
+                  <div v-if="contentWidth" class="field theme-width-field">
+                    <SundayRange
+                      :model-value="contentWidth ?? 0"
+                      :min="560"
+                      :max="1120"
+                      :step="20"
+                      suffix="px"
+                      :label="t('内容宽度')"
+                      @update:model-value="$emit('update:content-width', Number($event))"
                     />
-                  </label>
+                  </div>
                 </section>
                 <section class="theme-process-icon-section">
                   <div class="theme-section-copy">
@@ -224,6 +222,8 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import ThemeAreaEditor from '@/components/ThemeAreaEditor.vue'
 import ThemePreview from '@/components/ThemePreview.vue'
+import SundayRange from '@/components/SundayRange.vue'
+import SundaySegmented from '@/components/SundaySegmented.vue'
 import { gradientFromStops, themeForMode, DEFAULT_THEME_SCHEDULE, type ThemeArea, type ThemeMode, type ThemePreset, type ThemeSchedule, type ThemeStop } from '@/helpers/theme.ts'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 

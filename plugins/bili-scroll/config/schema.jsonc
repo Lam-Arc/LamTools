@@ -1,92 +1,153 @@
 {
+  /*
+   * 刷B站 设置 —— 字段与原版 dsh-bili-scroll 的 Config（schemastery）一一对应；
+   * 默认值也照原版抄，不擅自收紧：
+   *   perDay=5 / peakValley=false / noon=true / night=true / autoComment=false /
+   *   dmMode=only（原版默认私信投递）/ transcribe=false / asrModel=small /
+   *   commentPerRound=1 / reportLevel=full / dmWatch=true / dmWatchMinutes=1
+   * 原版宿主专属的字段（dshBin / headlessProfile / overlayMcp）没有对应概念，未搬。
+   */
   "type": "object",
   "properties": {
-    "keywords": {
-      "type": "array",
-      "title": "关注关键词",
-      "description": "每轮值班按这些词搜最近几天的视频；留空则自己在值班时提关键词",
-      "items": { "type": "string" },
-      "default": ["DeepSeek", "本地模型", "AI 工作流"]
-    },
-    "per_day": {
+    "perDay": {
       "type": "integer",
       "title": "每天最多挑几条",
-      "description": "写进日报的条数上限；0 = 只手动跑",
+      "description": "全天上限（0 = 只手动跑）。值班轮会读它决定这一轮还能挑几条。",
       "default": 5
     },
-    "report_level": {
-      "type": "string",
-      "title": "日报写多细",
-      "enum": ["full", "brief", "off"],
-      "default": "full",
-      "description": "完整 = 为什么值得 + 一句话；薄版 = 值不值 + 链接；off = 只记判重表"
-    },
-    "peak_valley": {
+    "peakValley": {
       "type": "boolean",
       "title": "峰谷自动刷",
-      "default": false,
-      "description": "打开后插件内置定时器在优惠时段自动拉起值班轮（每天每时段最多一轮）"
+      "description": "总开关。打开后才在下面的谷时窗口里自动跑。",
+      "default": false
     },
     "noon": {
       "type": "boolean",
-      "title": "中午时段（12–14 点）",
-      "default": true,
-      "description": "峰谷自动刷的子开关"
+      "title": "中午谷时自动跑",
+      "description": "12:00–14:00 之间自动跑一轮（需先打开峰谷自动刷）。",
+      "default": true
     },
     "night": {
       "type": "boolean",
-      "title": "晚间时段（18 点–次日 9 点）",
-      "default": true,
-      "description": "峰谷自动刷的子开关"
+      "title": "晚上/夜间谷时自动跑",
+      "description": "18:00–次日 09:00 之间自动跑一轮（需先打开峰谷自动刷）。",
+      "default": true
     },
-    "auto_comment": {
+    "autoComment": {
       "type": "boolean",
-      "title": "自动评论并 @ 我",
-      "default": false,
-      "description": "这是拿你的账号说话：打开后每轮才允许发评论，同一视频只发一次"
+      "title": "自动评论并 @ 你",
+      "description": "默认关。打开会拿你的账号说话，所以必须你自己开；还得填「要 @ 谁」才生效。",
+      "default": false
     },
-    "mention_name": {
-      "type": "string",
-      "title": "要 @ 的人（昵称）",
-      "default": "",
-      "description": "评论里 @ 谁；留空则评论不带 @"
-    },
-    "comment_per_round": {
-      "type": "integer",
-      "title": "每轮最多发几条评论",
-      "default": 1,
-      "description": "上限 20；默认 1 条"
-    },
-    "dm_mode": {
+    "dmMode": {
       "type": "string",
       "title": "投递方式",
+      "description": "off = 只发公开评论；only = 只私信（原版默认，完全不公开评论）；both = 评论 + 私信。",
       "enum": ["off", "only", "both"],
-      "default": "only",
-      "description": "值班结果的投递：off = 不投递；only = 只私信；both = 私信加评论"
+      "default": "only"
     },
-    "dm_uid": {
+    "dmUid": {
       "type": "integer",
       "title": "私信发给谁（UID）",
-      "default": 0,
-      "description": "留空 = 发给登录账号自己"
+      "description": "数字 UID。留 0 且填了昵称时由插件自己查。",
+      "default": 0
     },
-    "dm_reply": {
+    "mentionName": {
+      "type": "string",
+      "title": "要 @ 谁（B站昵称）",
+      "description": "留空 = 不发公开评论 —— 评论存在的意义就是 @ 那一下。",
+      "default": ""
+    },
+    "commentPerRound": {
+      "type": "integer",
+      "title": "每轮最多发几条评论",
+      "description": "0 = 不发；有效范围 0–20（超出由插件钳住）。",
+      "default": 1
+    },
+    "replyToComments": {
       "type": "boolean",
-      "title": "私信双向（读收件箱并回话）",
-      "default": false,
-      "description": "默认关闭；打开后值班轮可读最近私信会话预览，回话准则按值班章程执行"
+      "title": "回复评论",
+      "description": "默认关。打开后只回「直接回复到它那条评论下面」的人。",
+      "default": false
     },
-    "sessdata": {
-      "type": "string",
-      "title": "SESSDATA（浏览器 Cookie）",
-      "default": "",
-      "description": "读 AI 字幕、发评论需要；以明文存在本机插件数据目录，介意则不填（只影响字幕与评论）"
+    "replyPerRound": {
+      "type": "integer",
+      "title": "每轮最多回几条评论",
+      "default": 1
     },
-    "bili_jct": {
+    "dmWatch": {
+      "type": "boolean",
+      "title": "私信双向（读你的私信并回一句）",
+      "description": "只认主人本人发来的私信；查私信不花 token，只有真有人发消息才回一句。",
+      "default": true
+    },
+    "dmWatchMinutes": {
+      "type": "integer",
+      "title": "私信监听间隔（分钟）",
+      "description": "最小 3。",
+      "default": 1
+    },
+    "dmReplyPerDay": {
+      "type": "integer",
+      "title": "私信回复每天最多几条",
+      "description": "0 = 不限额。防刷用。",
+      "default": 0
+    },
+    "dmOwnerUid": {
+      "type": "integer",
+      "title": "只回这个 UID 的私信",
+      "description": "0 = 用「私信发给谁」那个。",
+      "default": 0
+    },
+    "keywords": {
+      "type": "array",
+      "title": "关注关键词",
+      "description": "一行一个。留空 = 走账号自己的首页推荐流（原版默认），不会所有人刷同一批视频。",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "personaPrompt": {
       "type": "string",
-      "title": "bili_jct（浏览器 Cookie，发评论用）",
-      "default": "",
-      "description": "同一份 Cookie 里的 csrf 值；只发评论时需要"
+      "title": "它按什么说话（人设提示词）",
+      "description": "想让它像谁就写在这儿；留空按中性说话。",
+      "default": ""
+    },
+    "reportLevel": {
+      "type": "string",
+      "title": "日报写多细",
+      "description": "full = 完整；brief = 每条一两行；off = 不写报告（只发评论/私信）。判重表任何一档都照写。",
+      "enum": ["full", "brief", "off"],
+      "default": "full"
+    },
+    "favFolderId": {
+      "type": "integer",
+      "title": "自动收藏到（收藏夹 fid）",
+      "description": "0 = 不收藏；>0 = 把这一轮挑中的收藏进该收藏夹（动作在宿主侧完成，模型拿不到这只手）。",
+      "default": 0
+    },
+    "transcribe": {
+      "type": "boolean",
+      "title": "本地转写（没字幕的视频用 Whisper）",
+      "description": "默认关。只打开开关不够，还得点「装转写依赖」（要下几百 MB 模型）。",
+      "default": false
+    },
+    "asrModel": {
+      "type": "string",
+      "title": "转写用哪个 Whisper 模型",
+      "enum": ["tiny", "base", "small", "medium"],
+      "default": "small"
+    },
+    "pythonPath": {
+      "type": "string",
+      "title": "Python（venv 里那个最好）",
+      "description": "「装主依赖」成功后会写成插件自己 venv 里的 python，一般不用手改。",
+      "default": ""
+    },
+    "workspace": {
+      "type": "string",
+      "title": "工作区（读你的 AGENTS.md）",
+      "description": "填了就把该目录的 AGENTS.md 内联进值班提示词，让它按你的设定说话；留空则中性。",
+      "default": ""
     }
   }
 }

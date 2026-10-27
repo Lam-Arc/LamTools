@@ -138,6 +138,27 @@ def test_inject_import_map_lands_before_any_module_script() -> None:
     assert inject_import_map(html, {}) == html
 
 
+def test_inject_import_map_replaces_the_embedded_base_map() -> None:
+    # user:“a3 无法使用，界面卡住了，查一查”+(构建页自带基础映射，Core 返回时原地替换为合并结果)
+    base = '<script type="importmap">{"imports":{"@/a.vue":"/assets/a.js"}}</script>'
+    html = (
+        "<html><head>"
+        f"{base}"
+        '<script type="module" src="/assets/main.js"></script>'
+        "</head><body></body></html>"
+    )
+    out = inject_import_map(html, {"@/a.vue": "/api/core/plugin-system/painter/assets/a.js"})
+
+    assert out.count('type="importmap"') == 1
+    importmap_at = out.find('<script type="importmap">')
+    module_at = out.find('<script type="module"')
+    assert importmap_at != -1 and importmap_at < module_at
+    payload = json.loads(
+        out[importmap_at + len('<script type="importmap">') : out.find("</script>", importmap_at)]
+    )
+    assert payload == {"imports": {"@/a.vue": "/api/core/plugin-system/painter/assets/a.js"}}
+
+
 def test_boot_loader_ignores_frontend_keys(tmp_path: Path) -> None:
     import sys
 

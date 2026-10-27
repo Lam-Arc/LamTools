@@ -101,19 +101,12 @@
       </div>
       <div class="general-toggle-row">
         <p class="general-hint general-hint--inline">{{ t("打开后，模型的提问卡超过 5 分钟无人回答，会按「用户跳过」回传，本轮继续往下走。 需要你授权的审批卡不受影响，会一直等你处理。") }}</p>
-        <button
-          class="text-btn toggle-btn"
-          :class="{ 'is-on': askAutoContinue }"
-          type="button"
-          :aria-label="t('提问自动继续')"
-          :aria-pressed="askAutoContinue"
-          :title="askAutoContinue ? t('已打开') : t('已关闭')"
+        <SundaySwitch
+          :model-value="askAutoContinue"
           :disabled="loading || busy"
-          @click="toggleAskAutoContinue"
-        >
-          <ToggleRight v-if="askAutoContinue" :size="16" :stroke-width="1.8" aria-hidden="true" />
-          <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </button>
+          :label="t('提问自动继续')"
+          @update:model-value="toggleAskAutoContinue"
+        />
       </div>
     </article>
 
@@ -126,19 +119,12 @@
       </div>
       <div class="general-toggle-row">
         <p class="general-hint general-hint--inline">{{ t("打开后阻止系统进入空闲休眠（手动睡眠、合盖休眠不受影响），长任务不会被中断。") }}</p>
-        <button
-          class="text-btn toggle-btn"
-          :class="{ 'is-on': keepAwake }"
-          type="button"
-          :aria-label="t('保持电脑运行')"
-          :aria-pressed="keepAwake"
-          :title="keepAwake ? t('已打开') : t('已关闭')"
+        <SundaySwitch
+          :model-value="keepAwake"
           :disabled="loading || busy"
-          @click="toggleKeepAwake"
-        >
-          <ToggleRight v-if="keepAwake" :size="16" :stroke-width="1.8" aria-hidden="true" />
-          <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </button>
+          :label="t('保持电脑运行')"
+          @update:model-value="toggleKeepAwake"
+        />
       </div>
     </article>
 
@@ -152,19 +138,12 @@
       </div>
       <div class="general-toggle-row">
         <p class="general-hint general-hint--inline">{{ t("机器内存不足导致本轮中断时，Sunday 会说明原因，并写明「可用内存大于多少就自动继续」； 内存回来后在同一会话自动开新一轮接着做，最多连续 3 次。你自己先发了新消息时不再自动继续。") }}</p>
-        <button
-          class="text-btn toggle-btn"
-          :class="{ 'is-on': memoryResume }"
-          type="button"
-          :aria-label="t('内存中断自动续跑')"
-          :aria-pressed="memoryResume"
-          :title="memoryResume ? t('已打开') : t('已关闭')"
+        <SundaySwitch
+          :model-value="memoryResume"
           :disabled="loading || memoryResumeBusy"
-          @click="toggleMemoryResume"
-        >
-          <ToggleRight v-if="memoryResume" :size="16" :stroke-width="1.8" aria-hidden="true" />
-          <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </button>
+          :label="t('内存中断自动续跑')"
+          @update:model-value="toggleMemoryResume"
+        />
       </div>
       <p class="general-hint">{{ t("自动继续的内存阈值（GB）：可用内存 = 物理内存 + 页面文件还能分配的量。调高更保守，但要等更久。") }}</p>
       <label class="field">
@@ -192,8 +171,9 @@
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Check, ToggleLeft, ToggleRight } from 'lucide-vue-next'
+import { Check } from 'lucide-vue-next'
 import UiSelect from '@/components/UiSelect.vue'
+import SundaySwitch from '@/components/SundaySwitch.vue'
 import { UI_LANGUAGES, uiLanguage, saveUiLanguage } from '@/i18n/index.ts'
 import { useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 

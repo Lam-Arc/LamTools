@@ -83,9 +83,10 @@ export type CoreAppInputItem = CoreTextInputItem | CoreAttachmentInputItem | Cor
 
 /**
  * Runtime configuration captured when a turn or queue item is accepted.
- * Model and thinking options remain turn-scoped; permission fields record the
- * initial/compatibility state and are overlaid from the live session before
- * dispatching or continuing work.
+ * The model stays turn-scoped. Permission fields record the initial state and
+ * are overlaid from the live session before dispatching or continuing work;
+ * mode, thinking level, and the shallow-thinking toggle follow the session's
+ * composer group and may change at the turn's next step.
  */
 export interface CoreAppRuntimeSnapshot {
   permission_preset?: 'ask' | 'auto' | 'full_access'

@@ -1,5 +1,30 @@
 # Latest Session Work
 
+## 插件系统验收：bili-scroll A6 状态（2026-10-26）
+
+- A6 包 `0.3.22-a6` 已装，插件 `bili-scroll` 2.2.2；值守运行时 `runner=run_profile`、`canSpawnRound=true`；MCP 服务器 `bilibili` 加载 34 个工具。
+- 值守轮的工具链已实际跑通：`mcp action=tools`、`bili_search`、`duty_paths / duty_seen_recent / duty_report_append / duty_seen_append / duty_digest_append` 均成功；子代理在 `bili_subtitle` 报「未登录」后按指令停一次，写出 `data/duty/out/2026-10-26.md`。唯一未完成：B站登录。
+- 登录：Chrome Default 没有 `.bilibili.com` cookie；Edge cookie 解密失败（app-bound key）；`browser_cookie3` 读不到 SESSDATA。**这一轮必须扫码登录**；扫码后 `bili-scroll.login_poll`，再跑一轮。
+- 本轮修掉的插件侧问题：每轮新建子会话（`agent=bili-duty-<ns>`，不继承上一轮失败历史）；插件 skill 与 round.md 只允许 `mcp action=run`，删掉会诱发 `run_command` 的旧回退；谷时窗口只有真正 `started` 才记为已跑；值守运行档声明 `approvedTools`，允许无人值守调用 `bili_reply / bili_send_message`（等级与能力上限不变）。
+- 结束条件：A 系列以「有登录、有字幕判断、有挑选/报告」为结束；之后按 B、C、D… 每个插件换一个字母跑下一批。
+
+### 下一批候选（按覆盖面上限排序）
+
+| 字母 | 候选 | UI | 重量 | 主要验证面 |
+|---|---|---|---|---|
+| B | `dsh-cert-mcp` | 无 | 轻 | 纯 MCP 注册、只读工具、零运行时依赖（最小 MCP 闭环） |
+| C | `kiwi` | 无 | 轻中 | npx 子进程、SQLite 持久化、技能提供、审批门 |
+| D | `dsh-pet` | 浮窗 | 中重 | 独立窗口/桌面入口、动画资源、会话事件、位置持久化 |
+| E | `dsh-cron` | 部分 | 中 | 定时器、后台子代理、持久 FireRecord、取消/生命周期 |
+| F | `dsh-mcp-connector` | 设置页 | 中重 | MCP 生命周期、OAuth 2.0 PKCE、凭据存储、工具发现 |
+| G | `dsh-agent-teams` | 工作区 | 重 | 多代理、依赖调度、持久状态、实时 UI |
+| H | `dsh-blender` | 部分 | 重 | 原生进程、venv/OpenCV、二进制资产、长任务 |
+| I | `dsh-plugin-appshot` | 部分 | 中 | 原生 sidecar、全局热键、截屏、系统权限 |
+
+> `dsh-plugin-sleep` 只适合做装完即弃的冒烟测试，不单独占一个字母系列。
+
+> DSH 插件版本与宿主 API 绑定较紧，移植时固定版本并保留原仓库对照；若某项依赖 DSH 私有运行时注入，先按宿主缺口分类，不直接改宿主。
+
 ## Sunday chatt 会话缓存命中率骤降调查与修复（2026-10-13）
 
 - Task/deployment/state：`sunday_cache_drop_investigation_20261013`；目标会话
@@ -4374,3 +4399,22 @@ mobile UI.
 - Published links: [versioned APK](https://47.114.43.99.nip.io/downloads/Sunday-mobile-0.1.7.apk) and latest APK. Versioned/latest HEAD returned 200 with expected length; public homepage GET and main JS GET returned 200, and the JS hash matched the local website build and contained version 0.1.7. No full APK GET was performed. Server SHA verification passed; the temporary key was revoked, authorized_keys is empty, services active, and staging removed.
 - The former stable 0.1.2 APK was preserved at `/var/www/lamtools/Sunday-mobile-latest-0.1.2-before-0.1.7-20260923.apk` with SHA256 `57958F1C739B4B2FC65556D49AD567A80A3CF21DD1C352791D31200609CFB561`. Website 0.3.6 was retained at `site-releases/0.3.6-mobile-0.1.7-20260923`; the live site was atomically switched to the refreshed release.
 - Release operation audit is owned by `mobile_017_release`; public verification evidence is `core/mobile/artifacts/release-017/public-verification.json`. This scoped sidebar/navigation deployment is complete. Broader Rust refactor remains incomplete.
+
+## Session composer parameter group and next-step settings (composer_state_20261025; 2026-10-25)
+
+- Goal/outcome: the Composer's mode, permission preset, model, thinking level, shallow-thinking toggle, and input info (per-session draft plus unsent attachment tray) are treated as one per-session "input parameter group". It is stored in session metadata as `composer_state` (top-level block), with `model_id` mirrored at the top level for auto-title and `runtime_preferences.permission_preset` kept authoritative for permissions.
+- Live operation: new `session.composer.set` (`app/live/composer.py`) normalizes/validates the group, patches session metadata once, publishes `session/updated`, auto-releases a parked tool approval for `auto`/`full_access`, and signals the active run through the new latest-wins settings mailbox on `RuntimeTaskRegistry` (`update_settings` / `settings_source`). `session.permissions.set` reuses the same approval-release helper and also signals the run.
+- Next-step application: the kernel calls `_apply_runtime_settings` after guidance consumption and before context/request construction. `CoreBaseAgentKit.apply_runtime_settings` replaces the frozen config for mode/thinking, mirrors the values into `runtime_snapshot` and flat state metadata, treats permission as an already-persisted dimension, and the kernel drops the frozen tool array when mode/permission changed so the next request advertises the new tools. The model is deliberately excluded and remains turn-scoped. `ShallowThinkingClient` is now always installed with an `enabled` flag so the toggle can flip at a step boundary.
+- Resume/continuation: `turn.resume` and `approval.respond` overlay mode/thinking/shallow from the session group (explicit stored fields only) while keeping the parked turn's model; `turn.start` fills missing options from the group so CLI/automatic turns inherit it.
+- UI: `useCoreExecutionControlsState` gains `CoreComposerControls`, `restoreControls`, `selectShallowThinking`, `controls`, and `onControlsChanged` (restore is echo-suppressed for one flush). `LamToolsApp` replaces the model-only PATCH watcher and permission writer with one serialized `session.composer.set` writer; `composer/sessionComposer.ts` holds the pure read/params helpers. The attachment tray parks/restores per thread in localStorage (`lamtools-core.composer.attachments.<threadId>`, uploaded items only); text drafts keep the existing per-thread storage.
+- Verification: new backend `tests/test_composer_state.py` (15 tests incl. pure helpers, handler validation/persistence/signal, kit application, dispatch registration) passed; kernel `TestKernelRuntimeSettings` (2) passed; shallow toggle test passed; existing live permission tests (3) and default-agent thinking tests passed. UI: new `core-pending-attachments.test.ts` (3), `core-session-composer.test.ts` (4), extended `core-execution-controls-state.test.ts` (16), `composer-drafts.test.ts` (6) passed; `vue-tsc --noEmit` passed.
+- Pre-existing failures observed and not caused by this work (verified by re-running with the new turn-start fallback disabled): `test_core_agent_rejects_removed_blocking_sub_agent_contract`, `test_turn_start_releases_registry_claim_before_trailing_cleanup`, three goal-dispatch boundary tests (monkeypatch targets a re-export that `queue_dispatch` no longer calls), and five `core-settings.test.ts` source-contract assertions.
+- Non-goals: queued items still snapshot options at enqueue time; cross-window sync is last-write-wins; sub-agent reasoning assignments are unchanged.
+
+## QQ bot port and host presets/waterfall (qqbot_port_20261026; 2026-10-26)
+
+- Goal/outcome: replicated `tencent-connect/dsh-qqbot` 0.5.3 (commit `d998f72`) as `plugins/qq-bot` 0.1.0. The port keeps the upstream QQ WebSocket/REST protocol, 14 middleware, 9 chat commands, per-peer persistent sessions, approvals/questions, C2C streaming, rich media, file sending, QR binding and settings UI. Difference table with the requested three problem classes: `plugins/qq-bot/差异表.md`.
+- Host additions: `plugin_system/agent_presets.py` (manifest `agentPresets` + project/global `agent-presets.jsonc`, stable registry, compose-only-unset-values, per-preset `register_service`/`service_for`), `plugin_system/prompt_waterfall.py` (ordered synchronous prompt handlers, append/replace sections, per-agent context), `plugin_system/model_catalog.py` (read-only list/resolve/default/capability/providers), `plugin_system/process_runtime.py` (JSON-RPC stdio child process backend with host lifecycle), `lamtools_core/channel/` (generic `ChannelRuntime` + `ChannelAdapter` + `ChannelHost`), `plugin_system/secrets.py` (DPAPI-protected, per-plugin secret store with scoped views), `plugin_system/plugin_http.py` (declared HTTP routes with token auth and auto-allow-only dispatch), `plugin.system.reload` (explicit module/backend reload) and `plugin.system.presets.list`, host-produced `deliverables/presented` events, and `question` tool `questions` arrays. `CoreBaseAgentKit` runs the waterfall and renders the preset prompt as a leading system-prompt block; `KernelSubAgentRunner` accepts `preset=` and re-applies it on approval/question resume, and adds `compact`/`fork`/`session_info`/`preset_service`/`clone_with_work_root`. `assemble_core_agent_plugins` creates/refreshes the registries in the plugin context; the main and plugin sub-agent runners receive them. Plugin operations also proxy to a process backend, and process plugins may omit Python `handler` fields.
+- Plugin integration: `AgentBridge` uses the host preset registry, model catalog and registers a `qqbot:scope-prompt` waterfall section; preset prompts are leading blocks, the caller's late context remains a tail message. Approval allow uses `resume_approved`; deny/timeout/cancel use `resume_question` as a denial/skip tool result to clear the pending state. Tool target context uses `contextvars` with a current-task fallback. `/compact` prefers `preset_service("compaction")`; `/fork` and `/history` use the host child-session APIs. AppSecret now lives in the host secret store; legacy plaintext is migrated on start and cleared from `config.jsonc`. The QQ bridge still keeps its own session layer; the generic channel runtime is a host addition validated by its own tests, not yet wired into this plugin.
+- Verification: plugin tests 43 passed (`plugins/qq-bot/tests/`); host architecture tests 41 passed (`test_agent_presets_prompt_waterfall.py` 11, `test_channel_runner_services.py` 5, `test_channel_runtime.py` 9, `test_process_runtime.py` 4, `test_plugin_secrets.py` 5, `test_plugin_http_routes.py` 4, `test_deliverables_event.py` 3); `test_plugin_host_rebuild.py` also covers `plugin.system.reload`; wiki `node wiki/scripts/verify.mjs` passed 80 articles. A real `q.qq.com` bind task was created and an SVG QR rendered (`phase=waiting`); the installed plugin passed `load_enabled_plugin_backends(start=True)` with `state=ready`, health check, and clean stop. End-to-end script confirmed `qq-readonly` reaches the runner and `qqbot:scope-prompt` appears in prompt assembly. Real QQ message send/receive, real model turns, vision calls and chunked upload remain unverified because no AppID/AppSecret or phone scan was available. Wiki: `wiki/articles/agent-presets-and-prompt-waterfall.md` and `wiki/articles/plugin-host-runtime.md`.
+- Installation note: for verification the plugin folder was copied to `%APPDATA%/LamTools/plugins/qq-bot` because the CLI install path requires a running desktop host; the normal install remains the plugin page / `core plugin install`. The worktree is intentionally left dirty; no commit/tag/push was made.

@@ -339,6 +339,8 @@
 </template>
 
 <script setup lang="tsx">
+import { useSplitKeyboardScope } from '@/split/keyboardScope'
+const splitKeyboardActive = useSplitKeyboardScope()
 import { t } from '@/i18n/index.ts'
 
 /**
@@ -967,7 +969,8 @@ function handleBack(): boolean {
 function onBackClick(): void {
   if (!handleBack()) emit('back')
 }
-defineExpose({ handleBack, isEditing: () => mode.value === 'editor' })
+// user:“内置文本编辑器”+(通用分屏关闭前可保存或保留方案草稿)。
+defineExpose({ handleBack, isEditing: () => mode.value === 'editor', hasUnsavedChanges: () => dirty.value || saving.value, savePendingChanges: async () => { if (saving.value) return false; await saveEditor(); return !dirty.value }, discardPendingChanges: leaveEditor })
 
 /* ---- 顶部条标题随子页变化 ---- */
 const heading = computed(() => {
@@ -987,6 +990,7 @@ watch(heading, (value) => emit('heading', { ...value }), { immediate: true })
 
 /* ---- Esc：先关掉最上面那一层，都不在了才退出整版 ---- */
 function onKeydown(event: KeyboardEvent): void {
+  if (!splitKeyboardActive()) return
   if (event.key !== 'Escape') return
   if (pendingDiscard.value) { pendingDiscard.value = false; return }
   if (pendingDelete.value) { pendingDelete.value = null; return }

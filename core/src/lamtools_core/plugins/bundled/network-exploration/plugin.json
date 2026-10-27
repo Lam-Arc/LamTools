@@ -1,0 +1,80 @@
+{
+  "skills": [
+    "./skills"
+  ],
+  "name": "network-exploration",
+  "version": "0.2.3",
+  "description": "Network Exploration · 网络拓展",
+  "config": {
+    "panel": "./config/panel.js",
+    "schema": "./config/schema.json"
+  },
+  "backend": "./backend.py",
+  "platforms": "desktop",
+  "ui": {
+    "pages": [
+      {
+        "id": "network",
+        "entry": "./ui/page.mjs",
+        "title": "网络拓展",
+        "navigation": true,
+        "order": 40
+      }
+    ],
+    "regions": [
+      {
+        "entry": "./ui/quick.mjs",
+        "region": "right",
+        "order": 40
+      }
+    ]
+  },
+  "defaultEnabled": true,
+  "tools": [
+    "./tools.jsonc"
+  ],
+  "operations": [
+    "./operations.json"
+  ],
+  "cli": {
+    "commands": [
+      {
+        "name": "network-exploration",
+        "commands": [
+          {
+            "name": "call",
+            "handler": "sunday_network_cli:network_call",
+            "arguments": [
+              {
+                "flags": [
+                  "method"
+                ],
+                "help": "Operation suffix, e.g. status or diagnose"
+              },
+              {
+                "flags": [
+                  "--arguments-file"
+                ],
+                "default": ""
+              },
+              {
+                "flags": [
+                  "--base-url"
+                ],
+                "default": ""
+              },
+              {
+                "flags": [
+                  "--ws-path"
+                ],
+                "default": ""
+              }
+            ],
+            "help": "Call the running network plugin"
+          }
+        ],
+        "help": "Network Exploration"
+      }
+    ]
+  }
+}

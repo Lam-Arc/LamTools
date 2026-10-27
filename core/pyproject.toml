@@ -4,11 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lamtools-core"
-version = "0.3.22-a3"
+version = "0.3.23"
 description = "LamTools Core SDK - protocols, types, and base interfaces"
 requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
+    # user:“从 GitHub 等平台下载并安装”+(市场 CLI 的实际连接客户端使用 aiohttp，干净安装也必须可用)。
+    "aiohttp>=3.13.0",
+    # user:“QQ…安装的时候直接从 GitHub 上”+(冻结宿主提供 QQ 绑定所需的加密运行库，插件代码仍独立分发)。
+    "cryptography>=46.0.0",
     # [asyncio] brings greenlet, which sqlalchemy.ext.asyncio imports at runtime.
     # It was never declared: the packaged backend only started because the
     # resolver happened to install greenlet, and a fresh environment does not —

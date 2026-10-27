@@ -1,0 +1,79 @@
+{
+  "operations": [
+    {
+      "name": "qqbot.status",
+      "description": "QQ 机器人状态：绑定、网关、会话数、配置摘要",
+      "handler": "ops:status"
+    },
+    {
+      "name": "qqbot.bind.state",
+      "description": "读取扫码绑定状态（starting / waiting / saving / failed / bound）",
+      "handler": "ops:bind_state"
+    },
+    {
+      "name": "qqbot.bind.refresh",
+      "description": "废弃当前二维码并重新生成",
+      "handler": "ops:bind_refresh"
+    },
+    {
+      "name": "qqbot.bind.manual",
+      "description": "手动保存 AppID / AppSecret",
+      "handler": "ops:bind_manual"
+    },
+    {
+      "name": "qqbot.bind.unbind",
+      "description": "解绑并清除已保存凭据",
+      "handler": "ops:bind_unbind"
+    },
+    {
+      "name": "qqbot.config.get",
+      "description": "读取当前配置（appSecret 不回传）",
+      "handler": "ops:config_get"
+    },
+    {
+      "name": "qqbot.config.update",
+      "description": "更新配置（只接受 schema 中的字段）",
+      "handler": "ops:config_update"
+    },
+    {
+      "name": "qqbot.session.list",
+      "description": "列出当前内存中的 QQ 会话",
+      "handler": "ops:session_list"
+    },
+    {
+      "name": "qqbot.session.reset",
+      "description": "为指定私聊/群聊开启新会话",
+      "handler": "ops:session_reset"
+    },
+    {
+      "name": "qqbot.session.stop",
+      "description": "中止指定会话正在进行的生成",
+      "handler": "ops:session_stop"
+    },
+    {
+      "name": "qqbot.models.list",
+      "description": "列出宿主可用模型",
+      "handler": "ops:models_list"
+    },
+    {
+      "name": "qqbot.test.send",
+      "description": "向指定私聊/群聊发送一条测试消息",
+      "handler": "ops:test_send"
+    },
+    {
+      "name": "qqbot.gateway.restart",
+      "description": "重启 QQ 网关（配置或凭据变更后）",
+      "handler": "ops:gateway_restart"
+    },
+    {
+      "name": "qqbot.diagnose",
+      "description": "诊断信息：绑定、网关、最近日志、配置（脱敏）",
+      "handler": "ops:diagnose"
+    },
+    {
+      "name": "qqbot.logs.tail",
+      "description": "读取插件日志尾部",
+      "handler": "ops:logs_tail"
+    }
+  ]
+}

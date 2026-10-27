@@ -100,6 +100,8 @@
 
 ## 参见
 
+- [分屏](split-pane.md)
+
 - [方案：从想法到开工](plans.md)
 - [记忆](memory.md)
 - [资料库](library.md)

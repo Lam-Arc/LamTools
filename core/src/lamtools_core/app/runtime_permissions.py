@@ -101,10 +101,12 @@ def serialize_tier_tools(raw: object) -> dict[str, list[str]]:
 def overlay_runtime_permissions(target: object, current: object) -> dict[str, Any]:
     """Overlay the live permission keys from ``current`` onto ``target``.
 
-    Model/thinking options stay tied to the parked turn; only the permission
-    dimension is refreshed from the live session. This is the one merge used by
-    approval continuations, queue dispatch, and toolbox refresh so no caller
-    can invent a different precedence or copy a partial key set.
+    Permissions are refreshed from the live session here. Model and composer
+    options are handled separately: the model stays tied to the parked turn,
+    while mode/thinking/shallow follow the session's composer group through
+    ``composer_state.overlay_composer_controls``. This is the one permission
+    merge used by approval continuations, queue dispatch, and toolbox refresh,
+    so no caller can invent a different precedence or copy a partial key set.
     """
     merged = dict(target) if isinstance(target, Mapping) else {}
     if not isinstance(current, Mapping):
@@ -293,6 +295,9 @@ class ResolvedRuntimePermissions:
     def to_dict(self) -> dict[str, Any]:
         return {
             "permission_preset": self.permission_preset,
+            # user:“工具权限是改成 123 级”+(快照明确记录免问线与能力上限，避免恢复时回到工具名单)。
+            "auto_approve_level": {"ask": 1, "auto": 2, "full_access": 3}[self.permission_preset],
+            "available_level": {"read_only": 1, "limited_edit": 2, "full_edit": 3}[self.active_tier],
             "active_tier": self.active_tier,
             "tier_tools": serialize_tier_tools(self.tier_tools),
             "approval_policy": self.approval_policy,
@@ -316,7 +321,7 @@ def resolve_permission_preset(
         else DEFAULT_BASE_ALLOW_ACCESS_OUTSIDE_WORKDIR
     )
     if normalized_preset == "full_access":
-        active_tier: PermissionMode = "full_edit"
+        active_tier: PermissionMode = normalized_base
         outside = True
         approval: ApprovalPolicy = "auto_approve"
     else:

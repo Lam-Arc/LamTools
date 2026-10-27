@@ -33,7 +33,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$BaseUrl = 'https://ainarit.com',
+    [string]$BaseUrl = '',
     [string]$InstallDir = '',
     [switch]$KeepInstall,
     [int]$StartupTimeoutSeconds = 90
@@ -117,8 +117,16 @@ if (Test-Path -LiteralPath $InstallDir) { Remove-Item -LiteralPath $InstallDir -
 try {
     # ---------------------------------------------------------- 1. the manifest
     Write-Host '1. read the published manifest'
-    $manifestUrl = "$($BaseUrl.TrimEnd('/'))/downloads/desktop-update.json"
-    $manifest = Invoke-RestMethod -Uri $manifestUrl -TimeoutSec 60
+    # user:“尽快摆脱对官网的依赖”+(公开更新验收默认走 GitHub，显式 BaseUrl 才验收兼容站点)。
+    if ($BaseUrl) {
+        $manifestUrl = "$($BaseUrl.TrimEnd('/'))/downloads/desktop-update.json"
+        $manifest = Invoke-RestMethod -Uri $manifestUrl -TimeoutSec 60
+    } else {
+        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Lam-Arc/LamTools/releases/latest' -TimeoutSec 60
+        $asset = $release.assets | Where-Object { $_.name -match '^Sunday_.*_x64-setup\.exe$' } | Select-Object -First 1
+        if (-not $asset) { Fail 'GitHub release has no Windows installer' }
+        $manifest = [pscustomobject]@{ version = $release.tag_name.TrimStart('v'); download_url = $asset.browser_download_url; sha256 = ([string]$asset.digest).Replace('sha256:', ''); size = $asset.size }
+    }
     $version = [string]$manifest.version
     $downloadUrl = [string]$manifest.download_url
     $expectedSha = ([string]$manifest.sha256).ToLowerInvariant()

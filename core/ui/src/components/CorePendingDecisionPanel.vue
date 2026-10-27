@@ -194,7 +194,7 @@ function activate(index: number) {
 }
 
 function optionClass(option: CoreDecisionChoice): string {
-  if (option.id === 'approve' || option.id === 'confirm') return 'is-approve'
+  if (option.id === 'approve' || option.id === 'trust' || option.id === 'confirm') return 'is-approve'
   if (option.id === 'deny' || option.id === 'cancel') return 'is-deny'
   return 'is-neutral'
 }

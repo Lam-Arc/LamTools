@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping
@@ -44,6 +45,45 @@ from lamtools_core.tool.permission import AUTO_ALLOW
 
 # Type alias for the attachment-lookup protocol (duck-typed AttachmentService.get).
 AttachmentServiceLike = Any
+
+
+class RunnerCompactionService:
+    """Preset-scoped compaction service backed by one child-session runner."""
+
+    def __init__(self, runner: "KernelSubAgentRunner") -> None:
+        self._runner = runner
+
+    async def compact_now(self, session_id: str, *, source_command_id: str = "") -> dict[str, Any]:
+        del source_command_id
+        return await self._runner.compact(session_id)
+
+
+def deliverables_payload(artifacts: list[Any], *, tool_name: str = "", call_id: str = "") -> dict[str, Any]:
+    """Normalize tool artifacts for the host ``deliverables/presented`` event."""
+    files = [
+        artifact.to_dict() if callable(getattr(artifact, "to_dict", None)) else dict(artifact)
+        for artifact in artifacts
+        if artifact is not None
+    ]
+    payload: dict[str, Any] = {"files": files}
+    if tool_name:
+        payload["tool_name"] = tool_name
+    if call_id:
+        payload["call_id"] = call_id
+    return payload
+
+
+def _history_message_text(item: dict[str, Any]) -> str:
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+        return "\n".join(part for part in parts if part)
+    return ""
 
 
 def _state_invocation_id(state: Any) -> str:
@@ -191,6 +231,7 @@ class KernelSubAgentRunner:
         skill_registry: SkillRegistry | None = None,
         mcp_caller: MCPToolCaller | None = None,
         mcp_tool_specs: list[ToolSpec] | None = None,
+        mcp_config_files: Iterable[Path] | None = None,
         context_window_tokens: int | None = None,
         compact_trigger_ratio: float = 0.8,
         # 成员＝主代理的受限变体：除工具与提示词外不应有差异。父内核已解析的
@@ -221,6 +262,8 @@ class KernelSubAgentRunner:
         parent_guidance_sink: Callable[[str, str, str, str], bool] | None = None,
         artifact_store: Any | None = None,
         plugin_mode_exclusive_tools: dict[str, set[str]] | None = None,
+        agent_presets: Any | None = None,
+        prompt_waterfall: Any | None = None,
     ) -> None:
         self.work_root = Path(work_root)
         # library 工具经它整理当前项目的成果目录；子代理与主代理同库。
@@ -259,6 +302,7 @@ class KernelSubAgentRunner:
             self.skill_registry = skill_registry or SkillRegistry(
                 explicit_roots=self.loaded_skill_roots
             )
+        self.mcp_config_files = tuple(mcp_config_files or ())
         self.mcp_caller = mcp_caller
         self.mcp_tool_specs = list(mcp_tool_specs or [])
         self.context_window_tokens = context_window_tokens
@@ -289,6 +333,12 @@ class KernelSubAgentRunner:
         }
         self.plugin_availability = plugin_availability
         self.parent_guidance_sink = parent_guidance_sink
+        # user:“agent preset（智能体预设）…是宿主缺失，去补”+(子代理运行器
+        # 接受宿主预设注册表；预设只填补调用方未显式设置的 mode/tools/model/prompt)。
+        self.agent_presets = agent_presets
+        # user:“system-prompt waterfall（系统提示词流水线）都是宿主缺失，去补”
+        # +(子代理内核的提示词组装接入插件流水线)。
+        self.prompt_waterfall = prompt_waterfall
         # Per-session serialization: parallel sub_agent calls with the same
         # agent name share one child session id, so concurrent runs would
         # interleave history writes (audit 02 S2).  Keyed by session id, which
@@ -312,7 +362,8 @@ class KernelSubAgentRunner:
             from lamtools_core.mcp import MCPToolRegistry
 
             independent_mcp = MCPToolRegistry(
-                self.work_root, config_files=list(self.mcp_caller.config_files)
+                self.work_root, config_files=list(self.mcp_caller.config_files),
+                plugin_host=getattr(getattr(self.plugin_availability, "__self__", None), "host", None),
             )
             await independent_mcp.load()
             independent_specs = independent_mcp.tool_specs()
@@ -325,6 +376,7 @@ class KernelSubAgentRunner:
             tier_tools=self.tier_tools, runtime_snapshot=self.runtime_snapshot,
             loaded_skill_roots=self.loaded_skill_roots, skill_registry=self.skill_registry,
             mcp_caller=independent_mcp, mcp_tool_specs=independent_specs,
+            mcp_config_files=self.mcp_config_files,
             context_window_tokens=self.context_window_tokens,
             compact_trigger_ratio=self.compact_trigger_ratio,
             loop_policy=self._loop_policy_template,
@@ -348,6 +400,8 @@ class KernelSubAgentRunner:
             parent_guidance_sink=self.parent_guidance_sink,
             artifact_store=self.artifact_store,
             plugin_mode_exclusive_tools=self.plugin_mode_exclusive_tools,
+            agent_presets=self.agent_presets,
+            prompt_waterfall=self.prompt_waterfall,
         )
         clone._owned_mcp_registry = independent_mcp
         return clone
@@ -383,12 +437,137 @@ class KernelSubAgentRunner:
             str(self.instructions or ""),
             id(self.artifact_store) if self.artifact_store is not None else 0,
             stable(self.plugin_mode_exclusive_tools),
+            tuple(str(path) for path in self.mcp_config_files),
         )
 
     async def close(self) -> None:
         if self._owned_mcp_registry is not None:
             await self._owned_mcp_registry.close()
             self._owned_mcp_registry = None
+
+    # ── Child-session lifecycle APIs for plugins ───────────────────────────
+    def clone_with_work_root(self, work_root: str | Path) -> "KernelSubAgentRunner":
+        """Return a runner view whose tools run in a plugin-owned directory.
+
+        The state store, session locks and plugin tool handlers are shared, so
+        the clone is a different working directory for the same child-session
+        namespace, not a second runtime.
+        """
+        clone = copy.copy(self)
+        clone.work_root = Path(work_root)
+        return clone
+
+    def preset_service(self, name: str, preset_id: str = "") -> Any | None:
+        """Resolve a live service for the active preset.
+
+        The registry may hold a plugin-registered service under
+        ``(preset_id, name)``.  Compaction is built in: every runner can
+        compact its own child sessions, so it is returned even when no plugin
+        registered one.
+        """
+        name = str(name or "")
+        if self.agent_presets is not None and hasattr(self.agent_presets, "service_for"):
+            service = self.agent_presets.service_for(preset_id, name)
+            if service is not None:
+                return service
+        if name == "compaction":
+            return RunnerCompactionService(self)
+        return None
+
+    async def compact(self, session_id: str) -> dict[str, Any]:
+        """Manually compact one child session (same pipeline as a normal turn)."""
+        if not isinstance(self.state_store, RuntimeCheckpointStore):
+            raise RuntimeError("child-session history storage does not support manual compaction")
+        from lamtools_core.app.command_execution import compact_runtime_history
+
+        return await compact_runtime_history(
+            runtime_state_store=self.state_store,
+            thread_id=session_id,
+            llm_client=self.llm_client,
+            model=self.model_id,
+        )
+
+    async def fork(self, session_id: str, new_agent_name: str) -> dict[str, Any]:
+        """Fork a child session's committed state and history to a new agent name."""
+        state = await self.state_store.get(session_id)
+        if state is None:
+            raise ValueError(f"child session not found: {session_id}")
+        agent_name = normalize_sub_session_agent_name(new_agent_name)
+        new_session_id = f"{self.session_prefix}:sub:{agent_name}"
+        if new_session_id == session_id:
+            raise ValueError("fork target must be a different agent name")
+        history: list[dict[str, Any]] = []
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            history = await self.state_store.get_history(session_id)
+        forked = deepcopy(state)
+        forked.session_id = new_session_id
+        forked.run_id = uuid.uuid4().hex
+        forked.status = "idle"
+        forked.position = ""
+        forked.loop_state = "continue"
+        forked.turn_count = 0
+        metadata = forked.metadata if isinstance(forked.metadata, dict) else {}
+        metadata.pop("pending_approval", None)
+        metadata.pop("pending_waiting_request", None)
+        metadata.pop("sub_invocation_id", None)
+        delegated = metadata.get("delegated_session")
+        if isinstance(delegated, dict):
+            delegated["session_id"] = new_session_id
+            delegated["agent"] = agent_name
+        forked.metadata = metadata
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            await self.state_store.save_checkpoint(forked, history)
+        else:
+            await self.state_store.save(forked)
+        return {
+            "session_id": new_session_id,
+            "agent": agent_name,
+            "forked_from": session_id,
+            "history_count": len(history),
+        }
+
+    async def session_info(self, session_id: str) -> dict[str, Any]:
+        """Read a child session's status, usage and recent transcript."""
+        state = await self.state_store.get(session_id)
+        if state is None:
+            raise ValueError(f"child session not found: {session_id}")
+        history: list[dict[str, Any]] = []
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            history = await self.state_store.get_history(session_id)
+        usage = state.metadata.get("runtime_usage") if isinstance(state.metadata, dict) else None
+        if not isinstance(usage, dict):
+            usage = state.metadata.get("usage") if isinstance(state.metadata, dict) else None
+        usage = usage if isinstance(usage, dict) else {}
+        messages = [
+            {
+                "role": str(item.get("role") or ""),
+                "text": _history_message_text(item),
+                **({"name": str(item.get("name"))} if item.get("name") else {}),
+            }
+            for item in history
+            if str(item.get("role") or "") in {"user", "assistant"}
+        ]
+        return {
+            "session_id": session_id,
+            "status": state.status,
+            "loop_state": state.loop_state,
+            "turn_count": state.turn_count,
+            "history_count": len(history),
+            "message_count": len(messages),
+            "model_id": str((state.metadata or {}).get("model_id") or ""),
+            "agent_preset": str((state.metadata or {}).get("agent_preset") or ""),
+            "pending": bool(
+                (state.metadata or {}).get("pending_approval")
+                or (state.metadata or {}).get("pending_waiting_request")
+            ),
+            "usage": {
+                "input": int(usage.get("prompt_tokens") or usage.get("input") or 0),
+                "output": int(usage.get("completion_tokens") or usage.get("output") or 0),
+                "cacheRead": int(usage.get("cached_tokens") or usage.get("cacheRead") or 0),
+                "cacheWrite": int(usage.get("cache_creation_tokens") or usage.get("cacheWrite") or 0),
+            },
+            "messages": messages[-20:],
+        }
 
     def _disabled_tools(self) -> set[str]:
         """Sub-agent disabled set: never sub_agent itself; generate_image only
@@ -398,7 +577,7 @@ class KernelSubAgentRunner:
             disabled.add("generate_image")
         return disabled
 
-    def _build_toolbox(self, disabled_tools: set[str], *, active_mode: str | None) -> CoreToolbox:
+    def _build_toolbox(self, disabled_tools: set[str], *, active_mode: str | None, mcp_service: Any | None = None) -> CoreToolbox:
         async def child_message(call: ToolCall):
             from lamtools_core.sub_agent_supervisor import current_child_identity
 
@@ -474,8 +653,8 @@ class KernelSubAgentRunner:
             tier_tools=child_tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
             skill_registry=self.skill_registry,
+            mcp_service=mcp_service,
             mcp_caller=self.mcp_caller,
-            mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
             imagegen_config=self.imagegen_config,
             activated_mcp_servers=self.activated_mcp_servers,
@@ -582,36 +761,76 @@ class KernelSubAgentRunner:
         guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = None,
         guidance_acknowledger: Callable[[list[str]], Any] | None = None,
         initial_guidance_ids: list[str] | None = None,
+        preset: str = "",
     ) -> SubAgentRunResult:
         agent_name = normalize_sub_session_agent_name(agent)
         lock = self._session_locks.setdefault(
             f"{self.session_prefix}:sub:{agent_name}", asyncio.Lock()
         )
-        async with lock:
-            return await self._run_locked(
-                task=task,
-                agent=agent,
-                model=model,
-                reasoning_level=reasoning_level,
-                reasoning_effort=reasoning_effort,
-                mode=mode,
-                attachments=attachments,
-                parent_call_id=parent_call_id,
-                parent_run_id=parent_run_id,
-                parent_turn_id=parent_turn_id,
-                allowed_tools=allowed_tools,
-                profile_spec=profile_spec,
-                execution_context=execution_context,
-                late_context=late_context,
-                guidance_source=guidance_source,
-                guidance_finalizer=guidance_finalizer,
-                guidance_acknowledger=guidance_acknowledger,
-                initial_guidance_ids=initial_guidance_ids,
-            )
+        # user:“该修修”+(每轮独占连接、命令白名单和清理，不修改 runner 的共享激活集)。
+        service, owns_service = self._new_command_service(profile_spec)
+        try:
+            async with lock:
+                return await self._run_locked(
+                    mcp_service=service,
+                    task=task,
+                    agent=agent,
+                    model=model,
+                    reasoning_level=reasoning_level,
+                    reasoning_effort=reasoning_effort,
+                    mode=mode,
+                    attachments=attachments,
+                    parent_call_id=parent_call_id,
+                    parent_run_id=parent_run_id,
+                    parent_turn_id=parent_turn_id,
+                    allowed_tools=allowed_tools,
+                    profile_spec=profile_spec,
+                    execution_context=execution_context,
+                    late_context=late_context,
+                    guidance_source=guidance_source,
+                    guidance_finalizer=guidance_finalizer,
+                    guidance_acknowledger=guidance_acknowledger,
+                    initial_guidance_ids=initial_guidance_ids,
+                    preset=preset,
+                )
+        finally:
+            if owns_service:
+                await service.close()
+
+    def _new_command_service(self, profile_spec=None):
+        from lamtools_core.mcp.command_service import MCPCommandService
+        from lamtools_core.mcp import MCPToolRegistry
+        owned = bool(self.mcp_config_files) or self.mcp_caller is None
+        # user:“该调的模块就是该写的东西”+(子代理的 MCP 同样归插件宿主管理，更新前必须排空并关闭)。
+        registry = MCPToolRegistry(self.work_root, config_files=list(self.mcp_config_files),
+            plugin_host=getattr(getattr(self.plugin_availability, "__self__", None), "host", None)) if owned else self.mcp_caller
+        service = MCPCommandService(registry, loaded=not owned)
+        if profile_spec is not None and profile_spec.mcp_tools:
+            service.allowed_tools = frozenset(profile_spec.mcp_tools)
+        return service, owned
+
+    @staticmethod
+    def _profile_from_state(state):
+        from lamtools_core.plugin_system.profiles import ProfileSpec, ProfileBudget
+        raw = state.metadata.get("run_profile_spec")
+        if not isinstance(raw, dict):
+            return None
+        values = dict(raw)
+        values["budget"] = ProfileBudget(**dict(values.get("budget") or {}))
+        for key in ("tools", "mcp_servers", "mcp_tools", "skills"):
+            values[key] = tuple(values.get(key) or ())
+        return ProfileSpec(**values)
+
+    async def _save_profile_budget(self, result, toolbox):
+        budget = getattr(toolbox, "run_budget", None)
+        if budget is not None:
+            result.state.metadata["run_profile_budget"] = dict(budget.counters)
+            await self.state_store.save(result.state)
 
     async def _run_locked(
         self,
         *,
+        mcp_service: Any | None = None,
         task: str,
         agent: str = "",
         invocation_id: str = "",
@@ -631,7 +850,26 @@ class KernelSubAgentRunner:
         guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = None,
         guidance_acknowledger: Callable[[list[str]], Any] | None = None,
         initial_guidance_ids: list[str] | None = None,
+        preset: str = "",
     ) -> SubAgentRunResult:
+        preset_id = str(preset or "").strip()
+        preset_prompt = ""
+        if preset_id and self.agent_presets is not None:
+            try:
+                composed = self.agent_presets.compose(
+                    preset_id,
+                    mode=mode,
+                    allowed_tools=allowed_tools,
+                    model=model,
+                    prompt=late_context,
+                )
+            except KeyError as exc:
+                raise ValueError(f"unknown agent preset '{preset_id}'") from exc
+            mode = composed.mode or mode
+            allowed_tools = composed.allowed_tools if composed.allowed_tools is not None else allowed_tools
+            model = composed.model or model
+            late_context = composed.prompt
+            preset_prompt = composed.preset_prompt
         # Resolve model early: the LLM may pass a display_name (e.g. "Kimi-K2.6")
         # instead of a model_id (e.g. "xopkimik26"). Translate to canonical
         # model_id once so the entire downstream chain (capability lookup,
@@ -659,16 +897,10 @@ class KernelSubAgentRunner:
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = self._disabled_tools()
         if profile_spec is not None:
-            # user:“白名单里的 MCP 工具要服务器激活才可用”+运行档声明的
-            # MCP 服务器并入本次激活集——必须在构建工具箱之前，否则声明的
-            # 工具面进不了这次会话。
-            declared_servers = tuple(getattr(profile_spec, "mcp_servers", ()) or ())
-            if declared_servers:
-                self.activated_mcp_servers = set(self.activated_mcp_servers or ()) | set(declared_servers)
             # user:“运行档由宿主强制”+白名单以声明为准（覆盖调用方传入的
             # allowed_tools），配合 apply_profile 的 fail closed 执行拒绝。
             allowed = set(profile_spec.tools)
-            probe = self._build_toolbox(disabled_tools, active_mode=effective_mode)
+            probe = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
             full_names = {spec.name for spec in probe.tool_specs()}
             disabled_tools |= full_names - allowed
         elif allowed_tools:
@@ -678,15 +910,24 @@ class KernelSubAgentRunner:
                 # full name set is the toolbox's own spec set (audit 18 S2 —
                 # cfg.tools/allowed_tools from plugin UIs must be honored by
                 # the runner rather than only persisted in the session.
-                probe = self._build_toolbox(disabled_tools, active_mode=effective_mode)
+                probe = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
                 full_names = {spec.name for spec in probe.tool_specs()}
                 disabled_tools |= full_names - allowed
-        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode)
+        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
         if profile_spec is not None:
             # 宿主强制：白名单可见面 + execute 拒绝 + 审批覆盖 + 预算计数。
             from lamtools_core.plugin_system.profiles import apply_profile
 
             apply_profile(toolbox, profile_spec)
+        if profile_spec is not None:
+            # user:“该修修”+(运行档依赖的技能正文由宿主预载，受限工具面不必另开文件读取权)。
+            bodies = []
+            for skill_name in getattr(profile_spec, "skills", ()):
+                body = self.skill_registry.load_prompt_content(self.work_root, skill_name)
+                if body.startswith(f'Skill "{skill_name}" not found.'):
+                    raise ValueError(body)
+                bodies.append(body)
+            late_context = "\n\n".join([*bodies, late_context]).strip()
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
             parent_sink=self.parent_event_sink,
@@ -708,6 +949,7 @@ class KernelSubAgentRunner:
             reasoning_level=effective_reasoning_level,
             active_mode=effective_mode,
             late_context=late_context,
+            preset_prompt=preset_prompt,
         )
         workflow_metadata = _workflow_context_metadata(
             execution_context,
@@ -726,7 +968,9 @@ class KernelSubAgentRunner:
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                     "actor_kind": "sub_agent",
+                    "run_profile_spec": asdict(profile_spec) if profile_spec is not None else None,
                     "initial_guidance_ids": list(initial_guidance_ids or []),
+                    **({"agent_preset": preset_id} if preset_id else {}),
                     "delegated_session": {
                         "session_id": f"{self.session_prefix}:sub:{agent_name}",
                         "parent_thread_id": self.session_prefix,
@@ -755,6 +999,9 @@ class KernelSubAgentRunner:
                 guidance_acknowledger=guidance_acknowledger,
             )
         )
+        if preset_id:
+            result.state.metadata["agent_preset"] = preset_id
+        await self._save_profile_budget(result, toolbox)
         delegated_session = {
             "session_id": result.session_id,
             "parent_thread_id": self.session_prefix,
@@ -793,6 +1040,7 @@ class KernelSubAgentRunner:
         reasoning_level: str | None = None,
         active_mode: str | None = None,
         late_context: str = "",
+        preset_prompt: str = "",
     ) -> CoreLoopKernel:
         return CoreLoopKernel(
             kit=CoreBaseAgentKit(
@@ -808,8 +1056,10 @@ class KernelSubAgentRunner:
                     approval_policy=self.approval_policy,
                     active_mode=active_mode,
                     request_local_late_context=late_context,
+                    agent_preset_prompt=preset_prompt,
                 ),
                 toolbox=toolbox,
+                prompt_waterfall=self.prompt_waterfall,
             ),
             llm_client=self.llm_client,
             state_store=self.state_store,
@@ -1038,12 +1288,24 @@ class KernelSubAgentRunner:
             run_id=state.run_id,
             tags=["approval", "resolved"],
         ))
-        approval_toolbox = self._build_toolbox(
-            self._disabled_tools(),
-            active_mode=effective_mode,
-        )
-        call = approval_toolbox.prepare_approved_call(call)
-        tool_result = await approval_toolbox.execute(call)
+        # user:“一次性处理干净 不要留尾巴”+(审批恢复仍装配命令连接、白名单与已消耗预算)。
+        profile = self._profile_from_state(state)
+        service, owned = self._new_command_service(profile)
+        try:
+            approval_toolbox = self._build_toolbox(self._disabled_tools(), active_mode=effective_mode, mcp_service=service)
+            if profile is not None:
+                from lamtools_core.plugin_system.profiles import apply_profile
+                counters = apply_profile(approval_toolbox, profile)
+                counters.update(state.metadata.get("run_profile_budget") or {})
+            if call.metadata.pop("trust_requested", False):
+                approval_toolbox.approval_gate.trust_operation(call.name, call.arguments)
+            call = approval_toolbox.prepare_approved_call(call)
+            tool_result = await approval_toolbox.execute(call)
+            if profile is not None:
+                state.metadata["run_profile_budget"] = dict(counters)
+        finally:
+            if owned:
+                await service.close()
         await child_sink.emit(CoreEvent(
             name="runtime.tool.finished",
             category="tool",
@@ -1060,6 +1322,17 @@ class KernelSubAgentRunner:
             run_id=state.run_id,
             tags=["tool"],
         ))
+        if tool_result.artifacts:
+            # user:“该做就做”+(宿主把工具产物统一发成交付物事件；通道插件
+            # 不必只靠扫描 tool.finished 来发现文件)。
+            await child_sink.emit(CoreEvent(
+                name="deliverables/presented",
+                category="artifact",
+                payload=deliverables_payload(tool_result.artifacts, tool_name=call.name, call_id=call.id),
+                session_id=session_id,
+                run_id=state.run_id,
+                tags=["artifact", "deliverable"],
+            ))
         if tool_result.status == "blocked":
             # A refused call cannot be continued with; a *failed* result is a
             # correctable tool failure and is handed back to the child below.
@@ -1380,9 +1653,20 @@ class KernelSubAgentRunner:
         with bound_child_identity(supervisor, effective_mode or "execute", agent):
             return await self._run_turn(**kwargs)
 
-    async def _run_turn(
+    async def _run_turn(self, **kwargs) -> SubAgentRunResult:
+        profile = self._profile_from_state(kwargs["state"])
+        service, owned = self._new_command_service(profile)
+        try:
+            return await self._run_turn_in_context(mcp_service=service, profile_spec=profile, **kwargs)
+        finally:
+            if owned:
+                await service.close()
+
+    async def _run_turn_in_context(
         self,
         *,
+        mcp_service: Any,
+        profile_spec: Any | None = None,
         task: str,
         delegated_task: str | None = None,
         agent: str,
@@ -1403,6 +1687,29 @@ class KernelSubAgentRunner:
         late_context: str = "",
         invocation_id: str = "",
     ) -> SubAgentRunResult:
+        preset_id = ""
+        preset_tools: list[str] | None = None
+        preset_prompt = ""
+        if self.agent_presets is not None:
+            metadata = state.metadata if isinstance(state.metadata, dict) else {}
+            preset_id = str(metadata.get("agent_preset") or "").strip()
+            if preset_id:
+                try:
+                    composed = self.agent_presets.compose(
+                        preset_id,
+                        mode=mode,
+                        allowed_tools=None,
+                        model=model,
+                        prompt=late_context,
+                    )
+                except KeyError:
+                    composed = None
+                if composed is not None:
+                    mode = composed.mode or mode
+                    model = composed.model or model
+                    late_context = composed.prompt
+                    preset_tools = composed.allowed_tools
+                    preset_prompt = composed.preset_prompt
         # Same early resolution as run() — translate display_name to model_id.
         effective_model = _resolve_model_id_for_capability(
             (model or "").strip() or self.model_id
@@ -1416,7 +1723,16 @@ class KernelSubAgentRunner:
         effective_mode = self._resolve_mode(mode)
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = self._disabled_tools()
-        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode)
+        if preset_tools:
+            probe = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
+            disabled_tools |= {spec.name for spec in probe.tool_specs()} - set(preset_tools)
+        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
+        if profile_spec is not None:
+            from lamtools_core.plugin_system.profiles import apply_profile
+            counters = apply_profile(toolbox, profile_spec)
+            counters.update(state.metadata.get("run_profile_budget") or {})
+            bodies = [self.skill_registry.load_prompt_content(self.work_root, name) for name in profile_spec.skills]
+            late_context = "\n\n".join([*bodies, late_context]).strip()
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
             parent_sink=self.parent_event_sink,
@@ -1438,12 +1754,15 @@ class KernelSubAgentRunner:
             reasoning_level=effective_reasoning_level,
             active_mode=effective_mode,
             late_context=late_context,
+            preset_prompt=preset_prompt,
         )
         workflow_metadata = _workflow_context_metadata(
             execution_context,
             attachments=list(attachments or []),
         )
         state.metadata["sub_invocation_id"] = child_sink.invocation_id
+        if preset_id:
+            state.metadata["agent_preset"] = preset_id
         result = await kernel.run(
             RuntimeTurnInput(
                 user_message=task,
@@ -1461,6 +1780,7 @@ class KernelSubAgentRunner:
                     "thinking_budget": self.thinking_budget,
                     "actor_kind": "sub_agent",
                     **({"origin": origin} if origin else {}),
+                    **({"agent_preset": preset_id} if preset_id else {}),
                     "delegated_session": {
                         "session_id": session_id,
                         "parent_thread_id": self.session_prefix,
@@ -1483,6 +1803,7 @@ class KernelSubAgentRunner:
                 },
             )
         )
+        await self._save_profile_budget(result, toolbox)
         return self._result_from_kernel(result, model_id=effective_model)
 
 __all__ = ["KernelSubAgentRunner"]

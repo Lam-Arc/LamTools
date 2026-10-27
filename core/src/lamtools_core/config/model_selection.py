@@ -8,7 +8,7 @@ which model a call uses are
   model for a conversation turn, or the scene's most recent model for a
   non-conversation call).
 
-Scenes are kept separate on purpose: the desktop pet's cheap model must never
+Scenes are kept separate on purpose: a background job's cheap model must never
 leak into the main conversation just because it was used most recently.  Every
 inheritance/fallback is explicit — either the same model continues, or the
 resolver reports exactly which model replaced which, or it fails with a clear
@@ -28,15 +28,13 @@ from .provider_store import ProviderConfig, ProviderStore
 
 SCENE_CHAT = "chat"
 SCENE_STUDY = "study"
-SCENE_DESKTOP_PET = "desktop_pet"
 SCENE_BACKGROUND = "background"
 
-SCENES = (SCENE_CHAT, SCENE_STUDY, SCENE_DESKTOP_PET, SCENE_BACKGROUND)
+SCENES = (SCENE_CHAT, SCENE_STUDY, SCENE_BACKGROUND)
 
 SCENE_LABELS = {
     SCENE_CHAT: "主对话",
     SCENE_STUDY: "学习",
-    SCENE_DESKTOP_PET: "桌宠",
     SCENE_BACKGROUND: "后台任务",
 }
 
@@ -318,7 +316,6 @@ __all__ = [
     "SCENES",
     "SCENE_BACKGROUND",
     "SCENE_CHAT",
-    "SCENE_DESKTOP_PET",
     "SCENE_LABELS",
     "SCENE_MEMORY_NAMESPACE",
     "SCENE_STUDY",

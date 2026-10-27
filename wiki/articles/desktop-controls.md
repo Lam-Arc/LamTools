@@ -91,6 +91,8 @@
 
 ## 参见
 
+- [分屏](split-pane.md)
+
 - [界面外观](appearance.md)
 - [快捷键与快速定位](shortcuts.md)
 - [设置总览](settings.md)

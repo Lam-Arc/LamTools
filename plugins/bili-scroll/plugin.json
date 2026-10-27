@@ -1,93 +1,128 @@
 {
   "name": "bili-scroll",
-  "version": "0.3.1",
-  "description": "每天替你刷一轮 B站：搜视频、读字幕判价值、写日报；复刻自 dsh-bili-scroll（MIT）",
+  "version": "2.3.0",
+  "description": "刷B站：每天替你刷一轮 B 站 —— 读字幕挑出值得的、写一份日报，值得的就私信或 @ 你。能力来自随包内置的 bilibili-mcp 服务器（MCP 配置照搬原版，未改写为进程内工具）。",
   "scope": "global",
   "defaultEnabled": true,
-  "skills": [
-    "./skills"
-  ],
-  "operations": [
-    "./operations.jsonc"
-  ],
-  "commands": [
-    {
-      "name": "bili-duty",
-      "title": "刷B站：取今日值班参数",
-      "description": "返回今天的关键词、挑选限额、判重状态与日报位置，开始一轮值班",
-      "operation": "bili-scroll.duty.brief"
-    }
-  ],
-  "config": {
-    "schema": "./config/schema.jsonc"
-  },
-  "dependencies": [
-    "httpx"
-  ],
-  "profiles": {
-    "duty": {
-      "title": "值班轮",
-      "tools": [
-        "mcp__bilibili__brief",
-        "mcp__bilibili__search",
-        "mcp__bilibili__video_info",
-        "mcp__bilibili__subtitles",
-        "mcp__bilibili__comments",
-        "mcp__bilibili__save_report",
-        "mcp__bilibili__dedup",
-        "mcp__bilibili__post_comment",
-        "mcp__bilibili__account_status",
-        "mcp__bilibili__send_dm",
-        "mcp__bilibili__dm_inbox",
-        "mcp__bilibili__transcribe"
-      ],
-      "approval": "auto",
-      "modelScene": "background",
-      "mcpServers": [
-        "bilibili"
-      ],
-      "budget": {
-        "maxToolCalls": 120,
-        "maxTokens": 150000
-      }
-    }
+  "engine": {
+    "python": ">=3.10",
+    "app": ">=0.3.23"
   },
   "mcp": [
     "./mcp/mcp.json"
   ],
+  "skills": [
+    "./skills"
+  ],
+  "tools": [
+    "./tools/tools.jsonc"
+  ],
+  "operations": [
+    "./operations.jsonc"
+  ],
+  "config": {
+    "schema": "./config/schema.jsonc"
+  },
   "backend": "./backend/__init__.py",
+  "profiles": {
+    "duty": {
+      "title": "刷B站 值班轮",
+      "tools": [
+        "mcp"
+      ],
+      "approval": "auto",
+      "approvedTools": [
+        "mcp__bilibili__bili_reply",
+        "mcp__bilibili__bili_send_message"
+      ],
+      "modelScene": "background",
+      "mcpServers": [
+        "bilibili"
+      ],
+      "mcpTools": [
+        "mcp__bilibili__bili_check_credential",
+        "mcp__bilibili__bili_recommend",
+        "mcp__bilibili__bili_search",
+        "mcp__bilibili__bili_subtitle",
+        "mcp__bilibili__bili_comments",
+        "mcp__bilibili__bili_danmaku",
+        "mcp__bilibili__bili_video_info",
+        "mcp__bilibili__bili_cover",
+        "mcp__bilibili__bili_frames",
+        "mcp__bilibili__bili_transcribe_start",
+        "mcp__bilibili__bili_transcribe_result",
+        "mcp__bilibili__bili_transcribe",
+        "mcp__bilibili__duty_paths",
+        "mcp__bilibili__duty_report_append",
+        "mcp__bilibili__duty_seen_append",
+        "mcp__bilibili__duty_seen_recent",
+        "mcp__bilibili__duty_digest_append",
+        "mcp__bilibili__bili_unread_messages",
+        "mcp__bilibili__bili_received_replies",
+        "mcp__bilibili__bili_received_at_and_likes",
+        "mcp__bilibili__bili_send_message",
+        "mcp__bilibili__bili_reply"
+      ],
+      "budget": {
+        "maxToolCalls": 120,
+        "maxTokens": 2000000
+      },
+      "skills": [
+        "bili-scroll"
+      ]
+    }
+  },
   "ui": {
     "regions": [
       {
-        "region": "settings",
-        "order": 10,
-        "blocks": [
-          {
-            "type": "status",
-            "label": "值班状态",
-            "value": "峰谷自动刷见配置",
-            "state": "idle"
-          }
-        ],
+        "region": "right",
+        "order": 50,
+        "entry": "./ui/panel.js",
         "actions": [
           {
-            "id": "run-now",
+            "id": "run",
             "title": "现在跑一轮",
-            "operation": "bili-scroll.run_now"
+            "operation": "bili-scroll.run_round"
           },
           {
             "id": "setup",
-            "title": "装依赖",
-            "operation": "bili-scroll.setup"
+            "title": "装主依赖",
+            "operation": "bili-scroll.setup",
+            "dangerous": true
           },
           {
-            "id": "check",
-            "title": "测一下",
-            "operation": "bili-scroll.selfcheck"
+            "id": "home",
+            "title": "打开它的地盘",
+            "operation": "bili-scroll.open_home"
           }
-        ],
-        "entry": "./ui/board.js"
+        ]
+      }
+    ],
+    "windows": [
+      {
+        "id": "wall",
+        "title": "刷B站",
+        "entry": "./ui/window.html",
+        "width": 940,
+        "height": 680
+      }
+    ],
+    "pages": [
+      {
+        "id": "wall",
+        "title": "刷B站",
+        "entry": "./ui/page.mjs",
+        "navigation": true,
+        "order": 50
+      },
+      {
+        "id": "watched",
+        "title": "刷过的视频",
+        "entry": "./ui/watched.mjs",
+        "navigation": false,
+        "order": 51
       }
     ]
-  }
+  },
+  "repository": "https://github.com/Lam-Arc/Sunday-Plugins"
 }

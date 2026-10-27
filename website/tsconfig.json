@@ -13,7 +13,7 @@
     "resolveJsonModule": true,
     "noEmit": true,
     "paths": {
-      "@/*": ["./src/*"],
+      "@/*": ["../core/ui/src/*"],
       "@ui/*": ["../core/ui/src/*"]
     },
     "types": ["vite/client"]

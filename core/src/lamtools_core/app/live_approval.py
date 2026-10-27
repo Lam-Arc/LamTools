@@ -13,7 +13,7 @@ _DECISION_ALIASES = {
     "other_guidance": "guide",
     "answer": "guide",
 }
-_VALID_DECISIONS = {"approve", "deny", "guide", "skip"}
+_VALID_DECISIONS = {"approve", "deny", "guide", "skip", "trust"}
 
 
 @dataclass(frozen=True)

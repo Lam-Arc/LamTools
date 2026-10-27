@@ -36,7 +36,7 @@
       @heading="onChildHeading"
     />
     <PlanLibraryView
-      v-else
+      v-else-if="section === 'plans'"
       ref="sectionRef"
       :root-label="t('方案')"
       :client="client"
@@ -49,7 +49,9 @@
     />
     <WikiView
       v-else-if="section === 'wiki'"
+      ref="sectionRef"
       :request-rpc="requestRpc"
+      @heading="onChildHeading"
     />
   </div>
 </template>
@@ -73,6 +75,8 @@ import { t } from '@/i18n/index.ts'
 import { computed, ref, watch } from 'vue'
 import type { CoreProjectClient } from '@/projects/client.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
+// user:“该修修”+(Wiki 分区使用真实组件，避免未注册标签导致空白)。
+import WikiView from '@/components/WikiView.vue'
 import MaterialsView from '@/components/MaterialsView.vue'
 import MemoryView from '@/components/MemoryView.vue'
 import PlanLibraryView from '@/components/PlanLibraryView.vue'

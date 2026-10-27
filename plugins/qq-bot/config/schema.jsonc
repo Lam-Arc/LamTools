@@ -1,0 +1,227 @@
+{
+  /*
+   * QQ 机器人设置 —— 字段与原版 @tencent-connect/dsh-qqbot 0.5.3 的
+   * ConfigSchema 一一对应；默认值照原版，不擅自收紧。
+   * 原版宿主专属字段（dsh profile / cordis patch / settings.yaml）没有对应概念，
+   * 由本插件的绑定操作和 data/config.jsonc 接管。
+   */
+  "type": "object",
+  "properties": {
+    "appId": {
+      "type": "string",
+      "title": "QQ 机器人 AppID",
+      "description": "在 QQ 开放平台创建机器人后获得。也可以不填，用「QQ 机器人」页面扫码绑定。",
+      "default": ""
+    },
+    "appSecret": {
+      "type": "string",
+      "title": "QQ 机器人 AppSecret",
+      "description": "只保存在插件数据目录，不会回显到页面。",
+      "default": ""
+    },
+    "provider": {
+      "type": "string",
+      "title": "模型 Provider",
+      "description": "留空继承宿主默认模型。聊天里也可以用 /model 单独切换。",
+      "default": ""
+    },
+    "model": {
+      "type": "string",
+      "title": "模型",
+      "description": "留空继承宿主默认模型。",
+      "default": ""
+    },
+    "preset": {
+      "type": "string",
+      "title": "Agent Preset",
+      "description": "插件自有 preset id（见 data/presets.jsonc）。留空用默认工具面。",
+      "default": ""
+    },
+    "cwd": {
+      "type": "string",
+      "title": "Agent 工作目录",
+      "description": "只用于文件发送白名单和提示词；实际工具工作目录跟随当前 LamTools 项目。",
+      "default": ""
+    },
+    "requireMention": {
+      "type": "boolean",
+      "title": "群聊仅回复 @机器人 的消息",
+      "description": "开启后，群里只有 @ 机器人的消息才会触发回复；未 @ 的消息仍进入历史缓冲。",
+      "default": true
+    },
+    "groupPrompt": {
+      "type": "string",
+      "title": "群聊额外 system prompt",
+      "description": "只对群聊会话生效，追加在宿主提示词之后。",
+      "default": ""
+    },
+    "directPrompt": {
+      "type": "string",
+      "title": "私聊额外 system prompt",
+      "description": "只对私聊会话生效，追加在宿主提示词之后。",
+      "default": ""
+    },
+    "textChunkLimit": {
+      "type": "integer",
+      "title": "单条消息最大字符数",
+      "description": "QQ 单条消息约 5000 字符；超出会按代码块/表格边界切分。",
+      "default": 4500
+    },
+    "streaming": {
+      "type": "boolean",
+      "title": "流式输出",
+      "description": "私聊里把回复分段实时推送；群聊始终使用静态消息。",
+      "default": true
+    },
+    "sessionIdleTimeout": {
+      "type": "integer",
+      "title": "会话闲置回收（毫秒）",
+      "description": "超过这个时间没有消息就释放内存中的会话；历史仍保存在宿主状态库。",
+      "default": 1800000
+    },
+    "maxQueue": {
+      "type": "integer",
+      "title": "每会话排队上限",
+      "description": "同一用户/群正在处理时，最多再缓冲多少条消息。",
+      "default": 20
+    },
+    "processingTimeoutMs": {
+      "type": "integer",
+      "title": "单轮处理超时（毫秒）",
+      "description": "超过后中止本轮生成。",
+      "default": 1800000
+    },
+    "askTimeoutMs": {
+      "type": "integer",
+      "title": "提问等待超时（毫秒）",
+      "description": "ask_user_question 等待用户回答的最长时间。",
+      "default": 300000
+    },
+    "historyLimit": {
+      "type": "integer",
+      "title": "群历史缓冲条数",
+      "description": "群聊被 @ 时，额外带入最近多少条群消息。",
+      "default": 10
+    },
+    "access": {
+      "type": "object",
+      "title": "访问控制",
+      "description": "分别控制私聊和群聊：所有人 / 白名单 / 禁用。",
+      "properties": {
+        "c2cMode": {
+          "type": "string",
+          "title": "私聊",
+          "enum": ["open", "allowlist", "disabled"],
+          "default": "open"
+        },
+        "c2cAllow": {
+          "type": "array",
+          "title": "私聊白名单",
+          "description": "用户 openid，一行一个。",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "groupMode": {
+          "type": "string",
+          "title": "群聊",
+          "enum": ["open", "allowlist", "disabled"],
+          "default": "open"
+        },
+        "groupAllow": {
+          "type": "array",
+          "title": "群聊白名单",
+          "description": "群 openid，一行一个。",
+          "items": { "type": "string" },
+          "default": []
+        }
+      },
+      "default": {
+        "c2cMode": "open",
+        "c2cAllow": [],
+        "groupMode": "open",
+        "groupAllow": []
+      }
+    },
+    "showToolResults": {
+      "type": "boolean",
+      "title": "显示工具调用成功结果",
+      "description": "工具错误始终显示；打开后成功结果也发到聊天里。",
+      "default": false
+    },
+    "debug": {
+      "type": "boolean",
+      "title": "调试日志",
+      "description": "把网关和消息细节写进插件日志。",
+      "default": false
+    },
+    "media": {
+      "type": "object",
+      "title": "富媒体理解",
+      "description": "下载 QQ 图片/视频/文件到插件数据目录，供模型读取。",
+      "properties": {
+        "enabled": { "type": "boolean", "title": "启用", "default": true },
+        "maxMB": { "type": "integer", "title": "单个文件上限（MB）", "default": 200 },
+        "ttlHours": { "type": "integer", "title": "保留时长（小时，0=永不过期）", "default": 24 }
+      },
+      "default": { "enabled": true, "maxMB": 200, "ttlHours": 24 }
+    },
+    "vision": {
+      "type": "object",
+      "title": "视觉理解",
+      "description": "qqbot_describe_image 工具使用的视觉模型；关闭时工具仍可把图片交给主模型。",
+      "properties": {
+        "enabled": { "type": "boolean", "title": "启用", "default": false },
+        "provider": { "type": "string", "title": "Provider", "default": "" },
+        "model": { "type": "string", "title": "模型", "default": "" },
+        "defaultPrompt": { "type": "string", "title": "默认描述提示词", "default": "Describe this image in detail." },
+        "maxBytes": { "type": "integer", "title": "图片字节上限", "default": 10485760 },
+        "maxTokens": { "type": "integer", "title": "输出 token 上限", "default": 1024 },
+        "timeoutMs": { "type": "integer", "title": "超时（毫秒）", "default": 120000 }
+      },
+      "default": {
+        "enabled": false,
+        "provider": "",
+        "model": "",
+        "defaultPrompt": "Describe this image in detail.",
+        "maxBytes": 10485760,
+        "maxTokens": 1024,
+        "timeoutMs": 120000
+      }
+    },
+    "sendFile": {
+      "type": "object",
+      "title": "附件发送",
+      "description": "qqbot_send_file 工具和轮末交付文件共用。",
+      "properties": {
+        "restrictPaths": { "type": "boolean", "title": "限制路径白名单", "default": true },
+        "extraRoots": {
+          "type": "array",
+          "title": "额外允许目录",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "sendPresentedFiles": { "type": "boolean", "title": "轮末发送交付文件", "default": true },
+        "maxFiles": { "type": "integer", "title": "单轮最多投递文件数", "default": 4 }
+      },
+      "default": {
+        "restrictPaths": true,
+        "extraRoots": [],
+        "sendPresentedFiles": true,
+        "maxFiles": 4
+      }
+    },
+    "agentMode": {
+      "type": "string",
+      "title": "默认 Agent 模式",
+      "description": "留空继承宿主；也可以选 auto / low / medium / high。preset 里的 mode 优先。",
+      "enum": ["", "auto", "low", "medium", "high"],
+      "default": ""
+    },
+    "replyLimit": {
+      "type": "integer",
+      "title": "同一条消息最多被动回复次数",
+      "description": "QQ 被动回复有次数和时效限制；超限自动降级为主动消息。",
+      "default": 4
+    }
+  }
+}

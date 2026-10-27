@@ -62,10 +62,13 @@ async def run_transcribe(bvid: str) -> str:
     text_file = out / f"{bvid}.txt"
     import httpx
 
-    with bili_core._client() as client, client.stream("GET", url) as response, open(audio_file, "wb") as sink:
-        response.raise_for_status()
-        async for chunk in response.aiter_bytes():
-            sink.write(chunk)
+    # user:“该修修”+(下载统一异步客户端，避免同步流误用异步迭代并阻塞服务)。
+    async with httpx.AsyncClient(headers={"User-Agent": bili_core._UA, "Referer": "https://www.bilibili.com"}, cookies=bili_core._cookies(), timeout=30) as client:
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+            with audio_file.open("wb") as sink:
+                async for chunk in response.aiter_bytes():
+                    sink.write(chunk)
     proc = await asyncio.create_subprocess_exec(
         "whisper",
         str(audio_file),
@@ -78,9 +81,15 @@ async def run_transcribe(bvid: str) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    _, stderr = await proc.communicate()
+    try:
+        output, _ = await proc.communicate()
+    except asyncio.CancelledError:
+        proc.terminate()
+        await proc.wait()
+        audio_file.unlink(missing_ok=True)
+        raise
     if proc.returncode != 0 or not text_file.exists():
-        detail = stderr.decode("utf-8", "ignore")[-400:] if stderr else ""
+        detail = output.decode("utf-8", "ignore")[-400:] if output else ""
         return f"转写失败（whisper 退出码 {proc.returncode}）：{detail}"
     text = text_file.read_text(encoding="utf-8").strip()
     audio_file.unlink(missing_ok=True)

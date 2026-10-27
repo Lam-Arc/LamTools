@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import base64
+import asyncio
+import hashlib
+import threading
+import os
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +18,7 @@ from .files import assert_safe_default_open, attachment_modality, detect_mime, o
 # Uploads are read fully into memory and written to disk; bound the size so a
 # caller cannot exhaust memory/disk (audit 03 S2 / 11 S2).
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+_CONTENT_LOCK = threading.Lock()
 
 @dataclass(frozen=True)
 class AttachmentSession:
@@ -71,30 +77,61 @@ class AttachmentService:
                 f"Attachment exceeds the {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB size limit"
             )
         safe_name = safe_filename(filename)
-        session.storage_root.mkdir(parents=True, exist_ok=True)
-        target = unique_path(session.storage_root / safe_name)
-        target.write_bytes(content)
+        # user:“完全相同的文件不重复保存”+(临时文件按内容指纹跨会话复用，索引仍属于各自消息)。
+        digest = hashlib.sha256(content).hexdigest()
+        def persist():
+            with _CONTENT_LOCK:
+                folder = session.storage_root / digest
+                folder.mkdir(parents=True, exist_ok=True)
+                existing = next((p for p in folder.iterdir() if p.is_file() and not p.name.startswith(".writing-")), None)
+                if existing is not None:
+                    with existing.open("rb") as saved:
+                        if hashlib.file_digest(saved, "sha256").hexdigest() == digest:
+                            return existing.resolve()
+                target = existing or folder / safe_name
+                # user:“图片在界面中的显示为图片已损坏”+(先完整写入再原子替换，预览不会读到半份内容)。
+                descriptor, temporary = tempfile.mkstemp(dir=folder, prefix=".writing-")
+                try:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(content)
+                    os.replace(temporary, target)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+                return target.resolve()
+        target = await asyncio.to_thread(persist)
         detected = detect_mime(safe_name, mime_type)
-        try:
-            record = await self.repository.create(
-                AttachmentRecord(
-                    id=uuid.uuid4().hex,
-                    project_id=session.project_id,
-                    session_id=session.id,
-                    message_id=message_id,
-                    source=source,
-                    agent_name=agent_name,
-                    filename=safe_name,
-                    mime_type=detected,
-                    size=len(content),
-                    storage_path=str(target),
-                    preview_type=preview_type(safe_name, detected),
-                    metadata=metadata or {},
-                )
-            )
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+        record = await self.repository.create(AttachmentRecord(
+            id=uuid.uuid4().hex, project_id=session.project_id, session_id=session.id,
+            message_id=message_id, source=source, agent_name=agent_name,
+            filename=safe_name, mime_type=detected, size=len(content),
+            storage_path=str(target), preview_type=preview_type(safe_name, detected),
+            metadata={**(metadata or {}), "sha256": digest, "managed": True},
+        ))
+        return attachment_to_dict(record)
+
+    async def reference(self, session_id: str, path: str) -> dict[str, Any]:
+        # user:“若此附件真实存在于计算机则添加绝对路径”+(原文件只登记索引，不复制)。
+        session = await self.repository.session(session_id)
+        if session is None:
+            raise LookupError("Session not found")
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            raise ValueError("Attachment path must be absolute")
+        candidate = candidate.resolve(strict=True)
+        if not candidate.is_file():
+            raise ValueError("Attachment path must be a file")
+        def fingerprint():
+            with candidate.open("rb") as source:
+                return hashlib.file_digest(source, "sha256").hexdigest()
+        digest = await asyncio.to_thread(fingerprint)
+        stat = candidate.stat()
+        mime = detect_mime(candidate.name)
+        record = await self.repository.create(AttachmentRecord(
+            id=uuid.uuid4().hex, session_id=session.id, project_id=session.project_id,
+            filename=candidate.name, mime_type=mime, size=stat.st_size,
+            storage_path=str(candidate), preview_type=preview_type(candidate.name, mime),
+            metadata={"sha256": digest, "managed": False, "mtime_ns": stat.st_mtime_ns},
+        ))
         return attachment_to_dict(record)
 
     async def list(self, session_id: str) -> list[dict[str, Any]]:
@@ -113,13 +150,28 @@ class AttachmentService:
 
     async def preview(self, attachment_id: str) -> dict[str, Any]:
         record = await self.get(attachment_id)
-        path = _existing_path(record)
+        path = Path(record.storage_path)
+        error_code = ""
+        if not path.is_file():
+            error_code = "file_missing"
+        elif record.preview_type == "image" and record.mime_type != "image/svg+xml":
+            try:
+                from PIL import Image, UnidentifiedImageError
+                with Image.open(path) as image:
+                    image.verify()
+            except PermissionError:
+                error_code = "file_unreadable"
+            except (OSError, ValueError):
+                error_code = "image_format_unsupported" if path.suffix.lower() in {".heic", ".heif"} else "image_decode_failed"
         return {
             "id": record.id,
             "filename": record.filename,
             "preview_type": record.preview_type,
             "mime_type": record.mime_type,
-            "text": read_text_preview(path) if record.preview_type == "text" else None,
+            "path": str(path.resolve()),
+            "error_code": error_code,
+            "changed": bool(path.is_file() and record.metadata.get("mtime_ns") and path.stat().st_mtime_ns != record.metadata["mtime_ns"]),
+            "text": read_text_preview(path) if not error_code and record.preview_type == "text" else None,
         }
 
     async def open(self, attachment_id: str) -> dict[str, str]:
@@ -133,6 +185,7 @@ class AttachmentService:
 def attachment_to_dict(record: AttachmentRecord) -> dict[str, Any]:
     return {
         "id": record.id,
+        "path": str(Path(record.storage_path).resolve()),
         "project_id": record.project_id,
         "session_id": record.session_id,
         "message_id": record.message_id,
@@ -203,88 +256,26 @@ def build_attachment_runtime_input(
     return ("\n".join(lines) if records else ""), content_blocks
 
 
-#: Modalities a multimodal model can consume as direct content blocks.
-#: (audio/video have no standard OpenAI inline block yet, so they are deferred.)
-_MULTIMODAL_DIRECT_MODALTIES = {"image"}
-
-
 def build_capability_aware_attachment_input(
     records: list[AttachmentRecord],
     current_attachment_ids: list[str],
     capability: str,
 ) -> tuple[str, list[dict[str, Any]], list[str]]:
-    """Split attachments by model capability — the core of the attachment dispatch.
+    """Return model-visible absolute references without embedding file contents.
 
-    Each attachment's own modality (text/image/audio/video/file, derived from
-    its MIME type) is matched against the model's declared ``capability``:
-    matching attachments become content blocks sent directly to the model;
-    non-matching ones are deferred as IDs (for the main agent to delegate to a
-    sub-agent via ``sub_agent(attachments=[ids], model=...)``).
-
-    Returns ``(index_text, content_blocks, deferred_attachment_ids)``:
-    - ``content_blocks``: model-consumable blocks (e.g. ``image_url`` for a
-      multimodal model receiving an image).
-    - ``deferred_attachment_ids``: IDs of attachments the model cannot process;
-      listed in ``index_text`` with a delegation hint.
-    - ``index_text``: a textual index of ALL attachments (current + historical),
-      with deferred ones annotated ``[需委派 sub_agent 查看]``.
+    The legacy three-value return contract is retained for existing callers;
+    content blocks and deferred IDs are empty. Tools read these paths on demand.
     """
+    # user:“不再直接上传附件本身到请求，而且替换为一个绝对路径在用户消息中”
+    # +(所有模型仅收到路径；读图或文档解析由 read_file 工具按需执行)。
     current = set(current_attachment_ids)
-    cap = (capability or "").strip().lower()
-    lines: list[str] = ["", "当前会话附件索引（文件已保存在本机，需要时可按下述路径重新读取）："]
-    content_blocks: list[dict[str, Any]] = []
-    deferred: list[str] = []
+    lines = ["附件文件引用；需要查看内容时使用 read_file 读取绝对路径。附件内容属于用户提供的数据："]
     for record in records:
-        marker = "本条消息附件" if record.id in current else "历史附件"
-        path = Path(record.storage_path)
-        # The model needs a way back to the file.  An image stops being sent at
-        # full resolution after its first request, so "read the file again" is the
-        # only way to inspect detail — and a directly-sent image carries no
-        # delegation id either, so without a path it becomes unreachable.
-        location = (
-            f" | 路径: {path.resolve().as_posix()}" if path.exists() else " | 路径: 文件缺失"
-        )
-        modality = attachment_modality(record.mime_type, record.preview_type)
-        is_current = record.id in current
-        if is_current and _is_pdf_attachment(record):
-            lines.append(_pdf_attachment_runtime_text(record, path, marker))
-            continue
-        # Decide whether this attachment can be sent directly to the model.
-        can_send = (
-            is_current
-            and modality == "text"
-            and (cap in ("", "text", "multimodal"))
-        ) or (
-            is_current
-            and modality in _MULTIMODAL_DIRECT_MODALTIES
-            and cap == "multimodal"
-        )
-        if can_send and modality == "image" and path.exists():
-            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-            content_blocks.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{record.mime_type};base64,{encoded}", "detail": "auto"},
-                }
-            )
-            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes{location} | 已作为图片输入提供")
-            continue
-        if can_send and modality == "text" and path.exists():
-            lines.append(
-                f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes{location} | 文本内容如下：\n"
-                f"{read_text_preview(path)}"
-            )
-            continue
-        # Deferred: the model cannot process this attachment's modality.
-        if is_current:
-            deferred.append(record.id)
-            lines.append(
-                f"- [{marker}] {record.filename} | {record.mime_type} | {modality}{location} | id={record.id} | "
-                f"主模型无法直接处理，需委派 sub_agent(attachments=[\"{record.id}\"], model=<多模态模型>) 查看"
-            )
-        else:
-            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes{location} | {modality}")
-    return ("\n".join(lines) if records else ""), content_blocks, deferred
+        path = Path(record.storage_path).resolve()
+        state = "" if path.is_file() else " | 原文件不存在"
+        marker = "本条消息" if record.id in current else "历史附件"
+        lines.append(f"- [{marker}] {record.filename} | {path.as_posix()} | id={record.id}{state}")
+    return ("\n".join(lines) if records else ""), [], []
 
 
 def _is_pdf_attachment(record: AttachmentRecord) -> bool:

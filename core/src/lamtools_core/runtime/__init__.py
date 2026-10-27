@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkable
@@ -85,6 +86,12 @@ class RuntimeTurnInput:
     guidance_source: Callable[[], list[Any]] | None = field(default=None, repr=False, compare=False)
     guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = field(default=None, repr=False, compare=False)
     guidance_acknowledger: Callable[[list[str]], Any] | None = field(default=None, repr=False, compare=False)
+    # Pulls the latest composer parameter group for the next kernel step.
+    # The callable returns ``(generation, patch)`` or ``None`` when nothing
+    # newer than the caller's applied generation exists.
+    settings_source: Callable[[int], tuple[int, dict[str, Any]] | None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"user_message": self.user_message}
@@ -281,6 +288,11 @@ class _RuntimeTaskEntry:
     staged_guidance_ids: set[str] = field(default_factory=set)
     offered_guidance_ids: set[str] = field(default_factory=set)
     guidance_changed: asyncio.Event = field(default_factory=asyncio.Event)
+    # user:“模式、权限、思考强度在下一步生效（即时生效）”+(运行中的回合用一个
+    # 最新值信箱接收输入参数组变化；它不是排队，后来的值直接覆盖前面的)。
+    settings: dict[str, Any] = field(default_factory=dict)
+    settings_generation: int = 0
+    settings_changed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class RuntimeTaskRegistry:
@@ -649,6 +661,53 @@ class RuntimeTaskRegistry:
             run_id=run_id,
             include_metadata=include_metadata,
         )
+
+    def update_settings(
+        self,
+        thread_id: str,
+        patch: Mapping[str, Any],
+        *,
+        run_id: str = "",
+    ) -> bool:
+        """Publish a latest-wins composer settings patch to the active run.
+
+        user:“模式、权限、思考强度在下一步生效（即时生效）”+(同一个会话只保留
+        最新一组参数，内核在下一步边界取走；回合结束后补丁自然消失，持久化由
+        会话 metadata 负责)。
+        """
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None or entry.task is None or entry.task.done():
+            return False
+        if run_id and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
+            return False
+        for key, value in (patch or {}).items():
+            entry.settings[str(key)] = deepcopy(value)
+        entry.settings_generation += 1
+        entry.settings_changed.set()
+        return True
+
+    def settings_source(
+        self,
+        thread_id: str,
+        *,
+        run_id: str = "",
+    ) -> Callable[[int], tuple[int, dict[str, Any]] | None]:
+        """Return a puller the kernel calls at each step boundary."""
+
+        def pull(applied_generation: int = 0) -> tuple[int, dict[str, Any]] | None:
+            self._drop_done_entry(thread_id)
+            entry = self._entries.get(thread_id)
+            if entry is None or entry.task is None:
+                return None
+            if run_id and normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
+                return None
+            generation = int(entry.settings_generation)
+            if generation <= int(applied_generation or 0) or not entry.settings:
+                return None
+            return generation, deepcopy(entry.settings)
+
+        return pull
 
     def guidance_finalizer(
         self,

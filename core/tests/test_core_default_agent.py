@@ -395,36 +395,6 @@ async def test_core_agent_catalog_filters_disabled_skills(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_enabled_plugin_command_is_catalogued_and_returns_validated_effect(tmp_path):
-    catalog = create_core_agent_operations(
-        spec=CoreAgentSpec(),
-        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
-        model_provider=_fake_model,
-    )
-
-    listed = await catalog.execute("command.catalog", {})
-    pet = next(item for item in listed.payload["commands"] if item["name"] == "pet")
-    assert pet["source"] == "plugin"
-    assert pet["metadata"]["plugin_id"] == "emotion-ball-pet"
-
-    executed = await catalog.execute(
-        "command.execute",
-        {"thread_id": "thread-pet", "command": "pet"},
-    )
-
-    assert executed.status == "ok"
-    assert executed.payload["result"]["effects"] == [{
-        "type": "desktop_plugin",
-        "action": "show",
-        "plugin_id": "emotion-ball-pet",
-    }]
-
-    await catalog.execute("plugin.system.disable", {"name": "emotion-ball-pet"})
-    disabled = await catalog.execute("command.catalog", {})
-    assert all(item["name"] != "pet" for item in disabled.payload["commands"])
-
-
-@pytest.mark.asyncio
 async def test_core_agent_command_execute_passes_arguments_to_action_handler(tmp_path):
     core_root = tmp_path / "core-root"
     command_dir = core_root / "config" / "command"

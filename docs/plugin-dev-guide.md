@@ -44,7 +44,7 @@
 | 值 | 含义 | 示例 |
 |---|---|---|
 | `universal` | 通用（**缺省**）：两端都提供 | websearch / imagegen / study |
-| `desktop` | 桌面专属：手机没有对应能力 | git（无 git 可执行文件）、workflow（执行面在桌面）、emotion-ball-pet（桌面挂件窗口） |
+| `desktop` | 桌面专属：手机没有对应能力 | git（无 git 可执行文件）、workflow（执行面在桌面） |
 | `mobile` | 移动专属：桌面没有对应能力 | （目前没有内置插件属于这一类） |
 
 - 分类由插件自己在清单里声明，宿主的插件页、模式、工具、技能、钩子、MCP 都按它过滤：分类不含本机的插件**整块不装配**，也不出现在面板里。
@@ -196,3 +196,22 @@ Workflow 的队列、快照、后台重试和错误返回合同见
 **operations 注册与直调（`test_plugin_operations.py` G 组）**。
 新插件建议自测：安装 → `plugin.list` 确认工具 → 按 visibility 验证可见性 → 执行 → 卸载；
 声明了 operations 的插件再用 `cli plugin operations list` 确认 RPC 面入口。
+
+## 9. 网络拓展验证后的宿主合同
+
+<!-- user:“实现这个插件，也正好实验我们的新插件架构”+(将本次架构试验验证的接口同步到开发规范)。 -->
+
+新插件沿用 `plugin.json`、`backend`、`operations`、`ui.pages` 和区域声明，不增加第二套插件运行时。完整参考见 `core/src/lamtools_core/plugins/bundled/network-exploration/README.md`。
+
+- 后台操作声明 `permission: "ask_user"` 与 `impact` 后，由宿主共享权限服务检查。未授权时返回一次性审批请求；宿主确认组件响应后只执行服务器捕获的参数，不能靠 `confirmed` 字段跳过。`hard_block` 不会被手动批准覆盖。
+- `ui.pages[].navigation: true` 同时提供左竖栏入口与分屏入口，其他页面仍只作为独立分屏页面。
+- 自绘配置面板可使用 `api.rpc`、`api.signal`；`mount` 可以异步返回清理函数。关闭时释放订阅、计时器与待处理确认，不停止页面以外的后台任务。
+- 卸载前先停止后台，清理失败则保留文件。外部组件进程必须由插件生命周期管理，禁止页面各自启动一份。
+- Agent 优先通过现有 command 运行插件 CLI，连接已运行的宿主，不必重复注册 Agent 工具。CLI 顶层名字不能与核心命令冲突。
+
+
+### 插件页面的动态样式
+
+<!-- user:“它自己的样式好像全部都丢了”+(桌面打包的页面样式遵循宿主 CSP 和实例生命周期)。 -->
+
+`mount(root, context)` 中使用 `context.addStyle(cssText)`，返回的函数可提前移除样式；页面关闭或挂载失败时宿主也会清理。宿主按 `root.ownerDocument` 挂载，自动携带当前文档的样式 nonce。不要假定开发浏览器里能插入的无 nonce `<style>` 在桌面发行包里也能生效；Tauri 会向策略增加 nonce，使原有 `unsafe-inline` 不再授权这些样式。外部独立 HTML 没有此 context 时应使用所属文档自己的 nonce。

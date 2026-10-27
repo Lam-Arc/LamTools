@@ -82,6 +82,17 @@ export { default as CoreRuntimeMenu } from '@/components/CoreRuntimeMenu.vue';
 export { default as CoreWorkspaceMenu } from '@/components/CoreWorkspaceMenu.vue';
 export { default as CoreModelThinkingMenu } from '@/components/CoreModelThinkingMenu.vue';
 export { default as CoreSubAgentPanel } from '@/components/CoreSubAgentPanel.vue';
+// user:“CoreSubAgentPane，rename to **Split Pane**  分屏”+(公开通用分屏宿主与独立的子代理内容)。
+export { default as CoreSplitPane } from '@/components/CoreSplitPane.vue';
+export { default as CoreSplitWorkspace } from '@/components/CoreSplitWorkspace.vue';
+// user:“辅助对话”+(对话面板与分屏入口可复用，保持独立的小模块)。
+export { default as CoreAuxiliaryChat } from '@/components/CoreAuxiliaryChat.vue';
+export { createAuxiliaryWorkspace, AuxiliaryWorkspaceKey, type AuxiliaryContext, type AuxiliaryEnvironment } from '@/auxiliary/workspace';
+export { default as CoreSubAgentView } from '@/components/CoreSubAgentView.vue';
+export { useSplitWorkspace } from '@/split/useSplitWorkspace';
+// user:“支持一下”+(插件作者和宿主共用分屏自绘页面的类型契约)。
+export type { PluginPageEntry, PluginPageContext, PluginPageModule, PluginPageScope } from '@/plugins/pages';
+export type { SplitTab, SplitPane, SplitNode, SplitState, SplitEdge } from '@/split/layout';
 export { default as CoreSubAgentDialog } from '@/components/CoreSubAgentDialog.vue';
 export { default as CoreResourceStats } from '@/components/CoreResourceStats.vue';
 export { default as MarkdownRenderer } from '@/components/MarkdownRenderer.vue';
@@ -261,6 +272,7 @@ export {
   coreShouldAutoLoadHistory,
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
+  type CoreComposerControls,
   useCoreApprovalController,
   useCoreLiveComposerController,
   useCoreLiveTurnController,
@@ -531,3 +543,4 @@ import './styles/base.css';
 import './styles/layout.css';
 import './styles/theme-editor.css';
 import './styles/library-surface.css';
+import './styles/sunday-controls.css';

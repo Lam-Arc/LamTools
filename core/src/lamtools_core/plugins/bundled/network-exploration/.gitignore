@@ -1,0 +1,6 @@
+# Generated and verified at build time; do not store large executable artifacts in Git.
+bin/*.exe
+bin/*.old
+resources/engines/*.exe
+controller/target/
+data/

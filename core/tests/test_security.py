@@ -116,6 +116,22 @@ def test_http_origin_check(tmp_path: pathlib.Path) -> None:
     assert client.get("/", headers={"Origin": "http://evil.example"}).status_code == 403
 
 
+def test_plugin_system_asset_is_cross_origin_readable(tmp_path: pathlib.Path) -> None:
+    """Plugin pages are ES modules imported by the desktop WebView.
+
+    The WebView origin is not the backend listener origin, so the asset route
+    must be readable cross-origin. Only the read-only plugin asset subtree is
+    exempt; the rest of the Core API keeps the origin fence.
+    """
+    client = _make_spa_app(tmp_path)
+    url = "/api/core/plugin-system/demo/assets/ui/page.mjs"
+    response = client.get(url, headers={"Origin": "http://127.0.0.1:60010"})
+    assert response.status_code != 403
+    assert response.headers.get("access-control-allow-origin") == "*"
+    assert response.headers.get("cross-origin-resource-policy") == "cross-origin"
+    assert client.get("/api/health", headers={"Origin": "http://127.0.0.1:60010"}).status_code == 403
+
+
 def test_websocket_origin_rejected(tmp_path: pathlib.Path) -> None:
     """WS handshakes with a foreign Origin must be rejected (1008) before accept.
 

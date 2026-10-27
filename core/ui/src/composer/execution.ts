@@ -11,10 +11,11 @@ export const CORE_PERMISSION_PRESET_LABELS: Record<CorePermissionPreset, string>
   get full_access() { return t('完全访问') },
 }
 
+// user:“工具权限是改成 123 级”+(输入框与设置页共用操作免问线说明)。
 export const CORE_PERMISSION_PRESET_DESCRIPTIONS: Record<CorePermissionPreset, string> = {
-  get ask() { return t("工具执行前请求批准") },
-  get auto() { return t("在当前能力范围内自动批准（工作目录外仍会确认）") },
-  get full_access() { return t("完全编辑、自动批准，并允许访问工作目录外") },
+  get ask() { return t("自动放行 1 级操作，2、3 级操作请求批准") },
+  get auto() { return t("自动放行到 2 级，3 级操作仍请求批准") },
+  get full_access() { return t("自动放行到 3 级，仍受能力上限与硬禁止限制") },
 }
 
 export function normalizeCorePermissionPreset(

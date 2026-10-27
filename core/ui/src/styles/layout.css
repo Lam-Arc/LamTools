@@ -49,6 +49,14 @@
 /* Workflow owns the central surface (the canvas is not a content-column
    document). Keep the main header as an overlay and let the plugin root take
    the complete main card, including the horizontal gutters. */
+/* user:“replace 换主区”+主区默认内容的让位容器：display: contents 让它对
+   布局完全透明——.thread 等直接子元素继续参与 .workspace-main 原本的布局
+   链（这是装插件前就存在的高度与滚动结构）；replace 生效时 v-show 写入的
+   内联 display:none 优先于 contents，整块让位。 */
+.workspace-main-default {
+  display: contents;
+}
+
 .workspace-shell--full-bleed .workspace-main {
   padding: 0;
 }

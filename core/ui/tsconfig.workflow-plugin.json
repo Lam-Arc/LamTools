@@ -7,6 +7,7 @@
     "emitDeclarationOnly": false,
     "baseUrl": ".",
     "paths": {
+      "@/*": ["./src/*"],
       "vue": ["./node_modules/vue"],
       "lucide-vue-next": ["./node_modules/lucide-vue-next"],
       "@vue-flow/core": ["./node_modules/@vue-flow/core"],

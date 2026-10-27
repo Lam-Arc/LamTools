@@ -79,13 +79,21 @@ def _merge_thinking(native: str, shallow: str) -> str:
 
 
 class ShallowThinkingClient:
-    def __init__(self, inner: LLMClient) -> None:
+    def __init__(self, inner: LLMClient, *, enabled: bool = True) -> None:
         self._inner = inner
+        # user:“模式、权限、思考强度在下一步生效（即时生效）”+(浅层思考开关要在
+        # 运行中可切换；包装器常驻，enabled 决定每个请求是否注入提示)。
+        self.enabled = bool(enabled)
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = bool(enabled)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        if not self.enabled:
+            return await self._inner.complete(request)
         response = await self._inner.complete(with_shallow_thinking_prompt(request))
         transformed = _transform_complete_response(response)
         if _response_has_thinking(transformed) or not _response_needs_thinking(response):
@@ -96,6 +104,13 @@ class ShallowThinkingClient:
         )
 
     async def stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamEvent]:
+        if not self.enabled:
+            passthrough = self._inner.stream(request)
+            if inspect.isawaitable(passthrough):
+                passthrough = await passthrough
+            async for event in passthrough:
+                yield event
+            return
         stream = self._inner.stream(with_shallow_thinking_prompt(request))
         if inspect.isawaitable(stream):
             stream = await stream

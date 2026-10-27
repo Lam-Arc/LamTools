@@ -19,7 +19,8 @@ VALID_APPROVALS = ("auto", "ask")
 
 
 class BudgetExhausted(RuntimeError):
-    """运行档预算耗尽：后续调用都会收到本错误，运行应尽快收尾。"""
+    """运行档预算耗尽：终止当前执行循环。"""
+    budget_exhausted = True
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,11 @@ class ProfileSpec:
     # 工具只有在其服务器激活后才真的可用。
     mcp_servers: tuple[str, ...] = ()
     budget: ProfileBudget = ProfileBudget()
+    mcp_tools: tuple[str, ...] = ()
+    skills: tuple[str, ...] = ()
+    # user:“值守的时候…有什么办法能开放吗”+(只对这里列出的 MCP 工具跳过确认；
+    # 目标工具的等级与能力上限照常判断，不能拿它去放行普通工具)。
+    approved_tools: tuple[str, ...] = ()
 
 
 def _positive_int(value: Any, *, label: str) -> int | None:
@@ -95,6 +101,13 @@ def read_profiles(manifest: PluginManifest) -> dict[str, ProfileSpec]:
             max_tool_calls=_positive_int(budget_raw.get("maxToolCalls"), label="maxToolCalls"),
             max_tokens=_positive_int(budget_raw.get("maxTokens"), label="maxTokens"),
         )
+        approved_tools = _string_list(body.get("approvedTools"), "approvedTools")
+        invalid_approved = [name for name in approved_tools if not name.startswith("mcp__")]
+        if invalid_approved:
+            raise CapabilityError(
+                manifest.name,
+                f"profile '{short}' approvedTools entries must be mcp__<server>__<tool>: {', '.join(invalid_approved)}",
+            )
         profiles[short] = ProfileSpec(
             full_name=f"{manifest.name}:{short}",
             plugin=manifest.name,
@@ -104,6 +117,9 @@ def read_profiles(manifest: PluginManifest) -> dict[str, ProfileSpec]:
             approval=approval,
             model_scene=str(body.get("modelScene") or "").strip(),
             mcp_servers=servers,
+            mcp_tools=_string_list(body.get("mcpTools"), "mcpTools"),
+            skills=_string_list(body.get("skills"), "skills"),
+            approved_tools=approved_tools,
             budget=budget,
         )
     return profiles
@@ -143,66 +159,89 @@ def resolve_profile(manifests: list[PluginManifest], name: str) -> ProfileSpec:
     raise ValueError(f"profile '{wanted}' not found. available profiles: {available}")
 
 
-def apply_profile(toolbox: Any, spec: ProfileSpec) -> dict[str, int]:
-    """把运行档强制到工具箱上，返回预算计数器。
+def _string_list(raw: Any, label: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or any(not isinstance(value, str) or not value.strip() for value in raw):
+        raise CapabilityError("", f"profile {label} must be an array of non-empty strings")
+    return tuple(value.strip() for value in raw)
 
-    - 白名单：`agent_tool_whitelist`（可见面收窄）+ execute 入口拒绝（fail closed，
-      陈旧上下文也调不了白名单外的工具）。
-    - 审批：approval=auto 时白名单内全部自动放行（无人值守语义）。
-    - 预算：包装 execute 计数，超限后所有后续调用都收到预算耗尽错误。
-    """
-    # user:“无人值守 = 白名单内自动、白名单外拒绝”+白名单双重生效：
-    # 可见面收窄（agent_tool_whitelist）+ 执行拒绝（execute 入口检查）；
-    # 审批用宿主现成的 gate 级 auto_approve（未被阻断的调用全部自动批准），
-    # 不逐工具改权限表。
-    whitelist = set(spec.tools)
-    toolbox.agent_tool_whitelist = whitelist
+
+class RunBudget:
+    """user:“该修修”+(运行预算归单次任务，模型与工具共用同一停止条件)。"""
+    def __init__(self, spec: ProfileBudget) -> None:
+        self.spec = spec
+        self.counters = {"tool_calls": 0, "tokens": 0}
+
+    def check(self) -> None:
+        if self.spec.max_tokens is not None and self.counters["tokens"] >= self.spec.max_tokens:
+            raise BudgetExhausted(f"运行档 token 预算已耗尽：{self.spec.max_tokens}")
+
+    def record_model_usage(self, usage: Any, *, estimated_tokens: int = 0) -> None:
+        self.counters["tokens"] += max(0, int(getattr(usage, "total_tokens", 0) or estimated_tokens))
+        self.check()
+
+    def take_tool_call(self) -> None:
+        self.check()
+        if self.spec.max_tool_calls is not None and self.counters["tool_calls"] >= self.spec.max_tool_calls:
+            raise BudgetExhausted(f"运行档工具调用预算已耗尽：{self.spec.max_tool_calls}")
+        self.counters["tool_calls"] += 1
+
+
+def apply_profile(toolbox: Any, spec: ProfileSpec) -> dict[str, int]:
+    toolbox.agent_tool_whitelist = set(spec.tools)
+    # user:“值守的时候…有什么办法能开放吗”+(只对 approvedTools 里的目标
+    # MCP 工具跳过确认；等级与能力上限由 ApprovalGate 照常判断)。
+    toolbox.approved_mcp_tools = set(spec.approved_tools)
+    gate = getattr(getattr(toolbox, "permission_resolver", None), "gate", None)
+    if gate is not None:
+        gate.mcp_approved_tools = set(spec.approved_tools)
     if spec.approval == "auto":
         gate = getattr(getattr(toolbox, "permission_resolver", None), "gate", None)
         if gate is not None:
             gate.approval_policy = "auto_approve"
-
-    counters = {"tool_calls": 0, "tokens": 0}
+            # user:“auto模式自动通过小于等于2级”+(运行档的 auto 也不能隐式提升成完全访问)。
+            from lamtools_core.tool.operation_levels import AUTO_APPROVE_LEVELS
+            gate.auto_approve_level = max(2, AUTO_APPROVE_LEVELS.get(getattr(gate, "permission_preset", "ask"), 1))
+    budget = RunBudget(spec.budget)
+    toolbox.run_budget = budget
     original_execute = toolbox.execute
+    service = getattr(toolbox, "mcp_service", None)
+    if spec.mcp_tools and service is not None:
+        service.allowed_tools = frozenset(spec.mcp_tools)
 
     async def execute(call: Any, context: Any = None):
-        if (
-            spec.budget.max_tool_calls is not None
-            and counters["tool_calls"] >= spec.budget.max_tool_calls
-        ):
-            return _budget_exhausted_result(call, f"工具调用已达上限 {spec.budget.max_tool_calls} 次")
-        counters["tool_calls"] += 1
-        result = await original_execute(call, context)
-        usage = getattr(result, "usage", None)
-        if usage is not None:
-            counters["tokens"] += int(getattr(usage, "total_tokens", 0) or 0)
-        if (
-            spec.budget.max_tokens is not None
-            and counters["tokens"] >= spec.budget.max_tokens
-        ):
-            return _budget_exhausted_result(call, f"token 已达上限 {spec.budget.max_tokens}")
-        return result
+        # user:“通过 command 运行”+(无人值守仅放行声明的 MCP 命令，不借 command 扩大到任意 shell)。
+        if spec.mcp_tools and call.name == "run_command":
+            from lamtools_core.tool import ToolResult
+
+            try:
+                if service is None:
+                    raise ValueError("MCP command service unavailable")
+                service.check_command(str((call.arguments or {}).get("command") or ""))
+            except ValueError as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="blocked", error=str(exc))
+        # user:“mcp run 名 参”+(同一份运行档白名单也要挡住直接走 mcp 入口的调用)。
+        if spec.mcp_tools and call.name == "mcp" and str((call.arguments or {}).get("action") or "") == "run":
+            from lamtools_core.tool import ToolResult
+
+            try:
+                if service is None:
+                    raise ValueError("MCP command service unavailable")
+                service.check_tool_allowed(str((call.arguments or {}).get("tool_name") or ""))
+            except ValueError as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="blocked", error=str(exc))
+        budget.take_tool_call()
+        return await original_execute(call, context)
 
     toolbox.execute = execute
-    return counters
-
-
-def _budget_exhausted_result(call: Any, detail: str) -> Any:
-    from lamtools_core.tool import ToolResult
-
-    message = f"运行档预算耗尽：{detail}。请立即收尾并汇报已完成的部分。"
-    return ToolResult(
-        call_id=getattr(call, "id", ""),
-        name=getattr(call, "name", ""),
-        status="failed",
-        content=message,
-        error=message,
-    )
+    return budget.counters
 
 
 __all__ = [
     "BudgetExhausted",
     "ProfileBudget",
+    "RunBudget",
     "ProfileSpec",
     "apply_profile",
     "available_profiles",

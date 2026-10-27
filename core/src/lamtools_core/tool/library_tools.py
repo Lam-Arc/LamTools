@@ -1,9 +1,9 @@
 """The ``library`` tool — catalog bookkeeping over the project library (资料库).
 
 One tool, dispatched by ``action``: list, register, favorite, folder, remove,
-restore.  Nothing lands in the catalog automatically any more: agent-produced
-files enter the library only when the agent registers them here (user uploads
-are catalogued by the upload itself).  The catalog is bookkeeping over
+restore. Final-answer file references, web links and changed memory are indexed
+automatically; this tool also files other intentional deliverables and organizes
+existing entries. The catalog is bookkeeping over
 workspace files — no action reads, moves or deletes the file itself, exactly
 like the UI's library panel.  Folders are catalog layers, not disk
 directories.  The handler is bound to the current project via the toolbox's
@@ -17,15 +17,16 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from lamtools_core.tool import ToolCall, ToolResult
+from lamtools_core.tool import ToolCall, ToolResult, ToolArtifact
 
 LIBRARY_TOOL_NAME = "library"
 
 LIBRARY_TOOL_DESCRIPTION = (
     "Curate the project library (资料库): the catalog of files that matter for "
     "this project — user uploads and the deliverables you deliberately file into "
-    "it. Nothing you produce enters the catalog automatically: registering is "
-    "your call. The catalog is bookkeeping only — entries point at files and no "
+    "it. Existing files named in your final answer, web links and changed memory "
+    "are indexed automatically; use register to file other intentional outputs. "
+    "The catalog is bookkeeping only — entries point at files and no "
     "action here reads, moves or deletes those files. Folders are catalog "
     "layers (the library's archive tabs), not disk directories; layer names are "
     "free-form and may nest with '/', empty string = unarchived. Every entry "
@@ -207,6 +208,8 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
                     status="ok",
                     content=f"Filed {relative} into the library as {record.artifact_id}"
                     + (f" under {folder}" if folder else ""),
+                    # user:“这一轮被操作进libary的文件”+(显式登记也形成可汇总的本轮成果)。
+                    artifacts=[ToolArtifact(kind="file_change", uri=record.path, artifact_id=record.artifact_id, metadata={"path": record.path, "role": record.role, "mime_type": record.mime_type})],
                     metadata={"artifact_id": record.artifact_id, "path": relative, "folder": folder},
                 )
 

@@ -15,14 +15,7 @@
 
       <!-- user:“自绘内容”+声明了 entry 的区域给插件一个空盒并注入模块脚本，
            插件自己往盒子里画；脚本每地址只执行一次。 -->
-      <div
-        v-if="region.entryUrl"
-        class="plugin-region-entry"
-        :data-plugin-entry="region.plugin"
-        :data-entry-url="region.entryUrl"
-      >
-        <!-- 插件脚本自行填充此容器 -->
-      </div>
+      <PluginRegionEntry v-if="region.entryUrl" :plugin="region.plugin" :entry-url="region.entryUrl" :request-rpc="props.requestRpc" />
 
       <div
         v-for="(block, index) in region.blocks"
@@ -115,10 +108,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+import PluginRegionEntry from './PluginRegionEntry.vue'
+import { consentRpc, confirmPluginOperation } from '@/plugins/consent'
 
 import { t } from '@/i18n/index.ts'
-import { injectScript, type PluginAction, type PluginBlock, type PluginRegionContribution } from '@/plugins/contributions.ts'
+import { type PluginAction, type PluginBlock, type PluginRegionContribution } from '@/plugins/contributions.ts'
 
 interface RegionView extends PluginRegionContribution {
   entryUrl: string
@@ -138,15 +133,6 @@ const viewRegions = computed<RegionView[]>(() =>
 const regions = viewRegions
 
 const busy = ref('')
-
-// entry 脚本注入：每地址一次。
-watch(
-  () => viewRegions.value.map((region) => region.entryUrl).filter(Boolean),
-  (urls) => {
-    for (const url of urls) injectScript(url)
-  },
-  { immediate: true },
-)
 
 interface ActionField {
   title: string
@@ -190,7 +176,7 @@ function coerce(name: string, field: ActionField): unknown {
 async function runOperation(action: PluginAction, payload: Record<string, unknown>): Promise<void> {
   busy.value = action.id
   try {
-    await props.requestRpc(action.operation, payload)
+    await consentRpc(props.requestRpc)(action.operation, payload)
   } catch (cause) {
     console.warn('[plugin-region] action failed:', action.operation, cause)
   } finally {
@@ -216,7 +202,7 @@ async function invoke(action: PluginAction, region: PluginRegionContribution): P
   // user:“危险操作先确认”+dangerous 标记的按钮点击先弹确认再执行。
   if (action.dangerous) {
     const label = action.mutates ? t("确定执行 {0}？该操作会修改数据。", { 0: action.title }) : t("确定执行 {0}？", { 0: action.title })
-    if (!window.confirm(label)) return
+    if (!await confirmPluginOperation(action.title, label)) return
   }
   const schema = action.input_schema as { properties?: Record<string, unknown> } | undefined
   if (schema && schema.properties && Object.keys(schema.properties).length > 0) {

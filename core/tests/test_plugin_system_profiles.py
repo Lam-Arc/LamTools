@@ -68,6 +68,8 @@ def test_read_profiles_parses_the_full_declaration(tmp_path: Path) -> None:
                     "tools": ["search", "report"],
                     "approval": "auto",
                     "modelScene": "background",
+                    "mcpTools": ["mcp__sample__search"],
+                    "approvedTools": ["mcp__sample__report"],
                     "budget": {"maxToolCalls": 120, "maxTokens": 300000},
                 }
             },
@@ -81,6 +83,8 @@ def test_read_profiles_parses_the_full_declaration(tmp_path: Path) -> None:
     assert spec.tools == ("search", "report")
     assert spec.approval == "auto"
     assert spec.model_scene == "background"
+    assert spec.mcp_tools == ("mcp__sample__search",)
+    assert spec.approved_tools == ("mcp__sample__report",)
     assert spec.budget.max_tool_calls == 120
     assert spec.budget.max_tokens == 300000
 
@@ -91,6 +95,7 @@ def test_read_profiles_parses_the_full_declaration(tmp_path: Path) -> None:
         ({"duty": {"tools": []}}, "non-empty tools"),
         ({"duty": {"tools": ["search"], "approval": "yolo"}}, "approval must be one of"),
         ({"duty": {"tools": ["search"], "budget": {"maxToolCalls": -1}}}, "positive integer"),
+        ({"duty": {"tools": ["search"], "approvedTools": ["report"]}}, "approvedTools entries must be"),
         ({"bad name": {"tools": ["search"]}}, "one token"),
     ],
 )
@@ -166,11 +171,18 @@ def _stub_toolbox(tmp_path: Path) -> object:
         "out_tool": _echo_handler("out"),
         "secret_tool": _echo_handler("secret"),
     }
-    return build_core_toolbox(
+    toolbox = build_core_toolbox(
         work_root=tmp_path,
         plugin_tool_specs=specs,
         plugin_tool_handlers=handlers,
     )
+    # These fixtures exercise the run-profile whitelist/approval, not the
+    # default level of an undeclared plugin tool (which is 3). Keep them at 2
+    # so a profile's ``approval=auto`` (at least level 2) is the variable.
+    toolbox.approval_gate.operation_levels.update(
+        {"in_tool": 2, "out_tool": 2, "secret_tool": 2}
+    )
+    return toolbox
 
 
 @pytest.mark.asyncio
@@ -224,7 +236,7 @@ async def test_apply_profile_approval_override(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_apply_profile_budget_exhaustion(tmp_path: Path) -> None:
-    from lamtools_core.plugin_system.profiles import ProfileBudget, ProfileSpec
+    from lamtools_core.plugin_system.profiles import BudgetExhausted, ProfileBudget, ProfileSpec
 
     spec = ProfileSpec(
         full_name="demo:duty",
@@ -238,11 +250,10 @@ async def test_apply_profile_budget_exhaustion(tmp_path: Path) -> None:
 
     await toolbox.execute(ToolCall(id="c1", name="in_tool", arguments={}))
     await toolbox.execute(ToolCall(id="c2", name="in_tool", arguments={}))
-    exhausted = await toolbox.execute(ToolCall(id="c3", name="in_tool", arguments={}))
 
-    # user:“预算超限终止”+超限后所有后续调用都收到预算耗尽错误。
-    assert exhausted.status == "failed"
-    assert "预算耗尽" in (exhausted.error or "")
+    # user:“预算超限终止”+预算耗尽要抛出给内核终止本轮，而不是伪装成一次工具失败。
+    with pytest.raises(BudgetExhausted):
+        await toolbox.execute(ToolCall(id="c3", name="in_tool", arguments={}))
 
 
 # ── 真实声明：bili-scroll 的值班档 ───────────────────────────────────
@@ -270,3 +281,54 @@ def test_bili_scroll_duty_profile_resolves(tmp_path: Path) -> None:
 
     assert spec.tools == ("bili_brief", "bili_search")
     assert spec.budget.max_tool_calls == 120
+
+
+@pytest.mark.asyncio
+async def test_profile_list_and_resolve_operations(tmp_path: Path) -> None:
+    """user:“我们提供了 profile 接口吗？”+运行档查询走 RPC，不再只能靠 CLI。"""
+    from lamtools_core.app import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
+
+    root = tmp_path / "roots"
+    _write_plugin(
+        root,
+        "demo",
+        {
+            "name": "demo",
+            "version": "1.0.0",
+            "profiles": {
+                "duty": {
+                    "title": "值班轮",
+                    "tools": ["mcp"],
+                    "mcpTools": ["mcp__sample__search"],
+                    "approvedTools": ["mcp__sample__write"],
+                }
+            },
+        },
+    )
+
+    class Model:
+        async def stream(self, request):
+            if False:
+                yield None
+
+        async def complete(self, request):
+            raise AssertionError("profile RPC must not call the model")
+
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=Model(),
+        plugin_roots=[root],
+    )
+
+    listed = await catalog.execute("profile.list", {})
+    assert listed.status == "ok"
+    names = [item["full_name"] for item in listed.payload["profiles"]]
+    assert "demo:duty" in names
+
+    resolved = await catalog.execute("profile.resolve", {"name": "demo:duty"})
+    assert resolved.status == "ok"
+    profile = resolved.payload["profile"]
+    assert profile["tools"] == ["mcp"]
+    assert profile["mcp_tools"] == ["mcp__sample__search"]
+    assert profile["approved_tools"] == ["mcp__sample__write"]

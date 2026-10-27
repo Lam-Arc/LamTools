@@ -66,11 +66,12 @@ def _apply_connection_pragmas(
 ) -> None:
     """Apply the per-connection pragmas; a failure never kills the connection.
 
-    ``busy_timeout`` and ``synchronous`` are per-connection and cheap. The
+    ``busy_timeout`` and ``synchronous`` are per-connection. The
     journal mode is set once (until it succeeds) and skipped afterwards. Every
     statement is best-effort: a transient lock must degrade to a warning instead
     of turning a read into a user-visible error.
     """
+    # user:“一次 PRAGMA synchronous 要 0.4–1.4 秒”+(连接初始化可能受 I/O 压力影响，依靠连接复用摊薄成本)。
     started = perf_counter()
     try:
         cursor.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")

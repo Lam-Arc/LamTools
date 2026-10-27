@@ -7,6 +7,7 @@ user:“界面四档全开”+第 3 步只处理声明式的部分：样式文�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,18 @@ class PluginUIMode:
 
 
 @dataclass(frozen=True)
+class PluginUIPage:
+    """user:“支持一下”+(独立自绘页面可在分屏挂载，不接管主聊天模式)。"""
+    id: str
+    title: str
+    entry: Path
+    plugin: str
+    order: int = 50
+    navigation: bool = False
+    file_extensions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class PluginWindowSpec:
     id: str
     title: str
@@ -91,10 +104,6 @@ class PluginWindowSpec:
     height: int = 620
     plugin: str = ""
     root: Path | None = None
-    #: Desktop host hints: drag/drop files onto the window.
-    file_drop: bool = False
-    #: Raw collapsed/expanded/card sizes for hosts that float the window.
-    window: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -105,6 +114,7 @@ class PluginUISpec:
     script: "PluginAssetSpec | None" = None
     windows: list[PluginWindowSpec] = field(default_factory=list)
     modes: list[PluginUIMode] = field(default_factory=list)
+    pages: list[PluginUIPage] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -122,6 +132,7 @@ class UIAssembly:
     scripts: list[PluginAssetSpec] = field(default_factory=list)
     windows: list[PluginWindowSpec] = field(default_factory=list)
     modes: list[PluginUIMode] = field(default_factory=list)
+    pages: list[PluginUIPage] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -315,12 +326,6 @@ def _parse_window(manifest: PluginManifest, raw: Any) -> PluginWindowSpec:
         height=_positive_int(manifest.name, raw.get("height"), key="height", default=620),
         plugin=manifest.name,
         root=manifest.root,
-        file_drop=bool(raw.get("fileDrop", False)),
-        window=(
-            {str(key): value for key, value in raw["window"].items()}
-            if isinstance(raw.get("window"), dict)
-            else {}
-        ),
     )
 
 
@@ -364,6 +369,33 @@ def read_ui(manifest: PluginManifest) -> PluginUISpec:
         raise CapabilityError(manifest.name, "ui.modes must be an array")
     modes = [_parse_mode(manifest, item) for item in (modes_raw or [])]
 
+    pages_raw = raw.get("pages", [])
+    if not isinstance(pages_raw, list):
+        raise CapabilityError(manifest.name, "ui.pages must be an array")
+    pages = []
+    ids: set[str] = set()
+    for item in pages_raw:
+        if not isinstance(item, dict):
+            raise CapabilityError(manifest.name, "ui page must be an object")
+        page_id = str(item.get("id") or "").strip()
+        if not page_id or any(char.isspace() for char in page_id) or page_id in ids:
+            raise CapabilityError(manifest.name, "ui page id must be a unique non-empty token")
+        ids.add(page_id)
+        order = item.get("order", 50)
+        if isinstance(order, bool) or not isinstance(order, int):
+            raise CapabilityError(manifest.name, "ui page order must be an integer")
+        entry = _asset(manifest, item.get("entry"), key=f"ui page '{page_id}' entry", suffixes=(".js", ".mjs"))
+        # user:“该修就修，不用停下”+(插件声明可打开的文件后缀；只接受后缀，不能包含路径)。
+        extensions = item.get("fileExtensions", [])
+        if (not isinstance(extensions, list) or len(extensions) > 32 or any(
+            not isinstance(value, str) or not re.fullmatch(r"\.[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}", value)
+            for value in extensions
+        ) or len({value.lower() for value in extensions}) != len(extensions)):
+            raise CapabilityError(manifest.name, f"ui page '{page_id}' fileExtensions must contain unique file suffixes")
+        pages.append(PluginUIPage(id=page_id, title=str(item.get("title") or page_id), entry=entry.path,
+                                  plugin=manifest.name, order=order, navigation=item.get("navigation") is True,
+                                  file_extensions=tuple(value.lower() for value in extensions)))
+
     return PluginUISpec(
         plugin=manifest.name,
         styles=styles,
@@ -371,6 +403,7 @@ def read_ui(manifest: PluginManifest) -> PluginUISpec:
         script=script,
         windows=windows,
         modes=modes,
+        pages=pages,
     )
 
 
@@ -395,6 +428,7 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
         # Modes are keyed by plugin:id, so two plugins may both call their mode
         # "main" without a conflict.
         assembly.modes.extend(spec.modes)
+        assembly.pages.extend(spec.pages)
         for region in spec.regions:
             if region.replace:
                 owner = replaced.get(region.region)
@@ -422,6 +456,7 @@ def assemble_ui(manifests: list[PluginManifest]) -> UIAssembly:
             assembly.windows.append(window)
     assembly.regions.sort(key=lambda item: (item.order, item.plugin, item.region))
     assembly.modes.sort(key=lambda item: (item.order, item.plugin, item.id))
+    assembly.pages.sort(key=lambda item: (item.order, item.plugin, item.id))
     return assembly
 
 
@@ -432,6 +467,7 @@ __all__ = [
     "PluginUIAction",
     "PluginUIBlock",
     "PluginUIMode",
+    "PluginUIPage",
     "PluginUIRegion",
     "PluginUISpec",
     "PluginWindowSpec",

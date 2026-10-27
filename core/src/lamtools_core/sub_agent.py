@@ -110,6 +110,7 @@ def _is_visible_child_event(event: CoreEvent) -> bool:
         "runtime.cancelled",
         "runtime.usage",
         "runtime.metrics",
+        "deliverables/presented",
     }:
         return True
     return event.name == "runtime.part"

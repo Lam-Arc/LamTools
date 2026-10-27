@@ -351,3 +351,76 @@ describe('useCoreExecutionControlsState', () => {
     expect(state.turnOptions()).toMatchObject({ model_id: 'model-2' })
   })
 })
+
+describe('per-session composer parameter group', () => {
+  it('notifies the host with the whole group after a user change', async () => {
+    const changes: Array<Record<string, unknown>> = []
+    const models = ref([
+      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true },
+      { id: 'model-2', provider_id: 'provider-2', thinking_supported: true },
+    ])
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      defaultModel: ref(models.value[0]),
+      initial: { thinkingMode: 'high' },
+      onControlsChanged: (controls) => { changes.push({ ...controls }) },
+    })
+
+    state.selectModel('model-2')
+    state.selectThinkingMode('light')
+    state.selectMode('consider')
+    state.selectShallowThinking(true)
+    state.selectPermissionPreset('auto')
+    await nextTick()
+
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({
+      modelId: 'model-2',
+      thinkingMode: 'light',
+      shallowThinkingEnabled: true,
+      activeMode: 'consider',
+      permissionPreset: 'auto',
+    })
+  })
+
+  it('restoreControls applies the group without echo-writing it back', async () => {
+    const changes: Array<Record<string, unknown>> = []
+    const models = ref([
+      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true },
+      { id: 'model-2', provider_id: 'provider-2', thinking_supported: true },
+    ])
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      defaultModel: ref(models.value[0]),
+      initial: { thinkingMode: 'high' },
+      onControlsChanged: (controls) => { changes.push({ ...controls }) },
+    })
+
+    state.restoreControls({
+      modelId: 'model-2',
+      thinkingMode: 'light',
+      shallowThinkingEnabled: false,
+      activeMode: 'consider',
+      permissionPreset: 'auto',
+    })
+
+    expect(state.controls()).toEqual({
+      modelId: 'model-2',
+      thinkingMode: 'light',
+      shallowThinkingEnabled: false,
+      activeMode: 'consider',
+      permissionPreset: 'auto',
+    })
+    await nextTick()
+    await nextTick()
+    // Switching sessions must not look like a user edit.
+    expect(changes).toEqual([])
+
+    state.selectThinkingMode('max')
+    await nextTick()
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({ thinkingMode: 'max' })
+  })
+})

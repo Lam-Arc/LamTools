@@ -13,6 +13,12 @@ There is one plugin system; every `plugin.json` is assembled by it. No marker or
 
 Ask the user only what you cannot infer: what the plugin does, what it must remember, whether it needs a UI. Then decide what it touches, write it, install it, and exercise every declared capability once before claiming it works.
 
+## Existing plugins and replicas
+
+<!-- user:“在复刻或者说移植的状态下，尽可能使用原本的源码”+(已有实现先复用，不能按新插件默认流程重画)。 -->
+
+When the request is a replica, migration or port of an existing plugin, follow `../port-plugin/SKILL.md` first. After checking the licence, prefer the original source, components, styles and assets with the smallest host adapter. A different framework is not itself a reason to rewrite. New-plugin recommendations below (schema forms, declarative blocks, design recipes) must not silently replace the original UI. Record concrete blockers and source differences for every necessary rewrite.
+
 ## 1. The three layers a plugin can touch
 
 Everything a plugin does falls into three layers. Walk them in this order when deciding what to build.
@@ -24,6 +30,7 @@ Everything a plugin does falls into three layers. Walk them in this order when d
 - Anything richer (card walls, filters, charts, previews): a self-drawn `entry` — the host injects your module script and gives you an empty container to draw into.
 - Forms: the config panel (schema-driven, or a custom panel script).
 - Standalone flows: `ui.windows` — plain HTML pages opened as desktop windows.
+- Split-pane pages: `ui.pages` — JavaScript ES modules exporting `mount(root, context)`, opened as independent split tabs. See `agent_docs/plugin_split_pages.md` for the manifest, scoped RPC and cleanup contract; use `plugins/bili-scroll/ui/wall-page.mjs` as a working example.
 - Restyling: `styles` — plain CSS loaded page-wide; restyle existing UI through the stable `data-region` / `data-part` hooks.
 
 Honest inventory: region blocks have **no input controls** — inputs happen through action arguments or the config panel. If you need dropdowns and inputs inside a region, write an `entry`. A plugin whose user-facing side is only the config form is not finished if the product needs buttons and browsing — check what the user expects to click.
@@ -31,7 +38,7 @@ Honest inventory: region blocks have **no input controls** — inputs happen thr
 ### 能力层 — what the plugin does
 
 - Tools: in-process functions the model calls.
-- MCP servers: declared in `mcp/mcp.json`, merged into the session's tools.
+- MCP servers: declared in `mcp/mcp.json`; the model inspects them with the `mcp` tool and executes them through `run_command` (`core mcp call`).
 - Operations: RPC for buttons, commands and panels. **The model cannot call operations** — if the model needs the data, declare a tool that returns it.
 - Host services for backends: session store, sub-agent runner (spawn isolated sessions), LLM client, event bus/sink, operation catalog. This list works today but is **not yet a documented contract** — verify the service in the host source before building on it.
 - Scripts: files in your plugin folder executed on the user's machine (see "External dependencies" below).
@@ -42,13 +49,13 @@ If neither layer fits, replace host modules with `overrides`. Read section 13 fi
 
 ## 2. Choose the mechanism
 
-**MCP or tool** (the most common decision). First question: how often is it called?
+**MCP or tool** (the most common decision). Check reuse first, then frequency.
 
+- **The capability already exists as an MCP server** (the source plugin ships one, or a public server provides it) → ship that MCP config. This is the default and the cheapest path: the capability comes across whole, with zero re-implementation, and its tools never enter the prompt — the model inspects them with the `mcp` tool and runs one with `mcp action=run`. Rewriting an existing MCP server's tools as native tools is a shape change — a `changed` row in a port — and needs the user's decision. "Zero install" is not a reason to rewrite a working MCP.
 - Called in most rounds → an in-process tool. The tool list is always present and the UI collapses its call cards.
-- Called rarely or only in specific flows → MCP. It stays dormant until the session activates it, so its definitions never pollute the prompt, and its call cards collapse by default too.
-- The capability already exists as an MCP server (yours, or a public one you may reuse)? → ship that MCP config. Capabilities come across whole, with zero re-implementation.
+- Called rarely, or only in one flow → MCP, or a tool gated with `visibility: "on_load"` + `skill` (section 5). A dormant server costs nothing in the prompt; an always-on tool costs every session.
 
-Second question: where do the dependencies live?
+Where the dependencies live is the second question:
 
 - It runs on what the host already ships (for example httpx + public APIs)? → in-process, zero install.
 - It needs dependencies the host does not ship? → MCP in your own environment, or a script (see "External dependencies").
@@ -96,6 +103,10 @@ Real cases behind these rules — the bili-scroll replication and others — liv
 | `agent` | object | prompt/tools/approval/context takeover |
 | `operations` | string[] | `./`-relative `operations.jsonc` files |
 | `backend` | string | `./`-relative entry; `backend/__init__.py` is the convention |
+| `runtime` | object | `{ "kind": "process", "command": [...], "cwd": ".", "env": {...} }` — host-supervised external process backend (see section 9) |
+| `http` | object | `{ "routes": [{ "method": "POST", "path": "/webhook", "operation": "demo.webhook" }] }` — token-protected HTTP routes dispatched to operations |
+| `profiles` | object | named run profiles for unattended/sub-agent rounds — tool whitelist, approval, model scene, MCP servers/tools, budget (see section 9) |
+| `agentPresets` | object[] | named presets for sub-agent rounds — mode, tool whitelist, model, leading prompt section (see section 9) |
 | `overrides` | object | module replacements, backend and frontend keys |
 | `skillModes` | object | skill root → modes that unlock it |
 
@@ -161,11 +172,23 @@ Two naming rules:
 - Two plugins may not declare the same tool name; the later one is refused and the conflict is reported. Same for commands and skills.
 - A tool that reuses a **core tool's name** is a handler swap: keep the declaration minimal (name, permission, handler) and the host borrows the core tool's description and schemas. This is how built-ins like web search are re-implemented; the swap only changes the implementation, not the interface.
 
+**Visibility.** `visibility` defaults to `always` — the tool is in the model's list in every session, even when the plugin's flow never runs. For tools that belong to one skill or flow, set `"visibility": "on_load"` with `"skill": "<skill-name>"`; they appear only after that skill loads. A plugin with eight or more flow-specific tools should gate them this way, or ship them as an MCP server instead (section 2). Twenty always-on tools is a prompt cost every conversation pays.
+
+**Same-folder imports are not automatic.** `tools.py`, `ops.py` and `backend/__init__.py` are loaded one file at a time; for a plain `module:function` entry the plugin root is not on `sys.path`. `import helper` from any of them raises `ModuleNotFoundError` at load or call time. Either keep the handler self-contained, or put this before the sibling imports:
+
+```python
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+```
+
+For `backend/__init__.py` the plugin root is `Path(__file__).resolve().parent.parent`. Operation entries with a dotted module name are the exception: the host appends the plugin root before importing them.
+
 ## 6. Skills, hooks, MCP, context
 
 - Skill: a folder with `SKILL.md` whose frontmatter has `name` and `description`. The description states when to use it; declare `skillModes` to scope a skill root to specific modes.
 - Hook: `hooks/hooks.json`, same shape as host hook files. Events: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `Stop`, `UserPromptSubmit`, `PermissionRequest`. Handler types: `command`, `http`, `mcp`, `prompt`. Hooks declared by a plugin are **trusted on install** — they do not go through the per-hook review flow that user hook files do. Installing a plugin is an explicit act of trust.
-- MCP: `mcp/mcp.json` with an `mcpServers` object. The host merges it into the session's MCP config. The server command can point into your own environment (for example a venv your setup operation built) — if the server cannot start, its tools are simply unavailable and the rest of the plugin keeps working.
+- MCP: `mcp/mcp.json` with an `mcpServers` object. The host merges it into the session's MCP config; the server command can point into your own environment (for example a venv your setup operation built). MCP tools are **not** added to the model's tool list: the model inspects them with the `mcp` tool (`servers` / `tools` / `schema`) and runs one with `mcp action=run, tool_name='mcp__server__tool', arguments={...}`. Each run is gated by that tool's declared `level` / `toolLevels`. The legacy `core mcp call` route still works as a compatibility alias inside `run_command`, but do not write new instructions against it. If the server cannot start, its tools are unavailable and the rest of the plugin keeps working.
 - Context: declare files, not prompt text. Order is explicit; equal order sorts by file name, so a plugin always keeps its place. Context changes appear after the next context compaction or a new session, never mid-turn.
 
 ## 7. Slash commands
@@ -180,7 +203,7 @@ Two naming rules:
 }
 ```
 
-`operation` is any registered RPC operation — yours (section 8) or the host's. Text typed after the command is appended to the payload. A command may instead declare an `effect` (for example showing a plugin window); commands have no permission system of their own, the operation they call carries the permissions.
+`operation` is any registered RPC operation — yours (section 8) or the host's. Text typed after the command is appended to the payload. A command may instead declare an `effect`; the host returns it to the caller without executing an operation. Commands have no permission system of their own, the operation they call carries the permissions.
 
 ## 8. Plugin operations
 
@@ -191,9 +214,23 @@ Operations are the plugin's RPC surface — what buttons, commands, the config p
 { "operations": [ { "name": "demo.refresh", "description": "Refresh the cache", "handler": "ops:refresh" } ] }
 ```
 
-Handler contract: `async def refresh(request)`, returning an `OperationResult` or a plain dict payload. Handlers may accept keyword-only `work_root` and `data_dir`; the host passes what the signature asks for. Declared operations are mounted at startup, stay available behind the plugin's enabled state, and conflicting names across plugins are refused.
+Handler contract: `async def refresh(request)`, returning an `OperationResult` or a plain dict payload. Handlers may accept keyword-only `work_root` and `data_dir`; the host passes what the signature asks for. Declared operations are mounted at startup — an installed or updated plugin answers `Unsupported method` until the app (or the dev backend) restarts — stay available behind the plugin's enabled state, and conflicting names across plugins are refused. Plan the restart into the verify loop (section 15).
 
-**Operations are the user-facing surface. The model has no way to call them** — if a piece of data or action must also be reachable by the model, declare a tool for it and share the implementation (one payload function, two thin wrappers).
+**Operations are the user-facing RPC surface.** An Agent can also reach them through an existing `run_command` plus a plugin-declared CLI that connects to the running host. Prefer that route for existing command capabilities; do not add a duplicate Agent tool just to simplify arguments.
+
+<!-- user:“实现这个插件，也正好实验我们的新插件架构”+(网络插件验证后的后台审批、导航及自绘面板合同)。 -->
+
+Operations may declare `permission: "ask_user"` and an `impact` description, or `permission: "hard_block"`. The host checks its shared permission service before importing/executing the handler. Missing permission services fail closed for protected operations. Existing explicit host authorization remains effective. Unspecified permission retains legacy `auto_allow` behavior; system network modifications must explicitly declare protection.
+
+Use `approvalFields: ["kind", "interface_index"]` to include selected concrete arguments in the confirmation. Only list non-sensitive fields; never include URLs with credentials, subscription links, cookies or tokens. The execution still uses the full server-captured request.
+
+An unapproved call returns an `approval_required` result containing `approval.id`, `operation`, and `impact` (over JSON-RPC this is error data). Host UI bridges show `CoreConfirmDialog` and send `plugin.system.operation.respond` with the ID and `approve` / `deny`. The host executes only the captured request once; changing parameters, replaying, expiry or plugin changes cannot reuse it. A client-supplied `confirmed` field is never authorization. Agents must not manufacture approval responses.
+
+For complete plugin pages, set `ui.pages[].navigation: true` to add the same page to the main left rail. Ordinary pages remain split-only. No dedicated host component or hard-coded plugin branch is needed.
+
+Custom config panels receive `api.rpc` and `api.signal` in addition to config/schema/save. Their `mount` may return a cleanup function, synchronously or asynchronously. Prefer `api.rpc` over a global bridge so pending confirmations and subscriptions can be cancelled when the panel closes. The host stops a plugin backend before uninstalling its files; cleanup failure prevents file removal.
+
+Choose a unique CLI command name and check `core --help` before declaring it. For example, the core already owns `network`, so Network Exploration uses `network-exploration`.
 
 ## 9. Backend
 
@@ -213,6 +250,135 @@ def create_plugin(context):
 The factory must be synchronous; do initialization in `start(context)`. A runtime may expose `start`, `stop`, `health_check`, `lifecycle_tasks`, `lifecycle_processes` — the host starts it with the plugin enabled, stops it on disable, monitors health, and restarts the same instance on re-enable. Each backend gets its own model scene; it never inherits the conversation's model by accident. Declared tools keep working across restarts because one instance per plugin lives for the process.
 
 Through `context` a backend reaches the host services listed in section 1 — for example `context.service("sub_agent_runner_factory")` spawns isolated sub-agent sessions, and the operation catalog executes any registered operation (scheduling, session queries). This is how a plugin implements its own schedulers and background flows: the timer lives in your runtime, the work it triggers runs where you point it.
+
+### External-process backends
+
+A Node, Rust or other process can be the backend without a Python shim:
+
+```jsonc
+// plugin.json
+"runtime": {
+  "kind": "process",
+  "command": ["node", "dist/server.js"],
+  "cwd": ".",
+  "env": { "NODE_ENV": "production" },
+  "startupTimeoutMs": 15000,
+  "requestTimeoutMs": 60000
+}
+```
+
+- The process speaks newline-delimited JSON-RPC 2.0 over stdio: `initialize`, `tools/call`, `operations/call`, `health`, `shutdown`. `initialize` returns `{name, version, tools?, operations?}`; tool calls return `{status, content, error, artifacts, metadata}` and operation calls return `{status, payload}`.
+- Declare the tool and operation names in `tools.jsonc` / `operations.jsonc` as usual. For a process runtime the `handler` field may be omitted — the child process implements it.
+- The host owns startup, readiness, health, stop and restart exactly like an in-process backend. `cwd` defaults to the plugin root; use it when the child expects its own directory. `env` is merged over the host environment.
+- Do not print non-JSON text to stdout; use stderr for logs. The host logs stderr under the plugin name.
+- Process backends cannot receive host callbacks yet. Keep protocol handlers request/response; long-running work should report through the plugin's operations or tools.
+
+### HTTP routes
+
+A plugin can expose webhooks or callbacks without registering a FastAPI router:
+
+```jsonc
+"http": {
+  "routes": [
+    {"method": "POST", "path": "/webhook", "operation": "demo.webhook"},
+    {"method": "GET", "path": "/health", "operation": "demo.health", "auth": "none"}
+  ]
+}
+```
+
+- Routes mount under `/api/core/plugin-http/<plugin>/<path>` and dispatch to the named operation with `{method, path, query, body, headers}`.
+- `auth` defaults to `token`. The host generates a bearer token in the plugin's secret store under `httpToken`; read it with `context.service("secrets").get("httpToken")` and show it to the user. Send it as `X-Plugin-Token` or `Authorization: Bearer …`.
+- The operation must be owned by the plugin and declared `permission: "auto_allow"`; `ask_user` and `hard_block` routes are refused because HTTP cannot show an approval prompt.
+- Paths are exact, must start with `/`, and cannot contain `..`, `?` or `#`. At most 32 routes per plugin.
+
+### Reloading plugin code
+
+`plugin.system.reload` (alias `plugin.reload`) stops the backend, invalidates imported modules, loads the current files, starts the backend and remounts the plugin's operations. It is the no-restart path after editing an installed plugin; it is explicit, not a file watcher. Use `plugin.system.update` when replacing the plugin directory.
+
+### Host services for channel and session plugins
+
+These are stable contracts; do not import internal host modules when one exists.
+
+| Service | Contract |
+|---|---|
+| `model_catalog` | `list()` / `resolve(ref)` / `default()` / `capability(ref)` / `providers()`; each model has `id`, `provider`, `capability`, `contextWindow`, `maxOutputTokens`. |
+| `agent_presets` | `list()` / `has(id)` / `resolve(id)` / `compose(id, ...)` and per-preset services: `register_service(preset_id, name, service)` / `service_for(preset_id, name)`. |
+| `system_prompt_waterfall` | synchronous `register(handler, plugin=..., order=...)`; the handler receives `PromptContext` and `PromptAssembly`. |
+| `sub_agent_runner_factory` | `factory(work_root=...)` returns a runner; use `work_root` for a plugin-owned working directory. |
+| `channel_host` | `ChannelHost.create(adapter=..., config=..., ...)` builds a `ChannelRuntime` for an IM bridge. |
+| `secrets` | Per-plugin secret view: `get(key, default="")` / `set(key, value)` / `delete(key)` / `keys()` / `has(key)`. Values are DPAPI-protected on Windows and isolated by plugin. |
+
+A tool result with `artifacts` also emits `deliverables/presented`
+(`{files, tool_name, call_id}`). Chat-channel plugins receive it through the
+sub-agent event forwarder; deduplicate against `runtime.tool.finished` because
+both carry the same artifacts.
+
+`KernelSubAgentRunner` exposes child-session operations directly: `run(..., preset=...)`, `compact(session_id)`, `fork(session_id, new_agent_name)`, `session_info(session_id)`, and `preset_service(name, preset_id)` (the built-in `compaction` service has `compact_now(session_id)`).
+
+For a chat channel, implement `ChannelAdapter` (`send_text`, `send_file`, `open_stream`, `ask_approval`, `ask_questions`, `handle_interaction`, `handle_text`, `cancel_pending`, `acknowledge_interaction`) and let `ChannelRuntime` own per-peer sessions, the merge queue, commands, approvals/questions, streaming, usage and compact/fork/reset. The runtime calls the host runner factory; the plugin keeps only network I/O and message formatting.
+
+### Run profiles (unattended and sub-agent rounds)
+
+A named profile is a host-enforced bundle for a round nobody is watching. Declare it in the manifest and start the round with it; do not put the same whitelist only in a prompt.
+
+```jsonc
+"profiles": {
+  "duty": {
+    "title": "Duty round",
+    "tools": ["bili_duty", "bili_search", "run_command"],
+    "approval": "auto",
+    "modelScene": "background",
+    "mcpServers": ["bilibili"],
+    "mcpTools": ["mcp__bilibili__search", "mcp__bilibili__save_report"],
+    "approvedTools": ["mcp__bilibili__bili_reply", "mcp__bilibili__bili_send_message"],
+    "budget": { "maxToolCalls": 120, "maxTokens": 150000 }
+  }
+}
+```
+
+- `tools` is required and is the exact callable whitelist; the host refuses calls outside it, so a prompt cannot widen the round.
+- `approval: "auto"` is the coarse switch: it lifts the round's confirmation threshold (in full access, up to level 3). Prefer `approvedTools` for the precise version.
+- `mcpServers` activates those servers for the round; `mcpTools` restricts their tools (use `mcp__<server>__<tool>` names). `skills` limits which skills the round can load.
+- `approvedTools` lists the exact MCP tools whose level-3 confirmation is skipped for this round. It is not a whitelist (that is `mcpTools`) and does not lower the tool's level or the capability cap; every other level-3 tool still asks. Use it for unattended writes instead of a blanket `approval: "auto"`, and let the user grant it — a plugin should not self-approve a write.
+- `modelScene` picks that scene's model; `budget` ends the round when either counter is exhausted.
+- Start the round with `context.service("run_profile")(profile="plugin:profile", task=prompt, agent="...")`; it resolves the profile and runs a headless sub-agent with `profile_spec`. It is async: from a backend thread, capture the host loop in `start()` and schedule it with `asyncio.run_coroutine_threadsafe`, then return instead of blocking the timer. The lower-level `sub_agent_runner_factory` still exists (`runner.run(task=..., profile_spec=...)`), but use `run_profile` unless you need custom kwargs. `profile.list` / `profile.resolve` are read-only RPC operations for inspecting declarations.
+
+### Agent presets and system prompt waterfall
+
+Two host contracts let a plugin shape a sub-agent round without reimplementing the host:
+
+```jsonc
+// plugin.json
+"agentPresets": [
+  { "id": "readonly", "title": "Read only", "mode": "low",
+    "tools": ["read_file", "list_dir", "search_content"],
+    "prompt": "This round may read and search, but must not modify files." }
+]
+```
+
+- Presets come from enabled plugin manifests and from `agent-presets.jsonc` in the project/global config; config overrides a plugin preset with the same id. `mode`, `tools`, `model` and `prompt` are optional.
+- A preset only fills values the caller did not set. An explicit `mode`, `allowed_tools` or `model` wins; `tools` is an exact whitelist for that round.
+- The preset prompt becomes a leading system-prompt block, not a tail note. Callers start a round with `runner.run(..., preset="readonly")`; the runner re-applies the preset when an approval or question resumes.
+- UI that lists presets should read `context.service("agent_presets").list()` / `has(id)`.
+- A preset can mount a live service with `register_service(preset_id, "compaction", service)`, and a runner resolves it with `preset_service("compaction", preset_id)`. The host also provides a built-in compaction service for every preset.
+
+The system-prompt waterfall lets a backend append or replace prompt sections at assembly time:
+
+```python
+waterfall = context.service("system_prompt_waterfall")
+unregister = waterfall.register(handler, plugin="demo", order=100)
+
+def handler(prompt_context, assembly):
+    if prompt_context.agent_name == "my-agent":
+        assembly.append_section("demo:rules", "Extra rules for this agent.", order=90)
+    return assembly
+```
+
+- Handlers are synchronous. Returning an awaitable is rejected; the host prompt assembly is synchronous.
+- `PromptContext` carries the session id, agent name, work root, active mode and session metadata, so a handler can scope its section to one agent.
+- `assembly.append_section(name, text, order=...)` also appends the text; `replace_section(name, text)` updates both the section and its occurrence. Return `None` to leave the assembly unchanged.
+- Register in `start()` and call the returned unregister function in `stop()`. A handler exception is logged and the built-in prompt is kept, so one plugin cannot break the turn.
+- Sections become independently tracked blocks and follow the same freeze/notice cycle as built-in prompt blocks.
 
 ## 10. Config panel
 
@@ -278,7 +444,7 @@ Regions are places the host already renders: `appRail`, `left`, `titlebar`, `mai
       }
     ],
     "windows": [
-      { "id": "board", "title": "Board", "entry": "./ui/window.html", "width": 720, "height": 520, "fileDrop": true }
+      { "id": "board", "title": "Board", "entry": "./ui/window.html", "width": 720, "height": 520 }
     ],
     "modes": [
       { "id": "focus", "title": "Focus", "tools": ["read_file", "demo.notes"], "exclusiveTools": true }
@@ -291,7 +457,7 @@ Regions are places the host already renders: `appRail`, `left`, `titlebar`, `mai
 - Actions: `dangerous: true` makes the host ask for confirmation first; `inputSchema` makes the host collect arguments in a small form before invoking.
 - `entry` hands the region to plugin JavaScript: the host injects the module script once and leaves an empty container for it to draw into. Card walls, filters and paginated browsing are built here — your script reads your operations and renders. Your script calls your own operations through the host bridge `window.LamToolsPluginRPC(method, params)` — the same channel the plugin page uses.
 - Styles load as real stylesheets from the plugin folder, so relative `url(...)` references to shipped images and fonts work. Because they are page-wide CSS, a style-only plugin can restyle existing UI via the stable `data-region` / `data-part` hooks.
-- Windows are plain HTML pages opened as desktop windows; `fileDrop` opts into drag-and-drop files. They call Core operations over the same API.
+- Windows are plain HTML pages opened as desktop windows; they call Core operations over the same API.
 - A mode turns the main area into a plugin surface and appears in the mode switcher. `tools` restricts what the model sees in that mode; `exclusiveTools` makes the plugin's own tools visible only there. Mode components ship with the app for bundled plugins; third-party mode UIs come from regions, scripts, and overrides.
 
 A user-facing plugin usually needs more than a config form: if the product has buttons, lists, or browsing, build them with actions and entries, not just a schema.
@@ -354,17 +520,19 @@ The host compares `python`, `app` and `platform` at install time and refuses the
 
 1. Write the folder under the workspace, for example `plugins/<name>/`.
 2. Install with the `plugin.system.install` operation: `{ "source": "local", "path": "<folder>" }`, `{ "source": "zip", "path": "<zip>" }`, or `{ "source": "url", "url": "<zip url>", "sha256": "<optional digest>" }`. The plugin lands in the user plugin root.
-3. Verify declarations: call `plugin.system.list` and confirm no declaration error, then the capability-specific checks — `plugin.system.ui` for regions/windows/modes, `plugin.system.agent` for takeover.
-4. Exercise every declared capability once: run the tool, trigger the command, load the skill, open the window, save the config, restart the backend by disabling and enabling the plugin.
-5. Update with `plugin.system.update` (same three sources) and confirm `data/` survived.
-6. If a capability reports a declaration error, fix the manifest and update; never hand-edit files inside the installed root.
+3. Restart the app (or the dev backend) before exercising plugin code. Install loads declarations, but tools and operations are mounted at startup; until then they answer `Unsupported method` or are absent. This is expected — plan for it and do not report it as a plugin defect.
+4. Verify declarations: call `plugin.system.list` and confirm no declaration error, then the capability-specific checks — `plugin.system.ui` for regions/windows/modes, `plugin.system.agent` for takeover.
+5. Exercise every declared capability once **through the host**, not by importing the module yourself: call the operation over the app's RPC, let the model call the tool, load the skill, open the window in the app, save the config. A local `python -c "import tools"` proves nothing about the host loader.
+6. Check `backend.log` for `Plugin '<name>' load failed` and `plugins:handler import failed`. The plugin page's `errors` array covers declaration errors, not runtime load failures: a plugin can look enabled and error-free while its backend and handlers failed to import.
+7. Update with `plugin.system.update` (same three sources), restart, and confirm `data/` survived.
+8. If a capability reports a declaration error, fix the manifest and update; never hand-edit files inside the installed root.
 
 **The runtime runs the installed copy**, not your workspace folder: handler code, `data/`, and saved config all live under the installed root (found via `plugin.system.list`'s `root` field). When settings need to change on the user's behalf, use the config operations (`plugin.system.config.get/update`) — never write a `data/config.jsonc` next to the workspace source, where the running tool will never see it.
 
 **When changes take effect** — tell the user which of the three applies:
 
 - Config values: immediate, on next read.
-- Code and declarations: restart the backend.
+- Code and declarations: restart the app (the packaged backend process). Tools and operations are mounted at startup; there is no reload key yet. A disable/enable may restart a backend but does not guarantee the operation catalog is remounted.
 - Prompt-affecting changes (context, agent prompt, overrides): new session / compaction for prompts, app restart or full page reload for overrides.
 
 The full table lives in the bundled Wiki's 插件 article.
@@ -373,9 +541,12 @@ The definition of done is the loop above passing, not the files looking right.
 
 ## Rules
 
+- If the capability already exists as an MCP server, ship that MCP config; do not rewrite its tools in-process unless the user asks for that shape. Reuse wins over reimplementation.
+- Do not leave a large set of flow-specific tools always visible. Gate them with `visibility: "on_load"` + `skill`, or use an MCP server.
+- Do not assume same-folder imports work. Add the plugin root to `sys.path`, or keep each handler self-contained.
 - Do not read credentials or unrelated files from a handler. If a plugin needs a secret, ask the user how it should be supplied.
 - Do not write outside the plugin folder except through declared tools and `data/`.
 - Do not add a second plugin runtime, a component protocol, or a permission system inside a plugin.
-- Do not claim a capability works until you have exercised it once.
+- Do not claim a capability works until you have exercised it once through the host, after a restart.
 - Report what you did not build: if the request implies a capability you left out, say so — the missing part is a deliverable, not a footnote.
 - If the request needs something the host does not offer, say what is missing instead of faking it.

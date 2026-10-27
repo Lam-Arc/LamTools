@@ -1,0 +1,4 @@
+# user:“对比原版，能力应当只增不减”+(实测 PyAV 19 删除 metadata_errors，固定可运行的转写依赖边界)。
+faster-whisper==1.2.1
+av>=11,<19
+yt-dlp>=2024.10

@@ -242,3 +242,55 @@ async def test_shallow_thinking_client_stream_flushes_incomplete_marker_as_conte
         ("content_delta", f"{SHALLOW_THINKING_START}\n未闭合"),
         ("done", ""),
     ]
+
+
+@pytest.mark.asyncio
+async def test_shallow_thinking_client_can_be_toggled_off_and_on_at_runtime():
+    """user:“模式、权限、思考强度在下一步生效（即时生效）”
+
+    The wrapper is always installed; ``enabled`` decides per request whether
+    the prompt is injected, so a running turn can toggle it at a step boundary.
+    """
+    from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
+
+    class Inner:
+        def __init__(self):
+            self.requests = []
+
+        async def complete(self, request):
+            self.requests.append(request)
+            return LLMResponse(content="plain answer")
+
+        async def stream(self, request):
+            self.requests.append(request)
+            yield LLMStreamEvent(kind="content_delta", content="plain answer")
+            yield LLMStreamEvent(kind="done")
+
+    inner = Inner()
+    client = ShallowThinkingClient(inner, enabled=False)
+    request = LLMRequest(messages=[ChatMessage(role="user", content="hi")])
+
+    disabled_response = await client.complete(request)
+
+    assert disabled_response.content == "plain answer"
+    assert all(
+        message.content != SHALLOW_THINKING_PROMPT
+        for message in inner.requests[0].messages
+    )
+
+    client.set_enabled(True)
+    await client.complete(request)
+
+    assert any(
+        message.content == SHALLOW_THINKING_PROMPT
+        for message in inner.requests[1].messages
+    )
+
+    client.set_enabled(False)
+    events = [event async for event in client.stream(request)]
+
+    assert [event.kind for event in events] == ["content_delta", "done"]
+    assert all(
+        message.content != SHALLOW_THINKING_PROMPT
+        for message in inner.requests[2].messages
+    )

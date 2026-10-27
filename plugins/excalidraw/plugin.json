@@ -1,0 +1,49 @@
+{
+  "name": "excalidraw",
+  "version": "0.1.17-dev",
+  "description": "Excalidraw 原版移植（开发中）",
+  "scope": "global",
+  "defaultEnabled": true,
+  "operations": [
+    {
+      "name": "excalidraw.file.read",
+      "handler": "ops:read",
+      "description": "读取工作区画图文件"
+    },
+    {
+      "name": "excalidraw.file.write",
+      "handler": "ops:write",
+      "description": "保存工作区画图文件"
+    },
+    {
+      "name": "excalidraw.asset.put",
+      "handler": "ops:put_asset",
+      "description": "保存画图图片附件"
+    },
+    {
+      "name": "excalidraw.asset.read",
+      "handler": "ops:read_asset",
+      "description": "读取画图图片附件"
+    },
+    {
+      "name": "excalidraw.link.resolve",
+      "handler": "ops:resolve_link",
+      "description": "解析画图中的工作区链接"
+    }
+  ],
+  "ui": {
+    "pages": [
+      {
+        "id": "canvas",
+        "title": "Excalidraw",
+        "entry": "./ui/page.mjs",
+        "navigation": true,
+        "order": 55,
+        "fileExtensions": [
+          ".excalidraw.md",
+          ".excalidraw"
+        ]
+      }
+    ]
+  }
+}

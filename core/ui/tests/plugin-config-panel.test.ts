@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import PluginConfigPanel from '../src/components/PluginConfigPanel.vue'
+import UiSelect from '../src/components/UiSelect.vue'
 
 interface PanelApi {
   plugin: { name: string; version: string; description: string }
@@ -85,7 +86,10 @@ describe('plugin config panel', () => {
     const numberInput = wrapper.find('input[type="number"]')
     await numberInput.setValue('3')
     await wrapper.find('input[type="checkbox"]').setValue(true)
-    await wrapper.find('select').setValue('safe')
+    // user:“配置界面里面自带的那些样式……比如选中键、下拉框之类的”+
+    // 枚举下拉改用 UiSelect，选项通过同一个 v-model 事件写入。
+    wrapper.getComponent(UiSelect).vm.$emit('update:modelValue', 'safe')
+    await flushPromises()
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 

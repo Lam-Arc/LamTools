@@ -29,8 +29,8 @@ defineEmits<{
 }>()
 
 const options: Array<{ value: CoreModelCatalogView; label: string }> = [
-  { value: 'group', get label() { return t("按组") } },
-  { value: 'provider', get label() { return t("按供应商") } },
+  { value: 'group', get label() { return t("组") } },
+  { value: 'provider', get label() { return t("供应商") } },
 ]
 </script>
 
@@ -42,7 +42,7 @@ const options: Array<{ value: CoreModelCatalogView; label: string }> = [
   gap: var(--space-1);
   padding: var(--space-1);
   border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
-  border-radius: var(--radius);
+  border-radius: 999px;
   background: var(--theme-control-background);
   color: var(--text);
 }
@@ -51,7 +51,7 @@ const options: Array<{ value: CoreModelCatalogView; label: string }> = [
   min-height: 26px;
   padding: 0 var(--space-2);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: transparent;
   color: color-mix(in srgb, var(--text) 68%, transparent);
   font: inherit;

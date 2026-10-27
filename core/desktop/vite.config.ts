@@ -11,10 +11,24 @@ const UI_SRC = resolve(__dirname, '../ui/src')
  * 相对引用。流程：rollup 正常出块 → generateBundle 把块间相对导入改写
  * 回 `@/` 键 → 产出 importmap.base.json。
  */
+function injectBaseImportMap(html: string, imports: Record<string, string>): string {
+  if (html.includes('type="importmap"')) return html
+  // `</script>` inside a JSON string would terminate the tag early.
+  const payload = JSON.stringify({ imports }).replace(/</g, '\\u003c')
+  const tag = `<script type="importmap">${payload}</script>`
+  const scriptAt = html.toLowerCase().indexOf('<script')
+  return scriptAt === -1 ? `${tag}\n${html}` : `${html.slice(0, scriptAt)}${tag}\n${html.slice(scriptAt)}`
+}
+
 function lamtoolsImportMap(): Plugin {
   return {
     name: 'lamtools-import-map',
-    generateBundle(_options, bundle) {
+    // The desktop window loads the built page from Tauri's embedded assets,
+    // not from Core's HTTP SPA fallback, so the base map has to travel inside
+    // the document. Without it every `@/...` import fails and the window stays
+    // on the startup splash.
+    // user:“a3 无法使用，界面卡住了，查一查”+(打包页必须自带基础映射)
+    generateBundle: { order: 'post', handler(_options, bundle) {
       type Chunk = { type: string; fileName: string; code?: string; facadeModuleId?: string | null }
       const chunks = Object.values(bundle) as Chunk[]
 
@@ -54,8 +68,19 @@ function lamtoolsImportMap(): Plugin {
         fileName: 'importmap.base.json',
         source: JSON.stringify({ imports }, null, 2) + '\n',
       })
-      console.log(`[import-map] ${Object.keys(imports).length} module entries, ${rewritten} imports rewritten to bare specifiers`)
-    },
+
+      // user:“a3 无法使用，界面卡住了，查一查”+(内嵌页与 Core 返回的页都先有映射再加载模块)
+      let pages = 0
+      for (const asset of Object.values(bundle)) {
+        if (asset.type !== 'asset' || typeof asset.source !== 'string') continue
+        if (!asset.fileName.endsWith('.html')) continue
+        const injected = injectBaseImportMap(asset.source, imports)
+        if (injected === asset.source) continue
+        asset.source = injected
+        pages += 1
+      }
+      console.log(`[import-map] ${Object.keys(imports).length} module entries, ${rewritten} imports rewritten to bare specifiers, ${pages} page(s) injected`)
+    } },
   }
 }
 
@@ -86,7 +111,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
-        desktopPluginHost: resolve(__dirname, 'desktop-plugin-host.html'),
       },
       output: {
         preserveModules: true,

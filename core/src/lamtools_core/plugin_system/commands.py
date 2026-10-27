@@ -42,7 +42,7 @@ class ComposerPluginHandle:
 
 def composer_plugin_handles(host: PluginHost) -> list[ComposerPluginHandle]:
     """Expose enabled plugin commands in the legacy catalog's plugin shape."""
-    manifests = host.discover()
+    manifests = host.runtime_manifests()
     assembly = assemble_capabilities(manifests)
     grouped: dict[str, list[ComposerCommandHandle]] = {}
     for command in assembly.commands:

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from ..member import MemberManifest, MemberRegistry
 from .security import allowed_origins, is_allowed_origin, is_same_server_origin
 from .api_access import CoreApiAccessMiddleware, CoreApiAccessPolicy
+from .inline_visualization import RUNTIME_PATH, runtime_response
 
 
 @asynccontextmanager
@@ -119,8 +120,16 @@ def create_app(
     async def _check_request_origin(request: Request, call_next: Callable) -> Any:
         # Origin filtering supplements, rather than replaces, access control.
         origin = request.headers.get("origin")
+        # user:“点击之后没反应”+(分屏页在 Tauri 里用动态 import 从后台取 .mjs；
+        # 这是跨源脚本请求，会被下面的 Origin 栅栏拦成 403。插件静态资源是
+        # 只读代码，单独放开并补 CORS，不能拿它去放宽其它 Core API。)
+        is_plugin_system_asset = (
+            request.url.path.startswith("/api/core/plugin-system/")
+            and "/assets/" in request.url.path
+        )
         if (
             origin is not None
+            and not is_plugin_system_asset
             and not is_allowed_origin(origin)
             and not is_same_server_origin(
                 origin,
@@ -135,15 +144,25 @@ def create_app(
         # policies shrink the sniffing / clickjacking surface.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
-        is_desktop_plugin_asset = (
-            request.url.path.startswith("/api/core/desktop-plugins/")
-            and "/assets/" in request.url.path
-        )
-        if is_desktop_plugin_asset:
-            # Desktop plugin documents are intentionally framed by the local
-            # Tauri host, which uses a different loopback port in development
-            # and the Tauri custom origin in packaged builds. Keep every other
-            # response protected by SAMEORIGIN.
+        if is_plugin_system_asset:
+            # Plugin pages are imported as ES modules by the desktop WebView,
+            # whose origin can differ from the backend port. Module scripts
+            # need CORS plus a cross-origin resource policy; the content is
+            # read-only plugin code, never Core API data.
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
+            # Module scripts are credential-free; a wildcard origin combined
+            # with allow-credentials is invalid and some WebViews reject it.
+            # user:“我看看界面什么的有没有 bug”+(Starlette 响应头不是 dict，删除跨域凭证头不能使插件资源请求崩溃)。
+            if "access-control-allow-credentials" in response.headers:
+                del response.headers["access-control-allow-credentials"]
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+            response.headers.setdefault("Vary", "Origin")
+        elif request.url.path == RUNTIME_PATH:
+            # The runtime document is intentionally framed by the local Tauri
+            # host, which uses a different loopback port in development and the
+            # Tauri custom origin in packaged builds. Keep every other response
+            # protected by SAMEORIGIN.
             response.headers.setdefault(
                 "Content-Security-Policy",
                 "frame-ancestors http://127.0.0.1:* http://localhost:* tauri://localhost http://tauri.localhost",
@@ -157,6 +176,9 @@ def create_app(
     # Last added is outermost: do not let CORS preflight, static files, docs,
     # future routers or WebSockets bypass the listener's access policy.
     app.add_middleware(CoreApiAccessMiddleware, policy=policy)
+
+    # user:“Sunday也可以实现吗？去实现”+(独立交互页保留访问检查，仅自身允许被桌面窗口嵌入)。
+    app.add_api_route(RUNTIME_PATH, runtime_response, methods=["GET"], include_in_schema=False)
 
     # --- Core routes ---
     if health_payload is not None:

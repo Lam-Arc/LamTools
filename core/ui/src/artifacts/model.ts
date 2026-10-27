@@ -7,6 +7,8 @@
  */
 import {
   File,
+  Link2,
+  BookOpen,
   FileCode2,
   FileSpreadsheet,
   FileText,
@@ -22,6 +24,8 @@ import type { ArtifactRole, ProjectArtifact } from '@/types.ts'
 export const ROLE_VALUES: ArtifactRole[] = ['input', 'intermediate', 'deliverable']
 
 export const KIND_ICONS: Record<string, LucideIcon> = {
+  link: Link2,
+  memory: BookOpen,
   image: ImageIcon,
   video: Film,
   audio: Music,
@@ -135,7 +139,7 @@ export function kindIcon(kind: string, name = ''): LucideIcon {
 export function kindLabel(kind: string, name = ''): string {
   const resolved = inferredKind(kind, name)
   const labels: Record<string, string> = {
-    image: '图片', video: '视频', audio: '音频', pdf: 'PDF', document: '文档', code: '代码',
+    link: '链接', memory: '记忆', image: '图片', video: '视频', audio: '音频', pdf: 'PDF', document: '文档', code: '代码',
     spreadsheet: '表格', presentation: '演示文稿', file: '文件', file_change: '文件改动',
   }
   return labels[resolved] || resolved || '文件'
@@ -345,9 +349,11 @@ export function reportMentionsArtifactPath(
  * - 其余条目要在本回合的入库清单里，或被汇报文本以路径提到，才留下。
  */
 export function shouldListTurnArtifact(
-  artifact: Pick<ProjectArtifact, 'kind' | 'path' | 'uri'> & { metadata?: Record<string, unknown> },
+  artifact: Pick<ProjectArtifact, 'kind' | 'path' | 'uri'> & { artifact_id?: string; metadata?: Record<string, unknown> },
   options: TurnArtifactSelectionOptions,
 ): boolean {
+  // user:“这一轮被操作进libary的文件、变更的memory”+(后端已核验的成果不再被前端旧筛选丢弃)。
+  if (String(artifact.kind || '') === 'memory' || String(artifact.kind || '') === 'link' || artifact.artifact_id) return true
   if (String(artifact.kind || '') === 'image') return true
   const reference = artifactListingReference(artifact)
   if (!reference) return false

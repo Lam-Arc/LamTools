@@ -163,12 +163,9 @@ class CoreProjectStore:
         self._sync_publisher = publisher
 
     async def _publish_sync_changes(self, change_ids: list[str]) -> None:
-        if self._sync_journal is None or self._sync_publisher is None:
-            return
-        for change_id in change_ids:
-            change = await self._sync_journal.get_change(change_id)
-            if change is not None:
-                await self._sync_publisher({"method": "sync/change", "params": change})
+        # user:“错误发生在宿主自己的写入/同步路径上”+(项目写入同样遵守提交与通知分离的边界)。
+        from .sync_notifications import publish_committed_changes
+        await publish_committed_changes(self._sync_journal, self._sync_publisher, change_ids)
 
     def _is_session_visible(self, session: SessionRecord) -> bool:
         try:

@@ -32,6 +32,25 @@ def test_create_plugin_documents_the_v2_contract() -> None:
     assert "LamToolsPluginPanels" in content
 
 
+def test_create_plugin_teaches_mcp_reuse_and_host_loading() -> None:
+    content = load_skill("create-plugin").content
+
+    # user:“像 Billy scroll 这种，我就极推荐它做成 MCP，尤其是因为它本身就是 MCP”
+    # + “它本身就是 MCP，最大化利用本身的资源，不要重复造轮子”。
+    assert "already exists as an MCP server" in content
+    # user:“原版是 MCP 就照搬”+MCP 工具通过 mcp 查询、mcp action=run 执行。
+    assert "mcp action=run" in content
+    assert "approvedTools" in content
+    # user:“同目录的 Python 文件在宿主里互相引用不到”+一行 sys.path 的绕法。
+    assert "sys.path.insert" in content
+    # user:“工具与操作要重启后才注册”+插件页不显示运行期加载失败。
+    assert "visibility" in content and "on_load" in content
+    assert "profiles" in content
+    assert "run_profile" in content
+    assert "restart the app" in content
+    assert "load failed" in content
+
+
 def test_port_plugin_starts_with_the_licence_check() -> None:
     skill = load_skill("port-plugin")
     content = skill.content.lower()
@@ -39,3 +58,16 @@ def test_port_plugin_starts_with_the_licence_check() -> None:
     assert "licence" in content or "license" in content
     assert "difference report" in content
     assert "run_command" in content
+
+
+def test_port_plugin_teaches_mcp_first_and_real_host_verification() -> None:
+    content = load_skill("port-plugin").content
+
+    # user:“它本身就是 MCP……不要重复造轮子”+原版是 MCP 就照搬配置。
+    assert "Port the MCP config as-is" in content
+    assert "mcp action=run" in content
+    assert "approvedTools" in content
+    # user:“插件同目录模块导入”+装完必须重启并从宿主真实调用一次。
+    assert "sys.path.insert" in content
+    assert "through the host" in content
+    assert "restart" in content.lower()

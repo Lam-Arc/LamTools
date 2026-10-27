@@ -8,7 +8,8 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // user:“实现这个插件，也正好实验我们的新插件架构”+(官网复用真实工作台，组件内部 @ 路径必须仍指向 core/ui，文档入口才能随官网正常构建)。
+      '@': fileURLToPath(new URL('../core/ui/src', import.meta.url)),
       // core/ui 真实组件库
       '@ui': fileURLToPath(new URL('../core/ui/src', import.meta.url)),
       // 完整 LamToolsApp 会按需加载内置 Workflow UI；这些 alias 与桌面端保持一致。

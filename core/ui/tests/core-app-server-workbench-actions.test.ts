@@ -36,15 +36,15 @@ describe('core appServer workbench actions', () => {
 
   it('preserves plugin command ownership metadata', () => {
     expect(normalizeCoreCommandCatalogItem({
-      name: 'pet',
+      name: 'workflow',
       source: 'plugin',
       kind: 'action',
       action: 'run_action',
-      metadata: { plugin_name: 'emotion-ball-pet', plugin_title: 'LamTools 桌宠' },
+      metadata: { plugin_name: 'workflow', plugin_title: 'Workflow' },
     })).toMatchObject({
-      name: 'pet',
+      name: 'workflow',
       source: 'plugin',
-      metadata: { plugin_name: 'emotion-ball-pet', plugin_title: 'LamTools 桌宠' },
+      metadata: { plugin_name: 'workflow', plugin_title: 'Workflow' },
     })
   })
 

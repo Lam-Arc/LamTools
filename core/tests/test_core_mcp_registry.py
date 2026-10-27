@@ -86,11 +86,22 @@ class ScriptedMcpLLM:
         self.requests.append(request)
         if len(self.requests) == 1:
             tool_names = {tool["function"]["name"] for tool in request.tools or []}
-            assert "mcp__local__echo" in tool_names
+            assert "mcp" in tool_names
+            assert "mcp__local__echo" not in tool_names
             yield LLMStreamEvent(kind="thinking_delta", content="Need MCP echo.")
             yield LLMStreamEvent(
                 kind="done",
-                tool_calls=[LLMToolCall(id="call-mcp", name="mcp__local__echo", arguments={"text": "ok"})],
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-mcp",
+                        name="mcp",
+                        arguments={
+                            "action": "run",
+                            "tool_name": "mcp__local__echo",
+                            "arguments": {"text": "ok"},
+                        },
+                    )
+                ],
             )
             return
         yield LLMStreamEvent(kind="content_delta", content="MCP returned echo:ok.")
@@ -103,21 +114,21 @@ def _write_server(tmp_path: Path) -> Path:
     return server
 
 
-def _write_mcp_config(path: Path, server: Path) -> None:
+def _write_mcp_config(path: Path, server: Path, *, level: int | None = None,
+                      tool_levels: dict[str, int] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    body = {
+        "command": sys.executable,
+        "args": [str(server)],
+        "timeout": 5,
+        "permission": "auto_allow",
+    }
+    if level is not None:
+        body["level"] = level
+    if tool_levels:
+        body["toolLevels"] = tool_levels
     path.write_text(
-        json.dumps(
-            {
-                "mcpServers": {
-                    "local": {
-                        "command": sys.executable,
-                        "args": [str(server)],
-                        "timeout": 5,
-                        "permission": "auto_allow",
-                    }
-                }
-            }
-        ),
+        json.dumps({"mcpServers": {"local": body}}),
         encoding="utf-8",
     )
 
@@ -175,10 +186,10 @@ async def test_core_agent_operation_loads_plugin_mcp_tools(tmp_path: Path):
     plugin = plugin_root / "sample"
     (plugin / "mcp").mkdir(parents=True)
     (plugin / "plugin.json").write_text(
-        json.dumps({"name": "sample", "version": "1.0.0", "mcpServers": "./mcp/mcp.json"}),
+        json.dumps({"name": "sample", "version": "1.0.0", "mcp": ["./mcp/mcp.json"]}),
         encoding="utf-8",
     )
-    _write_mcp_config(plugin / "mcp" / "mcp.json", server)
+    _write_mcp_config(plugin / "mcp" / "mcp.json", server, level=1, tool_levels={"echo": 1})
     llm = ScriptedMcpLLM()
 
     catalog = create_core_agent_operations(
