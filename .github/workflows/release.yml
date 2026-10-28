@@ -22,6 +22,12 @@ on:
         description: 'Version expected from the public update channel'
         type: string
         default: ''
+      # user:“测试，提交打包发布”+(允许分开验收两个公开渠道，与其他平台构建并行，避免重复下载和安装)。
+      public_update_channel:
+        description: 'Public update source to verify'
+        type: choice
+        options: [both, github, site]
+        default: both
 
 permissions:
   contents: write
@@ -299,6 +305,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify public GitHub update installation and automatic restart
+        if: inputs.public_update_channel != 'site'
         shell: pwsh
         run: |
           if ($env:EXPECTED_VERSION) {
@@ -312,6 +319,7 @@ jobs:
 
       # user:“测试，提交打包发布”+(同一干净环境还要验收官网兼容更新源，不能用 GitHub 成功替代官网校验)。
       - name: Verify official-site fallback update and automatic restart
+        if: inputs.public_update_channel != 'github'
         shell: pwsh
         run: |
           $manifest = Invoke-RestMethod 'https://ainarit.com/downloads/desktop-update.json'
