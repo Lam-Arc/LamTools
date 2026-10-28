@@ -310,6 +310,17 @@ jobs:
           if (-not $install.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe acceptance directory' }
           ./scripts/verify-update-install.ps1 -InstallDir $install -KeepInstall
 
+      # user:“测试，提交打包发布”+(同一干净环境还要验收官网兼容更新源，不能用 GitHub 成功替代官网校验)。
+      - name: Verify official-site fallback update and automatic restart
+        shell: pwsh
+        run: |
+          $manifest = Invoke-RestMethod 'https://ainarit.com/downloads/desktop-update.json'
+          if ($env:EXPECTED_VERSION -and $manifest.version -ne $env:EXPECTED_VERSION) { throw 'Official site version does not match the requested acceptance version' }
+          $root = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
+          $install = [IO.Path]::GetFullPath((Join-Path $root 'sunday-site-update-acceptance'))
+          if (-not $install.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe acceptance directory' }
+          ./scripts/verify-update-install.ps1 -BaseUrl https://ainarit.com -InstallDir $install -KeepInstall
+
   build-linux:
     # package-linux.sh builds the native x64 sidecar and Tauri bundles. Windows
     # remains in the separate job above, including its repository-owned Inno path.
