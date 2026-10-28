@@ -55,6 +55,8 @@ page_is_current() {
 
 preview_is_current() {
     [ -f "$PREVIEW/index.html" ] || return 1
+    # user:“测试，提交打包发布”+(版本元数据与实际资源都必须对应本次发布)。
+    grep -q "name=\"sunday-version\" content=\"$wanted_desktop\"" "$PREVIEW/index.html" || return 1
     # The embedded UI must be the bundle the site release is serving.
     entry=$(sed -n 's|.*/preview/\(assets/preview-[A-Za-z0-9._-]*\.js\).*|\1|p' "$PREVIEW/index.html" | head -1)
     [ -n "$entry" ] || return 1
@@ -128,11 +130,15 @@ verify_live() {
     echo "$page" | grep -q "SUNDAY MOBILE $wanted_mobile " || die "$ORIGIN still does not read mobile $wanted_mobile"
     echo "$page" | grep -q "Sunday_${wanted_linux}_amd64" || die "$ORIGIN still links the old Linux build"
 
-    entry=$(curl -sS -m 30 "$ORIGIN/preview/" |
+    preview=$(curl -fsS -m 30 "$ORIGIN/preview/")
+    echo "$preview" | grep -q "name=\"sunday-version\" content=\"$wanted_desktop\"" || die "$ORIGIN/preview/ has the wrong build version"
+    entry=$(echo "$preview" |
         sed -n 's|.*\(/preview/assets/preview-[A-Za-z0-9._-]*\.js\).*|\1|p' | head -1)
     [ -n "$entry" ] || die "$ORIGIN/preview/ serves no product bundle"
-    served=$(curl -sS -m 60 "$ORIGIN$entry")
-    echo "$served" | grep -q "$wanted_desktop" || die "$ORIGIN$entry does not carry $wanted_desktop"
+    # user:“测试，提交打包发布”+(入口分包不一定含版本文本，改为校验公开资源与已发布文件的完整摘要)。
+    served_sha=$(curl -fsS -m 60 "$ORIGIN$entry" | sha256sum | awk '{print $1}')
+    expected_sha=$(sha256sum "$SITE/${entry#/preview/}" | awk '{print $1}')
+    [ "$served_sha" = "$expected_sha" ] || die "$ORIGIN$entry differs from the published bundle"
     echo "live: $ORIGIN/sunday.html reads $wanted_desktop / $wanted_mobile; /preview/ serves $entry"
 }
 

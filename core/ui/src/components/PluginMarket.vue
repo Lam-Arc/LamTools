@@ -71,13 +71,17 @@ async function install(plugin: MarketPlugin) {
     const result = await props.requestRpc('plugin.market.install', { name: plugin.id }, 180_000)
     if (result.error) throw new Error(String(result.error))
     // user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(只有已就绪的安装结果才能显示成功)。
-    if (result.available === false) {
-      const backend = result.backend as Record<string, unknown> | undefined
+    const backend = result.backend as Record<string, unknown> | undefined
+    const state = String(backend?.state || '')
+    // user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(更新保留禁用状态，安全模式不运行插件，均不属于启动失败)。
+    if (result.available === false && state !== 'disabled' && state !== 'safe_mode') {
       throw new Error(String(backend?.error || t('插件启动失败，请在“已安装”中查看详情。')))
     }
     emit('changed')
     await load()
-    notice.value = t('插件已安装，可在“已安装”中配置和管理。')
+    notice.value = state === 'disabled' ? t('插件已更新，仍保持禁用。')
+      : state === 'safe_mode' ? t('插件已安装，安全模式下暂不运行。')
+      : t('插件已安装，可在“已安装”中配置和管理。')
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally { busy.value = '' }

@@ -26,3 +26,17 @@ it('does not announce success when installation did not produce an available plu
   expect(wrapper.emitted('changed')).toBeUndefined()
   wrapper.unmount()
 })
+
+it.each(['disabled', 'safe_mode'])('preserves a successful %s installation instead of reporting startup failure', async (state) => {
+  const requestRpc = vi.fn(async (method: string) => method === 'plugin.market.list'
+    ? { plugins: [{ ...plugin, installed_version: '0.1.0', update_available: true }], source: 'github' }
+    : { updated: true, available: false, backend: { state, error: null } })
+  const wrapper = mount(PluginMarket, { props: { requestRpc } })
+  await flushPromises()
+  await wrapper.get('[data-market-action="qq-bot"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  expect(wrapper.emitted('changed')).toHaveLength(1)
+  expect(wrapper.text()).toContain(state === 'disabled' ? '仍保持禁用' : '安全模式')
+  wrapper.unmount()
+})

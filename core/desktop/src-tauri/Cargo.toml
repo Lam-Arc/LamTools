@@ -1,6 +1,6 @@
 [package]
 name = "lamcore"
-version = "0.3.26"
+version = "0.3.27"
 description = "Sunday desktop app"
 authors = ["Lam"]
 edition = "2021"
