@@ -37,6 +37,17 @@ def current_session() -> "PeerSession | None":
     return _current_session.get()
 
 
+def session_title(scope: str, peer_id: str, sender_name: str = "") -> str:
+    """Stable display title used by the QQ page and session lists."""
+    name = str(sender_name or "").strip()
+    if not name:
+        name = str(peer_id or "").strip()[-6:] or "未知"
+    if len(name) > 32:
+        name = name[:31] + "…"
+    prefix = "QQ-群聊" if scope == "group" else "QQ-私聊"
+    return f"{prefix}-{name}"
+
+
 @dataclass
 class PeerSession:
     key: str
@@ -45,6 +56,7 @@ class PeerSession:
     sender_id: str
     agent_name: str
     reply_target: ReplyTarget
+    title: str = ""
     generation: int = 0
     model_provider: str = ""
     model: str = ""
@@ -188,6 +200,7 @@ class AgentBridge:
         sender_id: str,
         reply_target: ReplyTarget,
         sender: Callable[..., Awaitable[Any]],
+        sender_name: str = "",
     ) -> PeerSession:
         from .config import agent_name, session_key
 
@@ -197,6 +210,7 @@ class AgentBridge:
         if existing is not None:
             existing.reply_target = reply_target
             existing.sender_id = sender_id or existing.sender_id
+            existing.title = session_title(scope, peer_id, sender_name) or existing.title
             existing.last_activity = time.time()
             existing.sender = sender
             return existing
@@ -212,6 +226,7 @@ class AgentBridge:
             sender_id=sender_id,
             agent_name=agent,
             reply_target=reply_target,
+            title=session_title(scope, peer_id, sender_name),
             generation=generation,
             model_provider=(override or {}).get("provider", ""),
             model=(override or {}).get("model", ""),
@@ -638,6 +653,7 @@ class AgentBridge:
         return {
             "active": True,
             "key": session.key,
+            "title": session.title or session_title(session.scope, session.peer_id),
             "scope": session.scope,
             "peerId": session.peer_id,
             "agent": session.agent_name,

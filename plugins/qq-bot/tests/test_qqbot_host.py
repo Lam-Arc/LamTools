@@ -37,7 +37,7 @@ def test_manifest_declarations() -> None:
 
     capabilities = read_capabilities(manifest)
     tool_names = {spec.name for spec in capabilities.tools}
-    assert {"qqbot_send_file", "qqbot_describe_image", "qqbot_status", "qqbot_bind_start"} <= tool_names
+    assert {"qqbot_send_file", "qqbot_status", "qqbot_bind_start"} <= tool_names
     from qqbot.util import jsonc_loads
 
     operation_names = {
@@ -70,11 +70,10 @@ async def test_host_assembly_exposes_tools_presets_and_waterfall(tmp_path: Path)
     )
 
     names = {spec.name for spec in assembly["plugin_runtime_specs"]}
-    assert {"qqbot_send_file", "qqbot_describe_image", "qqbot_status", "qqbot_bind_start"} <= names
+    assert {"qqbot_send_file", "qqbot_status", "qqbot_bind_start"} <= names
     handlers = {spec.name: (spec.metadata or {}).get("handler") for spec in assembly["plugin_runtime_specs"]}
     assert handlers["qqbot_status"] == "tools:status"
     assert handlers["qqbot_send_file"] == "tools:send_file"
-    assert handlers["qqbot_describe_image"] == "tools:describe_image"
 
     presets = context.services.get("agent_presets")
     assert presets is not None

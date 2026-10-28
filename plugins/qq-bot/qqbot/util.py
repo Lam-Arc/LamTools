@@ -179,75 +179,15 @@ def mask_secret(value: str) -> str:
 
 # ── Text ───────────────────────────────────────────────────────────────────
 
-_CODE_FENCE = re.compile(r"^```")
-_GFM_TABLE_LINE = re.compile(r"^\|.+\|$")
-
-
-def chunk_markdown_text(text: str, limit: int) -> list[str]:
-    """Split Markdown on safe boundaries, preserving fences and GFM tables.
-
-    This is a behavioural port of the upstream ``chunkMarkdownText``: a code
-    block or table is never cut in the middle; an oversized single line is
-    still returned whole because QQ would reject a broken fence.
-    """
-    text = str(text or "")
-    limit = max(64, int(limit or 4500))
-    if len(text) <= limit:
-        return [text] if text else []
-
-    lines = text.split("\n")
-    chunks: list[str] = []
-    current = ""
-    in_code_block = False
-    table_buffer: list[str] = []
-
-    def flush_table() -> None:
-        nonlocal current, table_buffer
-        if not table_buffer:
-            return
-        block = "\n".join(table_buffer)
-        table_buffer = []
-        if not current:
-            current = block
-            return
-        candidate = current + "\n" + block
-        if len(candidate) > limit:
-            chunks.append(current)
-            current = block
-        else:
-            current = candidate
-
-    def append_line(line: str) -> None:
-        nonlocal current
-        if not current:
-            current = line
-            return
-        candidate = current + "\n" + line
-        if len(candidate) > limit:
-            chunks.append(current)
-            current = line
-        else:
-            current = candidate
-
-    for line in lines:
-        if _CODE_FENCE.match(line):
-            flush_table()
-            in_code_block = not in_code_block
-            append_line(line)
-            continue
-        if in_code_block:
-            append_line(line)
-            continue
-        if _GFM_TABLE_LINE.match(line):
-            table_buffer.append(line)
-            continue
-        flush_table()
-        append_line(line)
-
-    flush_table()
-    if current:
-        chunks.append(current)
-    return chunks or [text]
+from .bubbles import (
+    Block,
+    BubbleOptions,
+    MarkdownBlockBuilder,
+    chunk_markdown_text,
+    markdown_blocks,
+    render_block,
+    split_bubbles,
+)
 
 
 def short_sender_id(sender_id: str, length: int = 8) -> str:
@@ -274,6 +214,14 @@ def unique_filename(name: str) -> str:
 
 def to_posix_path(path: str | Path) -> str:
     return str(path).replace("\\", "/")
+
+
+def resolve_plugin_path(file_path: str | Path, work_root: str | Path | None) -> Path:
+    """Resolve a tool-reported path against the agent's work root."""
+    path = Path(str(file_path)).expanduser()
+    if not path.is_absolute() and work_root:
+        path = Path(work_root) / path
+    return path.resolve()
 
 
 def is_within_root(file_path: str | Path, root: str | Path) -> bool:
@@ -350,7 +298,13 @@ __all__ = [
     "format_relative_time",
     "format_file_size",
     "mask_secret",
+    "Block",
+    "BubbleOptions",
+    "MarkdownBlockBuilder",
     "chunk_markdown_text",
+    "markdown_blocks",
+    "render_block",
+    "split_bubbles",
     "short_sender_id",
     "sanitize_filename",
     "unique_filename",

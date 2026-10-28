@@ -18,7 +18,7 @@ from qqbot.agent_bridge import current_session  # noqa: E402
 from qqbot.media import download_url, path_is_allowed, send_media_file  # noqa: E402
 from qqbot.protocol import ReplyTarget  # noqa: E402
 from qqbot.state import get_runtime  # noqa: E402
-from qqbot.util import data_url, format_file_size, sniff_image_media_type  # noqa: E402
+from qqbot.util import data_url, format_file_size, resolve_plugin_path, sniff_image_media_type  # noqa: E402
 
 
 def _args(call) -> dict:
@@ -80,7 +80,7 @@ async def send_file(call) -> ToolResult:
         if session is None:
             return _result(call, {"ok": False, "error": "无法确定发送目标；请显式传 target（c2c:openid / group:openid）"})
         target = session.reply_target
-    path = Path(file_path).resolve()
+    path = resolve_plugin_path(file_path, runtime.work_root)
     if not path_is_allowed(
         path,
         data_dir=runtime.data_dir,

@@ -632,6 +632,14 @@ def create_core_agent_http_app(
             observer_status=observer_supervisor.status,
         )
         app_state["operations"] = agent_operations
+        # Plugins that inject messages into a desktop session must use the live
+        # turn path, not the agent-operation turn.start: only the former writes
+        # the acceptance/user-message projection the UI renders.
+        from .live_plugin_service import LiveTurnService
+
+        plugin_context = getattr(agent_operations, "plugin_context", None)
+        if plugin_context is not None:
+            plugin_context.set_service("live_turn_service", LiveTurnService(live_context))
         app_state["plugin_system_host"] = getattr(agent_operations, "plugin_system_host", None)
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor

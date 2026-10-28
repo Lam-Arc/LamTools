@@ -20,10 +20,21 @@ DEFAULTS: dict[str, Any] = {
     "model": "",
     "preset": "",
     "cwd": "",
+    "targetProjectId": "",
+    "targetSessionId": "",
     "requireMention": True,
     "groupPrompt": "",
     "directPrompt": "",
     "textChunkLimit": 4500,
+    "bubbles": {
+        "profile": "full",
+        "table": "markdown",
+        "code": "fence",
+        "heading": "keep",
+        "inlineCode": "keep",
+        "math": "keep",
+        "html": "keep",
+    },
     "streaming": True,
     "sessionIdleTimeout": 30 * 60 * 1000,
     "maxQueue": 20,
@@ -147,7 +158,7 @@ def normalize(raw: dict[str, Any] | None) -> dict[str, Any]:
     cfg = deep_merge(DEFAULTS, raw or {})
     cfg["appId"] = str(cfg.get("appId") or "").strip()
     cfg["appSecret"] = str(cfg.get("appSecret") or "").strip()
-    for key in ("provider", "model", "preset", "cwd", "groupPrompt", "directPrompt"):
+    for key in ("provider", "model", "preset", "cwd", "targetProjectId", "targetSessionId", "groupPrompt", "directPrompt"):
         cfg[key] = str(cfg.get(key) or "").strip()
     cfg["requireMention"] = _bool(cfg.get("requireMention"), True)
     cfg["streaming"] = _bool(cfg.get("streaming"), True)
@@ -170,6 +181,43 @@ def normalize(raw: dict[str, Any] | None) -> dict[str, Any]:
         "groupMode": _mode(access.get("groupMode")),
         "groupAllow": _string_list(access.get("groupAllow")),
     }
+
+    bubbles = cfg.get("bubbles") if isinstance(cfg.get("bubbles"), dict) else {}
+    raw_bubbles = raw.get("bubbles") if isinstance(raw, dict) and isinstance(raw.get("bubbles"), dict) else {}
+    profile = str(bubbles.get("profile") or "full").strip().lower()
+    if profile not in {"safe", "full"}:
+        profile = "full"
+    defaults = {
+        "safe": {
+            "table": "cards",
+            "code": "quote",
+            "heading": "keep",
+            "inlineCode": "quote",
+            "math": "plain",
+            "html": "strip",
+        },
+        "full": {
+            "table": "markdown",
+            "code": "fence",
+            "heading": "keep",
+            "inlineCode": "keep",
+            "math": "keep",
+            "html": "keep",
+        },
+    }[profile]
+    allowed = {
+        "table": {"markdown", "cards"},
+        "code": {"fence", "quote"},
+        "heading": {"keep", "bold"},
+        "inlineCode": {"keep", "quote"},
+        "math": {"keep", "plain"},
+        "html": {"keep", "strip"},
+    }
+    normalized_bubbles = {"profile": profile}
+    for key, fallback in defaults.items():
+        value = str(raw_bubbles.get(key) or fallback).strip()
+        normalized_bubbles[key] = value if value in allowed[key] else fallback
+    cfg["bubbles"] = normalized_bubbles
 
     media = cfg.get("media") if isinstance(cfg.get("media"), dict) else {}
     cfg["media"] = {

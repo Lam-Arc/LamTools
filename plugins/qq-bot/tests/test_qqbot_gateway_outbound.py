@@ -180,6 +180,102 @@ async def test_outbound_streams_c2c_and_sends_final(tmp_path: Path) -> None:
     assert api.sent == []
 
 
+async def test_outbound_streaming_splits_newline_bubbles(tmp_path: Path) -> None:
+    api = _OutboundApi()
+    session = SimpleNamespace(
+        agent_name="qq_u",
+        reply_target=ReplyTarget("c2c", "u", "m"),
+        usage={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+    )
+    router = _router(tmp_path, api, session)
+    for delta in ("第一行", "\n", "第二行", "\n\n\n", "第三行"):
+        await router.handle_event(_event("runtime.reply_delta", {"content": delta}))
+    await router.handle_event(_event("runtime.reply", {"content": "第一行\n第二行\n\n\n第三行"}))
+
+    assert [stream.updates[-1] for stream in api.streams] == ["第一行", "第二行", "第三行"]
+    assert all(stream.completed == 1 for stream in api.streams)
+    assert api.sent == []
+
+
+async def test_outbound_streaming_keeps_code_block_together(tmp_path: Path) -> None:
+    api = _OutboundApi()
+    session = SimpleNamespace(
+        agent_name="qq_u",
+        reply_target=ReplyTarget("c2c", "u", "m"),
+        usage={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+    )
+    router = _router(tmp_path, api, session)
+    for delta in ("说明", "\n", "```python", "\n", "a", "\n\n", "b", "\n", "```", "\n", "结尾"):
+        await router.handle_event(_event("runtime.reply_delta", {"content": delta}))
+    await router.handle_event(_event("runtime.reply", {"content": "说明\n```python\na\n\nb\n```\n结尾"}))
+
+    assert len(api.streams) == 3
+    assert api.streams[0].updates[-1] == "说明"
+    assert api.streams[1].updates[-1] == "```python\na\n\nb\n```"
+    assert api.streams[2].updates[-1] == "结尾"
+    assert all(stream.completed == 1 for stream in api.streams)
+    assert api.sent == []
+
+
+async def test_outbound_streaming_keeps_table_together(tmp_path: Path) -> None:
+    api = _OutboundApi()
+    session = SimpleNamespace(
+        agent_name="qq_u",
+        reply_target=ReplyTarget("c2c", "u", "m"),
+        usage={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+    )
+    router = _router(tmp_path, api, session)
+    for delta in (
+        "说明",
+        "\n",
+        "| 名称 | 数量 |",
+        "\n",
+        "|---|---:|",
+        "\n",
+        "| A | 1 |",
+        "\n",
+        "| B | 2 |",
+        "\n",
+        "结尾",
+    ):
+        await router.handle_event(_event("runtime.reply_delta", {"content": delta}))
+    await router.handle_event(_event("runtime.reply", {"content": "说明\n| 名称 | 数量 |\n|---|---:|\n| A | 1 |\n| B | 2 |\n结尾"}))
+
+    assert [stream.updates[-1] for stream in api.streams] == [
+        "说明",
+        "| 名称 | 数量 |\n|---|---:|\n| A | 1 |\n| B | 2 |",
+    ]
+    assert all(stream.completed == 1 for stream in api.streams)
+    assert [content for _target, content, _keyboard in api.sent] == ["结尾"]
+
+
+async def test_outbound_streaming_keeps_list_together(tmp_path: Path) -> None:
+    api = _OutboundApi()
+    session = SimpleNamespace(
+        agent_name="qq_u",
+        reply_target=ReplyTarget("c2c", "u", "m"),
+        usage={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+    )
+    router = _router(tmp_path, api, session)
+    for delta in (
+        "- 列表项一",
+        "\n",
+        "  缩进续行",
+        "\n\n",
+        "- 列表项二",
+        "\n",
+        "结尾",
+    ):
+        await router.handle_event(_event("runtime.reply_delta", {"content": delta}))
+    await router.handle_event(_event("runtime.reply", {"content": "- 列表项一\n  缩进续行\n\n- 列表项二\n结尾"}))
+
+    assert [stream.updates[-1] for stream in api.streams] == [
+        "- 列表项一\n  缩进续行\n\n- 列表项二",
+    ]
+    assert all(stream.completed == 1 for stream in api.streams)
+    assert [content for _target, content, _keyboard in api.sent] == ["结尾"]
+
+
 async def test_outbound_group_static_and_tool_error(tmp_path: Path) -> None:
     api = _OutboundApi()
     session = SimpleNamespace(
@@ -233,3 +329,66 @@ async def test_outbound_delivers_artifact(tmp_path: Path) -> None:
     await router.handle_event(_event("runtime.done", {}))
     assert api.media
     assert api.media[0][2] == "report.txt"
+
+
+async def test_outbound_safe_table_sends_cards_not_raw_pipes(tmp_path: Path) -> None:
+    api = _OutboundApi()
+    session = SimpleNamespace(
+        agent_name="qq_u",
+        reply_target=ReplyTarget("c2c", "u", "m"),
+        usage={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+    )
+    router = _router(
+        tmp_path,
+        api,
+        session,
+        {"appId": "app", "streaming": True, "bubbles": {"profile": "safe"}},
+    )
+    for delta in (
+        "说明",
+        "\n",
+        "| 名称 | 数量 |",
+        "\n",
+        "|---|---:|",
+        "\n",
+        "| A | 1 |",
+        "\n",
+        "| B | 2 |",
+        "\n",
+        "结尾",
+    ):
+        await router.handle_event(_event("runtime.reply_delta", {"content": delta}))
+    await router.handle_event(
+        _event("runtime.reply", {"content": "说明\n| 名称 | 数量 |\n|---|---:|\n| A | 1 |\n| B | 2 |\n结尾"})
+    )
+
+    assert [stream.updates[-1] for stream in api.streams] == ["说明"]
+    assert [content for _target, content, _keyboard in api.sent] == [
+        "**表格 · 第 1 行**\n- 名称：A\n- 数量：1",
+        "**表格 · 第 2 行**\n- 名称：B\n- 数量：2",
+        "结尾",
+    ]
+
+
+async def test_outbound_safe_code_streams_quote_rendering(tmp_path: Path) -> None:
+    api = _OutboundApi()
+    session = SimpleNamespace(
+        agent_name="qq_u",
+        reply_target=ReplyTarget("c2c", "u", "m"),
+        usage={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+    )
+    router = _router(
+        tmp_path,
+        api,
+        session,
+        {"appId": "app", "streaming": True, "bubbles": {"profile": "safe"}},
+    )
+    for delta in ("```python", "\n", "x = 1", "\n", "```"):
+        await router.handle_event(_event("runtime.reply_delta", {"content": delta}))
+    await router.handle_event(_event("runtime.reply", {"content": "```python\nx = 1\n```"}))
+
+    assert [stream.updates[-1] for stream in api.streams] == [
+        "**代码 · python**\n> x = 1"
+    ]
+    assert all(stream.completed == 1 for stream in api.streams)
+    assert api.sent == []

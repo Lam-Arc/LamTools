@@ -33,6 +33,7 @@ from .util import (
     format_file_size,
     is_path_allowed,
     media_file_type,
+    resolve_plugin_path,
     sanitize_filename,
     to_posix_path,
     unique_filename,
@@ -103,7 +104,10 @@ async def download_url(url: str, max_bytes: int, *, allow_http: bool = False) ->
 
 class MediaStore:
     def __init__(self, data_dir: Path, logger: logging.Logger | None = None) -> None:
-        self.root = Path(data_dir) / "media"
+        # Keep inbound QQ files in the shared attachment area, not a private
+        # media folder, so the path handed to the model is the same one the
+        # rest of Sunday uses.
+        self.root = Path(data_dir) / "attachments" / "qqbot"
         self.logger = logger or logging.getLogger("qqbot")
 
     def ensure(self) -> None:
@@ -227,7 +231,7 @@ def send_roots(
     work_root: str | Path | None,
     config: dict[str, Any],
 ) -> list[str]:
-    roots: list[str] = [str(Path(data_dir) / "media")]
+    roots: list[str] = [str(Path(data_dir) / "media"), str(Path(data_dir) / "attachments")]
     if work_root:
         roots.append(str(work_root))
     send_file = config.get("sendFile") or {}
@@ -247,7 +251,7 @@ def path_is_allowed(
 ) -> bool:
     send_file = config.get("sendFile") or {}
     return is_path_allowed(
-        file_path,
+        resolve_plugin_path(file_path, work_root),
         send_roots(data_dir=data_dir, work_root=work_root, config=config),
         restrict=bool(send_file.get("restrictPaths", True)),
     )

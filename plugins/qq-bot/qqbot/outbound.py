@@ -22,7 +22,8 @@ from typing import Any, Awaitable, Callable
 from .config import load_config
 from .media import path_is_allowed, send_media_file
 from .protocol import MsgIdCache, QQApi, ReplyLimiter, ReplyTarget, resolve_reply_target
-from .util import chunk_markdown_text, format_file_size
+from .bubbles import Block, BubbleOptions, MarkdownBlockBuilder, render_block, split_bubbles
+from .util import format_file_size, resolve_plugin_path
 
 RESULT_PREVIEW_LIMIT = 1500
 SILENT_TURN_ERROR_CODES = {"STREAM_CLOSED"}
@@ -30,10 +31,12 @@ SILENT_TURN_ERROR_CODES = {"STREAM_CLOSED"}
 
 @dataclass
 class _Buffer:
+    # 尚未成为完整 Markdown 块的内容（通常是未换行的普通文本）。
     text: str = ""
     stream: Any | None = None
     stream_failed: bool = False
     final_sent: bool = False
+    builder: MarkdownBlockBuilder = field(default_factory=MarkdownBlockBuilder)
 
 
 class OutboundRouter:
@@ -57,6 +60,7 @@ class OutboundRouter:
         self.limiter = limiter
         self.data_dir = Path(data_dir)
         self.work_root = work_root
+        self.bubble_options = BubbleOptions.from_config(self.config)
         self._buffers: dict[str, _Buffer] = {}
         self._tool_calls: dict[tuple[str, str], dict[str, str]] = {}
         self._artifacts: dict[str, list[str]] = {}
@@ -104,19 +108,13 @@ class OutboundRouter:
             return
         buffer = self._buffer(session)
         buffer.text += content
-        if self._should_stream(session):
-            if buffer.stream is None:
-                buffer.stream = self.api.open_stream(session.reply_target)
-            try:
-                await buffer.stream.update(buffer.text)
-            except Exception as exc:
-                buffer.stream_failed = True
-                self.logger.warning("QQ stream update failed, will fall back to static: %s", exc)
+        await self._drain(session, buffer, final=False)
 
     async def _on_reply(self, session: Any, content: str) -> None:
         buffer = self._buffer(session)
-        if buffer.text.strip():
-            await self._flush(session, buffer)
+        if buffer.text.strip() or buffer.builder.current_text:
+            await self._drain(session, buffer, final=True)
+            buffer.final_sent = True
             return
         if content.strip():
             await self._send(session, content, "reply")
@@ -132,21 +130,97 @@ class OutboundRouter:
             and bool(session.reply_target.msg_id)
         )
 
-    async def _flush(self, session: Any, buffer: _Buffer) -> None:
-        if not buffer.text.strip():
+    async def _drain(self, session: Any, buffer: _Buffer, *, final: bool) -> None:
+        # user:“换行大等于换气泡，连续换行按一次换行算”“代码块除外”
+        # +表格/引用/列表这类 Markdown 渲染单元也整块保留；流式与静态
+        # 共用同一个块解析器，避免两套切分规则不一致。
+        text = buffer.text
+        lines = text.split("\n")
+        if final:
+            complete, remainder = lines, ""
+        else:
+            complete, remainder = lines[:-1], lines[-1]
+
+        for line in complete:
+            for block in buffer.builder.add_line(line):
+                await self._finish_block(session, buffer, block)
+
+        buffer.text = remainder
+        # A partial line is the live edge even while a table/list/code block
+        # is still open: it may turn out to be the first non-block line, and
+        # waiting for the block would lose its streaming bubble.  The safe
+        # table profile suppresses raw pipe previews.
+        preview = buffer.builder.preview_text(remainder, self.bubble_options)
+        if final:
+            if remainder.strip():
+                for block in buffer.builder.add_line(remainder):
+                    await self._finish_block(session, buffer, block)
+                remainder = ""
+            for block in buffer.builder.finish():
+                await self._finish_block(session, buffer, block)
+            buffer.text = ""
             return
-        if buffer.stream is not None:
+        await self._update_stream(session, buffer, preview)
+
+    async def _update_stream(self, session: Any, buffer: _Buffer, text: str) -> None:
+        if not text.strip() or buffer.stream_failed or not self._should_stream(session):
+            return
+        if buffer.stream is None:
+            buffer.stream = self.api.open_stream(session.reply_target)
+        try:
+            await buffer.stream.update(text)
+        except Exception as exc:
+            buffer.stream_failed = True
+            self.logger.warning("QQ stream update failed, will fall back to static: %s", exc)
+
+    async def _finish_block(self, session: Any, buffer: _Buffer, block: Block) -> None:
+        buffer.text = ""
+        limit = int(self.config.get("textChunkLimit") or 4500)
+        texts = render_block(block, limit, self.bubble_options)
+        if not texts:
+            return
+        stream = buffer.stream
+        buffer.stream = None
+        if len(texts) == 1:
+            if stream is not None and not buffer.stream_failed:
+                try:
+                    await stream.update(texts[0])
+                    await stream.complete()
+                except Exception as exc:
+                    buffer.stream_failed = True
+                    self.logger.warning("QQ stream bubble failed, fallback to static: %s", exc)
+                else:
+                    if not stream.should_fallback:
+                        return
+            await self._send_rendered(session, texts[0], "stream-bubble")
+            return
+        # A block that renders to several bubbles (safe table cards, oversized
+        # code/table) cannot be represented by one stream bubble.  Close the
+        # stream with the first final bubble, then send the rest statically.
+        if stream is not None and not buffer.stream_failed:
+            try:
+                await stream.update(texts[0])
+                await stream.complete()
+            except Exception as exc:
+                buffer.stream_failed = True
+                self.logger.warning("QQ stream bubble failed, fallback to static: %s", exc)
+            else:
+                if not stream.should_fallback:
+                    texts = texts[1:]
+        for text in texts:
+            await self._send_rendered(session, text, "block")
+
+    async def _flush(self, session: Any, buffer: _Buffer) -> None:
+        if buffer.text.strip() or buffer.builder.current_text:
+            await self._drain(session, buffer, final=True)
+        if buffer.stream is not None and not buffer.stream_failed:
             try:
                 await buffer.stream.complete()
             except Exception as exc:
-                buffer.stream_failed = True
                 self.logger.warning("QQ stream complete failed: %s", exc)
-            if not buffer.stream_failed and not buffer.stream.should_fallback:
-                buffer.text = ""
-                buffer.final_sent = True
-                return
-        await self._send(session, buffer.text, "flush")
         buffer.text = ""
+        buffer.stream = None
+        buffer.builder = MarkdownBlockBuilder()
         buffer.final_sent = True
 
     # ── Tool results ───────────────────────────────────────────────────────
@@ -173,6 +247,7 @@ class OutboundRouter:
             for artifact in artifacts:
                 path = _artifact_path(artifact)
                 if path:
+                    path = str(resolve_plugin_path(path, self.work_root))
                     bucket = self._artifacts.setdefault(session.agent_name, [])
                     if path not in bucket:
                         bucket.append(path)
@@ -249,9 +324,19 @@ class OutboundRouter:
             await self._send(session, text, "deliverables-notice")
 
     # ── Low-level send ─────────────────────────────────────────────────────
+    async def _send_rendered(self, session: Any, text: str, tag: str) -> None:
+        """Send one already-rendered bubble without parsing it again."""
+        if not str(text or "").strip():
+            return
+        try:
+            target = resolve_reply_target(session.reply_target, self.limiter, self.cache, allow_event=True)
+            await self.api.send_markdown(target, text)
+        except Exception as exc:
+            self.logger.error("QQ %s send failed: %s", tag, exc)
+
     async def _send(self, session: Any, text: str, tag: str) -> None:
         limit = int(self.config.get("textChunkLimit") or 4500)
-        for chunk in chunk_markdown_text(text, limit):
+        for chunk in split_bubbles(text, limit, options=self.bubble_options):
             try:
                 target = resolve_reply_target(session.reply_target, self.limiter, self.cache, allow_event=True)
                 await self.api.send_markdown(target, chunk)

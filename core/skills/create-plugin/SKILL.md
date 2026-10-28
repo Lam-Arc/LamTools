@@ -40,7 +40,7 @@ Honest inventory: region blocks have **no input controls** — inputs happen thr
 - Tools: in-process functions the model calls.
 - MCP servers: declared in `mcp/mcp.json`; the model inspects them with the `mcp` tool and executes them through `run_command` (`core mcp call`).
 - Operations: RPC for buttons, commands and panels. **The model cannot call operations** — if the model needs the data, declare a tool that returns it.
-- Host services for backends: session store, sub-agent runner (spawn isolated sessions), LLM client, event bus/sink, operation catalog. This list works today but is **not yet a documented contract** — verify the service in the host source before building on it.
+- Host services for backends: session store, sub-agent runner (spawn isolated sessions), LLM client, event bus/sink, operation catalog, and live session delivery (`live_turn_service`, section 9). The channel/session services in section 9 are stable contracts; verify anything else in the host source before building on it.
 - Scripts: files in your plugin folder executed on the user's machine (see "External dependencies" below).
 
 ### 覆盖层 — replacing host modules
@@ -214,7 +214,7 @@ Operations are the plugin's RPC surface — what buttons, commands, the config p
 { "operations": [ { "name": "demo.refresh", "description": "Refresh the cache", "handler": "ops:refresh" } ] }
 ```
 
-Handler contract: `async def refresh(request)`, returning an `OperationResult` or a plain dict payload. Handlers may accept keyword-only `work_root` and `data_dir`; the host passes what the signature asks for. Declared operations are mounted at startup — an installed or updated plugin answers `Unsupported method` until the app (or the dev backend) restarts — stay available behind the plugin's enabled state, and conflicting names across plugins are refused. Plan the restart into the verify loop (section 15).
+Handler contract: `async def refresh(request)`, returning an `OperationResult` or a plain dict payload. Handlers may accept keyword-only `work_root` and `data_dir`; the host passes what the signature asks for. Declared operations are mounted at startup and remounted by `plugin.system.reload`. An installed or updated plugin may answer `Unsupported method` until it is reloaded or the backend restarts. They stay available behind the plugin's enabled state, and conflicting names across plugins are refused. Plan the reload/restart into the verify loop (section 15).
 
 **Operations are the user-facing RPC surface.** An Agent can also reach them through an existing `run_command` plus a plugin-declared CLI that connects to the running host. Prefer that route for existing command capabilities; do not add a duplicate Agent tool just to simplify arguments.
 
@@ -306,6 +306,7 @@ These are stable contracts; do not import internal host modules when one exists.
 | `system_prompt_waterfall` | synchronous `register(handler, plugin=..., order=...)`; the handler receives `PromptContext` and `PromptAssembly`. |
 | `sub_agent_runner_factory` | `factory(work_root=...)` returns a runner; use `work_root` for a plugin-owned working directory. |
 | `channel_host` | `ChannelHost.create(adapter=..., config=..., ...)` builds a `ChannelRuntime` for an IM bridge. |
+| `live_turn_service` | `deliver_message(thread_id=..., text=..., client_message_id=..., work_root="")` returns `{ok, mode: "started"/"steered"/"queued", turn_id, run_id}`. Also `active_turn`, `start_turn`, `resume_turn`, `steer_turn`, `respond_approval`. One call owns the idle/running/paused decision; never read the runtime registry or build an active run id in the plugin. |
 | `secrets` | Per-plugin secret view: `get(key, default="")` / `set(key, value)` / `delete(key)` / `keys()` / `has(key)`. Values are DPAPI-protected on Windows and isolated by plugin. |
 
 A tool result with `artifacts` also emits `deliverables/presented`
@@ -316,6 +317,26 @@ both carry the same artifacts.
 `KernelSubAgentRunner` exposes child-session operations directly: `run(..., preset=...)`, `compact(session_id)`, `fork(session_id, new_agent_name)`, `session_info(session_id)`, and `preset_service(name, preset_id)` (the built-in `compaction` service has `compact_now(session_id)`).
 
 For a chat channel, implement `ChannelAdapter` (`send_text`, `send_file`, `open_stream`, `ask_approval`, `ask_questions`, `handle_interaction`, `handle_text`, `cancel_pending`, `acknowledge_interaction`) and let `ChannelRuntime` own per-peer sessions, the merge queue, commands, approvals/questions, streaming, usage and compact/fork/reset. The runtime calls the host runner factory; the plugin keeps only network I/O and message formatting.
+
+### Live session delivery
+
+A chat bridge, scheduler or notifier may need to put a message into the Sunday session the user is currently watching. That is different from a plugin-owned sub-session: the live session already has its own turn state, guidance path and desktop projection. Route it through the host:
+
+```python
+live = context.service("live_turn_service")
+result = await live.deliver_message(
+    thread_id=session_id,
+    text=text,
+    client_message_id=message_id,
+)
+```
+
+- `started`: the host began a normal user turn.
+- `steered`: the host submitted the text as guidance to the running turn through the same operation the desktop uses, so the user-guide projection is written.
+- `queued`: the turn was ending at the boundary; the host filed the text as the next user message instead of dropping it.
+- Wait for the target turn's events and forward replies; do not decide idle/running yourself.
+
+Never read `runtime_task_registry`, query the turn snapshot, or pass an `active_run_id` from the plugin. Do not call `turn.start` first while a turn may be running: it can block behind the session actor and turn a mid-turn message into the next turn. For approvals and questions, consume the live event stream and call `respond_approval`; keep one persistent target watcher as the single reply forwarder.
 
 ### Run profiles (unattended and sub-agent rounds)
 
@@ -520,19 +541,20 @@ The host compares `python`, `app` and `platform` at install time and refuses the
 
 1. Write the folder under the workspace, for example `plugins/<name>/`.
 2. Install with the `plugin.system.install` operation: `{ "source": "local", "path": "<folder>" }`, `{ "source": "zip", "path": "<zip>" }`, or `{ "source": "url", "url": "<zip url>", "sha256": "<optional digest>" }`. The plugin lands in the user plugin root.
-3. Restart the app (or the dev backend) before exercising plugin code. Install loads declarations, but tools and operations are mounted at startup; until then they answer `Unsupported method` or are absent. This is expected — plan for it and do not report it as a plugin defect.
-4. Verify declarations: call `plugin.system.list` and confirm no declaration error, then the capability-specific checks — `plugin.system.ui` for regions/windows/modes, `plugin.system.agent` for takeover.
-5. Exercise every declared capability once **through the host**, not by importing the module yourself: call the operation over the app's RPC, let the model call the tool, load the skill, open the window in the app, save the config. A local `python -c "import tools"` proves nothing about the host loader.
-6. Check `backend.log` for `Plugin '<name>' load failed` and `plugins:handler import failed`. The plugin page's `errors` array covers declaration errors, not runtime load failures: a plugin can look enabled and error-free while its backend and handlers failed to import.
-7. Update with `plugin.system.update` (same three sources), restart, and confirm `data/` survived.
-8. If a capability reports a declaration error, fix the manifest and update; never hand-edit files inside the installed root.
+3. Confirm the installed root with `plugin.system.list` (`root`). The runtime reads that copy, not the workspace. On Windows it is normally `%APPDATA%\LamTools\plugins\<name>`; portable mode uses the app-side plugins directory.
+4. After code or declaration changes, update the installed copy with `plugin.system.update` (or copy the files there) and call `plugin.system.reload`. A workspace edit alone is not visible to the running plugin. If host service code changed, restart the backend/app instead.
+5. Verify declarations: call `plugin.system.list` and confirm no declaration error, then the capability-specific checks — `plugin.system.ui` for regions/windows/modes, `plugin.system.agent` for takeover.
+6. Exercise every declared capability once **through the host**, not by importing the module yourself: call the operation over the app's RPC, let the model call the tool, load the skill, open the window in the app, save the config. A local `python -c "import tools"` proves nothing about the host loader.
+7. Check `backend.log` for `Plugin '<name>' load failed` and `plugins:handler import failed`. The plugin page's `errors` array covers declaration errors, not runtime load failures: a plugin can look enabled and error-free while its backend and handlers failed to import.
+8. Update with `plugin.system.update` (same three sources), reload or restart, and confirm `data/` survived.
+9. If a capability reports a declaration error, fix the manifest and update; never hand-edit files inside the installed root.
 
 **The runtime runs the installed copy**, not your workspace folder: handler code, `data/`, and saved config all live under the installed root (found via `plugin.system.list`'s `root` field). When settings need to change on the user's behalf, use the config operations (`plugin.system.config.get/update`) — never write a `data/config.jsonc` next to the workspace source, where the running tool will never see it.
 
 **When changes take effect** — tell the user which of the three applies:
 
 - Config values: immediate, on next read.
-- Code and declarations: restart the app (the packaged backend process). Tools and operations are mounted at startup; there is no reload key yet. A disable/enable may restart a backend but does not guarantee the operation catalog is remounted.
+- Code and declarations: `plugin.system.reload` on the installed copy. Tools and operations are remounted by the reload. If host service code changed, restart the backend/app.
 - Prompt-affecting changes (context, agent prompt, overrides): new session / compaction for prompts, app restart or full page reload for overrides.
 
 The full table lives in the bundled Wiki's 插件 article.
@@ -547,6 +569,8 @@ The definition of done is the loop above passing, not the files looking right.
 - Do not read credentials or unrelated files from a handler. If a plugin needs a secret, ask the user how it should be supplied.
 - Do not write outside the plugin folder except through declared tools and `data/`.
 - Do not add a second plugin runtime, a component protocol, or a permission system inside a plugin.
-- Do not claim a capability works until you have exercised it once through the host, after a restart.
+- Do not reimplement the host's live-session state machine. For messages into the session the user is watching, call `live_turn_service.deliver_message`; do not read the runtime registry or call `turn.start` yourself while a turn may be running.
+- Verify the installed copy, not the workspace source: run the plugin through the host after a reload or restart.
+- Do not claim a capability works until you have exercised it once through the host, after a reload or restart.
 - Report what you did not build: if the request implies a capability you left out, say so — the missing part is a deliverable, not a footnote.
 - If the request needs something the host does not offer, say what is missing instead of faking it.
