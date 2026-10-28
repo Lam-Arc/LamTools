@@ -127,7 +127,7 @@ tar -C "$ROOT" \
   --exclude='core/desktop/tauri-dev.log' \
   --exclude='*/__pycache__' \
   --exclude='*/.pytest_cache' \
-  -cf - core/desktop core/ui core/src core/config core/skills \
+  -cf - core/desktop core/ui core/src core/config core/skills wiki \
   core/pyproject.toml core/lamtools-core-backend.spec core/desktop_backend.py \
   scripts/package-linux.sh scripts/verify-backend-ws.py \
   | tar -C "$SOURCE_ROOT" -xf -
