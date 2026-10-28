@@ -19,6 +19,7 @@ from ..queue_state import (
 from ..runtime_permissions import overlay_runtime_permissions
 from ..turn_acceptance import build_turn_acceptance_plan
 from .context import CoreLiveContext
+from .handoff import complete_turn_handoff
 
 
 async def _session_current_model(context: CoreLiveContext, thread_id: str) -> str:
@@ -49,6 +50,7 @@ def _goal_reminder(active_goal: dict[str, Any] | None) -> str:
     return goal_continuation_text(objective) if objective else ""
 
 
+@complete_turn_handoff
 async def _dispatch_next_queue_item(
     *,
     context: CoreLiveContext,

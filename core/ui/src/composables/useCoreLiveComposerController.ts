@@ -1,4 +1,4 @@
-import { computed, getCurrentScope, onScopeDispose, ref, watch, type Ref } from 'vue'
+import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue'
 import {
   coreComposerActionMode,
   coreComposerSubmissionEffects,
@@ -32,6 +32,37 @@ export interface CoreLiveComposerMessages {
   forceResetFailed?: string
 }
 
+// user:“做吧”+(每次发送拥有固定身份、原始输入和独立状态，异步结果不得操作另一份草稿)。
+export interface CoreComposerSubmission {
+  id: string
+  threadId: string
+  text: string
+  attachments: CoreInputItem[]
+  state: 'preparing' | 'sending' | 'accepted' | 'queued' | 'guided' | 'failed' | 'unknown'
+  error: string
+  intent?: 'start' | 'queue' | 'guide' | 'resume'
+  displayed?: boolean
+  turnId?: string
+}
+
+interface SubmissionAttempt extends CoreComposerSubmission {
+  rawText: string
+  draftVersion: number
+  activeTurnId: string
+  status: CoreWorkbenchTurnStatus
+  catalog: CoreCommandCatalogItem[]
+  workRoot: string
+  turnOptions?: Record<string, unknown>
+  clearComposer: boolean
+  resumeParentDone?: boolean
+  resumeMembers: boolean
+  acknowledged?: boolean
+}
+
+function copySubmissionValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
 export interface UseCoreLiveComposerControllerOptions {
   activeThreadId: Readonly<Ref<string | null>>
   activeTurnId?: Readonly<Ref<string>>
@@ -39,7 +70,7 @@ export interface UseCoreLiveComposerControllerOptions {
   /** Whether the session is paused as a whole: its members follow the session. */
   sessionPaused?: Readonly<Ref<boolean>>
   /** Continue the paused turn. Text typed while paused rides the same press. */
-  resumeTurn?(threadId: string, turnId: string, input?: CoreInputItem[]): Promise<void>
+  resumeTurn?(threadId: string, turnId: string, input?: CoreInputItem[], clientMessageId?: string): Promise<void>
   /** Long-press confirm: end the turn and its members for good. */
   terminateTurn?(threadId: string, turnId?: string): Promise<void>
   /**
@@ -80,6 +111,7 @@ export interface UseCoreLiveComposerControllerOptions {
     threadId: string,
     turnId: string,
     input: CoreInputItem[],
+    clientMessageId?: string,
   ): Promise<boolean | CoreSteerAttempt>
   queueInput(
     threadId: string,
@@ -91,10 +123,14 @@ export interface UseCoreLiveComposerControllerOptions {
   getWorkRoot(): string
   executeCommand(threadId: string, command: string, workRoot?: string, argumentsText?: string): Promise<boolean>
   canExecuteCommand?(): boolean
+  canSubmit?(): boolean
   commandUnavailableMessage?: string
   turnOptions?(): Record<string, unknown> | Promise<Record<string, unknown>>
   clearComposer?(submittedText: string): void
-  clearAttachments?(): void
+  clearAttachments?(submittedAttachments?: CoreInputItem[]): void
+  restoreAttachments?(attachments: CoreInputItem[]): void
+  /** Retire only the parked draft belonging to this accepted submission. */
+  onSubmissionAccepted?(submission: CoreComposerSubmission, rawText: string): void
   focusComposer?(cursor: number): void
   setStatusText?(text: string): void
   onError?(text: string): void
@@ -108,12 +144,19 @@ export interface UseCoreLiveComposerControllerOptions {
 }
 
 export function useCoreLiveComposerController(options: UseCoreLiveComposerControllerOptions) {
-  const uncertainSubmissions = new Map<string, string>()
-  // Clearing the draft explicitly ends that submission's retry identity.
-  // A later newly composed identical message is a new user action.
-  watch(options.text, value => {
-    if (!value.trim()) uncertainSubmissions.clear()
-  }, { flush: 'sync' })
+  const attempts = new Map<string, SubmissionAttempt>()
+  const submissions = shallowRef<CoreComposerSubmission[]>([])
+  let draftVersion = 0
+  watch([options.text, options.activeThreadId], () => { draftVersion += 1 }, { flush: 'sync' })
+  function publishSubmissions(): void {
+    // Confirmed display rows no longer need an in-memory copy of the input.
+    for (const [id, attempt] of attempts) {
+      if (attempt.displayed && !submitting.value && attempt.state === 'accepted') attempts.delete(id)
+    }
+    const receipts = [...attempts.values()].filter(a => ['accepted', 'queued', 'guided'].includes(a.state))
+    for (const receipt of receipts.slice(0, Math.max(0, receipts.length - 20))) attempts.delete(receipt.id)
+    submissions.value = [...attempts.values()].filter(attempt => !attempt.displayed).map(attempt => ({ ...attempt }))
+  }
   const commandCatalog = ref<CoreCommandCatalogItem[]>([])
   const commandError = ref('')
   const commandCatalogLoading = ref(false)
@@ -286,6 +329,9 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     }
     const workRoot = options.getWorkRoot()
     const submittedCommand = options.text.value.trim()
+    // user:“做吧”+(命令的迟到清理或失败恢复不能写入另一聊天的新草稿)。
+    const commandDraftVersion = draftVersion
+    let clearedVersion: number | undefined
     const expectedCommandText = `/${command}${argumentsText ? ` ${argumentsText}` : ''}`
     const clearRunningCommand = submittedCommand === expectedCommandText || submittedCommand === `/${command}`
     if (options.canExecuteCommand && !options.canExecuteCommand()) {
@@ -297,14 +343,17 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
         throw new Error(liveTurnController.lastError.value)
       }
       commandPalette.reset()
-      if (clearRunningCommand) clearCommandComposer(submittedCommand)
+      if (clearRunningCommand && options.activeThreadId.value === threadId && draftVersion === commandDraftVersion) {
+        clearCommandComposer(submittedCommand)
+        clearedVersion = draftVersion
+      }
       commandRunning.value = true
       const ok = await options.executeCommand(threadId, command, workRoot, argumentsText)
-      if (!ok && clearRunningCommand && !options.text.value) options.text.value = submittedCommand
+      if (!ok && clearedVersion === draftVersion && options.activeThreadId.value === threadId && !options.text.value) options.text.value = submittedCommand
       return ok
     } catch (error) {
-      if (clearRunningCommand && !options.text.value) options.text.value = submittedCommand
-      reportCommandError(errorMessage(error))
+      if (clearedVersion === draftVersion && options.activeThreadId.value === threadId && !options.text.value) options.text.value = submittedCommand
+      if (options.activeThreadId.value === threadId) reportCommandError(errorMessage(error))
       return false
     } finally {
       commandRunning.value = false
@@ -374,142 +423,209 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     return true
   }
 
-  async function submit(submissionOptions: { clearComposer?: boolean; forceGuide?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
-    // A paused turn owns the session: sending continues it, whether the draft is
-    // empty (the Continue press) or holds the user's answer to it.
-    const pausedTurnId = options.resumableTurnId?.value || ''
-    if (pausedTurnId || actionMode.value === 'resume') {
-      if (submitting.value) return null
-      const threadId = options.activeThreadId.value || ''
-      const turnId = pausedTurnId
-      // What the user typed while the turn was paused. It rides the continue
-      // press as a supplementary input instead of waiting for a later turn.
-      const supplement = (options.text.value.trim() || (options.attachments.value || []).length > 0)
-        ? buildCoreComposerInputItems(
-          options.text.value.trim(),
-          options.attachments.value || [],
-          commandCatalog.value,
-        )
-        : []
-      submitting.value = true
-      try {
-        if (await liveTurnController.ensureConnected(threadId)) {
-          if (turnId) await options.resumeTurn?.(threadId, turnId, supplement)
-          // Parked members continue on the same Continue press; they are
-          // independent of whether the parent turn itself was resumable.
-          if ((options.resumableSubAgents?.value.length ?? 0) > 0) {
-            await options.resumeSubAgents?.(threadId)
-          }
-          if (supplement.length > 0) {
-            options.clearComposer?.(options.text.value)
-          }
-          options.setStatusText?.('')
-        }
-      } catch (error) {
-        options.onError?.(errorMessage(error))
-      } finally {
-        submitting.value = false
+  // user:“做吧”+(先固定提交快照；准备、发送、确认和重试共享同一个请求身份)。
+  function acceptSubmission(attempt: SubmissionAttempt): void {
+    if (attempt.acknowledged) return
+    attempt.acknowledged = true
+    if (options.activeThreadId.value === attempt.threadId) {
+      if (attempt.clearComposer && draftVersion === attempt.draftVersion && options.text.value === attempt.rawText) {
+        options.clearComposer?.(attempt.text)
       }
-      return null
+      // Remove exactly the accepted files, never files added while awaiting a reply.
+      options.clearAttachments?.(attempt.attachments)
     }
-    if (actionMode.value === 'stop') {
-      await stop()
-      return null
+    options.onSubmissionAccepted?.(attempt, attempt.rawText)
+  }
+
+  function acknowledgeSubmission(threadId: string, id: string, displayed = false, turnId?: string): void {
+    const attempt = attempts.get(id)
+    if (!attempt || attempt.threadId !== threadId) return
+    const memberRecoveryFailed = attempt.intent === 'resume' && attempt.resumeParentDone && attempt.state === 'failed'
+    attempt.turnId = turnId || attempt.turnId
+    if (attempt.intent === 'resume') attempt.resumeParentDone = true
+    attempt.displayed ||= displayed && attempt.intent !== 'resume'
+    if (!attempt.acknowledged) acceptSubmission(attempt)
+    // A repeated parent receipt cannot erase an unfinished member recovery.
+    if (!memberRecoveryFailed) {
+      if (attempt.state !== 'queued' && attempt.state !== 'guided') attempt.state = 'accepted'
+      attempt.error = ''
     }
-    // In-flight guard: a submit() call spans an async turn/start (or queue)
-    // round-trip. Without this guard, a rapid double-Enter (e.g. IME
-    // composition confirm + real Enter, or event.repeat) can overlap two
-    // turn/start calls — the second hits "active turn already exists".
+    publishSubmissions()
+  }
+
+  async function runSubmission(attempt: SubmissionAttempt): Promise<SubmitCoreComposerTaskResult | null> {
     if (submitting.value) return null
     submitting.value = true
-    const threadId = options.activeThreadId.value || ''
-    if (!threadId) {
-      submitting.value = false
-      reportError(options.messages?.noActiveThread || 'An active thread is required')
-      return null
-    }
-    const submittedText = options.text.value.trim()
-    const workRoot = options.getWorkRoot()
-    const parsedCommand = (options.attachments.value || []).length === 0
-      ? parseComposerInput(submittedText, commandCatalog.value)
-      : null
-    // Resolve plugin turn options at submit time for actual model turns.
-    // Action commands never use these options; keeping that path synchronous
-    // preserves the command palette's immediate clear/stop behavior.
-    let turnOptions: Record<string, unknown> = {}
-    if (parsedCommand?.kind !== 'action' && (submittedText || (options.attachments.value || []).length)) {
-      try {
-        turnOptions = await options.turnOptions?.() || {}
-      } catch (error) {
-        reportError(errorMessage(error) || options.messages?.sendFailed || 'Unable to prepare message context')
-        submitting.value = false
-        return null
+    attempt.error = ''
+    attempt.state = attempt.turnOptions === undefined && attempt.intent !== 'resume' ? 'preparing' : 'sending'
+    publishSubmissions()
+    const fail = (error: unknown): void => {
+      // A matching server receipt wins over a late transport timeout.
+      if (attempt.acknowledged && !attempt.resumeParentDone) {
+        attempt.state = 'accepted'
+        return
+      }
+      attempt.state = error instanceof CoreRequestAcceptanceUnknownError && !attempt.resumeParentDone ? 'unknown' : 'failed'
+      attempt.error = attempt.resumeParentDone
+        ? `主任务已继续，子任务尚未全部恢复：${errorMessage(error)}`
+        : errorMessage(error)
+      if (options.activeThreadId.value === attempt.threadId) {
+        liveTurnController.lastError.value = attempt.error
+        reportError(attempt.error)
       }
     }
-    // Show a placeholder bubble before the async round-trip so the user sees
-    // immediate feedback even when turn/start takes hundreds of ms. Only
-    // fire when there is actual content to send — an empty submit would
-    // return { status: 'ignored' } and the placeholder would never be
-    // cleared by an incoming user message.
-    if (parsedCommand?.kind !== 'action' && (submittedText || (options.attachments.value || []).length > 0)) {
-      options.onSubmitStart?.(submittedText)
-    }
     try {
-      // One identity for the whole submission: the start attempt and its queue
-      // fallback carry it, so a repeat cannot double-send.
-      const submissionKey = JSON.stringify([threadId, submittedText, options.attachments.value])
-      const retainedId = uncertainSubmissions.get(submissionKey)
-      const clientMessageId = retainedId || crypto.randomUUID()
-      let acceptanceUnknown = false
+      if (attempt.intent === 'resume') {
+        if (!await ensureSubmissionConnection(attempt.threadId)) throw new Error(liveTurnController.lastError.value)
+        const input = attempt.text || attempt.attachments.length
+          ? buildCoreComposerInputItems(attempt.text, attempt.attachments, attempt.catalog)
+          : []
+        if (attempt.activeTurnId && !attempt.resumeParentDone) {
+          await options.resumeTurn?.(attempt.threadId, attempt.activeTurnId, input, attempt.id)
+          attempt.resumeParentDone = true
+          acceptSubmission(attempt)
+        }
+        // The parent may have accepted its supplement even if a member fails.
+        // Retrying this record only retries the unfinished member recovery.
+        if (attempt.resumeMembers) await options.resumeSubAgents?.(attempt.threadId)
+        attempt.state = 'accepted'
+        if (!attempt.acknowledged) acceptSubmission(attempt)
+        return null
+      }
+      if (attempt.turnOptions === undefined) {
+        // Invoke the provider before yielding: the host captures its controls now.
+        attempt.turnOptions = copySubmissionValue(await options.turnOptions?.() || {})
+      }
+      attempt.state = 'sending'
+      publishSubmissions()
+      let startError: unknown
       const result = await submitCoreComposerTask({
-        threadId,
-        activeTurnId: options.activeTurnId?.value || '',
-        text: submittedText,
-        // Retry an uncertain start as the same start, even if a late event has
-        // made the UI running. Do not turn that retry into new guidance/queue.
-        status: retainedId ? 'idle' : options.status.value,
-        commandCatalog: commandCatalog.value,
-        attachments: options.attachments.value,
-        executeCommand: runCommand,
+        threadId: attempt.threadId,
+        activeTurnId: attempt.activeTurnId,
+        text: attempt.text,
+        status: attempt.intent === 'start' ? 'idle' : 'running',
+        commandCatalog: attempt.catalog,
+        attachments: attempt.attachments,
+        workRoot: attempt.workRoot,
+        turnOptions: attempt.turnOptions,
+        clientMessageId: attempt.id,
+        forceGuide: attempt.intent === 'guide',
         steerTurn: options.steerTurn,
-        queueInput: options.queueInput,
-        clientMessageId,
-        forceGuide: submissionOptions.forceGuide === true,
+        queueInput: async (...args) => {
+          attempt.intent = 'queue'
+          await options.queueInput(...args)
+        },
         startTurn: async (_threadId, input) => {
-          const outcome = await liveTurnController.startThreadTurnOutcome(
-            input,
-            threadId,
-            workRoot,
-            turnOptions,
-            clientMessageId,
-          )
-          if (outcome.ok) {
+          try {
+            if (!await ensureSubmissionConnection(attempt.threadId)) throw new Error(liveTurnController.lastError.value)
+            await options.startTurn(attempt.threadId, input, attempt.workRoot, attempt.turnOptions, attempt.id)
+            liveTurnController.lastError.value = ''
             notifyTurnStarted()
             return { ok: true }
+          } catch (error) {
+            startError = error
+            return { ok: false, busy: isCoreSessionBusyError(error) }
           }
-          if (outcome.error instanceof CoreRequestAcceptanceUnknownError) {
-            acceptanceUnknown = true
-            uncertainSubmissions.set(submissionKey, clientMessageId)
-          }
-          // A busy session is not a failure: the caller falls back to the
-          // mode-appropriate path (steer or queue). Anything else still surfaces.
-          const busy = isCoreSessionBusyError(outcome.error)
-          if (!busy) {
-            reportError(liveTurnController.lastError.value || options.messages?.sendFailed || 'Unable to send message')
-          }
-          return { ok: false, busy }
         },
       })
-      if (!acceptanceUnknown) uncertainSubmissions.delete(submissionKey)
-      applySubmissionEffects(result, submittedText, submissionOptions.clearComposer === true)
+      if (result.status === 'started' && !result.ok) {
+        fail(startError)
+      } else if (result.status !== 'ignored') {
+        attempt.state = result.status === 'queued' ? 'queued' : result.status === 'guided' ? 'guided' : 'accepted'
+        // Preserve fallback intent on retry: never start a second turn for a queued write.
+        if (result.status === 'queued') attempt.intent = 'queue'
+        if (result.status === 'guided') attempt.intent = 'guide'
+        if (!attempt.acknowledged) acceptSubmission(attempt)
+        if (options.activeThreadId.value === attempt.threadId) {
+          if (result.status === 'queued') options.setStatusText?.(options.messages?.queued || 'Queued')
+          if (result.status === 'guided') options.setStatusText?.(options.messages?.guided || 'Guidance sent')
+        }
+      }
       return result
     } catch (error) {
-      reportError(errorMessage(error) || options.messages?.sendFailed || 'Unable to send message')
+      fail(error)
       return null
     } finally {
       submitting.value = false
+      publishSubmissions()
       options.onSubmitSettled?.()
     }
+  }
+
+  async function ensureSubmissionConnection(threadId: string): Promise<boolean> {
+    // user:“做吧”+(旧聊天的迟到发送复用已打开的连接，不抢回当前聊天的订阅)。
+    if (options.connectionState.value === 'open' && options.connectedThreadId.value) return true
+    return await liveTurnController.ensureConnected(threadId)
+  }
+
+  async function retrySubmission(id: string): Promise<SubmitCoreComposerTaskResult | null> {
+    const attempt = attempts.get(id)
+    if (!attempt || options.activeThreadId.value !== attempt.threadId || !['failed', 'unknown'].includes(attempt.state)) return null
+    return await runSubmission(attempt)
+  }
+
+  function editSubmission(id: string): boolean {
+    const attempt = attempts.get(id)
+    if (!attempt || attempt.state !== 'failed' || attempt.resumeParentDone || options.activeThreadId.value !== attempt.threadId) return false
+    if (options.text.value.trim() || options.attachments.value.length) return false
+    options.text.value = attempt.rawText
+    // A failed record remains available for attachment-only submissions too.
+    options.restoreAttachments?.(copySubmissionValue(attempt.attachments))
+    attempts.delete(id)
+    publishSubmissions()
+    options.focusComposer?.(attempt.rawText.length)
+    return true
+  }
+
+  function dismissSubmission(id: string): void {
+    const attempt = attempts.get(id)
+    if (!attempt || ['preparing', 'sending', 'unknown'].includes(attempt.state)) return
+    attempts.delete(id)
+    publishSubmissions()
+  }
+
+  async function submit(submissionOptions: { clearComposer?: boolean; forceGuide?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
+    const pausedTurnId = options.resumableTurnId?.value || ''
+    const resuming = Boolean(pausedTurnId || actionMode.value === 'resume')
+    if (!resuming && actionMode.value === 'stop') { await stop(); return null }
+    if (submitting.value) return null
+    // user:“做吧”+(鼠标与键盘发送共用校验，停止操作不被发送条件阻挡)。
+    if (options.canSubmit && !options.canSubmit()) return null
+    const threadId = options.activeThreadId.value || ''
+    if (!threadId) { reportError(options.messages?.noActiveThread || 'An active thread is required'); return null }
+    const rawText = options.text.value
+    const text = rawText.trim()
+    const attachments = copySubmissionValue(options.attachments.value || [])
+    const catalog = copySubmissionValue(commandCatalog.value)
+    if (!resuming && !text && !attachments.length) return { status: 'ignored' }
+    const command = attachments.length ? null : parseComposerInput(text, catalog)
+    if (!resuming && command?.kind === 'action') {
+      const version = draftVersion
+      submitting.value = true
+      try {
+        const ok = await runCommand(command.name, command.arguments)
+        if (options.activeThreadId.value === threadId && draftVersion === version) {
+          applySubmissionEffects({ status: 'command', command: command.name, ok }, text, submissionOptions.clearComposer === true)
+        }
+        return { status: 'command', command: command.name, ok }
+      } finally { submitting.value = false; options.onSubmitSettled?.() }
+    }
+    const prior = [...attempts.values()].find(a => a.threadId === threadId && a.rawText === rawText
+      && JSON.stringify(a.attachments) === JSON.stringify(attachments) && ['unknown', 'failed'].includes(a.state))
+    if (prior) return await runSubmission(prior)
+    const attempt: SubmissionAttempt = {
+      id: crypto.randomUUID(), threadId, text, rawText, attachments,
+      state: resuming ? 'sending' : 'preparing', error: '',
+      draftVersion, activeTurnId: resuming ? pausedTurnId : options.activeTurnId?.value || '',
+      status: options.status.value, catalog, workRoot: options.getWorkRoot(),
+      clearComposer: submissionOptions.clearComposer === true || resuming,
+      intent: resuming ? 'resume' : isCoreActiveTurnStatus(options.status.value) ? (submissionOptions.forceGuide ? 'guide' : 'queue') : 'start',
+      resumeMembers: (options.resumableSubAgents?.value.length ?? 0) > 0,
+    }
+    attempts.set(attempt.id, attempt)
+    publishSubmissions()
+    if (text || attachments.length) options.onSubmitStart?.(text)
+    return await runSubmission(attempt)
   }
 
   async function handleKeydown(event: KeyboardEvent): Promise<boolean> {
@@ -620,6 +736,12 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   }
 
   return {
+    submissions,
+    submitting,
+    retrySubmission,
+    editSubmission,
+    dismissSubmission,
+    acknowledgeSubmission,
     actionMode,
     terminate,
     commandCatalog,

@@ -69,6 +69,7 @@ These host contracts exist; a source feature that matches one is a port, not a r
 | Named agent presets, per-preset services/compaction | manifest `agentPresets`; `context.service("agent_presets")`; `runner.preset_service(name, preset_id)` |
 | System-prompt injection at assembly time | `context.service("system_prompt_waterfall")` (synchronous handlers) |
 | Chat/IM bridge (sessions, approvals, questions, streaming, commands) | `context.service("channel_host")` + `ChannelAdapter` |
+| Message into the live Sunday session the user is watching | `context.service("live_turn_service").deliver_message(...)`; do not infer idle/running or call `turn.start` while a turn may be running |
 | Manual child-session compact/fork/history/usage | `runner.compact` / `fork` / `session_info`; `preset_service("compaction").compact_now` |
 | Plugin-owned working directory | `context.service("sub_agent_runner_factory")(work_root=...)` |
 | Model list/capability/default | `context.service("model_catalog")` |

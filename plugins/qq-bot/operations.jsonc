@@ -1,8 +1,28 @@
 {
   "operations": [
     {
+      "name": "qqbot.bots.list",
+      "description": "列出机器人；可传 sessionId 只看绑定到该 Sunday 会话的机器人",
+      "handler": "ops:bots_list"
+    },
+    {
+      "name": "qqbot.bot.create",
+      "description": "为指定 Sunday 会话创建一个独立 QQ 机器人（独立 AppID/Secret/网关）",
+      "handler": "ops:bot_create"
+    },
+    {
+      "name": "qqbot.bot.delete",
+      "description": "停止并移除指定机器人（botId）",
+      "handler": "ops:bot_delete"
+    },
+    {
+      "name": "qqbot.bot.state",
+      "description": "读取指定机器人（botId）的绑定、网关和目标会话状态",
+      "handler": "ops:bot_state"
+    },
+    {
       "name": "qqbot.status",
-      "description": "QQ 机器人状态：绑定、网关、会话数、配置摘要",
+      "description": "QQ 机器人状态：绑定、网关、会话数、配置摘要（可选 botId）",
       "handler": "ops:status"
     },
     {
@@ -41,6 +61,16 @@
       "handler": "ops:session_list"
     },
     {
+      "name": "qqbot.targets",
+      "description": "列出可注入的项目和 Sunday 会话",
+      "handler": "ops:targets"
+    },
+    {
+      "name": "qqbot.session.send_file",
+      "description": "向指定 QQ 私聊/群聊发送一个本地文件",
+      "handler": "ops:session_send_file"
+    },
+    {
       "name": "qqbot.session.reset",
       "description": "为指定私聊/群聊开启新会话",
       "handler": "ops:session_reset"
@@ -54,6 +84,11 @@
       "name": "qqbot.models.list",
       "description": "列出宿主可用模型",
       "handler": "ops:models_list"
+    },
+    {
+      "name": "qqbot.bubbles.preview",
+      "description": "预览一段文本在当前气泡规则下会被拆成哪些消息（不发送）",
+      "handler": "ops:bubbles_preview"
     },
     {
       "name": "qqbot.test.send",

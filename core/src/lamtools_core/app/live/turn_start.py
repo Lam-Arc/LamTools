@@ -13,8 +13,32 @@ from ..queue_state import latest_active_turn_id
 from ..runtime_permissions import overlay_runtime_permissions
 from ..turn_acceptance import TURN_ACCEPTED_METHODS, build_turn_acceptance_plan
 from .context import CoreLiveContext, CoreLiveOperationOutcome
+from .handoff import complete_turn_handoff
 
 
+def _resume_target_turn(snapshot: dict[str, Any], requested: str) -> tuple[dict[str, Any], str]:
+    """Pick the paused turn a resume request names, not the highest seq."""
+    turns = snapshot.get("turns") if isinstance(snapshot.get("turns"), dict) else {}
+    core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+    core_turns = core.get("turns") if isinstance(core.get("turns"), dict) else {}
+    all_turns = {**core_turns, **turns}
+    requested_record = all_turns.get(requested) if requested else None
+    if isinstance(requested_record, dict) and str(requested_record.get("status") or "") == "paused":
+        latest = requested_record
+    else:
+        paused_turns = [
+            turn for turn in all_turns.values()
+            if isinstance(turn, dict) and str(turn.get("status") or "") == "paused"
+        ]
+        latest = max(
+            paused_turns,
+            key=lambda turn: int(turn.get("seq") or turn.get("last_seq") or 0),
+            default={},
+        )
+    return latest, str(latest.get("turn_id") or requested or "")
+
+
+@complete_turn_handoff
 async def handle_turn_resume_operation(
     *, request_id: int | str | None, params: dict[str, Any], context: CoreLiveContext,
 ) -> CoreLiveOperationOutcome:
@@ -61,9 +85,7 @@ async def handle_turn_resume_operation(
         if existing is not None:
             return existing, None
         snapshot = await context.persistence.load_metadata(db, thread_id)
-        turns = snapshot.get("turns") or {}
-        latest = max(turns.values(), key=lambda turn: int(turn.get("seq") or 0), default={})
-        turn_id = str(latest.get("turn_id") or "")
+        latest, turn_id = _resume_target_turn(snapshot, requested)
         if (not turn_id or (requested and requested != turn_id)
                 or latest.get("status") != "paused"):
             # Only a paused turn continues. A terminated one is final on
@@ -176,16 +198,16 @@ async def handle_turn_resume_operation(
         return CoreLiveOperationOutcome(response=rpc_result(request_id, {
             "turn_id": event.turn_id, "events": [event.to_dict()],
         }))
+    # user:“该修修，相关插件也要修”+(恢复先记录执行再启动，快速结束的回合不能被迟到的启动镜像改回运行中)。
+    await _mirror_turn_started(
+        context=context,
+        thread_id=thread_id,
+        turn_id=str(runtime_start.get("turn_id") or ""),
+        run_id=str(runtime_start.get("run_id") or ""),
+        input_payload={"text": str(runtime_start.get("text") or "")},
+        resumed=True,
+    )
     failure = await _start_runtime_task(context=context, runtime_start=runtime_start)
-    if failure is None:
-        await _mirror_turn_started(
-            context=context,
-            thread_id=thread_id,
-            turn_id=str(runtime_start.get("turn_id") or ""),
-            run_id=str(runtime_start.get("run_id") or ""),
-            input_payload={"text": str(runtime_start.get("text") or "")},
-            resumed=True,
-        )
     # One press continues the whole session: the members a pause parked start
     # again from their own committed history. Members waiting on a question are
     # untouched, that card is still the user's to answer. Detached so the
@@ -202,6 +224,7 @@ async def handle_turn_resume_operation(
     )
 
 
+@complete_turn_handoff
 async def handle_turn_start_operation(
     *,
     request_id: int | str | None,

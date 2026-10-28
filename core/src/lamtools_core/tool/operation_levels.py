@@ -14,6 +14,8 @@ OPERATION_LEVELS = {
     "write_file": 2, "write": 2, "edit_file": 2, "edit": 2,
     "list_processes": 1, "kill_process": 1, "process.list": 1, "process.kill": 1,
     "memory": 1, "library": 1, "load_skill": 1,
+    # user:“ok，那就这么做”+(当前会话历史的搜索和原文读取属于只读能力)。
+    "search_context": 1, "recall_context": 1,
     "write_checklist": 1, "update_checklist": 1, "checklist": 1,
     "goal": 2, "goal.list": 1, "goal.get": 1,
     "arrange": 3, "arrange.list": 1, "arrange.get": 1,

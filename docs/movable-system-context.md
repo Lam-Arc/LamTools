@@ -140,7 +140,7 @@ System message "skills index" are deleted; the copy in the leading system prompt
 - **工具数组不冻结。** MCP 激活、`load_skill` 的 `on_load` 工具仍会改变 tools 数组，下一轮整段前缀失效一次。MCP 使用频率低，暂不处理。
 - **模型备注仍在传输层注入。** `cli.py` 的 `_messages_with_model_notes` 会把备注拼到第一条 system 消息末尾；备注中途变化会静默改写冻结前缀。这是当前唯一未封住的系统提示词入口。
 - **原生 Anthropic 没有显式缓存断点。** 全仓没有 `cache_control`，Anthropic 不会自动缓存；前缀稳定只是必要条件，还需要单独的缓存标记。
-- **路由粘性只覆盖 OpenCode。** 只有 OpenCode 携带 `x-opencode-session`；OpenAI 的 `prompt_cache_key` 和网关侧粘滞尚未使用。
+- **路由粘性只覆盖 OpenCode。** 只有 OpenCode 携带 `x-opencode-session`；OpenAI 的 `prompt_cache_key` 和网关侧粘滞尚未使用。子代理及子会话沿用父会话的 id（与 OpenCode 官方客户端一致），避免主/子代理被分到不同的路由与缓存桶。
 
 ## 代码位置
 

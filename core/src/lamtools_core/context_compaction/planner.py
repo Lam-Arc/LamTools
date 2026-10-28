@@ -41,8 +41,8 @@ class CompactionPlanner:
 
     By default no Step is retained, so the complete non-prefix history enters
     summarization. A positive setting retains that many latest model Steps;
-    recent user instructions are appended to the summary later by the
-    controller instead of remaining as raw messages.
+    the latest user request remains a user message, while older originals
+    remain available through the history recall tools.
     """
 
     def __init__(self, estimate_tokens: CompactionTokenEstimator | None = None) -> None:
@@ -190,6 +190,12 @@ def _protected_message_indexes(
     """
     step_groups = _model_step_groups(messages)
     selected: set[int] = set()
+    # user:“用户消息那个也许可以取消？”+(不再追加近期用户原话列表，只保护当前最后一条真实用户请求)。
+    latest_user = next((index for index in range(len(messages) - 1, -1, -1)
+                        if messages[index].role == "user" and not messages[index].metadata.get("internal")
+                        and messages[index].metadata.get("key") != "request_local_late_context"), None)
+    if latest_user is not None:
+        selected.add(latest_user)
     step_count = max(0, int(retained_steps))
     if step_count:
         for group in step_groups[-step_count:]:

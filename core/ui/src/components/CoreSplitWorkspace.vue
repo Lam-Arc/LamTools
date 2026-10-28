@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, FileText, FolderTree, Globe, PanelLeftClose, PanelTopClose, Columns2, Rows2, Maximize2, X, LayoutGrid } from 'lucide-vue-next'
+import { BookOpen, FileText, FolderTree, Globe, PanelLeftClose, PanelTopClose, Columns2, Rows2, Maximize2, X, LayoutGrid } from 'lucide-vue-next'
 import CoreSplitPane from './CoreSplitPane.vue'
 import { openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
-import { layoutRects, minimumSize, moveTab, resizeSplit, SPLIT_TAB_BAR_HEIGHT, type Divider, type Rect, type SplitContent, type SplitEdge, type SplitTab } from '@/split/layout'
+import { layoutRects, minimumSize, moveTab, resizeSplit, SPLIT_TAB_BAR_HEIGHT, canJoinPanes, type Divider, type Rect, type SplitContent, type SplitEdge, type SplitTab } from '@/split/layout'
 import type { SplitWorkspaceController } from '@/split/useSplitWorkspace'
 import { t } from '@/i18n'
 import '@/styles/split-workspace.css'
@@ -29,6 +29,14 @@ watch(geometry, value => emit('geometry', value), { immediate: true })
 const activeRect = (pane: string): Rect => focused.value === pane ? bounds.value : normal.value.panes[pane] || bounds.value
 const paneVisible = (pane: string) => !state.hidden && (!focused.value || focused.value === pane)
 const css = (rect: Rect, content = false) => ({ left: `${rect.x}px`, top: `${rect.y + (content ? SPLIT_TAB_BAR_HEIGHT : 0)}px`, width: `${rect.width}px`, height: `${Math.max(0, rect.height - (content ? SPLIT_TAB_BAR_HEIGHT : 0))}px` })
+// user:“拖拽的判定，应该只有中间区域是拖拽判定，偏靠角的那一块应该留给创建分屏的判定”+(分隔线视觉仍贯通，但只有中间那一截接收拖动)。
+const dividerStyle = (divider: Divider) => ({
+  ...css(divider.handle),
+  '--divider-extend-top': `${Math.max(0, divider.handle.y - divider.rect.y)}px`,
+  '--divider-extend-bottom': `${Math.max(0, divider.rect.y + divider.rect.height - divider.handle.y - divider.handle.height)}px`,
+  '--divider-extend-left': `${Math.max(0, divider.handle.x - divider.rect.x)}px`,
+  '--divider-extend-right': `${Math.max(0, divider.rect.x + divider.rect.width - divider.handle.x - divider.handle.width)}px`,
+})
 const allTabs = props.controller.tabs
 const tabVisible = (pane: string, tab: SplitTab) => paneVisible(pane) && state.panes[pane]?.activeTab === tab.id
 // user:“审查分屏代码，并优化”+(可见性事件只报告真正变化的标签，避免每次布局变化都通知所有网页和插件页面)。
@@ -85,18 +93,6 @@ function splitContentItems(pane: string, edge: SplitEdge): ContextMenuEntry[] {
     { label: t('文件树'), icon: FolderTree, action: create('files', props.workRoot, t('文件')) },
   ]
 }
-// user:“在分屏内选择分屏类型和标签页”+(手柄点开先选方向，再选新分屏要承载的标签内容)。
-function openSplitMenu(event: MouseEvent, pane: string) {
-  const directions: { edge: SplitEdge; label: string; icon: typeof ArrowRight }[] = [
-    { edge: 'right', label: t('向右分屏'), icon: ArrowRight },
-    { edge: 'bottom', label: t('向下分屏'), icon: ArrowDown },
-    { edge: 'left', label: t('向左分屏'), icon: ArrowLeft },
-    { edge: 'top', label: t('向上分屏'), icon: ArrowUp },
-  ]
-  openContextMenu({ event, ariaLabel: t('新建分屏'), items: directions.map(({ edge, label, icon }) => ({
-    type: 'submenu' as const, label, icon, disabled: !canSplit(pane, edge), children: splitContentItems(pane, edge),
-  })) })
-}
 function operations(event: MouseEvent, pane = state.activePane) {
   props.controller.activate(pane)
   const items: ContextMenuEntry[] = [
@@ -123,6 +119,31 @@ function tabMenu(event: MouseEvent, pane: string, tab: SplitTab) {
     { type: 'separator' as const }, { label: t('关闭标签'), action: () => props.controller.closeTab(pane, tab) },
   ] })
 }
+// user:“包括显示表现最好也对齐”“我要体验一致化”+(边框右键合并/交换相邻分屏，和 Blender 的 Area Options 一样提供非拖拽入口)。
+function adjacentPanes(event: MouseEvent, divider: Divider): [string, string] | null {
+  const box = root.value?.getBoundingClientRect()
+  if (!box) return null
+  const x = event.clientX - box.left, y = event.clientY - box.top
+  const panes = Object.entries(normal.value.panes).filter(([id]) => id !== 'main' && state.panes[id])
+  const near = (value: number, target: number) => Math.abs(value - target) <= 1
+  if (divider.direction === 'columns') {
+    const left = panes.filter(([, rect]) => near(rect.x + rect.width, divider.rect.x) && y >= rect.y && y <= rect.y + rect.height).sort((a, b) => b[1].x - a[1].x)[0]?.[0]
+    const right = panes.filter(([, rect]) => near(rect.x, divider.rect.x + divider.rect.width) && y >= rect.y && y <= rect.y + rect.height).sort((a, b) => a[1].x - b[1].x)[0]?.[0]
+    return left && right ? [left, right] : null
+  }
+  const top = panes.filter(([, rect]) => near(rect.y + rect.height, divider.rect.y) && x >= rect.x && x <= rect.x + rect.width).sort((a, b) => b[1].y - a[1].y)[0]?.[0]
+  const bottom = panes.filter(([, rect]) => near(rect.y, divider.rect.y + divider.rect.height) && x >= rect.x && x <= rect.x + rect.width).sort((a, b) => a[1].y - b[1].y)[0]?.[0]
+  return top && bottom ? [top, bottom] : null
+}
+function dividerMenu(event: MouseEvent, divider: Divider) {
+  const pair = adjacentPanes(event, divider)
+  if (!pair) return
+  const [first, second] = pair
+  openContextMenu({ event, ariaLabel: t('分屏边界'), items: [
+    { label: t('合并这两块分屏'), disabled: !canJoinPanes(state.tree, first, second), action: () => { props.controller.join(first, second) } },
+    { label: t('交换这两块分屏'), action: () => { props.controller.swap(first, second) } },
+  ] })
+}
 const drag = ref<{ pane: string; tab: string } | null>(null)
 function dragStart(event: DragEvent, pane: string, tab: SplitTab) { drag.value = { pane, tab: tab.id }; document.body.classList.add('split-is-dragging'); event.dataTransfer?.setData('application/x-lamtools-split-tab', JSON.stringify(drag.value)); if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move' }
 function dragOver(event: DragEvent, pane: string) {
@@ -143,25 +164,53 @@ function onDrop(event: DragEvent) {
   endDrag()
 }
 function endDrag() { drag.value = null; drop.value = null; document.body.classList.remove('split-is-dragging') }
-const dropStyle = computed(() => {
-  if (!drop.value) return {}
-  const rect = { ...activeRect(drop.value.pane) }, edge = drop.value.edge
-  if (edge === 'left' || edge === 'right') { rect.width /= 2; if (edge === 'right') rect.x += rect.width }
-  if (edge === 'top' || edge === 'bottom') { rect.height /= 2; if (edge === 'bottom') rect.y += rect.height }
-  return css(rect)
-})
-const dropLabel = computed(() => drop.value?.edge === 'center' ? t('合并标签') : ({ left: t('向左分屏'), right: t('向右分屏'), top: t('向上分屏'), bottom: t('向下分屏') })[drop.value?.edge || 'right'])
-// user:“拉起其他分屏的时候...通过拖动拉起，而不是点击按钮。就类似 blender”+(手柄拖动时按方向拉出预览，松手直接在指针处落下一块新屏)。
+// user:“它绝对不是在分的时候先给你出来一个遮罩，然后告诉你什么‘向上分屏’、‘向右分屏’，而是直接就像拉出来了一个新分屏”+(预览直接描出分割后的两块区域和分隔线，不显示文字/遮罩)。
+type SplitPreviewMode = 'split' | 'merge' | 'join'
+interface SplitPreviewModel { mode: SplitPreviewMode; areas: Rect[]; line?: Rect }
+const PREVIEW_GAP = 2
+function splitAreas(source: Rect, edge: SplitEdge, size: number): SplitPreviewModel {
+  const horizontal = edge === 'left' || edge === 'right', extent = horizontal ? source.width : source.height
+  const created = Math.max(0, Math.min(extent, Math.round(size))), existing = Math.max(0, extent - created - PREVIEW_GAP)
+  const next: Rect = edge === 'left' ? { x: source.x, y: source.y, width: created, height: source.height }
+    : edge === 'right' ? { x: source.x + existing + PREVIEW_GAP, y: source.y, width: created, height: source.height }
+    : edge === 'top' ? { x: source.x, y: source.y, width: source.width, height: created }
+    : { x: source.x, y: source.y + existing + PREVIEW_GAP, width: source.width, height: created }
+  const keep: Rect = edge === 'left' ? { x: source.x + created + PREVIEW_GAP, y: source.y, width: existing, height: source.height }
+    : edge === 'right' ? { x: source.x, y: source.y, width: existing, height: source.height }
+    : edge === 'top' ? { x: source.x, y: source.y + created + PREVIEW_GAP, width: source.width, height: existing }
+    : { x: source.x, y: source.y, width: source.width, height: existing }
+  const line: Rect = edge === 'left' ? { x: source.x + created, y: source.y, width: PREVIEW_GAP, height: source.height }
+    : edge === 'right' ? { x: source.x + existing, y: source.y, width: PREVIEW_GAP, height: source.height }
+    : edge === 'top' ? { x: source.x, y: source.y + created, width: source.width, height: PREVIEW_GAP }
+    : { x: source.x, y: source.y + existing, width: source.width, height: PREVIEW_GAP }
+  return { mode: 'split', areas: [next, keep], line }
+}
+const joinTarget = ref<{ source: string; target: string } | null>(null)
+function dropPreview(): SplitPreviewModel | null {
+  if (!drop.value) return null
+  const source = activeRect(drop.value.pane)
+  if (drop.value.edge === 'center') return { mode: 'merge', areas: [source] }
+  const horizontal = drop.value.edge === 'left' || drop.value.edge === 'right', extent = horizontal ? source.width : source.height
+  return splitAreas(source, drop.value.edge, Math.round((extent - PREVIEW_GAP) / 2))
+}
+function pullPreview(): SplitPreviewModel | null {
+  if (!pull.value) return null
+  const source = activeRect(pull.value.pane), horizontal = pull.value.edge === 'left' || pull.value.edge === 'right'
+  return splitAreas(source, pull.value.edge, horizontal ? pull.value.rect.width : pull.value.rect.height)
+}
+const preview = computed<SplitPreviewModel | null>(() => joinTarget.value ? { mode: 'join', areas: [activeRect(joinTarget.value.source), activeRect(joinTarget.value.target)] } : pullPreview() || dropPreview())
+// user:“分割线位置跟着鼠标...分割线方向按主拖动轴，起始角决定新区域落在哪一侧”+(Blender 式角柄：从哪个角起拖，新屏就贴着那个角；指针位置决定分隔线位置)。
+type SplitCorner = 'top-left' | 'bottom-left' | 'bottom-right'
+const CORNER_SIZE = 18
 const pull = ref<{ pane: string; edge: SplitEdge; rect: Rect; ratio: number } | null>(null)
 let stopPull: (() => void) | undefined
-const pullLabel = computed(() => ({ left: t('向左分屏'), right: t('向右分屏'), top: t('向上分屏'), bottom: t('向下分屏') })[pull.value?.edge || 'right'])
 function clampSplitShare(pane: string, edge: SplitEdge, share: number, extent: number) {
   const key = edge === 'left' || edge === 'right' ? 'width' : 'height'
   const existing = minimumSize({ type: 'pane', id: pane })[key], created = minimumSize({ type: 'pane', id: '__new-split' })[key]
   const lo = created / extent, hi = 1 - existing / extent
   return lo <= hi ? Math.max(lo, Math.min(hi, share)) : .5
 }
-function beginSplitPull(event: PointerEvent, pane: string) {
+function beginSplitPull(event: PointerEvent, pane: string, corner: SplitCorner) {
   if (event.button !== 0) return
   stopPull?.()
   event.preventDefault()
@@ -174,31 +223,43 @@ function beginSplitPull(event: PointerEvent, pane: string) {
     handle.removeEventListener('lostpointercapture', cancel)
     if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId)
     document.body.classList.remove('split-is-pulling')
-    pull.value = null; stopPull = undefined
+    pull.value = null; joinTarget.value = null; stopPull = undefined
   }
   const move = (e: PointerEvent) => {
     const dx = e.clientX - startX, dy = e.clientY - startY
     if (!moved && Math.hypot(dx, dy) < 6) return
     moved = true
-    const columns = Math.abs(dx) >= Math.abs(dy)
-    const edge: SplitEdge = columns ? (dx >= 0 ? 'right' : 'left') : (dy >= 0 ? 'bottom' : 'top')
-    if (!canSplit(pane, edge)) { pull.value = null; document.body.classList.remove('split-is-pulling'); return }
-    const extent = Math.max(1, columns ? source.width : source.height)
-    const share = clampSplitShare(pane, edge, .5 + Math.abs(columns ? dx : dy) / extent * .5, extent)
-    const size = Math.round(extent * share)
-    const ratio = edge === 'left' || edge === 'top' ? share : 1 - share
-    const rect = edge === 'right' ? { x: source.x + source.width - size, y: source.y, width: size, height: source.height }
-      : edge === 'left' ? { x: source.x, y: source.y, width: size, height: source.height }
-      : edge === 'bottom' ? { x: source.x, y: source.y + source.height - size, width: source.width, height: size }
-      : { x: source.x, y: source.y, width: source.width, height: size }
-    pull.value = { pane, edge, rect, ratio }
+    // Hide native webviews as soon as the gesture leaves the grip so the pointer can cross other panes.
     document.body.classList.add('split-is-pulling')
+    const box = root.value?.getBoundingClientRect()
+    if (!box) return
+    const x = e.clientX - box.left, y = e.clientY - box.top
+    if (!state.focused && !state.hidden) {
+      const target = Object.entries(normal.value.panes).find(([id, rect]) => id !== 'main' && state.panes[id] && x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)?.[0]
+      if (target && target !== pane && canJoinPanes(state.tree, pane, target)) { joinTarget.value = { source: pane, target }; pull.value = null; return }
+    }
+    joinTarget.value = null
+    if (x < source.x || x >= source.x + source.width || y < source.y || y >= source.y + source.height) { pull.value = null; return }
+    const columns = Math.abs(dx) >= Math.abs(dy)
+    const edge: SplitEdge = columns ? (corner.endsWith('left') ? 'left' : 'right') : (corner.startsWith('top') ? 'top' : 'bottom')
+    if (!canSplit(pane, edge)) { pull.value = null; return }
+    const extent = Math.max(1, columns ? source.width : source.height)
+    const pointer = columns ? x : y, start = columns ? source.x : source.y
+    const nextSize = edge === 'left' || edge === 'top' ? pointer - start : start + extent - pointer
+    if (nextSize < 8) { pull.value = null; return }
+    const share = clampSplitShare(pane, edge, nextSize / extent, extent), size = Math.round(extent * share)
+    const ratio = edge === 'left' || edge === 'top' ? share : 1 - share
+    const rect = edge === 'left' ? { x: source.x, y: source.y, width: size, height: source.height }
+      : edge === 'right' ? { x: source.x + source.width - size, y: source.y, width: size, height: source.height }
+      : edge === 'top' ? { x: source.x, y: source.y, width: source.width, height: size }
+      : { x: source.x, y: source.y + source.height - size, width: source.width, height: size }
+    pull.value = { pane, edge, rect, ratio }
   }
-  const finish = (e: PointerEvent) => {
-    const dropped = pull.value, dragged = moved
+  const finish = () => {
+    const join = joinTarget.value, dropped = pull.value
     stop()
-    if (!dragged) { openSplitMenu(e, pane); return }
-    if (dropped) props.controller.splitAt(dropped.pane, dropped.edge, dropped.ratio)
+    if (join) props.controller.join(join.source, join.target)
+    else if (dropped) props.controller.splitAt(dropped.pane, dropped.edge, dropped.ratio)
   }
   const cancel = () => stop()
   const cancelKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); stop() } }
@@ -207,6 +268,10 @@ function beginSplitPull(event: PointerEvent, pane: string) {
   handle.addEventListener('lostpointercapture', cancel)
   window.addEventListener('pointermove', move); window.addEventListener('pointerup', finish)
   window.addEventListener('pointercancel', cancel); window.addEventListener('keydown', cancelKey)
+}
+function cornerStyle(pane: string, corner: 'bottom-left' | 'bottom-right') {
+  const rect = activeRect(pane)
+  return { left: `${corner === 'bottom-left' ? rect.x : rect.x + rect.width - CORNER_SIZE}px`, top: `${rect.y + rect.height - CORNER_SIZE}px`, width: `${CORNER_SIZE}px`, height: `${CORNER_SIZE}px`, bottom: 'auto' }
 }
 // user:“相比把全部能力都缝在一个按键里面”+(新屏用短促的淡入和轻微缩放出现，避免突然替换画面)。
 const entering = ref(new Set<string>()), knownPanes = new Set(Object.keys(state.panes))
@@ -228,7 +293,14 @@ function resize(event: PointerEvent, divider: Divider) {
   stopResize?.()
   event.preventDefault(); const el = event.currentTarget as HTMLElement; el.setPointerCapture?.(event.pointerId)
   const original = divider.ratio
-  const move = (e: PointerEvent) => { const box = root.value!.getBoundingClientRect(), columns = divider.direction === 'columns'; resizeSplit(state.tree, divider.id, ((columns ? e.clientX - box.left - divider.parent.x : e.clientY - box.top - divider.parent.y)) / ((columns ? divider.parent.width : divider.parent.height) - 2), columns ? divider.parent.width : divider.parent.height) }
+  const move = (e: PointerEvent) => {
+    const box = root.value!.getBoundingClientRect(), columns = divider.direction === 'columns'
+    const extent = columns ? divider.parent.width : divider.parent.height
+    const offset = columns ? e.clientX - box.left - divider.parent.x : e.clientY - box.top - divider.parent.y
+    let ratio = offset / (extent - 2)
+    if (e.ctrlKey) ratio = Math.round(ratio * 12) / 12
+    resizeSplit(state.tree, divider.id, ratio, extent)
+  }
   const cancel = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); resizeSplit(state.tree, divider.id, original, divider.direction === 'columns' ? divider.parent.width : divider.parent.height); stop() } }
   const stop = () => {
     el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', stop); el.removeEventListener('pointercancel', stop); el.removeEventListener('lostpointercapture', stop)
@@ -253,24 +325,33 @@ function measure() { const rect = root.value?.getBoundingClientRect(); if (rect)
 onMounted(() => { const rpc = contributionsRpc(); if (rpc) void ensureContributions(rpc); measure(); if (typeof ResizeObserver !== 'undefined') { observer = new ResizeObserver(measure); observer.observe(root.value!) } window.addEventListener('resize', measure); window.addEventListener('dragend', endDrag); window.addEventListener('keydown', cancelDrag) })
 function cancelDrag(e: KeyboardEvent) { if (e.key === 'Escape') endDrag() }
 onBeforeUnmount(() => { stopResize?.(); stopPull?.(); clearTimeout(enterTimer); endDrag(); observer?.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('dragend', endDrag); window.removeEventListener('keydown', cancelDrag) })
-defineExpose({ operations, openMenu, openSplitMenu, measure })
+defineExpose({ operations, openMenu, measure })
 </script>
 <template>
   <div ref="root" class="split-workspace" :class="{ 'split-workspace--open': Object.keys(state.panes).length > 0 }" :style="{ '--split-tabbar-height': `${SPLIT_TAB_BAR_HEIGHT}px` }" data-region="split" @drop="onDrop">
     <div v-if="drag" class="split-main-drop" :style="css(activeRect('main'))" @dragover="dragOver($event, 'main')"></div>
     <section v-for="pane in state.panes" :key="pane.id" v-show="paneVisible(pane.id)" class="split-pane-frame" :class="{ 'is-entering': entering.has(pane.id), 'is-pulling': pull?.pane === pane.id }" :style="css(activeRect(pane.id))" :aria-label="t('分屏')" @pointerdown="controller.activate(pane.id)" @dragover="dragOver($event, pane.id)">
-      <CoreSplitPane :pane="pane" :active="state.activePane === pane.id" :dirty="dirty" @focus="controller.activate(pane.id)" @activate="controller.activate(pane.id, $event)" @open="openMenu($event, pane.id)" @menu="operations($event, pane.id)" @split="openSplitMenu($event, pane.id)" @split-pull="beginSplitPull($event, pane.id)" @close="controller.closeTab(pane.id, $event)" @tab-menu="(event, tab) => tabMenu(event, pane.id, tab)" @drag="(event, tab) => dragStart(event, pane.id, tab)" />
+      <CoreSplitPane :pane="pane" :active="state.activePane === pane.id" :dirty="dirty" @focus="controller.activate(pane.id)" @activate="controller.activate(pane.id, $event)" @open="openMenu($event, pane.id)" @menu="operations($event, pane.id)" @close-pane="controller.closePane(pane.id)" @split-pull="beginSplitPull($event, pane.id, 'top-left')" @close="controller.closeTab(pane.id, $event)" @tab-menu="(event, tab) => tabMenu(event, pane.id, tab)" @drag="(event, tab) => dragStart(event, pane.id, tab)" />
       <div v-if="!pane.tabs.length" class="split-empty"><span>{{ t('留一个空间，打开需要的内容') }}</span><button class="split-text-button" type="button" @click="openMenu($event, pane.id)">{{ t('打开内容') }}</button><small>{{ t('也可以将标签拖到这里') }}</small></div>
     </section>
     <!-- Flat, identity-keyed content keeps editors and webviews mounted while their tabs move. -->
     <section v-for="{ pane, tab } in allTabs" :id="`split-content-${tab.id}`" :key="tab.id" v-show="tabVisible(pane, tab)" :class="['split-tab-content', `split-tab-content--${tab.kind}`]" :style="css(activeRect(pane), true)" :data-selection-document="`split:${tab.id}`" :data-source-session-id="tab.kind === 'agent' ? tab.sessionId : undefined" role="tabpanel" :aria-labelledby="`split-tab-${tab.id}`" :tabindex="0" @pointerdown="controller.activate(pane)" @focusin="controller.activate(pane)" @keydown.esc.stop @dragover="dragOver($event, pane)">
       <slot :tab="tab" :pane="pane" :visible="tabVisible(pane, tab)" />
     </section>
+    <!-- user:“像 Blender 一样从分屏的角进行拖拽...偏靠角的那一块应该留给创建分屏的判定”+(左上/左下可见角柄；右下短动作区；右上留给加号与关闭)。 -->
+    <template v-for="pane in state.panes" :key="`corner-${pane.id}`">
+      <div v-show="paneVisible(pane.id)" class="split-corner-grip split-corner-grip--bottom-left" :style="cornerStyle(pane.id, 'bottom-left')" :title="t('拖动角新建分屏')" aria-hidden="true" @pointerdown.prevent="beginSplitPull($event, pane.id, 'bottom-left')"></div>
+      <div v-show="paneVisible(pane.id)" class="split-corner-grip split-corner-grip--bottom-right split-corner-grip--ghost" :style="cornerStyle(pane.id, 'bottom-right')" :title="t('拖动角新建分屏')" aria-hidden="true" @pointerdown.prevent="beginSplitPull($event, pane.id, 'bottom-right')"></div>
+    </template>
     <template v-if="!focused">
-      <div v-for="divider in normal.dividers" :key="divider.id" class="split-divider" :class="[`split-divider--${divider.direction}`, { 'is-resizing': resizing === divider.id }]" :style="css(divider.rect)" role="separator" tabindex="0" :aria-label="t('调整分屏大小')" :title="t('拖动调整 · 双击均分 · Esc 撤回')" :aria-orientation="divider.direction === 'columns' ? 'vertical' : 'horizontal'" :aria-valuemin="0" :aria-valuemax="100" :aria-valuenow="Math.round(divider.ratio * 100)" @pointerdown="resize($event, divider)" @keydown="keyResize($event, divider)" @dblclick="resizeSplit(state.tree, divider.id, .5, divider.direction === 'columns' ? divider.parent.width : divider.parent.height)"></div>
+      <div v-for="divider in normal.dividers" :key="divider.id" class="split-divider" :class="[`split-divider--${divider.direction}`, { 'is-resizing': resizing === divider.id }]" :style="dividerStyle(divider)" role="separator" tabindex="0" :aria-label="t('调整分屏大小')" :title="t('拖动中段调整 · Ctrl 吸附 · 双击均分 · 右键合并/交换 · Esc 撤回')" :aria-orientation="divider.direction === 'columns' ? 'vertical' : 'horizontal'" :aria-valuemin="0" :aria-valuemax="100" :aria-valuenow="Math.round(divider.ratio * 100)" @pointerdown="resize($event, divider)" @keydown="keyResize($event, divider)" @contextmenu.prevent.stop="dividerMenu($event, divider)" @dblclick="resizeSplit(state.tree, divider.id, .5, divider.direction === 'columns' ? divider.parent.width : divider.parent.height)"></div>
     </template>
     <div v-if="focused && !state.hidden && Object.keys(state.panes).length" class="split-focus-switch"><button class="split-text-button" type="button" @click="switchScreen">{{ t('查看其他屏') }} · {{ Object.keys(state.panes).length + 1 }}</button><button v-if="state.focused" class="split-icon-button" type="button" :aria-label="t('退出聚焦')" @click="state.focused = null"><PanelTopClose :size="14" /></button></div>
-    <Transition name="split-drop"><div v-if="drop" class="split-drop-preview" :style="dropStyle">{{ dropLabel }}</div></Transition>
-    <Transition name="split-drop"><div v-if="pull" class="split-drop-preview split-pull-preview" :style="css(pull.rect)">{{ pullLabel }}</div></Transition>
+    <Transition name="split-drop">
+      <div v-if="preview" class="split-split-preview" :class="`split-split-preview--${preview.mode}`">
+        <div v-for="(rect, index) in preview.areas" :key="index" class="split-split-preview-area" :style="css(rect)"></div>
+        <div v-if="preview.line" class="split-split-preview-line" :style="css(preview.line)"></div>
+      </div>
+    </Transition>
   </div>
 </template>

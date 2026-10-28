@@ -149,6 +149,8 @@ def default_load_tools() -> LoadTools:
                 "read_file", "list_dir", "search_files", "search_content",
                 "web_search", "web_fetch", "git_status", "git_diff",
                 "load_skill", "memory", "message",
+                # user:“ok，那就这么做”+(分析模式也可查阅当前会话的历史原文)。
+                "search_context", "recall_context",
             ],
         ),
         "execute": LoadToolMode(

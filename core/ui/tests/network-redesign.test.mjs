@@ -5,8 +5,8 @@ import NetworkApp from "../../src/lamtools_core/plugins/bundled/network-explorat
 import QuickPanel from "../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/QuickPanel.vue";
 import { networkStore } from "../../src/lamtools_core/plugins/bundled/network-exploration/ui/store.mjs";
 import {
-  filenameFromUrl,
   uptime,
+  useNetwork,
 } from "../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/session.mjs";
 const mounted = [];
 afterEach(() => {
@@ -242,9 +242,7 @@ it("starts a download with the chosen parallel count and speed limit", async () 
   const { view, rpc } = await setup();
   await view.get('[data-page="transfer"]').trigger("click");
   await flushPromises();
-  await view
-    .get('input[name="url"]')
-    .setValue("https://example.com/file.zip");
+  await view.get('input[name="url"]').setValue("https://example.com/file.zip");
   await view.get('select[aria-label="并行数量"]').setValue("4");
   await view.get('select[aria-label="下载限速"]').setValue("5242880");
   await view.get(".nx-download-composer").trigger("submit");
@@ -317,7 +315,9 @@ it("toggles the proxy directly from the home block", async () => {
   await view.get("[data-home-proxy]").trigger("click");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.stop", {});
-  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe("page");
+  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe(
+    "page",
+  );
 });
 it("sends a home proxy block without a subscription to the proxy page", async () => {
   const { view, rpc } = await setup({
@@ -336,7 +336,7 @@ it("starts a download from the home block with a filename derived from the link"
   // user:“三个块分别是加速代理下载的快捷操作”+(下载块粘贴链接即可开始，不要求先打开下载页)。
   const { view, rpc } = await setup();
   await view
-    .get('[data-home-download] input')
+    .get("[data-home-download] input")
     .setValue("https://example.com/files/My%20Mod.zip?download=1");
   await view.get("[data-home-download]").trigger("submit");
   await flushPromises();
@@ -344,11 +344,9 @@ it("starts a download from the home block with a filename derived from the link"
     "network-exploration.transfer.add",
     expect.objectContaining({
       url: "https://example.com/files/My%20Mod.zip?download=1",
-      filename: "My Mod.zip",
-      connections: 8,
     }),
   );
-  expect(view.get('[data-home-download] input').element.value).toBe("");
+  expect(view.get("[data-home-download] input").element.value).toBe("");
 });
 it("starts local acceleration from the home page without a subscription", async () => {
   // user:“就像是用 watt toolkit 一样，点一下‘一键加速’”“本机加速的意思就是本机加速选线路的事儿，去代理里面”+(首页一键加速只启动本机加速器，不要求订阅，也不跳走)。
@@ -357,11 +355,10 @@ it("starts local acceleration from the home page without a subscription", async 
   });
   await view.get("[data-acceleration]").trigger("click");
   await flushPromises();
-  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe("page");
-  expect(rpc).toHaveBeenCalledWith(
-    "network-exploration.accelerator.start",
-    {},
+  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe(
+    "page",
   );
+  expect(rpc).toHaveBeenCalledWith("network-exploration.accelerator.start", {});
   expect(rpc).toHaveBeenCalledWith("network-exploration.system.apply", {
     kind: "proxy",
     server: "127.0.0.1:49152",
@@ -398,10 +395,7 @@ it("runs local acceleration from the acceleration page without a subscription", 
   expect(view.find("[data-line-select]").exists()).toBe(false);
   await view.get("[data-acceleration]").trigger("click");
   await flushPromises();
-  expect(rpc).toHaveBeenCalledWith(
-    "network-exploration.accelerator.start",
-    {},
-  );
+  expect(rpc).toHaveBeenCalledWith("network-exploration.accelerator.start", {});
   expect(rpc).toHaveBeenCalledWith("network-exploration.system.apply", {
     kind: "proxy",
     server: "127.0.0.1:49152",
@@ -410,7 +404,9 @@ it("runs local acceleration from the acceleration page without a subscription", 
 it("keeps line switching on the proxy page instead of the acceleration page", async () => {
   // user:“加速页里头不用分什么线路加速，本机加速的意思就是本机加速选线路的事儿，去代理里面”+(加速页不再选线路，线路选择只在代理页)。
   const { view, rpc } = await setup();
-  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe("page");
+  expect(view.get('[data-page="home"]').attributes("aria-current")).toBe(
+    "page",
+  );
   expect(view.text()).toContain("一键加速");
   await view.get("[data-acceleration]").trigger("click");
   await flushPromises();
@@ -431,17 +427,6 @@ it("keeps line switching on the proxy page instead of the acceleration page", as
     group: "Auto",
     name: "Singapore",
   });
-});
-it("derives a safe filename for quick downloads", () => {
-  // user:“三个块分别是加速代理下载的快捷操作”+(下载块只让用户粘贴链接，文件名从链接里推导并清理非法字符)。
-  expect(
-    filenameFromUrl("https://example.com/files/My%20Mod.zip?download=1"),
-  ).toBe("My Mod.zip");
-  expect(filenameFromUrl("https://example.com/")).toBe("download.bin");
-  expect(filenameFromUrl("https://example.com/a%3Ab%3F.zip")).toBe(
-    "a_b_.zip",
-  );
-  expect(filenameFromUrl("not a url")).toBe("");
 });
 it("formats the real proxy uptime for the home page", () => {
   // user:“样式示例：不必照抄，只是方向”+(连接时长来自控制器启动时刻，不是伪造的计时)。
@@ -551,8 +536,6 @@ it("renders three quick pills with direct actions", async () => {
     "network-exploration.transfer.add",
     expect.objectContaining({
       url: "https://example.com/file.zip",
-      filename: "file.zip",
-      connections: 8,
     }),
   );
 });
@@ -612,4 +595,84 @@ it("stops quick-panel polling when the window becomes hidden", async () => {
   expect(
     rpc.mock.calls.filter(([method]) => method.endsWith(".status")).length,
   ).toBe(before);
+});
+
+// user:“修”+(恢复系统代理失败时保留加速服务，避免把电脑留在无效代理端口)。
+it("keeps acceleration running when system restoration fails", async () => {
+  const { rpc } = await setup({
+    accelerator: { running: true, port: 49152 },
+    transactions: [
+      { id: "owned", request: { kind: "proxy" }, status: "applied" },
+    ],
+  });
+  const original = rpc.getMockImplementation();
+  rpc.mockImplementation(async (method, params) => {
+    if (method.endsWith(".system.inspect"))
+      return { enabled: 1, server: "127.0.0.1:49152" };
+    if (method.endsWith(".system.restore")) throw new Error("恢复失败");
+    return original(method, params);
+  });
+  const consumer = mount({
+    setup() {
+      return { session: useNetwork({ rpc, visible: true }) };
+    },
+    template: "<div />",
+  });
+  mounted.push(consumer);
+  await flushPromises();
+  await consumer.vm.session.toggleAcceleration();
+  await flushPromises();
+  expect(rpc).toHaveBeenCalledWith("network-exploration.system.restore", {
+    id: "owned",
+  });
+  expect(rpc.mock.calls.map(([method]) => method)).not.toContain(
+    "network-exploration.accelerator.stop",
+  );
+  expect(consumer.vm.session.error).toBe("恢复失败");
+});
+
+// user:“修”+(首页与侧栏把原始参数交给统一下载服务，后台刷新也必须更新首页任务数)。
+it("unified download entries leave naming and defaults to the backend", async () => {
+  const { view, rpc } = await setup();
+  await view
+    .get("[data-home-download] input")
+    .setValue("https://example.com/file%ZZ.zip");
+  await view.get("[data-home-download]").trigger("submit");
+  await flushPromises();
+  expect(rpc).toHaveBeenCalledWith("network-exploration.transfer.add", {
+    url: "https://example.com/file%ZZ.zip",
+  });
+  const quick = mount(QuickPanel, {
+    props: { context: { rpc, visible: true } },
+  });
+  mounted.push(quick);
+  await flushPromises();
+  await quick
+    .get('[data-quick="download"] input')
+    .setValue("https://example.com/file%ZZ.zip");
+  await quick.get('[data-quick="download"] form').trigger("submit");
+  await flushPromises();
+  expect(
+    rpc.mock.calls.filter(([method]) => method.endsWith(".transfer.add")),
+  ).toHaveLength(2);
+  expect(
+    rpc.mock.calls.filter(([method]) => method.endsWith(".transfer.add"))[1][1],
+  ).toEqual({ url: "https://example.com/file%ZZ.zip" });
+});
+it("unified task snapshots update the home without opening downloads", async () => {
+  const { view, rpc } = await setup();
+  const original = rpc.getMockImplementation();
+  rpc.mockImplementation(async (method, params) =>
+    method.endsWith(".status")
+      ? {
+          ...state(),
+          downloads: [
+            { gid: "external", status: "active", downloadSpeed: "3145728" },
+          ],
+        }
+      : original(method, params),
+  );
+  await networkStore.refresh();
+  await flushPromises();
+  expect(view.text()).toContain("3.0 MB/s");
 });

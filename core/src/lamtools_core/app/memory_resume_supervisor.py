@@ -27,6 +27,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from lamtools_core.runtime.memory_diagnostics import BackendMemoryDiagnostics
 
 from lamtools_core.config.automation import (
     ASK_AUTO_CONTINUE_TIMEOUT_MINUTES,
@@ -168,6 +169,8 @@ class MemoryResumeSupervisor:
         # spawning a second handler every polling tick while the first one is
         # still persisting its decision.
         self._auto_continue_inflight: set[str] = set()
+        # user:“而且刚才为什么内存占用这么多，差不多 14g？”+(复用现有轮询留存进程内存证据，不增加后台线程)。
+        self._memory_diagnostics = BackendMemoryDiagnostics()
 
     async def start(self) -> None:
         if self._task is not None:
@@ -258,6 +261,7 @@ class MemoryResumeSupervisor:
             await self._safe_tick()
 
     async def _safe_tick(self) -> None:
+        self._memory_diagnostics.sample()
         try:
             await self.tick()
         except asyncio.CancelledError:

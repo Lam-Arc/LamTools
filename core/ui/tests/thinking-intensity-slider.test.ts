@@ -63,6 +63,15 @@ describe('ThinkingIntensitySlider', () => {
     expect(wrapper.classes()).not.toContain('is-dragging')
   })
 
+  it('shows six fading white dots inside the track only at max', async () => {
+    const wrapper = fixture('max')
+    expect(wrapper.find('.sunday-thinking-slider__max-dots').exists()).toBe(true)
+    expect(wrapper.findAll('.sunday-thinking-slider__max-dot')).toHaveLength(6)
+
+    await wrapper.setProps({ modelValue: 'high' })
+    expect(wrapper.find('.sunday-thinking-slider__max-dots').exists()).toBe(false)
+  })
+
   it('locks to the single available level', () => {
     const wrapper = fixture('off', [{ value: 'off', label: '关闭' }])
     const rail = wrapper.get('[data-core-thinking-slider]')

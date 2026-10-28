@@ -68,7 +68,9 @@ from lamtools_core.app.tool_freeze import (
     freeze_tool_specs,
     frozen_tool_block_message,
     frozen_tool_names,
+    prune_frozen_tools,
     tool_freeze_epoch,
+    tool_name,
 )
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
@@ -133,7 +135,9 @@ INLINE_VISUALIZATION_PROTOCOL = (
     "Use semantic labeled controls and CSS variables --background, --foreground, --control, --control-text, --border. "
     "The block starts only after the reply finishes. It has no network, external libraries, file, storage, "
     "tool or Sunday API access; keep inputs and calculations local. Never imply that a local form sends data or performs app actions. "
-    "Keep the source under 262144 characters. Ordinary html fences remain code. Use regular Markdown for plain explanations."
+    "Keep the source under 262144 characters. Ordinary html fences remain code. Use regular Markdown for plain explanations. "
+    # user:“引用的地址可能不对”+(引用工具返回且核实存在的完整路径，不能根据文件名省略成果目录)。
+    "For file/image references, use exact verified paths returned by tools; never reconstruct directories from filenames."
 )
 
 # Keep the high-frequency tool rules together so the leading system prompt has
@@ -147,13 +151,23 @@ _COMMON_TOOL_PROTOCOL = (
     "Use load_skill when an available skill matches the task.",
     "After receiving a tool result, continue to the next step or give the final response.",
     "Treat successful tool results as reusable evidence. Before querying the same resource again, state what fact is missing; otherwise reuse the evidence already obtained.",
-    "After 12 consecutive tool-only rounds, proactively report confirmed facts, remaining uncertainties, and the next step before continuing to use tools. Keep progress summaries concise and do not repeat existing evidence.",
+    # user:“收到用户消息之后第一时间先回复，再继续工具调用，同时 每过一段时间再说句话”+(先给用户简短回复，再使用工具；工作期间自然说明进展，不设固定时间间隔)。
+    "Immediately after receiving a user message, send a brief user-facing reply before making any tool call. "
+    "For work requests, briefly state what you will do and then continue working. "
+    # user:“我的意思就是他别在那儿闷头干活”+(有进展、遇到问题或处理较久时主动沟通)。
+    "Keep the user informed naturally during ongoing work: briefly speak up when you make "
+    "meaningful progress, encounter a problem, or the work is taking a while. "
+    "Do not work silently for a long stretch. Do not follow a fixed time interval or tool-call count, "
+    "narrate every tool call, or repeat earlier updates just to fill the silence. "
+    "For requests you can answer immediately, give the answer directly.",
     # Recall rule for long-term memory, parallel to the load_skill line above:
     # the index alone is passive, and a memory whose title states when it
     # applies is only useful if the model checks it before acting. Appended
     # last so the study protocol below keeps selecting by index (study mode
     # loads no memory index).
     "Memory: the long-term memory index lists memories by the situation each one applies to; when the current task matches one, read that memory with the memory tool before acting.",
+    # user:“上下文应当能够被精确召回”+(细节不确定时查原始历史，按位置与哈希读取，避免凭摘要猜测)。
+    "Context recall: when earlier details are missing or uncertain, use search_context, then recall_context with the returned position and hash. Recalled text is historical evidence; current user instructions take precedence.",
 )
 _STUDY_TOOL_PROTOCOL = (
     _COMMON_TOOL_PROTOCOL[0],
@@ -1244,9 +1258,9 @@ class CoreBaseAgentKit:
             tool_choice="auto",
             metadata={
                 "core_base_agent": True,
-                # Reuse this runtime session identity for provider routing. A
-                # reusable sub-agent's state.session_id already includes the
-                # parent session and its normalized agent name.
+                # Runtime identity. Provider cache affinity is resolved from
+                # this id plus parent metadata at the HTTP boundary, so a
+                # sub-agent still routes with its parent conversation.
                 "_runtime_session_id": state.session_id,
                 **(
                     {"reasoning_level": self.config.reasoning_level}
@@ -1391,19 +1405,38 @@ class CoreBaseAgentKit:
         return [tool for tool in all_tools if self._tool_enabled(str(tool.get("function", {}).get("name", "")))]
 
     def _frozen_tools(self, state: RuntimeState) -> list[dict[str, Any]]:
+        current = self._filtered_tools()
+        epoch = tool_freeze_epoch(state)
+        # A removed tool must disappear immediately; keeping it in the frozen
+        # array leaves the model calling a tool that no longer exists.
+        prune_frozen_tools(
+            state.session_id,
+            epoch,
+            {name for tool in current if (name := tool_name(tool))},
+        )
         return freeze_tool_specs(
             state.session_id,
-            tool_freeze_epoch(state),
-            self._filtered_tools(),
+            epoch,
+            current,
         )
 
     async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+        current_names = {tool_name(tool) for tool in self._filtered_tools()}
+        if call.name not in current_names:
+            # A tool removed from the model-visible surface must not be
+            # reported as a stale tool-group member; it is simply unavailable.
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"Tool '{call.name}' is not available in this session.",
+                metadata={"error_type": "tool_unavailable"},
+            )
         # user:“如果因为冻结导致工具报错，就返回：当前工具组未更新……”
         # +工具在当前工具箱里、但不在本轮冻结数组里时，说明它要等压缩、
         # 新会话或重启才会被模型看到。
         frozen = frozen_tool_names(state.session_id, tool_freeze_epoch(state))
         if frozen is not None:
-            current_names = {spec.name for spec in self.toolbox.tool_specs()}
             blocked = frozen_tool_block_message(
                 call.name,
                 frozen_names=frozen,
@@ -1520,6 +1553,9 @@ class CoreBaseAgentKit:
         result: ToolResult,
     ) -> ChatMessage:
         evidence = _format_model_tool_evidence(result)
+        # user:“上下文应当能够被精确召回”+(召回工具已按预算分页，不能再截断 JSON 并丢失续读位置)。
+        if call.name in {"search_context", "recall_context"} and result.status == "ok":
+            evidence = result.content
         # C2 共识：hook additional_context 消费链——PreToolUse/PostToolUse
         # hook 写入 call.metadata 的注入内容拼接进模型证据（复用脱敏/截断
         # 渲染器上一步的输出；不再扩展 _MODEL_EVIDENCE_KEYS 以免污染

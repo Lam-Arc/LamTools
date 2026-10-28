@@ -43,6 +43,8 @@ class MCPToolRegistry:
                             self._owners[name] = manifest.name
         self._clients: dict[str, MCPClient] = {}
         self._tools_by_name: dict[str, MCPTool] = {}
+        # user:“MCP 列表空”+(向调用方保留启动失败原因，区分未配置与连接失败)。
+        self.load_errors: dict[str, str] = {}
 
     @property
     def server_names(self) -> list[str]:
@@ -100,6 +102,7 @@ class MCPToolRegistry:
                 await client.close()
                 if not isinstance(exc, Exception):
                     raise
+                self.load_errors[config.name] = f"{config.command}: {str(exc) or type(exc).__name__}"
                 logger.warning("MCP server %s load failed: %s", config.name, exc)
                 continue
             self._clients[config.name] = client
@@ -115,6 +118,7 @@ class MCPToolRegistry:
             self._tools_by_name = {key: tool for key, tool in self._tools_by_name.items() if tool.server != name}
 
     async def close(self) -> None:
+        self.load_errors.clear()
         clients = list(self._clients.values())
         self._clients.clear()
         self._tools_by_name.clear()

@@ -71,4 +71,42 @@ describe('split pane interaction polish', () => {
     expect(css).toContain('.split-entry:is(:hover, :focus-visible)')
     expect(css).toContain('.split-entry::before')
   })
+  // user:“那个分屏的意思是打开分屏和折起分屏”+(标题栏入口只切换开关，不再向右/向下分屏)。
+  it('wires the header split key to the open/collapse toggle', () => {
+    const app = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
+    expect(app).toContain('@click="splitWorkspace.toggle()"')
+    expect(app).toContain("t('打开分屏')")
+    expect(app).toContain("t('收起分屏')")
+  })
+  // user:“标签和角铁太难看，重新设计”+(标签改用主区文字与轻选中底色；角铁改为单层圆角 L 遮罩，不再出现白块和硬边 L)。
+  it('uses main-area tab text, a quiet selected fill, and a single masked corner bracket', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/split-workspace.css'), 'utf8')
+    const tabRule = css.match(/\.split-pane-tab \{[^}]*\}/)?.[0] || ''
+    const selectedRule = css.match(/\.split-pane-tab\.is-selected \{[^}]*\}/)?.[0] || ''
+    const cornerRule = css.match(/\.split-corner-grip::before \{[^}]*\}/)?.[0] || ''
+    const bottomRule = css.match(/\.split-corner-grip--bottom-left \{[^}]*\}/)?.[0] || ''
+    expect(tabRule).toContain('--text: var(--theme-main-text)')
+    expect(tabRule).not.toContain('--theme-control-text')
+    expect(selectedRule).toContain('var(--alpha-active)')
+    expect(selectedRule).not.toContain('theme-control-soft-background')
+    expect(css).not.toContain('.split-pane-bar.is-active .split-pane-tab.is-selected::after')
+    expect(css).not.toContain('.split-pane-bar .split-icon-button { background: var(--theme-control-soft-background); }')
+    expect(cornerRule).toContain('mask: var(--split-corner-mask)')
+    expect(bottomRule).toContain('--split-corner-rotation: -90deg')
+  })
+  // user:“分屏的右上角，只需要留一个加号...一个 x...从分屏的角进行拖拽”+(头部只保留加号与关闭，拆分入口改为角柄)。
+  it('keeps only add/close controls and a corner split grip in the pane header', () => {
+    const pane = readFileSync(resolve(process.cwd(), 'src/components/CoreSplitPane.vue'), 'utf8')
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/split-workspace.css'), 'utf8')
+    expect(pane).not.toContain('split-split-handle')
+    expect(pane).toContain('split-corner-grip')
+    expect(pane).toContain("t('关闭分屏')")
+    expect(pane).toContain("t('打开内容')")
+    expect(css).toContain('.split-corner-grip')
+    expect(css).toContain('.split-corner-grip--top-left')
+    expect(css).toContain('.split-corner-grip--ghost')
+    expect(css).toContain('.split-split-preview')
+    expect(css).not.toContain('repeating-linear-gradient(-45deg, currentColor')
+    expect(css).toContain('padding-inline: 22px var(--space-2)')
+  })
 })

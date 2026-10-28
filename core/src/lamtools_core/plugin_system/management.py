@@ -210,6 +210,11 @@ async def install_or_update(host, payload, *, update=False):
         manager = supervisor(host)
         async with manager.mutation(incoming.name):
             existing = host.get(incoming.name)
+            # user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(下载期间其他请求可能已更新插件，替换事务内必须再次阻止降级)。
+            if existing and payload.get("no_downgrade"):
+                from lamtools_core.update.checker import compare_versions
+                if compare_versions(incoming.version, existing.version) < 0:
+                    raise ValueError("已安装的插件版本更新，不能由市场降级")
             if update and existing is None:
                 raise ValueError("plugin is not installed")
             if not update and existing is not None:

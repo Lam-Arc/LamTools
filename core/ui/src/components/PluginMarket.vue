@@ -55,19 +55,26 @@ async function load() {
     const result = await props.requestRpc('plugin.market.list', {})
     plugins.value = Array.isArray(result.plugins) ? result.plugins as MarketPlugin[] : []
     cached.value = result.source === 'cache'
-    if (result.error && !plugins.value.length) error.value = String(result.error)
+    // user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(目录占位行不能隐藏实际连接错误)。
+    if (result.error) error.value = String(result.error)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally { loading.value = false }
 }
 
 async function install(plugin: MarketPlugin) {
+  if (busy.value || loading.value) return
   busy.value = plugin.id
   error.value = ''; notice.value = ''
   try {
     // user:“从 GitHub 等平台下载并安装”+(安装允许下载和后端验证完成，避免沿用普通查询的 30 秒等待上限)。
     const result = await props.requestRpc('plugin.market.install', { name: plugin.id }, 180_000)
     if (result.error) throw new Error(String(result.error))
+    // user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(只有已就绪的安装结果才能显示成功)。
+    if (result.available === false) {
+      const backend = result.backend as Record<string, unknown> | undefined
+      throw new Error(String(backend?.error || t('插件启动失败，请在“已安装”中查看详情。')))
+    }
     emit('changed')
     await load()
     notice.value = t('插件已安装，可在“已安装”中配置和管理。')

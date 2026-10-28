@@ -1,3 +1,4 @@
+// user:“测试，提交打包发布”+(旧快照测试也提供协议要求的序号)。
 import { describe, expect, it } from 'vitest'
 import { mergeResolvedRequestStates } from '../src/appServer/store.ts'
 import { selectVisiblePendingDecisions } from '../src/appServer/pendingDecisions.ts'
@@ -25,7 +26,7 @@ describe('stale snapshot decision pool repair', () => {
   it.each(['resolved', 'cancelled', 'expired'])('removes a %s card from all pool views', status => {
     const current = fixture()
     const incoming = {
-      thread_id: 'thread', requests: { 'req-1': { request_id: 'req-1', status } },
+      thread_id: 'thread', snapshot_seq: 0, requests: { 'req-1': { request_id: 'req-1', status } },
     } as CoreAppSnapshot
     const merged = mergeResolvedRequestStates(current, incoming)!
     expect(merged).not.toBeNull()
@@ -46,7 +47,7 @@ describe('stale snapshot decision pool repair', () => {
 
   it.each(['processing', 'deferred'])('does not treat %s as a terminal decision', status => {
     const current = fixture()
-    const incoming = { thread_id: 'thread', requests: { 'req-1': { request_id: 'req-1', status } } } as CoreAppSnapshot
+    const incoming = { thread_id: 'thread', snapshot_seq: 0, requests: { 'req-1': { request_id: 'req-1', status } } } as CoreAppSnapshot
     expect(mergeResolvedRequestStates(current, incoming)).toBeNull()
   })
 })

@@ -151,3 +151,19 @@ async def test_clone_with_work_root_shares_state_store(tmp_path: Path) -> None:
     assert clone.work_root == other
     assert clone.state_store is store
     assert clone.agent_presets is runner.agent_presets
+
+
+async def test_runner_wraps_a_callable_parent_event_sink(tmp_path: Path) -> None:
+    from lamtools_core.event import CoreEvent
+
+    runner, _ = await _runner(tmp_path)
+    seen: list[CoreEvent] = []
+
+    async def sink(event: CoreEvent) -> None:
+        seen.append(event)
+
+    runner.parent_event_sink = sink
+
+    assert hasattr(runner.parent_event_sink, "emit")
+    await runner.parent_event_sink.emit(CoreEvent(name="runtime.done", category="progress"))
+    assert [event.name for event in seen] == ["runtime.done"]

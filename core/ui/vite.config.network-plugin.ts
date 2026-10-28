@@ -19,7 +19,8 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: folder,
+    // user:“测试，提交打包发布”+(先构建到隔离目录，再替换正式资源)。
+    outDir: process.env.SUNDAY_NETWORK_UI_OUTDIR || folder,
     emptyOutDir: false,
     minify: true,
     lib: {

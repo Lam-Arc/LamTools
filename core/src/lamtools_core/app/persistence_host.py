@@ -314,5 +314,14 @@ class AppPersistenceHost:
             methods=methods,
         )
 
+    # user:“该修修，相关插件也要修”+(失败收尾查询目标回合，不能只检查会话的前五百条事件)。
+    async def find_turn_event(
+        self, db: AsyncSession, *, thread_id: str, turn_id: str,
+        terminal_only: bool = False,
+    ) -> AppEventEnvelope | None:
+        return await self.event_store.find_turn_event(
+            db, thread_id=thread_id, turn_id=turn_id, terminal_only=terminal_only,
+        )
+
 
 __all__ = ["AppPersistenceHost", "RevisionConflictError"]

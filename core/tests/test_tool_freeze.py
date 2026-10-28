@@ -7,6 +7,7 @@ from lamtools_core.app.tool_freeze import (
     freeze_tool_specs,
     frozen_tool_block_message,
     frozen_tool_names,
+    prune_frozen_tools,
     reset_session_tool_freeze,
     reset_tool_freeze_cache,
     tool_freeze_epoch,
@@ -33,6 +34,12 @@ def test_first_request_freezes_and_later_changes_are_ignored() -> None:
     second = freeze_tool_specs("s1", "epoch-1", [_tool("read_file")])
     assert [tool_name(item) for item in first] == ["read_file", "write_file"]
     assert [tool_name(item) for item in second] == ["read_file", "write_file"]
+
+
+def test_removed_tool_is_pruned_but_additions_still_wait() -> None:
+    freeze_tool_specs("s1", "epoch-1", [_tool("read_file"), _tool("write_file")])
+    prune_frozen_tools("s1", "epoch-1", {"read_file", "generate_image"})
+    assert frozen_tool_names("s1", "epoch-1") == {"read_file"}
 
 
 def test_new_epoch_rebuilds() -> None:

@@ -632,6 +632,14 @@ def create_core_agent_http_app(
             observer_status=observer_supervisor.status,
         )
         app_state["operations"] = agent_operations
+        # Plugins that inject messages into a desktop session must use the live
+        # turn path, not the agent-operation turn.start: only the former writes
+        # the acceptance/user-message projection the UI renders.
+        from .live_plugin_service import LiveTurnService
+
+        plugin_context = getattr(agent_operations, "plugin_context", None)
+        if plugin_context is not None:
+            plugin_context.set_service("live_turn_service", LiveTurnService(live_context))
         app_state["plugin_system_host"] = getattr(agent_operations, "plugin_system_host", None)
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
@@ -895,13 +903,29 @@ def create_core_agent_http_app(
         import asyncio
         return {"items": await asyncio.to_thread(search)}
 
+    async def actual_reference(path: str, work_root: str | None = None) -> Path:
+        import asyncio
+        from .file_references import resolve_file_reference, AmbiguousFileReference
+        root = Path(work_root or resolved_work_root)
+        if not root.is_absolute() or not root.is_dir():
+            raise HTTPException(status_code=400, detail="项目目录不存在")
+        try:
+            return await asyncio.to_thread(resolve_file_reference, path, root)
+        except AmbiguousFileReference as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="原文件不存在") from exc
+
+    # user:“引用的地址可能不对”+(显示、读取与打开统一使用经过文件存在性检查的实际地址)。
+    @app.get("/api/core/files/resolve-reference")
+    async def resolve_reference(path: str, work_root: str | None = None) -> dict[str, str]:
+        return {"path": (await actual_reference(path, work_root)).as_posix()}
+
     @app.get("/api/core/files/read-reference")
-    async def read_file_reference(path: str) -> FileResponse:
+    async def read_file_reference(path: str, work_root: str | None = None) -> FileResponse:
         # user:“‘@文件名’实际为一个 绝对地址”+(恢复后的消息仍可按原路径预览，不依赖旧 UI 附件状态)。
         import mimetypes
-        candidate = Path(path)
-        if not candidate.is_absolute() or not candidate.is_file():
-            raise HTTPException(status_code=404, detail="原文件不存在")
+        candidate = await actual_reference(path, work_root)
         return FileResponse(candidate, media_type=mimetypes.guess_type(candidate.name)[0], filename=candidate.name)
 
     @app.post("/api/core/files/open-reference")
@@ -910,9 +934,7 @@ def create_core_agent_http_app(
         import asyncio
         from lamtools_core.attachment.files import open_with_default_app
         payload = await request.json()
-        path = Path(str(payload.get("path") or ""))
-        if not path.is_absolute() or not (path.parent.is_dir() if payload.get("reveal") else path.is_file()):
-            raise HTTPException(status_code=404, detail="原文件不存在")
+        path = await actual_reference(str(payload.get("path") or ""), payload.get("work_root"))
         try:
             await asyncio.to_thread(open_with_default_app, path.parent if payload.get("reveal") else path)
         except (OSError, ValueError) as exc:

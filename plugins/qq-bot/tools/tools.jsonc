@@ -22,27 +22,6 @@
       "handler": "tools:send_file"
     },
     {
-      "name": "qqbot_describe_image",
-      "description": "查看一张图片并返回需要的文字：本地绝对路径或 http(s) URL。适合 OCR、读图表、看截图/UI、翻译图片文字、理解照片。调用时尽量给明确的 prompt，例如“转写全部文字”“把表格提取成 CSV”。",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "image": {
-            "type": "string",
-            "description": "本地图片绝对路径，或 http(s) 图片 URL。"
-          },
-          "prompt": {
-            "type": "string",
-            "description": "给视觉模型的具体指令。"
-          }
-        },
-        "required": ["image"],
-        "additionalProperties": false
-      },
-      "permission": "auto_allow",
-      "handler": "tools:describe_image"
-    },
-    {
       "name": "qqbot_status",
       "description": "QQ 机器人的运行状态：是否已绑定、网关是否在线、当前有多少会话、模型和访问控制摘要。",
       "input_schema": {

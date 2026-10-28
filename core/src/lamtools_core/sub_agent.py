@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 import time
 import uuid
@@ -13,6 +14,18 @@ def normalize_sub_session_agent_name(agent_name: str | None) -> str:
     value = re.sub(r"[^a-z0-9_]+", "_", value)
     value = re.sub(r"_+", "_", value).strip("_")
     return value or "sub"
+
+
+class CallableEventSink:
+    """Adapt a plain event callback to the ``EventSink`` protocol."""
+
+    def __init__(self, callback: Any) -> None:
+        self._callback = callback
+
+    async def emit(self, event: CoreEvent) -> None:
+        result = self._callback(event)
+        if inspect.isawaitable(result):
+            await result
 
 
 class SubAgentEventForwardingSink:
@@ -34,7 +47,13 @@ class SubAgentEventForwardingSink:
         started_at: float | None = None,
         invocation_id: str = "",
     ) -> None:
-        self._parent_sink = parent_sink
+        self._parent_sink = (
+            CallableEventSink(parent_sink)
+            if parent_sink is not None
+            and not callable(getattr(parent_sink, "emit", None))
+            and callable(parent_sink)
+            else parent_sink
+        )
         self._parent_session_id = parent_session_id
         self._agent = agent
         self._task = task
@@ -116,4 +135,4 @@ def _is_visible_child_event(event: CoreEvent) -> bool:
     return event.name == "runtime.part"
 
 
-__all__ = ["SubAgentEventForwardingSink", "normalize_sub_session_agent_name"]
+__all__ = ["CallableEventSink", "SubAgentEventForwardingSink", "normalize_sub_session_agent_name"]

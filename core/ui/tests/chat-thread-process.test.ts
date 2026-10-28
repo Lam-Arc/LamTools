@@ -159,12 +159,16 @@ describe('ChatThread process cards', () => {
     wrapper.unmount()
   })
 
-  it('routes ordinary process states through the configurable theme icon color', () => {
+  it('mixes process row icons from theme text and gray while preserving status colors', () => {
     const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
 
-    expect(source).toContain('--theme-process-icon-color');
-    expect(source).toMatch(/\.process-card-state-icon--running\s*\{[\s\S]*?var\(--theme-process-icon-color/);
-    expect(source).toMatch(/\.process-card-state-icon--completed\s*\{[\s\S]*?var\(--theme-process-icon-color/);
+    // user:“把过程行那个图标从现在的浅紫色改成文字色与灰色混合” — 常规图标随主题文字色与中性灰混合。
+    expect(source).not.toContain('--theme-process-icon-color');
+    expect(source).toMatch(/\.process-card-state-icon--running\s*\{[\s\S]*?color-mix\(in srgb, var\(--theme-main-text, #fff\) 50%, gray\)/);
+    expect(source).toMatch(/\.process-card-state-icon--completed\s*\{[\s\S]*?color-mix\(in srgb, var\(--theme-main-text, #fff\) 50%, gray\)/);
+    const layout = readFileSync(resolve(__dirname, '../src/styles/layout.css'), 'utf8');
+    expect(layout).not.toContain('--theme-process-icon-color');
+    expect(layout).toContain('color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray)');
     expect(source).toMatch(/\.process-card-state-icon--pending\s*\{[\s\S]*?var\(--orange\)/);
     expect(source).toMatch(/\.process-card-state-icon--error[\s\S]*?var\(--red\)/);
   });

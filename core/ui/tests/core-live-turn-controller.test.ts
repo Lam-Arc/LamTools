@@ -1,3 +1,4 @@
+// user:“测试，提交打包发布”+(补齐测试替身的暂停和终止接口，保持正式控制契约)。
 import { ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { useCoreLiveTurnController } from '../src/composables'
@@ -9,6 +10,7 @@ describe('useCoreLiveTurnController', () => {
     const connectedThreadId = ref('')
     const connectionState = ref<'connecting' | 'open' | 'closed' | 'error'>('closed')
     const controller = useCoreLiveTurnController({
+      pauseTurn: async () => undefined, terminateTurn: async () => undefined,
       activeThreadId,
       connectedThreadId,
       connectionState,
@@ -43,6 +45,7 @@ describe('useCoreLiveTurnController', () => {
   it('stops an already connected active turn without reconnecting', async () => {
     const calls: string[] = []
     const controller = useCoreLiveTurnController({
+      pauseTurn: async () => undefined, terminateTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       activeTurnId: ref('thread-1:turn:active'),
       connectedThreadId: ref('thread-1'),
@@ -66,6 +69,7 @@ describe('useCoreLiveTurnController', () => {
   it('starts an explicitly captured thread without rereading the active thread', async () => {
     const calls: string[] = []
     const controller = useCoreLiveTurnController({
+      pauseTurn: async () => undefined, terminateTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-b'),
       connectedThreadId: ref('thread-a'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),

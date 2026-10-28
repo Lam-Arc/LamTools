@@ -11,7 +11,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from functools import wraps
 from typing import Any, Awaitable, Callable
+
+from lamtools_core.async_tasks import finish_on_cancel
 
 from .model import (
     ControlIntent,
@@ -37,6 +40,49 @@ class TurnHooks:
     reopen_interactions: Callable[[Turn, list[Interaction]], Awaitable[None]] | None = None
 
 
+def _atomic_control(operation):
+    # user:“该修修，相关插件也要修”+(控制操作完整提交后才启动外部动作，避免半提交状态和事务内运行模型)。
+    @wraps(operation)
+    async def execute(self, *args, **kwargs):
+        pending_hooks = []
+
+        def defer(hook):
+            if hook is None:
+                return None
+
+            async def record(*hook_args):
+                pending_hooks.append((hook, hook_args))
+
+            return record
+
+        async def write(store):
+            # A lock-contention retry reruns this callback. Only hooks from
+            # the transaction that eventually commits may be activated.
+            pending_hooks.clear()
+            # A new scope shares the transaction's store, never the caller's
+            # mutable store. Concurrent operations cannot inherit this session.
+            scoped = TurnCoordinator(store, hooks=TurnHooks(
+                pause_run=defer(self.hooks.pause_run),
+                cancel_run=defer(self.hooks.cancel_run),
+                start_run=defer(self.hooks.start_run),
+                reopen_interactions=defer(self.hooks.reopen_interactions),
+            ))
+            return await operation(scoped, *args, **kwargs)
+
+        turn_id = str(kwargs.get("turn_id") or (args[0] if args else ""))
+
+        async def commit_and_actuate():
+            async with self._lock(turn_id):
+                result = await self.store.transaction(write)
+                for hook, hook_args in pending_hooks:
+                    await hook(*hook_args)
+                return result
+
+        return await finish_on_cancel(commit_and_actuate(), name=f"turn-control:{turn_id}")
+
+    return execute
+
+
 @dataclass
 class TurnCoordinator:
     store: TurnStore
@@ -50,6 +96,7 @@ class TurnCoordinator:
             self._locks[turn_id] = lock
         return lock
 
+    @_atomic_control
     async def ensure_turn(
         self,
         *,
@@ -73,6 +120,7 @@ class TurnCoordinator:
             )
         )
 
+    @_atomic_control
     async def start_run(self, turn_id: str, run_id: str, *, epoch: int | None = None) -> Run | None:
         async with self._lock(turn_id):
             turn = await self.store.get_turn(turn_id)
@@ -106,6 +154,7 @@ class TurnCoordinator:
                 await self.hooks.start_run(transitioned, run)
             return run
 
+    @_atomic_control
     async def begin_resumed_run(self, turn_id: str, run_id: str) -> Run | None:
         """Start a new execution for a paused turn with caller-supplied id."""
         async with self._lock(turn_id):
@@ -137,6 +186,7 @@ class TurnCoordinator:
                 await self.hooks.start_run(transitioned, run)
             return run
 
+    @_atomic_control
     async def open_interactions(self, turn_id: str, interaction_ids: list[str]) -> Turn | None:
         async with self._lock(turn_id):
             turn = await self.store.get_turn(turn_id)
@@ -157,6 +207,7 @@ class TurnCoordinator:
             )
             return transitioned
 
+    @_atomic_control
     async def pause(self, turn_id: str, *, reason: str = "user_pause") -> Turn | None:
         async with self._lock(turn_id):
             turn = await self.store.get_turn(turn_id)
@@ -187,6 +238,7 @@ class TurnCoordinator:
                 await self.hooks.pause_run(transitioned, reason)
             return transitioned
 
+    @_atomic_control
     async def resume(self, turn_id: str) -> tuple[Turn, Run | None] | None:
         async with self._lock(turn_id):
             turn = await self.store.get_turn(turn_id)
@@ -230,6 +282,7 @@ class TurnCoordinator:
                 await self.hooks.reopen_interactions(transitioned, open_interactions)
             return transitioned, run
 
+    @_atomic_control
     async def cancel(self, turn_id: str, *, terminate: bool = False) -> Turn | None:
         async with self._lock(turn_id):
             turn = await self.store.get_turn(turn_id)
@@ -277,6 +330,7 @@ class TurnCoordinator:
                     await self.hooks.cancel_run(transitioned, terminate)
             return transitioned
 
+    @_atomic_control
     async def settle_stopped(self, turn_id: str) -> Turn | None:
         """Move a draining ``stopping`` turn to its single terminal state."""
         async with self._lock(turn_id):
@@ -292,6 +346,7 @@ class TurnCoordinator:
                 bump_epoch=True,
             )
 
+    @_atomic_control
     async def finish_run(
         self,
         turn_id: str,
@@ -330,6 +385,7 @@ class TurnCoordinator:
             )
             return transitioned
 
+    @_atomic_control
     async def force_reset(self, turn_id: str) -> Turn | None:
         async with self._lock(turn_id):
             turn = await self.store.get_turn(turn_id)

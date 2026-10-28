@@ -1,5 +1,5 @@
 import { computed, hasInjectionContext, inject, onBeforeUnmount, onMounted, provide, reactive, ref, watch, type InjectionKey, type Ref } from 'vue'
-import { arrangeLayout, canFitSplit, closePane, closeTab, createSplitState, layoutRects, newTabId, openTab, paneIds, restoreSplitState, splitPane, type SplitContent, type SplitEdge, type SplitState, type SplitTab } from './layout'
+import { arrangeLayout, canFitSplit, canJoinPanes, closePane, closeTab, createSplitState, joinPanes, newTabId, openTab, paneIds, restoreSplitState, splitPane, swapPanes, type SplitContent, type SplitEdge, type SplitState, type SplitTab } from './layout'
 import { pluginPageKey, type PluginPageEntry, type PluginPageScope } from '@/plugins/pages'
 export type CloseGuard = (proceed: () => void) => void
 export type SplitWorkspaceController = ReturnType<typeof useSplitWorkspace>
@@ -40,17 +40,6 @@ export function useSplitWorkspace(storageKey: Ref<string>, workRoot?: Ref<string
   // user:“通过拖动拉起，而不是点击按钮。就类似 blender”+(拖动时把指针算出的分隔比例一次带进布局，再按最小尺寸校正显示)。
   const splitAt = (target: string, edge: SplitEdge, ratio?: number) => canSplit(target, edge) ? splitPane(state, target, edge, ratio) : null
   const toggle = () => { if (!Object.keys(state.panes).length) splitPane(state, 'main', 'right'); else state.hidden = !state.hidden }
-  // user:“点一下这个分屏键，自动在右边起一个分屏...分屏键里面不需要有任何东西”+(标题栏入口只向右分屏；已收起时恢复原布局，不弹菜单)。
-  const splitRight = () => {
-    if (state.hidden) { toggle(); return null }
-    let target = state.focused || state.activePane
-    if (!state.focused && bounds.value.width) {
-      const rects = layoutRects(state.tree, { x: 0, y: 0, ...bounds.value }).panes
-      let right = -Infinity
-      for (const [id, rect] of Object.entries(rects)) if (rect.x + rect.width >= right) { right = rect.x + rect.width; target = id }
-    }
-    return splitAt(target, 'right')
-  }
   const controller = {
     state, tabs,
     canSplit,
@@ -63,13 +52,15 @@ export function useSplitWorkspace(storageKey: Ref<string>, workRoot?: Ref<string
         : add('plugin', pluginPageKey(page.plugin, page.id), page.title, target)
     },
     splitAt,
-    splitRight,
     toggle,
     split(target: string, edge: SplitEdge) { return splitAt(target, edge) },
     closeTab(pane: string, tab: SplitTab) { guardTabs([tab], () => closeTab(state, pane, tab.id)) },
     closePane(pane: string) { guardTabs(state.panes[pane]?.tabs || [], () => closePane(state, pane)) },
     registerGuard(id: string, guard: CloseGuard) { guards.set(id, guard); return () => { if (guards.get(id) === guard) guards.delete(id) } },
     preset(preset: Parameters<typeof arrangeLayout>[1]) { arrangeLayout(state, preset) },
+    // user:“该对齐的就全部都去对齐”“我要体验一致化”+(角拖合并与边框合并/交换和 Blender 共用一套布局动作)。
+    join(source: string, target: string) { return canJoinPanes(state.tree, source, target) ? joinPanes(state, source, target) : false },
+    swap(a: string, b: string) { return swapPanes(state, a, b) },
     focus(pane: string) { state.focused = state.focused === pane ? null : pane },
     activate(pane: string, tab?: string) { state.activePane = pane; if (tab && state.panes[pane]) state.panes[pane].activeTab = tab },
     show(pane: string) { if (paneIds(state.tree).includes(pane)) { state.hidden = false; state.activePane = pane } },

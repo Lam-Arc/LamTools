@@ -19,7 +19,8 @@ export interface CoreResourceSummary {
 }
 
 export function buildCoreResourceSummary(
-  messages: Array<Pick<CoreMessage, 'metadata' | 'id'> & Partial<Pick<CoreMessage, 'parts'>>>,
+  // user:“测试，提交打包发布”+(资源汇总只读取消息身份和元数据，兼容服务端投影与界面消息的不同正文结构)。
+  messages: Array<Pick<CoreMessage, 'metadata' | 'id'> & { parts?: unknown[] }>,
   modelContextWindow?: number | null,
 ): CoreResourceSummary | null {
   // Context and provider usage are separate records. Both are attached to

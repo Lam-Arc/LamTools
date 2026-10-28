@@ -167,6 +167,8 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     return await (await ensureRpcClient()).request(method, params, timeoutMs)
   }
 
+  // user:“做吧”+(正式消息只确认同一聊天、同一提交，不能由任意用户消息撤下占位)。
+  let onSubmissionEvent: ((event: CoreAppEvent) => void) | undefined
   let sharedClient: CoreAppServerClient | null = null
   let sharedCallbacks: {
     onEvent: (event: CoreAppEvent) => void
@@ -214,8 +216,14 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   const runtimeController = createCoreAppServerRuntimeController(runtime, {
     hydrateSnapshot,
     onSessionCreated: () => { void refreshSessions() },
+    onResponseEvent: (event) => onSubmissionEvent?.(event),
     onSessionUpdated: () => { void refreshSessions() },
-    createClient: async ({ onEvent, onSnapshot, onSyncChange, onConnectionState }) => {
+    createClient: async ({ onEvent: receiveEvent, onSnapshot, onSyncChange, onConnectionState }) => {
+      const onEvent = (event: CoreAppEvent) => {
+        lastEvent.value = event
+        receiveEvent(event)
+        onSubmissionEvent?.(event)
+      }
       if (options.clientFactory) {
         return await options.clientFactory.createClient({
           transport: options.transport,
@@ -440,7 +448,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     activeTurnId,
     resumableTurnId,
     sessionPaused,
-    resumeTurn: (threadId, turnId, input) => runtimeController.resumeTurn(threadId, turnId, input),
+    resumeTurn: (threadId, turnId, input, clientMessageId) => runtimeController.resumeTurn(threadId, turnId, input, clientMessageId),
     interruptibleSubAgents: computed(() => sessionActivity.value.interruptibleSubAgentNames),
     resumableSubAgents: computed(() => sessionActivity.value.resumableSubAgentNames),
     subAgentControl: computed(() => runtime.client?.capabilities?.sub_agent_control === true),
@@ -465,8 +473,8 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     pauseTurn: (threadId, turnId) => runtimeController.pauseTurn(threadId, turnId),
     terminateTurn: (threadId, turnId) => runtimeController.terminateTurn(threadId, turnId),
     forceResetTurn: (threadId, turnId) => runtimeController.forceResetTurn(threadId, turnId),
-    steerTurn: async (threadId, turnId, input) => {
-      const outcome = await runtimeController.steerTurn(threadId, turnId, input)
+    steerTurn: async (threadId, turnId, input, clientMessageId) => {
+      const outcome = await runtimeController.steerTurn(threadId, turnId, input, clientMessageId)
       if (outcome.applied) {
         pendingGuidance.track(threadId, turnId, input)
         return { ok: true }
@@ -487,10 +495,26 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       return true
     },
     turnOptions: () => turnOptionsProvider(),
+    canSubmit: () => composerCallbacks.canSubmit?.() !== false,
     onSubmitStart: (submittedText: string) => composerCallbacks.onSubmitStart?.(submittedText),
     onSubmitSettled: () => composerCallbacks.onSubmitSettled?.(),
-    clearComposer: () => { composerText.value = '' },
-    clearAttachments: () => { attachments.value = [] },
+    // user:“做吧”+(只清理被服务端接收的原始草稿和附件，保护等待期间的新输入)。
+    clearComposer: (expectedText) => { if (composerText.value.trim() === expectedText) composerText.value = '' },
+    clearAttachments: (submitted = []) => {
+      const sent = new Set(submitted.map(item => JSON.stringify(item)))
+      attachments.value = attachments.value.filter(item => !sent.has(JSON.stringify(item)))
+    },
+    restoreAttachments: (items) => {
+      attachments.value = items
+      composerCallbacks.onRestoreAttachments?.(items)
+    },
+    onSubmissionAccepted: (submission, rawText) => {
+      if (activeSessionId.value !== submission.threadId
+        && readComposerDraft(composerDraftStorage, submission.threadId) === rawText) {
+        writeComposerDraft(composerDraftStorage, submission.threadId, '')
+      }
+      composerCallbacks.onSubmissionAccepted?.(submission)
+    },
     setStatusText: (text) => composerCallbacks.onStatusText?.(text),
     onError: (error) => composerCallbacks.onError?.(String(error)),
     onTurnStarted: () => {
@@ -506,6 +530,27 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       sendFailed: '发送失败',
     },
   })
+
+  onSubmissionEvent = (event) => {
+    if (!event.client_message_id || !['turn/accepted', 'turn/started', 'turn/steered', 'queue/itemAccepted', 'item/started'].includes(event.method)) return
+    liveComposerController.acknowledgeSubmission(
+      event.thread_id, event.client_message_id,
+      (event.method === 'item/started' && event.payload?.type === 'userMessage')
+        || event.method === 'queue/itemAccepted' || event.method === 'turn/steered',
+      event.turn_id || undefined,
+    )
+  }
+  watch([snapshot, liveComposerController.submissions], () => {
+    const state = snapshot.value
+    if (!state) return
+    for (const submission of liveComposerController.submissions.value) {
+      if (submission.intent !== 'start' || submission.threadId !== state.thread_id || !submission.turnId || submission.state === 'failed') continue
+      if (Object.values(state.items || {}).some(item => item.type === 'userMessage' && item.turn_id === submission.turnId)) {
+        liveComposerController.acknowledgeSubmission(submission.threadId, submission.id, true)
+      }
+    }
+  })
+
 
   const approvalController = useCoreApprovalController({
     messages: projectionController.messages,

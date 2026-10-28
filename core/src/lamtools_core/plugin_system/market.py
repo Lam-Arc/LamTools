@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import tempfile
 import httpx
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -20,7 +21,7 @@ DESCRIPTIONS = {
 
 
 def validate_catalog(data):
-    if data.get("format") != 1 or not isinstance(data.get("plugins"), list):
+    if not isinstance(data, dict) or data.get("format") != 1 or not isinstance(data.get("plugins"), list):
         raise ValueError("插件市场目录格式无效")
     seen = set()
     for row in data["plugins"]:
@@ -32,6 +33,9 @@ def validate_catalog(data):
             raise ValueError("插件安装包必须来自官方插件 GitHub Release")
         if not re.fullmatch(r"[0-9a-f]{64}", str(row.get("sha256") or "")) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", str(row.get("version") or "")):
             raise ValueError("插件版本或摘要无效")
+        # user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(拒绝异常包大小，避免把无效发布项显示为可安装)。
+        if type(row.get("size")) is not int or not 0 < row["size"] <= 256 * 1024 * 1024:
+            raise ValueError("插件安装包大小无效")
     return data
 
 
@@ -58,10 +62,6 @@ async def list_market(host):
     cache = Path(host.state.path).parent / "plugin-market-cache.json"
     try:
         data = await asyncio.to_thread(load_catalog)
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        temporary = cache.with_suffix(".tmp")
-        temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(cache)
     except Exception as exc:
         error = str(exc)
         source = "cache"
@@ -69,6 +69,21 @@ async def list_market(host):
             data = validate_catalog(json.loads(cache.read_text(encoding="utf-8")))
         except (OSError, ValueError):
             data = {"plugins": []}
+            source = "unavailable"
+    else:
+        # user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(缓存是尽力保存；磁盘失败不能丢弃新目录，并发请求使用各自临时文件)。
+        temporary = None
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=cache.parent, prefix="plugin-market-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(data, stream, ensure_ascii=False)
+            temporary.replace(cache)
+        except OSError:
+            pass
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     releases = {row["id"]: row for row in data["plugins"]}
     items = []
     for name, description in DESCRIPTIONS.items():
@@ -92,8 +107,12 @@ async def install_market_plugin(host, name):
     row = next((row for row in data["plugins"] if row["id"] == name), None)
     if row is None:
         raise ValueError("暂时无法获取该插件的发布包，请刷新后重试")
+    # user:“注意一下插件市场，如果没有或者没做好的话给它做好”+(旧目录不得降级用户已经安装的较新版本)。
+    installed = host.get(name)
+    if installed and compare_versions(row["version"], installed.version) < 0:
+        raise ValueError("已安装的插件版本更新，无需降级；请刷新市场目录")
     return await install_or_update(host, {"source": "url", "url": row.get("api_url") or row["url"], "fallback_url": row["url"] if row.get("api_url") else "", "sha256": row["sha256"],
-                                         "expected_name": name, "expected_version": row["version"]}, update=host.get(name) is not None)
+                                         "expected_name": name, "expected_version": row["version"], "no_downgrade": True}, update=installed is not None)
 
 
 def register_market_operations(catalog, host):

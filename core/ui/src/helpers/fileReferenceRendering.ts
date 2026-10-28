@@ -2,6 +2,9 @@ import { absoluteReference } from './referenceActions'
 import { normalizeWebLink } from './webLinks'
 
 const FILE_END = /\.(?:md|txt|pdf|png|jpe?g|webp|gif|svg|xlsx?|csv|pptx?|docx?|zip|jsonc?|ya?ml|toml|py|rs|ts|tsx|js|jsx|vue|html?|css|log|mp[34]|wav|webm)(?::\d+(?::\d+)?)?$/i
+export function isLocalFileReference(path: string): boolean {
+  return FILE_END.test(path) && !normalizeWebLink(path) && (!/^[a-z][\w+.-]*:/i.test(path) || /^(?:[A-Za-z]:[\\/]|workspace:\/\/|file:\/\/)/i.test(path))
+}
 export function renderFileReferenceNodes(root: HTMLElement, workRoot: string): void {
   function decorate(anchor: HTMLAnchorElement, raw: string) {
     const path = absoluteReference(raw.replace(/:\d+(?::\d+)?$/, ''), workRoot)

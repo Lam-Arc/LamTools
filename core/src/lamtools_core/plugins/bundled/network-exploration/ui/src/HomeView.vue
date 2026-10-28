@@ -1,6 +1,6 @@
 <script setup>
 // user:“首页重做，放三个块和一个 bar，bar 写数值，三个块分别是加速代理下载的快捷操作”+(首页只保留实时数值条与三个可直接操作的快捷块)。
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import {
   Power,
   ArrowUpRight,
@@ -13,17 +13,10 @@ import {
   Download,
   Zap,
 } from "lucide-vue-next";
-import {
-  bytes,
-  filenameFromUrl,
-  nodeLabel,
-  primaryNode,
-  rate,
-} from "./session.mjs";
+import { bytes, nodeLabel, primaryNode, rate } from "./session.mjs";
 const props = defineProps({ session: Object });
 const emit = defineEmits(["navigate"]);
 const draft = ref("");
-onMounted(() => props.session.loadTasks());
 const active = computed(() => Boolean(props.session.accelerated));
 const download = computed(() =>
   Number(props.session.state?.traffic?.download || 0),
@@ -36,9 +29,7 @@ const total = computed(
     Number(props.session.state?.traffic?.received || 0) +
     Number(props.session.state?.traffic?.sent || 0),
 );
-const saved = computed(() =>
-  Boolean(props.session.state?.proxy?.config_saved),
-);
+const saved = computed(() => Boolean(props.session.state?.proxy?.config_saved));
 const proxyRunning = computed(() =>
   Boolean(props.session.state?.proxy?.running),
 );
@@ -101,16 +92,8 @@ async function toggleProxy() {
 }
 async function startDownload() {
   const url = draft.value.trim();
-  const filename = filenameFromUrl(url);
-  if (!filename) {
-    props.session.error = "请输入有效的下载链接";
-    return;
-  }
-  const result = await props.session.run(
-    "transfer.add",
-    { url, filename, connections: 8 },
-    "已开始下载",
-  );
+  // user:“修”+(快捷入口只提交链接，文件名、默认参数与线路由后台决定)。
+  const result = await props.session.run("transfer.add", { url }, "已开始下载");
   if (!result) return;
   draft.value = "";
   await props.session.loadTasks();

@@ -89,8 +89,14 @@ fn default_selector_group(proxies: &Value) -> Result<String, String> {
 }
 fn rank_candidates(mut rows: Vec<Value>) -> Vec<Value> {
     rows.sort_by(|a, b| {
-        let left = a["delay"].as_u64().filter(|value| *value > 0).unwrap_or(u64::MAX);
-        let right = b["delay"].as_u64().filter(|value| *value > 0).unwrap_or(u64::MAX);
+        let left = a["delay"]
+            .as_u64()
+            .filter(|value| *value > 0)
+            .unwrap_or(u64::MAX);
+        let right = b["delay"]
+            .as_u64()
+            .filter(|value| *value > 0)
+            .unwrap_or(u64::MAX);
         left.cmp(&right).then_with(|| {
             a["name"]
                 .as_str()
@@ -132,11 +138,15 @@ async fn delay_probe(
         Ok(response) if response.status().is_success() => {
             let value: Value = response.json().await.unwrap_or_default();
             match value["delay"].as_u64().filter(|delay| *delay > 0) {
-                Some(delay) => json!({"name":name,"delay":delay,"ms":started.elapsed().as_millis() as u64}),
+                Some(delay) => {
+                    json!({"name":name,"delay":delay,"ms":started.elapsed().as_millis() as u64})
+                }
                 None => json!({"name":name,"error":"测速未返回延迟"}),
             }
         }
-        Ok(response) => json!({"name":name,"error":format!("节点返回 {}",response.status().as_u16())}),
+        Ok(response) => {
+            json!({"name":name,"error":format!("节点返回 {}",response.status().as_u16())})
+        }
         Err(_) => json!({"name":name,"error":"测速请求失败或超时"}),
     }
 }
@@ -211,7 +221,9 @@ impl Engines {
             Ok(traffic) => {
                 json!({"running":true,"traffic":traffic,"traffic_source":"mihomo_only","controller":"127.0.0.1","mode":"managed","started_at":started,"config_saved":config_saved})
             }
-            Err(_) => json!({"running":true,"healthy":false,"traffic_source":"mihomo_only","started_at":started,"config_saved":config_saved}),
+            Err(_) => {
+                json!({"running":true,"healthy":false,"traffic_source":"mihomo_only","started_at":started,"config_saved":config_saved})
+            }
         }
     }
     async fn proxy_request(&self, method: &str, path: &str, body: Option<Value>) -> Reply {
@@ -448,7 +460,8 @@ impl Engines {
         let mut selected = Value::Null;
         if let Some((name, _)) = fastest.clone() {
             if select {
-                self.proxy_select(json!({"group":group,"name":name})).await?;
+                self.proxy_select(json!({"group":group,"name":name}))
+                    .await?;
                 selected = json!(name);
             }
         }
@@ -491,6 +504,15 @@ impl Engines {
         let binary = self.binary("aria2c")?;
         self.aria = Some(
             command(binary)
+                // user:“修”+(下载线路由统一服务明确选择，不受启动进程的环境代理干扰)。
+                .env_remove("http_proxy")
+                .env_remove("https_proxy")
+                .env_remove("all_proxy")
+                .env_remove("no_proxy")
+                .env_remove("HTTP_PROXY")
+                .env_remove("HTTPS_PROXY")
+                .env_remove("ALL_PROXY")
+                .env_remove("NO_PROXY")
                 .args([
                     "--enable-rpc=true",
                     "--rpc-listen-all=false",
@@ -589,14 +611,71 @@ impl Engines {
 
 // user:“点一下‘一键加速’，然后就把 GitHub等常用的那些网站全部都加速了”+(内置常用站点规则，启动代理时排在最前面，不需要用户自己写规则)。
 const COMMON_ACCELERATION: &[&[&str]] = &[
-    &["github.com", "github.dev", "api.github.com", "github.githubassets.com", "githubusercontent.com", "githubapp.com", "github.io", "education.github.com", "resources.github.com", "uploads.github.com", "archivalprogram.github.com", "hub.docker.com", "greasyfork.org"],
-    &["steamcommunity.com", "store.steampowered.com", "steamstatic.com", "steamcdn-a.akamaihd.net", "media.steampowered.com"],
-    &["twitch.tv", "irc-ws.chat.twitch.tv", "passport.twitch.tv", "assets.twitch.tv", "clips-media-assets2.twitch.tv", "id.twitch.tv", "pubsub-edge.twitch.tv", "panels.twitch.tv", "supervisor-ext.twitch.tv"],
+    &[
+        "github.com",
+        "github.dev",
+        "api.github.com",
+        "github.githubassets.com",
+        "githubusercontent.com",
+        "githubapp.com",
+        "github.io",
+        "education.github.com",
+        "resources.github.com",
+        "uploads.github.com",
+        "archivalprogram.github.com",
+        "hub.docker.com",
+        "greasyfork.org",
+    ],
+    &[
+        "steamcommunity.com",
+        "store.steampowered.com",
+        "steamstatic.com",
+        "steamcdn-a.akamaihd.net",
+        "media.steampowered.com",
+    ],
+    &[
+        "twitch.tv",
+        "irc-ws.chat.twitch.tv",
+        "passport.twitch.tv",
+        "assets.twitch.tv",
+        "clips-media-assets2.twitch.tv",
+        "id.twitch.tv",
+        "pubsub-edge.twitch.tv",
+        "panels.twitch.tv",
+        "supervisor-ext.twitch.tv",
+    ],
     &["spotify.com", "open.spotify.com"],
-    &["google.com", "www.google.com", "translate.google.cn", "translate.googleapis.com", "fonts.gstatic.com", "fonts.googleapis.com", "themes.googleusercontent.com", "ajax.googleapis.com"],
+    &[
+        "google.com",
+        "www.google.com",
+        "translate.google.cn",
+        "translate.googleapis.com",
+        "fonts.gstatic.com",
+        "fonts.googleapis.com",
+        "themes.googleusercontent.com",
+        "ajax.googleapis.com",
+    ],
     &["huggingface.co"],
-    &["dropbox.com", "dl.dropboxusercontent.com", "mega.co.nz", "mega.io", "mega.nz", "onedrive.live.com", "storage.live.com"],
-    &["nexusmods.com", "mod.io", "binarylage.mod.io", "files.nexus-cdn.com", "fandom.com", "pinterest.com", "artstation.com", "imgur.com", "vercel.app"],
+    &[
+        "dropbox.com",
+        "dl.dropboxusercontent.com",
+        "mega.co.nz",
+        "mega.io",
+        "mega.nz",
+        "onedrive.live.com",
+        "storage.live.com",
+    ],
+    &[
+        "nexusmods.com",
+        "mod.io",
+        "binarylage.mod.io",
+        "files.nexus-cdn.com",
+        "fandom.com",
+        "pinterest.com",
+        "artstation.com",
+        "imgur.com",
+        "vercel.app",
+    ],
 ];
 // user:“本机加速层 你学习一下呗…它该抄就抄”+(照 FastGithub/Watt Toolkit 的域名匹配方式：精确域名或子域名)。
 pub fn is_common_acceleration_host(host: &str) -> bool {
@@ -633,8 +712,10 @@ fn acceleration_target(config: &serde_yaml::Value) -> Option<String> {
                 .get("type")
                 .and_then(serde_yaml::Value::as_str)
                 .unwrap_or("");
-            if matches!(kind, "select" | "url-test" | "fallback" | "load-balance" | "relay")
-                && usable(name)
+            if matches!(
+                kind,
+                "select" | "url-test" | "fallback" | "load-balance" | "relay"
+            ) && usable(name)
             {
                 return Some(name.to_string());
             }
@@ -683,10 +764,7 @@ fn apply_common_acceleration(config: &mut serde_yaml::Value) -> Result<(), Strin
         }
         None => {
             config["rules"] = serde_yaml::Value::Sequence(
-                preset
-                    .into_iter()
-                    .map(serde_yaml::Value::String)
-                    .collect(),
+                preset.into_iter().map(serde_yaml::Value::String).collect(),
             );
         }
     }
@@ -711,10 +789,7 @@ fn subscription_proxy(server: &str) -> Option<String> {
             }
         })?
         .trim();
-    if candidate.is_empty()
-        || candidate == "127.0.0.1:17890"
-        || candidate == "localhost:17890"
-    {
+    if candidate.is_empty() || candidate == "127.0.0.1:17890" || candidate == "localhost:17890" {
         return None;
     }
     Some(candidate.to_string())
@@ -823,7 +898,43 @@ fn sanitize_config(raw: &str, port: u16, secret: &str) -> Result<String, String>
 }
 
 impl Controller {
+    // user:“修”+(加速启停时同步自动下载任务的端口，不能让重试请求继续访问已关闭的服务)。
+    pub async fn reroute_auto_downloads(&mut self, port: Option<u16>) -> Result<(), String> {
+        let tasks = self.engines.downloads().await?["tasks"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let (_, proxy_url) = crate::transfer::route(&json!({}), port, false)?;
+        for task in tasks {
+            if !matches!(
+                task["status"].as_str(),
+                Some("active" | "waiting" | "paused")
+            ) {
+                continue;
+            }
+            if self
+                .saved
+                .downloads
+                .iter()
+                .any(|row| row["gid"] == task["gid"] && row["route"] == "auto")
+            {
+                self.engines
+                    .aria_rpc(
+                        "changeOption",
+                        vec![task["gid"].clone(), json!({"all-proxy":proxy_url})],
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
     pub async fn add_download(&mut self, p: Value) -> Reply {
+        let p = crate::transfer::normalize(p)?;
+        let (route, proxy_url) = crate::transfer::route(
+            &p,
+            (self.accelerator.port > 0).then_some(self.accelerator.port),
+            self.engines.proxy.is_some(),
+        )?;
         let url = p["url"].as_str().ok_or("缺少下载地址")?;
         let parsed = http_url(url)?;
         let name = p["filename"]
@@ -903,14 +1014,9 @@ impl Controller {
         if !hash.is_empty() {
             options["checksum"] = json!(format!("sha-256={hash}"));
         }
-        if p["proxy"].as_bool() == Some(true) {
-            if self.engines.proxy.is_none() {
-                return Err("请先启动代理".into());
-            }
-            options["all-proxy"] = json!("http://127.0.0.1:17890");
-        }
+        options["all-proxy"] = json!(proxy_url);
         let cipher = protect(&json!({"url":url,"options":options}).to_string()).await?;
-        let record = json!({"gid":gid.clone(),"filename":name,"directory":dir.clone(),"host":parsed.host_str(),"sha256":hash,"protected_request":cipher,"status":"waiting","created":chrono::Utc::now().to_rfc3339()});
+        let record = json!({"gid":gid.clone(),"filename":name,"directory":dir.clone(),"host":parsed.host_str(),"route":route,"sha256":hash,"protected_request":cipher,"status":"waiting","created":chrono::Utc::now().to_rfc3339()});
         self.saved.downloads.push(record);
         self.persist()?;
         self.engines.start_aria().await?;
@@ -919,7 +1025,7 @@ impl Controller {
             .await?;
         self.event("transfer", "新增下载任务");
         self.persist()?;
-        Ok(json!({"gid":gid,"filename":name,"directory":dir}))
+        Ok(json!({"gid":gid,"filename":name,"directory":dir,"route":route,"status":"waiting"}))
     }
     pub async fn recover_downloads(&mut self) -> Reply {
         let saved = self.saved.downloads.clone();
@@ -946,6 +1052,18 @@ impl Controller {
             .await?;
             let request: Value = serde_json::from_str(&raw).map_err(|_| "下载记录损坏")?;
             let mut options = request["options"].clone();
+            // user:“修”+(重启后根据当前服务重新选择线路，不复用已经失效的随机端口)。
+            let routing = if row.get("route").is_some() {
+                json!({"route":row["route"]})
+            } else {
+                json!({"proxy":options["all-proxy"] == "http://127.0.0.1:17890"})
+            };
+            let (_, proxy_url) = crate::transfer::route(
+                &routing,
+                (self.accelerator.port > 0).then_some(self.accelerator.port),
+                true,
+            )?;
+            options["all-proxy"] = json!(proxy_url);
             options["pause"] = json!("true");
             self.engines
                 .aria_rpc("addUri", vec![json!([request["url"]]), options])
@@ -982,7 +1100,24 @@ impl Controller {
         if changed {
             self.persist()?;
         }
-        let mut tasks = active;
+        // user:“修”+(状态接口与列表接口返回同一份包含文件信息的任务快照)。
+        let mut tasks: Vec<Value> = active
+            .into_iter()
+            .map(|task| {
+                let mut merged = self
+                    .saved
+                    .downloads
+                    .iter()
+                    .find(|row| row["gid"] == task["gid"])
+                    .cloned()
+                    .unwrap_or(json!({}));
+                merged.as_object_mut().unwrap().remove("protected_request");
+                if let Some(fields) = task.as_object() {
+                    merged.as_object_mut().unwrap().extend(fields.clone());
+                }
+                merged
+            })
+            .collect();
         for row in &self.saved.downloads {
             if !tasks.iter().any(|t| t["gid"] == row["gid"]) {
                 let mut visible = row.clone();
@@ -999,6 +1134,31 @@ impl Controller {
         Ok(json!({"tasks":tasks,"running":result["running"]}))
     }
     pub async fn transfer_action(&mut self, p: Value) -> Reply {
+        if p["action"] == "resume" {
+            // user:“修”+(继续任务时重新选择当前端口；明确选代理但代理未启动时给出一致错误)。
+            if let Some(row) = self
+                .saved
+                .downloads
+                .iter()
+                .find(|row| row["gid"] == p["gid"])
+            {
+                let routing = row
+                    .get("route")
+                    .map(|mode| json!({"route":mode}))
+                    .unwrap_or(json!({}));
+                let (_, proxy_url) = crate::transfer::route(
+                    &routing,
+                    (self.accelerator.port > 0).then_some(self.accelerator.port),
+                    self.engines.proxy.is_some(),
+                )?;
+                self.engines
+                    .aria_rpc(
+                        "changeOption",
+                        vec![p["gid"].clone(), json!({"all-proxy":proxy_url})],
+                    )
+                    .await?;
+            }
+        }
         let result = self.engines.download_action(p.clone()).await?;
         if p["action"] == "cancel" {
             if let Some(row) = self
@@ -1097,10 +1257,7 @@ mod tests {
         .unwrap();
         apply_common_acceleration(&mut config).unwrap();
         let rules = config["rules"].as_sequence().unwrap();
-        assert_eq!(
-            rules[0].as_str(),
-            Some("DOMAIN-SUFFIX,github.com,节点选择")
-        );
+        assert_eq!(rules[0].as_str(), Some("DOMAIN-SUFFIX,github.com,节点选择"));
         assert_eq!(rules.last().unwrap().as_str(), Some("MATCH,DIRECT"));
         assert!(rules
             .iter()
@@ -1120,7 +1277,10 @@ mod tests {
         url.path_segments_mut().unwrap().push("GLOBAL");
         assert_eq!(url.path(), "/proxies/GLOBAL");
         let mut url = reqwest::Url::parse("http://localhost/proxies").unwrap();
-        url.path_segments_mut().unwrap().push("US-CF-BOOT").push("delay");
+        url.path_segments_mut()
+            .unwrap()
+            .push("US-CF-BOOT")
+            .push("delay");
         assert_eq!(url.path(), "/proxies/US-CF-BOOT/delay");
     }
     #[test]

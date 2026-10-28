@@ -67,6 +67,7 @@ interface ProjectionMessageCacheEntry {
 
 export interface CoreWorkbenchProjectionCache {
   clear(): void
+  chatSelection: { snapshot: CoreAppSnapshot; messages: CoreAppServerChatMessage[] } | null
   partsByItemId: Map<string, ProjectionPartCacheEntry>
   messagesById: Map<string, ProjectionMessageCacheEntry>
   /** Expanded CoreAppItem cache keyed by the underlying CoreRuntimeItem reference. */
@@ -81,12 +82,14 @@ export interface CoreWorkbenchProjectionCache {
 export function createCoreWorkbenchProjectionCache(): CoreWorkbenchProjectionCache {
   return {
     clear() {
+      this.chatSelection = null
       this.partsByItemId.clear()
       this.messagesById.clear()
       this.itemsApp.clear()
       this.subAgentChildren.clear()
       this.shallowByContent.clear()
     },
+    chatSelection: null,
     partsByItemId: new Map<string, ProjectionPartCacheEntry>(),
     messagesById: new Map<string, ProjectionMessageCacheEntry>(),
     itemsApp: new Map<CoreRuntimeItem, CoreAppItem>(),
@@ -126,7 +129,15 @@ export function selectCoreWorkbenchMessagesWindow(
   options: CoreWorkbenchMessageOptions = {},
   cache?: CoreWorkbenchProjectionCache | null,
 ): CoreWorkbenchMessageProjection {
-  const sourceMessages = selectChatMessages(snapshot, cache?.itemsApp, cache?.subAgentChildren)
+  // user:“每一次在发送请求前，会卡”“修，不要出错”+(同一不可变快照的历史整理
+  // 只执行一次；显示状态或分页变化仍重新投影，新快照与 clear() 必须失效)。
+  // Runtime events replace snapshots. Retain only the latest selection so older
+  // snapshots can be collected; do not cache UI options such as live/approval.
+  let sourceMessages = cache?.chatSelection?.snapshot === snapshot ? cache.chatSelection.messages : undefined
+  if (!sourceMessages) {
+    sourceMessages = selectChatMessages(snapshot, cache?.itemsApp, cache?.subAgentChildren)
+    if (cache) cache.chatSelection = { snapshot, messages: sourceMessages }
+  }
   const startIndex = coreHistoryWindowStartIndex(sourceMessages, options)
   const windowLength = sourceMessages.length - startIndex
   const lastAssistantIndex = sourceMessages.findLastIndex(message => message.role === 'assistant')
@@ -313,7 +324,9 @@ function messageFingerprint(
     message.role,
     shallow.content,
     activeAssistant,
-    shallowThinkingPending === true,
+    // user:“我发消息的一瞬间也是”“修，不要出错”+(思考占位仅改变当前助手消息，
+    // 与 buildWorkbenchMessage 的实际输出一致，历史消息不能因此失去缓存)。
+    activeAssistant && shallowThinkingPending === true,
     meta.live === true,
     meta.initialWaiting === true,
     // A machine-authored row renders as a system event instead of a bubble; the
@@ -325,7 +338,8 @@ function messageFingerprint(
     meta.duration_ms,
     meta.runtime_model_id,
     message.timestamp,
-    message.attachments,
+    // user:“修，不要出错”+(附件已由下方 parts 比较覆盖；不能让每次整理产生的
+    // 新空附件数组导致所有历史用户消息失去缓存，真实附件变化仍由 part 捕获)。
     ...parts.map(part => part),
   ]
 }

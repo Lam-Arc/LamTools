@@ -81,9 +81,12 @@ textarea::placeholder {
   color: color-mix(in srgb, var(--theme-composer-text, var(--text)) 45%, transparent);
 }
 /* 输入框不做聚焦态：光标闪动即聚焦指示（select 例外——无光标，键盘用户
-   需要可见聚焦指示，audit 19 S4） */
-input:focus, textarea:focus { outline: none; }
-input:focus-visible, textarea:focus-visible { outline: none; }
+   需要可见聚焦指示，audit 19 S4）
+   user:“我说取消掉”“统一关闭掉”+(系统给可编辑区域画的黑色焦点框一律取消：
+   输入框、多行输入、CodeMirror 编辑器和 contenteditable 统一不显示焦点框)。 */
+:is(input, textarea, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .cm-editor.cm-focused, .cm-content, .cm-scroller):is(:focus, :focus-visible) {
+  outline: none;
+}
 select:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;

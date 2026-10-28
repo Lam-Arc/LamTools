@@ -29,7 +29,7 @@ from lamtools_core.runtime import (
     RuntimeTurnInput,
 )
 from lamtools_core.skills import SkillRegistry
-from lamtools_core.sub_agent import SubAgentEventForwardingSink
+from lamtools_core.sub_agent import CallableEventSink, SubAgentEventForwardingSink
 from lamtools_core.sub_agent import normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolSpec
 from lamtools_core.tool.approval_continuation import (
@@ -180,13 +180,16 @@ def _workflow_context_metadata(
 
 
 def _resolve_model_id_for_capability(model_ref: str) -> str:
-    """Resolve a model reference (model_id or display_name) to canonical model_id.
+    """Resolve a model reference to the routable model record id.
 
     The ``model`` parameter passed to ``sub_agent`` may be a display_name
-    (e.g. "Kimi-K2.6") rather than a model_id (e.g. "xopkimik26"). Capability
-    tables and config lookups key on model_id, so callers should resolve
-    display_names to model_id as early as possible and use the canonical form
-    throughout.
+    (e.g. "Kimi-K2.6") or a bare upstream model id (e.g.
+    ``deepseek-v4.1-flash``).  Provider routing and tool calling use the
+    model *record* id (``opencode-go-deepseek-v4.1-flash``), which is also
+    what the main conversation sends; returning the bare ``model_id`` here
+    made the same provider receive a different model string on the plugin
+    sub-agent path.  Fall back to the canonical model id only when the record
+    has no separate id.
     """
     ref = (model_ref or "").strip()
     if not ref or ref.lower() in ("null", "none", "undefined"):
@@ -197,19 +200,32 @@ def _resolve_model_id_for_capability(model_ref: str) -> str:
         # Exact model_id match
         model = store.get_sync(ref)
         if model is not None:
-            return model.model_id
+            return model.id or model.model_id
         # Try matching by display_name (case-insensitive)
         all_models = store.list_sync()
         ref_lower = ref.lower()
         for m in all_models:
             if (m.display_name or "").lower() == ref_lower:
-                return m.model_id
+                return m.id or m.model_id
     except Exception:
         pass
     return ref
 
 
 class KernelSubAgentRunner:
+    @property
+    def parent_event_sink(self) -> EventSink | None:
+        return self._parent_event_sink
+
+    @parent_event_sink.setter
+    def parent_event_sink(self, value: EventSink | Callable[[CoreEvent], Any] | None) -> None:
+        # Host channel runtimes and plugins often pass a plain async callback.
+        # Normalize it once so every consumer (sub-agent forwarding, supervisor)
+        # can rely on the EventSink contract.
+        if value is not None and not callable(getattr(value, "emit", None)) and callable(value):
+            value = CallableEventSink(value)
+        self._parent_event_sink = value
+
     def __init__(
         self,
         *,
@@ -896,11 +912,19 @@ class KernelSubAgentRunner:
                 ) from exc
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = self._disabled_tools()
+        has_mcp = bool(self.mcp_config_files) or self.mcp_caller is not None or bool(
+            profile_spec is not None
+            and (getattr(profile_spec, "mcp_servers", ()) or getattr(profile_spec, "mcp_tools", ()))
+        )
+        # A child without any MCP server must not advertise the generic ``mcp``
+        # tool: it has no tools to discover and the model otherwise burns
+        # rounds calling it with a plugin tool name.
+        mcp_tools_service = mcp_service if has_mcp else None
         if profile_spec is not None:
             # user:“运行档由宿主强制”+白名单以声明为准（覆盖调用方传入的
             # allowed_tools），配合 apply_profile 的 fail closed 执行拒绝。
             allowed = set(profile_spec.tools)
-            probe = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
+            probe = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_tools_service)
             full_names = {spec.name for spec in probe.tool_specs()}
             disabled_tools |= full_names - allowed
         elif allowed_tools:
@@ -910,10 +934,10 @@ class KernelSubAgentRunner:
                 # full name set is the toolbox's own spec set (audit 18 S2 —
                 # cfg.tools/allowed_tools from plugin UIs must be honored by
                 # the runner rather than only persisted in the session.
-                probe = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
+                probe = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_tools_service)
                 full_names = {spec.name for spec in probe.tool_specs()}
                 disabled_tools |= full_names - allowed
-        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_service)
+        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode, mcp_service=mcp_tools_service)
         if profile_spec is not None:
             # 宿主强制：白名单可见面 + execute 拒绝 + 审批覆盖 + 预算计数。
             from lamtools_core.plugin_system.profiles import apply_profile

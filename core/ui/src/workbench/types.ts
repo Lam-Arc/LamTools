@@ -13,6 +13,7 @@ import type { CoreCommandCatalogItem, CoreInputItem, CoreMessage, CoreSessionLis
 import type { useComposerCommandPalette } from '@/composables/useComposerCommandPalette.ts'
 import type { useCoreApprovalController } from '@/composables/useCoreApprovalController.ts'
 import type { useCoreLiveComposerController } from '@/composables/useCoreLiveComposerController.ts'
+import type { CoreComposerSubmission } from '@/composables/useCoreLiveComposerController.ts'
 import type { useCoreQueuedInputController } from '@/composables/useCoreQueuedInputController.ts'
 import type { CoreQueuedInput } from '@/appServer/workbenchProjection.ts'
 import type { ComposerDraftStorage } from '@/composer/drafts.ts'
@@ -67,6 +68,10 @@ export interface WorkbenchRuntimeOptions {
 }
 
 export interface WorkbenchComposerCallbacks {
+  canSubmit?: () => boolean
+  /** user:“做吧”+(附件清理限定为已接收提交所属的聊天与文件)。 */
+  onSubmissionAccepted?: (submission: CoreComposerSubmission) => void
+  onRestoreAttachments?: (attachments: CoreInputItem[]) => void
   onError?: (message: string) => void
   onStatusText?: (message: string) => void
   onSubmitStart?: (submittedText: string) => void

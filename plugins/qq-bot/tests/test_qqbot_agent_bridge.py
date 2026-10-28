@@ -402,3 +402,25 @@ async def test_bridge_creates_runner_in_the_plugin_working_directory(tmp_path: P
 
     assert seen["work_root"] == str(tmp_path / "bot-home")
     await bridge.dispose_all()
+
+
+def test_session_title_uses_a_stable_qq_format(tmp_path: Path) -> None:
+    from qqbot.agent_bridge import session_title
+
+    assert session_title("c2c", "9F63903D858D", "霖") == "QQ-私聊-霖"
+    assert session_title("group", "GROUP123", "群友") == "QQ-群聊-群友"
+    assert session_title("c2c", "9F63903D858D", "") == "QQ-私聊-3D858D"
+
+
+def test_status_includes_the_session_title(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path, FakeRunner([]))
+    session = bridge.get_or_create(
+        scope="c2c",
+        peer_id="9F63903D858D",
+        sender_id="9F63903D858D",
+        sender_name="霖",
+        reply_target=ReplyTarget("c2c", "9F63903D858D", "m1"),
+        sender=_noop,
+    )
+    assert session.title == "QQ-私聊-霖"
+    assert bridge.status(session)["title"] == "QQ-私聊-霖"

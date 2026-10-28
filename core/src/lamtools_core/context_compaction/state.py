@@ -29,11 +29,6 @@ async def load_compaction_history(
     compaction = metadata.get("context_compaction")
     compaction = compaction if isinstance(compaction, dict) else {}
     summary = str(compaction.get("summary") or "")
-    try:
-        boundary = max(0, int(compaction.get("summary_seq") or 0))
-    except (TypeError, ValueError):
-        boundary = 0
-    compacted_seqs = _history_seq_set(compaction.get("compacted_history_seqs"))
     max_seq: int | None = None
     history_max_seq = getattr(runtime_state_store, "history_max_seq", None)
     if callable(history_max_seq):
@@ -45,6 +40,8 @@ async def load_compaction_history(
                 max_seq = max(0, int(max_value))
         except (TypeError, ValueError, OSError):
             max_seq = None
+
+    boundary, compacted_seqs = _validated_compaction_filter(compaction, max_seq)
 
     if compacted_seqs:
         # Manual compaction intentionally leaves durable rows untouched. Read
@@ -125,6 +122,42 @@ async def load_compaction_history(
             ),
         )
     return messages
+
+
+def rebase_compaction_history(
+    runtime_state: dict[str, Any], history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Renumber a restored transcript and its summary view together."""
+    # user:“修”+(回退或恢复重新编号时，压缩标记必须按原消息身份一起映射，不能误伤后续消息)。
+    result = deepcopy(runtime_state)
+    metadata = result.get("metadata")
+    compaction = metadata.get("context_compaction") if isinstance(metadata, dict) else None
+    compacted: set[int] = set()
+    old_seqs = []
+    for index, message in enumerate(history, 1):
+        old_metadata = message.get("metadata")
+        old_seqs.append(max(_history_seq_set([
+            old_metadata.get("history_seq") if isinstance(old_metadata, dict) else index,
+        ]), default=index))
+    if isinstance(compaction, dict):
+        boundary, old_compacted = _validated_compaction_filter(compaction, max(old_seqs, default=0))
+        # Older checkpoints only stored a prefix boundary, not an explicit set.
+        explicit = isinstance(compaction.get("compacted_history_seqs"), list)
+        for index, old_seq in enumerate(old_seqs, 1):
+            if old_seq in old_compacted or (not explicit and old_seq <= boundary):
+                compacted.add(index)
+        compaction["compacted_history_seqs"] = sorted(compacted)
+        compaction["summary_seq"] = next(
+            (index - 1 for index in range(1, len(history) + 1) if index not in compacted),
+            len(history),
+        )
+    for index, message in enumerate(history, 1):
+        message_metadata = message.get("metadata")
+        message["metadata"] = {
+            **(message_metadata if isinstance(message_metadata, dict) else {}),
+            "history_seq": index,
+        }
+    return result
 
 
 
@@ -322,3 +355,19 @@ def _history_seq_set(value: Any) -> set[int]:
         if parsed > 0:
             result.add(parsed)
     return result
+
+
+def _validated_compaction_filter(
+    compaction: dict[str, Any], max_seq: int | None,
+) -> tuple[int, set[int]]:
+    boundary = max(_history_seq_set([compaction.get("summary_seq")]), default=0)
+    compacted_seqs = _history_seq_set(compaction.get("compacted_history_seqs"))
+    # user:“修”+(加载已有异常会话和恢复旧快照时，都先清除不属于当前编号范围的压缩标记)。
+    # Preserve the summary; recover raw rows instead of silently hiding them.
+    # Zero may denote a legacy blob store, whose row watermark is unavailable.
+    if max_seq is not None and max_seq > 0 and max(boundary, max(compacted_seqs, default=0)) > max_seq:
+        boundary = 0
+        compacted_seqs = set()
+        compaction["summary_seq"] = 0
+        compaction["compacted_history_seqs"] = []
+    return boundary, compacted_seqs

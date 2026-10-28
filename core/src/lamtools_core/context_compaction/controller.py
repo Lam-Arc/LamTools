@@ -13,7 +13,6 @@ from typing import Any
 
 from lamtools_core.context_compaction_budget import (
     DEFAULT_SUMMARY_OUTPUT_TOKENS,
-    MAX_RETAINED_USER_MESSAGES,
     SummaryTokenBudget,
     TokenBudget,
     TokenMeasurement,
@@ -30,9 +29,7 @@ from lamtools_core.tokens import estimate_message_tokens
 from .fitter import CompactionFitter
 from .formatting import (
     RECENT_USER_MESSAGES_METADATA_KEY,
-    append_recent_user_messages,
     extract_recent_user_messages,
-    recent_user_message_text,
     strip_recent_user_messages,
 )
 from .models import (
@@ -537,58 +534,9 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         await _emit_compaction_event(request, result.display_payload)
         return result
 
-    # Carry forward the exact entries that a prior compaction fitted. New
-    # summaries keep this list in metadata; legacy summaries are parsed only
-    # when metadata is absent, avoiding accidental heading matches in prose.
-    prior_recent_user_messages: list[str] = []
-    for message in request.messages:
-        if not (
-            message.role == "system"
-            and message.metadata.get("key") == "context_compaction_summary"
-        ):
-            continue
-        raw_recent = message.metadata.get(RECENT_USER_MESSAGES_METADATA_KEY)
-        if isinstance(raw_recent, list) and all(isinstance(item, str) for item in raw_recent):
-            prior_recent_user_messages.extend(raw_recent)
-        else:
-            prior_recent_user_messages.extend(
-                extract_recent_user_messages(str(message.content or ""))
-            )
-
+    # user:“用户消息那个也许可以取消？”+(取消最多 50 条原话的常驻附录；当前请求保留原角色，历史原文由召回工具按需读取)。
     existing_recent = extract_recent_user_messages(request.existing_summary)
-    if existing_recent:
-        prior_recent_user_messages = _merge_recent_user_messages(
-            prior_recent_user_messages,
-            existing_recent,
-        )
-    current_recent_user_messages = [
-        recent_user_message_text(message.content)
-        for message in request.messages
-        if message.role == "user"
-        and not message.metadata.get("internal")
-        and message.metadata.get("key") != "request_local_late_context"
-    ]
-    recent_user_messages = _merge_recent_user_messages(
-        prior_recent_user_messages,
-        current_recent_user_messages,
-    )[-MAX_RETAINED_USER_MESSAGES:]
-    # The newest user instruction is the final safety boundary. It is stored
-    # inside the program-owned summary suffix rather than as a raw tail
-    # message, so account for that exact final representation before invoking
-    # the summarizer.
-    required_tail = (
-        [
-            ChatMessage(
-                role="system",
-                content=append_recent_user_messages(
-                    "",
-                    [recent_user_messages[-1]],
-                ),
-            )
-        ]
-        if recent_user_messages
-        else []
-    )
+    required_tail = [message for message in layout.retained_messages if message.role == "user" and not message.metadata.get("internal")][-1:]
     protected_tokens = _estimate_compaction_tokens(
         request,
         [*layout.prefix_messages, *required_tail],
@@ -679,7 +627,6 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
                 summary_message=summary_message,
                 recent_messages=list(layout.retained_messages),
                 target_tokens=request.limit_tokens,
-                recent_user_messages=recent_user_messages,
             )
         )
     except CompactionBudgetExceeded as exc:
@@ -859,23 +806,6 @@ def _message_recent_user_messages(message: ChatMessage) -> list[str] | None:
     if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
         return list(raw)
     return None
-
-
-def _merge_recent_user_messages(
-    prior: list[str], current: list[str]
-) -> list[str]:
-    """Append current entries while removing only a real sequence overlap."""
-    if not prior:
-        return list(current)
-    if not current:
-        return list(prior)
-    max_overlap = min(len(prior), len(current))
-    overlap = 0
-    for size in range(max_overlap, 0, -1):
-        if prior[-size:] == current[:size]:
-            overlap = size
-            break
-    return [*prior, *current[overlap:]]
 
 
 __all__ = [

@@ -3131,19 +3131,20 @@
 .process-summary:hover {
   color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
 }
+/* user:“把过程行那个图标从现在的浅紫色改成文字色与灰色混合” — 使用主题文字色与中性灰各半混合。 */
 .process-summary-icon {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--theme-process-icon-color, var(--theme-main-text, #fff)) 44%, transparent);
+  background: color-mix(in srgb, color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray) 44%, transparent);
   flex: 0 0 auto;
 }
 .process-summary-icon.part-dot--running {
-  background: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
   animation: part-pulse 1s ease-in-out infinite;
 }
 .process-summary-icon.part-dot--completed {
-  background: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
 }
 .process-summary-icon.part-dot--error {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
@@ -3174,7 +3175,7 @@
   height: 9px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  border-top-color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  border-top-color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
   animation: stream-spin .9s linear infinite;
   flex: 0 0 auto;
 }
@@ -3193,12 +3194,12 @@
 .part-dot--running {
   width: 9px; height: 9px;
   border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  border-top-color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  border-top-color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
   background: transparent;
   border-radius: 50%;
   animation: stream-spin .9s linear infinite;
 }
-.part-dot--completed { background: var(--theme-process-icon-color, var(--theme-main-text, #fff)); }
+.part-dot--completed { background: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray); }
 .part-dot--error { background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
 
 .global-stats-bar {

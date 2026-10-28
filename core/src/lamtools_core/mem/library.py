@@ -268,6 +268,7 @@ def edit_memory(
     new_string: str,
     *,
     occurrence: int | None = None,
+    context_links: str = "",
 ) -> MemoryEntry:
     """Replace *old_string* with *new_string*.
 
@@ -300,6 +301,8 @@ def edit_memory(
         start = text.find(old, scan)
         scan = start + len(old)
     updated = text[:start] + str(new_string or "") + text[start + len(old):]
+    # user:“记忆也应当保存记忆时的精确位置”+(正文编辑与新来源链接使用一次原子写入，避免仅保存其中一半)。
+    updated += context_links
     _atomic_write(target, updated)
     refresh_index(scope, work_root)
     return _entry_for(target, _memory_root(scope, work_root).resolve(), is_dir=False)

@@ -5,6 +5,7 @@ mod engines;
 mod observe;
 mod state;
 mod system;
+mod transfer;
 use fs2::FileExt;
 use serde_json::{json, Value};
 use state::{Controller, Reply};

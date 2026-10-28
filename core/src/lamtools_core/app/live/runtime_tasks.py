@@ -290,18 +290,9 @@ async def _fail_runtime_start(
     ) -> tuple[AppEventEnvelope, dict[str, Any]]:
         snapshot = await context.persistence.load(db, thread_id)
         if _turn_is_terminal(snapshot, turn_id):
-            terminal_events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=0)
-            # Use a default to avoid StopIteration → PEP 479 RuntimeError
-            # when no matching terminal event is found (can happen if the
-            # snapshot is terminal but the event log has no CORE_RUN_ITEM
-            # entry for this turn — e.g. after a revision conflict).
-            event = next(
-                (
-                    event
-                    for event in reversed(terminal_events)
-                    if event.turn_id == turn_id and event.method == CORE_RUN_ITEM_METHOD
-                ),
-                None,
+            # user:“该修修，相关插件也要修”+(长会话也必须保留真实终态，后来的工具事件不是回合终态)。
+            event = await context.persistence.find_turn_event(
+                db, thread_id=thread_id, turn_id=turn_id, terminal_only=True,
             )
             if event is not None:
                 return event, snapshot
@@ -316,10 +307,8 @@ async def _fail_runtime_start(
             for pending in (requests.values() if isinstance(requests, dict) else [])
         )
         if denied_request:
-            prior_events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=0)
-            prior = next(
-                (event for event in reversed(prior_events) if event.turn_id == turn_id),
-                None,
+            prior = await context.persistence.find_turn_event(
+                db, thread_id=thread_id, turn_id=turn_id,
             )
             if prior is not None:
                 return prior, snapshot

@@ -10,7 +10,7 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, turnStatus, activeTurnId, lockedMessageIds, autoPlotMath, decisionsDisabled]"
+      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, messageTurnActive(msg), messageTurnStatus(msg), messageActiveTurnId(msg), lockedMessageIds.has(msg.id), autoPlotMath, decisionsDisabled]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabelForMessage(msg)"
@@ -19,9 +19,9 @@
         :transport="transport"
       :project-id="projectId"
       :work-root="workRoot"
-      :active-turn-id="activeTurnId"
-      :turn-active="turnActive"
-      :turn-status="turnStatus"
+      :active-turn-id="messageActiveTurnId(msg)"
+      :turn-active="messageTurnActive(msg)"
+      :turn-status="messageTurnStatus(msg)"
       :locked-message-ids="lockedMessageIds"
       :auto-plot-math="autoPlotMath"
       :sub-agent-rows-inert="subAgentRowsInert"
@@ -58,6 +58,7 @@ import { t } from '@/i18n/index.ts'
 import type { CoreAttachment, CoreMessage } from '@/types.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
 import type { CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
+import { assistantSegmentTurnId } from '@/appServer/selectors.ts'
 import MessageView from '@/components/MessageView.vue'
 import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
 
@@ -128,6 +129,21 @@ function assistantLabelForMessage(message: CoreMessage): string {
     : ''
   if (!runtimeModelId) return props.assistantLabel
   return props.assistantModelLabels[runtimeModelId] || runtimeModelId.toUpperCase()
+}
+
+// user:“我发消息的一瞬间也是”“修，不要出错”+(运行状态只影响本轮助手消息；
+// 历史消息与用户消息保持稳定，锁定集合按本条成员关系参与缓存，避免整段历史重绘)。
+function messageTurnActive(message: CoreMessage): boolean {
+  return props.turnActive && message.role === 'assistant' && Boolean(props.activeTurnId)
+    && assistantSegmentTurnId(message.id) === props.activeTurnId
+}
+
+function messageActiveTurnId(message: CoreMessage): string | null {
+  return messageTurnActive(message) ? props.activeTurnId : null
+}
+
+function messageTurnStatus(message: CoreMessage): string {
+  return messageTurnActive(message) ? props.turnStatus : 'idle'
 }
 
 const emit = defineEmits<{
@@ -354,9 +370,9 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 }
 
 /* ── Part dot status colors — 以 main area 文字为底 ── */
-.part-dot--completed { color: var(--theme-process-icon-color, var(--theme-main-text, #fff)); }
+.part-dot--completed { color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray); }
 .part-dot--error { color: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
-.part-dot--running { color: var(--theme-process-icon-color, var(--theme-main-text, #fff)); }
+.part-dot--running { color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray); }
 
 /* ── Expandable tool cards ── */
 .process-stream {
@@ -1329,6 +1345,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent);
   outline-offset: 2px;
 }
+/* user:“把过程行那个图标从现在的浅紫色改成文字色与灰色混合” — 使用主题文字色与中性灰各半混合。 */
 .process-card-state-icon {
   grid-area: state;
   align-self: center;
@@ -1336,7 +1353,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   width: 16px;
   height: 16px;
   margin-top: 0;
-  color: color-mix(in srgb, var(--theme-process-icon-color, var(--theme-main-text, #fff)) 72%, transparent);
+  color: color-mix(in srgb, color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray) 72%, transparent);
   transform-origin: center;
   flex: 0 0 auto;
   transition:
@@ -1345,7 +1362,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
     transform var(--dur-base) var(--ease-out);
 }
 .process-card-state-icon--running {
-  color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
   animation: process-card-breathe 1.8s ease-in-out infinite;
 }
 .process-card-state-icon--pending {
@@ -1356,7 +1373,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   color: color-mix(in srgb, var(--red) 70%, var(--theme-main-text, #fff) 30%);
 }
 .process-card-state-icon--completed {
-  color: var(--theme-process-icon-color, var(--theme-main-text, #fff));
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
   opacity: .72;
   transform: scale(1);
 }

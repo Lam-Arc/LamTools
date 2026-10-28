@@ -36,6 +36,11 @@
           />
 
           <!-- user:“刻度点应该在条内用白灰点表示”+(刻度点收进轨道，点击仍可直接跳到该等级)。 -->
+          <!-- user:“白条换成白点吧，越向下越透明，然后消散”+(只在 max 档出现的轨道内下落白点)。 -->
+          <div v-if="isMax" class="sunday-thinking-slider__max-dots" aria-hidden="true">
+            <span v-for="dot in 6" :key="dot" class="sunday-thinking-slider__max-dot" />
+          </div>
+
           <div class="sunday-thinking-slider__ticks" :class="{ 'is-single': levels.length <= 1 }">
             <button
               v-for="(level, visualIndex) in levelsTopDown"
@@ -108,6 +113,7 @@ const selectedLabel = computed(() => (
 const activeVisualIndex = computed(() => (
   levels.value.length <= 1 ? 0 : levels.value.length - 1 - selectedIndex.value
 ))
+const isMax = computed(() => thinkingRank(levels.value[selectedIndex.value]?.value ?? '') === 5)
 
 const dragging = ref(false)
 const railHeight = ref(0)
@@ -368,6 +374,7 @@ watch(
   border-radius: 999px;
 }
 
+/* user:“思考强度上下搞成圆形的”+(轨道上下端收成完整半圆，不再是 2px 小圆角)。 */
 .sunday-thinking-slider__track {
   position: absolute;
   top: 0;
@@ -375,7 +382,7 @@ watch(
   left: 50%;
   width: 26px;
   overflow: hidden;
-  border-radius: var(--interaction-track-radius);
+  border-radius: 999px;
   background: color-mix(in srgb, var(--theme-composer-text) 7%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-composer-text) 5%, transparent);
   transform: translateX(-50%);
@@ -389,6 +396,83 @@ watch(
   bottom: 0;
   border-radius: 999px;
   transition: background-color var(--dur-base) var(--ease-out);
+}
+
+/* user:“不用做消散了，但是白点大小不一，大一点”+(白点匀速下落、保持不透明，大小明显不同，只在轨道内)。 */
+.sunday-thinking-slider__max-dots {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.sunday-thinking-slider__max-dot {
+  position: absolute;
+  top: -4%;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.68;
+  animation: max-dot-fall 3s linear infinite;
+  will-change: top;
+}
+
+.sunday-thinking-slider__max-dot:nth-child(1) {
+  left: 16%;
+  width: 3px;
+  height: 3px;
+  animation-duration: 2.6s;
+  animation-delay: -0.4s;
+}
+
+.sunday-thinking-slider__max-dot:nth-child(2) {
+  left: 30%;
+  width: 4px;
+  height: 4px;
+  animation-duration: 3.4s;
+  animation-delay: -2.1s;
+}
+
+.sunday-thinking-slider__max-dot:nth-child(3) {
+  left: 46%;
+  width: 3.5px;
+  height: 3.5px;
+  animation-duration: 2.9s;
+  animation-delay: -1.3s;
+}
+
+.sunday-thinking-slider__max-dot:nth-child(4) {
+  left: 62%;
+  width: 5px;
+  height: 5px;
+  animation-duration: 3.7s;
+  animation-delay: -3.2s;
+}
+
+.sunday-thinking-slider__max-dot:nth-child(5) {
+  left: 78%;
+  width: 4.5px;
+  height: 4.5px;
+  animation-duration: 2.7s;
+  animation-delay: -1.8s;
+}
+
+.sunday-thinking-slider__max-dot:nth-child(6) {
+  left: 90%;
+  width: 3px;
+  height: 3px;
+  animation-duration: 3.2s;
+  animation-delay: -2.6s;
+}
+
+@keyframes max-dot-fall {
+  0% {
+    top: -4%;
+  }
+  100% {
+    top: 104%;
+  }
 }
 
 /* user:“刻度点应该在条内用白灰点表示”+(轨道内均匀排布白灰节点，点击可直接选级)。 */
@@ -475,6 +559,10 @@ watch(
   .sunday-thinking-slider__fill,
   .sunday-thinking-slider__thumb {
     transition: none;
+  }
+
+  .sunday-thinking-slider__max-dots {
+    display: none;
   }
 }
 </style>

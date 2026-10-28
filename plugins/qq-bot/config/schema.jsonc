@@ -43,6 +43,18 @@
       "description": "只用于文件发送白名单和提示词；实际工具工作目录跟随当前 LamTools 项目。",
       "default": ""
     },
+    "targetProjectId": {
+      "type": "string",
+      "title": "目标项目",
+      "description": "QQ 消息注入到该项目。留空时使用插件自己的子会话。",
+      "default": ""
+    },
+    "targetSessionId": {
+      "type": "string",
+      "title": "目标会话",
+      "description": "QQ 私聊和群聊消息注入到该 Sunday 会话；空闲时发用户消息，运行中发即时引导，不走排队。",
+      "default": ""
+    },
     "requireMention": {
       "type": "boolean",
       "title": "群聊仅回复 @机器人 的消息",

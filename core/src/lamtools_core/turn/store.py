@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Iterable
+from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
+from typing import Any, Iterable, TypeVar
 
 from sqlalchemy import delete, func, select, update
 
@@ -33,6 +35,8 @@ from lamtools_core.turn.model import (
     now_ms,
 )
 
+T = TypeVar("T")
+
 
 def new_turn_id(thread_id: str) -> str:
     return f"{thread_id}:turn:{uuid.uuid4().hex[:12]}"
@@ -45,20 +49,44 @@ def new_run_id() -> str:
 class TurnStore:
     """Persistence boundary for turns, runs, interactions, intents and jobs."""
 
-    def __init__(self, session_factory: Any, write_coordinator: Any) -> None:
+    def __init__(self, session_factory: Any, write_coordinator: Any, *, session: Any = None) -> None:
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator
+        self._session = session
+
+    # user:“该修修，相关插件也要修”+(一次控制操作的状态、执行与控制记录共用同一事务，失败全部回滚)。
+    async def transaction(self, action: Callable[[TurnStore], Awaitable[T]]) -> T:
+        if self._session is not None:
+            return await action(self)
+
+        async def write(db: Any) -> T:
+            return await action(TurnStore(self.session_factory, self.write_coordinator, session=db))
+
+        return await self.write_coordinator.run(write)
+
+    async def _write(self, action):
+        if self._session is not None:
+            return await action(self._session)
+        return await self.write_coordinator.run(action)
+
+    @asynccontextmanager
+    async def _read(self):
+        if self._session is not None:
+            yield self._session
+        else:
+            async with self.session_factory() as db:
+                yield db
 
     # ------------------------------------------------------------------
     # Turns
     # ------------------------------------------------------------------
     async def get_turn(self, turn_id: str) -> Turn | None:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = await db.get(CoreTurnControl, turn_id)
         return _turn_from_row(row) if row is not None else None
 
     async def get_turn_for_thread(self, thread_id: str) -> Turn | None:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = (
                 await db.execute(
                     select(CoreTurnControl)
@@ -70,7 +98,7 @@ class TurnStore:
         return _turn_from_row(row) if row is not None else None
 
     async def list_turns(self, thread_id: str, *, limit: int = 100) -> list[Turn]:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnControl)
@@ -90,7 +118,7 @@ class TurnStore:
             await db.flush()
             return turn
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def save_turn(self, turn: Turn) -> Turn:
         async def write(db: Any) -> Turn:
@@ -105,7 +133,7 @@ class TurnStore:
             await db.flush()
             return turn
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def transition_turn(
         self,
@@ -154,7 +182,7 @@ class TurnStore:
             row = await db.get(CoreTurnControl, turn_id)
             return _turn_from_row(row) if row is not None else None
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def update_turn_if_epoch(
         self,
@@ -187,13 +215,13 @@ class TurnStore:
             )
             return result.rowcount == 1
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def delete_turn(self, turn_id: str) -> None:
         async def write(db: Any) -> None:
             await db.execute(delete(CoreTurnControl).where(CoreTurnControl.turn_id == turn_id))
 
-        await self.write_coordinator.run(write)
+        await self._write(write)
 
     # ------------------------------------------------------------------
     # Runs
@@ -207,15 +235,15 @@ class TurnStore:
             await db.flush()
             return run
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def get_run(self, run_id: str) -> Run | None:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = await db.get(CoreTurnRun, run_id)
         return _run_from_row(row) if row is not None else None
 
     async def list_runs(self, turn_id: str) -> list[Run]:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnRun)
@@ -226,7 +254,7 @@ class TurnStore:
         return [_run_from_row(row) for row in rows]
 
     async def next_run_attempt(self, turn_id: str) -> int:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             value = (
                 await db.execute(
                     select(func.coalesce(func.max(CoreTurnRun.attempt), 0)).where(
@@ -261,13 +289,13 @@ class TurnStore:
             )
             return result.rowcount == 1
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     # ------------------------------------------------------------------
     # Interactions
     # ------------------------------------------------------------------
     async def get_interaction(self, interaction_id: str) -> Interaction | None:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = await db.get(CoreTurnInteraction, interaction_id)
         return _interaction_from_row(row) if row is not None else None
 
@@ -279,7 +307,7 @@ class TurnStore:
         request_id = str(request_id or "").strip()
         if not request_id:
             return None
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = (
                 await db.execute(
                     select(CoreTurnInteraction)
@@ -311,7 +339,7 @@ class TurnStore:
             conditions.append(CoreTurnInteraction.thread_id == thread_id)
         if scope:
             conditions.append(CoreTurnInteraction.scope == scope)
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnInteraction)
@@ -331,7 +359,7 @@ class TurnStore:
         conditions = [CoreTurnInteraction.thread_id == thread_id]
         if status:
             conditions.append(CoreTurnInteraction.status == status)
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnInteraction)
@@ -344,7 +372,7 @@ class TurnStore:
 
     async def list_expired_questions(self, *, now_ms_value: int | None = None) -> list[Interaction]:
         cutoff = int(now_ms_value if now_ms_value is not None else now_ms())
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnInteraction)
@@ -387,7 +415,7 @@ class TurnStore:
             await db.flush()
             return interaction
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def resolve_interaction(
         self,
@@ -433,7 +461,7 @@ class TurnStore:
             row = await db.get(CoreTurnInteraction, interaction_id)
             return _interaction_from_row(row) if row is not None else None
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def defer_interactions(self, turn_id: str) -> int:
         async def write(db: Any) -> int:
@@ -447,7 +475,7 @@ class TurnStore:
             )
             return int(result.rowcount or 0)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def reopen_interactions(self, turn_id: str) -> int:
         async def write(db: Any) -> int:
@@ -461,7 +489,7 @@ class TurnStore:
             )
             return int(result.rowcount or 0)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def cancel_interactions(
         self,
@@ -502,7 +530,7 @@ class TurnStore:
             await db.flush()
             return resolved
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def mark_interaction_processing(
         self,
@@ -530,7 +558,7 @@ class TurnStore:
             await db.flush()
             return _interaction_from_row(row)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def revert_interaction_processing(
         self, interaction_id: str
@@ -548,7 +576,7 @@ class TurnStore:
             await db.flush()
             return _interaction_from_row(row)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def backfill_interaction_pool(
         self, thread_id: str, *, project_id: str = ""
@@ -602,7 +630,7 @@ class TurnStore:
                 await db.flush()
             return changed
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def set_interaction_claim(
         self,
@@ -623,7 +651,7 @@ class TurnStore:
             )
             return result.rowcount == 1
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     # ------------------------------------------------------------------
     # Control intents
@@ -637,7 +665,7 @@ class TurnStore:
             await db.flush()
             return intent
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def update_intent(
         self,
@@ -663,10 +691,10 @@ class TurnStore:
             )
             return result.rowcount == 1
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def list_pending_intents(self, turn_id: str) -> list[ControlIntent]:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnIntent)
@@ -722,7 +750,7 @@ class TurnStore:
             await db.flush()
             return _job_dict(row)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def claim_job(
         self, job_id: str, *, lease_ms: int = 60_000
@@ -756,7 +784,7 @@ class TurnStore:
             row = await db.get(CoreTurnJob, job_id)
             return _job_dict(row) if row is not None else None
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def requeue_running_jobs(self) -> int:
         """Release leases left by a previous process.
@@ -778,7 +806,7 @@ class TurnStore:
             )
             return int(result.rowcount or 0)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def claim_next_job(
         self, thread_id: str, *, lease_ms: int = 60_000
@@ -814,7 +842,7 @@ class TurnStore:
             await db.flush()
             return _job_dict(row)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def finish_job(
         self,
@@ -838,11 +866,11 @@ class TurnStore:
             )
             return result.rowcount == 1
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def list_pending_job_threads(self) -> list[str]:
         now = now_ms()
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnJob.thread_id)
@@ -861,7 +889,7 @@ class TurnStore:
         ``pending`` jobs waiting for a retry count: the one-shot worker sleeps
         until their delay elapses instead of dropping them.
         """
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = (
                 await db.execute(
                     select(CoreTurnJob.job_id)
@@ -906,10 +934,10 @@ class TurnStore:
             )
             return int(result.rowcount or 0)
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def get_job(self, job_id: str) -> dict[str, Any] | None:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = await db.get(CoreTurnJob, job_id)
         return _job_dict(row) if row is not None else None
 
@@ -917,7 +945,7 @@ class TurnStore:
         conditions = [CoreTurnJob.thread_id == thread_id]
         if status:
             conditions.append(CoreTurnJob.status == status)
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreTurnJob)
@@ -942,10 +970,10 @@ class TurnStore:
             await db.flush()
             return agent_run
 
-        return await self.write_coordinator.run(write)
+        return await self._write(write)
 
     async def get_agent_run(self, agent_run_id: str) -> AgentRun | None:
-        async with self.session_factory() as db:
+        async with self._read() as db:
             row = await db.get(CoreAgentRun, agent_run_id)
         return _agent_run_from_row(row) if row is not None else None
 
@@ -965,7 +993,7 @@ class TurnStore:
             conditions.append(
                 CoreAgentRun.status.in_(("running", "paused", "suspended", "interrupted"))
             )
-        async with self.session_factory() as db:
+        async with self._read() as db:
             rows = (
                 await db.execute(
                     select(CoreAgentRun)

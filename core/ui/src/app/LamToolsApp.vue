@@ -278,7 +278,7 @@
     </template>
 
     <template #main-header>
-      <button v-if="appRuntime.platform !== 'mobile'" class="split-entry split-icon-button" type="button" :title="splitWorkspace.state.hidden ? t('恢复分屏') : t('向右分屏')" :aria-label="splitWorkspace.state.hidden ? t('恢复分屏') : t('向右分屏')" @click="splitWorkspace.splitRight()"><Columns2 :size="16" :stroke-width="1.6" /></button>
+      <button v-if="appRuntime.platform !== 'mobile'" class="split-entry split-icon-button" type="button" :title="splitWorkspace.state.hidden || !splitEnabled ? t('打开分屏') : t('收起分屏')" :aria-label="splitWorkspace.state.hidden || !splitEnabled ? t('打开分屏') : t('收起分屏')" @click="splitWorkspace.toggle()"><Columns2 :size="16" :stroke-width="1.6" /></button>
       <!-- 整版界面：顶部标题跟着切换，返回键就放在标题原来的位置。
            设置 / 插件例外：会话栏已经写着页名并列出分区，标题条整条撤掉，内容独占一页
            （整版界面这一层仍然成立，不会被下面的插件头部顶替）。 -->
@@ -409,11 +409,15 @@
           @edit-message="handleEditMessage"
           @open-sub-agent="openSubAgentPane"
         />
-        <div v-if="pendingPlaceholder" class="user-row">
-          <div class="user-stack">
-            <div class="user-bubble user-bubble--placeholder">{{ pendingPlaceholder.content }}</div>
-          </div>
-        </div>
+        <!-- user:“做吧”+(发送状态按请求与聊天隔离，保留失败和待确认消息的恢复入口)。 -->
+        <CoreSubmissionStatus
+          :submissions="visibleSubmissions"
+          :can-edit="!composerText.trim() && pendingAttachments.length === 0"
+          :busy="liveComposerController.submitting.value"
+          @retry="liveComposerController.retrySubmission"
+          @edit="liveComposerController.editSubmission"
+          @dismiss="liveComposerController.dismissSubmission"
+        />
         <Transition name="thread-jump-latest">
           <button
             v-if="!isEmptySession && !threadScroll.autoFollow.value"
@@ -716,6 +720,7 @@ import {
 
 import AttachmentTray from '@/components/AttachmentTray.vue'
 import AttachmentSourceMenu from '@/components/AttachmentSourceMenu.vue'
+import CoreSubmissionStatus from '@/components/CoreSubmissionStatus.vue'
 import ChatThread from '@/components/ChatThread.vue'
 import ChatOutlineNavigator from '@/components/ChatOutlineNavigator.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
@@ -986,7 +991,6 @@ const agentsError = ref('')
 const shellRef = ref<InstanceType<typeof WorkspaceShell> | null>(null)
 const leftPinned = ref(true)
 const rightPinned = ref(false)
-const sendingDisabled = ref(false)
 
 function toggleLeftPinned() {
   shellRef.value?.toggleLeftPinned()
@@ -1625,9 +1629,7 @@ const composerInputDisabled = computed(() => {
   if (activePluginMode.value) {
     return readPluginSurface(activePluginSurface.value?.composerDisabled, true)
   }
-  return composerActionMode.value === 'send' && (
-    sendingDisabled.value
-  )
+  return false
 })
 
 const composerSendDisabled = computed(() => {
@@ -1639,6 +1641,7 @@ const composerSendDisabled = computed(() => {
   // would look like an answer without answering anything.
   if (composerTakenOver.value) return true
   return composerInputDisabled.value
+    || liveComposerController.submitting.value
     || hasBlockingFailure.value
     || !activeSessionId.value
     || (!composerText.value.trim() && pendingAttachments.value.length === 0)
@@ -1747,7 +1750,7 @@ const defaultModelId = ref('')
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
 const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
 const allowAccessOutsideWorkdir = ref(false)
-const { pendingAttachments, attachmentInputItems, hasBlockingFailure, addProcessing, addUploaded, markFailed, removeAttachment, clearAttachments, setSession: setAttachmentSession } = usePendingAttachments()
+const { pendingAttachments, attachmentInputItems, hasBlockingFailure, addProcessing, addUploaded, markFailed, removeAttachment, clearAttachments, removeSubmittedAttachments, setSession: setAttachmentSession } = usePendingAttachments()
 watch(attachmentInputItems, (items) => {
   workbench.attachments.value = items
 }, { immediate: true })
@@ -2195,7 +2198,12 @@ const {
 const composerHoldEnabled = computed(() => composerActionMode.value !== 'send')
 workbench.setShallowThinking(shallowThinkingEnabled.value)
 workbench.setTurnOptionsProvider(async () => {
-  const pluginOptions = await activePluginSurface.value?.turnOptions?.() || {}
+  // user:“做吧”+(在等待插件前固定会话参数，切换聊天不能混入另一会话的模型设置)。
+  const controls = { ...executionControls.controls() }
+  const turnOptions = { ...executionControls.turnOptions() }
+  const pluginOptionsPromise = activePluginSurface.value?.turnOptions?.()
+  void persistSessionComposerControls(controls)
+  const pluginOptions = await pluginOptionsPromise || {}
   const {
     permission_preset: _permissionPreset,
     active_tier: _activeTier,
@@ -2204,25 +2212,37 @@ workbench.setTurnOptionsProvider(async () => {
     allow_access_outside_workdir: _allowOutsideWorkdir,
     ...safePluginOptions
   } = pluginOptions
-  // user:“架构调整，输入框的信息作为‘输入参数组’按会话持久化保存”
-  // +(发送时把这一回合实际使用的一组参数补记到会话上，旧会话也会因此获得初值。)
-  void persistSessionComposerControls(executionControls.controls())
-  return { ...executionControls.turnOptions(), ...safePluginOptions }
+  return { ...turnOptions, ...safePluginOptions }
 })
 workbench.setComposerCallbacks({
+  // user:“做吧”+(点击与回车发送共用附件、审批和模型校验)。
+  canSubmit: () => {
+    if (composerTakenOver.value) return false
+    if (hasBlockingFailure.value || /pending:\/\//.test(composerText.value)) {
+      composerErrorText.value = t('附件尚未准备好，请重试或移除失败的引用')
+      return false
+    }
+    if (!activePluginMode.value && availableModels.value.length === 0) {
+      showToast('error', t('请先添加供应商/模型（设置 → 模型与供应商）'), 8000)
+      return false
+    }
+    return true
+  },
   onError: (text) => { composerErrorText.value = text },
   onStatusText: setRuntimeStatus,
   onTurnStarted: refreshSessions,
-  onSubmitStart: (submittedText: string) => {
-    const preview = submittedText.trim()
-    pendingPlaceholder.value = {
-      id: `placeholder-${Date.now()}`,
-      // 发送即见原文（长文本截断预览）：完整气泡等服务器回执的正式消息替换。
-      content: preview ? (preview.length > 400 ? `${preview.slice(0, 400)}…` : preview) : '…',
+  onSubmissionAccepted: (submission) => {
+    removeSubmittedAttachments(submission.threadId, submission.attachments)
+  },
+  // user:“做吧”+(重新编辑失败消息时恢复真实附件托盘，而不是只恢复不可见的发送参数)。
+  onRestoreAttachments: (items) => {
+    for (const file of items) {
+      if (file.type !== 'attachment') continue
+      addUploaded({ id: file.attachment_id, path: file.path, filename: file.filename || t('附件'),
+        mime_type: file.mime_type || 'application/octet-stream', size: file.size || 0,
+        preview_type: file.preview_type || 'external', status: 'uploaded' })
     }
   },
-  // 提交一有结果就收掉占位：引导与排队不会立刻产生用户消息，只等消息出现会一直挂着
-  onSubmitSettled: () => { pendingPlaceholder.value = null },
 })
 watch(shallowThinkingEnabled, (value) => workbench.setShallowThinking(value))
 const composerHighlightSegments = computed(() => (
@@ -2259,7 +2279,9 @@ watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId
   }
 })
 
-const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
+const visibleSubmissions = computed(() => liveComposerController.submissions.value.filter(
+  submission => submission.threadId === activeSessionId.value && !submission.displayed,
+))
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
 // user:“主区无需标签”+(主区保持原有标题，新增内容由独立分屏宿主管理)。
@@ -3091,21 +3113,10 @@ async function submitComposer() {
     : true
   if (!text && !(attachmentOnly && pendingAttachments.value.length)) return
 
-  // No model to inherit and none configured: fail with an explicit prompt
-  // instead of sending a turn that would be silently routed to some default.
-  if (!activePluginMode.value && availableModels.value.length === 0) {
-    showToast('error', t("请先添加供应商/模型（设置 → 模型与供应商）"), 8000)
-    return
-  }
-
-  sendingDisabled.value = true
-
   try {
     await liveComposerController.submit({ clearComposer: true })
   } catch {
     // error handled by controller
-  } finally {
-    sendingDisabled.value = false
   }
 }
 
@@ -3334,14 +3345,12 @@ async function handleComposerKeydown(event: KeyboardEvent) {
   if (hasBlockingFailure.value || /pending:\/\//.test(composerText.value)) {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); composerErrorText.value = '附件尚未准备好，请重试或移除失败的引用'; return }
   }
-  if (sendingDisabled.value) return
   updateComposerCursor()
   await liveComposerController.handleKeydown(event)
 }
 
 async function handleComposerKeyup(event: KeyboardEvent) {
   if (hasBlockingFailure.value || /pending:\/\//.test(composerText.value)) return
-  if (sendingDisabled.value) return
   updateComposerCursor()
   await liveComposerController.handleKeyup(event)
 }
@@ -3485,12 +3494,6 @@ function focusComposer(cursor: number) {
     textarea.focus()
     textarea.setSelectionRange(cursor, cursor)
   })
-}
-
-function clearComposerAfterPersisted(expectedText: string) {
-  if (composerText.value.trim() !== expectedText) return
-  composerText.value = ''
-  void nextTick(resizeComposerTextarea)
 }
 
 function resizeComposerTextarea() {
@@ -4345,16 +4348,6 @@ watch(composerText, () => {
 
 // user:“架构调整，输入框的信息作为‘输入参数组’按会话持久化保存”
 // +(模型的会话记忆并入整组写入，不再单独 PATCH；由 onControlsChanged 触发。)
-
-// 只为"新用户消息落地即收占位"存在。浅层监听即可：投影在消息增删时都会
-// 产出新数组，引用变化就会触发；deep 会在每个流式 tick 全窗口深遍历所有
-// part（性能排查 #6），而嵌套变化根本不产生新的用户消息，纯属开销。
-watch(messages, (newVal, oldVal) => {
-  const oldIds = new Set((oldVal || []).map(m => m.id))
-  const newUserMsgs = (newVal || []).filter(m => !oldIds.has(m.id) && m.role === 'user')
-  if (newUserMsgs.length > 0) pendingPlaceholder.value = null
-  // 滚动跟随由底部哨兵单一通道驱动；这里不再按消息变化隐式写 scrollTop。
-})
 
 // ── 首屏分批挂载：先出最近 10 个回合，其余回合空闲时分页补齐 ──
 // 初始窗口小、首绘快；补齐走空闲回调，不与流式帧抢主线程。每页复用滚动

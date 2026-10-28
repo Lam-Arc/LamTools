@@ -22,13 +22,15 @@ describe('inline interactive replies', () => {
   })
 
   it('does not execute ordinary HTML, documents, or partial streaming content', async () => {
-    for (const props of [
+    // user:“测试，提交打包发布”+(各测试变体共用可选 streaming 参数，不由首个对象推断为禁止)。
+    const cases: Array<{ content: string; interactive: boolean; streaming?: boolean }> = [
       { content: fence(), interactive: false },
       { content: fence(source, 'html'), interactive: true },
       { content: fence(), interactive: true, streaming: true },
       { content: fence().slice(0, -3), interactive: true, streaming: true },
       { content: fence().slice(0, -3), interactive: true },
-    ]) {
+    ]
+    for (const props of cases) {
       const wrapper = mount(MarkdownRenderer, { props })
       await flushPromises()
       expect(wrapper.find('iframe').exists()).toBe(false)

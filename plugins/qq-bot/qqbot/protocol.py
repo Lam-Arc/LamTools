@@ -153,6 +153,7 @@ def parse_inbound(event_type: str, data: dict[str, Any]) -> InboundMessage | Non
             raw_event_type=event_type,
             kind="c2c",
             sender_id=str(author.get("user_openid") or ""),
+            sender_name=str(author.get("username") or ""),
             content=str(data.get("content") or ""),
             message_id=str(data.get("id") or ""),
             timestamp=str(data.get("timestamp") or ""),

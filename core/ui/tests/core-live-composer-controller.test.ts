@@ -1,3 +1,4 @@
+// user:“测试，提交打包发布”+(补齐测试替身的暂停和终止接口，保持正式控制契约)。
 import { nextTick, ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { useCoreLiveComposerController } from '../src/composables'
@@ -15,6 +16,7 @@ describe('useCoreLiveComposerController', () => {
     const attachments = ref<CoreInputItem[]>([])
     const calls: string[] = []
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref('thread-1'), connectedThreadId: ref('thread-1'),
       connectionState: ref('open'), text, cursor: ref(0), status: ref('idle'), attachments,
       resumableTurnId: resumable,
@@ -44,6 +46,7 @@ describe('useCoreLiveComposerController', () => {
     const cursor = ref(0)
     let requests = 0
     useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       connectedThreadId: ref('thread-1'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
@@ -79,6 +82,7 @@ describe('useCoreLiveComposerController', () => {
     const text = ref('write from A')
     const started: Array<{ threadId: string; workRoot?: string; options?: Record<string, unknown> }> = []
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId,
       connectedThreadId,
       connectionState,
@@ -119,6 +123,7 @@ describe('useCoreLiveComposerController', () => {
     let starts = 0
     const text = ref('study this')
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('study:main'),
       connectedThreadId: ref('study:main'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
@@ -156,6 +161,7 @@ describe('useCoreLiveComposerController', () => {
     const statuses: string[] = []
     const text = ref('run this task')
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       connectedThreadId: ref('thread-1'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
@@ -188,6 +194,7 @@ describe('useCoreLiveComposerController', () => {
     let clearedText = ''
     let clearedAttachments = 0
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       connectedThreadId: ref('thread-1'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
@@ -243,6 +250,7 @@ describe('useCoreLiveComposerController', () => {
     })
     let catalogRequestCount = 0
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId,
       connectedThreadId,
       connectionState,
@@ -295,6 +303,7 @@ describe('useCoreLiveComposerController', () => {
   it('ignores an old catalog load invoked after the active thread moved to B', async () => {
     const calls: string[] = []
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-b'),
       connectedThreadId: ref('thread-b'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
@@ -334,6 +343,7 @@ describe('useCoreLiveComposerController', () => {
     const connectionState = ref<'connecting' | 'open' | 'closed' | 'error'>('closed')
     const calls: string[] = []
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId,
       connectedThreadId,
       connectionState,
@@ -373,6 +383,7 @@ describe('useCoreLiveComposerController', () => {
       resolveCommand = resolve
     })
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       activeTurnId: ref('thread-1:command:compact:running'),
       connectedThreadId: ref('thread-1'),
@@ -415,6 +426,7 @@ describe('useCoreLiveComposerController', () => {
     const status = ref('running')
     let queueFails = false
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       activeTurnId: ref('turn-1'),
       connectedThreadId: ref('thread-1'),
@@ -479,6 +491,7 @@ describe('useCoreLiveComposerController', () => {
     const text = ref('')
     const status = ref('running')
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       activeTurnId: ref('turn-1'),
       connectedThreadId: ref('thread-1'),
@@ -541,6 +554,7 @@ describe('useCoreLiveComposerController', () => {
     let clearedAttachments = 0
 
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId,
       activeTurnId,
       connectedThreadId,
@@ -640,6 +654,7 @@ describe('useCoreLiveComposerController', () => {
     const calls: string[] = []
     const text = ref('/compact')
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       connectedThreadId: ref('thread-1'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
@@ -685,6 +700,7 @@ describe('useCoreLiveComposerController', () => {
     const calls: string[] = []
     const text = ref('')
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       connectedThreadId: ref('thread-1'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
@@ -731,6 +747,7 @@ describe('useCoreLiveComposerController', () => {
 
   it('exposes command catalog failures without hiding the underlying error', async () => {
     const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
       connectedThreadId: ref('thread-1'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),

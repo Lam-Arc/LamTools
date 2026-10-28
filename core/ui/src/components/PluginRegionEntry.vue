@@ -20,7 +20,13 @@ function start() {
   }, props.requestRpc, { loadModule: loadPluginPageModule })
   void instance.ready.catch(cause => { if (alive && current === generation) error.value = String(cause) })
 }
-watch(() => [props.plugin, props.entryUrl], start, { flush: 'post' })
+watch(() => [
+  props.plugin,
+  props.entryUrl,
+  context?.activeSessionId.value,
+  context?.selectedProjectId.value,
+  context?.currentWorkRoot?.(),
+], start, { flush: 'post' })
 onMounted(start)
 onBeforeUnmount(() => { alive = false; generation++; dispose() })
 </script>

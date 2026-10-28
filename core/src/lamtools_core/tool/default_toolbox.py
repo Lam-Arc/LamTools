@@ -45,6 +45,7 @@ from lamtools_core.tool.memory_tools import (
     MEMORY_TOOL_SCHEMA,
     make_memory_handler,
 )
+from lamtools_core.tool.context_history import CONTEXT_HISTORY_TOOLS, make_context_history_handler
 from lamtools_core.tool.library_tools import (
     LIBRARY_TOOL_DESCRIPTION,
     LIBRARY_TOOL_NAME,
@@ -192,6 +193,9 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "search_files": AUTO_ALLOW,
     "search_content": AUTO_ALLOW,
     "load_skill": AUTO_ALLOW,
+    # user:“ok，那就这么做”+(通用历史检索与召回是只读操作，沿用统一权限判断)。
+    "search_context": AUTO_ALLOW,
+    "recall_context": AUTO_ALLOW,
     MEMORY_TOOL_NAME: AUTO_ALLOW,
     LIBRARY_TOOL_NAME: AUTO_ALLOW,
     "write_file": ASK_USER,
@@ -219,6 +223,8 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "search_files",
     "search_content",
     "load_skill",
+    "search_context",
+    "recall_context",
     MEMORY_TOOL_NAME,
     LIBRARY_TOOL_NAME,
     "write_file",
@@ -246,6 +252,8 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "search_files": "file_read",
     "search_content": "file_read",
     "load_skill": "skill",
+    "search_context": "context",
+    "recall_context": "context",
     MEMORY_TOOL_NAME: "memory",
     LIBRARY_TOOL_NAME: "library",
     "write_file": "file_write",
@@ -390,6 +398,7 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 
 DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    *CONTEXT_HISTORY_TOOLS,
     {
         "name": "read_file",
         "description": (
@@ -2244,6 +2253,8 @@ class CoreToolbox:
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),
             "load_skill": load_skill,
+            "search_context": make_context_history_handler("search_context"),
+            "recall_context": make_context_history_handler("recall_context"),
             MEMORY_TOOL_NAME: make_memory_handler(self.work_root),
             LIBRARY_TOOL_NAME: make_library_handler(self.artifact_store, self.work_root),
             "write_file": make_write_file_handler(

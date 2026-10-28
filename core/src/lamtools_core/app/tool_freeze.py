@@ -72,6 +72,27 @@ def frozen_tool_names(session_id: str, epoch_id: str) -> set[str] | None:
         return {name for tool in frozen if (name := tool_name(tool))}
 
 
+def prune_frozen_tools(
+    session_id: str,
+    epoch_id: str,
+    current_names: set[str],
+) -> None:
+    """Drop tools that disappeared from the current model-visible surface.
+
+    Additions still wait for compaction (the freeze contract), but a removed
+    tool must not stay advertised: the model would keep calling it and every
+    call would be rejected as a stale tool-group error.
+    """
+    key = (str(session_id or ""), str(epoch_id or ""))
+    with _LOCK:
+        frozen = _FROZEN.get(key)
+        if frozen is None:
+            return
+        kept = tuple(tool for tool in frozen if tool_name(tool) in current_names)
+        if len(kept) != len(frozen):
+            _FROZEN[key] = kept
+
+
 def frozen_tool_block_message(
     name: str,
     *,

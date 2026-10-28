@@ -77,6 +77,19 @@ def _assert_no_han(text: str) -> None:
     assert match is None, f"unexpected Han character {match.group(0)!r} in system prompt"
 
 
+# user:“收到用户消息之后第一时间先回复，再继续工具调用，同时 每过一段时间再说句话”+(普通和学习模式都要先回复，工作期间自然沟通，不规定固定间隔)。
+@pytest.mark.parametrize("active_mode", [None, "study:study"])
+def test_system_prompt_requires_initial_reply_and_natural_progress(tmp_path, active_mode):
+    prompt = _prompt_text(tmp_path, active_mode=active_mode)
+
+    assert "Immediately after receiving a user message, send a brief user-facing reply before making any tool call." in prompt
+    assert "Keep the user informed naturally during ongoing work" in prompt
+    assert "meaningful progress, encounter a problem, or the work is taking a while" in prompt
+    assert "Do not follow a fixed time interval or tool-call count" in prompt
+    assert "every 30 seconds" not in prompt
+    assert "After 12 consecutive tool-only rounds" not in prompt
+
+
 def test_normal_system_prompt_and_real_bundled_skill_descriptions_are_english(tmp_path):
     prompt = _prompt_text(tmp_path)
 

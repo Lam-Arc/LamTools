@@ -140,6 +140,27 @@ async def test_public_run_forwards_effective_child_identity_metadata(
     assert all(event.payload["sub_agent"]["reasoning_level"] == "xhigh" for event in forwarded)
 
 
+@pytest.mark.asyncio
+async def test_public_run_marks_provider_affinity_as_parent_thread(
+    tmp_path, instant_model_retry_sleep,
+) -> None:
+    llm = ScriptedSubAgentOnlyLLM()
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="fake-model",
+        load_tools=default_load_tools(),
+        session_prefix="parent-thread",
+    )
+    await runner.run(task="inspect the project", agent="reviewer", mode="consider")
+
+    assert llm.requests
+    request = llm.requests[-1]
+    # user:“子代理和主代理用一个 id”+(运行时身份仍是子会话，缓存路由亲和必须回到父会话)
+    assert request.metadata["_runtime_session_id"] == "parent-thread:sub:reviewer"
+    assert request.metadata["_provider_session_affinity"] == "parent-thread"
+
+
 def test_child_message_is_auto_allowed_across_restricted_modes_and_live_tiers(tmp_path) -> None:
     runtime_permissions = {
         "active_tier": "read_only",
@@ -1339,3 +1360,26 @@ def test_supervisor_runner_clone_keeps_policy_template(tmp_path):
     clone = asyncio.run(runner.create_supervisor_runner())
     assert clone._loop_policy_template is parent_policy
     assert clone._member_loop_policy().compact_trigger_tokens == 9_000
+
+
+def test_model_resolution_prefers_the_routable_record_id(monkeypatch):
+    from lamtools_core.config.model_store import ModelConfig
+    from lamtools_core.tool.sub_agent_runner import _resolve_model_id_for_capability
+
+    class _FakeStore:
+        def get_sync(self, ref, work_root=None):
+            if ref == "deepseek-v4.1-flash":
+                return ModelConfig(
+                    id="opencode-go-deepseek-v4.1-flash",
+                    model_id="deepseek-v4.1-flash",
+                    display_name="DeepSeek V4.1 Flash",
+                )
+            return None
+
+        def list_sync(self, work_root=None):
+            return [self.get_sync("deepseek-v4.1-flash")]
+
+    monkeypatch.setattr("lamtools_core.config.model_store.ModelStore", lambda: _FakeStore())
+
+    assert _resolve_model_id_for_capability("deepseek-v4.1-flash") == "opencode-go-deepseek-v4.1-flash"
+    assert _resolve_model_id_for_capability("DeepSeek V4.1 Flash") == "opencode-go-deepseek-v4.1-flash"

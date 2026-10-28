@@ -14,7 +14,7 @@
 
 <script setup lang="ts">
 import { linkifyTextNodes } from '@/helpers/webLinks'
-import { renderFileReferenceNodes } from '@/helpers/fileReferenceRendering'
+import { renderFileReferenceNodes, isLocalFileReference } from '@/helpers/fileReferenceRendering'
 import { useReferenceActions } from '@/helpers/referenceActions'
 
 import { t, uiLanguage } from '@/i18n/index.ts'
@@ -96,6 +96,35 @@ const props = withDefaults(
 )
 
 const contentRoot = ref<HTMLElement | null>(null)
+let localImageGeneration = 0
+const localImageUrls = new Set<string>()
+function disposeLocalImages() {
+  localImageGeneration += 1
+  for (const url of localImageUrls) URL.revokeObjectURL(url)
+  localImageUrls.clear()
+}
+async function hydrateLocalReferences() {
+  const root = contentRoot.value
+  if (!root || !props.fileReferences) return
+  const generation = localImageGeneration
+  void referenceActions.canonicalize(root)
+  for (const image of root.querySelectorAll<HTMLImageElement>('img[data-local-image-path]')) {
+    try {
+      const actual = await referenceActions.resolve(image.dataset.localImagePath || '')
+      const response = await referenceActions.read(actual)
+      if (generation !== localImageGeneration || !root.contains(image)) return
+      const mime = response.headers['content-type'] || ''
+      if (!mime.startsWith('image/') || response.body.length > 32 * 1024 * 1024) throw new Error('图片无法预览')
+      const url = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], { type: mime }))
+      localImageUrls.add(url); image.src = url
+      image.dataset.localImagePath = actual
+      const anchor = image.closest<HTMLAnchorElement>('a[data-file-path]')
+      if (anchor) { anchor.dataset.filePath = actual; anchor.title = actual }
+    } catch {
+      if (generation === localImageGeneration && root.contains(image)) image.dispatchEvent(new Event('error'))
+    }
+  }
+}
 type ReplyBlock = { id: number; target: HTMLElement; kind: 'interactive' | 'writing'; source: string; title?: string; variant?: string }
 const replyBlocks = shallowRef<ReplyBlock[]>([])
 let replyBlockSequence = 0
@@ -355,8 +384,20 @@ function createMermaidRenderer(heavy: boolean): Renderer {
   const renderer = new marked.Renderer()
   // user:“不要出错”+(内部挂载标记仅由专用块产生，原始 HTML 不能伪造可执行内容)。
   renderer.html = ({ text }) => text.replace(/\bdata-(inline-visualization|writing-block)\b/gi, 'data-disabled-$1')
+  // user:“E:/LamTools/MyProject/krea_ref01_00001_.png”+(Windows 文件链接先转换成安全引用，避免净化器把盘符当成协议移除)。
+  renderer.link = function ({ href, title, tokens }) {
+    if (props.fileReferences && isLocalFileReference(href)) {
+      const path = referenceActions.absolute(href.replace(/:\d+(?::\d+)?$/, ''))
+      return `<a href="#" class="file-reference-link" data-file-path="${escapeHtml(path)}" title="${escapeHtml(path)}">${this.parser.parseInline(tokens)}</a>`
+    }
+    return `<a href="${escapeHtml(href)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${this.parser.parseInline(tokens)}</a>`
+  }
 
   renderer.image = function ({ href, title, text }: { href: string; title?: string | null; text: string }): string {
+    if (props.fileReferences && isLocalFileReference(href)) {
+      const path = referenceActions.absolute(href)
+      return `<a href="#" data-file-path="${escapeHtml(path)}" title="${escapeHtml(path)}"><img data-local-image-path="${escapeHtml(path)}" alt="${escapeHtml(text)}"></a>`
+    }
     const remote = /^https?:\/\//i.test(href)
     if (remote && !props.autoPlotMath) {
       return `<span class="markdown-image-fallback" role="status">${escapeHtml(t('远程图片仅在 Study 中显示：{0}', { 0: text || t('配图') }))}</span>`
@@ -765,6 +806,7 @@ const renderedHtml = computed(() => {
 
 function renderStaticHtml(html: string): void {
   if (!contentRoot.value) return
+  disposeLocalImages()
   clearStreamedSegments()
   disposeTableEnhancements()
   disposeInteractiveBlocks()
@@ -772,6 +814,7 @@ function renderStaticHtml(html: string): void {
   mountInteractiveBlocks()
   renderInlineMathPlots()
   enhanceTables()
+  void hydrateLocalReferences()
 }
 
 function renderInlineMathPlots(): void {
@@ -948,6 +991,7 @@ watch(uiLanguage, () => {
 // contents with the finished render; entering it (a message going live again)
 // starts from a clean segment list.
 watch(() => props.streaming, (streaming) => {
+  if (streaming) disposeLocalImages()
   if (streaming) disposeInteractiveBlocks()
   clearStreamedSegments()
   if (streaming && contentRoot.value) syncStreamingSegments(props.content, true)
@@ -1044,6 +1088,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  disposeLocalImages()
   disposeInteractiveBlocks()
   contentRoot.value?.removeEventListener('click', onRootClick, true)
   contentRoot.value?.removeEventListener('contextmenu', onReferenceContextMenu, true)

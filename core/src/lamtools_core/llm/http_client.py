@@ -14,6 +14,7 @@ from lamtools_core.config.network import httpx_client_kwargs
 from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall, normalize_usage
 from lamtools_core.llm.forensics import recorded_request, record_id, drain_recording
 from lamtools_core.llm.reasoning import reasoning_level_from_legacy
+from lamtools_core.llm.session_affinity import provider_session_affinity
 from lamtools_core.llm.profiles import (
     build_profiled_anthropic_request,
     build_profiled_gemini_request,
@@ -506,12 +507,15 @@ class CoreHttpLLMClient:
                 headers["anthropic-version"] = str(self.adapter_profile.get("anthropic_version") or "2023-06-01")
         if self._uses_opencode_session_header():
             metadata = request.metadata if request is not None and isinstance(request.metadata, dict) else {}
-            session_id = ""
-            for key in ("_runtime_session_id", "session_id", "thread_id", "parent_session_id"):
+            runtime_session_id = ""
+            for key in ("_runtime_session_id", "session_id", "thread_id"):
                 value = metadata.get(key)
                 if isinstance(value, str) and value.strip():
-                    session_id = value.strip()
+                    runtime_session_id = value.strip()
                     break
+            # user:“子代理和主代理用一个 id”+(OpenCode 按会话做路由与提示词缓存亲和；
+            # 子会话沿用父会话 id，避免主/子代理被分到不同缓存桶。)
+            session_id = provider_session_affinity(runtime_session_id, metadata)
             if not session_id:
                 raise ValueError(
                     "OpenCode API requests require a stable conversation session ID "

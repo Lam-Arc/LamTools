@@ -1,3 +1,4 @@
+// user:“测试，提交打包发布”+(补齐测试替身的暂停和终止接口，保持正式控制契约)。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import { CoreAppServerClient, CoreRequestAcceptanceUnknownError } from '../src/appServer/client'
@@ -143,6 +144,7 @@ describe('committed turn acceptance', () => {
   it('preserves the identity of a manually retried uncertain submission despite late running state', async () => {
     const text = ref('task'); const status = ref('idle'); const ids: string[] = []; let queued = 0
     const composer = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
       activeThreadId: ref('thread'), connectedThreadId: ref('thread'), connectionState: ref('open'),
       text, status, cursor: ref(4), attachments: ref([]), connect: async () => {},
       startTurn: async (_thread, _input, _root, _options, id) => {

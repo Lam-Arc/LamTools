@@ -223,6 +223,25 @@ class SqlAlchemyAppEventStore:
         result = await db.execute(query)
         return [self._to_envelope(row) for row in result.scalars().all()]
 
+    # user:“该修修，相关插件也要修”+(按回合查询最后事件或真实终态，不受会话历史分页上限影响)。
+    async def find_turn_event(
+        self, db: AsyncSession, *, thread_id: str, turn_id: str,
+        terminal_only: bool = False,
+    ) -> AppEventEnvelope | None:
+        model = self.event_model
+        query = select(model).where(model.thread_id == thread_id, model.turn_id == turn_id)
+        if terminal_only:
+            from lamtools_core.turn.model import TERMINAL_TURN_STATUSES
+
+            query = query.where(
+                model.method == CORE_RUN_ITEM_METHOD,
+                model.payload_json["kind"].as_string() == "status",
+                model.payload_json["status"].as_string().in_(TERMINAL_TURN_STATUSES),
+                model.payload_json["payload"]["type"].as_string() == "turn",
+            )
+        row = await db.scalar(query.order_by(model.seq.desc()).limit(1))
+        return self._to_envelope(row) if row is not None else None
+
     async def find_client_event(
         self,
         db: AsyncSession,

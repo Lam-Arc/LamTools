@@ -153,20 +153,51 @@ class SQLiteWriteCoordinator:
         async with _write_lock(self.identity):
             for attempt in range(len(self.retry_delays) + 1):
                 try:
-                    async with self.session_factory() as session:
-                        try:
-                            await session.execute(text("BEGIN IMMEDIATE"))
-                            result = await action(session)
-                            await session.commit()
-                            return result
-                        except BaseException:
-                            await session.rollback()
-                            raise
+                    # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(重复取消不得穿透数据库操作；事务回滚完成才释放写入所有权)。
+                    cancelled = asyncio.Event()
+                    transaction = asyncio.create_task(
+                        self._transaction(action, cancelled), name="sqlite-write-transaction"
+                    )
+                    try:
+                        return await asyncio.shield(transaction)
+                    except asyncio.CancelledError:
+                        cancelled.set()
+                        # SQLite's worker continues executing even when its
+                        # asyncio waiter is cancelled. Drain the same owner,
+                        # including rollback/connection close, despite a second
+                        # Stop escalation. Never hand its connection to a new writer.
+                        while not transaction.done():
+                            try:
+                                await asyncio.shield(transaction)
+                            except asyncio.CancelledError:
+                                continue
+                            except Exception:
+                                break
+                        if not transaction.cancelled():
+                            transaction.exception()  # retrieve any failure while preserving cancellation
+                        raise
                 except OperationalError as exc:
                     if not _is_sqlite_locked_error(exc) or attempt >= len(self.retry_delays):
                         raise
                     await asyncio.sleep(self.retry_delays[attempt])
         raise RuntimeError("SQLite write retry exhausted")
+
+    async def _transaction(self, action: WriteAction[T], cancelled: asyncio.Event) -> T:
+        async with self.session_factory() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                if cancelled.is_set():
+                    await session.rollback()
+                    return None  # type: ignore[return-value]  # cancelled caller never consumes this result
+                result = await action(session)
+                if cancelled.is_set():
+                    await session.rollback()
+                else:
+                    await session.commit()
+                return result
+            except BaseException:
+                await session.rollback()
+                raise
 
 
 def _is_sqlite_locked_error(exc: BaseException) -> bool:

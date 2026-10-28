@@ -1,6 +1,6 @@
 <script setup>
 // user:“可交互式网络工具界面，不需要太专业”+(下载从任务行暂停和继续，不要求用户填写任务 ID)。
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import {
   Download,
   FileDown,
@@ -13,14 +13,14 @@ import {
   RefreshCw,
   ArrowUp,
 } from "lucide-vue-next";
-import { bytes, filenameFromUrl, rate, taskLabel } from "./session.mjs";
+import { bytes, rate, taskLabel } from "./session.mjs";
 const props = defineProps({ session: Object });
 const tab = ref("active"),
   url = ref(""),
   filename = ref(""),
   directory = ref(""),
   hash = ref(""),
-  proxy = ref(false),
+  route = ref("auto"),
   advanced = ref(false),
   connections = ref(8),
   speed = ref(0),
@@ -74,30 +74,20 @@ function remaining(task) {
     : "等待传输";
 }
 async function add() {
-  let name = filename.value.trim();
-  if (!name) {
-    name = filenameFromUrl(url.value);
-    if (!name) {
-      props.session.error = "请输入有效的下载链接";
-      return;
-    }
-  }
+  // user:“修”+(完整下载页与快捷入口共用后台默认值和参数验证)。
+  const name = filename.value.trim();
   const payload = {
     url: url.value.trim(),
-    filename: name,
+    ...(name ? { filename: name } : {}),
     connections: Number(connections.value),
-    proxy: proxy.value,
+    route: route.value,
     sha256: hash.value.trim(),
     ...(Number(speed.value) > 0
       ? { bytes_per_second: Number(speed.value) }
       : {}),
     ...(directory.value.trim() ? { directory: directory.value.trim() } : {}),
   };
-  const result = await props.session.run(
-    "transfer.add",
-    payload,
-    "已开始下载",
-  );
+  const result = await props.session.run("transfer.add", payload, "已开始下载");
   if (result) {
     url.value = "";
     filename.value = "";
@@ -149,11 +139,6 @@ async function verify(task) {
         ? "文件校验通过"
         : `文件校验值：${result.sha256}`;
 }
-onMounted(() => props.session.loadTasks());
-watch(
-  () => props.session.state,
-  () => props.session.loadTasks(),
-);
 </script>
 <template>
   <div class="nx-view-stack">
@@ -207,7 +192,11 @@ watch(
         <label
           ><span>并行数量</span
           ><select v-model.number="connections" aria-label="并行数量">
-            <option v-for="value in [1, 2, 4, 8, 16]" :key="value" :value="value">
+            <option
+              v-for="value in [1, 2, 4, 8, 16]"
+              :key="value"
+              :value="value"
+            >
               {{ value }}
             </option>
           </select></label
@@ -248,12 +237,15 @@ watch(
             v-model="hash"
             class="nx-input"
             placeholder="SHA-256" /></label
-        ><label class="nx-checkbox"
-          ><input
-            v-model="proxy"
-            type="checkbox"
-            :disabled="!session.state?.proxy?.running"
-          /><span>通过当前代理下载</span></label
+        ><label
+          ><span>下载线路</span
+          ><select v-model="route" aria-label="下载线路">
+            <option value="auto">自动（跟随加速）</option>
+            <option value="direct">直接连接</option>
+            <option value="proxy" :disabled="!session.state?.proxy?.running">
+              当前代理
+            </option>
+          </select></label
         >
       </div>
     </form>

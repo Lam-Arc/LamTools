@@ -38,10 +38,15 @@
             "default": 8,
             "description": "aria2 split connections"
           },
+          "route": {
+            "type": "string", "enum": ["auto", "direct", "proxy"], "default": "auto",
+            "description": "Automatic follows the local accelerator when running; direct bypasses it; proxy requires Mihomo."
+          },
+          "sha256": { "type": "string", "description": "Optional expected SHA-256 checksum" },
+          "bytes_per_second": { "type": "integer", "minimum": 0, "description": "Download limit in bytes per second; zero means unlimited" },
           "proxy": {
             "type": "boolean",
-            "default": false,
-            "description": "Download through the running Mihomo proxy"
+            "description": "Legacy explicit override: true uses Mihomo, false connects directly. Omit to follow automatic acceleration."
           }
         },
         "required": ["url"],

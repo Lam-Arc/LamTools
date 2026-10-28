@@ -28,6 +28,7 @@ from lamtools_core.tool.command import (
     run_subprocess_blocking as _run_subprocess_blocking,
     run_subprocess_streaming_blocking as _run_subprocess_streaming_blocking,
     terminate_process_tree as _terminate_process_tree,
+    read_command_log as _read_command_log,
 )
 
 
@@ -126,8 +127,9 @@ def _run_background_subprocess_blocking(
     if cancel_event is None:
         time.sleep(0.5)
     if process.poll() is not None:
-        stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
-        stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
+        # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(后台日志同样限制预览内存，完整日志仍保留在磁盘)。
+        stdout = _read_command_log(stdout_path)
+        stderr = _read_command_log(stderr_path)
         error_type = "BackgroundExited"
         metadata = {
             "pid": process.pid,
@@ -160,8 +162,8 @@ def _run_background_subprocess_blocking(
         probe_result = _wait_for_background_http_probe(http_probe, cancel_event=cancel_event)
         if not probe_result.ok:
             _terminate_process_tree(process)
-            stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
-            stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
+            stdout = _read_command_log(stdout_path)
+            stderr = _read_command_log(stderr_path)
             return _CommandExecution(
                 exit_code=1,
                 stdout=stdout,

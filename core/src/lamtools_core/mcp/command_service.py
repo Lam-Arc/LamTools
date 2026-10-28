@@ -101,6 +101,14 @@ class MCPCommandService:
         await self._ensure_loaded()
         tool = self.registry.resolve(name)
         if tool is None:
+            # user:“MCP 列表空”+(运行工具时也返回所属服务器的启动失败原因)。
+            parts = name.split("__", 2)
+            from .client import safe_name
+            errors = getattr(self.registry, "load_errors", {})
+            failure = next(((server, error) for server, error in errors.items()
+                            if len(parts) == 3 and safe_name(server) == parts[1]), None)
+            if failure:
+                raise ValueError(f"MCP server {failure[0]} failed to start: {failure[1]}")
             raise ValueError(f"Unknown MCP tool: {name}")
         if tool.permission == "hard_block":
             raise ValueError(f"MCP tool is hard-blocked: {name}")
@@ -124,7 +132,12 @@ class MCPCommandService:
                  and (getattr(tool, "level", 3) != 0 or any(value > 0 for value in getattr(tool, "action_levels", {}).values()))
                  and (self.allowed_tools is None or tool.function_name in self.allowed_tools)]
         if action == "servers":
-            return {"servers": sorted({t.server for t in tools})}
+            result = {"servers": sorted({t.server for t in tools})}
+            # user:“MCP 列表空”+(将启动失败展示给模型，而不是只返回空列表)。
+            errors = getattr(self.registry, "load_errors", {})
+            if errors:
+                result["errors"] = dict(errors)
+            return result
         if action == "schema":
             tool = next((t for t in tools if t.function_name == tool_name), None)
             if tool is None:

@@ -5,7 +5,8 @@ import { getMode, pluginUIRegistry } from '../src/plugins/registry'
 
 afterEach(() => pluginUIRegistry.clear())
 
-function makeRpc(legacy: unknown, system: unknown) {
+// user:“测试，提交打包发布”+(测试通道使用与实际插件 RPC 一致的对象响应契约)。
+function makeRpc(legacy: Record<string, unknown> | Error, system: Record<string, unknown> | Error) {
   return vi.fn(async (method: string) => {
     if (method === 'plugin.ui.list') {
       if (legacy instanceof Error) throw legacy

@@ -117,7 +117,9 @@ async def _persist_cancelled_terminal(
     await _persist_cancelled_runtime_state(context=context, thread_id=thread_id, turn_id=turn_id)
 
     async def write(db: AsyncSession) -> AppEventEnvelope | None:
-        snapshot = await context.persistence.load(db, thread_id)
+        # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(终止状态只读取回合元数据，避免每次收尾装载整段会话)。
+        loader = getattr(context.persistence, "load_metadata", context.persistence.load)
+        snapshot = await loader(db, thread_id)
         if _turn_is_terminal(snapshot, turn_id):
             return None
         # user:“结束事件不能创建回合”+没有这个回合就什么都不写：宁可留下一个

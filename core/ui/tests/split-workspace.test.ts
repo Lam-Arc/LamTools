@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFitSplit, createSplitState, splitPane, openTab, moveTab, closeTab, closePane, resizeSplit, arrangeLayout, layoutRects, minimumSize, paneIds, restoreSplitState } from '../src/split/layout'
+import { canFitSplit, canJoinPanes, createSplitState, splitPane, openTab, moveTab, closeTab, closePane, resizeSplit, arrangeLayout, joinPanes, layoutRects, minimumSize, paneIds, restoreSplitState, swapPanes, SPLIT_TAB_BAR_HEIGHT } from '../src/split/layout'
 
 // user:“第一版就支持多个分屏，左右 / 上下自由组合”+(验收递归布局、移动与恢复，不以固定右侧栏代替分屏)。
 describe('Split Pane workspace', () => {
@@ -47,6 +47,19 @@ describe('Split Pane workspace', () => {
     resizeSplit(state.tree, root.id, 20, 1200)
     expect(root.ratio).toBeLessThanOrEqual(1 - 320 / 1198)
   })
+  // user:“拖拽的判定，应该只有中间区域是拖拽判定，偏靠角的那一块应该留给创建分屏的判定”+(分隔线中段才可拖动，角部让给角柄)。
+  it('keeps resizing on the middle of a divider and reserves its corners', () => {
+    const state = createSplitState(), right = splitPane(state, 'main', 'right')!
+    const columns = layoutRects(state.tree, { x: 0, y: 0, width: 1200, height: 800 }).dividers[0]
+    expect(columns.handle.y).toBeGreaterThan(columns.rect.y + SPLIT_TAB_BAR_HEIGHT)
+    expect(columns.handle.y + columns.handle.height).toBeLessThan(columns.rect.y + columns.rect.height - 10)
+    expect(columns.handle.width).toBeGreaterThan(columns.rect.width)
+    splitPane(state, right, 'bottom')
+    const rows = layoutRects(state.tree, { x: 0, y: 0, width: 1200, height: 800 }).dividers.find(divider => divider.direction === 'rows')!
+    expect(rows.handle.x).toBeGreaterThan(rows.rect.x + 10)
+    expect(rows.handle.x + rows.handle.width).toBeLessThan(rows.rect.x + rows.rect.width - 10)
+    expect(rows.handle.height).toBeGreaterThan(rows.rect.height)
+  })
   // user:“审查分屏代码，并优化”+(把标签移到已经显示同一内容的屏时合并到原标签，不能出现两份相同内容)。
   it('merges a moved tab into an existing copy instead of duplicating it', () => {
     const state = createSplitState(), right = splitPane(state, 'main', 'right')!, below = splitPane(state, right, 'bottom')!
@@ -77,6 +90,27 @@ describe('Split Pane workspace', () => {
     const restored = restoreSplitState(JSON.stringify(state))
     expect(restored.panes[pane]).toBeDefined()
     expect(paneIds(restored.tree)).toHaveLength(18)
+  })
+  // user:“该对齐的就全部都去对齐”“我要体验一致化”+(角拖合并与边框交换共用同一套布局动作)。
+  it('joins sibling panes into one area and swaps pane contents', () => {
+    const state = createSplitState(), right = splitPane(state, 'main', 'right')!, below = splitPane(state, right, 'bottom')!
+    openTab(state, right, { id: 'a', kind: 'page', title: 'A', resource: 'res-a' })
+    openTab(state, below, { id: 'b', kind: 'page', title: 'B', resource: 'res-b' })
+    expect(canJoinPanes(state.tree, right, below)).toBe(true)
+    expect(canJoinPanes(state.tree, right, 'main')).toBe(false)
+    const before = layoutRects(state.tree, { x: 0, y: 0, width: 1200, height: 800 }).panes
+    expect(joinPanes(state, right, below)).toBe(true)
+    expect(state.panes[right]).toBeUndefined()
+    expect(state.panes[below].tabs.map(t => t.id)).toEqual(['b', 'a'])
+    const after = layoutRects(state.tree, { x: 0, y: 0, width: 1200, height: 800 }).panes[below]
+    expect(after.width).toBe(before[right].width)
+    expect(after.height).toBe(before[right].height + before[below].height + 2)
+    const extra = splitPane(state, below, 'right')!
+    openTab(state, below, { id: 'c', kind: 'page', title: 'C', resource: 'res-c' })
+    openTab(state, extra, { id: 'd', kind: 'page', title: 'D', resource: 'res-d' })
+    expect(swapPanes(state, below, extra)).toBe(true)
+    expect(state.panes[below].tabs.map(t => t.id)).toEqual(['d'])
+    expect(state.panes[extra].tabs.map(t => t.id)).toEqual(['b', 'a', 'c'])
   })
   it('preserves every tab when applying layout presets', () => {
     const state = createSplitState()

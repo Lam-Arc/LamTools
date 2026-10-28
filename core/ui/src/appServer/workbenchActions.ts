@@ -29,7 +29,7 @@ export interface SubmitCoreComposerTaskOptions {
   commandCatalog?: CoreCommandCatalogItem[]
   attachments?: CoreInputItem[]
   executeCommand?: (command: string, argumentsText?: string) => Promise<boolean>
-  steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<boolean | CoreSteerAttempt>
+  steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[], clientMessageId?: string) => Promise<boolean | CoreSteerAttempt>
   queueInput: (
     threadId: string,
     inputItems: CoreInputItem[],
@@ -139,7 +139,8 @@ export async function submitCoreComposerTask(
       await options.queueInput(options.threadId, inputItems, options.turnOptions, options.clientMessageId)
       return { status: 'queued', inputItems }
     }
-    const steered = await options.steerTurn(options.threadId, options.activeTurnId, inputItems)
+    // user:“做吧”+(引导与排队、重试使用同一请求身份，回执丢失不重复发送)。
+    const steered = await options.steerTurn(options.threadId, options.activeTurnId, inputItems, options.clientMessageId)
     const steerOutcome = typeof steered === 'boolean' ? { ok: steered } : steered
     if (steerOutcome.ok) return { status: 'guided', inputItems }
     // A refusal is a success response with `applied: false` (or a failed call).

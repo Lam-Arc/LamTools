@@ -131,6 +131,17 @@ export function usePendingAttachments() {
     pendingAttachments.value = [];
   }
 
+  // user:“做吧”+(迟到的发送结果只能移除原聊天里已提交的附件，保留新增文件)。
+  function removeSubmittedAttachments(sessionId: string, submitted: import('@/types.ts').CoreInputItem[]): void {
+    const ids = new Set(submitted.filter(item => item.type === 'attachment').map(item => item.attachment_id))
+    if (!ids.size) return
+    if (currentSessionId === sessionId) {
+      pendingAttachments.value = pendingAttachments.value.filter(item => !ids.has(item.id))
+    } else {
+      writeStoredAttachments(sessionId, readStoredAttachments(sessionId).filter(item => !ids.has(item.id)))
+    }
+  }
+
   return {
     pendingAttachments,
     hasBlockingFailure,
@@ -140,6 +151,7 @@ export function usePendingAttachments() {
     markFailed,
     removeAttachment,
     clearAttachments,
+    removeSubmittedAttachments,
     setSession,
     persistCurrent,
   };

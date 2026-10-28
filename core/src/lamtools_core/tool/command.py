@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import codecs
+import io
 import json
 import logging
 import re
@@ -20,6 +22,44 @@ from lamtools_core.tool.workspace import is_within_path
 DEFAULT_MAX_TEXT_LENGTH = 50_000
 
 logger = logging.getLogger(__name__)
+
+
+class _BoundedOutput:
+    # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(限制捕获阶段的内存，超长单行也只保留首尾，不能等显示时才截断)。
+    def __init__(self, limit: int = DEFAULT_MAX_TEXT_LENGTH) -> None:
+        self.limit = limit
+        self.total = 0
+        self.head = ""
+        self.tail = ""
+
+    def append(self, text: str) -> None:
+        self.total += len(text)
+        head_limit = self.limit // 2
+        take = min(len(text), head_limit - len(self.head))
+        self.head += text[:take]
+        self.tail = (self.tail + text[take:])[-(self.limit - head_limit):]
+
+    def snapshot(self) -> str:
+        if self.total <= self.limit:
+            return self.head + self.tail
+        omitted = self.total - len(self.head) - len(self.tail)
+        return self.head + f"\n[... {omitted} characters truncated ...]\n" + self.tail
+
+
+def read_command_log(path: Path) -> str:
+    """Preview a possibly huge log without reading the entire file."""
+    if not path.exists():
+        return ""
+    with path.open("rb") as handle:
+        size = handle.seek(0, 2)
+        handle.seek(0)
+        if size <= DEFAULT_MAX_TEXT_LENGTH:
+            return handle.read(DEFAULT_MAX_TEXT_LENGTH).decode("utf-8", errors="replace")
+        half = DEFAULT_MAX_TEXT_LENGTH // 2
+        head = handle.read(half).decode("utf-8", errors="replace")
+        handle.seek(-half, 2)
+        tail = handle.read(half).decode("utf-8", errors="replace")
+    return head + f"\n[... {size - 2 * half} bytes truncated ...]\n" + tail
 
 
 @dataclass(frozen=True)
@@ -256,84 +296,11 @@ def run_subprocess_blocking(
     env: dict[str, str] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> CommandExecution:
-    """Run a command without depending on the active asyncio loop's subprocess support."""
-    started_at = time.monotonic()
-    creationflags = _windows_command_creationflags()
-    process: subprocess.Popen[str] | None = None
-    job_handle: int | None = None
-    try:
-        process = subprocess.Popen(
-            argv,
-            cwd=str(cwd),
-            env=env,
-            shell=isinstance(argv, str),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-        )
-        job_handle = _windows_job_assign(process)
-        deadline = time.monotonic() + timeout
-        while True:
-            if cancel_event is not None and cancel_event.is_set():
-                terminate_process_tree(process, job_handle=job_handle)
-                stdout, stderr = _collect_after_terminate(process)
-                return CommandExecution(
-                    exit_code=-1,
-                    stdout=stdout or "",
-                    stderr=stderr or "",
-                    duration_seconds=time.monotonic() - started_at,
-                    error="Command cancelled by user",
-                    error_type="CancelledError",
-                )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired(argv, timeout)
-            try:
-                stdout, stderr = process.communicate(timeout=min(0.2, remaining))
-                break
-            except subprocess.TimeoutExpired:
-                continue
-        return CommandExecution(
-            exit_code=int(process.returncode or 0),
-            stdout=stdout or "",
-            stderr=stderr or "",
-            duration_seconds=time.monotonic() - started_at,
-        )
-    except subprocess.TimeoutExpired as exc:
-        if process is not None:
-            terminate_process_tree(process, job_handle=job_handle)
-            stdout, stderr = _collect_after_terminate(process)
-        else:
-            stdout = _decode_timeout_output(exc.stdout)
-            stderr = _decode_timeout_output(exc.stderr)
-        return CommandExecution(
-            exit_code=-1,
-            stdout=stdout,
-            stderr=stderr,
-            timed_out=True,
-            duration_seconds=time.monotonic() - started_at,
-            error=f"Command timed out after {timeout}s",
-            error_type=type(exc).__name__,
-        )
-    except OSError as exc:
-        return CommandExecution(
-            exit_code=1,
-            duration_seconds=time.monotonic() - started_at,
-            error=f"Cannot execute command: {_exception_summary(exc)}",
-            error_type=type(exc).__name__,
-        )
-    except Exception as exc:
-        return CommandExecution(
-            exit_code=1,
-            duration_seconds=time.monotonic() - started_at,
-            error=f"Command execution failed: {_exception_summary(exc)}",
-            error_type=type(exc).__name__,
-        )
-    finally:
-        _windows_job_release(job_handle)
+    # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(普通命令与实时命令共用有界捕获，避免 communicate 无上限缓存)。
+    return run_subprocess_streaming_blocking(
+        argv, cwd=cwd, timeout=timeout, env=env, cancel_event=cancel_event,
+        progress=lambda _stdout, _stderr: None,
+    )
 
 
 def _collect_after_terminate(process: subprocess.Popen[Any]) -> tuple[str, str]:
@@ -366,29 +333,48 @@ def run_subprocess_streaming_blocking(
     creationflags = _windows_command_creationflags()
     process: subprocess.Popen[str] | None = None
     job_handle: int | None = None
-    stdout_parts: list[str] = []
-    stderr_parts: list[str] = []
+    stdout_parts = _BoundedOutput()
+    stderr_parts = _BoundedOutput()
     threads: list[threading.Thread] = []
     lock = threading.Lock()
+    last_progress = 0.0
+
+    def _metadata() -> dict[str, Any]:
+        with lock:
+            return {"stdout_chars": stdout_parts.total, "stderr_chars": stderr_parts.total,
+                    "output_truncated": stdout_parts.total > stdout_parts.limit or stderr_parts.total > stderr_parts.limit}
 
     def _snapshot() -> tuple[str, str]:
         with lock:
-            return "".join(stdout_parts), "".join(stderr_parts)
+            return stdout_parts.snapshot(), stderr_parts.snapshot()
 
-    def _append_and_emit(parts: list[str], text: str) -> None:
+    def _append_and_emit(parts: _BoundedOutput, text: str) -> None:
+        nonlocal last_progress
         with lock:
             parts.append(text)
-            stdout = "".join(stdout_parts)
-            stderr = "".join(stderr_parts)
+            now = time.monotonic()
+            if now - last_progress < 0.1:
+                return
+            last_progress = now
+            stdout = stdout_parts.snapshot()
+            stderr = stderr_parts.snapshot()
         progress(stdout, stderr)
 
-    def _reader(pipe: Any, parts: list[str]) -> None:
+    def _reader(pipe: Any, parts: _BoundedOutput) -> None:
         try:
+            decoder = io.IncrementalNewlineDecoder(
+                codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True
+            )
             while True:
-                text = pipe.readline()
-                if not text:
+                # read1 returns available bytes, so short progress lines remain
+                # responsive without letting readline allocate a giant line.
+                chunk = pipe.read1(8192)
+                if not chunk:
                     break
-                _append_and_emit(parts, text)
+                _append_and_emit(parts, decoder.decode(chunk))
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                _append_and_emit(parts, tail)
         finally:
             try:
                 pipe.close()
@@ -404,9 +390,6 @@ def run_subprocess_streaming_blocking(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
             creationflags=creationflags,
         )
         threads = [
@@ -430,6 +413,7 @@ def run_subprocess_streaming_blocking(
                     duration_seconds=time.monotonic() - started_at,
                     error="Command cancelled by user",
                     error_type="CancelledError",
+                    metadata=_metadata(),
                 )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -447,6 +431,7 @@ def run_subprocess_streaming_blocking(
             stdout=stdout,
             stderr=stderr,
             duration_seconds=time.monotonic() - started_at,
+            metadata=_metadata(),
         )
     except subprocess.TimeoutExpired as exc:
         if process is not None:
@@ -469,6 +454,7 @@ def run_subprocess_streaming_blocking(
             duration_seconds=time.monotonic() - started_at,
             error=f"Command timed out after {timeout}s",
             error_type=type(exc).__name__,
+            metadata=_metadata(),
         )
     except OSError as exc:
         return CommandExecution(
@@ -516,6 +502,7 @@ async def run_subprocess(
         try:
             future.result(timeout=5)
         except Exception:
+            future.cancel()
             logger.debug("Command progress callback failed", exc_info=True)
 
     future = asyncio.create_task(

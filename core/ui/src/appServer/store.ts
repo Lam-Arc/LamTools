@@ -91,6 +91,8 @@ export interface CoreAppServerRuntimeControllerOptions<
   scheduleFrame?: (callback: () => void) => unknown
   onSessionCreated?: () => void
   onSessionUpdated?: (session: { title?: string }) => void
+  /** user:“做吧”+(命令响应里的回执也须确认对应提交，包括已切走的聊天)。 */
+  onResponseEvent?: (event: CoreAppEvent) => void
 }
 
 export function createCoreAppServerRuntimeState<
@@ -603,6 +605,11 @@ export function createCoreAppServerRuntimeController<
   }
 
   function applyResponse(response: Record<string, unknown>) {
+    if (Array.isArray(response.events)) {
+      for (const event of response.events) {
+        if (isRecord(event) && typeof event.method === 'string') options.onResponseEvent?.(event as unknown as CoreAppEvent)
+      }
+    }
     const snapshot = response.snapshot
     if (isCoreAppSnapshot(snapshot)) {
       hydrate(snapshot as Snapshot)
@@ -772,13 +779,15 @@ export function createCoreAppServerRuntimeController<
     threadId: string,
     turnId: string,
     input: string | InputItem[],
+    clientMessageId?: string,
   ): Promise<CoreSteerOutcome> {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
     const response = await requestMutation('turn/steer', {
       thread_id: threadId,
       turn_id: turnId,
-      client_message_id: crypto.randomUUID(),
+      // user:“做吧”+(引导发送重试沿用提交身份)。
+      client_message_id: clientMessageId || crypto.randomUUID(),
       input: inputItems,
       // 引导是否生效由事件与 applied 字段回答；整包快照在大线程上是纯延迟。
       include_snapshot: false,
@@ -836,10 +845,11 @@ export function createCoreAppServerRuntimeController<
     applyResponse(response)
   }
 
-  async function resumeTurn(threadId: string, turnId: string, input?: CoreAppInputItem[]) {
+  async function resumeTurn(threadId: string, turnId: string, input?: CoreAppInputItem[], clientMessageId?: string) {
     await ensureClient()
     const key = JSON.stringify([threadId, turnId])
-    const clientId = uncertainResumes.get(key) || crypto.randomUUID()
+    // user:“做吧”+(恢复补充输入以提交为单位重试，不能借用另一条补充输入的身份)。
+    const clientId = clientMessageId || uncertainResumes.get(key) || crypto.randomUUID()
     try {
       const response = await requestMutation('turn/resume', {
         thread_id: threadId, turn_id: turnId, include_snapshot: false,

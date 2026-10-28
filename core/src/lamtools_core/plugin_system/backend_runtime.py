@@ -6,12 +6,26 @@ from .lifecycle import backend_entry, plugin_backend_available
 from .safety import safe_mode
 
 
+_REMEMBERED_CONTEXTS: dict[str, object] = {}
+
+
+def remember_context(plugin, context):
+    """Keep the host context for a plugin whose manager is outside this host."""
+    if context is not None:
+        _REMEMBERED_CONTEXTS[str(plugin)] = context
+    return context
+
+
+def forget_context(plugin):
+    _REMEMBERED_CONTEXTS.pop(str(plugin), None)
+
+
 def context_for(plugin, host=None):
-    manager = getattr(host, "backend_manager", None)
-    if manager is None:
-        return None
-    handle = manager.get(plugin)
-    return handle.context if handle is not None else manager.context
+    manager = getattr(host, "backend_manager", None) if host is not None else None
+    if manager is not None:
+        handle = manager.get(plugin)
+        return handle.context if handle is not None else manager.context
+    return _REMEMBERED_CONTEXTS.get(str(plugin))
 
 
 class PluginSupervisor:
@@ -198,4 +212,4 @@ def register_manager(host, handles, context):
     return manager
 
 
-__all__ = ["PluginSupervisor", "V2RuntimeManager", "context_for", "register_manager"]
+__all__ = ["PluginSupervisor", "V2RuntimeManager", "context_for", "forget_context", "register_manager", "remember_context"]

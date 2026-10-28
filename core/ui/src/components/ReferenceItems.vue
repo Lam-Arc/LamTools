@@ -32,13 +32,13 @@ import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
 defineOptions({ inheritAttrs: false })
 const props = withDefaults(defineProps<{ attachments?: CoreAttachment[]; artifacts?: ToolArtifact[]; transport: LamToolsTransport; projectId?: string | null; workRoot?: string | null; compact?: boolean; previewOnly?: boolean }>(), { attachments: () => [], artifacts: () => [] })
 const actions = useReferenceActions(props.transport, () => props.workRoot || '')
-type Item = { id: string; name: string; path: string; kind: string; mime: string; attachment?: string; link: boolean; memory: boolean; inline?: string }
+type Item = { id: string; name: string; path: string; kind: string; mime: string; attachment?: string; artifactId?: string; link: boolean; memory: boolean; inline?: string }
 const items = computed<Item[]>(() => [
   ...props.attachments.map(a => ({ id: a.id, name: a.filename, path: a.path || '', kind: a.preview_type, mime: a.mime_type, attachment: a.id.startsWith('path:') ? undefined : a.id, link: false, memory: false })),
   ...props.artifacts.map((a, index) => {
     const raw = a as ToolArtifact & { artifact_id?: string; name?: string; path?: string; mime_type?: string }
     const metadata = raw.metadata || {}, path = String(raw.path || raw.uri || metadata.path || '')
-    return { inline: typeof metadata.image_data_url === 'string' && metadata.image_data_url.startsWith('data:image') ? metadata.image_data_url : undefined, id: raw.artifact_id || path || `legacy-${index}`, name: raw.name || String(metadata.name || path.split('/').pop() || '文件'), path, kind: raw.kind, mime: raw.mime_type || String(metadata.mime_type || ''), link: Boolean(normalizeWebLink(path)), memory: raw.kind === 'memory' }
+    return { artifactId: raw.artifact_id, inline: typeof metadata.image_data_url === 'string' && metadata.image_data_url.startsWith('data:image') ? metadata.image_data_url : undefined, id: raw.artifact_id || path || `legacy-${index}`, name: raw.name || String(metadata.name || path.split('/').pop() || '文件'), path, kind: raw.kind, mime: raw.mime_type || String(metadata.mime_type || ''), link: Boolean(normalizeWebLink(path)), memory: raw.kind === 'memory' }
   }),
 ])
 const resolvedPaths = reactive<Record<string, string>>({})
@@ -48,12 +48,19 @@ const owned = new Set<string>()
 let generation = 0, previewGeneration = 0, previousFocus: HTMLElement | null = null
 function binaryPath(item: Item) {
   if (item.attachment) return `/attachments/${encodeURIComponent(item.attachment)}/download`
-  if (item.id.startsWith('path:')) return `/files/read-reference?path=${encodeURIComponent(item.path)}`
-  return `/projects/${encodeURIComponent(props.projectId || '')}/artifacts/${encodeURIComponent(item.id)}/file?path=${encodeURIComponent(item.path)}`
+  if (item.artifactId && props.projectId) return `/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(item.artifactId)}/file?path=${encodeURIComponent(item.path)}`
+  const query = new URLSearchParams({ path: item.path, ...(props.workRoot ? { work_root: props.workRoot } : {}) })
+  return `/files/read-reference?${query}`
 }
 async function bytes(item: Item) {
-  const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path: binaryPath(item) })
-  if (response.status < 200 || response.status >= 300) throw new Error(response.status === 404 ? '原文件不存在' : '文件无法读取')
+  let response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path: binaryPath(item) })
+  // user:“引用的地址可能不对”+(旧投影 ID 不当作真实资料库 ID；文件预览和正文共用核实后的路径)。
+  if (response.status === 404 && item.artifactId && item.path) return actions.read(item.path)
+  if (response.status < 200 || response.status >= 300) {
+    let detail = response.status === 404 ? '原文件不存在' : '文件无法读取'
+    try { detail = JSON.parse(new TextDecoder().decode(response.body)).detail || detail } catch { /* Keep the existing fallback for non-JSON failures. */ }
+    throw new Error(detail)
+  }
   return response
 }
 function blobUrl(response: TransportHttpResponse, mime: string) {
@@ -66,6 +73,17 @@ watch(() => items.value.map(i => i.id + '\0' + i.path + '\0' + i.kind).join('\n'
   const run = ++generation
   if (props.previewOnly) return
   for (const item of current) {
+    if (!item.attachment && item.path && !item.link && !item.memory && !item.inline) {
+      try {
+        const actual = await actions.resolve(item.path)
+        if (run !== generation) return
+        item.path = actual; resolvedPaths[item.id] = actual
+        delete errors[item.id]
+      } catch (error) {
+        if (run === generation) errors[item.id] = error instanceof Error ? error.message : '原文件不存在'
+        if (!item.artifactId) continue
+      }
+    }
     if (item.attachment) {
       try {
         const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path: `/attachments/${encodeURIComponent(item.attachment)}/preview` })
@@ -93,6 +111,11 @@ async function preview(item: Item) {
   try {
     previewError.value = ''
     delete errors[item.id]
+    if (!item.attachment && item.path && !item.memory && !item.inline) {
+      const actual = await actions.resolve(item.path)
+      if (run !== previewGeneration) return
+      item.path = actual; resolvedPaths[item.id] = actual
+    }
     if (item.kind === 'image' && item.inline) previewUrl.value = item.inline
     else if (item.kind === 'image') { const response = await bytes(item); if (run === previewGeneration) previewUrl.value = blobUrl(response, item.mime) }
     else if (/^(?:text\/|application\/(?:json|xml))/.test(item.mime) || /\.(md|txt|log|jsonc?|ya?ml|csv|py|rs|ts|js)$/i.test(item.name)) {

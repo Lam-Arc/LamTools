@@ -36,21 +36,6 @@ export const nodeLabel = (name) =>
     : name === "REJECT"
       ? "阻止连接"
       : name || "尚未选择线路";
-// user:“三个块分别是加速代理下载的快捷操作”+(下载块只让用户粘贴链接，文件名从链接里推导并清理 Windows 非法字符)。
-export function filenameFromUrl(value) {
-  let name;
-  try {
-    const path = new URL(String(value).trim()).pathname;
-    name = decodeURIComponent(path.split("/").pop() || "");
-  } catch {
-    return "";
-  }
-  name = name
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
-    .replace(/[. ]+$/g, "")
-    .slice(0, 200);
-  return name || "download.bin";
-}
 // user:“样式示例：不必照抄，只是方向”+(首页显示真实出口名称，嵌套分组继续解析到具体节点)。
 export function resolveProxyNode(proxies, name, depth = 0) {
   const entry = proxies?.[name];
@@ -76,7 +61,11 @@ export function uptime(started, now = Date.now()) {
   const time = new Date(started).getTime();
   if (!Number.isFinite(time)) return "";
   const seconds = Math.max(0, Math.floor((now - time) / 1000));
-  return [Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60]
+  return [
+    Math.floor(seconds / 3600),
+    Math.floor((seconds % 3600) / 60),
+    seconds % 60,
+  ]
     .map((value) => String(value).padStart(2, "0"))
     .join(":");
 }
@@ -84,7 +73,7 @@ export function useNetwork(context) {
   const state = shallowRef(null),
     proxy = ref(null),
     interfaces = ref([]),
-    tasks = ref([]),
+    tasks = computed(() => state.value?.downloads || []),
     systemProxy = ref(null);
   const busy = ref(""),
     error = ref(""),
@@ -131,8 +120,8 @@ export function useNetwork(context) {
     if (result) systemProxy.value = result;
   }
   async function loadTasks() {
-    const result = await read("transfer.list");
-    if (result) tasks.value = result.tasks || [];
+    // user:“修”+(所有面板刷新同一份后台快照，不维护各自的下载列表)。
+    await networkStore.refresh();
   }
   async function run(method, params = {}, message = "") {
     if (busy.value) return null;
@@ -188,12 +177,15 @@ export function useNetwork(context) {
         error.value = "当前系统代理不是由这里设置的，请在系统设置中关闭";
         return;
       }
-      await run(
+      // user:“修”+(恢复失败时保留监听服务，不能让系统代理指向已关闭的端口)。
+      const restored = await run(
         "system.restore",
         { id: ownedProxy.value.id },
         "已恢复原来的系统代理",
       );
-      await run("accelerator.stop", {}, "");
+      if (!restored || restored.cancelled) return;
+      const stopped = await run("accelerator.stop", {}, "");
+      if (!stopped || stopped.cancelled) return;
       if (autoStartedProxy.value) {
         autoStartedProxy.value = false;
         await run("proxy.stop", {}, "");

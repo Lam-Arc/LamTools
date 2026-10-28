@@ -63,6 +63,7 @@ from lamtools_core.llm.forensics import runtime_context as forensic_runtime_cont
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
 from lamtools_core.llm.image_payload import MESSAGE_ADDED_AT_STEP
 from lamtools_core.llm.policy import RetryPolicy
+from lamtools_core.llm.session_affinity import provider_session_affinity
 from lamtools_core.llm.retry import (
     ModelRetryEvent,
     ModelRetryExhausted,
@@ -574,6 +575,8 @@ class CoreLoopKernel:
     # path must persist this list; reloading from the store instead dropped
     # everything the stopped turn had already produced. None outside a run.
     _live_history: list[ChatMessage] | None = field(default=None, init=False, repr=False)
+    # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(准备阶段也能取消，追踪尚未开始时按空值收尾)。
+    _run_span: Any | None = field(default=None, init=False, repr=False)
     # Number of leading _live_history entries already present as store rows.
     # The run flushes history incrementally (append-only) instead of rewriting
     # the whole table at loop exit. None = unaligned (request-local compaction
@@ -980,8 +983,20 @@ class CoreLoopKernel:
                     )
                 if committed_updates or movable_seeded:
                     await self._save_checkpoint(state)
-                request.metadata.update(_runtime_session_id=state.session_id,
-                                        _runtime_run_id=state.run_id, _runtime_step=index)
+                # user:“子代理和主代理用一个 id”+(运行时身份保持子会话；缓存路由亲和
+                # 回到父会话，OpenCode 官方客户端同样让子会话沿用父会话 id。)
+                affinity_metadata = {
+                    **(state.metadata or {}),
+                    **(turn_input.metadata or {}),
+                }
+                request.metadata.update(
+                    _runtime_session_id=state.session_id,
+                    _provider_session_affinity=provider_session_affinity(
+                        state.session_id, affinity_metadata
+                    ),
+                    _runtime_run_id=state.run_id,
+                    _runtime_step=index,
+                )
                 await self._compact_request_if_needed(state, request, history=history)
                 # Strip internal bookkeeping metadata (history seq / resume
                 # marker) before the request reaches the model — the shared
@@ -3469,7 +3484,17 @@ class CoreLoopKernel:
             "session_id": state.session_id, "run_id": state.run_id,
             "step": forensic_step,
         })
-        execution = self.kit.execute_tool(state, call)
+        # user:“记忆也应当保存记忆时的精确位置”+(在统一执行入口用真实历史绑定来源，覆盖普通、并行与恢复调用)。
+        if call.name == "memory":
+            from lamtools_core.mem.context import attach_context
+            attach_context(call, state, getattr(self, "_live_history", None) or [])
+        # user:“ok，那就这么做”+(将原始档案绑定到当前执行任务，工具参数不能跨会话扩大读取范围)。
+        async def execute_bound_tool():
+            from lamtools_core.tool.context_history import history_scope
+            with history_scope(self.state_store, state.session_id, self._live_history or []):
+                return await self.kit.execute_tool(state, call)
+
+        execution = execute_bound_tool()
         timeout = self.policy.tool_timeout_seconds
         try:
             if timeout is None or timeout <= 0:

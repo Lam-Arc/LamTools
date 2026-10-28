@@ -18,6 +18,9 @@ export function mount(root, context) {
   let initialConfig = null;
   let manualMode = false;
   let busy = false;
+  let targets = null;
+  let bots = [];
+  let selectedBotId = '';
 
   const shell = document.createElement('section');
   shell.className = 'qqb-page';
@@ -46,6 +49,10 @@ export function mount(root, context) {
   const bindBody = document.createElement('div');
   bindCard.append(bindBody);
 
+  const botsCard = card('机器人');
+  const botsBody = document.createElement('div');
+  botsCard.append(botsBody);
+
   const statusCard = card('运行状态');
   const statusBody = document.createElement('div');
   statusCard.append(statusBody);
@@ -60,13 +67,164 @@ export function mount(root, context) {
   diagnosticsBody.className = 'qqb-log';
   diagnosticsCard.append(diagnosticsBody);
 
-  shell.append(header, bindCard, statusCard, configCard, diagnosticsCard);
+  shell.append(header, botsCard, bindCard, statusCard, configCard, diagnosticsCard);
   root.append(shell);
 
   // ── RPC ────────────────────────────────────────────────────────────────
   async function rpc(method, params = {}) {
     if (disposed) throw new Error('页面已关闭');
     return await context.rpc(method, params);
+  }
+
+  async function botRpc(method, params = {}) {
+    if (!selectedBotId) throw new Error('请先选择一个机器人');
+    return await rpc(method, { ...params, botId: selectedBotId });
+  }
+
+  // ── Bot list ───────────────────────────────────────────────────────────
+  function renderBots() {
+    botsBody.replaceChildren();
+    const head = document.createElement('div');
+    head.className = 'qqb-row';
+    const note = document.createElement('p');
+    note.className = 'imqb2-note';
+    note.textContent = bots.length
+      ? `共 ${bots.length} 个机器人；每个会话独立 AppID。`
+      : '还没有机器人。';
+    head.append(note, button('为当前会话新建机器人', () => void createBotForSession(), 'imqb-pill'));
+    botsBody.append(head);
+
+    if (!bots.length) return;
+    const list = document.createElement('div');
+    list.className = 'qqb-sessions';
+    for (const bot of bots) {
+      const row = document.createElement('div');
+      row.className = 'qqb-session';
+      row.style.textAlign = 'left';
+      row.style.cursor = 'pointer';
+      row.tabIndex = 0;
+      if (bot.botId === selectedBotId) row.dataset.selected = 'true';
+      const main = document.createElement('div');
+      main.className = 'qqb-session-main';
+      const name = document.createElement('span');
+      name.className = 'qqb-session-title';
+      name.textContent = bot.name || bot.botId;
+      const meta = document.createElement('span');
+      meta.className = 'qqb-session-meta';
+      const phase = bot.phase || bot.bind?.phase || 'starting';
+      const target = String(bot.targetSessionId || '').slice(0, 8) || '未绑定会话';
+      meta.textContent = `AppID ${bot.appId || '—'} · 会话 ${target} · ${phase}`;
+      main.append(name, meta);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'imqb-ghost';
+      remove.textContent = '删除';
+      remove.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void deleteBot(bot.botId);
+      });
+      row.append(main, remove);
+      row.addEventListener('click', () => selectBot(bot.botId));
+      list.append(row);
+    }
+    botsBody.append(list);
+  }
+
+  function renderNoBot() {
+    statusPill.textContent = '未创建';
+    statusPill.dataset.state = 'off';
+    const bindNote = document.createElement('p');
+    bindNote.className = 'imqb-hint';
+    bindNote.textContent = '先在右侧栏或上方列表创建这个会话的机器人。';
+    bindBody.replaceChildren(bindNote);
+    const statusNote = document.createElement('p');
+    statusNote.className = 'imqb-hint';
+    statusNote.textContent = '选择机器人后显示运行状态。';
+    statusBody.replaceChildren(statusNote);
+    const configNote = document.createElement('p');
+    configNote.className = 'imqb-hint';
+    configNote.textContent = '选择机器人后显示它的独立设置。';
+    configBody.replaceChildren(configNote);
+  }
+
+  async function deleteBot(botId) {
+    if (!window.confirm('确定删除这个机器人吗？它的网关会停止，绑定和密钥会被移除。')) return;
+    try {
+      const result = await rpc('qqbot.bot.delete', { botId });
+      if (!result.ok) throw new Error(result.error || '删除失败');
+      if (selectedBotId === botId) {
+        selectedBotId = '';
+        bindState = null;
+        config = null;
+        initialConfig = null;
+      }
+      await refreshAll();
+    } catch (err) {
+      window.alert(String(err.message || err));
+    }
+  }
+
+  function selectBot(botId) {
+    if (!botId || botId === selectedBotId) return;
+    selectedBotId = botId;
+    bindState = null;
+    config = null;
+    initialConfig = null;
+    manualMode = false;
+    renderBots();
+    void Promise.all([refreshBind(), refreshStatus(), loadConfig()]);
+  }
+
+  async function createBotForSession() {
+    const sessionId = String(context.sessionId || '').trim();
+    if (!sessionId) {
+      window.alert('当前页面没有打开会话；请在具体会话的右侧栏创建机器人。');
+      return;
+    }
+    try {
+      const result = await rpc('qqbot.bot.create', {
+        sessionId,
+        projectId: context.projectId || '',
+      });
+      if (!result.ok) throw new Error(result.error || '创建机器人失败');
+      selectedBotId = result.botId || '';
+      bindState = null;
+      config = null;
+      initialConfig = null;
+      manualMode = false;
+      await refreshAll();
+    } catch (err) {
+      window.alert(String(err.message || err));
+    }
+  }
+
+  async function loadBots() {
+    try {
+      const result = await rpc('qqbot.bots.list', {});
+      const list = Array.isArray(result.bots) ? result.bots : [];
+      const stillThere = list.some((bot) => bot.botId === selectedBotId);
+      const changed = !stillThere && selectedBotId !== '';
+      bots = list;
+      if (!stillThere) {
+        selectedBotId = list[0]?.botId || '';
+        bindState = null;
+        config = null;
+        initialConfig = null;
+        manualMode = false;
+      }
+      renderBots();
+      if (!selectedBotId) {
+        renderNoBot();
+        return;
+      }
+      await Promise.all([refreshBind(), refreshStatus()]);
+      if (changed || !config) await loadConfig();
+    } catch (err) {
+      const error = document.createElement('p');
+      error.className = 'imqb-error';
+      error.textContent = `机器人列表加载失败：${String(err.message || err)}`;
+      botsBody.replaceChildren(error);
+    }
   }
 
   // ── Bind panel ─────────────────────────────────────────────────────────
@@ -195,7 +353,7 @@ export function mount(root, context) {
       submit.disabled = true;
       submit.textContent = '正在保存…';
       error.textContent = '';
-      void rpc('qqbot.bind.manual', { appId: appId.value.trim(), appSecret: appSecret.value.trim() })
+      void botRpc('qqbot.bind.manual', { appId: appId.value.trim(), appSecret: appSecret.value.trim() })
         .then((result) => {
           if (!result.ok) throw new Error(result.error || '保存失败');
           manualMode = false;
@@ -214,7 +372,7 @@ export function mount(root, context) {
   async function unbind() {
     if (!window.confirm('确定解绑吗？\n解绑后机器人立即下线，插件将重新进入扫码绑定流程。')) return;
     try {
-      const result = await rpc('qqbot.bind.unbind', {});
+      const result = await botRpc('qqbot.bind.unbind', {});
       if (!result.ok) throw new Error(result.error || '解绑失败');
       manualMode = false;
       await refreshBind();
@@ -225,7 +383,7 @@ export function mount(root, context) {
 
   async function refreshQr() {
     try {
-      await rpc('qqbot.bind.refresh', {});
+      await botRpc('qqbot.bind.refresh', {});
       await refreshBind();
     } catch (err) {
       window.alert(String(err.message || err));
@@ -233,7 +391,7 @@ export function mount(root, context) {
   }
 
   // ── Status ─────────────────────────────────────────────────────────────
-  function renderStatus(status) {
+  function renderStatus(status, sessions = []) {
     statusBody.replaceChildren();
     const info = status || {};
     const bound = Boolean(info.bound);
@@ -246,10 +404,11 @@ export function mount(root, context) {
     grid.append(
       metric('绑定', bound ? '已绑定' : '未绑定'),
       metric('网关', gatewayLabel(info.gateway)),
-      metric('会话', String((info.sessions || []).length)),
+      metric('会话', String(sessions.length || info.sessions || 0)),
       metric('版本', info.version || '—'),
     );
     statusBody.append(grid);
+    if (sessions.length) statusBody.append(renderSessions(sessions));
     if (info.lastError) {
       const error = document.createElement('p');
       error.className = 'imqb-error';
@@ -266,13 +425,37 @@ export function mount(root, context) {
     statusBody.append(actions);
   }
 
+  function renderSessions(sessions) {
+    const list = document.createElement('div');
+    list.className = 'qqb-sessions';
+    for (const session of sessions) {
+      const row = document.createElement('div');
+      row.className = 'qqb-session';
+      const main = document.createElement('div');
+      main.className = 'qqb-session-main';
+      const name = document.createElement('span');
+      name.className = 'qqb-session-title';
+      name.textContent = session.title || `QQ-${String(session.peerId || '').slice(-6) || '未知'}`;
+      const meta = document.createElement('span');
+      meta.className = 'qqb-session-meta';
+      const scope = session.scope === 'group' ? '群聊' : '私聊';
+      const model = session.model || '后台模型';
+      const state = session.running ? '生成中' : (session.lastError ? '异常' : '空闲');
+      meta.textContent = `${scope} · ${model} · ${state}`;
+      main.append(name, meta);
+      row.append(main);
+      list.append(row);
+    }
+    return list;
+  }
+
   function gatewayLabel(value) {
     return ({ connected: '已连接', connecting: '连接中', stopped: '已停止', unbound: '未绑定' })[value] || value || '—';
   }
 
   async function restartGateway() {
     try {
-      const result = await rpc('qqbot.gateway.restart', {});
+      const result = await botRpc('qqbot.gateway.restart', {});
       if (!result.ok) throw new Error(result.error || '重启失败');
       await refreshAll();
     } catch (err) {
@@ -282,7 +465,7 @@ export function mount(root, context) {
 
   async function showLogs() {
     try {
-      const result = await rpc('qqbot.logs.tail', { tail: 120 });
+      const result = await botRpc('qqbot.logs.tail', { tail: 120 });
       diagnosticsBody.textContent = (result.lines || []).join('\n') || '暂无日志';
       diagnosticsCard.classList.remove('qqb-hidden');
       diagnosticsCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -293,7 +476,7 @@ export function mount(root, context) {
 
   async function showDiagnostics() {
     try {
-      const result = await rpc('qqbot.diagnose', {});
+      const result = await botRpc('qqbot.diagnose', {});
       diagnosticsBody.textContent = JSON.stringify(result, null, 2);
       diagnosticsCard.classList.remove('qqb-hidden');
       diagnosticsCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -303,6 +486,68 @@ export function mount(root, context) {
   }
 
   // ── Config ─────────────────────────────────────────────────────────────
+  function targetSelector() {
+    const wrap = document.createElement('div');
+    wrap.className = 'qqb-targets';
+    if (!targets) {
+      const note = document.createElement('p');
+      note.className = 'imqb2-note';
+      note.textContent = '正在读取项目和会话…';
+      wrap.append(note);
+      return wrap;
+    }
+    if (targets.ok === false) {
+      const note = document.createElement('p');
+      note.className = 'imqb2-note imqb2-note--error';
+      note.textContent = targets.error || '读取项目和会话失败';
+      wrap.append(note);
+      return wrap;
+    }
+    const projects = Array.isArray(targets.projects) ? targets.projects : [];
+    const projectId = String(config.targetProjectId || '');
+    const project = projects.find((item) => item.id === projectId);
+    wrap.append(
+      selectRow(
+        '目标项目',
+        'QQ 消息注入到该项目。留空时使用插件自己的子会话。',
+        projectId,
+        [{ value: '', label: '不指定（插件子会话）' }, ...projects.map((item) => ({
+          value: item.id,
+          label: item.name || item.id,
+        }))],
+        (value) => {
+          config.targetProjectId = value;
+          const next = projects.find((item) => item.id === value);
+          if (!next || !(next.sessions || []).some((session) => session.id === config.targetSessionId)) {
+            config.targetSessionId = '';
+          }
+          renderConfig(config);
+        },
+      ),
+    );
+    const sessions = project ? (project.sessions || []) : [];
+    const sessionOptions = [{ value: '', label: '不指定（按私聊/群聊各自建子会话）' }];
+    for (const session of sessions) {
+      sessionOptions.push({
+        value: session.id,
+        label: `${session.title || session.id}${session.status ? ` · ${session.status}` : ''}`,
+      });
+    }
+    if (config.targetSessionId && !sessions.some((session) => session.id === config.targetSessionId)) {
+      sessionOptions.push({ value: config.targetSessionId, label: config.targetSessionId });
+    }
+    wrap.append(
+      selectRow(
+        '目标会话',
+        '私聊和群聊都注入这个 Sunday 会话；空闲时发用户消息，运行中发即时引导，不走排队。',
+        String(config.targetSessionId || ''),
+        sessionOptions,
+        (value) => { config.targetSessionId = value; },
+      ),
+    );
+    return wrap;
+  }
+
   function renderConfig(nextConfig) {
     config = nextConfig;
     if (initialConfig === null) initialConfig = JSON.parse(JSON.stringify(nextConfig));
@@ -334,6 +579,9 @@ export function mount(root, context) {
     form.append(switchRow('流式输出', '私聊里把回复分段实时推送；群聊始终静态发送。', config.streaming !== false, (value) => { config.streaming = value; }));
     form.append(switchRow('显示工具调用成功结果', '工具错误始终显示。', Boolean(config.showToolResults), (value) => { config.showToolResults = value; }));
     form.append(switchRow('调试日志', '把网关和消息细节写进插件日志。', Boolean(config.debug), (value) => { config.debug = value; }));
+
+    form.append(groupTitle('目标会话'));
+    form.append(targetSelector());
 
     form.append(groupTitle('模型'));
     form.append(textRow('Provider', '留空继承宿主默认。', config.provider || '', (value) => { config.provider = value; }, '留空继承宿主默认'));
@@ -414,7 +662,7 @@ export function mount(root, context) {
       save.disabled = true;
       save.textContent = '正在保存…';
       note.textContent = '';
-      void rpc('qqbot.config.update', { patch: changed })
+      void botRpc('qqbot.config.update', { patch: changed })
         .then((result) => {
           if (!result.ok) throw new Error(result.error || '保存失败');
           initialConfig = JSON.parse(JSON.stringify(config));
@@ -446,8 +694,9 @@ export function mount(root, context) {
 
   // ── Data loading / polling ─────────────────────────────────────────────
   async function refreshBind() {
+    if (!selectedBotId) return;
     try {
-      const state = await rpc('qqbot.bind.state', {});
+      const state = await botRpc('qqbot.bind.state', {});
       if (disposed) return;
       renderBind(state);
       schedulePoll(state);
@@ -460,17 +709,22 @@ export function mount(root, context) {
   }
 
   async function refreshStatus() {
+    if (!selectedBotId) return;
     try {
-      const status = await rpc('qqbot.status', {});
-      if (!disposed) renderStatus(status);
+      const [status, sessionsResult] = await Promise.all([
+        botRpc('qqbot.status', {}),
+        botRpc('qqbot.session.list', {}).catch(() => ({ sessions: [] })),
+      ]);
+      if (!disposed) renderStatus(status, sessionsResult.sessions || []);
     } catch (err) {
       if (!disposed) statusPill.textContent = '读取失败';
     }
   }
 
   async function loadConfig() {
+    if (!selectedBotId) return;
     try {
-      const result = await rpc('qqbot.config.get', {});
+      const result = await botRpc('qqbot.config.get', {});
       if (!disposed) renderConfig(result.config || {});
     } catch (err) {
       if (!disposed) {
@@ -482,8 +736,17 @@ export function mount(root, context) {
     }
   }
 
+  async function loadTargets() {
+    try {
+      targets = await rpc('qqbot.targets', {});
+    } catch (err) {
+      targets = { ok: false, error: String(err.message || err) };
+    }
+    if (!disposed && config) renderConfig(config);
+  }
+
   async function refreshAll() {
-    await Promise.all([refreshBind(), refreshStatus()]);
+    await loadBots();
   }
 
   function schedulePoll(state) {
@@ -511,7 +774,7 @@ export function mount(root, context) {
   context.signal.addEventListener('abort', dispose, { once: true });
   refreshButton.addEventListener('click', onRefresh);
   void refreshAll();
-  void loadConfig();
+  void loadTargets();
 
   function dispose() {
     if (disposed) return;
@@ -660,8 +923,33 @@ function textRow(label, help, value, onChange, placeholder) {
   return row;
 }
 
-function areaRow(label, help, value, onChange, rows) {
+function selectRow(label, help, value, options, onChange) {
   const row = document.createElement('div');
+  row.className = 'imqb2-field';
+  const text = document.createElement('span');
+  text.className = 'imqb2-label';
+  text.textContent = label;
+  const control = document.createElement('select');
+  control.className = 'imqb2-input';
+  for (const option of options || []) {
+    const item = document.createElement('option');
+    item.value = option.value;
+    item.textContent = option.label;
+    if (option.value === value) item.selected = true;
+    control.append(item);
+  }
+  control.addEventListener('change', () => onChange(control.value));
+  row.append(text, control);
+  if (help) {
+    const note = document.createElement('p');
+    note.className = 'imqb2-hint';
+    note.textContent = help;
+    row.append(note);
+  }
+  return row;
+}
+
+function areaRow(label, help, value, onChange, rows) {  const row = document.createElement('div');
   row.className = 'imqb2-field';
   const text = document.createElement('span');
   text.className = 'imqb2-label';

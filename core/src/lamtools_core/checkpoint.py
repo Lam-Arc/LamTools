@@ -52,6 +52,7 @@ from lamtools_core.app.snapshot_store import CoreAppSnapshotProjector, SqlAlchem
 from lamtools_core.app.sqlite_write import SQLiteWriteCoordinator
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 from lamtools_core.dialogue_records import ROLLBACK_RECORD, build_rollback_record
+from lamtools_core.context_compaction.state import rebase_compaction_history
 
 
 _logger = logging.getLogger(__name__)
@@ -487,9 +488,14 @@ class CoreCheckpointCoordinator:
                     created_at=now,
                 ))
                 runtime = await db.get(CoreRuntimeSession, fork_session_id)
+                # user:“修”+(分叉已直接写入权威历史表，随后的检查点也从同一来源捕获)。
+                fork_history_rows = list((await db.execute(
+                    select(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == fork_session_id)
+                    .order_by(CoreHistoryEntry.seq.asc())
+                )).scalars())
                 db.add(CoreCheckpointV2SessionHistory(
                     checkpoint_id=fork_checkpoint_id,
-                    history_json=list(runtime.history_json or []) if runtime is not None else [],
+                    history_json=[copy.deepcopy(dict(item.message_json or {})) for item in fork_history_rows],
                     created_at=now,
                 ))
                 event_seq = int((await db.execute(
@@ -560,6 +566,9 @@ class CoreCheckpointCoordinator:
 
             runtime = await db.get(CoreRuntimeSession, target.session_id)
             runtime_payload = _runtime_payload(runtime)
+            # user:“修”+(按检查点分叉时，摘要必须来自该检查点，不能继承当前分支的未来内容)。
+            if isinstance(runtime_payload, dict):
+                runtime_payload["runtime_state_json"] = copy.deepcopy(dict(checkpoint.runtime_state_json or {}))
             boundary_history = await db.get(CoreCheckpointV2SessionHistory, target.id)
             if boundary_history is not None:
                 history_payload = [dict(item) for item in list(boundary_history.history_json or []) if isinstance(item, dict)]
@@ -1137,7 +1146,7 @@ class CoreCheckpointConversationBackend:
         if source_session is not None:
             projection["session"] = copy.deepcopy(source_session)
         runtime = await db.get(CoreRuntimeSession, session_id)
-        history = await self._history_at_boundary(
+        history, context_state = await self._context_at_boundary(
             db,
             session_id=session_id,
             boundary_seq=boundary_seq,
@@ -1152,6 +1161,7 @@ class CoreCheckpointConversationBackend:
                 history=history,
                 boundary_seq=boundary_seq,
                 turn_id=normalized_turn_id,
+                context_state=context_state,
             ),
             "projection": {
                 "snapshot_seq": boundary_seq,
@@ -1160,7 +1170,7 @@ class CoreCheckpointConversationBackend:
             "events": [event.to_dict() for event in kept_events],
         }, boundary_seq
 
-    async def _history_at_boundary(
+    async def _context_at_boundary(
         self,
         db: Any,
         *,
@@ -1168,7 +1178,7 @@ class CoreCheckpointConversationBackend:
         boundary_seq: int,
         include_turn: bool,
         last_event_seq: int,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Return the model-visible transcript as it stood at ``boundary_seq``.
 
         The transcript is read back from the checkpoint captured at that exact
@@ -1183,14 +1193,17 @@ class CoreCheckpointConversationBackend:
         if boundary_seq <= 0:
             # Nothing precedes the removed turn, and "before the first turn"
             # cannot have a boundary checkpoint.
-            return []
-        captured = await self._captured_history(db, session_id=session_id, boundary_seq=boundary_seq)
+            return [], {}
+        captured = await self._captured_context(db, session_id=session_id, boundary_seq=boundary_seq)
         if captured is not None:
             return captured
         if include_turn and boundary_seq == last_event_seq:
             # The selected turn is the newest one and nothing was appended
             # after it, so the live transcript ends exactly at this boundary.
-            return await self._live_history(db, session_id)
+            runtime = await db.get(CoreRuntimeSession, session_id)
+            return await self._live_history(db, session_id), copy.deepcopy(
+                dict(runtime.runtime_state_json or {}) if runtime is not None else {}
+            )
         # Refuse instead of guessing: an unlocatable boundary must never be
         # answered with a silently empty (or partial) transcript.
         raise LookupError(
@@ -1198,16 +1211,17 @@ class CoreCheckpointConversationBackend:
             "为避免清空对话，本次操作已中止"
         )
 
-    async def _captured_history(
+    async def _captured_context(
         self,
         db: Any,
         *,
         session_id: str,
         boundary_seq: int,
-    ) -> list[dict[str, Any]] | None:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
         """The history captured by the checkpoint sitting on ``boundary_seq``."""
         row = (await db.execute(
-            select(CoreCheckpointV2SessionHistory.history_json)
+            # user:“修”+(一次读取同一边界的历史和摘要状态，禁止混用当前运行状态)。
+            select(CoreCheckpointV2SessionHistory.history_json, CoreCheckpointV2.runtime_state_json)
             .join(
                 CoreCheckpointV2,
                 CoreCheckpointV2.id == CoreCheckpointV2SessionHistory.checkpoint_id,
@@ -1221,10 +1235,24 @@ class CoreCheckpointConversationBackend:
             )
             .order_by(CoreCheckpoint.created_at.desc())
             .limit(1)
-        )).scalar_one_or_none()
-        if not isinstance(row, list):
+        )).first()
+        if row is None or not isinstance(row[0], list):
             return None
-        return [copy.deepcopy(item) for item in row if isinstance(item, dict)]
+        return (
+            [copy.deepcopy(item) for item in row[0] if isinstance(item, dict)],
+            copy.deepcopy(dict(row[1] or {})),
+        )
+
+    async def _replace_context_history(
+        self, db: Any, session_id: str, runtime_state: dict[str, Any],
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        # user:“修”+(所有恢复和分叉共用历史写入：同一事务内映射编号、压缩标记并替换权威历史表)。
+        restored_state = rebase_compaction_history(runtime_state, history)
+        await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
+        for seq, message in enumerate(history, 1):
+            db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, revision=seq, message_json=message))
+        return restored_state
 
     async def _live_history(self, db: Any, session_id: str) -> list[dict[str, Any]]:
         """The session's current durable transcript (rows, else legacy blob)."""
@@ -1446,17 +1474,10 @@ class CoreCheckpointConversationBackend:
             for message in list(runtime_payload["history_json"] or [])
             if isinstance(message, dict)
         ]
-        await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
-        for seq, message in enumerate(history, 1):
-            metadata = message.get("metadata")
-            if isinstance(metadata, dict):
-                message["metadata"] = {**metadata, "history_seq": seq}
-            db.add(CoreHistoryEntry(
-                thread_id=session_id,
-                seq=seq,
-                revision=seq,
-                message_json=message,
-            ))
+        # user:“修”+(回退对话与压缩视图在同一事务中采用同一套新编号)。
+        runtime_payload["runtime_state_json"] = await self._replace_context_history(
+            db, session_id, dict(runtime_payload["runtime_state_json"]), history,
+        )
         runtime = await db.get(CoreRuntimeSession, session_id)
         if runtime is None:
             runtime = CoreRuntimeSession(thread_id=session_id)
@@ -1512,13 +1533,19 @@ class CoreCheckpointConversationBackend:
                 runtime = CoreRuntimeSession(thread_id=session_id)
                 db.add(runtime)
             runtime.revision = max(int(runtime.revision or 0) + 1, int(runtime_payload.get("revision") or 0) + 1)
-            runtime.runtime_state_json = dict(runtime_payload.get("runtime_state_json") or {})
-            runtime.history_json = list(runtime_payload.get("history_json") or [])
+            history = copy.deepcopy(list(runtime_payload.get("history_json") or []))
+            runtime.runtime_state_json = await self._replace_context_history(
+                db, session_id, dict(runtime_payload.get("runtime_state_json") or {}), history,
+            )
+            runtime.history_json = []
             runtime.pending_approval_json = dict(runtime_payload.get("pending_approval_json") or {})
             runtime.last_event_seq = int(runtime_payload.get("last_event_seq") or 0)
             runtime.updated_at = datetime.now()
-        elif runtime is not None:
-            await db.delete(runtime)
+        else:
+            # user:“修”+(恢复到无运行状态的边界时，也清空遗留历史，不能留下可被重新读出的旧分支)。
+            await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
+            if runtime is not None:
+                await db.delete(runtime)
 
         is_root_session = session_id == _root_session_id(session_id)
         projection = await db.get(CoreThreadSnapshot, session_id) if is_root_session else None
@@ -1563,11 +1590,11 @@ class CoreCheckpointConversationBackend:
             return
 
         boundary_history = await db.get(CoreCheckpointV2SessionHistory, checkpoint.id)
+        restored_state = dict(checkpoint.runtime_state_json or {})
         if boundary_history is not None:
             history = [dict(item) for item in list(boundary_history.history_json or []) if isinstance(item, dict)]
-            await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
-            for seq, message in enumerate(history, 1):
-                db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, revision=seq, message_json=message))
+            # user:“修”+(检查点恢复同样重新编号，必须同步映射摘要覆盖的消息)。
+            restored_state = await self._replace_context_history(db, session_id, restored_state, history)
         else:
             history_rows = list((await db.execute(
                 select(CoreHistoryEntry).where(
@@ -1582,8 +1609,8 @@ class CoreCheckpointConversationBackend:
             ))
         runtime = await db.get(CoreRuntimeSession, session_id)
         if runtime is not None:
-            runtime.runtime_state_json = dict(checkpoint.runtime_state_json or {})
-            runtime.history_json = history
+            runtime.runtime_state_json = restored_state
+            runtime.history_json = []
             runtime.last_event_seq = checkpoint.event_seq
         await db.execute(delete(CoreAppEvent).where(
             CoreAppEvent.thread_id == session_id,
@@ -1637,22 +1664,18 @@ class CoreCheckpointConversationBackend:
         event_seq: int,
     ) -> None:
         history = [dict(item) for item in list(materialized.history_json or []) if isinstance(item, dict)]
+        payload = dict(materialized.runtime_json or {}) if materialized.runtime_present else {}
+        # user:“修”+(旧版完整快照恢复也共用编号映射，避免相同缺陷从兼容路径复发)。
+        restored_state = await self._replace_context_history(
+            db, session_id, dict(payload.get("runtime_state_json") or {}), history,
+        )
 
         # The history table is the runtime state's durable source after the
         # lazy migration.  Replace it, rather than only trimming by a global
         # watermark, because an old checkpoint can point at a different
         # branch or at an explicitly empty history.
-        await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
-        for seq, message in enumerate(history, 1):
-            if isinstance(message.get("metadata"), dict):
-                metadata = dict(message["metadata"])
-                metadata["history_seq"] = seq
-                message["metadata"] = metadata
-            db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, revision=seq, message_json=message))
-
         runtime = await db.get(CoreRuntimeSession, session_id)
         if materialized.runtime_present:
-            payload = dict(materialized.runtime_json or {})
             if runtime is None:
                 runtime = CoreRuntimeSession(thread_id=session_id)
                 db.add(runtime)
@@ -1660,8 +1683,8 @@ class CoreCheckpointConversationBackend:
                 int(runtime.revision or 0) + 1,
                 int(payload.get("revision") or 0) + 1,
             )
-            runtime.runtime_state_json = dict(payload.get("runtime_state_json") or {})
-            runtime.history_json = history
+            runtime.runtime_state_json = restored_state
+            runtime.history_json = []
             runtime.pending_approval_json = dict(payload.get("pending_approval_json") or {})
             runtime.last_event_seq = int(payload.get("last_event_seq") or 0)
             runtime.updated_at = datetime.now()
@@ -1746,11 +1769,14 @@ class CoreCheckpointConversationBackend:
             fork_session_id=new_session_id,
             checkpoint_id=checkpoint_id,
         )
+        runtime["runtime_state_json"] = await self._replace_context_history(
+            db, new_session_id, runtime["runtime_state_json"], runtime["history_json"],
+        )
         db.add(CoreRuntimeSession(
             thread_id=new_session_id,
             revision=1,
             runtime_state_json=runtime["runtime_state_json"],
-            history_json=runtime["history_json"],
+            history_json=[],
             pending_approval_json={},
             last_event_seq=runtime["last_event_seq"],
             updated_at=datetime.now(),
@@ -2416,10 +2442,18 @@ def _conversation_runtime_payload(
     history: list[dict[str, Any]],
     boundary_seq: int,
     turn_id: str,
+    context_state: dict[str, Any],
 ) -> dict[str, Any]:
     """Return an idle runtime shell without claiming runtime restoration."""
     source_state = dict((runtime.runtime_state_json if runtime is not None else {}) or {})
     source_metadata = dict(source_state.get("metadata") or {})
+    # user:“修”+(保留当前设置，但摘要及上下文计量只能来自选中回合的历史状态)。
+    boundary_metadata = context_state.get("metadata") or {}
+    for key in ("context_compaction", "context_usage_anchor", "runtime_context_metrics",
+                "runtime_context_reported", "movable_system_context", "_context_compaction_run_id"):
+        source_metadata.pop(key, None)
+        if key in boundary_metadata:
+            source_metadata[key] = copy.deepcopy(boundary_metadata[key])
     # These values describe an in-flight or already-completed execution, not
     # reusable conversation state.  Keeping them would falsely revive a tool
     # call, approval, or last-turn bookkeeping after a fallback rollback.

@@ -1,6 +1,6 @@
 {
   "name": "qq-bot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "QQ 机器人：把 LamTools 接入 QQ 私聊与群聊。移植自腾讯官方 @tencent-connect/dsh-qqbot 0.5.3，保留其全部能力并在宿主侧补齐持久会话、审批/问答续跑、文件投递和端内配置。",
   "scope": "global",
   "defaultEnabled": true,

@@ -1,5 +1,19 @@
 # Latest Session Work
 
+## QQ 机器人目标会话与气泡行为（2026-10-27）
+
+- 目标会话模式：设置里可选 Sunday 项目/会话；私聊和群聊都注入该会话，空闲走宿主 `live_turn_service`（live `turn.start`，会写 Sunday 用户消息投影），运行中走 `runtime_task_registry.inject_guidance`，不走排队。群聊正文带 `[QQ群 <id>] 发送人:` 前缀，目标会话已有历史，因此不再重复注入 QQ 群历史缓冲。
+- 目标会话交互：通过 live 事件总线接收 `approval_request`，转成 QQ 按钮或文字问答；用户回答后调 live `approval.respond` 继续原回合，支持连续多次审批/提问。目标会话模式下的 `/stop` 直接中止目标回合；其他指令提示去 Sunday 操作，避免误改插件子会话。
+- 气泡规则：普通文本按换行拆气泡，连续换行只算一次；围栏代码块（``` / ~~~）整块保留；超长气泡再按 markdown 安全边界切分。流式增量在代码块外遇到换行就完成当前气泡并开始下一个，代码块内换行保留到闭合；工具结果、错误和中间提示也走同一规则。
+- 多机器人：每个 Sunday 会话创建独立 QQ 机器人（独立 AppID/Secret/网关/绑定/配置/日志），旧单机器人迁移为 `default`；右侧栏按当前会话查/建机器人，导航页有机器人列表并按 botId 操作。数据在 `plugin-data/qq-bot/bots/<botId>/`。
+- 问题分类：用户看到的“消息没进 Sunday、QQ 报 completed”主因是宿主缺口 H18——插件操作目录和桌面 live 操作目录是两套，agent `turn.start` 不写 live 用户消息投影。修好后又暴露 H19：live `turn.resume` 按 `seq` 选最新回合，暂停回合没有 `seq`，被已完成回合覆盖，误报 `latest turn is not resumable`；已改为优先使用 `SESSION_PAUSED` 的 turn_id。插件最初误用 agent 路径、读空的 `snapshot.messages` 是次生移植适配问题 P19；原版没有跨会话注入 live 桌面会话的场景（O12）。
+- 运行中第二条消息被延迟的根因（插件侧，不是宿主）：`QQBotRuntime._process_message` 对所有消息套 `MergeGuard`，同一 QQ 对端串行；第一条消息的 `_target.send` 要等整个 Sunday 回合结束，期间到达的第二条消息被放进合并缓冲，回合结束后才作为新回合发送，所以看起来像“Agent 运行中拒收”。目标会话模式现在绕过 `MergeGuard`，每条消息直接进入 post 链，运行中由 `inject_guidance` 立即引导。
+- 架构修正（2026-10-28）：QQ 目标会话投递不再由插件判断空闲/运行/暂停，也不再直接读 `runtime_task_registry` 或拼 `active_run_id`。宿主新增 `LiveTurnService.deliver_message` 作为唯一入口：空闲走 live `turn.start`，运行中走桌面同款 `turn.steer`（负责写 `turn/steered` 和用户引导投影），暂停走 resume；回合刚好结束时由 `turn.steer` 把文本落成下一条用户消息，不丢消息。插件只提交 `thread_id/text/client_message_id`，收到 `started/steered/queued` 后等待事件。
+- 这次 `123456` 丢失的直接证据：网关日志在 03:03:00 已收到 `123456`，但 Sunday 事件里没有对应的 `turn/steered` 或用户引导，只有 03:02:27 的 `刚才失败了…` 引导；说明旧路径在 `turn.start` 忙错误后没拿到 `data.active_run_id`，把消息退回了。新入口不再依赖这个错误分支。
+- 气泡重构（2026-10-28）：不再按行猜内容，而是先解析成 Markdown 内容块（段落/标题/列表/引用/代码/表格/数学/Sunday `:::` 样式），再按渲染档位切气泡。默认 `full`（用户实测 QQ 能渲染表格、代码块等）；`safe` 保留为降级档：表格转“第 N 行”卡片、代码转引用块、行内代码转「」、`###+` 转粗体。表格只在“表头 + 分隔行”时成立，普通含 `|` 的文本不会被误判；超宽/超长表格按行或按列拆卡片，绝不把一行拆成两个气泡。Sunday `:::note`/`:::details` 等样式块不把 `:::` 原样发到 QQ：去掉容器，保留显式标题和正文，直接作为普通内容发送；超长时按正文切分。
+- 验证：QQ 插件测试 88 项通过（新增宿主原子投递、空闲/运行中/排队三种模式、真实 runtime 中途引导、full/safe 表格与代码、Sunday 样式块、流式一致性）。宿主 `test_live_plugin_service.py` 7 项通过。
+- 部署陷阱（2026-10-28）：桌面运行的是 `%APPDATA%\LamTools\plugins\qq-bot`（Roaming），不是仓库 `E:\LamTools\plugins\qq-bot`。前面 02:00/02:16 的 Roaming 副本没有 `deliver_message` 和绕过 `MergeGuard` 的改动，所以仓库测试全过、真实运行仍然把消息拖到回合结束。现在已把 `qqbot/runtime.py`、`session_target.py`、`outbound.py`、`util.py` 同步到 Roaming 并热重载；改插件代码后必须同步这个路径，否则运行结果不会变。
+
 ## 插件系统验收：bili-scroll A6 状态（2026-10-26）
 
 - A6 包 `0.3.22-a6` 已装，插件 `bili-scroll` 2.2.2；值守运行时 `runner=run_profile`、`canSpawnRound=true`；MCP 服务器 `bilibili` 加载 34 个工具。

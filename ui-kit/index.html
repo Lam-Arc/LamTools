@@ -1,0 +1,1152 @@
+<!doctype html>
+<html lang="en" data-theme="dark" class="scroll">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#1b1d22" />
+    <title>Sunday Controls — a black and white interaction kit</title>
+    <link rel="stylesheet" href="src/tokens.css" />
+    <link rel="stylesheet" href="src/kit.css" />
+    <link rel="stylesheet" href="src/demo.css" />
+    <script>
+      try {
+        if (localStorage.getItem('ui-kit-theme') === 'light') {
+          document.documentElement.dataset.theme = 'light';
+        }
+      } catch (error) {
+        /* storage can be unavailable on file://; default to dark */
+      }
+    </script>
+    <script src="dist/controls.js" defer></script>
+    <script src="dist/demo.js" defer></script>
+  </head>
+
+  <body>
+    <div class="page" id="top">
+      <header class="topbar">
+        <a class="brand" href="#top">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <span class="brand__name">Sunday</span>
+          <span class="brand__note">black &amp; white controls</span>
+        </a>
+        <div class="topbar__right">
+          <span class="version">v1.0</span>
+          <div
+            class="segmented segmented--sm"
+            data-segmented
+            data-theme-control
+            role="radiogroup"
+            aria-label="Theme"
+          >
+            <span class="segmented__indicator" aria-hidden="true"></span>
+            <button
+              class="segmented__item"
+              type="button"
+              role="radio"
+              aria-checked="true"
+              data-value="dark"
+            >
+              Dark
+            </button>
+            <button
+              class="segmented__item"
+              type="button"
+              role="radio"
+              aria-checked="false"
+              tabindex="-1"
+              data-value="light"
+            >
+              Light
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section class="masthead" aria-labelledby="page-title">
+        <div>
+          <h1 id="page-title">Controls that feel machined.</h1>
+          <p class="masthead__lede">
+            A flat interaction system built from hairlines, tonal steps, and short
+            motion. No gloss, no drop shadows, and one signal: the inverse of the
+            ground.
+          </p>
+          <p class="masthead__hint">
+            Every specimen is live. Tab to move, arrow keys to change a value,
+            <kbd class="kbd">/</kbd> to jump to search.
+          </p>
+        </div>
+        <dl class="tokens" aria-label="Theme tokens">
+          <div>
+            <dt>ground</dt>
+            <dd><span class="swatch swatch--paper" aria-hidden="true"></span>--paper</dd>
+          </div>
+          <div>
+            <dt>surface</dt>
+            <dd><span class="swatch swatch--surface" aria-hidden="true"></span>--surface</dd>
+          </div>
+          <div>
+            <dt>hairline</dt>
+            <dd><span class="swatch swatch--line" aria-hidden="true"></span>--line-strong</dd>
+          </div>
+          <div>
+            <dt>signal</dt>
+            <dd><span class="swatch swatch--accent" aria-hidden="true"></span>--control</dd>
+          </div>
+          <div>
+            <dt>motion</dt>
+            <dd><span class="swatch swatch--none" aria-hidden="true"></span>90 / 150 / 220 ms</dd>
+          </div>
+        </dl>
+      </section>
+
+      <div class="layout">
+        <aside class="rail">
+          <nav aria-label="Sections">
+            <a href="#buttons">Buttons</a>
+            <a href="#slider">Slider</a>
+            <a href="#progress">Progress</a>
+            <a href="#select">Select</a>
+            <a href="#input">Input</a>
+            <a href="#switch">Switch &amp; checks</a>
+            <a href="#segmented">Segmented</a>
+            <a href="#scrollbar">Scrollbar</a>
+            <a href="#assembly">In use</a>
+          </nav>
+        </aside>
+
+        <main class="content">
+          <section class="section" id="buttons">
+            <div class="section__head">
+              <h2>Buttons</h2>
+              <code class="api">.btn</code>
+            </div>
+            <p class="section__lede">
+              A 1px frame, a tonal fill, and a 1px depression on press. Primary uses
+              the control pair; the signal is the inverse of the ground, never a hue.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>height 28 / 34 / 42</span>
+                <span>radius 6 / 6 / 12</span>
+                <span>press 1px</span>
+              </div>
+              <div class="stage__body">
+                <div class="row">
+                  <span class="row__label">variants</span>
+                  <button class="btn btn--primary" type="button">Deploy</button>
+                  <button class="btn" type="button">Duplicate</button>
+                  <button class="btn btn--ghost" type="button">Skip</button>
+                  <button class="btn btn--danger" type="button">Delete</button>
+                  <button class="btn" type="button" disabled>Disabled</button>
+                </div>
+
+                <div class="row">
+                  <span class="row__label">sizes</span>
+                  <button class="btn btn--sm" type="button">Small</button>
+                  <button class="btn" type="button">Medium</button>
+                  <button class="btn btn--lg btn--primary" type="button">Large</button>
+                  <button class="btn btn--icon" type="button" aria-label="Add step">
+                    <svg
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="square"
+                      aria-hidden="true"
+                    >
+                      <path d="M6 1.5v9M1.5 6h9" />
+                    </svg>
+                  </button>
+                  <button
+                    class="btn btn--icon btn--sm"
+                    type="button"
+                    aria-label="Remove step"
+                  >
+                    <svg
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="square"
+                      aria-hidden="true"
+                    >
+                      <path d="M1.5 6h9" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="row">
+                  <span class="row__label">states</span>
+                  <button class="btn btn--primary" type="button" data-loading="true" aria-busy="true">
+                    <span class="btn__spinner" aria-hidden="true"></span>
+                    Deploying
+                  </button>
+                  <button class="btn" type="button" data-toggle aria-pressed="false">
+                    Pin
+                  </button>
+                  <button class="btn" type="button" data-toggle aria-pressed="true">
+                    Pinned
+                  </button>
+                  <button class="btn btn--primary" type="button" disabled>Unavailable</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="slider">
+            <div class="section__head">
+              <h2>Slider</h2>
+              <code class="api">.slider</code>
+            </div>
+            <p class="section__lede">
+              The filled rail is a separate element, so the track stays perfectly flat
+              in every browser. Values are set in tabular mono and updated live.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>track 4px</span>
+                <span>thumb 16px</span>
+                <span>inverse fill</span>
+              </div>
+              <div class="stage__body">
+                <div class="grid-2">
+                  <div class="specimen">
+                    <span class="specimen__label">density · step 1</span>
+                    <div class="slider" data-suffix="%" data-decimals="0" style="--fill: 48%">
+                      <div class="slider__head">
+                        <label class="slider__label" for="density">Grid density</label>
+                        <output class="slider__value" data-range-output for="density">48%</output>
+                      </div>
+                      <div class="slider__track">
+                        <span class="slider__fill" aria-hidden="true"></span>
+                        <input
+                          class="slider__input"
+                          id="density"
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value="48"
+                        />
+                      </div>
+                      <div class="slider__ticks" aria-hidden="true">
+                        <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="specimen">
+                    <span class="specimen__label">scale · step 0.1</span>
+                    <div class="slider" data-suffix="×" data-decimals="1" style="--fill: 46.67%">
+                      <div class="slider__head">
+                        <label class="slider__label" for="scale">Interface scale</label>
+                        <output class="slider__value" data-range-output for="scale">1.2×</output>
+                      </div>
+                      <div class="slider__track">
+                        <span class="slider__fill" aria-hidden="true"></span>
+                        <input
+                          class="slider__input"
+                          id="scale"
+                          type="range"
+                          min="0.5"
+                          max="2"
+                          step="0.1"
+                          value="1.2"
+                        />
+                      </div>
+                      <div class="slider__ticks" aria-hidden="true">
+                        <span>0.5×</span><span>1×</span><span>1.5×</span><span>2×</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="specimen">
+                    <span class="specimen__label">speed · integer steps</span>
+                    <div class="slider" data-suffix="×" data-decimals="0" style="--fill: 50%">
+                      <div class="slider__head">
+                        <label class="slider__label" for="speed">Playback speed</label>
+                        <output class="slider__value" data-range-output for="speed">3×</output>
+                      </div>
+                      <div class="slider__track">
+                        <span class="slider__fill" aria-hidden="true"></span>
+                        <input
+                          class="slider__input"
+                          id="speed"
+                          type="range"
+                          min="1"
+                          max="5"
+                          step="1"
+                          value="3"
+                        />
+                      </div>
+                      <div class="slider__ticks" aria-hidden="true">
+                        <span>1×</span><span>2×</span><span>3×</span><span>4×</span><span>5×</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="specimen">
+                    <span class="specimen__label">disabled</span>
+                    <div
+                      class="slider"
+                      data-disabled="true"
+                      data-suffix="%"
+                      data-decimals="0"
+                      style="--fill: 30%"
+                    >
+                      <div class="slider__head">
+                        <label class="slider__label" for="density-disabled">Grid density</label>
+                        <output class="slider__value" data-range-output for="density-disabled">30%</output>
+                      </div>
+                      <div class="slider__track">
+                        <span class="slider__fill" aria-hidden="true"></span>
+                        <input
+                          class="slider__input"
+                          id="density-disabled"
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value="30"
+                          disabled
+                        />
+                      </div>
+                      <div class="slider__ticks" aria-hidden="true">
+                        <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="progress">
+            <div class="section__head">
+              <h2>Progress</h2>
+              <code class="api">.progress</code>
+            </div>
+            <p class="section__lede">
+              Four honest states: determinate, buffered, indeterminate, and a thin
+              count. The number and the bar always agree.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>track 6px</span>
+                <span>radius 2px</span>
+                <span>aria-valuenow</span>
+              </div>
+              <div class="stage__body">
+                <div class="stack">
+                  <div class="progress-row">
+                    <div class="progress-row__head">
+                      <span class="progress-row__label">Indexing corpus</span>
+                      <span class="progress-row__value" data-live-progress-value>62%</span>
+                    </div>
+                    <div
+                      class="progress"
+                      data-live-progress
+                      role="progressbar"
+                      aria-label="Indexing corpus"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow="62"
+                      aria-valuetext="62%"
+                      style="--value: 62"
+                    >
+                      <div class="progress__bar"></div>
+                    </div>
+                  </div>
+
+                  <div class="progress-row">
+                    <div class="progress-row__head">
+                      <span class="progress-row__label">Package download</span>
+                      <span class="progress-row__value">54%</span>
+                    </div>
+                    <div
+                      class="progress progress--buffer"
+                      role="progressbar"
+                      aria-label="Package download"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow="54"
+                      aria-valuetext="54%, buffering"
+                      style="--value: 54; --buffer: 78"
+                    >
+                      <div class="progress__bar"></div>
+                    </div>
+                  </div>
+
+                  <div class="progress-row">
+                    <div class="progress-row__head">
+                      <span class="progress-row__label">Resolving dependencies</span>
+                      <span class="progress-row__value">indeterminate</span>
+                    </div>
+                    <div
+                      class="progress"
+                      data-indeterminate="true"
+                      role="progressbar"
+                      aria-label="Resolving dependencies"
+                    >
+                      <div class="progress__bar"></div>
+                    </div>
+                  </div>
+
+                  <div class="progress-row">
+                    <div class="progress-row__head">
+                      <span class="progress-row__label">Uploading attachments</span>
+                      <span class="progress-row__value">3 / 7</span>
+                    </div>
+                    <div
+                      class="progress progress--thin"
+                      role="progressbar"
+                      aria-label="Uploading attachments"
+                      aria-valuemin="0"
+                      aria-valuemax="7"
+                      aria-valuenow="3"
+                      aria-valuetext="3 of 7 files"
+                      style="--value: 42.86"
+                    >
+                      <div class="progress__bar"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="row">
+                  <button class="btn btn--sm btn--ghost" type="button" data-run-progress>
+                    Run cycle
+                  </button>
+                  <span class="note">updates the bar, the value, and aria-valuenow</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="select">
+            <div class="section__head">
+              <h2>Select</h2>
+              <code class="api">.select</code>
+            </div>
+            <p class="section__lede">
+              A real listbox: arrows move, typing jumps, Escape closes, and the panel
+              flips above the trigger when the viewport runs out.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>listbox</span>
+                <span>keyboard + typeahead</span>
+                <span>flips near viewport edge</span>
+              </div>
+              <div class="stage__body">
+                <div class="grid-2">
+                  <div class="field">
+                    <label class="field__label" for="env-trigger" id="env-label">Environment</label>
+                    <div class="select" data-select data-log-select>
+                      <button
+                        class="select__trigger"
+                        id="env-trigger"
+                        type="button"
+                        aria-haspopup="listbox"
+                        aria-expanded="false"
+                        aria-labelledby="env-label env-value"
+                      >
+                        <span class="select__value" id="env-value" data-select-value>Staging</span>
+                        <span class="select__chevron" aria-hidden="true"></span>
+                      </button>
+                      <div
+                        class="select__popup"
+                        role="listbox"
+                        tabindex="-1"
+                        aria-labelledby="env-label"
+                        hidden
+                      >
+                        <div class="select__option" role="option" aria-selected="false" data-value="production">
+                          <span class="select__check" aria-hidden="true"></span>
+                          <span class="select__option-label">Production</span>
+                          <span class="select__meta">live</span>
+                        </div>
+                        <div class="select__option" role="option" aria-selected="true" data-value="staging">
+                          <span class="select__check" aria-hidden="true"></span>
+                          <span class="select__option-label">Staging</span>
+                          <span class="select__meta">current</span>
+                        </div>
+                        <div class="select__option" role="option" aria-selected="false" data-value="preview">
+                          <span class="select__check" aria-hidden="true"></span>
+                          <span class="select__option-label">Preview</span>
+                          <span class="select__meta">eu-west</span>
+                        </div>
+                        <div class="select__option" role="option" aria-selected="false" data-value="local">
+                          <span class="select__check" aria-hidden="true"></span>
+                          <span class="select__option-label">Local</span>
+                          <span class="select__meta">this device</span>
+                        </div>
+                        <div
+                          class="select__option"
+                          role="option"
+                          aria-selected="false"
+                          aria-disabled="true"
+                          data-value="sandbox"
+                        >
+                          <span class="select__check" aria-hidden="true"></span>
+                          <span class="select__option-label">Sandbox</span>
+                          <span class="select__meta">locked</span>
+                        </div>
+                      </div>
+                    </div>
+                    <p class="field__hint">Deploys route to the selected environment.</p>
+                  </div>
+
+                  <div class="field">
+                    <label class="field__label" for="runtime-trigger" id="runtime-label">Runtime</label>
+                    <div class="select">
+                      <button
+                        class="select__trigger"
+                        id="runtime-trigger"
+                        type="button"
+                        aria-haspopup="listbox"
+                        aria-expanded="false"
+                        aria-labelledby="runtime-label runtime-value"
+                        disabled
+                      >
+                        <span class="select__value" id="runtime-value">Managed</span>
+                        <span class="select__chevron" aria-hidden="true"></span>
+                      </button>
+                    </div>
+                    <p class="field__hint">Set by your workspace administrator.</p>
+                  </div>
+                </div>
+
+                <div class="log-line">
+                  <span class="note">last change</span>
+                  <code data-select-log>staging</code>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="input">
+            <div class="section__head">
+              <h2>Input</h2>
+              <code class="api">.input</code>
+            </div>
+            <p class="section__lede">
+              The frame carries the state: a hairline at rest, ink on focus, the
+              inverse signal on the ring, and an error written in plain ink and a
+              2px frame. The slug below validates as you type.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>height 34</span>
+                <span>ring 2px</span>
+                <span>hint + error</span>
+              </div>
+              <div class="stage__body">
+                <div class="grid-2">
+                  <div class="field">
+                    <label class="field__label" for="name-demo">Workspace name</label>
+                    <input class="input" id="name-demo" type="text" placeholder="e.g. Atlas" />
+                    <p class="field__hint">Visible to everyone in the workspace.</p>
+                  </div>
+
+                  <div class="field">
+                    <label class="field__label" for="slug-demo">Slug</label>
+                    <div class="input-group">
+                      <span class="input-group__addon">lam.tools/</span>
+                      <input
+                        class="input"
+                        id="slug-demo"
+                        type="text"
+                        value="atlas-core"
+                        aria-describedby="slug-hint slug-error"
+                        data-slug-input
+                      />
+                      <span class="input-group__addon input-group__addon--end">/settings</span>
+                    </div>
+                    <p class="field__hint" id="slug-hint">Lowercase letters, numbers, and dashes.</p>
+                    <p class="field__error" id="slug-error" role="alert" data-slug-error hidden>
+                      Use lowercase letters, numbers, and dashes only.
+                    </p>
+                  </div>
+
+                  <div class="field">
+                    <label class="field__label" for="invalid-demo">Connection string</label>
+                    <input
+                      class="input"
+                      id="invalid-demo"
+                      type="text"
+                      value="postgres://"
+                      aria-invalid="true"
+                      aria-describedby="invalid-hint"
+                    />
+                    <p class="field__error" id="invalid-hint">A database name is required.</p>
+                  </div>
+
+                  <div class="field">
+                    <label class="field__label" for="search-demo">Search sessions</label>
+                    <div class="input-group">
+                      <span class="input-group__addon" aria-hidden="true">
+                        <svg
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.5"
+                          stroke-linecap="square"
+                          aria-hidden="true"
+                        >
+                          <circle cx="5" cy="5" r="3.2" />
+                          <path d="M7.4 7.4 10.5 10.5" />
+                        </svg>
+                      </span>
+                      <input
+                        class="input"
+                        id="search-demo"
+                        type="search"
+                        placeholder="Name, id, or model"
+                        data-search-demo
+                      />
+                      <span class="input-group__addon input-group__addon--end">
+                        <kbd class="kbd">/</kbd>
+                      </span>
+                    </div>
+                    <p class="field__hint">Press <kbd class="kbd">/</kbd> anywhere to focus.</p>
+                  </div>
+
+                  <div class="field specimen--wide">
+                    <div class="field__label">
+                      <label for="prompt-demo">System prompt</label>
+                      <span class="field__count" data-counter-for="prompt-demo">0 / 140</span>
+                    </div>
+                    <textarea
+                      class="input input--area"
+                      id="prompt-demo"
+                      maxlength="140"
+                      data-counter
+                    >Answer in short, direct sentences.</textarea>
+                    <p class="field__hint">Shown before every message in this session.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="switch">
+            <div class="section__head">
+              <h2>Switch &amp; checks</h2>
+              <code class="api">.switch / .check</code>
+            </div>
+            <p class="section__lede">
+              A switch commits immediately; a checkbox is for selection; a radio is for
+              one of a set. They share the same ink and signal grammar, not the same
+              shape.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>track 40 × 24</span>
+                <span>thumb 16</span>
+                <span>role=switch</span>
+              </div>
+              <div class="stage__body">
+                <div class="grid-2">
+                  <div class="stack">
+                    <label class="switch">
+                      <input class="switch__input" type="checkbox" role="switch" checked />
+                      <span class="switch__track" aria-hidden="true">
+                        <span class="switch__thumb"></span>
+                      </span>
+                      <span class="switch__text">
+                        <span class="switch__title">Stream output</span>
+                        <span class="switch__desc">Render tokens as they arrive.</span>
+                      </span>
+                    </label>
+
+                    <label class="switch">
+                      <input class="switch__input" type="checkbox" role="switch" />
+                      <span class="switch__track" aria-hidden="true">
+                        <span class="switch__thumb"></span>
+                      </span>
+                      <span class="switch__text">
+                        <span class="switch__title">Persist logs</span>
+                        <span class="switch__desc">Keep run logs after the session ends.</span>
+                      </span>
+                    </label>
+
+                    <label class="switch">
+                      <input class="switch__input" type="checkbox" role="switch" checked disabled />
+                      <span class="switch__track" aria-hidden="true">
+                        <span class="switch__thumb"></span>
+                      </span>
+                      <span class="switch__text">
+                        <span class="switch__title">Telemetry</span>
+                        <span class="switch__desc">Set by workspace policy.</span>
+                      </span>
+                    </label>
+
+                    <div class="row">
+                      <span class="specimen__label">small</span>
+                      <label class="switch switch--sm switch--bare">
+                        <input
+                          class="switch__input"
+                          type="checkbox"
+                          role="switch"
+                          checked
+                          aria-label="Compact mode"
+                        />
+                        <span class="switch__track" aria-hidden="true">
+                          <span class="switch__thumb"></span>
+                        </span>
+                      </label>
+                      <span class="specimen__label">off</span>
+                      <label class="switch switch--sm switch--bare">
+                        <input
+                          class="switch__input"
+                          type="checkbox"
+                          role="switch"
+                          aria-label="Reduced detail"
+                        />
+                        <span class="switch__track" aria-hidden="true">
+                          <span class="switch__thumb"></span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="stack">
+                    <label class="check">
+                      <input class="check__input" type="checkbox" checked />
+                      <span class="check__box" aria-hidden="true"></span>
+                      <span class="check__label">Remember this device</span>
+                    </label>
+
+                    <label class="check">
+                      <input class="check__input" type="checkbox" data-indeterminate />
+                      <span class="check__box" aria-hidden="true"></span>
+                      <span class="check__label">Some sessions selected</span>
+                    </label>
+
+                    <label class="check">
+                      <input class="check__input" type="checkbox" disabled />
+                      <span class="check__box" aria-hidden="true"></span>
+                      <span class="check__label">Disabled option</span>
+                    </label>
+
+                    <fieldset class="radio-set">
+                      <legend class="specimen__label">checkpoint interval</legend>
+                      <label class="check check--radio">
+                        <input
+                          class="check__input"
+                          type="radio"
+                          name="checkpoint-demo"
+                          value="5"
+                          checked
+                        />
+                        <span class="check__box" aria-hidden="true"></span>
+                        <span class="check__label">Every 5 min</span>
+                      </label>
+                      <label class="check check--radio">
+                        <input
+                          class="check__input"
+                          type="radio"
+                          name="checkpoint-demo"
+                          value="15"
+                        />
+                        <span class="check__box" aria-hidden="true"></span>
+                        <span class="check__label">Every 15 min</span>
+                      </label>
+                    </fieldset>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="segmented">
+            <div class="section__head">
+              <h2>Segmented</h2>
+              <code class="api">.segmented</code>
+            </div>
+            <p class="section__lede">
+              An ink block moves under the selected option. Arrow keys move both the
+              selection and the block; the control is one tab stop, not three.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>radiogroup</span>
+                <span>arrow keys</span>
+                <span>sliding ink</span>
+              </div>
+              <div class="stage__body">
+                <div class="row">
+                  <span class="row__label">view</span>
+                  <div
+                    class="segmented"
+                    data-segmented
+                    data-view-control
+                    role="radiogroup"
+                    aria-label="View"
+                  >
+                    <span class="segmented__indicator" aria-hidden="true"></span>
+                    <button
+                      class="segmented__item"
+                      type="button"
+                      role="radio"
+                      aria-checked="true"
+                      data-value="list"
+                    >
+                      List
+                    </button>
+                    <button
+                      class="segmented__item"
+                      type="button"
+                      role="radio"
+                      aria-checked="false"
+                      tabindex="-1"
+                      data-value="grid"
+                    >
+                      Grid
+                    </button>
+                    <button
+                      class="segmented__item"
+                      type="button"
+                      role="radio"
+                      aria-checked="false"
+                      tabindex="-1"
+                      data-value="table"
+                    >
+                      Table
+                    </button>
+                  </div>
+                  <span class="note">value → <code data-view-output>list</code></span>
+                </div>
+
+                <div class="row">
+                  <span class="row__label">size</span>
+                  <div
+                    class="segmented segmented--sm"
+                    data-segmented
+                    role="radiogroup"
+                    aria-label="Density"
+                  >
+                    <span class="segmented__indicator" aria-hidden="true"></span>
+                    <button
+                      class="segmented__item"
+                      type="button"
+                      role="radio"
+                      aria-checked="true"
+                      data-value="compact"
+                    >
+                      Compact
+                    </button>
+                    <button
+                      class="segmented__item"
+                      type="button"
+                      role="radio"
+                      aria-checked="false"
+                      tabindex="-1"
+                      data-value="comfortable"
+                    >
+                      Comfortable
+                    </button>
+                  </div>
+                  <span class="note">30px tall</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="scrollbar">
+            <div class="section__head">
+              <h2>Scrollbar</h2>
+              <code class="api">.scroll</code>
+            </div>
+            <p class="section__lede">
+              A 4px thumb inset in a 12px lane. It darkens on hover, never widens the
+              layout, and uses the same tokens as the page itself.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>thumb 4px</span>
+                <span>lane 12px</span>
+                <span>shared with page</span>
+              </div>
+              <div class="stage__body">
+                <div
+                  class="scroll-demo scroll"
+                  tabindex="0"
+                  role="region"
+                  aria-label="Recent sessions"
+                >
+                  <div class="session session--head" aria-hidden="true">
+                    <span>session</span>
+                    <span>task</span>
+                    <span>status</span>
+                    <span>time</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_8f21</code>
+                    <span>Refactor auth middleware</span>
+                    <span class="status"><span class="status__dot status__dot--run"></span>Running</span>
+                    <span class="session__time">04:12</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_2ba9</code>
+                    <span>Generate release notes</span>
+                    <span class="status"><span class="status__dot status__dot--run"></span>Running</span>
+                    <span class="session__time">01:48</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_71cc</code>
+                    <span>Map the wiki structure</span>
+                    <span class="status"><span class="status__dot"></span>Queued</span>
+                    <span class="session__time">—</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_4d03</code>
+                    <span>Summarize the design review</span>
+                    <span class="status"><span class="status__dot status__dot--done"></span>Done</span>
+                    <span class="session__time">12:06</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_99e1</code>
+                    <span>Index the plugin catalog</span>
+                    <span class="status"><span class="status__dot status__dot--done"></span>Done</span>
+                    <span class="session__time">07:31</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_a3c7</code>
+                    <span>Rebuild the settings table</span>
+                    <span class="status"><span class="status__dot status__dot--fail"></span>Failed</span>
+                    <span class="session__time">00:19</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_05f8</code>
+                    <span>Draft the migration plan</span>
+                    <span class="status"><span class="status__dot status__dot--done"></span>Done</span>
+                    <span class="session__time">22:40</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_c1a4</code>
+                    <span>Compress session snapshots</span>
+                    <span class="status"><span class="status__dot status__dot--run"></span>Running</span>
+                    <span class="session__time">08:57</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_6ee0</code>
+                    <span>Check plugin permissions</span>
+                    <span class="status"><span class="status__dot"></span>Queued</span>
+                    <span class="session__time">—</span>
+                  </div>
+                  <div class="session">
+                    <code>sess_b8d2</code>
+                    <span>Archive the old workspace</span>
+                    <span class="status"><span class="status__dot status__dot--done"></span>Done</span>
+                    <span class="session__time">15:22</span>
+                  </div>
+                </div>
+                <p class="note">The page scrollbar uses the same tokens. Scroll the panel to see the thumb.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="assembly">
+            <div class="section__head">
+              <h2>In use</h2>
+              <code class="api">.panel</code>
+            </div>
+            <p class="section__lede">
+              One settings surface, assembled from the same parts. Hairlines separate
+              rows; nothing is nested inside another card; every control is live.
+            </p>
+            <div class="stage">
+              <div class="stage__meta">
+                <span>hairline rows</span>
+                <span>34px fields</span>
+                <span>one panel</span>
+              </div>
+              <div class="stage__body">
+                <div class="panel">
+                  <div class="panel__head">
+                    <div>
+                      <h3>Session defaults</h3>
+                      <p>Applied to new sessions in this workspace.</p>
+                    </div>
+                    <span class="note">workspace / atlas</span>
+                  </div>
+
+                  <div class="setting">
+                    <div class="setting__text">
+                      <span class="setting__title" id="reasoning-label">Reasoning</span>
+                      <span class="setting__desc">How much time the model spends before answering.</span>
+                    </div>
+                    <div class="setting__control setting__control--field">
+                      <div class="select" data-select>
+                        <button
+                          class="select__trigger"
+                          type="button"
+                          aria-haspopup="listbox"
+                          aria-expanded="false"
+                          aria-labelledby="reasoning-label reasoning-value"
+                        >
+                          <span class="select__value" id="reasoning-value" data-select-value>Balanced</span>
+                          <span class="select__chevron" aria-hidden="true"></span>
+                        </button>
+                        <div
+                          class="select__popup"
+                          role="listbox"
+                          tabindex="-1"
+                          aria-labelledby="reasoning-label"
+                          hidden
+                        >
+                          <div class="select__option" role="option" aria-selected="false" data-value="fast">
+                            <span class="select__check" aria-hidden="true"></span>
+                            <span class="select__option-label">Fast</span>
+                            <span class="select__meta">low latency</span>
+                          </div>
+                          <div class="select__option" role="option" aria-selected="true" data-value="balanced">
+                            <span class="select__check" aria-hidden="true"></span>
+                            <span class="select__option-label">Balanced</span>
+                            <span class="select__meta">default</span>
+                          </div>
+                          <div class="select__option" role="option" aria-selected="false" data-value="deep">
+                            <span class="select__check" aria-hidden="true"></span>
+                            <span class="select__option-label">Deep</span>
+                            <span class="select__meta">extended</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <div class="setting__text">
+                      <span class="setting__title">Creativity</span>
+                      <span class="setting__desc">Lower values stay closer to the source.</span>
+                    </div>
+                    <div class="setting__control setting__control--field">
+                      <div class="slider slider--bare" data-suffix="" data-decimals="2" style="--fill: 70%">
+                        <div class="slider__head">
+                          <output class="slider__value" data-range-output for="creativity">0.70</output>
+                        </div>
+                        <div class="slider__track">
+                          <span class="slider__fill" aria-hidden="true"></span>
+                          <input
+                            class="slider__input"
+                            id="creativity"
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value="0.7"
+                            aria-label="Creativity"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <div class="setting__text">
+                      <span class="setting__title">Stream output</span>
+                      <span class="setting__desc">Show tokens as they arrive.</span>
+                    </div>
+                    <div class="setting__control">
+                      <label class="switch switch--bare">
+                        <input
+                          class="switch__input"
+                          type="checkbox"
+                          role="switch"
+                          checked
+                          aria-label="Stream output"
+                        />
+                        <span class="switch__track" aria-hidden="true">
+                          <span class="switch__thumb"></span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <div class="setting__text">
+                      <span class="setting__title">Persist logs</span>
+                      <span class="setting__desc">Keep run logs for 30 days.</span>
+                    </div>
+                    <div class="setting__control">
+                      <label class="switch switch--bare">
+                        <input
+                          class="switch__input"
+                          type="checkbox"
+                          role="switch"
+                          aria-label="Persist logs"
+                        />
+                        <span class="switch__track" aria-hidden="true">
+                          <span class="switch__thumb"></span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <div class="setting__text">
+                      <span class="setting__title">Density</span>
+                      <span class="setting__desc">Spacing for session lists.</span>
+                    </div>
+                    <div class="setting__control">
+                      <div
+                        class="segmented segmented--sm"
+                        data-segmented
+                        role="radiogroup"
+                        aria-label="Density"
+                      >
+                        <span class="segmented__indicator" aria-hidden="true"></span>
+                        <button
+                          class="segmented__item"
+                          type="button"
+                          role="radio"
+                          aria-checked="true"
+                          data-value="compact"
+                        >
+                          Compact
+                        </button>
+                        <button
+                          class="segmented__item"
+                          type="button"
+                          role="radio"
+                          aria-checked="false"
+                          tabindex="-1"
+                          data-value="comfortable"
+                        >
+                          Comfortable
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="panel__foot">
+                    <p
+                      class="panel__notice"
+                      role="status"
+                      aria-live="polite"
+                      data-save-notice
+                      data-visible="false"
+                    ></p>
+                    <div class="panel__actions">
+                      <button class="btn btn--primary" type="button" data-save>Save changes</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <footer class="footer">
+        <p>No shadows. No gradients. One signal: ivory on graphite, graphite on ivory.</p>
+        <p class="footer__files">
+          <code>tokens.css</code>
+          <code>kit.css</code>
+          <code>controls.ts</code>
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>

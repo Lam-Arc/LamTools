@@ -10,8 +10,11 @@ export interface SplitPane { id: string; tabs: SplitTab[]; activeTab: string }
 export type SplitNode = { type: 'pane'; id: string } | { type: 'split'; id: string; direction: 'columns' | 'rows'; ratio: number; first: SplitNode; second: SplitNode }
 export interface SplitState { version: 1; tree: SplitNode; panes: Record<string, SplitPane>; activePane: string; hidden: boolean; focused: string | null }
 export interface Rect { x: number; y: number; width: number; height: number }
-export interface Divider { id: string; direction: 'columns' | 'rows'; rect: Rect; parent: Rect; ratio: number }
+export interface Divider { id: string; direction: 'columns' | 'rows'; rect: Rect; handle: Rect; parent: Rect; ratio: number }
 const GAP = 2
+// user:“拖拽的判定，应该只有中间区域是拖拽判定，偏靠角的那一块应该留给创建分屏的判定”+(分隔线只有中段可调整，角部让给角柄拉屏)。
+const DIVIDER_HANDLE = 10
+const DIVIDER_END_GUARD = 18
 // user:“审查分屏代码，并优化”+(标签栏高度只有一个来源，内容区与空状态不再各自硬编码 36px)。
 export const SPLIT_TAB_BAR_HEIGHT = 36
 // user:“审查分屏代码，并优化”+(同一份内容、同一项目范围才算同一个标签；设置/搜索/插件/账号与项目无关，切换项目后仍复用原标签)。
@@ -86,8 +89,41 @@ export function moveTab(state: SplitState, source: string, target: string, tabId
   else { to.tabs.push(tab); to.activeTab = tab.id }
   state.activePane = target
 }
-export function minimumSize(node: SplitNode): { width: number; height: number } {
-  if (node.type === 'pane') return node.id === 'main' ? { width: 420, height: 320 } : { width: 320, height: 240 }
+// user:“该对齐的就全部都去对齐”“我要体验一致化”+(角拖合并、边框合并/交换与 Blender 保持同一套体验)。
+function siblingSplit(node: SplitNode, a: string, b: string): SplitNode | null {
+  if (node.type !== 'split') return null
+  if (node.first.type === 'pane' && node.second.type === 'pane'
+    && ((node.first.id === a && node.second.id === b) || (node.first.id === b && node.second.id === a))) return node
+  return siblingSplit(node.first, a, b) || siblingSplit(node.second, a, b)
+}
+export function canJoinPanes(tree: SplitNode, a: string, b: string): boolean {
+  return a !== b && a !== 'main' && b !== 'main' && Boolean(siblingSplit(tree, a, b))
+}
+export function joinPanes(state: SplitState, a: string, b: string): boolean {
+  if (!canJoinPanes(state.tree, a, b) || !state.panes[a] || !state.panes[b]) return false
+  const target = b, source = a, targetPane = state.panes[target], sourcePane = state.panes[source]
+  function collapse(node: SplitNode): SplitNode {
+    if (node.type === 'pane') return node
+    if (node.first.type === 'pane' && node.second.type === 'pane'
+      && ((node.first.id === a && node.second.id === b) || (node.first.id === b && node.second.id === a))) return { type: 'pane', id: target }
+    node.first = collapse(node.first); node.second = collapse(node.second); return node
+  }
+  state.tree = collapse(state.tree)
+  for (const tab of sourcePane.tabs) if (!targetPane.tabs.some(open => sameTab(open, tab))) targetPane.tabs.push(tab)
+  if (!targetPane.tabs.some(tab => tab.id === targetPane.activeTab)) targetPane.activeTab = targetPane.tabs[0]?.id ?? ''
+  delete state.panes[source]
+  if (state.activePane === source) state.activePane = target
+  if (state.focused === source) state.focused = target
+  return true
+}
+export function swapPanes(state: SplitState, a: string, b: string): boolean {
+  const first = state.panes[a], second = state.panes[b]
+  if (!first || !second || a === b) return false
+  const tabs = first.tabs; first.tabs = second.tabs; second.tabs = tabs
+  const active = first.activeTab; first.activeTab = second.activeTab; second.activeTab = active
+  return true
+}
+export function minimumSize(node: SplitNode): { width: number; height: number } {  if (node.type === 'pane') return node.id === 'main' ? { width: 420, height: 320 } : { width: 320, height: 240 }
   const a = minimumSize(node.first), b = minimumSize(node.second)
   return node.direction === 'columns' ? { width: a.width + b.width + GAP, height: Math.max(a.height, b.height) } : { width: Math.max(a.width, b.width), height: a.height + b.height + GAP }
 }
@@ -116,7 +152,10 @@ export function layoutRects(tree: SplitNode, bounds: Rect): { panes: Record<stri
     const part = extent >= minA + minB ? Math.max(minA, Math.min(extent - minB, Math.round(extent * node.ratio))) : Math.round(extent * node.ratio)
     const a = { ...rect, [key]: part }, b = { ...rect, [key]: extent - part, [columns ? 'x' : 'y']: (columns ? rect.x : rect.y) + part + GAP }
     const divider = columns ? { x: rect.x + part, y: rect.y, width: GAP, height: rect.height } : { x: rect.x, y: rect.y + part, width: rect.width, height: GAP }
-    dividers.push({ id: node.id, direction: node.direction, rect: divider, parent: rect, ratio: node.ratio })
+    const handle = columns
+      ? { x: divider.x - (DIVIDER_HANDLE - GAP) / 2, y: divider.y + SPLIT_TAB_BAR_HEIGHT + 8, width: DIVIDER_HANDLE, height: Math.max(0, divider.height - SPLIT_TAB_BAR_HEIGHT - 8 - DIVIDER_END_GUARD) }
+      : { x: divider.x + DIVIDER_END_GUARD, y: divider.y - (DIVIDER_HANDLE - GAP) / 2, width: Math.max(0, divider.width - DIVIDER_END_GUARD * 2), height: DIVIDER_HANDLE }
+    dividers.push({ id: node.id, direction: node.direction, rect: divider, handle, parent: rect, ratio: node.ratio })
     walk(node.first, a); walk(node.second, b)
   }
   walk(tree, bounds); return { panes, dividers }

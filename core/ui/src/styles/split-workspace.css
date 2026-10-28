@@ -3,35 +3,43 @@
 .split-pane-frame, .split-tab-content { position: absolute; min-width: 0; min-height: 0; pointer-events: auto; background: var(--theme-main-background); overflow: hidden; }
 .split-pane-frame { border-radius: 0; }
 .split-tab-content { overflow: auto; overscroll-behavior: contain; border-radius: 0; }
-.split-pane-bar { height: var(--split-tabbar-height, 36px); display: flex; align-items: center; padding-inline: var(--space-2); gap: var(--space-1); box-shadow: 0 1px color-mix(in srgb, var(--text) 8%, transparent); }
+/* user:“标签和角铁太难看，重新设计”+(标签属于 main 区：文字跟随主区颜色，选中态只用轻底色，不再使用会变成白块的 control 软底色)。 */
+.split-pane-bar { --text: var(--theme-main-text); height: var(--split-tabbar-height, 36px); display: flex; align-items: center; padding-inline: 22px var(--space-2); gap: var(--space-1); box-shadow: 0 1px color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
+.split-pane-bar.is-active { box-shadow: 0 1px color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
 .split-pane-tabs { position: relative; display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; align-self: stretch; gap: var(--space-1); }
-.split-pane-tab { --text: var(--theme-control-text); display: flex; align-items: center; min-width: 76px; max-width: 220px; margin-block: var(--space-1); border-radius: var(--radius-sm); position: relative; color: color-mix(in srgb, var(--text) 65%, transparent); }
-.split-pane-tab.is-selected { background: var(--theme-control-soft-background); color: var(--text); }
-.split-pane-bar.is-active .split-pane-tab.is-selected::after { content: ''; height: 1px; background: color-mix(in srgb, var(--text) 35%, transparent); position: absolute; bottom: calc(-1 * var(--space-1)); left: var(--space-2); right: var(--space-2); }
-.split-pane-tab > [role=tab] { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; padding: var(--space-1) var(--space-2); font: inherit; font-size: 12px; color: inherit; border: 0; background: transparent; cursor: pointer; white-space: nowrap; }
+.split-pane-tab { --text: var(--theme-main-text); display: flex; align-items: center; min-width: 76px; max-width: 220px; margin-block: var(--space-1); border-radius: var(--radius-sm); position: relative; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-pane-tab.is-selected { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); }
+.split-pane-tab > [role=tab] { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2); font: inherit; font-size: 12px; font-weight: 500; color: inherit; border: 0; background: transparent; cursor: pointer; white-space: nowrap; }
 .split-pane-tab > [role=tab] > span:first-of-type { overflow: hidden; text-overflow: ellipsis; }
-.split-pane-tab svg { flex-shrink: 0; }
-.split-icon-button, .split-tab-close { --text: var(--theme-control-text); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); cursor: pointer; }
+.split-pane-tab svg { flex-shrink: 0; opacity: .65; }
+.split-pane-tab.is-selected svg { opacity: 1; }
+.split-icon-button, .split-tab-close { --text: var(--theme-main-text); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 65%, transparent); cursor: pointer; }
+.split-pane-close { color: color-mix(in srgb, var(--text) 45%, transparent); }
 .split-icon-button:hover, .split-tab-close:hover, .split-text-button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
 .split-icon-button:active, .split-text-button:active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
-.split-tab-close { width: 20px; height: 20px; margin-right: var(--space-1); opacity: 0; visibility: hidden; }
-.split-pane-tab:is(:hover,:focus-within,.is-selected) .split-tab-close { opacity: 1; visibility: visible; transition-delay: 0s; }
+.split-tab-close { width: 18px; height: 18px; margin-right: var(--space-1); color: color-mix(in srgb, var(--text) 65%, transparent); opacity: 0; visibility: hidden; }
+.split-pane-tab.is-selected .split-tab-close { opacity: .7; visibility: visible; transition-delay: 0s; }
+.split-pane-tab:is(:hover,:focus-within) .split-tab-close { opacity: 1; visibility: visible; transition-delay: 0s; }
 .split-unsaved { width: 4px; height: 4px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 .split-empty-label { display: flex; align-items: center; padding-inline: var(--space-2); font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-empty { height: calc(100% - var(--split-tabbar-height, 36px)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); font-size: 13px; color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-empty small { font-size: 11px; }
 .split-text-button { --text: var(--theme-control-text); font: inherit; font-size: 12px; border: 0; border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); color: var(--text); background: var(--theme-control-soft-background); cursor: pointer; }
-.split-divider { position: absolute; pointer-events: auto; outline: none; z-index: var(--z-stage); }
-.split-divider::before { content: ''; position: absolute; background: transparent; border-radius: var(--radius-sm); }
+.split-divider { position: absolute; pointer-events: auto; outline: none; z-index: var(--z-stage); background: transparent; }
+.split-divider::before { content: ''; position: absolute; background: transparent; border-radius: var(--radius-sm); pointer-events: none; }
 .split-divider--columns { cursor: col-resize; }
-.split-divider--columns::before { inset: 0 -3px; }
+.split-divider--columns::before { left: 50%; top: calc(-1 * var(--divider-extend-top, 0px)); bottom: calc(-1 * var(--divider-extend-bottom, 0px)); width: 1px; transform: translateX(-50%); }
 .split-divider--rows { cursor: row-resize; }
-.split-divider--rows::before { inset: -3px 0; }
-.split-divider:is(:hover,:focus-visible)::before { background: color-mix(in srgb, var(--text) 12%, transparent); }
+.split-divider--rows::before { top: 50%; left: calc(-1 * var(--divider-extend-left, 0px)); right: calc(-1 * var(--divider-extend-right, 0px)); height: 1px; transform: translateY(-50%); }
+.split-divider:is(:hover,:focus-visible)::before { background: color-mix(in srgb, var(--text) 22%, transparent); }
 .split-is-resizing, .split-is-resizing * { user-select: none !important; cursor: inherit; }
 .split-is-resizing .split-tab-content { pointer-events: none; }
 .split-main-drop { position: absolute; pointer-events: auto; }
-.split-drop-preview { box-sizing: border-box; position: absolute; z-index: var(--z-composer); display: grid; place-items: center; background: color-mix(in srgb, var(--theme-main-text) 12%, transparent); border: 1px solid color-mix(in srgb, var(--theme-main-text) 25%, transparent); border-radius: var(--radius-sm); font-size: 12px; pointer-events: none; }
+.split-split-preview { position: absolute; inset: 0; z-index: var(--z-composer); pointer-events: none; }
+.split-split-preview-area { box-sizing: border-box; position: absolute; border: 1px solid color-mix(in srgb, var(--text) 26%, transparent); background: color-mix(in srgb, var(--text) 7%, transparent); border-radius: var(--radius-sm); pointer-events: none; }
+.split-split-preview-line { position: absolute; background: color-mix(in srgb, var(--text) 38%, transparent); pointer-events: none; }
+.split-split-preview--merge .split-split-preview-area { border-color: color-mix(in srgb, var(--text) 35%, transparent); background: color-mix(in srgb, var(--text) 10%, transparent); }
+.split-split-preview--join .split-split-preview-area { border-color: color-mix(in srgb, var(--text) 45%, transparent); background: color-mix(in srgb, var(--text) 13%, transparent); }
 .split-focus-switch { position: absolute; bottom: var(--space-2); right: var(--space-2); display: flex; gap: var(--space-1); pointer-events: auto; }
 /* user:“分屏键...平时是隐藏的，只有当鼠标到了那个区域时才显示，而且分屏键不需要有背景 它只是一个图标就可以了”+(右上角入口默认透明，悬停/键盘聚焦才浮现；扩大一点命中区但不加底色)。 */
 .split-entry { position: absolute; right: var(--space-3); top: var(--space-2); z-index: var(--z-stage); opacity: 0; background: transparent !important; color: var(--theme-main-text); transition: opacity var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
@@ -46,14 +54,10 @@
 .workspace-shell--split.workspace-shell--composer-center .composer-root--floating > .floating-composer { top: auto; bottom: calc(var(--composer-bottom-offset) + var(--space-4)); transform: translateX(-50%); }
 @media (prefers-reduced-motion: reduce) { .split-workspace *, .split-entry { transition: none !important; animation: none !important; } }
 
-/* Content controls reuse the control-area recipe and remain legible over both themes. */
-.split-pane-bar .split-icon-button, .split-tab-close { background: var(--theme-control-soft-background); }
-.split-pane-bar .split-icon-button { opacity: .65; }
-.split-pane-bar:hover .split-icon-button, .split-pane-bar:focus-within .split-icon-button { opacity: 1; }
+/* user:“标签和角铁太难看，重新设计”+(头部图标使用主区文字色的轻量幽灵按钮，不再是一排浅色方块)。 */
 .split-icon-button:disabled { opacity: .45; cursor: default; }
 .split-editor, .split-browser, .split-file-tree { height: 100%; min-height: 0; display: flex; flex-direction: column; --text: var(--theme-main-text); color: var(--text); }
 .split-content-toolbar { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-1); min-height: 36px; padding: var(--space-1) var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
-.split-content-toolbar .split-icon-button { background: var(--theme-control-soft-background); }
 .split-content-toolbar input { --text: var(--theme-composer-text); flex: 1; min-width: 0; border: 0; border-radius: var(--radius-sm); outline: none !important; background: var(--theme-composer-background); color: var(--text); padding: var(--space-1) var(--space-2); font: inherit; font-size: 12px; }
 .split-content-toolbar input::placeholder { color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); }
@@ -96,14 +100,14 @@
 
 /* user:“样式优化：动画、交互体验、圆角策略等”+(外轮廓统一圆角、内部交界平直；交互只使用短促淡入与轻微位移，拖动保持跟手)。 */
 .split-pane-tab { transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
-.split-pane-tab:not(.is-selected):hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
+.split-pane-tab:not(.is-selected):hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
 .split-pane-tab:focus-within { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 35%, transparent); }
 .split-pane-tab > [role=tab]:focus-visible { outline: none; }
 .split-icon-button, .split-tab-close, .split-text-button { transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
-.split-tab-close { transition: opacity var(--dur-fast) var(--ease-out), visibility 0s var(--dur-fast), background var(--dur-fast) var(--ease-out); }
-.split-icon-button:enabled:is(:hover,:focus-visible), .split-tab-close:is(:hover,:focus-visible), .split-text-button:is(:hover,:focus-visible) { outline: none; background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
+.split-tab-close { transition: opacity var(--dur-fast) var(--ease-out), visibility 0s var(--dur-fast), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.split-icon-button:enabled:is(:hover,:focus-visible), .split-tab-close:is(:hover,:focus-visible), .split-text-button:is(:hover,:focus-visible) { outline: none; background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
 .split-icon-button:enabled:active, .split-tab-close:active, .split-text-button:active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); transform: scale(.96); }
-.split-icon-button:focus-visible, .split-tab-close:focus-visible, .split-text-button:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 35%, transparent); opacity: 1; }
+.split-icon-button:focus-visible, .split-tab-close:focus-visible, .split-text-button:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 35%, transparent); opacity: 1; color: var(--text); }
 .split-content-status > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split-content-status > span:last-child { flex-shrink: 0; }
 .split-empty { padding-inline: var(--space-3); box-sizing: border-box; text-align: center; }
@@ -117,9 +121,8 @@
 .split-resize-columns, .split-resize-columns * { cursor: col-resize !important; }
 .split-resize-rows, .split-resize-rows * { cursor: row-resize !important; }
 .split-is-dragging .split-pane-tab { cursor: grabbing; }
-.split-drop-preview { transition: left var(--dur-fast) var(--ease-out), top var(--dur-fast) var(--ease-out), width var(--dur-fast) var(--ease-out), height var(--dur-fast) var(--ease-out); }
-.split-drop-enter-active, .split-drop-leave-active { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
-.split-drop-enter-from, .split-drop-leave-to { opacity: 0; transform: scale(.985); }
+.split-drop-enter-active, .split-drop-leave-active { transition: opacity var(--dur-fast) var(--ease-out); }
+.split-drop-enter-from, .split-drop-leave-to { opacity: 0; }
 .split-tab-content:not(.split-tab-content--browser) { animation: split-content-reveal var(--dur-fast) var(--ease-out); }
 @keyframes split-content-reveal { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
@@ -127,11 +130,18 @@
   .split-drop-enter-from, .split-drop-leave-to { transform: none; }
 }
 
-/* user:“拉起其他分屏...通过拖动拉起，而不是点击按钮。就类似 blender”+(分屏手柄可抓取，拉开时跟随指针预览，新屏短促淡入)。 */
-.split-split-handle { cursor: grab; touch-action: none; }
-.split-split-handle:active { cursor: grabbing; }
-.split-pane-frame.is-pulling .split-split-handle { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
+/* user:“标签和角铁太难看，重新设计”“简单，单层”“为什么左下角那个角铁是不可拖动的”+(单层圆角 L 形护角替代硬边 L；同一遮罩旋转出左下角，悬停时轻放大；左下角铁仍抬到输入栏之上)。 */
+.split-corner-grip { --split-corner-rotation: 0deg; --split-corner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M3.5 14.5V5.2C3.5 4.26 4.26 3.5 5.2 3.5H14.5' fill='none' stroke='%23fff' stroke-width='1.35' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); position: absolute; left: 0; bottom: 0; width: 18px; height: 18px; z-index: 2; pointer-events: auto; cursor: crosshair; touch-action: none; opacity: .5; color: var(--text); transition: opacity var(--dur-fast) var(--ease-out); }
+.split-corner-grip::before { content: ''; position: absolute; inset: 0; background: currentColor; -webkit-mask: var(--split-corner-mask) center / contain no-repeat; mask: var(--split-corner-mask) center / contain no-repeat; transform: rotate(var(--split-corner-rotation)); transform-origin: center; transition: transform var(--dur-fast) var(--ease-out); pointer-events: none; }
+.split-corner-grip--top-left { top: 0; bottom: auto; }
+.split-corner-grip--bottom-left { --split-corner-rotation: -90deg; z-index: calc(var(--z-composer, 40) + 1); }
+.split-corner-grip--ghost { opacity: 0; }
+.split-corner-grip--ghost::before { display: none; }
+.split-corner-grip:hover { opacity: 1; }
+.split-corner-grip:hover::before { transform: rotate(var(--split-corner-rotation)) scale(1.08); }
+.split-corner-grip--ghost:hover { opacity: 0; }
+.split-pane-frame.is-pulling .split-corner-grip { opacity: 1; }
 .split-is-pulling, .split-is-pulling * { cursor: crosshair !important; user-select: none; }
-.split-pull-preview { border-style: dashed; transition: opacity var(--dur-fast) var(--ease-out); }
 .split-pane-frame.is-entering { animation: split-pane-enter 180ms var(--ease-out); }
 @keyframes split-pane-enter { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .split-corner-grip:hover::before { transform: rotate(var(--split-corner-rotation)); } }

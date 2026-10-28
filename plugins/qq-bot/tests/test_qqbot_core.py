@@ -47,7 +47,7 @@ from qqbot.protocol import (
     StreamSession,
     parse_inbound,
 )
-from qqbot.runtime import MergeGuard, merge_contexts
+from qqbot.runtime import MergeGuard, QQBotRuntime, merge_contexts
 from qqbot.util import chunk_markdown_text, is_path_allowed, sniff_image_media_type
 
 
@@ -208,7 +208,7 @@ async def test_message_filter_dedup() -> None:
     ctx2 = MiddlewareContext(_message())
     await run_chain([middleware], ctx2)
     assert ctx2.stopped
-    assert ctx2.stop_reason == "deduplication"
+    assert ctx2.stop_reason.startswith("deduplication")
 
 
 async def test_access_policy_and_mention_gate() -> None:
@@ -282,7 +282,7 @@ async def test_build_agent_body_group_history_and_media() -> None:
     assert "[Chat history begins]" in body
     assert "Bob (u1)] earlier" in body
     assert "[Ann (u2)] current\n[图片] (@you)" in body
-    assert "Image: C:/media/a.png" in body
+    assert "@C:/media/a.png" in body
 
 
 async def test_merge_guard_merges_buffered_messages() -> None:
@@ -507,3 +507,117 @@ async def test_binding_service_completes() -> None:
     assert credentials == {"appId": "app-1", "appSecret": "secret"}
     assert service.state.phase == "saving"
     await service.dispose()
+
+
+def test_split_bubbles_newline_rules_and_code_blocks() -> None:
+    from qqbot.util import split_bubbles
+
+    assert split_bubbles("a\n\nb") == ["a", "b"]
+    assert split_bubbles("a\nb\n\n\nc") == ["a", "b", "c"]
+    assert split_bubbles("before\n```python\nx = 1\n\ny = 2\n```\nafter") == [
+        "before",
+        "```python\nx = 1\n\ny = 2\n```",
+        "after",
+    ]
+    assert split_bubbles("   \n\n") == []
+
+
+def test_split_bubbles_keeps_markdown_blocks_together() -> None:
+    from qqbot.util import split_bubbles
+
+    text = (
+        "先看结论\n"
+        "\n"
+        "| 名称 | 数量 |\n"
+        "|---|---:|\n"
+        "| A | 1 |\n"
+        "| B | 2 |\n"
+        "\n"
+        "> 这是引用\n"
+        "> 引用第二行\n"
+        "\n"
+        "- 列表项一\n"
+        "  缩进续行\n"
+        "\n"
+        "- 列表项二\n"
+        "\n"
+        "结尾"
+    )
+    assert split_bubbles(text) == [
+        "先看结论",
+        "| 名称 | 数量 |\n|---|---:|\n| A | 1 |\n| B | 2 |",
+        "> 这是引用\n> 引用第二行",
+        "- 列表项一\n  缩进续行\n\n- 列表项二",
+        "结尾",
+    ]
+
+
+def test_split_bubbles_chunks_oversized_markdown_blocks_safely() -> None:
+    from qqbot.util import split_bubbles
+
+    rows = "\n".join(f"| 行 {index} | 值 {index} |" for index in range(20))
+    table = f"| 列 | 值 |\n|---|---|\n{rows}"
+    bubbles = split_bubbles(table, limit=120)
+    assert len(bubbles) > 1
+    for bubble in bubbles:
+        assert bubble.startswith("|") and bubble.endswith("|")
+
+
+async def test_target_mode_does_not_buffer_second_message(tmp_path: Path) -> None:
+    """A QQ message sent while a Sunday turn is running must be processed now.
+
+    The previous message's send waits for the whole target turn, so the old
+    per-peer MergeGuard held the second message until the turn ended and then
+    started a fresh turn. Target mode must bypass that buffer so the second
+    message can be injected as guidance immediately.
+    """
+    class Context:
+        data_dir = tmp_path
+        work_root = tmp_path
+
+    class BlockingTarget:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.started = [asyncio.Event(), asyncio.Event()]
+            self.release = asyncio.Event()
+
+        async def send(self, **kwargs):
+            index = len(self.calls)
+            self.calls.append(kwargs)
+            if index < len(self.started):
+                self.started[index].set()
+            await self.release.wait()
+            return {"ok": True, "reply": ""}
+
+    runtime = QQBotRuntime(Context(), data_dir=tmp_path)  # type: ignore[arg-type]
+    runtime.config["targetSessionId"] = "session-1"
+    runtime.config["requireMention"] = False
+    target = BlockingTarget()
+    runtime._target = target  # type: ignore[assignment]
+
+    first = InboundMessage(
+        raw_event_type="C2C_MESSAGE_CREATE",
+        kind="c2c",
+        sender_id="user-1",
+        content="long task",
+        message_id="m1",
+        timestamp=str(int(time.time() * 1000)),
+    )
+    second = InboundMessage(
+        raw_event_type="C2C_MESSAGE_CREATE",
+        kind="c2c",
+        sender_id="user-1",
+        content="change it",
+        message_id="m2",
+        timestamp=str(int(time.time() * 1000)),
+    )
+
+    first_task = asyncio.create_task(runtime._process_message(first))
+    await asyncio.wait_for(target.started[0].wait(), timeout=1)
+    second_task = asyncio.create_task(runtime._process_message(second))
+    try:
+        await asyncio.wait_for(target.started[1].wait(), timeout=1)
+        assert [call["text"] for call in target.calls] == ["long task", "change it"]
+    finally:
+        target.release.set()
+        await asyncio.gather(first_task, second_task)

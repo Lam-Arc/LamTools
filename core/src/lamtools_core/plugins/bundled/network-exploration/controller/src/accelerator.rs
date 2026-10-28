@@ -32,7 +32,7 @@ const DOH_ENDPOINTS: &[&str] = &[
 pub struct Accelerator {
     task: Option<JoinHandle<()>>,
     pub port: u16,
-    pub fallback_proxy: Option<u16>,
+    fallback_proxy: Arc<Mutex<Option<u16>>>,
     preferred: Arc<Mutex<HashMap<String, Instant>>>,
 }
 impl Default for Accelerator {
@@ -45,7 +45,7 @@ impl Accelerator {
         Self {
             task: None,
             port: 0,
-            fallback_proxy: None,
+            fallback_proxy: Arc::new(Mutex::new(None)),
             preferred: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -53,13 +53,18 @@ impl Accelerator {
         json!({
             "running": self.task.is_some(),
             "port": self.port,
-            "fallback_proxy": self.fallback_proxy,
+            "fallback_proxy": *self.fallback_proxy.lock().unwrap(),
             "proxy_preferred": self.preferred.lock().map(|rows| rows.len()).unwrap_or(0),
             "mode": "local_direct",
             "note": "常用域名用 DoH 选 IP 直连；直连失败后回退线路并记住该域名。"
         })
     }
+    // user:“修”+(运行中更新兜底线路，保留宿主与系统正在使用的监听端口)。
+    pub fn set_fallback(&mut self, port: Option<u16>) {
+        *self.fallback_proxy.lock().unwrap() = port;
+    }
     pub async fn start(&mut self, fallback_proxy: Option<u16>) -> Reply {
+        self.set_fallback(fallback_proxy);
         if self.task.is_some() {
             return Ok(self.status());
         }
@@ -71,10 +76,12 @@ impl Accelerator {
             .map_err(|error| error.to_string())?
             .port();
         let preferred = self.preferred.clone();
+        let fallback = self.fallback_proxy.clone();
         let task = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((client, _)) => {
+                        let fallback_proxy = *fallback.lock().unwrap();
                         tokio::spawn(handle(client, fallback_proxy, preferred.clone()));
                     }
                     Err(_) => tokio::time::sleep(Duration::from_millis(80)).await,
@@ -83,7 +90,6 @@ impl Accelerator {
         });
         self.task = Some(task);
         self.port = port;
-        self.fallback_proxy = fallback_proxy;
         Ok(self.status())
     }
     pub fn stop(&mut self) {
@@ -91,7 +97,7 @@ impl Accelerator {
             task.abort();
         }
         self.port = 0;
-        self.fallback_proxy = None;
+        self.set_fallback(None);
     }
 }
 async fn handle(
@@ -133,15 +139,8 @@ async fn handle(
                 .await
                 .is_ok()
             {
-                relay_accelerated(
-                    &mut client,
-                    upstream,
-                    fallback,
-                    &header,
-                    &preferred,
-                    &host,
-                )
-                .await;
+                relay_accelerated(&mut client, upstream, fallback, &header, &preferred, &host)
+                    .await;
             }
             return;
         }
@@ -214,18 +213,87 @@ async fn read_headers(client: &mut TcpStream) -> Option<(Vec<u8>, String, String
         }
     }
 }
+// user:“修”+(无订阅时普通 HTTP 也能直连；转发时转换请求地址并删除代理凭据)。
 async fn forward_raw(mut client: TcpStream, header: Vec<u8>, fallback: Option<u16>) {
-    let Some(proxy_port) = fallback else {
-        respond(&mut client, "502 Bad Gateway").await;
-        return;
-    };
-    match TcpStream::connect(("127.0.0.1", proxy_port)).await {
-        Ok(mut upstream) => {
+    if let Some(proxy_port) = fallback {
+        if let Ok(mut upstream) = TcpStream::connect(("127.0.0.1", proxy_port)).await {
             if upstream.write_all(&header).await.is_ok() {
                 let _ = copy_bidirectional(&mut client, &mut upstream).await;
             }
+            return;
         }
-        Err(_) => respond(&mut client, "502 Bad Gateway").await,
+    }
+    let Some(end) = header.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return;
+    };
+    let Ok(text) = std::str::from_utf8(&header[..end]) else {
+        respond(&mut client, "400 Bad Request").await;
+        return;
+    };
+    let mut lines = text.split("\r\n");
+    let parts: Vec<_> = lines.next().unwrap_or("").split_whitespace().collect();
+    let url = parts
+        .get(1)
+        .and_then(|target| reqwest::Url::parse(target).ok());
+    let Some(url) = url.filter(|url| {
+        url.scheme() == "http"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+    }) else {
+        respond(&mut client, "400 Bad Request").await;
+        return;
+    };
+    if parts.len() != 3 {
+        respond(&mut client, "400 Bad Request").await;
+        return;
+    }
+    let mut path = url.path().to_string();
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    let mut request = format!("{} {} {}\r\n", parts[0], path, parts[2]);
+    for line in lines {
+        let name = line.split(':').next().unwrap_or("");
+        if [
+            "proxy-authorization",
+            "proxy-connection",
+            "connection",
+            "host",
+        ]
+        .iter()
+        .any(|key| name.eq_ignore_ascii_case(key))
+        {
+            continue;
+        }
+        request.push_str(line);
+        request.push_str("\r\n");
+    }
+    request.push_str(&format!(
+        "Host: {}\r\nConnection: close\r\n\r\n",
+        url.authority()
+    ));
+    let host = url
+        .host_str()
+        .unwrap()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    match tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        TcpStream::connect((host.as_str(), url.port_or_known_default().unwrap_or(80))),
+    )
+    .await
+    {
+        Ok(Ok(mut upstream)) => {
+            if upstream.write_all(request.as_bytes()).await.is_ok()
+                && upstream.write_all(&header[end + 4..]).await.is_ok()
+            {
+                let _ = copy_bidirectional(&mut client, &mut upstream).await;
+            }
+        }
+        _ => respond(&mut client, "502 Bad Gateway").await,
     }
 }
 // user:“那你试了吗？能连上吗？比如 mod n 网”+(DNS 被污染时 TCP 能连上但 TLS 被重置，首包失败就改走已开启的线路)。
@@ -441,7 +509,10 @@ fn parse_authority(value: &str) -> Result<(String, u16), String> {
         if host.contains(':') {
             return Err("IPv6 地址需要加方括号".into());
         }
-        (host.to_string(), port.parse::<u16>().map_err(|_| "端口无效")?)
+        (
+            host.to_string(),
+            port.parse::<u16>().map_err(|_| "端口无效")?,
+        )
     } else {
         (value.to_string(), 443)
     };
@@ -465,11 +536,19 @@ mod tests {
     fn common_hosts_match_suffixes_but_not_lookalikes() {
         // user:“本机加速层 你学习一下呗…它该抄就抄”+(照 FastGithub 的域名匹配：精确或子域名)。
         assert!(crate::engines::is_common_acceleration_host("github.com"));
-        assert!(crate::engines::is_common_acceleration_host("api.github.com"));
+        assert!(crate::engines::is_common_acceleration_host(
+            "api.github.com"
+        ));
         assert!(crate::engines::is_common_acceleration_host("github.com."));
-        assert!(!crate::engines::is_common_acceleration_host("evilgithub.com"));
-        assert!(!crate::engines::is_common_acceleration_host("github.com.evil"));
-        assert!(crate::engines::is_common_acceleration_host("huggingface.co"));
+        assert!(!crate::engines::is_common_acceleration_host(
+            "evilgithub.com"
+        ));
+        assert!(!crate::engines::is_common_acceleration_host(
+            "github.com.evil"
+        ));
+        assert!(crate::engines::is_common_acceleration_host(
+            "huggingface.co"
+        ));
     }
     #[test]
     fn rejects_resolver_answers_that_point_back_to_this_machine() {
@@ -511,5 +590,72 @@ mod tests {
         );
         assert!(parse_authority("github.com:0").is_err());
         assert!(parse_authority("bad host:443").is_err());
+    }
+    // user:“修”+(用真实回环连接验收 HTTP 直连与运行中更新兜底线路，不触碰系统设置)。
+    #[tokio::test]
+    async fn regression_http_without_subscription_reaches_origin() {
+        let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = origin.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = origin.accept().await.unwrap();
+            let (header, method, target) = read_headers(&mut stream).await.unwrap();
+            assert_eq!(method, "GET");
+            assert_eq!(target, "/asset?q=1");
+            assert!(!String::from_utf8_lossy(&header)
+                .to_lowercase()
+                .contains("proxy-authorization"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+        });
+        let mut accelerator = Accelerator::new();
+        accelerator.start(None).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", accelerator.port))
+            .await
+            .unwrap();
+        client.write_all(format!("GET http://127.0.0.1:{port}/asset?q=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nProxy-Authorization: secret\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut result = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut result))
+            .await
+            .unwrap()
+            .unwrap();
+        accelerator.stop();
+        assert!(String::from_utf8_lossy(&result).starts_with("HTTP/1.1 200"));
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn regression_running_accelerator_updates_fallback_without_changing_port() {
+        let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fallback_port = fallback.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = fallback.accept().await.unwrap();
+            read_headers(&mut stream).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let mut accelerator = Accelerator::new();
+        accelerator.start(None).await.unwrap();
+        let port = accelerator.port;
+        let status = accelerator.start(Some(fallback_port)).await.unwrap();
+        assert_eq!(status["fallback_proxy"], json!(fallback_port));
+        assert_eq!(accelerator.port, port);
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        client
+            .write_all(b"CONNECT example.invalid:443 HTTP/1.1\r\nHost: example.invalid\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = [0; 128];
+        let count = tokio::time::timeout(Duration::from_secs(3), client.read(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&response[..count]).starts_with("HTTP/1.1 200"));
+        accelerator.start(None).await.unwrap();
+        assert_eq!(accelerator.status()["fallback_proxy"], Value::Null);
+        accelerator.stop();
+        server.await.unwrap();
     }
 }

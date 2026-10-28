@@ -3641,28 +3641,18 @@ var ss = (e) => {
 	hour: "2-digit",
 	minute: "2-digit"
 }) : "刚刚", nc = (e) => e === "DIRECT" ? "直接连接" : e === "REJECT" ? "阻止连接" : e || "尚未选择线路";
-function rc(e) {
-	let t;
-	try {
-		let n = new URL(String(e).trim()).pathname;
-		t = decodeURIComponent(n.split("/").pop() || "");
-	} catch {
-		return "";
-	}
-	return t = t.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "").slice(0, 200), t || "download.bin";
-}
-function ic(e, t, n = 0) {
+function rc(e, t, n = 0) {
 	let r = e?.[t];
-	return !r || !Array.isArray(r.all) || !r.now || n > 4 ? t : ic(e, r.now, n + 1);
+	return !r || !Array.isArray(r.all) || !r.now || n > 4 ? t : rc(e, r.now, n + 1);
 }
-function ac(e) {
+function ic(e) {
 	let t = e?.proxies;
 	if (!t) return "";
 	let n = Object.entries(t).filter(([, e]) => Array.isArray(e.all) && e.now), r = n.find(([e]) => e === "GLOBAL") || n.find(([, e]) => e.type === "Selector") || n[0];
-	return r ? ic(t, r[1].now) : "";
+	return r ? rc(t, r[1].now) : "";
 }
-function oc(e) {
-	let n = /* @__PURE__ */ Jt(null), r = /* @__PURE__ */ F(null), i = /* @__PURE__ */ F([]), a = /* @__PURE__ */ F([]), o = /* @__PURE__ */ F(null), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(""), l = /* @__PURE__ */ F(""), u = /* @__PURE__ */ F(""), d = /* @__PURE__ */ F(!1), f = !1, p, m = async (t, n = {}) => {
+function ac(e) {
+	let n = /* @__PURE__ */ Jt(null), r = /* @__PURE__ */ F(null), i = /* @__PURE__ */ F([]), a = X(() => n.value?.downloads || []), o = /* @__PURE__ */ F(null), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(""), l = /* @__PURE__ */ F(""), u = /* @__PURE__ */ F(""), d = /* @__PURE__ */ F(!1), f = !1, p, m = async (t, n = {}) => {
 		if (f || e.signal?.aborted) throw Error("页面已关闭");
 		let r = await e.rpc(`network-exploration.${t}`, n);
 		if (f || e.signal?.aborted) throw Error("页面已关闭");
@@ -3693,8 +3683,7 @@ function oc(e) {
 		e && (o.value = e);
 	}
 	async function v() {
-		let e = await h("transfer.list");
-		e && (a.value = e.tasks || []);
+		await t.refresh();
 	}
 	async function y(e, n = {}, r = "") {
 		if (s.value) return null;
@@ -3721,7 +3710,11 @@ function oc(e) {
 					c.value = "当前系统代理不是由这里设置的，请在系统设置中关闭";
 					return;
 				}
-				await y("system.restore", { id: x.value.id }, "已恢复原来的系统代理"), await y("accelerator.stop", {}, ""), d.value && (d.value = !1, await y("proxy.stop", {}, ""), await g());
+				let e = await y("system.restore", { id: x.value.id }, "已恢复原来的系统代理");
+				if (!e || e.cancelled) return;
+				let t = await y("accelerator.stop", {}, "");
+				if (!t || t.cancelled) return;
+				d.value && (d.value = !1, await y("proxy.stop", {}, ""), await g());
 			} else {
 				if (n.value?.proxy?.config_saved && !n.value?.proxy?.running) {
 					let e = await y("proxy.start", {}, "");
@@ -3821,30 +3814,28 @@ function oc(e) {
 }
 //#endregion
 //#region ../src/lamtools_core/plugins/bundled/network-exploration/ui/src/HomeView.vue
-var sc = { class: "nx-home" }, cc = {
+var oc = { class: "nx-home" }, sc = {
 	class: "nx-stat-bar",
 	"data-stat-bar": "",
 	"aria-label": "实时网络数据"
-}, lc = {
+}, cc = {
 	class: "nx-stat",
 	"data-stat": "download"
-}, uc = {
+}, lc = {
 	class: "nx-stat",
 	"data-stat": "upload"
-}, dc = {
+}, uc = {
 	class: "nx-stat",
 	"data-stat": "total"
-}, fc = {
+}, dc = {
 	class: "nx-stat",
 	"data-stat": "delay"
-}, pc = { class: "nx-home-grid" }, mc = { class: "nx-quick-head" }, hc = { class: "nx-quick-icon" }, gc = { class: "nx-quick-main" }, _c = { class: "nx-quick-actions" }, vc = ["aria-pressed", "disabled"], yc = { class: "nx-quick-head" }, bc = { class: "nx-quick-icon" }, xc = { class: "nx-quick-main" }, Sc = { class: "nx-quick-actions" }, Cc = ["aria-pressed", "disabled"], wc = { class: "nx-quick-head" }, Tc = { class: "nx-quick-icon" }, Ec = { class: "nx-quick-main" }, Dc = { class: "nx-quick-actions nx-quick-actions--stack" }, Oc = ["disabled"], kc = {
+}, fc = { class: "nx-home-grid" }, pc = { class: "nx-quick-head" }, mc = { class: "nx-quick-icon" }, hc = { class: "nx-quick-main" }, gc = { class: "nx-quick-actions" }, _c = ["aria-pressed", "disabled"], vc = { class: "nx-quick-head" }, yc = { class: "nx-quick-icon" }, bc = { class: "nx-quick-main" }, xc = { class: "nx-quick-actions" }, Sc = ["aria-pressed", "disabled"], Cc = { class: "nx-quick-head" }, wc = { class: "nx-quick-icon" }, Tc = { class: "nx-quick-main" }, Ec = { class: "nx-quick-actions nx-quick-actions--stack" }, Dc = ["disabled"], Oc = {
 	__name: "HomeView",
 	props: { session: Object },
 	emits: ["navigate"],
 	setup(t, { emit: n }) {
-		let r = t, i = n, a = /* @__PURE__ */ F("");
-		vr(() => r.session.loadTasks());
-		let o = X(() => !!r.session.accelerated), s = X(() => Number(r.session.state?.traffic?.download || 0)), c = X(() => Number(r.session.state?.traffic?.upload || 0)), l = X(() => Number(r.session.state?.traffic?.received || 0) + Number(r.session.state?.traffic?.sent || 0)), u = X(() => !!r.session.state?.proxy?.config_saved), d = X(() => !!r.session.state?.proxy?.running), f = X(() => ac(r.session.proxy)), p = X(() => f.value ? nc(f.value) : d.value ? "正在读取线路" : "尚未连接"), m = X(() => Number(r.session.proxy?.proxies?.[f.value]?.history?.at(-1)?.delay || 0)), h = X(() => r.session.tasks.filter((e) => !["complete", "removed"].includes(e.status)).length), g = X(() => r.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), _ = X(() => r.session.busy === "proxy.start" ? "正在准备线路…" : r.session.busy === "accelerator.start" ? "正在准备…" : r.session.busy === "system.apply" ? "正在开启…" : o.value ? "停止加速" : "一键加速"), v = X(() => r.session.busy === "proxy.start" ? "连接中…" : r.session.busy === "proxy.stop" ? "关闭中…" : d.value ? "关闭代理" : u.value ? "开启代理" : "添加订阅");
+		let r = t, i = n, a = /* @__PURE__ */ F(""), o = X(() => !!r.session.accelerated), s = X(() => Number(r.session.state?.traffic?.download || 0)), c = X(() => Number(r.session.state?.traffic?.upload || 0)), l = X(() => Number(r.session.state?.traffic?.received || 0) + Number(r.session.state?.traffic?.sent || 0)), u = X(() => !!r.session.state?.proxy?.config_saved), d = X(() => !!r.session.state?.proxy?.running), f = X(() => ic(r.session.proxy)), p = X(() => f.value ? nc(f.value) : d.value ? "正在读取线路" : "尚未连接"), m = X(() => Number(r.session.proxy?.proxies?.[f.value]?.history?.at(-1)?.delay || 0)), h = X(() => r.session.tasks.filter((e) => !["complete", "removed"].includes(e.status)).length), g = X(() => r.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), _ = X(() => r.session.busy === "proxy.start" ? "正在准备线路…" : r.session.busy === "accelerator.start" ? "正在准备…" : r.session.busy === "system.apply" ? "正在开启…" : o.value ? "停止加速" : "一键加速"), v = X(() => r.session.busy === "proxy.start" ? "连接中…" : r.session.busy === "proxy.stop" ? "关闭中…" : d.value ? "关闭代理" : u.value ? "开启代理" : "添加订阅");
 		async function y() {
 			await r.session.toggleAcceleration();
 		}
@@ -3856,40 +3847,32 @@ var sc = { class: "nx-home" }, cc = {
 			await r.session.toggleProxy();
 		}
 		async function x() {
-			let e = a.value.trim(), t = rc(e);
-			if (!t) {
-				r.session.error = "请输入有效的下载链接";
-				return;
-			}
-			await r.session.run("transfer.add", {
-				url: e,
-				filename: t,
-				connections: 8
-			}, "已开始下载") && (a.value = "", await r.session.loadTasks());
+			let e = a.value.trim();
+			await r.session.run("transfer.add", { url: e }, "已开始下载") && (a.value = "", await r.session.loadTasks());
 		}
-		return (n, r) => (U(), W("div", sc, [G("section", cc, [
-			G("div", lc, [G("span", null, [K(I(_s), { size: 13 }), r[4] ||= q("实时下载", -1)]), G("strong", null, k(I($s)(s.value)), 1)]),
-			G("div", uc, [G("span", null, [K(I(bs), { size: 13 }), r[5] ||= q("实时上传", -1)]), G("strong", null, k(I($s)(c.value)), 1)]),
-			G("div", dc, [G("span", null, [K(I(Ds), { size: 13 }), r[6] ||= q("累计流量", -1)]), G("strong", null, k(I(e)(l.value)), 1)]),
-			G("div", fc, [G("span", null, [K(I(Ns), { size: 13 }), r[7] ||= q("线路延迟", -1)]), G("strong", null, k(m.value ? `${m.value} ms` : "—"), 1)])
-		]), G("div", pc, [
+		return (n, r) => (U(), W("div", oc, [G("section", sc, [
+			G("div", cc, [G("span", null, [K(I(_s), { size: 13 }), r[4] ||= q("实时下载", -1)]), G("strong", null, k(I($s)(s.value)), 1)]),
+			G("div", lc, [G("span", null, [K(I(bs), { size: 13 }), r[5] ||= q("实时上传", -1)]), G("strong", null, k(I($s)(c.value)), 1)]),
+			G("div", uc, [G("span", null, [K(I(Ds), { size: 13 }), r[6] ||= q("累计流量", -1)]), G("strong", null, k(I(e)(l.value)), 1)]),
+			G("div", dc, [G("span", null, [K(I(Ns), { size: 13 }), r[7] ||= q("线路延迟", -1)]), G("strong", null, k(m.value ? `${m.value} ms` : "—"), 1)])
+		]), G("div", fc, [
 			G("section", {
 				class: O(["nx-quick-card", { "is-on": o.value }]),
 				"data-home-block": "acceleration"
 			}, [
-				G("header", mc, [
-					G("span", hc, [K(I(Qs), { size: 19 })]),
+				G("header", pc, [
+					G("span", mc, [K(I(Qs), { size: 19 })]),
 					r[8] ||= G("div", { class: "nx-quick-title" }, [G("h2", null, "加速"), G("p", null, "本机加速")], -1),
 					G("span", { class: O(["nx-quick-state", { "is-live": o.value }]) }, k(o.value ? "运行中" : "未加速"), 3)
 				]),
-				G("div", gc, [G("strong", null, k(o.value ? "常用站点直连" : "无需订阅"), 1), G("p", null, k(o.value ? d.value ? "本机直连 · 线路兜底已就绪" : "DoH 选路，失败时按系统解析" : "有订阅会自动准备线路兜底"), 1)]),
-				G("div", _c, [G("button", {
+				G("div", hc, [G("strong", null, k(o.value ? "常用站点直连" : "无需订阅"), 1), G("p", null, k(o.value ? d.value ? "本机直连 · 线路兜底已就绪" : "DoH 选路，失败时按系统解析" : "有订阅会自动准备线路兜底"), 1)]),
+				G("div", gc, [G("button", {
 					class: O(["nx-button", o.value ? "nx-secondary" : "nx-primary"]),
 					"aria-pressed": o.value,
 					disabled: !!t.session.busy || !t.session.systemProxyReady,
 					"data-acceleration": "",
 					onClick: y
-				}, [K(I(Hs), { size: 15 }), q(k(_.value), 1)], 10, vc), G("button", {
+				}, [K(I(Hs), { size: 15 }), q(k(_.value), 1)], 10, _c), G("button", {
 					class: "nx-button nx-quiet nx-quick-link",
 					"data-home-open": "overview",
 					onClick: r[0] ||= (e) => i("navigate", "overview")
@@ -3899,19 +3882,19 @@ var sc = { class: "nx-home" }, cc = {
 				class: O(["nx-quick-card", { "is-on": d.value }]),
 				"data-home-block": "proxy"
 			}, [
-				G("header", yc, [
-					G("span", bc, [K(I(Ps), { size: 19 })]),
+				G("header", vc, [
+					G("span", yc, [K(I(Ps), { size: 19 })]),
 					r[10] ||= G("div", { class: "nx-quick-title" }, [G("h2", null, "代理"), G("p", null, "订阅线路")], -1),
 					G("span", { class: O(["nx-quick-state", { "is-live": d.value }]) }, k(d.value ? "已连接" : u.value ? "待连接" : "未配置"), 3)
 				]),
-				G("div", xc, [G("strong", null, k(p.value), 1), G("p", null, k(d.value && m.value ? `${m.value} ms · 当前线路` : u.value ? "开启后加载订阅里的节点" : "先去代理页添加订阅"), 1)]),
-				G("div", Sc, [G("button", {
+				G("div", bc, [G("strong", null, k(p.value), 1), G("p", null, k(d.value && m.value ? `${m.value} ms · 当前线路` : u.value ? "开启后加载订阅里的节点" : "先去代理页添加订阅"), 1)]),
+				G("div", xc, [G("button", {
 					class: O(["nx-button", d.value ? "nx-secondary" : "nx-primary"]),
 					"aria-pressed": d.value,
 					disabled: !!t.session.busy,
 					"data-home-proxy": "",
 					onClick: b
-				}, [K(I(Hs), { size: 15 }), q(k(v.value), 1)], 10, Cc), G("button", {
+				}, [K(I(Hs), { size: 15 }), q(k(v.value), 1)], 10, Sc), G("button", {
 					class: "nx-button nx-quiet nx-quick-link",
 					"data-home-open": "proxy",
 					onClick: r[1] ||= (e) => i("navigate", "proxy")
@@ -3921,13 +3904,13 @@ var sc = { class: "nx-home" }, cc = {
 				class: O(["nx-quick-card", { "is-on": h.value > 0 }]),
 				"data-home-block": "transfer"
 			}, [
-				G("header", wc, [
-					G("span", Tc, [K(I(Os), { size: 19 })]),
+				G("header", Cc, [
+					G("span", wc, [K(I(Os), { size: 19 })]),
 					r[12] ||= G("div", { class: "nx-quick-title" }, [G("h2", null, "下载"), G("p", null, "快速取回文件")], -1),
 					G("span", { class: O(["nx-quick-state", { "is-live": h.value > 0 }]) }, k(h.value ? "进行中" : "空闲"), 3)
 				]),
-				G("div", Ec, [G("strong", null, k(h.value ? `${h.value} 个任务` : "没有进行中的下载"), 1), G("p", null, k(h.value ? `${I($s)(g.value)} 总速度` : "粘贴链接即可开始，默认 8 连接"), 1)]),
-				G("div", Dc, [G("form", {
+				G("div", Tc, [G("strong", null, k(h.value ? `${h.value} 个任务` : "没有进行中的下载"), 1), G("p", null, k(h.value ? `${I($s)(g.value)} 总速度` : "粘贴链接即可开始，默认 8 连接"), 1)]),
+				G("div", Ec, [G("form", {
 					class: "nx-home-download",
 					"data-home-download": "",
 					onSubmit: Q(x, ["prevent"])
@@ -3941,7 +3924,7 @@ var sc = { class: "nx-home" }, cc = {
 					class: "nx-button nx-primary",
 					disabled: !!t.session.busy || !a.value.trim(),
 					"aria-label": "开始下载"
-				}, [K(I(Os), { size: 15 })], 8, Oc)], 32), G("button", {
+				}, [K(I(Os), { size: 15 })], 8, Dc)], 32), G("button", {
 					class: "nx-button nx-quiet nx-quick-link",
 					"data-home-open": "transfer",
 					onClick: r[3] ||= (e) => i("navigate", "transfer")
@@ -3949,19 +3932,19 @@ var sc = { class: "nx-home" }, cc = {
 			], 2)
 		])]));
 	}
-}, Ac = {
+}, kc = {
 	class: "nx-panel nx-speed",
 	"data-network-chart": ""
-}, jc = { class: "nx-panel-heading" }, Mc = { class: "nx-speed-values" }, Nc = { class: "nx-plot" }, Pc = {
+}, Ac = { class: "nx-panel-heading" }, jc = { class: "nx-speed-values" }, Mc = { class: "nx-plot" }, Nc = {
 	key: 0,
 	viewBox: "0 0 640 164",
 	preserveAspectRatio: "none",
 	role: "img",
 	"aria-label": "实时下载和上传速度趋势"
-}, Fc = ["d"], Ic = ["d"], Lc = ["d"], Rc = ["d"], zc = {
+}, Pc = ["d"], Fc = ["d"], Ic = ["d"], Lc = ["d"], Rc = {
 	key: 1,
 	class: "nx-chart-wait"
-}, Bc = { class: "nx-chart-axis" }, Vc = { key: 0 }, Hc = {
+}, zc = { class: "nx-chart-axis" }, Bc = { key: 0 }, Vc = {
 	__name: "SpeedChart",
 	props: {
 		history: { default: () => [] },
@@ -3975,9 +3958,9 @@ var sc = { class: "nx-home" }, cc = {
 			return t.length < 2 ? "" : t.map((n, r) => `${r ? "L" : "M"}${(r / (t.length - 1) * 640).toFixed(2)},${(154 - Number(n[e] || 0) / i.value * 138).toFixed(2)}`).join(" ");
 		}
 		let o = X(() => a("download")), s = X(() => a("upload")), c = X(() => o.value ? `${o.value} L640,164 L0,164 Z` : "");
-		return (n, a) => (U(), W("section", Ac, [
-			G("div", jc, [G("h2", null, [K(I(hs), { size: 17 }), a[0] ||= q("实时网速", -1)]), a[1] ||= G("span", { class: "nx-subtle" }, "系统接口", -1)]),
-			G("div", Mc, [G("span", null, [
+		return (n, a) => (U(), W("section", kc, [
+			G("div", Ac, [G("h2", null, [K(I(hs), { size: 17 }), a[0] ||= q("实时网速", -1)]), a[1] ||= G("span", { class: "nx-subtle" }, "系统接口", -1)]),
+			G("div", jc, [G("span", null, [
 				K(I(_s), { size: 17 }),
 				G("strong", null, k(I($s)(t.traffic?.download)), 1),
 				a[2] ||= G("small", null, "下载", -1)
@@ -3986,7 +3969,7 @@ var sc = { class: "nx-home" }, cc = {
 				G("strong", null, k(I($s)(t.traffic?.upload)), 1),
 				a[3] ||= G("small", null, "上传", -1)
 			])]),
-			G("div", Nc, [t.history.length > 1 ? (U(), W("svg", Pc, [
+			G("div", Mc, [t.history.length > 1 ? (U(), W("svg", Nc, [
 				G("defs", null, [G("linearGradient", {
 					id: r,
 					x1: "0",
@@ -4011,36 +3994,36 @@ var sc = { class: "nx-home" }, cc = {
 					key: e,
 					d: `M0,${e}H640`,
 					class: "nx-chart-grid"
-				}, null, 8, Fc)), 64)),
+				}, null, 8, Pc)), 64)),
 				G("path", {
 					d: c.value,
 					style: me({ fill: `url(#${r})` }),
 					class: "nx-chart-area"
-				}, null, 12, Ic),
+				}, null, 12, Fc),
 				G("path", {
 					d: s.value,
 					class: "nx-chart-upload"
-				}, null, 8, Lc),
+				}, null, 8, Ic),
 				G("path", {
 					d: o.value,
 					class: "nx-chart-download"
-				}, null, 8, Rc)
-			])) : (U(), W("div", zc, [
+				}, null, 8, Lc)
+			])) : (U(), W("div", Rc, [
 				K(I(hs), { size: 22 }),
 				a[5] ||= G("span", null, "正在收集网速变化", -1),
 				a[6] ||= G("small", null, "新的采样会自动显示在这里", -1)
 			]))]),
-			G("div", Bc, [
+			G("div", zc, [
 				G("span", null, k(t.history.length > 1 ? "较早" : "等待采样"), 1),
-				t.history.length > 1 ? (U(), W("span", Vc, "最高 " + k(I(e)(i.value)) + "/s", 1)) : J("", !0),
+				t.history.length > 1 ? (U(), W("span", Bc, "最高 " + k(I(e)(i.value)) + "/s", 1)) : J("", !0),
 				a[7] ||= G("span", null, "现在", -1)
 			])
 		]));
 	}
-}, Uc = { class: "nx-accel-page" }, Wc = { class: "nx-accel-orb" }, Gc = { class: "nx-accel-copy" }, Kc = ["aria-pressed", "disabled"], qc = { class: "nx-accel-grid" }, Jc = { class: "nx-panel nx-accel-facts" }, Yc = { class: "nx-panel-heading" }, Xc = { class: "nx-fact" }, Zc = { class: "nx-panel nx-site-check" }, Qc = { class: "nx-panel-heading" }, $c = ["disabled"], el = { class: "nx-site-shortcuts" }, tl = ["onClick"], nl = {
+}, Hc = { class: "nx-accel-page" }, Uc = { class: "nx-accel-orb" }, Wc = { class: "nx-accel-copy" }, Gc = ["aria-pressed", "disabled"], Kc = { class: "nx-accel-grid" }, qc = { class: "nx-panel nx-accel-facts" }, Jc = { class: "nx-panel-heading" }, Yc = { class: "nx-fact" }, Xc = { class: "nx-panel nx-site-check" }, Zc = { class: "nx-panel-heading" }, Qc = ["disabled"], $c = { class: "nx-site-shortcuts" }, el = ["onClick"], tl = {
 	key: 0,
 	class: "nx-panel nx-recent"
-}, rl = { class: "nx-section-heading" }, il = {
+}, nl = { class: "nx-section-heading" }, rl = {
 	__name: "DashboardView",
 	props: { session: Object },
 	emits: ["navigate", "diagnostic"],
@@ -4053,13 +4036,13 @@ var sc = { class: "nx-home" }, cc = {
 			let e = await n.session.diagnose(i.value);
 			e?.report && r("diagnostic", e.report);
 		}
-		return (t, n) => (U(), W("div", Uc, [
+		return (t, n) => (U(), W("div", Hc, [
 			G("section", { class: O(["nx-accel-control", { "is-on": a.value }]) }, [
-				G("div", Wc, [K(I(Hs), {
+				G("div", Uc, [K(I(Hs), {
 					size: 24,
 					"stroke-width": 1.7
 				})]),
-				G("div", Gc, [
+				G("div", Wc, [
 					n[3] ||= G("span", { class: "nx-kicker" }, "LOCAL ACCELERATION", -1),
 					G("h2", null, k(a.value ? "本机加速中" : "未加速"), 1),
 					G("p", null, k(a.value ? "本机直连：命中 GitHub、Steam 等常用站点时用 DoH 选 IP。" : "不需要订阅。点一下，用 DoH 选路直连 GitHub、Steam 等常用站点。"), 1)
@@ -4070,24 +4053,24 @@ var sc = { class: "nx-home" }, cc = {
 					disabled: !!e.session.busy || !e.session.systemProxyReady,
 					"data-acceleration": "",
 					onClick: o
-				}, [K(I(Hs), { size: 17 }), q(k(e.session.busy === "proxy.start" ? "正在准备线路…" : e.session.busy === "accelerator.start" ? "正在准备…" : e.session.busy === "system.apply" ? "正在开启…" : a.value ? "停止加速" : "一键加速"), 1)], 10, Kc)
+				}, [K(I(Hs), { size: 17 }), q(k(e.session.busy === "proxy.start" ? "正在准备线路…" : e.session.busy === "accelerator.start" ? "正在准备…" : e.session.busy === "system.apply" ? "正在开启…" : a.value ? "停止加速" : "一键加速"), 1)], 10, Gc)
 			], 2),
-			G("div", qc, [K(Hc, {
+			G("div", Kc, [K(Vc, {
 				history: e.session.state?.history || [],
 				traffic: e.session.state?.traffic
-			}, null, 8, ["history", "traffic"]), G("section", Jc, [
-				G("div", Yc, [G("h2", null, [K(I(qs), { size: 17 }), n[4] ||= q("运行方式", -1)])]),
+			}, null, 8, ["history", "traffic"]), G("section", qc, [
+				G("div", Jc, [G("h2", null, [K(I(qs), { size: 17 }), n[4] ||= q("运行方式", -1)])]),
 				n[7] ||= G("div", { class: "nx-fact" }, [G("span", null, "加速方式"), G("strong", null, "DoH 选 IP 直连")], -1),
 				n[8] ||= G("div", { class: "nx-fact" }, [G("span", null, "系统改动"), G("strong", null, "仅系统代理")], -1),
 				n[9] ||= G("div", { class: "nx-fact" }, [G("span", null, "证书 / hosts"), G("strong", null, "不修改")], -1),
-				G("div", Xc, [n[6] ||= G("span", null, "订阅线路", -1), G("button", {
+				G("div", Yc, [n[6] ||= G("span", null, "订阅线路", -1), G("button", {
 					class: "nx-button nx-quiet nx-fact-link",
 					onClick: n[0] ||= (e) => r("navigate", "proxy")
 				}, [n[5] ||= q(" 去代理页管理", -1), K(I(ys), { size: 13 })])]),
 				n[10] ||= G("p", { class: "nx-help" }, " 有订阅时会自动准备线路兜底，但不改系统代理；直连失败的域名会记住并优先走线路。 ", -1)
 			])]),
-			G("div", { class: O(["nx-accel-lower", { "nx-single": !e.session.state?.events?.length }]) }, [G("section", Zc, [
-				G("div", Qc, [G("h2", null, [K(I(Is), { size: 17 }), n[11] ||= q("检查网站访问", -1)])]),
+			G("div", { class: O(["nx-accel-lower", { "nx-single": !e.session.state?.events?.length }]) }, [G("section", Xc, [
+				G("div", Zc, [G("h2", null, [K(I(Is), { size: 17 }), n[11] ||= q("检查网站访问", -1)])]),
 				G("form", {
 					class: "nx-inline-form",
 					onSubmit: Q(s, ["prevent"])
@@ -4100,8 +4083,8 @@ var sc = { class: "nx-home" }, cc = {
 				}, null, 512), [[Z, i.value]]), G("button", {
 					class: "nx-button nx-secondary",
 					disabled: !!e.session.busy
-				}, [K(I(hs), { size: 15 }), q(k(e.session.busy === "diagnose" ? "检查中…" : "检查一下"), 1)], 8, $c)], 32),
-				G("div", el, [n[12] ||= G("span", null, "常用网站", -1), (U(), W(V, null, z([
+				}, [K(I(hs), { size: 15 }), q(k(e.session.busy === "diagnose" ? "检查中…" : "检查一下"), 1)], 8, Qc)], 32),
+				G("div", $c, [n[12] ||= G("span", null, "常用网站", -1), (U(), W(V, null, z([
 					"github.com",
 					"huggingface.co",
 					"google.com"
@@ -4109,8 +4092,8 @@ var sc = { class: "nx-home" }, cc = {
 					key: e,
 					class: "nx-button nx-quiet",
 					onClick: (t) => i.value = e
-				}, k(e), 9, tl)), 64))])
-			]), e.session.state?.events?.length ? (U(), W("section", nl, [G("div", rl, [n[14] ||= G("h2", null, "最近活动", -1), G("button", {
+				}, k(e), 9, el)), 64))])
+			]), e.session.state?.events?.length ? (U(), W("section", tl, [G("div", nl, [n[14] ||= G("h2", null, "最近活动", -1), G("button", {
 				class: "nx-button nx-quiet",
 				onClick: n[2] ||= (e) => r("navigate", "advanced")
 			}, [n[13] ||= q(" 查看记录", -1), K(I(ys), { size: 13 })])]), (U(!0), W(V, null, z([...e.session.state.events].reverse().slice(0, 3), (e, t) => (U(), W("div", {
@@ -4123,23 +4106,23 @@ var sc = { class: "nx-home" }, cc = {
 			]))), 128))])) : J("", !0)], 2)
 		]));
 	}
-}, al = { class: "nx-panel nx-nodes" }, ol = { class: "nx-panel-heading" }, sl = { class: "nx-node-head-actions" }, cl = ["disabled"], ll = ["disabled"], ul = {
+}, il = { class: "nx-panel nx-nodes" }, al = { class: "nx-panel-heading" }, ol = { class: "nx-node-head-actions" }, sl = ["disabled"], cl = ["disabled"], ll = {
 	class: "nx-line-groups",
 	role: "group",
 	"aria-label": "线路分组"
-}, dl = ["aria-pressed", "onClick"], fl = { class: "nx-subtle" }, pl = [
+}, ul = ["aria-pressed", "onClick"], dl = { class: "nx-subtle" }, fl = [
 	"data-node",
 	"aria-pressed",
 	"disabled",
 	"onClick"
-], ml = { class: "nx-line-radio" }, hl = { class: "nx-line-name" }, gl = { class: "nx-line-ms" }, _l = [
+], pl = { class: "nx-line-radio" }, ml = { class: "nx-line-name" }, hl = { class: "nx-line-ms" }, gl = [
 	"disabled",
 	"aria-label",
 	"onClick"
-], vl = {
+], _l = {
 	key: 1,
 	class: "nx-empty nx-empty--small"
-}, yl = {
+}, vl = {
 	__name: "NodePicker",
 	props: {
 		session: Object,
@@ -4179,26 +4162,26 @@ var sc = { class: "nx-home" }, cc = {
 			let e = await t.session.optimizeNode(n.value);
 			if (e) for (let t of e.candidates || []) Number(t.delay) > 0 && (i.value[t.name] = t.delay);
 		}
-		return (t, i) => (U(), W("section", al, [
-			G("div", ol, [G("div", null, [i[5] ||= G("span", { class: "nx-kicker" }, "03 / 线路与测速", -1), G("h2", null, [K(I(Us), { size: 17 }), i[4] ||= q("选择线路", -1)])]), G("div", sl, [G("button", {
+		return (t, i) => (U(), W("section", il, [
+			G("div", al, [G("div", null, [i[5] ||= G("span", { class: "nx-kicker" }, "03 / 线路与测速", -1), G("h2", null, [K(I(Us), { size: 17 }), i[4] ||= q("选择线路", -1)])]), G("div", ol, [G("button", {
 				class: "nx-button nx-quiet nx-icon-button",
 				"aria-label": "刷新线路",
 				disabled: !!e.session.busy,
 				onClick: i[0] ||= (t) => e.session.loadProxy()
-			}, [K(I(Ws), { size: 15 })], 8, cl), G("button", {
+			}, [K(I(Ws), { size: 15 })], 8, sl), G("button", {
 				class: "nx-button nx-secondary nx-optimize",
 				"data-optimize": "",
 				disabled: !!e.session.busy || !s.value.length,
 				onClick: p
-			}, [K(I(Qs), { size: 13 }), q(k(e.session.busy === "proxy.optimize" ? "测速中…" : "选择最快"), 1)], 8, ll)])]),
+			}, [K(I(Qs), { size: 13 }), q(k(e.session.busy === "proxy.optimize" ? "测速中…" : "选择最快"), 1)], 8, cl)])]),
 			i[9] ||= G("p", { class: "nx-help" }, "点一行直接切换；右侧刷新键单独测速。", -1),
 			a.value.length ? (U(), W(V, { key: 0 }, [
-				G("div", ul, [(U(!0), W(V, null, z(a.value, ([e]) => (U(), W("button", {
+				G("div", ll, [(U(!0), W(V, null, z(a.value, ([e]) => (U(), W("button", {
 					key: e,
 					class: O(["nx-line-group", { "is-active": n.value === e }]),
 					"aria-pressed": n.value === e,
 					onClick: (t) => n.value = e
-				}, [q(k(e) + " ", 1), G("span", null, k((a.value.length, "")), 1)], 10, dl))), 128)), G("span", fl, k(s.value.length) + " 条", 1)]),
+				}, [q(k(e) + " ", 1), G("span", null, k((a.value.length, "")), 1)], 10, ul))), 128)), G("span", dl, k(s.value.length) + " 条", 1)]),
 				s.value.length > 8 ? R((U(), W("input", {
 					key: 0,
 					"onUpdate:modelValue": i[1] ||= (e) => r.value = e,
@@ -4216,25 +4199,25 @@ var sc = { class: "nx-home" }, cc = {
 					disabled: !!e.session.busy,
 					onClick: (r) => e.session.selectNode(n.value, t)
 				}, [
-					G("span", ml, [o.value.now === t ? (U(), Qi(I(xs), {
+					G("span", pl, [o.value.now === t ? (U(), Qi(I(xs), {
 						key: 0,
 						size: 11
 					})) : J("", !0)]),
-					G("span", hl, k(t === "DIRECT" ? "直接连接" : t === "REJECT" ? "阻止连接" : t), 1),
+					G("span", ml, k(t === "DIRECT" ? "直接连接" : t === "REJECT" ? "阻止连接" : t), 1),
 					G("span", { class: O(["nx-line-meter", d(t)]) }, [G("i", { style: me({ width: `${u(t)}%` }) }, null, 4)], 2),
-					G("span", gl, k(c(t)), 1)
-				], 8, pl), e.compact ? J("", !0) : (U(), W("button", {
+					G("span", hl, k(c(t)), 1)
+				], 8, fl), e.compact ? J("", !0) : (U(), W("button", {
 					key: 0,
 					class: "nx-button nx-quiet nx-icon-button nx-line-refresh",
 					disabled: !!e.session.busy,
 					"aria-label": `测试 ${t} 的延迟`,
 					onClick: (e) => f(t)
-				}, [K(I(Ws), { size: 13 })], 8, _l))], 2))), 128))], 2),
+				}, [K(I(Ws), { size: 13 })], 8, gl))], 2))), 128))], 2),
 				G("button", {
 					class: "nx-button nx-quiet nx-add-profile",
 					onClick: i[2] ||= (e) => t.$emit("import")
 				}, [K(I(Vs), { size: 14 }), i[6] ||= q("添加或更新订阅 ", -1)])
-			], 64)) : (U(), W("div", vl, [
+			], 64)) : (U(), W("div", _l, [
 				K(I(Us), { size: 24 }),
 				G("strong", null, k(e.session.state?.proxy?.running ? "尚未找到可选线路" : "开启代理后可切换线路"), 1),
 				i[8] ||= G("p", null, "添加订阅，使用你已有的代理节点。", -1),
@@ -4245,16 +4228,16 @@ var sc = { class: "nx-home" }, cc = {
 			]))
 		]));
 	}
-}, bl = {
+}, yl = {
 	class: "nx-panel nx-import",
 	"data-profile-import": ""
-}, xl = { class: "nx-panel-heading" }, Sl = { class: "nx-input-with-action" }, Cl = ["type"], wl = ["aria-label"], Tl = ["disabled"], El = {
+}, bl = { class: "nx-panel-heading" }, xl = { class: "nx-input-with-action" }, Sl = ["type"], Cl = ["aria-label"], wl = ["disabled"], Tl = {
 	key: 0,
 	class: "nx-help"
-}, Dl = { class: "nx-import-options" }, Ol = ["disabled"], kl = ["aria-expanded"], Al = ["disabled"], jl = {
+}, El = { class: "nx-import-options" }, Dl = ["disabled"], Ol = ["aria-expanded"], kl = ["disabled"], Al = {
 	key: 2,
 	class: "nx-help"
-}, Ml = {
+}, jl = {
 	__name: "ImportProfile",
 	props: {
 		session: Object,
@@ -4277,8 +4260,8 @@ var sc = { class: "nx-home" }, cc = {
 				await l({ content: await t.text() });
 			}
 		}
-		return (t, n) => (U(), W("section", bl, [
-			G("div", xl, [G("h2", null, [K(I(Is), { size: 17 }), n[8] ||= q("添加订阅", -1)]), G("button", {
+		return (t, n) => (U(), W("section", yl, [
+			G("div", bl, [G("h2", null, [K(I(Is), { size: 17 }), n[8] ||= q("添加订阅", -1)]), G("button", {
 				class: "nx-button nx-quiet nx-icon-button",
 				"aria-label": "收起订阅设置",
 				onClick: n[0] ||= (e) => t.$emit("close")
@@ -4287,7 +4270,7 @@ var sc = { class: "nx-home" }, cc = {
 			G("form", {
 				class: "nx-inline-form",
 				onSubmit: n[3] ||= Q((e) => l({ subscription: i.value.trim() }), ["prevent"])
-			}, [G("label", Sl, [R(G("input", {
+			}, [G("label", xl, [R(G("input", {
 				"onUpdate:modelValue": n[1] ||= (e) => i.value = e,
 				type: a.value ? "text" : "password",
 				class: "nx-input",
@@ -4295,27 +4278,27 @@ var sc = { class: "nx-home" }, cc = {
 				placeholder: "https://…",
 				"aria-label": "订阅链接",
 				autocomplete: "off"
-			}, null, 8, Cl), [[Xo, i.value]]), G("button", {
+			}, null, 8, Sl), [[Xo, i.value]]), G("button", {
 				class: "nx-button nx-quiet nx-icon-button",
 				type: "button",
 				"aria-label": a.value ? "隐藏订阅链接" : "显示订阅链接",
 				onClick: n[2] ||= (e) => a.value = !a.value
-			}, [(U(), Qi(kr(a.value ? I(ks) : I(As)), { size: 16 }))], 8, wl)]), G("button", {
+			}, [(U(), Qi(kr(a.value ? I(ks) : I(As)), { size: 16 }))], 8, Cl)]), G("button", {
 				class: "nx-button nx-primary",
 				disabled: !!e.session.busy || !i.value.trim()
-			}, k(e.session.busy === "proxy.config" ? "正在下载…" : "保存订阅"), 9, Tl)], 32),
-			e.session.busy === "proxy.config" ? (U(), W("p", El, " 正在下载订阅。慢速订阅可能需要几十秒，请不要关闭页面。 ")) : J("", !0),
-			G("div", Dl, [
+			}, k(e.session.busy === "proxy.config" ? "正在下载…" : "保存订阅"), 9, wl)], 32),
+			e.session.busy === "proxy.config" ? (U(), W("p", Tl, " 正在下载订阅。慢速订阅可能需要几十秒，请不要关闭页面。 ")) : J("", !0),
+			G("div", El, [
 				G("button", {
 					class: "nx-button nx-quiet",
 					disabled: !!e.session.busy,
 					onClick: n[4] ||= (e) => o.value.click()
-				}, [K(I(Ms), { size: 14 }), n[9] ||= q("导入配置文件", -1)], 8, Ol),
+				}, [K(I(Ms), { size: 14 }), n[9] ||= q("导入配置文件", -1)], 8, Dl),
 				G("button", {
 					class: "nx-button nx-quiet",
 					"aria-expanded": s.value,
 					onClick: n[5] ||= (e) => s.value = !s.value
-				}, k(s.value ? "收起文本配置" : "粘贴配置文本"), 9, kl),
+				}, k(s.value ? "收起文本配置" : "粘贴配置文本"), 9, Ol),
 				G("input", {
 					ref_key: "fileInput",
 					ref: o,
@@ -4339,17 +4322,17 @@ var sc = { class: "nx-home" }, cc = {
 			}, null, 512), [[Z, c.value]]), G("button", {
 				class: "nx-button nx-secondary",
 				disabled: !!e.session.busy
-			}, " 保存配置 ", 8, Al)], 32)) : J("", !0),
-			e.session.state?.proxy?.running ? (U(), W("p", jl, " 当前连接已开启。保存订阅或配置时会自动断开并重新连接，不需要手动关闭。 ")) : J("", !0)
+			}, " 保存配置 ", 8, kl)], 32)) : J("", !0),
+			e.session.state?.proxy?.running ? (U(), W("p", Al, " 当前连接已开启。保存订阅或配置时会自动断开并重新连接，不需要手动关闭。 ")) : J("", !0)
 		]));
 	}
-}, Nl = { class: "nx-view-stack" }, Pl = { class: "nx-section-heading" }, Fl = { class: "nx-proxy-top" }, Il = { class: "nx-panel nx-subscribe-summary" }, Ll = { class: "nx-subscribe-copy" }, Rl = { class: "nx-panel nx-proxy-connection" }, zl = { class: "nx-proxy-connection-row" }, Bl = { class: "nx-route-icon" }, Vl = { class: "nx-control-copy" }, Hl = ["aria-checked", "disabled"], Ul = {
+}, Ml = { class: "nx-view-stack" }, Nl = { class: "nx-section-heading" }, Pl = { class: "nx-proxy-top" }, Fl = { class: "nx-panel nx-subscribe-summary" }, Il = { class: "nx-subscribe-copy" }, Ll = { class: "nx-panel nx-proxy-connection" }, Rl = { class: "nx-proxy-connection-row" }, zl = { class: "nx-route-icon" }, Bl = { class: "nx-control-copy" }, Vl = ["aria-checked", "disabled"], Hl = {
 	__name: "ProxyView",
 	props: { session: Object },
 	setup(e) {
 		let t = e, n = /* @__PURE__ */ F(!1), r = X(() => !!t.session.state?.proxy?.config_saved);
-		return (t, i) => (U(), W("div", Nl, [
-			G("div", Pl, [i[5] ||= G("div", null, [
+		return (t, i) => (U(), W("div", Ml, [
+			G("div", Nl, [i[5] ||= G("div", null, [
 				G("span", { class: "nx-kicker" }, "PROXY DESK"),
 				G("h2", null, "订阅与线路"),
 				G("p", null, "先有订阅，再选一条线路。")
@@ -4357,21 +4340,21 @@ var sc = { class: "nx-home" }, cc = {
 				class: "nx-button nx-secondary",
 				onClick: i[0] ||= (e) => n.value = !n.value
 			}, [K(I(Vs), { size: 15 }), q(k(r.value ? "更新订阅" : "添加订阅"), 1)])]),
-			n.value ? (U(), Qi(Ml, {
+			n.value ? (U(), Qi(jl, {
 				key: 0,
 				session: e.session,
 				onClose: i[1] ||= (e) => n.value = !1
 			}, null, 8, ["session"])) : J("", !0),
-			G("div", Fl, [G("section", Il, [
+			G("div", Pl, [G("section", Fl, [
 				i[6] ||= G("span", { class: "nx-kicker" }, "01 / 订阅", -1),
-				G("div", Ll, [G("h3", null, k(r.value ? "订阅已保存" : "还没有订阅"), 1), G("p", null, k(r.value ? "已使用当前 Windows 账户加密保存。更新订阅会自动重连。" : "粘贴服务商给你的 HTTPS 订阅链接，节点会自动出现。"), 1)]),
+				G("div", Il, [G("h3", null, k(r.value ? "订阅已保存" : "还没有订阅"), 1), G("p", null, k(r.value ? "已使用当前 Windows 账户加密保存。更新订阅会自动重连。" : "粘贴服务商给你的 HTTPS 订阅链接，节点会自动出现。"), 1)]),
 				G("button", {
 					class: O(["nx-button", r.value ? "nx-quiet" : "nx-primary"]),
 					onClick: i[2] ||= (e) => n.value = !0
 				}, [K(I(Is), { size: 14 }), q(k(r.value ? "更新订阅" : "粘贴订阅链接"), 1)], 2)
-			]), G("section", Rl, [i[8] ||= G("span", { class: "nx-kicker" }, "02 / 连接", -1), G("div", zl, [
-				G("span", Bl, [K(I(Hs), { size: 18 })]),
-				G("div", Vl, [G("strong", null, k(e.session.state?.proxy?.running ? "已连接" : "未连接"), 1), G("p", null, k(r.value ? e.session.state?.proxy?.running ? "节点已加载，可以在下面切换。" : "开启后加载订阅里的节点。" : "先保存订阅，才能启动代理。"), 1)]),
+			]), G("section", Ll, [i[8] ||= G("span", { class: "nx-kicker" }, "02 / 连接", -1), G("div", Rl, [
+				G("span", zl, [K(I(Hs), { size: 18 })]),
+				G("div", Bl, [G("strong", null, k(e.session.state?.proxy?.running ? "已连接" : "未连接"), 1), G("p", null, k(r.value ? e.session.state?.proxy?.running ? "节点已加载，可以在下面切换。" : "开启后加载订阅里的节点。" : "先保存订阅，才能启动代理。"), 1)]),
 				G("button", {
 					role: "switch",
 					"aria-checked": !!e.session.state?.proxy?.running,
@@ -4380,32 +4363,32 @@ var sc = { class: "nx-home" }, cc = {
 					"data-proxy-switch": "",
 					disabled: !!e.session.busy || !r.value,
 					onClick: i[3] ||= (t) => e.session.toggleProxy()
-				}, [...i[7] ||= [G("span", null, null, -1)]], 8, Hl)
+				}, [...i[7] ||= [G("span", null, null, -1)]], 8, Vl)
 			])])]),
-			K(yl, {
+			K(vl, {
 				session: e.session,
 				onImport: i[4] ||= (e) => n.value = !0
 			}, null, 8, ["session"])
 		]));
 	}
-}, Wl = { class: "nx-view-stack" }, Gl = { class: "nx-download-stats" }, Kl = { class: "nx-panel-heading" }, ql = { class: "nx-inline-form" }, Jl = ["disabled"], Yl = { class: "nx-download-options" }, Xl = ["value"], Zl = ["aria-expanded"], Ql = {
+}, Ul = { class: "nx-view-stack" }, Wl = { class: "nx-download-stats" }, Gl = { class: "nx-panel-heading" }, Kl = { class: "nx-inline-form" }, ql = ["disabled"], Jl = { class: "nx-download-options" }, Yl = ["value"], Xl = ["aria-expanded"], Zl = {
 	key: 0,
 	class: "nx-form-grid"
-}, $l = { class: "nx-checkbox" }, eu = ["disabled"], tu = { class: "nx-list-toolbar" }, nu = { class: "nx-filter-tabs" }, ru = { class: "nx-panel nx-task-list" }, iu = ["data-task"], au = { class: "nx-file-icon" }, ou = { class: "nx-download-body" }, su = { class: "nx-task-title" }, cu = ["aria-valuenow", "aria-label"], lu = { class: "nx-task-meta" }, uu = { key: 0 }, du = { key: 1 }, fu = { key: 2 }, pu = { class: "nx-task-controls" }, mu = ["disabled", "onClick"], hu = ["disabled", "onClick"], gu = [
+}, Ql = ["disabled"], $l = { class: "nx-list-toolbar" }, eu = { class: "nx-filter-tabs" }, tu = { class: "nx-panel nx-task-list" }, nu = ["data-task"], ru = { class: "nx-file-icon" }, iu = { class: "nx-download-body" }, au = { class: "nx-task-title" }, ou = ["aria-valuenow", "aria-label"], su = { class: "nx-task-meta" }, cu = { key: 0 }, lu = { key: 1 }, uu = { key: 2 }, du = { class: "nx-task-controls" }, fu = ["disabled", "onClick"], pu = ["disabled", "onClick"], mu = [
 	"aria-label",
 	"aria-expanded",
 	"onClick"
-], _u = {
+], hu = {
 	key: 0,
 	class: "nx-task-details"
-}, vu = { class: "nx-subtle" }, yu = { class: "nx-actions" }, bu = { class: "nx-small-select" }, xu = ["onChange"], Su = ["disabled", "onClick"], Cu = ["disabled", "onClick"], wu = ["disabled", "onClick"], Tu = {
+}, gu = { class: "nx-subtle" }, _u = { class: "nx-actions" }, vu = { class: "nx-small-select" }, yu = ["onChange"], bu = ["disabled", "onClick"], xu = ["disabled", "onClick"], Su = ["disabled", "onClick"], Cu = {
 	key: 0,
 	class: "nx-empty"
-}, Eu = {
+}, wu = {
 	__name: "TransferView",
 	props: { session: Object },
 	setup(t) {
-		let n = t, r = /* @__PURE__ */ F("active"), i = /* @__PURE__ */ F(""), a = /* @__PURE__ */ F(""), o = /* @__PURE__ */ F(""), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F(!1), l = /* @__PURE__ */ F(!1), u = /* @__PURE__ */ F(8), d = /* @__PURE__ */ F(0), f = /* @__PURE__ */ F(!1), p = /* @__PURE__ */ F(""), m = X(() => n.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), h = X(() => n.session.tasks.map((e) => ({
+		let n = t, r = /* @__PURE__ */ F("active"), i = /* @__PURE__ */ F(""), a = /* @__PURE__ */ F(""), o = /* @__PURE__ */ F(""), s = /* @__PURE__ */ F(""), c = /* @__PURE__ */ F("auto"), l = /* @__PURE__ */ F(!1), u = /* @__PURE__ */ F(8), d = /* @__PURE__ */ F(0), f = /* @__PURE__ */ F(!1), p = /* @__PURE__ */ F(""), m = X(() => n.session.tasks.reduce((e, t) => e + (Number(t.downloadSpeed) || 0), 0)), h = X(() => n.session.tasks.map((e) => ({
 			...n.session.state?.downloads?.find((t) => t.gid === e.gid),
 			...e
 		})).filter((e) => r.value === "all" || (r.value === "complete" ? e.status === "complete" : !["complete", "removed"].includes(e.status)))), g = X(() => n.session.tasks.filter((e) => !["complete", "removed"].includes(e.status)).length), _ = X(() => n.session.tasks.filter((e) => e.status === "complete").length);
@@ -4417,16 +4400,11 @@ var sc = { class: "nx-home" }, cc = {
 			return Number.isFinite(t) && t > 0 ? t < 60 ? `约 ${Math.ceil(t)} 秒` : `约 ${Math.ceil(t / 60)} 分钟` : "等待传输";
 		}
 		async function b() {
-			let e = a.value.trim();
-			if (!e && (e = rc(i.value), !e)) {
-				n.session.error = "请输入有效的下载链接";
-				return;
-			}
-			let t = {
+			let e = a.value.trim(), t = {
 				url: i.value.trim(),
-				filename: e,
+				...e ? { filename: e } : {},
 				connections: Number(u.value),
-				proxy: c.value,
+				route: c.value,
 				sha256: s.value.trim(),
 				...Number(d.value) > 0 ? { bytes_per_second: Number(d.value) } : {},
 				...o.value.trim() ? { directory: o.value.trim() } : {}
@@ -4459,9 +4437,9 @@ var sc = { class: "nx-home" }, cc = {
 			let t = await n.session.run("transfer.verify", { gid: e.gid });
 			t && (t.verified === !1 ? n.session.error = "文件与预期校验值不一致，请核对下载来源" : n.session.notice = t.verified === !0 ? "文件校验通过" : `文件校验值：${t.sha256}`);
 		}
-		return vr(() => n.session.loadTasks()), In(() => n.session.state, () => n.session.loadTasks()), (n, T) => (U(), W("div", Wl, [
-			T[37] ||= G("div", { class: "nx-section-heading" }, [G("div", null, [G("h2", null, "下载"), G("p", null, "粘贴链接或把链接拖进来，点“开始下载”。")])], -1),
-			G("div", Gl, [
+		return (n, T) => (U(), W("div", Ul, [
+			T[39] ||= G("div", { class: "nx-section-heading" }, [G("div", null, [G("h2", null, "下载"), G("p", null, "粘贴链接或把链接拖进来，点“开始下载”。")])], -1),
+			G("div", Wl, [
 				G("div", null, [T[15] ||= G("span", null, "进行中", -1), G("strong", null, k(g.value), 1)]),
 				G("div", null, [T[16] ||= G("span", null, "已完成", -1), G("strong", null, k(_.value), 1)]),
 				G("div", null, [T[17] ||= G("span", null, "总速度", -1), G("strong", null, k(I($s)(m.value)), 1)])
@@ -4475,8 +4453,8 @@ var sc = { class: "nx-home" }, cc = {
 				onDragleave: T[10] ||= (e) => f.value = !1,
 				onDrop: Q(x, ["prevent"])
 			}, [
-				G("div", Kl, [G("h2", null, [K(I(Os), { size: 17 }), T[18] ||= q("新建下载", -1)]), T[19] ||= G("span", { class: "nx-subtle" }, "支持 HTTP / HTTPS", -1)]),
-				G("div", ql, [R(G("input", {
+				G("div", Gl, [G("h2", null, [K(I(Os), { size: 17 }), T[18] ||= q("新建下载", -1)]), T[19] ||= G("span", { class: "nx-subtle" }, "支持 HTTP / HTTPS", -1)]),
+				G("div", Kl, [R(G("input", {
 					"onUpdate:modelValue": T[0] ||= (e) => i.value = e,
 					name: "url",
 					class: "nx-input",
@@ -4486,8 +4464,8 @@ var sc = { class: "nx-home" }, cc = {
 				}, null, 512), [[Z, i.value]]), G("button", {
 					class: "nx-button nx-primary",
 					disabled: !!t.session.busy || !i.value.trim()
-				}, " 开始下载 ", 8, Jl)]),
-				G("div", Yl, [G("label", null, [T[20] ||= G("span", null, "并行数量", -1), R(G("select", {
+				}, " 开始下载 ", 8, ql)]),
+				G("div", Jl, [G("label", null, [T[20] ||= G("span", null, "并行数量", -1), R(G("select", {
 					"onUpdate:modelValue": T[1] ||= (e) => u.value = e,
 					"aria-label": "并行数量"
 				}, [(U(), W(V, null, z([
@@ -4499,7 +4477,7 @@ var sc = { class: "nx-home" }, cc = {
 				], (e) => G("option", {
 					key: e,
 					value: e
-				}, k(e), 9, Xl)), 64))], 512), [[
+				}, k(e), 9, Yl)), 64))], 512), [[
 					Ko,
 					u.value,
 					void 0,
@@ -4523,8 +4501,8 @@ var sc = { class: "nx-home" }, cc = {
 					class: "nx-button nx-quiet nx-options-button",
 					"aria-expanded": l.value,
 					onClick: T[3] ||= (e) => l.value = !l.value
-				}, [T[23] ||= q(" 更多选项", -1), K(I(Ss), { size: 13 })], 8, Zl),
-				l.value ? (U(), W("div", Ql, [
+				}, [T[23] ||= q(" 更多选项", -1), K(I(Ss), { size: 13 })], 8, Xl),
+				l.value ? (U(), W("div", Zl, [
 					G("label", null, [T[24] ||= G("span", null, "文件名", -1), R(G("input", {
 						"onUpdate:modelValue": T[4] ||= (e) => a.value = e,
 						class: "nx-input",
@@ -4540,22 +4518,28 @@ var sc = { class: "nx-home" }, cc = {
 						class: "nx-input",
 						placeholder: "SHA-256"
 					}, null, 512), [[Z, s.value]])]),
-					G("label", $l, [R(G("input", {
+					G("label", null, [T[29] ||= G("span", null, "下载线路", -1), R(G("select", {
 						"onUpdate:modelValue": T[7] ||= (e) => c.value = e,
-						type: "checkbox",
-						disabled: !t.session.state?.proxy?.running
-					}, null, 8, eu), [[Uo, c.value]]), T[27] ||= G("span", null, "通过当前代理下载", -1)])
+						"aria-label": "下载线路"
+					}, [
+						T[27] ||= G("option", { value: "auto" }, "自动（跟随加速）", -1),
+						T[28] ||= G("option", { value: "direct" }, "直接连接", -1),
+						G("option", {
+							value: "proxy",
+							disabled: !t.session.state?.proxy?.running
+						}, " 当前代理 ", 8, Ql)
+					], 512), [[Ko, c.value]])])
 				])) : J("", !0)
 			], 34),
-			G("div", tu, [G("div", nu, [
+			G("div", $l, [G("div", eu, [
 				G("button", {
 					class: O({ active: r.value === "active" }),
 					onClick: T[11] ||= (e) => r.value = "active"
-				}, [T[28] ||= q(" 进行中", -1), G("span", null, k(g.value), 1)], 2),
+				}, [T[30] ||= q(" 进行中", -1), G("span", null, k(g.value), 1)], 2),
 				G("button", {
 					class: O({ active: r.value === "complete" }),
 					onClick: T[12] ||= (e) => r.value = "complete"
-				}, [T[29] ||= q(" 已完成", -1), G("span", null, k(_.value), 1)], 2),
+				}, [T[31] ||= q(" 已完成", -1), G("span", null, k(_.value), 1)], 2),
 				G("button", {
 					class: O({ active: r.value === "all" }),
 					onClick: T[13] ||= (e) => r.value = "all"
@@ -4565,17 +4549,17 @@ var sc = { class: "nx-home" }, cc = {
 				"aria-label": "刷新下载列表",
 				onClick: T[14] ||= (e) => t.session.loadTasks()
 			}, [K(I(Ws), { size: 15 })])]),
-			G("section", ru, [(U(!0), W(V, null, z(h.value, (n) => (U(), W("article", {
+			G("section", tu, [(U(!0), W(V, null, z(h.value, (n) => (U(), W("article", {
 				key: n.gid,
 				class: "nx-download-row",
 				"data-task": n.gid
 			}, [
-				G("div", au, [K(I(js), {
+				G("div", ru, [K(I(js), {
 					size: 22,
 					"stroke-width": 1.5
 				})]),
-				G("div", ou, [
-					G("div", su, [G("strong", null, k(n.filename || "未命名下载"), 1), G("span", { class: O({ "nx-state-error": n.status === "error" }) }, k(I(ec)(n.status)), 3)]),
+				G("div", iu, [
+					G("div", au, [G("strong", null, k(n.filename || "未命名下载"), 1), G("span", { class: O({ "nx-state-error": n.status === "error" }) }, k(I(ec)(n.status)), 3)]),
 					G("div", {
 						class: "nx-progress-track",
 						role: "progressbar",
@@ -4583,67 +4567,67 @@ var sc = { class: "nx-home" }, cc = {
 						"aria-valuemin": "0",
 						"aria-valuemax": "100",
 						"aria-label": `${n.filename || "下载"}的进度`
-					}, [G("span", { style: me({ width: `${v(n)}%` }) }, null, 4)], 8, cu),
-					G("div", lu, [G("span", null, [
+					}, [G("span", { style: me({ width: `${v(n)}%` }) }, null, 4)], 8, ou),
+					G("div", su, [G("span", null, [
 						q(k(I(e)(n.completedLength)), 1),
-						T[30] ||= G("span", { class: "nx-meta-divider" }, " / ", -1),
+						T[32] ||= G("span", { class: "nx-meta-divider" }, " / ", -1),
 						q(k(I(e)(n.totalLength)), 1)
-					]), n.status === "active" ? (U(), W("span", uu, [
+					]), n.status === "active" ? (U(), W("span", cu, [
 						q(k(I($s)(n.downloadSpeed)), 1),
-						T[31] ||= G("span", { class: "nx-meta-divider" }, "·", -1),
+						T[33] ||= G("span", { class: "nx-meta-divider" }, "·", -1),
 						q(k(y(n)), 1)
-					])) : n.status === "complete" ? (U(), W("span", du, "已保存到本地")) : n.status === "error" ? (U(), W("span", fu, "链接可能失效，或下载源暂时不可用")) : J("", !0)])
+					])) : n.status === "complete" ? (U(), W("span", lu, "已保存到本地")) : n.status === "error" ? (U(), W("span", uu, "链接可能失效，或下载源暂时不可用")) : J("", !0)])
 				]),
-				G("div", pu, [n.status === "active" || n.status === "waiting" ? (U(), W("button", {
+				G("div", du, [n.status === "active" || n.status === "waiting" ? (U(), W("button", {
 					key: 0,
 					class: "nx-button nx-secondary nx-icon-button",
 					"aria-label": "暂停下载",
 					"data-task-action": "pause",
 					disabled: !!t.session.busy,
 					onClick: (e) => S(n, "pause")
-				}, [K(I(zs), { size: 15 })], 8, mu)) : ["paused", "recoverable"].includes(n.status) ? (U(), W("button", {
+				}, [K(I(zs), { size: 15 })], 8, fu)) : ["paused", "recoverable"].includes(n.status) ? (U(), W("button", {
 					key: 1,
 					class: "nx-button nx-secondary nx-icon-button",
 					"aria-label": "继续下载",
 					"data-task-action": "resume",
 					disabled: !!t.session.busy,
 					onClick: (e) => S(n, "resume")
-				}, [K(I(Bs), { size: 15 })], 8, hu)) : J("", !0), G("button", {
+				}, [K(I(Bs), { size: 15 })], 8, pu)) : J("", !0), G("button", {
 					class: "nx-button nx-quiet nx-icon-button",
 					"aria-label": p.value === n.gid ? "收起下载详情" : "展开下载详情",
 					"aria-expanded": p.value === n.gid,
 					onClick: (e) => p.value = p.value === n.gid ? "" : n.gid
-				}, [(U(), Qi(kr(p.value === n.gid ? I(ws) : I(Ss)), { size: 15 }))], 8, gu)]),
-				p.value === n.gid ? (U(), W("div", _u, [G("span", vu, k(n.directory || "默认下载目录"), 1), G("div", yu, [
-					G("label", bu, [T[33] ||= q("下载速度", -1), G("select", {
+				}, [(U(), Qi(kr(p.value === n.gid ? I(ws) : I(Ss)), { size: 15 }))], 8, mu)]),
+				p.value === n.gid ? (U(), W("div", hu, [G("span", gu, k(n.directory || "默认下载目录"), 1), G("div", _u, [
+					G("label", vu, [T[35] ||= q("下载速度", -1), G("select", {
 						"aria-label": "下载速度限制",
 						onChange: (e) => C(n, e.target.value)
-					}, [...T[32] ||= [
+					}, [...T[34] ||= [
 						G("option", { value: "0" }, "不限速", -1),
 						G("option", { value: "1048576" }, "1 MB/s", -1),
 						G("option", { value: "5242880" }, "5 MB/s", -1),
 						G("option", { value: "10485760" }, "10 MB/s", -1)
-					]], 40, xu)]),
+					]], 40, yu)]),
 					["complete", "removed"].includes(n.status) ? J("", !0) : (U(), W("button", {
 						key: 0,
 						class: "nx-button nx-quiet",
 						disabled: !!t.session.busy,
 						onClick: (e) => S(n, "first")
-					}, [K(I(bs), { size: 13 }), T[34] ||= q("优先下载", -1)], 8, Su)),
+					}, [K(I(bs), { size: 13 }), T[36] ||= q("优先下载", -1)], 8, bu)),
 					n.status === "complete" ? (U(), W("button", {
 						key: 1,
 						class: "nx-button nx-quiet",
 						disabled: !!t.session.busy,
 						onClick: (e) => w(n)
-					}, [K(I(qs), { size: 13 }), T[35] ||= q("校验文件", -1)], 8, Cu)) : J("", !0),
+					}, [K(I(qs), { size: 13 }), T[37] ||= q("校验文件", -1)], 8, xu)) : J("", !0),
 					["complete", "removed"].includes(n.status) ? J("", !0) : (U(), W("button", {
 						key: 2,
 						class: "nx-button nx-quiet nx-danger-text",
 						disabled: !!t.session.busy,
 						onClick: (e) => S(n, "cancel")
-					}, [K(I(Zs), { size: 13 }), T[36] ||= q("取消下载 ", -1)], 8, wu))
+					}, [K(I(Zs), { size: 13 }), T[38] ||= q("取消下载 ", -1)], 8, Su))
 				])])) : J("", !0)
-			], 8, iu))), 128)), h.value.length ? J("", !0) : (U(), W("div", Tu, [
+			], 8, nu))), 128)), h.value.length ? J("", !0) : (U(), W("div", Cu, [
 				K(I(Os), {
 					size: 32,
 					"stroke-width": 1.3
@@ -4653,26 +4637,26 @@ var sc = { class: "nx-home" }, cc = {
 			]))])
 		]));
 	}
-}, Du = { class: "nx-view-stack" }, Ou = { class: "nx-panel nx-diagnose-start" }, ku = { class: "nx-diagnose-symbol" }, Au = { class: "nx-input-with-icon" }, ju = ["disabled"], Mu = { class: "nx-diagnose-options" }, Nu = {
+}, Tu = { class: "nx-view-stack" }, Eu = { class: "nx-panel nx-diagnose-start" }, Du = { class: "nx-diagnose-symbol" }, Ou = { class: "nx-input-with-icon" }, ku = ["disabled"], Au = { class: "nx-diagnose-options" }, ju = {
 	key: 0,
 	class: "nx-panel nx-diagnose-pending",
 	"aria-live": "polite"
-}, Pu = {
+}, Mu = {
 	key: 1,
 	class: "nx-panel nx-report"
-}, Fu = { class: "nx-report-heading" }, Iu = { class: "nx-check-list" }, Lu = { key: 0 }, Ru = {
+}, Nu = { class: "nx-report-heading" }, Pu = { class: "nx-check-list" }, Fu = { key: 0 }, Iu = {
 	key: 0,
 	class: "nx-report-advice"
-}, zu = ["aria-expanded"], Bu = {
+}, Lu = ["aria-expanded"], Ru = {
 	key: 1,
 	class: "nx-check-evidence"
-}, Vu = {
+}, zu = {
 	key: 2,
 	class: "nx-history"
-}, Hu = { class: "nx-section-heading" }, Uu = { class: "nx-subtle" }, Wu = ["onClick"], Gu = {
+}, Bu = { class: "nx-section-heading" }, Vu = { class: "nx-subtle" }, Hu = ["onClick"], Uu = {
 	key: 3,
 	class: "nx-empty nx-diagnose-empty"
-}, Ku = {
+}, Wu = {
 	__name: "DiagnoseView",
 	props: {
 		session: Object,
@@ -4698,9 +4682,9 @@ var sc = { class: "nx-home" }, cc = {
 			let e = await t.session.diagnose(n.value, a.value);
 			e?.report && (r.value = e.report, i.value = !1);
 		}
-		return (t, l) => (U(), W("div", Du, [
-			G("section", Ou, [
-				G("div", ku, [K(I(hs), {
+		return (t, l) => (U(), W("div", Tu, [
+			G("section", Eu, [
+				G("div", Du, [K(I(hs), {
 					size: 25,
 					"stroke-width": 1.5
 				})]),
@@ -4710,7 +4694,7 @@ var sc = { class: "nx-home" }, cc = {
 					class: "nx-inline-form",
 					"data-diagnose-form": "",
 					onSubmit: Q(c, ["prevent"])
-				}, [G("label", Au, [K(I(Ps), { size: 16 }), R(G("input", {
+				}, [G("label", Ou, [K(I(Ps), { size: 16 }), R(G("input", {
 					"onUpdate:modelValue": l[0] ||= (e) => n.value = e,
 					name: "target",
 					class: "nx-input",
@@ -4720,8 +4704,8 @@ var sc = { class: "nx-home" }, cc = {
 				}, null, 512), [[Z, n.value]])]), G("button", {
 					class: "nx-button nx-primary",
 					disabled: !!e.session.busy
-				}, [K(I(Gs), { size: 15 }), q(k(e.session.busy === "diagnose" ? "检查中…" : "开始检测"), 1)], 8, ju)], 32),
-				G("div", Mu, [
+				}, [K(I(Gs), { size: 15 }), q(k(e.session.busy === "diagnose" ? "检查中…" : "开始检测"), 1)], 8, ku)], 32),
+				G("div", Au, [
 					G("label", null, [R(G("input", {
 						"onUpdate:modelValue": l[1] ||= (e) => a.value = e,
 						type: "radio",
@@ -4739,15 +4723,15 @@ var sc = { class: "nx-home" }, cc = {
 					}, null, 512), [[Go, a.value]]), l[7] ||= q("查看访问路径", -1)])
 				])
 			]),
-			e.session.busy === "diagnose" ? (U(), W("section", Nu, [
+			e.session.busy === "diagnose" ? (U(), W("section", ju, [
 				l[10] ||= G("div", { class: "nx-skeleton nx-skeleton-title" }, null, -1),
 				l[11] ||= G("p", null, "正在检查网站地址、连接和安全响应…", -1),
 				(U(), W(V, null, z(3, (e) => G("div", {
 					key: e,
 					class: "nx-skeleton nx-skeleton-row"
 				})), 64))
-			])) : o.value ? (U(), W("section", Pu, [
-				G("div", Fu, [G("span", { class: O(["nx-result-icon", { "is-failure": o.value.failures > 0 }]) }, [o.value.failures ? (U(), Qi(I(Zs), {
+			])) : o.value ? (U(), W("section", Mu, [
+				G("div", Nu, [G("span", { class: O(["nx-result-icon", { "is-failure": o.value.failures > 0 }]) }, [o.value.failures ? (U(), Qi(I(Zs), {
 					key: 1,
 					size: 22
 				})) : (U(), Qi(I(xs), {
@@ -4758,7 +4742,7 @@ var sc = { class: "nx-home" }, cc = {
 					l[12] ||= G("span", { class: "nx-meta-divider" }, "·", -1),
 					q(k(I(tc)(o.value.time)), 1)
 				])])]),
-				G("div", Iu, [(U(!0), W(V, null, z(o.value.checks || [], (e, t) => (U(), W("div", {
+				G("div", Pu, [(U(!0), W(V, null, z(o.value.checks || [], (e, t) => (U(), W("div", {
 					key: t,
 					class: "nx-check-row"
 				}, [
@@ -4771,17 +4755,17 @@ var sc = { class: "nx-home" }, cc = {
 					}))], 2),
 					G("strong", null, k(s(e.stage)), 1),
 					G("span", null, k(e.ok ? "通过" : "未通过"), 1),
-					e.ms == null ? J("", !0) : (U(), W("time", Lu, k(e.ms) + " ms", 1))
+					e.ms == null ? J("", !0) : (U(), W("time", Fu, k(e.ms) + " ms", 1))
 				]))), 128))]),
-				o.value.recommendation ? (U(), W("p", Ru, k(o.value.recommendation), 1)) : J("", !0),
+				o.value.recommendation ? (U(), W("p", Iu, k(o.value.recommendation), 1)) : J("", !0),
 				G("button", {
 					class: "nx-button nx-quiet nx-report-detail-button",
 					"aria-expanded": i.value,
 					onClick: l[4] ||= (e) => i.value = !i.value
-				}, [q(k(i.value ? "收起" : "查看") + "检查详情", 1), K(I(Ss), { size: 13 })], 8, zu),
-				i.value ? (U(), W("div", Bu, [(U(!0), W(V, null, z(o.value.checks || [], (e, t) => (U(), W("div", { key: t }, [G("strong", null, k(s(e.stage)), 1), G("p", null, k(e.evidence || e.address || e.addresses?.join("、") || (e.status ? `网站响应：${e.status}` : "未提供额外信息")), 1)]))), 128))])) : J("", !0)
+				}, [q(k(i.value ? "收起" : "查看") + "检查详情", 1), K(I(Ss), { size: 13 })], 8, Lu),
+				i.value ? (U(), W("div", Ru, [(U(!0), W(V, null, z(o.value.checks || [], (e, t) => (U(), W("div", { key: t }, [G("strong", null, k(s(e.stage)), 1), G("p", null, k(e.evidence || e.address || e.addresses?.join("、") || (e.status ? `网站响应：${e.status}` : "未提供额外信息")), 1)]))), 128))])) : J("", !0)
 			])) : J("", !0),
-			e.session.state?.reports?.length ? (U(), W("section", Vu, [G("div", Hu, [l[13] ||= G("h2", null, "最近检查", -1), G("span", Uu, k(e.session.state.reports.length) + " 条记录", 1)]), (U(!0), W(V, null, z([...e.session.state.reports].reverse().slice(0, 12), (e) => (U(), W("button", {
+			e.session.state?.reports?.length ? (U(), W("section", zu, [G("div", Bu, [l[13] ||= G("h2", null, "最近检查", -1), G("span", Vu, k(e.session.state.reports.length) + " 条记录", 1)]), (U(!0), W(V, null, z([...e.session.state.reports].reverse().slice(0, 12), (e) => (U(), W("button", {
 				key: e.id,
 				class: "nx-history-row",
 				onClick: (t) => r.value = e
@@ -4791,19 +4775,19 @@ var sc = { class: "nx-home" }, cc = {
 				G("span", null, k(e.failures ? "有未通过的检查" : "检查通过"), 1),
 				G("time", null, k(I(tc)(e.time)), 1),
 				K(I(Cs), { size: 15 })
-			], 8, Wu))), 128))])) : o.value ? J("", !0) : (U(), W("div", Gu, [K(I(Es), { size: 25 }), l[14] ||= G("span", null, "检查记录会保存在这里，方便下次对照。", -1)]))
+			], 8, Hu))), 128))])) : o.value ? J("", !0) : (U(), W("div", Uu, [K(I(Es), { size: 25 }), l[14] ||= G("span", null, "检查记录会保存在这里，方便下次对照。", -1)]))
 		]));
 	}
-}, qu = { class: "nx-view-stack" }, Ju = { class: "nx-section-heading" }, Yu = ["aria-expanded"], Xu = { class: "nx-panel nx-interface-list" }, Zu = { class: "nx-control-icon" }, Qu = { key: 0 }, $u = {
+}, Gu = { class: "nx-view-stack" }, Ku = { class: "nx-section-heading" }, qu = ["aria-expanded"], Ju = { class: "nx-panel nx-interface-list" }, Yu = { class: "nx-control-icon" }, Xu = { key: 0 }, Zu = {
 	key: 0,
 	class: "nx-empty nx-empty--small"
-}, ed = { class: "nx-form-grid" }, td = ["value"], nd = ["disabled"], rd = { class: "nx-panel nx-form" }, id = { class: "nx-panel-heading" }, ad = ["disabled"], od = {
+}, Qu = { class: "nx-form-grid" }, $u = ["value"], ed = ["disabled"], td = { class: "nx-panel nx-form" }, nd = { class: "nx-panel-heading" }, rd = ["disabled"], id = {
 	key: 0,
 	class: "nx-query-result"
-}, sd = { class: "nx-subtle" }, cd = { key: 0 }, ld = { class: "nx-settings-fold" }, ud = ["aria-expanded"], dd = {
+}, ad = { class: "nx-subtle" }, od = { key: 0 }, sd = { class: "nx-settings-fold" }, cd = ["aria-expanded"], ld = {
 	key: 0,
 	class: "nx-panel nx-form"
-}, fd = ["onUpdate:modelValue"], pd = ["onUpdate:modelValue"], md = ["onClick"], hd = { class: "nx-actions" }, gd = ["disabled"], _d = ["disabled"], vd = { key: 0 }, yd = {
+}, ud = ["onUpdate:modelValue"], dd = ["onUpdate:modelValue"], fd = ["onClick"], pd = { class: "nx-actions" }, md = ["disabled"], hd = ["disabled"], gd = { key: 0 }, _d = {
 	__name: "NetworkSettings",
 	props: { session: Object },
 	setup(e) {
@@ -4838,27 +4822,27 @@ var sc = { class: "nx-home" }, cc = {
 		async function g() {
 			d.value = await t.session.run("rules.test", { domain: u.value });
 		}
-		return (t, _) => (U(), W("div", qu, [
-			G("div", Ju, [_[8] ||= G("div", null, [G("h2", null, "本机网络"), G("p", null, "查看当前地址和正在使用的 DNS。")], -1), G("button", {
+		return (t, _) => (U(), W("div", Gu, [
+			G("div", Ku, [_[8] ||= G("div", null, [G("h2", null, "本机网络"), G("p", null, "查看当前地址和正在使用的 DNS。")], -1), G("button", {
 				class: "nx-button nx-secondary",
 				"aria-expanded": n.value,
 				onClick: _[0] ||= (e) => n.value = !n.value
-			}, [K(I(Ks), { size: 15 }), _[7] ||= q("调整 DNS ", -1)], 8, Yu)]),
-			G("section", Xu, [(U(!0), W(V, null, z(e.session.interfaces, (e) => (U(), W("article", {
+			}, [K(I(Ks), { size: 15 }), _[7] ||= q("调整 DNS ", -1)], 8, qu)]),
+			G("section", Ju, [(U(!0), W(V, null, z(e.session.interfaces, (e) => (U(), W("article", {
 				key: e.index,
 				class: "nx-interface"
-			}, [G("span", Zu, [K(I(Ls), { size: 20 })]), G("div", null, [G("strong", null, k(e.name), 1), G("dl", null, [
+			}, [G("span", Yu, [K(I(Ls), { size: 20 })]), G("div", null, [G("strong", null, k(e.name), 1), G("dl", null, [
 				G("div", null, [_[9] ||= G("dt", null, "本机地址", -1), G("dd", null, k(e.ipv4?.join("、") || "没有 IPv4 地址"), 1)]),
 				G("div", null, [_[10] ||= G("dt", null, "DNS", -1), G("dd", null, k(e.dns?.join("、") || "由系统提供"), 1)]),
-				e.gateway?.length ? (U(), W("div", Qu, [_[11] ||= G("dt", null, "网关", -1), G("dd", null, k(e.gateway.join("、")), 1)])) : J("", !0)
-			])])]))), 128)), e.session.interfaces.length ? J("", !0) : (U(), W("div", $u, [K(I(Ls), { size: 25 }), _[12] ||= G("span", null, "暂时没有读取到网络接口。", -1)]))]),
+				e.gateway?.length ? (U(), W("div", Xu, [_[11] ||= G("dt", null, "网关", -1), G("dd", null, k(e.gateway.join("、")), 1)])) : J("", !0)
+			])])]))), 128)), e.session.interfaces.length ? J("", !0) : (U(), W("div", Zu, [K(I(Ls), { size: 25 }), _[12] ||= G("span", null, "暂时没有读取到网络接口。", -1)]))]),
 			n.value ? (U(), W("form", {
 				key: 0,
 				class: "nx-panel nx-form",
 				onSubmit: Q(p, ["prevent"])
 			}, [
 				_[16] ||= G("h2", null, "调整 DNS", -1),
-				G("div", ed, [G("label", null, [_[14] ||= G("span", null, "网络接口", -1), R(G("select", {
+				G("div", Qu, [G("label", null, [_[14] ||= G("span", null, "网络接口", -1), R(G("select", {
 					"onUpdate:modelValue": _[1] ||= (e) => r.value = e,
 					class: "nx-input",
 					required: "",
@@ -4869,7 +4853,7 @@ var sc = { class: "nx-home" }, cc = {
 				}, "选择正在使用的网络", -1), (U(!0), W(V, null, z(e.session.interfaces, (e) => (U(), W("option", {
 					key: e.index,
 					value: e.index
-				}, k(e.name), 9, td))), 128))], 512), [[Ko, r.value]])]), G("label", null, [_[15] ||= G("span", null, "DNS 地址", -1), R(G("input", {
+				}, k(e.name), 9, $u))), 128))], 512), [[Ko, r.value]])]), G("label", null, [_[15] ||= G("span", null, "DNS 地址", -1), R(G("input", {
 					"onUpdate:modelValue": _[2] ||= (e) => i.value = e,
 					class: "nx-input",
 					required: "",
@@ -4879,10 +4863,10 @@ var sc = { class: "nx-home" }, cc = {
 				G("button", {
 					class: "nx-button nx-secondary",
 					disabled: !!e.session.busy
-				}, " 确认并申请修改 ", 8, nd)
+				}, " 确认并申请修改 ", 8, ed)
 			], 32)) : J("", !0),
-			G("section", rd, [
-				G("div", id, [G("h2", null, [K(I(Ps), { size: 17 }), _[18] ||= q("查询网站地址", -1)])]),
+			G("section", td, [
+				G("div", nd, [G("h2", null, [K(I(Ps), { size: 17 }), _[18] ||= q("查询网站地址", -1)])]),
 				G("form", {
 					class: "nx-inline-form",
 					onSubmit: Q(f, ["prevent"])
@@ -4906,22 +4890,22 @@ var sc = { class: "nx-home" }, cc = {
 					G("button", {
 						class: "nx-button nx-secondary",
 						disabled: !!e.session.busy
-					}, [K(I(Gs), { size: 14 }), _[20] ||= q("查询 ", -1)], 8, ad)
+					}, [K(I(Gs), { size: 14 }), _[20] ||= q("查询 ", -1)], 8, rd)
 				], 32),
-				s.value ? (U(), W("div", od, [
-					G("span", sd, k(s.value.domain) + " · " + k(s.value.ms || 0) + " ms", 1),
+				s.value ? (U(), W("div", id, [
+					G("span", ad, k(s.value.domain) + " · " + k(s.value.ms || 0) + " ms", 1),
 					(U(!0), W(V, null, z(s.value.addresses || s.value.answers || [], (e, t) => (U(), W("div", {
 						key: t,
 						class: "nx-query-address"
 					}, k(typeof e == "string" ? e : e.data), 1))), 128)),
-					(s.value.addresses || s.value.answers || []).length ? J("", !0) : (U(), W("span", cd, "没有查到地址"))
+					(s.value.addresses || s.value.answers || []).length ? J("", !0) : (U(), W("span", od, "没有查到地址"))
 				])) : J("", !0)
 			]),
-			G("section", ld, [G("button", {
+			G("section", sd, [G("button", {
 				class: "nx-button nx-quiet",
 				"aria-expanded": c.value,
 				onClick: m
-			}, [_[21] ||= q(" 网站规则匹配预览", -1), K(I(Ss), { size: 13 })], 8, ud), c.value ? (U(), W("div", dd, [
+			}, [_[21] ||= q(" 网站规则匹配预览", -1), K(I(Ss), { size: 13 })], 8, cd), c.value ? (U(), W("div", ld, [
 				_[24] ||= G("p", { class: "nx-help" }, " 用于检查匹配结果；实际代理分流以订阅中的规则为准。 ", -1),
 				(U(!0), W(V, null, z(l.value, (e, t) => (U(), W("div", {
 					key: t,
@@ -4932,7 +4916,7 @@ var sc = { class: "nx-home" }, cc = {
 						class: "nx-input",
 						placeholder: "例如 github.com",
 						"aria-label": "规则域名"
-					}, null, 8, fd), [[Z, e.domain]]),
+					}, null, 8, ud), [[Z, e.domain]]),
 					R(G("select", {
 						"onUpdate:modelValue": (t) => e.outbound = t,
 						class: "nx-input",
@@ -4941,14 +4925,14 @@ var sc = { class: "nx-home" }, cc = {
 						G("option", { value: "DIRECT" }, "直接连接", -1),
 						G("option", { value: "PROXY" }, "通过代理", -1),
 						G("option", { value: "REJECT" }, "阻止连接", -1)
-					]], 8, pd), [[Ko, e.outbound]]),
+					]], 8, dd), [[Ko, e.outbound]]),
 					G("button", {
 						class: "nx-button nx-quiet nx-icon-button",
 						"aria-label": "删除规则",
 						onClick: (e) => l.value.splice(t, 1)
-					}, [K(I(Zs), { size: 14 })], 8, md)
+					}, [K(I(Zs), { size: 14 })], 8, fd)
 				]))), 128)),
-				G("div", hd, [G("button", {
+				G("div", pd, [G("button", {
 					class: "nx-button nx-quiet",
 					onClick: _[5] ||= (e) => l.value.push({
 						domain: "",
@@ -4958,7 +4942,7 @@ var sc = { class: "nx-home" }, cc = {
 					class: "nx-button nx-secondary",
 					disabled: !!e.session.busy,
 					onClick: h
-				}, " 保存规则 ", 8, gd)]),
+				}, " 保存规则 ", 8, md)]),
 				G("form", {
 					class: "nx-inline-form",
 					onSubmit: Q(g, ["prevent"])
@@ -4971,8 +4955,8 @@ var sc = { class: "nx-home" }, cc = {
 				}, null, 512), [[Z, u.value]]), G("button", {
 					class: "nx-button nx-secondary",
 					disabled: !!e.session.busy
-				}, " 测试匹配 ", 8, _d)], 32),
-				d.value ? (U(), W("p", vd, k(d.value.matched ? `匹配到 ${d.value.matched.domain}` : "未匹配到专属规则") + " · " + k({
+				}, " 测试匹配 ", 8, hd)], 32),
+				d.value ? (U(), W("p", gd, k(d.value.matched ? `匹配到 ${d.value.matched.domain}` : "未匹配到专属规则") + " · " + k({
 					DIRECT: "直接连接",
 					PROXY: "通过代理",
 					REJECT: "阻止连接"
@@ -4980,16 +4964,16 @@ var sc = { class: "nx-home" }, cc = {
 			])) : J("", !0)])
 		]));
 	}
-}, bd = { class: "nx-view-stack" }, xd = { class: "nx-section-heading" }, Sd = { class: "nx-subtle" }, Cd = { class: "nx-input-with-icon" }, wd = ["disabled"], Td = { class: "nx-panel nx-table-panel" }, Ed = {
+}, vd = { class: "nx-view-stack" }, yd = { class: "nx-section-heading" }, bd = { class: "nx-subtle" }, xd = { class: "nx-input-with-icon" }, Sd = ["disabled"], Cd = { class: "nx-panel nx-table-panel" }, wd = {
 	key: 0,
 	class: "nx-table-loading"
-}, Dd = {
+}, Td = {
 	key: 1,
 	class: "nx-table-scroll"
-}, Od = { class: "nx-table" }, kd = ["title"], Ad = { key: 0 }, jd = { class: "nx-data-cell" }, Md = { class: "nx-protocol" }, Nd = {
+}, Ed = { class: "nx-table" }, Dd = ["title"], Od = { key: 0 }, kd = { class: "nx-data-cell" }, Ad = { class: "nx-protocol" }, jd = {
 	key: 0,
 	class: "nx-empty"
-}, Pd = {
+}, Md = {
 	__name: "ConnectionsView",
 	props: { session: Object },
 	setup(e) {
@@ -5010,12 +4994,12 @@ var sc = { class: "nx-home" }, cc = {
 				SynSent: "正在连接"
 			}[e] || e;
 		}
-		return vr(s), (e, t) => (U(), W("div", bd, [
-			G("div", xd, [t[2] ||= G("div", null, [G("h2", null, "应用正在连接什么"), G("p", null, "按应用、地址或端口查找当前连接。")], -1), G("span", Sd, k(i.value) + " 个连接", 1)]),
+		return vr(s), (e, t) => (U(), W("div", vd, [
+			G("div", yd, [t[2] ||= G("div", null, [G("h2", null, "应用正在连接什么"), G("p", null, "按应用、地址或端口查找当前连接。")], -1), G("span", bd, k(i.value) + " 个连接", 1)]),
 			G("form", {
 				class: "nx-inline-form nx-searchbar",
 				onSubmit: Q(s, ["prevent"])
-			}, [G("label", Cd, [K(I(Gs), { size: 16 }), R(G("input", {
+			}, [G("label", xd, [K(I(Gs), { size: 16 }), R(G("input", {
 				"onUpdate:modelValue": t[0] ||= (e) => n.value = e,
 				class: "nx-input",
 				placeholder: "搜索应用、IP 或端口",
@@ -5023,23 +5007,23 @@ var sc = { class: "nx-home" }, cc = {
 			}, null, 512), [[Z, n.value]])]), G("button", {
 				class: "nx-button nx-secondary",
 				disabled: o.value
-			}, [K(I(Ws), { size: 14 }), t[3] ||= q("刷新 ", -1)], 8, wd)], 32),
-			G("section", Td, [o.value ? (U(), W("div", Ed, [(U(), W(V, null, z(5, (e) => G("div", {
+			}, [K(I(Ws), { size: 14 }), t[3] ||= q("刷新 ", -1)], 8, Sd)], 32),
+			G("section", Cd, [o.value ? (U(), W("div", wd, [(U(), W(V, null, z(5, (e) => G("div", {
 				key: e,
 				class: "nx-skeleton nx-skeleton-row"
-			})), 64))])) : (U(), W("div", Dd, [G("table", Od, [t[4] ||= G("thead", null, [G("tr", null, [
+			})), 64))])) : (U(), W("div", Td, [G("table", Ed, [t[4] ||= G("thead", null, [G("tr", null, [
 				G("th", null, "应用"),
 				G("th", null, "本地端口"),
 				G("th", null, "远端地址"),
 				G("th", null, "协议"),
 				G("th", null, "状态")
 			])], -1), G("tbody", null, [(U(!0), W(V, null, z(c.value, (e, t) => (U(), W("tr", { key: t }, [
-				G("td", { title: e.path || "" }, [G("strong", null, k(e.process || "未知应用"), 1), e.pid ? (U(), W("small", Ad, "PID " + k(e.pid), 1)) : J("", !0)], 8, kd),
+				G("td", { title: e.path || "" }, [G("strong", null, k(e.process || "未知应用"), 1), e.pid ? (U(), W("small", Od, "PID " + k(e.pid), 1)) : J("", !0)], 8, Dd),
 				G("td", null, k(e.local_port), 1),
-				G("td", jd, k(e.remote_address ? `${e.remote_address}:${e.remote_port}` : "—"), 1),
-				G("td", null, [G("span", Md, k(e.protocol), 1)]),
+				G("td", kd, k(e.remote_address ? `${e.remote_address}:${e.remote_port}` : "—"), 1),
+				G("td", null, [G("span", Ad, k(e.protocol), 1)]),
 				G("td", null, [G("span", { class: O(["nx-connection-state", { "is-live": e.state === "Established" }]) }, k(l(e.state)), 3)])
-			]))), 128))])]), r.value.length ? J("", !0) : (U(), W("div", Nd, [
+			]))), 128))])]), r.value.length ? J("", !0) : (U(), W("div", jd, [
 				K(I(vs), { size: 28 }),
 				t[5] ||= G("strong", null, "没有匹配的连接", -1),
 				t[6] ||= G("p", null, "试着输入其他应用名称、地址或端口。", -1)
@@ -5051,13 +5035,13 @@ var sc = { class: "nx-home" }, cc = {
 			t[7] ||= G("p", { class: "nx-help" }, "这里显示连接和端口，不代表每个应用的流量大小。", -1)
 		]));
 	}
-}, Fd = { class: "nx-view-stack" }, Id = { class: "nx-section-heading" }, Ld = {
+}, Nd = { class: "nx-view-stack" }, Pd = { class: "nx-section-heading" }, Fd = {
 	key: 0,
 	class: "nx-panel nx-form"
-}, Rd = { class: "nx-inline-form" }, zd = ["value"], Bd = { class: "nx-application-actions" }, Vd = ["disabled"], Hd = { class: "nx-inline-form" }, Ud = ["disabled"], Wd = { class: "nx-panel nx-transaction-list" }, Gd = { class: "nx-panel-heading" }, Kd = { class: "nx-subtle" }, qd = { class: "nx-transaction-icon" }, Jd = { key: 0 }, Yd = ["disabled", "onClick"], Xd = {
+}, Id = { class: "nx-inline-form" }, Ld = ["value"], Rd = { class: "nx-application-actions" }, zd = ["disabled"], Bd = { class: "nx-inline-form" }, Vd = ["disabled"], Hd = { class: "nx-panel nx-transaction-list" }, Ud = { class: "nx-panel-heading" }, Wd = { class: "nx-subtle" }, Gd = { class: "nx-transaction-icon" }, Kd = { key: 0 }, qd = ["disabled", "onClick"], Jd = {
 	key: 0,
 	class: "nx-empty"
-}, Zd = {
+}, Yd = {
 	__name: "SecurityView",
 	props: { session: Object },
 	setup(e) {
@@ -5098,14 +5082,14 @@ var sc = { class: "nx-home" }, cc = {
 				rolled_back: "已撤回"
 			}[e] || e;
 		}
-		return (t, f) => (U(), W("div", Fd, [
-			G("div", Id, [f[7] ||= G("div", null, [G("h2", null, "应用联网与恢复"), G("p", null, "只修改你选择的应用，随时检查并恢复原设置。")], -1), G("button", {
+		return (t, f) => (U(), W("div", Nd, [
+			G("div", Pd, [f[7] ||= G("div", null, [G("h2", null, "应用联网与恢复"), G("p", null, "只修改你选择的应用，随时检查并恢复原设置。")], -1), G("button", {
 				class: "nx-button nx-secondary",
 				onClick: c
 			}, [K(I(Ls), { size: 15 }), f[6] ||= q("选择应用 ", -1)])]),
-			n.value ? (U(), W("section", Ld, [
+			n.value ? (U(), W("section", Fd, [
 				f[15] ||= G("h2", null, "管理一个应用", -1),
-				G("div", Rd, [a.value ? R((U(), W("input", {
+				G("div", Id, [a.value ? R((U(), W("input", {
 					key: 0,
 					"onUpdate:modelValue": f[0] ||= (e) => i.value = e,
 					class: "nx-input",
@@ -5122,24 +5106,24 @@ var sc = { class: "nx-home" }, cc = {
 				}, "从当前连接的应用中选择", -1), (U(!0), W(V, null, z(r.value, (e) => (U(), W("option", {
 					key: e.path,
 					value: e.path
-				}, k(e.process) + " · " + k(e.path.split("\\").at(-1)), 9, zd))), 128))], 512)), [[Ko, i.value]]), G("button", {
+				}, k(e.process) + " · " + k(e.path.split("\\").at(-1)), 9, Ld))), 128))], 512)), [[Ko, i.value]]), G("button", {
 					class: "nx-button nx-quiet",
 					onClick: f[2] ||= (e) => {
 						a.value = !a.value, i.value = "";
 					}
 				}, k(a.value ? "从列表选择" : "手动输入路径"), 1)]),
-				G("div", Bd, [G("div", null, [
+				G("div", Rd, [G("div", null, [
 					f[10] ||= G("h3", null, "阻止这个应用联网", -1),
 					f[11] ||= G("p", null, "创建仅作用于该应用的出站防火墙规则。", -1),
 					G("button", {
 						class: "nx-button nx-secondary nx-danger-text",
 						disabled: !i.value || !!e.session.busy,
 						onClick: f[3] ||= (e) => l("firewall")
-					}, [K(I(Js), { size: 14 }), f[9] ||= q("申请阻止联网 ", -1)], 8, Vd)
+					}, [K(I(Js), { size: 14 }), f[9] ||= q("申请阻止联网 ", -1)], 8, zd)
 				]), G("div", null, [
 					f[13] ||= G("h3", null, "限制这个应用的上传", -1),
 					f[14] ||= G("p", null, "降低后台上传对其他任务的影响。", -1),
-					G("div", Hd, [R(G("select", {
+					G("div", Bd, [R(G("select", {
 						"onUpdate:modelValue": f[4] ||= (e) => o.value = e,
 						class: "nx-input",
 						"aria-label": "应用上传速度上限"
@@ -5151,20 +5135,20 @@ var sc = { class: "nx-home" }, cc = {
 						class: "nx-button nx-secondary",
 						disabled: !i.value || !!e.session.busy,
 						onClick: f[5] ||= (e) => l("qos")
-					}, " 申请限速 ", 8, Ud)])
+					}, " 申请限速 ", 8, Vd)])
 				])]),
 				f[16] ||= G("p", { class: "nx-help" }, " 这两项操作可能需要 Windows 管理员权限，执行前会显示影响范围。 ", -1)
 			])) : J("", !0),
-			G("section", Wd, [
-				G("div", Gd, [G("h2", null, [K(I(Xs), { size: 17 }), f[17] ||= q("网络设置记录", -1)]), G("span", Kd, k(s.value.length) + " 条", 1)]),
+			G("section", Hd, [
+				G("div", Ud, [G("h2", null, [K(I(Xs), { size: 17 }), f[17] ||= q("网络设置记录", -1)]), G("span", Wd, k(s.value.length) + " 条", 1)]),
 				(U(!0), W(V, null, z(s.value, (t) => (U(), W("article", {
 					key: t.id,
 					class: "nx-transaction"
 				}, [
-					G("span", qd, [K(I(qs), { size: 18 })]),
+					G("span", Gd, [K(I(qs), { size: 18 })]),
 					G("div", null, [
 						G("strong", null, k(u(t)), 1),
-						t.request?.program ? (U(), W("p", Jd, k(t.request.program.split("\\").at(-1)), 1)) : J("", !0),
+						t.request?.program ? (U(), W("p", Kd, k(t.request.program.split("\\").at(-1)), 1)) : J("", !0),
 						G("small", null, k(I(tc)(t.time)), 1)
 					]),
 					G("span", { class: O(["nx-status-text", { "is-warning": ["external_change", "recovery_required"].includes(t.status) }]) }, k(d(t.status)), 3),
@@ -5177,9 +5161,9 @@ var sc = { class: "nx-home" }, cc = {
 						class: "nx-button nx-secondary",
 						disabled: !!e.session.busy,
 						onClick: (n) => e.session.run("system.restore", { id: t.id }, "已检查并恢复原设置")
-					}, [K(I(Xs), { size: 13 }), f[18] ||= q("恢复 ", -1)], 8, Yd)) : J("", !0)
+					}, [K(I(Xs), { size: 13 }), f[18] ||= q("恢复 ", -1)], 8, qd)) : J("", !0)
 				]))), 128)),
-				s.value.length ? J("", !0) : (U(), W("div", Xd, [
+				s.value.length ? J("", !0) : (U(), W("div", Jd, [
 					K(I(qs), {
 						size: 31,
 						"stroke-width": 1.4
@@ -5191,24 +5175,24 @@ var sc = { class: "nx-home" }, cc = {
 			f[21] ||= G("p", { class: "nx-help" }, " 如果设置已被其他软件或用户修改，会保留当前状态，避免直接覆盖。 ", -1)
 		]));
 	}
-}, Qd = { class: "nx-view-stack" }, $d = { class: "nx-panel" }, ef = { class: "nx-panel-heading" }, tf = ["disabled"], nf = [
+}, Xd = { class: "nx-view-stack" }, Zd = { class: "nx-panel" }, Qd = { class: "nx-panel-heading" }, $d = ["disabled"], ef = [
 	"aria-label",
 	"aria-checked",
 	"disabled",
 	"onClick"
-], rf = ["disabled", "onClick"], af = ["disabled", "onClick"], of = {
+], tf = ["disabled", "onClick"], nf = ["disabled", "onClick"], rf = {
 	key: 1,
 	class: "nx-empty-inline"
-}, sf = { class: "nx-panel" }, cf = { class: "nx-panel-heading" }, lf = ["disabled"], uf = {
+}, af = { class: "nx-panel" }, of = { class: "nx-panel-heading" }, sf = ["disabled"], cf = {
 	key: 1,
 	class: "nx-table-scroll"
-}, df = { class: "nx-table" }, ff = {
+}, lf = { class: "nx-table" }, uf = {
 	key: 0,
 	class: "nx-empty-inline"
-}, pf = { class: "nx-panel nx-settings-rows" }, mf = ["disabled"], hf = {
+}, df = { class: "nx-panel nx-settings-rows" }, ff = ["disabled"], pf = {
 	key: 0,
 	class: "nx-recent"
-}, gf = { class: "nx-section-heading" }, _f = { class: "nx-subtle" }, vf = {
+}, mf = { class: "nx-section-heading" }, hf = { class: "nx-subtle" }, gf = {
 	__name: "AdvancedView",
 	props: { session: Object },
 	setup(e) {
@@ -5259,9 +5243,9 @@ var sc = { class: "nx-home" }, cc = {
 		async function p() {
 			a.value = await t.session.read("lan");
 		}
-		return (t, s) => (U(), W("div", Qd, [
-			G("section", $d, [
-				G("div", ef, [G("h2", null, [K(I(Es), { size: 17 }), s[5] ||= q("定时检查", -1)]), G("button", {
+		return (t, s) => (U(), W("div", Xd, [
+			G("section", Zd, [
+				G("div", Qd, [G("h2", null, [K(I(Es), { size: 17 }), s[5] ||= q("定时检查", -1)]), G("button", {
 					class: "nx-button nx-quiet",
 					onClick: s[0] ||= (e) => n.value = !n.value
 				}, [K(I(Vs), { size: 14 }), s[6] ||= q("添加 ", -1)])]),
@@ -5291,7 +5275,7 @@ var sc = { class: "nx-home" }, cc = {
 					G("button", {
 						class: "nx-button nx-secondary",
 						disabled: !!e.session.busy
-					}, " 添加计划 ", 8, tf)
+					}, " 添加计划 ", 8, $d)
 				], 32)) : J("", !0),
 				(U(!0), W(V, null, z(e.session.state?.automations || [], (t, n) => (U(), W("article", {
 					key: n,
@@ -5304,24 +5288,24 @@ var sc = { class: "nx-home" }, cc = {
 						"aria-checked": t.enabled,
 						disabled: !!e.session.busy,
 						onClick: (e) => l(n)
-					}, [...s[8] ||= [G("span", null, null, -1)]], 8, nf),
+					}, [...s[8] ||= [G("span", null, null, -1)]], 8, ef),
 					G("div", null, [G("strong", null, k(t.target), 1), G("small", null, "每 " + k(t.interval_minutes) + " 分钟检查一次", 1)]),
 					G("button", {
 						class: "nx-button nx-quiet",
 						disabled: !!e.session.busy,
 						onClick: (e) => d(n)
-					}, [K(I(Bs), { size: 13 }), s[9] ||= q("试运行", -1)], 8, rf),
+					}, [K(I(Bs), { size: 13 }), s[9] ||= q("试运行", -1)], 8, tf),
 					G("button", {
 						class: "nx-button nx-quiet nx-icon-button",
 						disabled: !!e.session.busy,
 						"aria-label": "删除定时检查",
 						onClick: (e) => u(n)
-					}, [K(I(Zs), { size: 14 })], 8, af)
+					}, [K(I(Zs), { size: 14 })], 8, nf)
 				]))), 128)),
-				!e.session.state?.automations?.length && !n.value ? (U(), W("p", of, " 还没有计划，需要时再添加。 ")) : J("", !0)
+				!e.session.state?.automations?.length && !n.value ? (U(), W("p", rf, " 还没有计划，需要时再添加。 ")) : J("", !0)
 			]),
-			G("section", sf, [
-				G("div", cf, [G("h2", null, [K(I(Ls), { size: 17 }), s[11] ||= q("本地设备", -1)]), G("button", {
+			G("section", af, [
+				G("div", of, [G("h2", null, [K(I(Ls), { size: 17 }), s[11] ||= q("本地设备", -1)]), G("button", {
 					class: "nx-button nx-quiet",
 					onClick: p
 				}, " 查看设备 ")]),
@@ -5331,8 +5315,8 @@ var sc = { class: "nx-home" }, cc = {
 					class: "nx-button nx-secondary",
 					disabled: !!e.session.busy,
 					onClick: p
-				}, " 读取设备列表 ", 8, lf)),
-				a.value?.devices ? (U(), W("div", uf, [G("table", df, [s[12] ||= G("thead", null, [G("tr", null, [
+				}, " 读取设备列表 ", 8, sf)),
+				a.value?.devices ? (U(), W("div", cf, [G("table", lf, [s[12] ||= G("thead", null, [G("tr", null, [
 					G("th", null, "设备地址"),
 					G("th", null, "硬件地址"),
 					G("th", null, "状态")
@@ -5340,9 +5324,9 @@ var sc = { class: "nx-home" }, cc = {
 					G("td", null, k(e.IPAddress), 1),
 					G("td", null, k(e.LinkLayerAddress || "—"), 1),
 					G("td", null, k(e.state), 1)
-				]))), 128))])]), a.value.devices.length ? J("", !0) : (U(), W("p", ff, " 没有读取到设备记录。 "))])) : J("", !0)
+				]))), 128))])]), a.value.devices.length ? J("", !0) : (U(), W("p", uf, " 没有读取到设备记录。 "))])) : J("", !0)
 			]),
-			G("section", pf, [G("div", null, [s[15] ||= G("span", null, [G("strong", null, "网速更新频率"), G("small", null, "降低更新频率可以减少后台采样。")], -1), R(G("select", {
+			G("section", df, [G("div", null, [s[15] ||= G("span", null, [G("strong", null, "网速更新频率"), G("small", null, "降低更新频率可以减少后台采样。")], -1), R(G("select", {
 				"onUpdate:modelValue": s[3] ||= (e) => o.value = e,
 				class: "nx-input nx-fit-select",
 				"aria-label": "网速采样间隔",
@@ -5359,8 +5343,8 @@ var sc = { class: "nx-home" }, cc = {
 				class: "nx-button nx-secondary",
 				disabled: !!e.session.busy,
 				onClick: f
-			}, [K(I(js), { size: 14 }), s[16] ||= q("导出 ", -1)], 8, mf)])]),
-			e.session.state?.events?.length ? (U(), W("section", hf, [G("div", gf, [s[18] ||= G("h2", null, "活动记录", -1), G("span", _f, "最近 " + k(Math.min(e.session.state.events.length, 40)) + " 条", 1)]), (U(!0), W(V, null, z([...e.session.state.events].reverse().slice(0, 40), (e, t) => (U(), W("div", {
+			}, [K(I(js), { size: 14 }), s[16] ||= q("导出 ", -1)], 8, ff)])]),
+			e.session.state?.events?.length ? (U(), W("section", pf, [G("div", mf, [s[18] ||= G("h2", null, "活动记录", -1), G("span", hf, "最近 " + k(Math.min(e.session.state.events.length, 40)) + " 条", 1)]), (U(!0), W(V, null, z([...e.session.state.events].reverse().slice(0, 40), (e, t) => (U(), W("div", {
 				key: t,
 				class: "nx-event"
 			}, [
@@ -5370,98 +5354,98 @@ var sc = { class: "nx-home" }, cc = {
 			]))), 128))])) : J("", !0)
 		]));
 	}
-}, yf = ["aria-busy"], bf = { class: "nx-sidebar" }, xf = {
+}, _f = ["aria-busy"], vf = { class: "nx-sidebar" }, yf = {
 	class: "nx-brand",
 	title: "Network Exploration"
-}, Sf = { "aria-label": "网络工具" }, Cf = [
+}, bf = { "aria-label": "网络工具" }, xf = [
 	"data-page",
 	"aria-current",
 	"title",
 	"onClick"
-], wf = { class: "nx-sidebar-foot" }, Tf = { class: "nx-workspace" }, Ef = { class: "nx-header" }, Df = { class: "nx-header-actions" }, Of = {
+], Sf = { class: "nx-sidebar-foot" }, Cf = { class: "nx-workspace" }, wf = { class: "nx-header" }, Tf = { class: "nx-header-actions" }, Ef = {
 	key: 0,
 	class: "nx-working"
-}, kf = {
+}, Df = {
 	key: 1,
 	class: "nx-live-label"
-}, Af = ["disabled"], jf = {
+}, Of = ["disabled"], kf = {
 	key: 0,
 	class: "nx-notice nx-notice--error",
 	role: "alert"
-}, Mf = ["role"], Nf = { class: "nx-content ne-content" }, Pf = {
+}, Af = ["role"], jf = { class: "nx-content ne-content" }, Mf = {
 	key: "loading",
 	class: "nx-loading",
 	"aria-live": "polite"
-}, Ff = "network-exploration:page", If = {
+}, Nf = "network-exploration:page", Pf = {
 	__name: "NetworkApp",
 	props: { context: {
 		type: Object,
 		required: !0
 	} },
 	setup(e) {
-		let t = oc(e.context), n = /* @__PURE__ */ F(null), r = [
+		let t = ac(e.context), n = /* @__PURE__ */ F(null), r = [
 			{
 				id: "home",
 				title: "首页",
 				hint: "实时数据与常用操作",
 				icon: Fs,
-				component: kc
+				component: Oc
 			},
 			{
 				id: "overview",
 				title: "加速",
 				hint: "本机加速开关与运行状态",
 				icon: Qs,
-				component: il
+				component: rl
 			},
 			{
 				id: "proxy",
 				title: "代理",
 				hint: "订阅、节点与连接方式",
 				icon: Ps,
-				component: Ul
+				component: Hl
 			},
 			{
 				id: "transfer",
 				title: "下载",
 				hint: "文件下载与任务",
 				icon: Os,
-				component: Eu
+				component: wu
 			},
 			{
 				id: "diagnose",
 				title: "检测",
 				hint: "检查网站连接",
 				icon: hs,
-				component: Ku
+				component: Wu
 			},
 			{
 				id: "network",
 				title: "网络",
 				hint: "接口与 DNS",
 				icon: Ks,
-				component: yd
+				component: _d
 			},
 			{
 				id: "traffic",
 				title: "连接",
 				hint: "应用与端口",
 				icon: vs,
-				component: Pd
+				component: Md
 			},
 			{
 				id: "security",
 				title: "防护",
 				hint: "应用联网与恢复",
 				icon: qs,
-				component: Zd
+				component: Yd
 			},
 			{
 				id: "advanced",
 				title: "更多",
 				hint: "定时检测与记录",
 				icon: Ys,
-				component: vf
+				component: gf
 			}
 		], i = r.filter((e) => [
 			"home",
@@ -5471,8 +5455,8 @@ var sc = { class: "nx-home" }, cc = {
 		].includes(e.id));
 		function a() {
 			try {
-				let e = sessionStorage.getItem(Ff);
-				return sessionStorage.removeItem(Ff), r.some((t) => t.id === e) ? e : "home";
+				let e = sessionStorage.getItem(Nf);
+				return sessionStorage.removeItem(Nf), r.some((t) => t.id === e) ? e : "home";
 			} catch {
 				return "home";
 			}
@@ -5483,7 +5467,7 @@ var sc = { class: "nx-home" }, cc = {
 			if (r.some((e) => e.id === t)) {
 				l(t);
 				try {
-					sessionStorage.removeItem(Ff);
+					sessionStorage.removeItem(Nf);
 				} catch {}
 			}
 		}
@@ -5498,12 +5482,12 @@ var sc = { class: "nx-home" }, cc = {
 		return (e, r) => (U(), W("div", {
 			class: "nx-app",
 			"aria-busy": !!I(t).busy
-		}, [G("aside", bf, [
-			G("div", xf, [K(I(Rs), {
+		}, [G("aside", vf, [
+			G("div", yf, [K(I(Rs), {
 				size: 25,
 				"stroke-width": 1.7
 			}), r[4] ||= G("span", null, "Network", -1)]),
-			G("nav", Sf, [(U(!0), W(V, null, z(I(i), (e) => (U(), W("button", {
+			G("nav", bf, [(U(!0), W(V, null, z(I(i), (e) => (U(), W("button", {
 				key: e.id,
 				class: O(["nx-nav-item", { "is-active": o.value === e.id }]),
 				"data-page": e.id,
@@ -5513,20 +5497,20 @@ var sc = { class: "nx-home" }, cc = {
 			}, [(U(), Qi(kr(e.icon), {
 				size: 20,
 				"stroke-width": 1.65
-			})), G("span", null, k(e.title), 1)], 10, Cf))), 128))]),
-			G("div", wf, [G("span", { class: O(["nx-live-dot", { "is-offline": !!I(t).connectionError || !I(t).state }]) }, null, 2), G("span", null, k(I(t).connectionError ? "离线" : I(t).state ? "监测中" : "连接中"), 1)])
-		]), G("div", Tf, [
-			G("header", Ef, [G("div", null, [
+			})), G("span", null, k(e.title), 1)], 10, xf))), 128))]),
+			G("div", Sf, [G("span", { class: O(["nx-live-dot", { "is-offline": !!I(t).connectionError || !I(t).state }]) }, null, 2), G("span", null, k(I(t).connectionError ? "离线" : I(t).state ? "监测中" : "连接中"), 1)])
+		]), G("div", Cf, [
+			G("header", wf, [G("div", null, [
 				r[5] ||= G("span", { class: "nx-eyebrow" }, "NETWORK CONSOLE", -1),
 				G("h1", null, k(c.value.title), 1),
 				G("p", null, k(c.value.hint), 1)
-			]), G("div", Df, [I(t).busy ? (U(), W("span", Of, "正在处理…")) : I(t).state && !I(t).connectionError ? (U(), W("span", kf, [...r[6] ||= [G("span", { class: "nx-live-dot" }, null, -1), q("实时更新", -1)]])) : J("", !0), G("button", {
+			]), G("div", Tf, [I(t).busy ? (U(), W("span", Ef, "正在处理…")) : I(t).state && !I(t).connectionError ? (U(), W("span", Df, [...r[6] ||= [G("span", { class: "nx-live-dot" }, null, -1), q("实时更新", -1)]])) : J("", !0), G("button", {
 				class: "nx-button nx-quiet nx-icon-button",
 				disabled: !!I(t).busy,
 				"aria-label": "刷新网络状态",
 				onClick: r[0] ||= (e) => I(t).refresh()
-			}, [K(I(Ws), { size: 17 })], 8, Af)])]),
-			I(t).connectionError ? (U(), W("div", jf, [r[7] ||= G("span", null, "暂时无法连接网络服务，请稍后重试。", -1), G("button", {
+			}, [K(I(Ws), { size: 17 })], 8, Of)])]),
+			I(t).connectionError ? (U(), W("div", kf, [r[7] ||= G("span", null, "暂时无法连接网络服务，请稍后重试。", -1), G("button", {
 				class: "nx-button nx-quiet",
 				onClick: r[1] ||= (e) => I(t).refresh()
 			}, "重试")])) : J("", !0),
@@ -5540,15 +5524,15 @@ var sc = { class: "nx-home" }, cc = {
 				onClick: r[2] ||= (e) => {
 					I(t).error = "", I(t).notice = "";
 				}
-			}, [K(I(Zs), { size: 14 })])], 10, Mf)) : J("", !0),
-			G("main", Nf, [K(qa, { name: "nx-page" }, {
+			}, [K(I(Zs), { size: 14 })])], 10, Af)) : J("", !0),
+			G("main", jf, [K(qa, { name: "nx-page" }, {
 				default: An(() => [I(t).state ? (U(), Qi(kr(c.value.component), {
 					key: o.value,
 					session: I(t),
 					report: n.value,
 					onNavigate: l,
 					onDiagnostic: u
-				}, null, 40, ["session", "report"])) : (U(), W("div", Pf, [
+				}, null, 40, ["session", "report"])) : (U(), W("div", Mf, [
 					r[8] ||= G("div", { class: "nx-skeleton nx-loading-banner" }, null, -1),
 					r[9] ||= G("div", { class: "nx-loading-grid" }, [G("div", { class: "nx-skeleton nx-loading-chart" }), G("div", { class: "nx-skeleton nx-loading-chart" })], -1),
 					r[10] ||= G("p", null, "正在读取网络状态…", -1),
@@ -5560,51 +5544,51 @@ var sc = { class: "nx-home" }, cc = {
 				]))]),
 				_: 1
 			})])
-		])], 8, yf));
+		])], 8, _f));
 	}
-}, Lf = {
+}, Ff = {
 	class: "nx-app nx-quick-app",
 	"aria-label": "网络快捷操作"
-}, Rf = { class: "nx-pill-list" }, zf = {
+}, If = { class: "nx-pill-list" }, Lf = {
 	class: "nx-pill-icon",
 	title: "加速"
-}, Bf = [
+}, Rf = [
 	"aria-pressed",
 	"aria-label",
 	"title",
 	"disabled"
-], Vf = {
+], zf = {
 	class: "nx-pill-icon",
 	title: "代理"
-}, Hf = { class: "nx-node-wrap" }, Uf = ["value", "disabled"], Wf = {
+}, Bf = { class: "nx-node-wrap" }, Vf = ["value", "disabled"], Hf = {
 	key: 0,
 	value: ""
-}, Gf = ["value"], Kf = [
+}, Uf = ["value"], Wf = [
 	"aria-pressed",
 	"aria-label",
 	"title",
 	"disabled"
-], qf = {
+], Gf = {
 	class: "nx-quick-pill",
 	"data-quick": "download"
-}, Jf = {
+}, Kf = {
 	class: "nx-pill-icon",
 	title: "下载"
-}, Yf = ["disabled"], Xf = {
+}, qf = ["disabled"], Jf = {
 	key: 0,
 	class: "nx-quick-error",
 	role: "alert"
-}, Zf = {
+}, Yf = {
 	key: 1,
 	class: "nx-quick-note",
 	role: "status"
-}, Qf = {
+}, Xf = {
 	__name: "QuickPanel",
 	props: { context: Object },
 	setup(e) {
 		let t = Object.create(e.context);
 		t.compact = !0;
-		let n = oc(t), r = /* @__PURE__ */ F(""), i = X(() => !!n.state?.proxy?.config_saved), a = X(() => !!n.state?.proxy?.running), o = X(() => Object.entries(n.proxy?.proxies || {}).filter(([e, t]) => e !== "GLOBAL" && Array.isArray(t.all) && t.type === "Selector")), s = X(() => o.value[0] || null), c = X(() => s.value?.[1]?.all || []), l = X(() => s.value?.[1]?.now || ""), u = X(() => n.systemProxyReady ? n.accelerated ? "已开启" : "未开启" : "读取中");
+		let n = ac(t), r = /* @__PURE__ */ F(""), i = X(() => !!n.state?.proxy?.config_saved), a = X(() => !!n.state?.proxy?.running), o = X(() => Object.entries(n.proxy?.proxies || {}).filter(([e, t]) => e !== "GLOBAL" && Array.isArray(t.all) && t.type === "Selector")), s = X(() => o.value[0] || null), c = X(() => s.value?.[1]?.all || []), l = X(() => s.value?.[1]?.now || ""), u = X(() => n.systemProxyReady ? n.accelerated ? "已开启" : "未开启" : "读取中");
 		function d(e) {
 			try {
 				sessionStorage.setItem("network-exploration:page", e);
@@ -5626,23 +5610,15 @@ var sc = { class: "nx-home" }, cc = {
 			!t || !s.value || t === l.value || await n.selectNode(s.value[0], t);
 		}
 		async function m() {
-			let e = r.value.trim(), t = rc(e);
-			if (!t) {
-				n.error = "请输入有效的下载链接";
-				return;
-			}
-			await n.run("transfer.add", {
-				url: e,
-				filename: t,
-				connections: 8
-			}, "已开始下载") && (r.value = "", await n.loadTasks());
+			let e = r.value.trim();
+			await n.run("transfer.add", { url: e }, "已开始下载") && (r.value = "", await n.loadTasks());
 		}
-		return (e, t) => (U(), W("section", Lf, [G("div", Rf, [
+		return (e, t) => (U(), W("section", Ff, [G("div", If, [
 			G("div", {
 				class: O(["nx-quick-pill", { "is-on": I(n).accelerated }]),
 				"data-quick": "acceleration"
 			}, [
-				G("span", zf, [K(I(Qs), { size: 16 })]),
+				G("span", Lf, [K(I(Qs), { size: 16 })]),
 				G("span", { class: O(["nx-pill-value", { "is-live": I(n).accelerated }]) }, k(u.value), 3),
 				G("button", {
 					class: O(["nx-mini-action", { "is-on": I(n).accelerated }]),
@@ -5652,24 +5628,24 @@ var sc = { class: "nx-home" }, cc = {
 					disabled: !!I(n).busy || !I(n).state || !I(n).systemProxyReady,
 					"data-quick-action": "acceleration",
 					onClick: t[0] ||= (e) => I(n).toggleAcceleration()
-				}, [K(I(Hs), { size: 14 })], 10, Bf)
+				}, [K(I(Hs), { size: 14 })], 10, Rf)
 			], 2),
 			G("div", {
 				class: O(["nx-quick-pill", { "is-on": a.value }]),
 				"data-quick": "proxy"
 			}, [
-				G("span", Vf, [K(I(Ps), { size: 16 })]),
-				G("div", Hf, [G("select", {
+				G("span", zf, [K(I(Ps), { size: 16 })]),
+				G("div", Bf, [G("select", {
 					class: "nx-node-select",
 					value: l.value,
 					disabled: !!I(n).busy || !c.value.length,
 					"aria-label": "更换节点",
 					title: "更换节点",
 					onChange: p
-				}, [c.value.length ? J("", !0) : (U(), W("option", Wf, "无可用节点")), (U(!0), W(V, null, z(c.value, (e) => (U(), W("option", {
+				}, [c.value.length ? J("", !0) : (U(), W("option", Hf, "无可用节点")), (U(!0), W(V, null, z(c.value, (e) => (U(), W("option", {
 					key: e,
 					value: e
-				}, k(e === "DIRECT" ? "直接连接" : e), 9, Gf))), 128))], 40, Uf), K(I(Ts), {
+				}, k(e === "DIRECT" ? "直接连接" : e), 9, Uf))), 128))], 40, Vf), K(I(Ts), {
 					size: 12,
 					class: "nx-chevron"
 				})]),
@@ -5681,9 +5657,9 @@ var sc = { class: "nx-home" }, cc = {
 					disabled: !!I(n).busy || !I(n).state,
 					"data-quick-action": "proxy",
 					onClick: f
-				}, [K(I(Hs), { size: 14 })], 10, Kf)
+				}, [K(I(Hs), { size: 14 })], 10, Wf)
 			], 2),
-			G("div", qf, [G("span", Jf, [K(I(Os), { size: 16 })]), G("form", {
+			G("div", Gf, [G("span", Kf, [K(I(Os), { size: 16 })]), G("form", {
 				class: "nx-download-form",
 				onSubmit: Q(m, ["prevent"])
 			}, [R(G("input", {
@@ -5697,32 +5673,32 @@ var sc = { class: "nx-home" }, cc = {
 				disabled: !!I(n).busy || !r.value.trim(),
 				"aria-label": "开始下载",
 				title: "开始下载"
-			}, [K(I(gs), { size: 14 })], 10, Yf)], 32)])
-		]), I(n).error || I(n).connectionError ? (U(), W("p", Xf, k(I(n).error || "暂时无法连接网络服务"), 1)) : I(n).notice ? (U(), W("p", Zf, k(I(n).notice), 1)) : J("", !0)]));
+			}, [K(I(gs), { size: 14 })], 10, qf)], 32)])
+		]), I(n).error || I(n).connectionError ? (U(), W("p", Jf, k(I(n).error || "暂时无法连接网络服务"), 1)) : I(n).notice ? (U(), W("p", Yf, k(I(n).notice), 1)) : J("", !0)]));
 	}
-}, $f = ".workspace-main.nx-plugin-full{padding:0!important}.workspace-main.nx-plugin-full>.thread-header[data-full-area-header]{display:none}.workspace-main.nx-plugin-full .split-plugin-page{border-radius:0}.workspace-main.nx-plugin-full .split-content-toolbar{display:none}.workspace-main.nx-plugin-full .split-plugin-page__host{padding:0}.workspace-main.nx-plugin-full .plugin-page-instance,.workspace-main.nx-plugin-full .nx-mount{height:100%;min-height:0}.nx-host>.split-content-toolbar{display:none}.nx-host>.split-plugin-page__host{padding:0}.nx-mount{height:min(780px,76vh);min-height:420px}.nx-host .nx-mount{height:100%;min-height:360px}.nx-mount--quick{height:auto!important;min-height:0!important}.nx-app{--nx-bg:var(--theme-main-background,#111416);--nx-rail:color-mix(in srgb, var(--theme-main-background,#111416) 86%, var(--theme-main-text,#e8eeeb));--nx-panel:color-mix(in srgb, var(--theme-main-background,#111416) 92%, var(--theme-main-text,#e8eeeb));--nx-panel-hover:color-mix(in srgb, var(--theme-main-background,#111416) 84%, var(--theme-main-text,#e8eeeb));--nx-input:color-mix(in srgb, var(--theme-main-background,#111416) 78%, var(--theme-main-text,#e8eeeb));--nx-text:var(--theme-main-text,#e8eeeb);--nx-muted:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 62%, transparent);--nx-faint:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 42%, transparent);--nx-line:var(--theme-main-border,color-mix(in srgb, var(--theme-main-text,#e8eeeb) 14%, transparent));--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-error:var(--red,#ef9c9f);--nx-warning:var(--orange,var(--nx-warning));background:var(--nx-bg);width:100%;height:100%;min-height:360px;color:var(--nx-text);font-family:var(--font-sans,Inter, \"Segoe UI\", \"Microsoft YaHei\", sans-serif);text-align:left;border-radius:0;font-size:13px;line-height:1.5;display:flex;overflow:hidden;container:nx-shell/inline-size}.nx-app *{box-sizing:border-box}.nx-app button,.nx-app input,.nx-app select,.nx-app textarea{font:inherit}.nx-app button{cursor:pointer}.nx-app button:disabled{cursor:default;opacity:.42}.nx-app svg{vertical-align:middle;flex-shrink:0}.nx-app h1,.nx-app h2,.nx-app h3,.nx-app p{margin:0}.nx-app h2{letter-spacing:-.015em;font-size:14px;font-weight:600;line-height:1.5}.nx-app h3{font-size:13px;font-weight:600}.nx-app button:focus-visible,.nx-app a:focus-visible{outline:2px solid var(--nx-accent);outline-offset:3px}.nx-app input:focus-visible,.nx-app textarea:focus-visible,.nx-app select:focus-visible{outline:1px solid color-mix(in srgb, var(--nx-accent) 65%, transparent);outline-offset:1px}.nx-app ::selection{color:var(--nx-text);background:#315846}.nx-sidebar{background:var(--nx-rail);border-right:1px solid var(--nx-line);flex-direction:column;flex:0 0 88px;align-items:stretch;width:88px;padding:22px 12px 16px;display:flex}.nx-brand{color:var(--nx-accent);flex-direction:column;align-items:center;gap:7px;padding-bottom:24px;display:flex}.nx-brand span{letter-spacing:.02em;color:var(--nx-muted);font-size:10px;font-weight:550}.nx-sidebar nav{flex-direction:column;flex:1;gap:5px;min-height:0;display:flex;overflow-y:auto}.nx-nav-item{min-height:53px;color:var(--nx-muted);background:0 0;border:0;border-radius:11px;flex-direction:column;justify-content:center;align-items:center;gap:5px;transition:background .16s,color .16s;display:flex;position:relative}.nx-nav-item span{font-size:11px}.nx-nav-item:hover{background:color-mix(in srgb, var(--nx-text) 6%, transparent);color:var(--nx-text)}.nx-nav-item.is-active{background:color-mix(in srgb, var(--nx-accent) 11%, transparent);color:var(--nx-accent)}.nx-nav-item.is-active:before{content:\"\";background:var(--nx-accent);border-radius:2px;width:2px;position:absolute;top:13px;bottom:13px;left:0}.nx-nav-divider{background:var(--nx-line);height:1px;margin:14px 8px}.nx-sidebar-foot{color:var(--nx-faint);justify-content:center;align-items:center;gap:6px;margin-top:auto;padding-top:26px;font-size:10px;display:flex}.nx-live-dot{background:var(--nx-accent);border-radius:50%;flex:none;width:6px;height:6px;display:inline-block}.nx-live-dot.is-offline{background:var(--nx-faint)}.nx-workspace{flex-direction:column;flex:1;min-width:0;display:flex;overflow:hidden}.nx-header{border-bottom:1px solid var(--nx-line);flex-shrink:0;justify-content:space-between;align-items:center;gap:16px;padding:22px 30px 18px;display:flex}.nx-header h1{letter-spacing:-.035em;font-size:25px;font-weight:620;line-height:1.3}.nx-header p{color:var(--nx-faint);margin-top:5px;font-size:12px}.nx-header-actions{align-items:center;gap:15px;display:flex}.nx-live-label{color:var(--nx-muted);align-items:center;gap:7px;font-size:11px;display:flex}.nx-working{color:var(--nx-muted);font-size:12px}.nx-content{flex:1;min-height:0;padding:20px 30px 30px;overflow:auto}.nx-content>*{width:100%;min-width:0;max-width:1180px;margin-inline:auto}.nx-eyebrow{color:var(--nx-faint);letter-spacing:.18em;margin-bottom:6px;font-size:9px;font-weight:600;display:block}.nx-page-enter-active,.nx-page-leave-active{transition:opacity .18s,transform .18s}.nx-page-enter-from{opacity:0;transform:translateY(6px)}.nx-page-leave-to{opacity:0;transform:translateY(-4px)}.nx-home{flex-direction:column;gap:16px;display:flex}.nx-stat-bar{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:16px;grid-template-columns:repeat(4,minmax(0,1fr));display:grid;overflow:hidden}.nx-stat{flex-direction:column;gap:5px;min-width:0;padding:15px 20px;display:flex}.nx-stat+.nx-stat{border-left:1px solid var(--nx-line)}.nx-stat>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:11px;display:flex}.nx-stat>strong{font-variant-numeric:tabular-nums;letter-spacing:-.025em;text-overflow:ellipsis;white-space:nowrap;font-size:20px;font-weight:600;overflow:hidden}.nx-stat[data-stat=download]>strong{color:var(--nx-accent)}.nx-home-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;display:grid}.nx-quick-card{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:18px;flex-direction:column;gap:15px;min-height:236px;padding:20px;transition:border-color .18s;display:flex}.nx-quick-card.is-on{border-color:color-mix(in srgb, var(--nx-accent) 34%, var(--nx-line))}.nx-quick-head{align-items:center;gap:10px;min-width:0;display:flex}.nx-quick-icon{background:var(--nx-input);width:38px;height:38px;color:var(--nx-muted);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-route-icon{background:color-mix(in srgb, var(--nx-accent) 12%, transparent);width:38px;height:38px;color:var(--nx-accent);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-quick-card.is-on .nx-quick-icon{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent)}.nx-quick-title{flex:1;min-width:0}.nx-quick-title h2{font-size:14px}.nx-quick-title p{color:var(--nx-faint);margin-top:1px;font-size:10px}.nx-quick-state{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:999px;padding:3px 8px;font-size:10px}.nx-quick-state.is-live{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent);border-color:#0000}.nx-quick-main{flex-direction:column;gap:3px;min-width:0;display:flex}.nx-quick-main>strong{letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:600;overflow:hidden}.nx-quick-main>p{color:var(--nx-muted);text-overflow:ellipsis;white-space:nowrap;font-size:11px;overflow:hidden}.nx-quick-actions{align-items:center;gap:8px;margin-top:auto;display:flex}.nx-quick-actions>.nx-button:first-child{flex:1;min-height:38px}.nx-quick-link{color:var(--nx-muted);gap:3px;padding-inline:8px;font-size:11px}.nx-quick-actions--stack{flex-direction:column;align-items:stretch;gap:6px}.nx-home-download{gap:8px;min-width:0;display:flex}.nx-home-download>.nx-input{flex:1;min-width:0;min-height:38px}.nx-home-download>.nx-button{justify-content:center;width:40px;min-height:38px;padding:0}.nx-home-download+.nx-quick-link{align-self:flex-start}.nx-kicker{color:var(--nx-faint);letter-spacing:.16em;font-size:9px;font-weight:600;display:block}.nx-proxy-top{grid-template-columns:minmax(0,1.2fr) minmax(240px,.8fr);gap:14px;display:grid}.nx-subscribe-summary{flex-direction:column;align-items:flex-start;gap:13px;display:flex}.nx-subscribe-copy h3{letter-spacing:-.02em;margin-top:6px;font-size:18px;font-weight:600}.nx-subscribe-copy p{max-width:52ch;color:var(--nx-muted);margin-top:5px;font-size:12px}.nx-subscribe-summary>.nx-button{margin-top:auto}.nx-proxy-connection{flex-direction:column;gap:14px;display:flex}.nx-proxy-connection-row{align-items:center;gap:12px;display:flex}.nx-proxy-connection-row .nx-control-copy{flex:1;min-width:0}.nx-proxy-connection-row .nx-control-copy strong{font-size:14px;font-weight:600}.nx-proxy-connection-row .nx-control-copy p{color:var(--nx-muted);margin-top:3px;font-size:11px}.nx-accel-page{flex-direction:column;gap:20px;display:flex}.nx-accel-control{border:1px solid var(--nx-line);background:radial-gradient(90% 180% at 0% 50%, color-mix(in srgb, var(--nx-accent) 13%, transparent), transparent 60%), var(--nx-panel);border-radius:20px;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:0 20px;padding:26px 28px;display:grid;position:relative;overflow:hidden}.nx-accel-control.is-on{border-color:color-mix(in srgb, var(--nx-accent) 38%, var(--nx-line))}.nx-accel-orb{border:1px solid var(--nx-line);background:var(--nx-input);width:58px;height:58px;color:var(--nx-muted);border-radius:18px;flex:0 0 58px;grid-row:1/span 2;place-items:center;display:grid}.nx-accel-control.is-on .nx-accel-orb{background:var(--nx-accent);color:var(--nx-accent-ink);box-shadow:0 0 0 6px color-mix(in srgb, var(--nx-accent) 14%, transparent);border-color:#0000}.nx-accel-copy{min-width:0}.nx-accel-copy h2{letter-spacing:-.03em;margin-top:5px;font-size:28px;font-weight:650}.nx-accel-copy p{max-width:62ch;color:var(--nx-muted);margin-top:4px;font-size:12px}.nx-accel-control>.nx-button{grid-column:2;justify-self:start;margin-top:14px}.nx-button.nx-large{white-space:nowrap;min-height:46px;padding-inline:24px;font-size:14px}.nx-accel-grid{grid-template-columns:minmax(0,1.45fr) minmax(280px,.85fr);align-items:stretch;gap:20px;display:grid}.nx-accel-facts{flex-direction:column;gap:14px;display:flex}.nx-fact{border-bottom:1px solid var(--nx-line);justify-content:space-between;align-items:center;gap:16px;padding-bottom:13px;display:flex}.nx-fact>span{color:var(--nx-muted);font-size:11px}.nx-fact>strong{text-align:right;font-size:12px;font-weight:550}.nx-fact-link{color:var(--nx-accent);gap:4px;padding:0;font-size:11px}.nx-accel-facts .nx-help{margin-top:auto}.nx-accel-lower{grid-template-columns:minmax(0,1.2fr) minmax(300px,.8fr);align-items:start;gap:20px;display:grid}.nx-accel-lower.nx-single{grid-template-columns:minmax(0,1fr)}.nx-view-stack,.nx-dashboard{gap:20px;min-width:0;display:grid}.nx-dashboard-grid{grid-template-columns:minmax(0,1.75fr) minmax(218px,1fr);align-items:start;gap:20px;display:grid}.nx-dashboard-main,.nx-dashboard-side{gap:20px;min-width:0;display:grid}.nx-dashboard-hero{grid-template-columns:minmax(0,1.8fr) minmax(238px,.95fr);align-items:stretch}.nx-dashboard-tiles{grid-template-columns:minmax(0,1.35fr) minmax(185px,.82fr) minmax(190px,.9fr)}.nx-dashboard-lower{grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);align-items:start;gap:20px;display:grid}.nx-accelerate-card{flex-direction:column;display:flex}.nx-switch-row{justify-content:space-between;align-items:center;gap:16px;display:flex}.nx-switch-row strong{font-size:13px;font-weight:550}.nx-switch-row p{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:4px;font-size:11px}.nx-accelerate-card>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-accelerate-state{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:4px;font-size:12px}.nx-accelerate-card .nx-block{width:100%;min-height:44px;margin-top:15px;font-size:14px}.nx-line-card{flex-direction:column;display:flex}.nx-line-current{align-items:baseline;gap:10px;min-width:0;display:flex}.nx-line-current strong{letter-spacing:-.02em;overflow-wrap:anywhere;font-size:22px;font-weight:600}.nx-line-delay{color:var(--nx-accent);font-variant-numeric:tabular-nums;white-space:nowrap;font-size:12px}.nx-line-meta{color:var(--nx-faint);flex-wrap:wrap;gap:4px 12px;margin-top:5px;font-size:11px;display:flex}.nx-line-actions{flex-wrap:wrap;align-items:center;gap:10px;margin-top:auto;padding-top:17px;display:flex}.nx-line-select select{max-width:150px}.nx-line-actions .nx-button{margin-left:auto}.nx-line-off{flex-direction:column;align-items:flex-start;gap:12px;display:flex}.nx-line-off p{color:var(--nx-muted);font-size:12px}.nx-donut-row{align-items:center;gap:18px;display:flex}.nx-donut{border-radius:50%;flex:0 0 78px;place-items:center;width:78px;height:78px;display:grid;position:relative}.nx-donut:after{content:\"\";background:var(--nx-panel);border-radius:50%;position:absolute;inset:9px}.nx-donut span{z-index:1;color:var(--nx-muted);font-variant-numeric:tabular-nums;font-size:12px;position:relative}.nx-traffic-legend{flex-direction:column;gap:10px;min-width:0;display:flex}.nx-traffic-legend>div{flex-direction:column;gap:2px;display:flex}.nx-traffic-legend span{color:var(--nx-muted);align-items:center;gap:5px;font-size:11px;display:flex}.nx-traffic-legend strong{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;font-size:13px;font-weight:500}.nx-legend-down svg{color:var(--nx-accent)}.nx-legend-up svg{color:#8f9a94}.nx-traffic-card>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-two-columns{grid-template-columns:minmax(0,1.55fr) minmax(230px,1fr);align-items:start;gap:20px;display:grid}.nx-panel{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:16px;min-width:0;padding:20px}.nx-panel-heading{justify-content:space-between;align-items:center;gap:10px;min-height:22px;margin-bottom:16px;display:flex}.nx-panel-heading>div{min-width:0}.nx-panel-heading .nx-kicker+h2{margin-top:4px}.nx-panel-heading h2{color:var(--nx-text);align-items:center;gap:9px;display:flex}.nx-panel-heading h2>svg{color:var(--nx-muted)}.nx-section-heading{justify-content:space-between;align-items:center;gap:16px;display:flex}.nx-section-heading p{color:var(--nx-muted);margin-top:5px;font-size:12px}.nx-subtle,.nx-help{color:var(--nx-muted);font-size:12px}.nx-help{max-width:70ch;line-height:1.7}.nx-panel>.nx-help+.nx-button{margin-top:14px}.nx-empty-inline{color:var(--nx-faint);padding:20px 0 6px;font-size:12px}.nx-button{appearance:none;min-height:34px;color:var(--nx-text);white-space:nowrap;background:0 0;border:1px solid #0000;border-radius:9px;justify-content:center;align-items:center;gap:7px;padding:7px 12px;font-size:12px;font-weight:550;line-height:1.4;transition:background .15s,border-color .15s,color .15s;display:inline-flex}.nx-button svg{stroke-width:1.7px}.nx-primary{background:var(--nx-accent);color:var(--nx-accent-ink);border-color:var(--nx-accent)}.nx-primary:hover:not(:disabled){filter:brightness(.94)}.nx-primary:active:not(:disabled){filter:brightness(.88)}.nx-secondary{color:#dae8df;background:#252d29;border-color:#37463d}.nx-secondary:hover:not(:disabled){background:#303d35;border-color:#4b6053}.nx-quiet{color:var(--nx-muted);font-weight:450}.nx-quiet:hover:not(:disabled){background:color-mix(in srgb, var(--nx-text) 7%, transparent);color:var(--nx-text)}.nx-icon-button{min-width:32px;min-height:32px;padding:6px}.nx-danger-text{color:var(--nx-error)}.nx-actions{flex-wrap:wrap;align-items:center;gap:8px;display:flex}.nx-switch{border:1px solid var(--nx-line);background:var(--nx-input);border-radius:99px;flex:0 0 44px;width:44px;height:25px;padding:3px;transition:background .18s,border-color .18s;position:relative}.nx-switch>span{background:var(--nx-muted);border-radius:50%;width:17px;height:17px;transition:transform .18s,background .18s;display:block;transform:translate(0)}.nx-switch[aria-checked=true]{background:var(--nx-accent);border-color:var(--nx-accent)}.nx-switch[aria-checked=true]>span{background:#193b2a;transform:translate(18px)}.nx-switch--small{transform-origin:0;margin-right:-6px;transform:scale(.86)}.nx-notice{background:color-mix(in srgb, var(--nx-accent) 9%, var(--nx-panel));color:var(--nx-text);border:1px solid var(--nx-line);border-radius:10px;flex-shrink:0;justify-content:space-between;align-items:center;gap:12px;margin:0 30px 18px;padding:10px 12px;font-size:12px;display:flex}.nx-notice--error{color:var(--nx-error);background:#2e2023;border-color:#4b3037}.nx-notice>span{overflow-wrap:anywhere;min-width:0}.nx-notice .nx-button{color:inherit;flex-shrink:0}.nx-acceleration{background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel));align-items:center;gap:17px;padding:23px 24px;display:flex}.nx-acceleration-icon{background:color-mix(in srgb, var(--nx-accent) 10%, var(--nx-panel));width:52px;height:52px;color:var(--nx-muted);border-radius:16px;flex:0 0 52px;place-items:center;display:grid}.nx-acceleration-icon.is-on{color:var(--nx-accent);background:#294d3a}.nx-acceleration-copy{flex:1;min-width:0}.nx-acceleration-copy h2{align-items:center;gap:10px;font-size:17px;font-weight:600;display:flex}.nx-acceleration-copy p{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:6px;font-size:12px}.nx-badge{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:450}.nx-badge.is-on{color:var(--nx-accent);background:#233a2d;border-color:#3e5c4a}.nx-acceleration>.nx-button{min-height:39px;padding-inline:16px}.nx-node-toolbar{justify-content:space-between;align-items:center;gap:12px;margin:-2px 0 10px;display:flex}.nx-optimize{white-space:nowrap;margin-left:auto}.nx-node-head-actions{align-items:center;gap:6px;display:flex}.nx-line-groups{flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px;display:flex}.nx-line-group{border:1px solid var(--nx-line);color:var(--nx-muted);background:0 0;border-radius:999px;padding:6px 12px;font-size:11px;transition:background .16s,border-color .16s,color .16s}.nx-line-group:hover{background:var(--nx-panel-hover);color:var(--nx-text)}.nx-line-group.is-active{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 10%, transparent);color:var(--nx-text)}.nx-line-groups .nx-subtle{margin-left:auto}.nx-line-list{flex-direction:column;max-height:430px;margin:0 -8px;display:flex;overflow:auto}.nx-line-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:6px;display:flex}.nx-line-row:last-child{border-bottom:0}.nx-line-choice{min-width:0;color:var(--nx-text);text-align:left;background:0 0;border:0;border-radius:10px;flex:1;align-items:center;gap:12px;padding:13px 8px;display:flex}.nx-line-choice:hover{background:var(--nx-panel-hover)}.nx-line-row.is-selected .nx-line-choice{background:color-mix(in srgb, var(--nx-accent) 7%, transparent)}.nx-line-radio{border:1px solid var(--nx-line);width:16px;height:16px;color:var(--nx-accent-ink);border-radius:50%;flex:0 0 16px;place-items:center;display:grid}.nx-line-row.is-selected .nx-line-radio{border-color:var(--nx-accent);background:var(--nx-accent)}.nx-line-name{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:13px;overflow:hidden}.nx-line-meter{background:var(--nx-line);border-radius:999px;flex:0 0 120px;width:120px;height:4px;overflow:hidden}.nx-line-meter i{border-radius:inherit;background:var(--nx-accent);height:100%;transition:width .3s;display:block}.nx-line-meter.is-mid i{background:var(--nx-warning)}.nx-line-meter.is-slow i{background:var(--nx-error)}.nx-line-meter.is-unknown i{background:var(--nx-faint)}.nx-line-ms{width:62px;color:var(--nx-muted);font-variant-numeric:tabular-nums;text-align:right;flex:0 0 62px;font-size:11px}.nx-line-refresh{opacity:.35}.nx-line-row:hover .nx-line-refresh,.nx-line-row.is-selected .nx-line-refresh{opacity:1}.nx-node-list{max-height:380px;margin-inline:-8px;overflow:auto}.nx-node-list--compact{max-height:206px}.nx-node{border-radius:9px;align-items:center;min-width:0;display:flex}.nx-node:hover{background:color-mix(in srgb, var(--nx-text) 4%, transparent)}.nx-node.is-selected{background:#25352b}.nx-node-choice{text-align:left;width:100%;min-width:0;min-height:43px;color:var(--nx-text);background:0 0;border:0;border-radius:9px;align-items:center;gap:11px;padding:10px 9px;display:flex}.nx-node-name{text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:13px;overflow:hidden}.nx-node-delay{color:var(--nx-faint);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11px}.is-selected .nx-node-delay{color:#91b69e}.nx-radio-mark{border:1px solid #4d5a52;border-radius:50%;flex-shrink:0;place-items:center;width:16px;height:16px;display:grid}.is-selected .nx-radio-mark{background:var(--nx-accent);border-color:var(--nx-accent);color:var(--nx-accent-ink)}.nx-node-search{margin-bottom:10px}.nx-add-profile{margin-top:13px;padding-inline:4px;font-size:11px}.nx-select-wrap{align-items:center;gap:6px;min-width:0;display:flex;position:relative}.nx-select-wrap select{appearance:none;color:var(--nx-text);outline-offset:3px;cursor:pointer;background:0 0;border:0;max-width:220px;padding:1px 20px 1px 0;font-size:12px}.nx-select-wrap svg{pointer-events:none;color:var(--nx-faint);position:absolute;right:0}.nx-select-wrap option{background:var(--nx-panel);color:var(--nx-text)}.nx-speed{flex-direction:column;padding-bottom:15px;display:flex}.nx-speed-values{flex-wrap:wrap;gap:30px;margin-top:3px;display:flex}.nx-speed-values>span{align-items:center;gap:7px;min-width:0;display:flex}.nx-speed-values strong{letter-spacing:-.025em;font-variant-numeric:tabular-nums;font-size:19px;font-weight:550}.nx-speed-values small{color:var(--nx-faint);padding-top:4px;font-size:10px}.nx-speed-values>span:first-child>svg{color:var(--nx-accent)}.nx-speed-values>span:nth-child(2)>svg{color:var(--blue,#a2b8c6)}.nx-plot{min-height:153px;color:var(--nx-accent);flex:1;margin:17px -6px 0}.nx-plot>svg{width:100%;height:100%;overflow:visible}.nx-chart-grid{stroke:var(--nx-line);stroke-width:1px;fill:none;vector-effect:non-scaling-stroke}.nx-chart-area{stroke:none}.nx-chart-download{stroke:var(--nx-accent);stroke-width:2px;stroke-linejoin:round;stroke-linecap:round;fill:none;vector-effect:non-scaling-stroke}.nx-chart-upload{stroke:var(--blue,#8a9ca5);stroke-width:1.5px;stroke-dasharray:4 5;fill:none;vector-effect:non-scaling-stroke;opacity:.65}.nx-chart-axis{color:var(--nx-faint);justify-content:space-between;gap:10px;margin-top:8px;font-size:10px;display:flex}.nx-chart-wait{height:100%;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:6px;font-size:12px;display:flex}.nx-chart-wait small{color:var(--nx-faint);font-size:11px}.nx-mode-options{flex-direction:column;gap:5px;display:flex}.nx-mode{width:100%;color:var(--nx-muted);text-align:left;background:0 0;border:1px solid #0000;border-radius:10px;align-items:center;gap:11px;min-width:0;padding:10px 8px;display:flex}.nx-mode:hover:not(:disabled){background:var(--nx-line)}.nx-mode[aria-checked=true]{color:var(--nx-text);background:#28372d;border-color:#3d5143}.nx-mode>span:nth-child(2){flex:1;gap:3px;min-width:0;display:grid}.nx-mode strong{font-size:12px;font-weight:550}.nx-mode small{color:var(--nx-faint);font-size:10px;line-height:1.5}.nx-mode-dot{border:1px solid #5c6c61;border-radius:50%;flex-shrink:0;width:13px;height:13px}.nx-mode[aria-checked=true] .nx-mode-dot{border:4px solid var(--nx-accent)}.nx-modes>.nx-help{margin-top:10px;font-size:11px}.nx-local-info>strong{color:var(--nx-muted);font-size:12px;font-weight:500}.nx-address{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;letter-spacing:-.015em;margin:7px 0 10px;font-size:18px;font-weight:500}.nx-local-info>.nx-button{padding-left:0;font-size:11px}.nx-total>div:not(.nx-panel-heading){justify-content:space-between;align-items:center;gap:12px;margin-top:11px;display:flex}.nx-total>div>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:12px;display:flex}.nx-total strong{font-variant-numeric:tabular-nums;font-size:14px;font-weight:500}.nx-total>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-input{border:1px solid var(--nx-line);background:var(--nx-input);width:100%;min-width:0;min-height:38px;color:var(--nx-text);accent-color:var(--nx-accent);border-radius:9px;padding:9px 12px;font-size:12px;line-height:1.5}.nx-input::placeholder{color:#839188;opacity:1}.nx-input option{background:var(--nx-panel);color:var(--nx-text)}.nx-inline-form{align-items:center;gap:10px;min-width:0;display:flex}.nx-inline-form>.nx-input{flex:1}.nx-inline-form>.nx-button{flex-shrink:0;min-height:38px}.nx-input-with-icon,.nx-input-with-action{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-input-with-icon>svg{color:var(--nx-faint);pointer-events:none;position:absolute;left:12px}.nx-input-with-icon>.nx-input{padding-left:38px}.nx-input-with-action>.nx-input{padding-right:42px}.nx-input-with-action>.nx-button{position:absolute;right:4px}.nx-fit-select{min-width:100px;flex:0 auto!important;width:auto!important}.nx-form{gap:15px;display:grid}.nx-form>.nx-button{justify-self:start}.nx-form-grid{grid-template-columns:1fr 1fr;gap:16px;display:grid}.nx-form-grid>label{gap:7px;min-width:0;display:grid}.nx-form-grid>label>span{color:var(--nx-muted);font-size:12px}.nx-code{resize:vertical;font-family:Cascadia Code,Consolas,monospace;font-size:12px;line-height:1.7}.nx-import>.nx-help{margin-bottom:13px}.nx-import-options{flex-wrap:wrap;gap:14px;margin-top:8px;display:flex}.nx-import-options>.nx-button{padding-left:0;font-size:11px}.nx-import>.nx-form{margin-top:12px}.nx-import-running{justify-content:space-between;align-items:center;gap:12px;margin-top:14px;display:flex}.nx-import-running .nx-button{font-size:11px}.nx-import>.nx-help:last-child{margin-top:12px;margin-bottom:0}.nx-site-shortcuts{flex-wrap:wrap;align-items:center;gap:4px;margin-top:8px;display:flex}.nx-site-shortcuts>span{color:var(--nx-faint);margin-right:4px;font-size:10px}.nx-site-shortcuts .nx-button{min-height:27px;padding:4px 6px;font-size:10px}.nx-recent{padding:18px 20px}.nx-recent>.nx-section-heading{margin-bottom:9px}.nx-event{border-bottom:1px solid #252e28;align-items:center;gap:11px;padding:11px 0;font-size:12px;display:flex}.nx-event>svg{color:var(--nx-faint)}.nx-event>span{overflow-wrap:anywhere;flex:1;min-width:0}.nx-event>time{color:var(--nx-faint);white-space:nowrap;font-size:10px}.nx-event:last-child{border-bottom:0;padding-bottom:0}.nx-empty{text-align:center;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:11px;padding:52px 20px;display:flex}.nx-empty>svg{color:#83968a;margin-bottom:3px}.nx-empty>strong{color:var(--nx-text);font-size:14px;font-weight:500}.nx-empty>p{max-width:35ch;color:var(--nx-muted);font-size:12px;line-height:1.7}.nx-empty>.nx-button{margin-top:5px}.nx-empty--small{padding:27px 10px}.nx-empty--small strong{font-size:12px}.nx-empty--small p{font-size:11px}.nx-control-row{align-items:center;gap:15px;display:flex}.nx-control-row--plain{padding:0}.nx-control-icon{color:#bfd0c4;background:#28322b;border-radius:11px;flex:0 0 40px;place-items:center;width:40px;height:40px;display:grid}.nx-control-copy{flex:1;min-width:0}.nx-control-copy strong{font-size:13px;font-weight:550}.nx-control-copy p{color:var(--nx-muted);margin-top:4px;font-size:11px;line-height:1.6}.nx-settings-fold{padding-top:3px}.nx-settings-fold>.nx-panel{margin-top:12px}.nx-detail-list{max-width:650px;margin:12px 0}.nx-detail-list>div{border-bottom:1px solid var(--nx-line);color:var(--nx-muted);justify-content:space-between;gap:15px;padding:10px 0;font-size:12px;display:flex}.nx-detail-list>div>span:last-child{align-items:center;gap:5px;display:flex}.nx-detail-list code{color:var(--nx-text);font-size:11px}.nx-download-composer>.nx-inline-form{margin-bottom:5px}.nx-download-stats{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:14px;grid-template-columns:repeat(3,minmax(0,1fr));display:grid;overflow:hidden}.nx-download-stats>div{justify-content:space-between;align-items:baseline;gap:10px;padding:12px 18px;display:flex}.nx-download-stats>div+div{border-left:1px solid var(--nx-line)}.nx-download-stats span{color:var(--nx-muted);font-size:11px}.nx-download-stats strong{font-variant-numeric:tabular-nums;font-size:15px;font-weight:600}.nx-download-composer.is-dragging{border-color:color-mix(in srgb, var(--nx-accent) 55%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel))}.nx-download-options{flex-wrap:wrap;gap:8px 18px;margin:9px 0 4px;display:flex}.nx-download-options>label{color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-download-options select{border:1px solid var(--nx-line);background:var(--nx-input);min-height:30px;color:var(--nx-text);border-radius:8px;padding:4px 8px;font-size:11px}.nx-options-button{padding-left:0;font-size:11px}.nx-download-composer>.nx-form-grid{padding-top:13px}.nx-checkbox{align-self:end;align-items:center;min-height:38px;gap:8px!important;display:flex!important}.nx-checkbox>input{accent-color:var(--nx-accent)}.nx-list-toolbar{justify-content:space-between;align-items:center;gap:12px;display:flex}.nx-filter-tabs{align-items:center;gap:5px;display:flex}.nx-filter-tabs>button{min-height:32px;color:var(--nx-muted);background:0 0;border:0;border-radius:8px;align-items:center;gap:7px;padding:6px 10px;font-size:12px;display:flex}.nx-filter-tabs>button.active{color:var(--nx-text);background:#29332c}.nx-filter-tabs>button:hover{background:#242e27}.nx-filter-tabs>button>span{color:var(--nx-faint);font-size:10px}.nx-task-list{padding:0 20px}.nx-download-row{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr) auto;align-items:center;column-gap:15px;padding:23px 0;display:grid}.nx-download-row:last-child{border-bottom:0}.nx-file-icon{color:#b3d5bd;background:#29352c;border-radius:10px;place-items:center;width:40px;height:45px;display:grid}.nx-download-body{min-width:0}.nx-task-title{justify-content:space-between;align-items:baseline;gap:12px;min-width:0;display:flex}.nx-task-title>strong{text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;overflow:hidden}.nx-task-title>span{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-progress-track{background:#313b34;border-radius:99px;height:4px;margin:10px 0 8px;overflow:hidden}.nx-progress-track>span{background:var(--nx-accent);border-radius:inherit;height:100%;transition:width .25s;display:block}.nx-task-meta{color:var(--nx-faint);font-variant-numeric:tabular-nums;flex-wrap:wrap;justify-content:space-between;gap:10px;font-size:10px;display:flex}.nx-meta-divider{color:var(--nx-faint);margin-inline:6px}.nx-task-controls{align-items:center;gap:5px;display:flex}.nx-task-details{grid-column:2/-1;gap:13px;padding:17px 0 0;display:grid}.nx-task-details>.nx-subtle{overflow-wrap:anywhere;font-size:11px}.nx-small-select{color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-small-select select{background:var(--nx-input);border:1px solid var(--nx-line);min-height:30px;color:var(--nx-text);border-radius:7px;padding:4px 7px}.nx-state-error{color:var(--nx-error)!important}.nx-diagnose-start{text-align:center;padding:30px 28px 23px}.nx-diagnose-symbol{width:49px;height:49px;color:var(--nx-accent);background:#2a3d30;border-radius:15px;place-items:center;margin:0 auto 15px;display:grid}.nx-diagnose-start>h2{letter-spacing:-.025em;font-size:19px;font-weight:550}.nx-diagnose-start>p{color:var(--nx-muted);margin-top:7px;font-size:12px}.nx-diagnose-start>.nx-inline-form{max-width:580px;margin:22px auto 0}.nx-diagnose-options{color:var(--nx-muted);flex-wrap:wrap;justify-content:center;align-items:center;gap:20px;margin-top:17px;font-size:11px;display:flex}.nx-diagnose-options>label{cursor:pointer;align-items:center;gap:5px;display:flex}.nx-diagnose-options input{accent-color:var(--nx-accent);width:12px;height:12px;margin:0}.nx-report-heading{align-items:center;gap:14px;margin-bottom:20px;display:flex}.nx-result-icon{width:44px;height:44px;color:var(--nx-accent);background:#273f2f;border-radius:13px;place-items:center;display:grid}.nx-result-icon.is-failure{color:var(--nx-warning);background:#3c3324}.nx-report-heading h2{font-size:16px}.nx-report-heading p{color:var(--nx-muted);margin-top:4px;font-size:11px}.nx-check-list{gap:0;display:grid}.nx-check-row{border-bottom:1px solid var(--nx-line);grid-template-columns:20px minmax(0,1fr) auto 66px;align-items:center;gap:11px;min-height:47px;display:grid}.nx-check-row:last-child{border-bottom:0}.nx-check-status{width:18px;height:18px;color:var(--nx-accent);border:1px solid #3f5b49;border-radius:50%;place-items:center;display:grid}.nx-check-status.is-failure{color:var(--nx-error);border-color:#70504d}.nx-check-row strong{font-size:12px;font-weight:450}.nx-check-row>span:not(.nx-check-status){color:var(--nx-muted);font-size:11px}.nx-check-row time{color:var(--nx-faint);text-align:right;font-variant-numeric:tabular-nums;font-size:11px}.nx-report-advice{color:var(--nx-muted);font-size:12px;line-height:1.8;margin-top:17px!important}.nx-report-detail-button{margin-top:10px;padding-left:0;font-size:11px}.nx-check-evidence{gap:14px;margin-top:10px;display:grid}.nx-check-evidence>div{background:var(--nx-input);border-radius:9px;min-width:0;padding:12px}.nx-check-evidence strong{color:var(--nx-muted);font-size:11px;font-weight:500}.nx-check-evidence p{overflow-wrap:anywhere;white-space:pre-wrap;color:var(--nx-faint);margin-top:6px;font-size:11px;line-height:1.7}.nx-history>.nx-section-heading{padding-bottom:10px}.nx-history-row{border:0;border-bottom:1px solid var(--nx-line);text-align:left;width:100%;color:var(--nx-text);background:0 0;align-items:center;gap:12px;padding:13px 2px;display:flex}.nx-history-row:hover{background:color-mix(in srgb, var(--nx-text) 3%, transparent)}.nx-history-row>strong{text-overflow:ellipsis;flex:1;min-width:0;font-size:12px;font-weight:500;overflow:hidden}.nx-history-row>span:not(.nx-history-result),.nx-history-row>time{color:var(--nx-faint);font-size:10px}.nx-history-result{color:var(--nx-accent)}.nx-history-result.is-failure{color:var(--nx-warning)}.nx-diagnose-empty{padding-block:28px;font-size:12px}.nx-diagnose-pending>p{color:var(--nx-muted);margin-block:15px;font-size:12px}.nx-skeleton{background:linear-gradient(100deg, var(--nx-line) 20%, #303b33 45%, var(--nx-line) 70%);background-size:220% 100%;border-radius:8px;animation:1.6s infinite nx-loading-sheen}.nx-skeleton-title{width:180px;height:15px}.nx-skeleton-row{width:100%;height:35px;margin-block:10px}.nx-loading-banner{height:100px}.nx-loading-grid{grid-template-columns:1.7fr 1fr;gap:20px;margin-top:20px;display:grid}.nx-loading-chart{height:250px}.nx-loading>p{color:var(--nx-muted);margin-top:18px;font-size:12px}.nx-loading>.nx-button{margin-top:14px}.nx-interface-list{padding-block:0}.nx-interface{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr);gap:16px;padding:22px 0;display:grid}.nx-interface:last-child{border:0}.nx-interface strong{font-size:13px;font-weight:500}.nx-interface dl{gap:7px;margin:10px 0 0;display:grid}.nx-interface dl>div{gap:18px;min-width:0;font-size:11px;display:flex}.nx-interface dt{min-width:52px;color:var(--nx-faint)}.nx-interface dd{color:var(--nx-muted);overflow-wrap:anywhere;margin:0}.nx-query-result{border-top:1px solid var(--nx-line);padding-top:14px}.nx-query-address{font-variant-numeric:tabular-nums;margin-top:8px;font-size:13px}.nx-rule-row{grid-template-columns:minmax(0,1fr) minmax(100px,.65fr) 30px;gap:8px;display:grid}.nx-table-panel{padding:0;overflow:hidden}.nx-table-scroll{max-width:100%;overflow:auto}.nx-table{border-collapse:collapse;white-space:nowrap;text-align:left;width:100%;font-size:12px}.nx-table th{color:var(--nx-faint);border-bottom:1px solid var(--nx-line);padding:13px 17px;font-size:10px;font-weight:450}.nx-table td{color:var(--nx-muted);border-bottom:1px solid #29312c;padding:14px 17px}.nx-table tr:last-child td{border-bottom:0}.nx-table td strong{color:var(--nx-text);text-overflow:ellipsis;max-width:180px;font-size:12px;font-weight:500;display:block;overflow:hidden}.nx-table td small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-table tbody tr:hover{background:#202822}.nx-table .nx-data-cell{font-variant-numeric:tabular-nums;font-size:11px}.nx-protocol{color:var(--nx-faint);border:1px solid #39433c;border-radius:4px;padding:2px 5px;font-size:10px}.nx-connection-state{color:var(--nx-faint);font-size:11px}.nx-connection-state.is-live{color:#9bc9ac}.nx-table-loading{padding:10px 18px}.nx-load-more{border-top:1px solid var(--nx-line);border-radius:0;width:100%;min-height:39px;font-size:11px}.nx-application-actions{grid-template-columns:1fr 1fr;gap:24px;padding-block:8px;display:grid}.nx-application-actions p{color:var(--nx-muted);margin:6px 0 13px;font-size:11px}.nx-transaction-list>.nx-panel-heading{margin-bottom:5px}.nx-transaction{border-bottom:1px solid var(--nx-line);align-items:center;gap:13px;padding:16px 0;display:flex}.nx-transaction:last-child{border-bottom:0}.nx-transaction-icon{color:var(--nx-faint)}.nx-transaction>div{overflow-wrap:anywhere;flex:1;min-width:0}.nx-transaction strong{font-size:12px;font-weight:500}.nx-transaction p,.nx-transaction small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-status-text{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-status-text.is-warning{color:var(--nx-warning)}.nx-schedule-form{margin-top:15px}.nx-schedule-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:12px;padding:15px 0;display:flex}.nx-schedule-row:last-child{border-bottom:0}.nx-schedule-row>div{flex:1;min-width:0}.nx-schedule-row strong{overflow-wrap:anywhere;font-size:12px;font-weight:500}.nx-schedule-row small{color:var(--nx-faint);margin-top:4px;font-size:10px;display:block}.nx-settings-rows{padding-block:0}.nx-settings-rows>div{border-bottom:1px solid var(--nx-line);justify-content:space-between;align-items:center;gap:24px;padding:20px 0;display:flex}.nx-settings-rows>div:last-child{border:0}.nx-settings-rows strong{font-size:12px;font-weight:500;display:block}.nx-settings-rows small{color:var(--nx-muted);margin-top:5px;font-size:11px;display:block}.nx-host .plugin-page-instance{height:100%}.nx-quick-app{--nx-text:var(--theme-backdrop-text,var(--theme-main-text,#e8eeeb));--nx-muted:color-mix(in srgb, var(--nx-text) 60%, transparent);--nx-faint:color-mix(in srgb, var(--nx-text) 40%, transparent);--nx-line:color-mix(in srgb, var(--nx-text) 11%, transparent);--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-panel:transparent;--nx-panel-hover:color-mix(in srgb, var(--nx-text) 7%, transparent);--nx-input:color-mix(in srgb, var(--nx-text) 5%, transparent);background:0 0;border:0;border-radius:0;width:100%;max-width:100%;height:auto;min-height:0;padding:0;display:block;overflow:visible}.nx-pill-list{flex-direction:column;gap:8px;display:flex}.nx-quick-pill{border:1px solid color-mix(in srgb, var(--nx-text) 9%, transparent);background:color-mix(in srgb, var(--nx-text) 4%, transparent);width:100%;min-height:46px;box-shadow:inset 0 1px 0 color-mix(in srgb, var(--nx-text) 5%, transparent);color:var(--nx-text);border-radius:999px;align-items:center;gap:8px;padding:6px 8px 6px 10px;transition:border-color .16s,background .16s;display:flex}.nx-quick-pill:focus-within{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line))}.nx-quick-pill.is-on{border-color:color-mix(in srgb, var(--nx-accent) 30%, transparent);background:color-mix(in srgb, var(--nx-accent) 6%, transparent)}.nx-pill-icon{background:color-mix(in srgb, var(--nx-text) 6%, transparent);width:30px;height:30px;color:var(--nx-muted);border-radius:50%;flex:0 0 30px;place-items:center;display:grid}.nx-quick-pill.is-on .nx-pill-icon{background:color-mix(in srgb, var(--nx-accent) 13%, transparent);color:var(--nx-accent)}.nx-pill-value{min-width:0;color:var(--nx-muted);font-variant-numeric:tabular-nums;letter-spacing:-.01em;flex:1;font-size:11px}.nx-pill-value.is-live{color:var(--nx-accent)}.nx-mini-action{border:1px solid var(--nx-line);width:32px;height:32px;color:var(--nx-muted);background:0 0;border-radius:50%;flex:0 0 32px;place-items:center;padding:0;transition:border-color .16s,background .16s,color .16s;display:grid}.nx-mini-action:hover:not(:disabled){border-color:color-mix(in srgb, var(--nx-accent) 36%, var(--nx-line));color:var(--nx-text)}.nx-mini-action.is-on,.nx-mini-action.is-ready{background:var(--nx-accent);color:var(--nx-accent-ink);border-color:#0000}.nx-mini-action:disabled{opacity:.38}.nx-node-wrap{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-node-select{width:100%;min-width:0;height:32px;color:var(--nx-text);text-overflow:ellipsis;appearance:none;cursor:pointer;background:0 0;border:0;padding:0 18px 0 2px;font-size:11px}.nx-node-select:focus{outline:none}.nx-chevron{color:var(--nx-faint);pointer-events:none;position:absolute;right:2px}.nx-download-form{flex:1;align-items:center;gap:6px;min-width:0;display:flex}.nx-download-form>input{min-width:0;height:32px;color:var(--nx-text);background:0 0;border:0;outline:none;flex:1;padding:0 2px;font-size:11px}.nx-download-form>input::placeholder{color:var(--nx-faint)}.nx-quick-error,.nx-quick-note{overflow-wrap:anywhere;font-size:10px;line-height:1.5;margin:8px 4px 0!important}.nx-quick-error{color:var(--nx-error)}.nx-quick-note{color:var(--nx-accent)}@keyframes nx-loading-sheen{to{background-position:-220% 0}}@container nx-shell (width<=850px){.nx-sidebar{flex-basis:76px;width:76px;padding-inline:9px}.nx-header{padding:23px 22px 20px}.nx-content{padding:0 22px 24px}.nx-notice{margin-inline:22px}.nx-panel{padding:17px}.nx-dashboard-grid{grid-template-columns:minmax(0,1.65fr) minmax(205px,1fr);gap:16px}.nx-dashboard-hero{grid-template-columns:minmax(0,1.5fr) minmax(210px,1fr)}.nx-dashboard-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-dashboard-lower{grid-template-columns:minmax(0,1fr)}.nx-stat-bar{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-stat:nth-child(3){border-top:1px solid var(--nx-line);border-left:0}.nx-stat:nth-child(4){border-top:1px solid var(--nx-line)}.nx-home-grid{grid-template-columns:minmax(0,1fr)}.nx-quick-card{min-height:0}.nx-proxy-top{grid-template-columns:minmax(0,1fr)}.nx-accel-control{grid-template-columns:auto minmax(0,1fr)}.nx-accel-control>.nx-button{grid-column:1/-1;width:100%}.nx-accel-grid,.nx-accel-lower{grid-template-columns:minmax(0,1fr)}.nx-dashboard-main,.nx-dashboard-side{gap:16px}.nx-acceleration{gap:13px;padding:19px 20px}.nx-acceleration-copy h2{font-size:16px}.nx-acceleration-icon{border-radius:13px;flex-basis:44px;width:44px;height:44px}.nx-speed-values{gap:19px}.nx-speed-values strong{font-size:17px}.nx-speed-values small{display:none}.nx-two-columns{grid-template-columns:minmax(0,1.4fr) minmax(205px,1fr);gap:16px}.nx-task-list{padding-block:0}.nx-task-meta{font-size:10px}.nx-total strong{font-size:13px}}@container nx-shell (width<=680px){.nx-dashboard-grid,.nx-two-columns{grid-template-columns:minmax(0,1fr)}.nx-line-meter{display:none}.nx-download-stats{grid-template-columns:minmax(0,1fr)}.nx-download-stats>div+div{border-top:1px solid var(--nx-line);border-left:0}.nx-dashboard-side{grid-template-columns:1fr 1fr;display:grid}.nx-dashboard-side>.nx-modes{grid-column:1/-1}.nx-dashboard-side .nx-mode-options{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;display:grid}.nx-dashboard-side .nx-mode{align-items:flex-start;gap:7px;padding:10px 8px}.nx-dashboard-side .nx-mode>svg{display:none}.nx-dashboard-side .nx-mode-dot{width:12px;height:12px;margin-top:2px}.nx-mode small{font-size:10px}.nx-acceleration-copy p{font-size:11px}.nx-acceleration>.nx-button{padding-inline:12px;font-size:11px}.nx-section-heading{gap:10px}.nx-section-heading p{font-size:11px}.nx-form-grid{grid-template-columns:1fr}.nx-application-actions{grid-template-columns:1fr;gap:22px}.nx-plot{height:160px}.nx-node-list--compact{max-height:190px}}@container nx-shell (width<=520px){.nx-sidebar{flex-basis:59px;width:59px;padding:18px 6px 12px}.nx-brand{padding-bottom:18px}.nx-brand span{display:none}.nx-nav-item{border-radius:9px;gap:4px;min-height:47px}.nx-nav-item span{font-size:10px}.nx-nav-item svg{width:18px;height:18px}.nx-nav-divider{margin-block:11px}.nx-sidebar-foot>span:last-child{display:none}.nx-header{padding:20px 16px 18px}.nx-header h1{font-size:23px}.nx-header p{font-size:11px}.nx-content{padding:0 16px 22px}.nx-notice{margin:0 16px 14px}.nx-header-actions{gap:5px}.nx-live-label{font-size:10px}.nx-live-label>.nx-live-dot{display:none}.nx-acceleration{flex-wrap:wrap;gap:12px;padding:17px}.nx-acceleration-copy{min-width:130px}.nx-acceleration-copy h2{gap:7px}.nx-acceleration>.nx-button{min-height:34px;margin-left:56px}.nx-acceleration-icon{flex-basis:42px;width:42px;height:42px}.nx-panel{padding:16px}.nx-dashboard,.nx-view-stack{gap:16px}.nx-dashboard-side{grid-template-columns:minmax(0,1fr)}.nx-dashboard-side>.nx-modes{grid-column:auto}.nx-dashboard-side .nx-mode-options{display:flex}.nx-dashboard-side .nx-mode>svg{display:block}.nx-dashboard-side .nx-mode{align-items:center}.nx-plot{height:140px}.nx-speed-values{gap:23px}.nx-speed-values strong{font-size:16px}.nx-inline-form{gap:8px}.nx-inline-form>.nx-button{padding-inline:10px;font-size:11px}.nx-inline-form .nx-fit-select{min-width:82px;font-size:11px}.nx-site-shortcuts{gap:1px}.nx-site-shortcuts>span{width:100%;margin-bottom:3px}.nx-download-row{grid-template-columns:28px minmax(0,1fr) auto;gap:10px;padding-block:19px}.nx-file-icon{border-radius:8px;width:28px;height:35px}.nx-file-icon>svg{width:17px}.nx-task-title{flex-direction:column;align-items:flex-start;gap:3px}.nx-task-title>strong{max-width:100%;font-size:12px}.nx-task-title>span{font-size:9px}.nx-task-controls{gap:1px}.nx-task-controls>.nx-icon-button{min-width:27px;padding:4px}.nx-task-meta{gap:4px;font-size:9px}.nx-task-meta>span{width:100%}.nx-task-details{grid-column:1/-1;padding-top:14px}.nx-filter-tabs>button{padding-inline:8px;font-size:11px}.nx-task-list{padding-block:0}.nx-diagnose-start{padding:24px 16px 18px}.nx-diagnose-start>h2{font-size:17px}.nx-diagnose-start>.nx-inline-form{margin-top:18px}.nx-diagnose-options{gap:12px;font-size:10px}.nx-check-row{grid-template-columns:18px minmax(0,1fr) auto 47px;gap:8px}.nx-check-row strong{font-size:11px}.nx-check-row time{font-size:10px}.nx-history-row{gap:9px}.nx-history-row>span:not(.nx-history-result){display:none}.nx-history-row>time{font-size:9px}.nx-section-heading>div{min-width:0}.nx-section-heading h2{font-size:13px}.nx-section-heading>.nx-button{padding-inline:9px;font-size:11px}.nx-schedule-form{flex-wrap:wrap}.nx-schedule-form>.nx-input:first-child{flex-basis:100%}.nx-schedule-row{gap:8px}.nx-schedule-row>.nx-button:not(.nx-icon-button){padding-inline:5px;font-size:10px}.nx-schedule-row strong{font-size:11px}.nx-settings-rows>div{gap:12px}.nx-settings-rows small{font-size:10px}.nx-event{gap:8px;font-size:11px}.nx-event>time{font-size:9px}.nx-rule-row{grid-template-columns:minmax(0,1fr) 96px 24px;gap:5px}.nx-rule-row .nx-input{padding-inline:8px;font-size:11px}.nx-loading-grid{grid-template-columns:1fr}.nx-loading-grid>.nx-skeleton:last-child{display:none}}@media (prefers-reduced-motion:reduce){.nx-app *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}";
+}, Zf = ".workspace-main.nx-plugin-full{padding:0!important}.workspace-main.nx-plugin-full>.thread-header[data-full-area-header]{display:none}.workspace-main.nx-plugin-full .split-plugin-page{border-radius:0}.workspace-main.nx-plugin-full .split-content-toolbar{display:none}.workspace-main.nx-plugin-full .split-plugin-page__host{padding:0}.workspace-main.nx-plugin-full .plugin-page-instance,.workspace-main.nx-plugin-full .nx-mount{height:100%;min-height:0}.nx-host>.split-content-toolbar{display:none}.nx-host>.split-plugin-page__host{padding:0}.nx-mount{height:min(780px,76vh);min-height:420px}.nx-host .nx-mount{height:100%;min-height:360px}.nx-mount--quick{height:auto!important;min-height:0!important}.nx-app{--nx-bg:var(--theme-main-background,#111416);--nx-rail:color-mix(in srgb, var(--theme-main-background,#111416) 86%, var(--theme-main-text,#e8eeeb));--nx-panel:color-mix(in srgb, var(--theme-main-background,#111416) 92%, var(--theme-main-text,#e8eeeb));--nx-panel-hover:color-mix(in srgb, var(--theme-main-background,#111416) 84%, var(--theme-main-text,#e8eeeb));--nx-input:color-mix(in srgb, var(--theme-main-background,#111416) 78%, var(--theme-main-text,#e8eeeb));--nx-text:var(--theme-main-text,#e8eeeb);--nx-muted:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 62%, transparent);--nx-faint:color-mix(in srgb, var(--theme-main-text,#e8eeeb) 42%, transparent);--nx-line:var(--theme-main-border,color-mix(in srgb, var(--theme-main-text,#e8eeeb) 14%, transparent));--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-error:var(--red,#ef9c9f);--nx-warning:var(--orange,var(--nx-warning));background:var(--nx-bg);width:100%;height:100%;min-height:360px;color:var(--nx-text);font-family:var(--font-sans,Inter, \"Segoe UI\", \"Microsoft YaHei\", sans-serif);text-align:left;border-radius:0;font-size:13px;line-height:1.5;display:flex;overflow:hidden;container:nx-shell/inline-size}.nx-app *{box-sizing:border-box}.nx-app button,.nx-app input,.nx-app select,.nx-app textarea{font:inherit}.nx-app button{cursor:pointer}.nx-app button:disabled{cursor:default;opacity:.42}.nx-app svg{vertical-align:middle;flex-shrink:0}.nx-app h1,.nx-app h2,.nx-app h3,.nx-app p{margin:0}.nx-app h2{letter-spacing:-.015em;font-size:14px;font-weight:600;line-height:1.5}.nx-app h3{font-size:13px;font-weight:600}.nx-app button:focus-visible,.nx-app a:focus-visible{outline:2px solid var(--nx-accent);outline-offset:3px}.nx-app input:focus-visible,.nx-app textarea:focus-visible,.nx-app select:focus-visible{outline:1px solid color-mix(in srgb, var(--nx-accent) 65%, transparent);outline-offset:1px}.nx-app ::selection{color:var(--nx-text);background:#315846}.nx-sidebar{background:var(--nx-rail);border-right:1px solid var(--nx-line);flex-direction:column;flex:0 0 88px;align-items:stretch;width:88px;padding:22px 12px 16px;display:flex}.nx-brand{color:var(--nx-accent);flex-direction:column;align-items:center;gap:7px;padding-bottom:24px;display:flex}.nx-brand span{letter-spacing:.02em;color:var(--nx-muted);font-size:10px;font-weight:550}.nx-sidebar nav{flex-direction:column;flex:1;gap:5px;min-height:0;display:flex;overflow-y:auto}.nx-nav-item{min-height:53px;color:var(--nx-muted);background:0 0;border:0;border-radius:11px;flex-direction:column;justify-content:center;align-items:center;gap:5px;transition:background .16s,color .16s;display:flex;position:relative}.nx-nav-item span{font-size:11px}.nx-nav-item:hover{background:color-mix(in srgb, var(--nx-text) 6%, transparent);color:var(--nx-text)}.nx-nav-item.is-active{background:color-mix(in srgb, var(--nx-accent) 11%, transparent);color:var(--nx-accent)}.nx-nav-item.is-active:before{content:\"\";background:var(--nx-accent);border-radius:2px;width:2px;position:absolute;top:13px;bottom:13px;left:0}.nx-nav-divider{background:var(--nx-line);height:1px;margin:14px 8px}.nx-sidebar-foot{color:var(--nx-faint);justify-content:center;align-items:center;gap:6px;margin-top:auto;padding-top:26px;font-size:10px;display:flex}.nx-live-dot{background:var(--nx-accent);border-radius:50%;flex:none;width:6px;height:6px;display:inline-block}.nx-live-dot.is-offline{background:var(--nx-faint)}.nx-workspace{flex-direction:column;flex:1;min-width:0;display:flex;overflow:hidden}.nx-header{border-bottom:1px solid var(--nx-line);flex-shrink:0;justify-content:space-between;align-items:center;gap:16px;padding:22px 30px 18px;display:flex}.nx-header h1{letter-spacing:-.035em;font-size:25px;font-weight:620;line-height:1.3}.nx-header p{color:var(--nx-faint);margin-top:5px;font-size:12px}.nx-header-actions{align-items:center;gap:15px;display:flex}.nx-live-label{color:var(--nx-muted);align-items:center;gap:7px;font-size:11px;display:flex}.nx-working{color:var(--nx-muted);font-size:12px}.nx-content{flex:1;min-height:0;padding:20px 30px 30px;overflow:auto}.nx-content>*{width:100%;min-width:0;max-width:1180px;margin-inline:auto}.nx-eyebrow{color:var(--nx-faint);letter-spacing:.18em;margin-bottom:6px;font-size:9px;font-weight:600;display:block}.nx-page-enter-active,.nx-page-leave-active{transition:opacity .18s,transform .18s}.nx-page-enter-from{opacity:0;transform:translateY(6px)}.nx-page-leave-to{opacity:0;transform:translateY(-4px)}.nx-home{flex-direction:column;gap:16px;display:flex}.nx-stat-bar{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:16px;grid-template-columns:repeat(4,minmax(0,1fr));display:grid;overflow:hidden}.nx-stat{flex-direction:column;gap:5px;min-width:0;padding:15px 20px;display:flex}.nx-stat+.nx-stat{border-left:1px solid var(--nx-line)}.nx-stat>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:11px;display:flex}.nx-stat>strong{font-variant-numeric:tabular-nums;letter-spacing:-.025em;text-overflow:ellipsis;white-space:nowrap;font-size:20px;font-weight:600;overflow:hidden}.nx-stat[data-stat=download]>strong{color:var(--nx-accent)}.nx-home-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;display:grid}.nx-quick-card{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:18px;flex-direction:column;gap:15px;min-height:236px;padding:20px;transition:border-color .18s;display:flex}.nx-quick-card.is-on{border-color:color-mix(in srgb, var(--nx-accent) 34%, var(--nx-line))}.nx-quick-head{align-items:center;gap:10px;min-width:0;display:flex}.nx-quick-icon{background:var(--nx-input);width:38px;height:38px;color:var(--nx-muted);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-route-icon{background:color-mix(in srgb, var(--nx-accent) 12%, transparent);width:38px;height:38px;color:var(--nx-accent);border-radius:12px;flex:0 0 38px;place-items:center;display:grid}.nx-quick-card.is-on .nx-quick-icon{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent)}.nx-quick-title{flex:1;min-width:0}.nx-quick-title h2{font-size:14px}.nx-quick-title p{color:var(--nx-faint);margin-top:1px;font-size:10px}.nx-quick-state{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:999px;padding:3px 8px;font-size:10px}.nx-quick-state.is-live{background:color-mix(in srgb, var(--nx-accent) 14%, transparent);color:var(--nx-accent);border-color:#0000}.nx-quick-main{flex-direction:column;gap:3px;min-width:0;display:flex}.nx-quick-main>strong{letter-spacing:-.02em;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:600;overflow:hidden}.nx-quick-main>p{color:var(--nx-muted);text-overflow:ellipsis;white-space:nowrap;font-size:11px;overflow:hidden}.nx-quick-actions{align-items:center;gap:8px;margin-top:auto;display:flex}.nx-quick-actions>.nx-button:first-child{flex:1;min-height:38px}.nx-quick-link{color:var(--nx-muted);gap:3px;padding-inline:8px;font-size:11px}.nx-quick-actions--stack{flex-direction:column;align-items:stretch;gap:6px}.nx-home-download{gap:8px;min-width:0;display:flex}.nx-home-download>.nx-input{flex:1;min-width:0;min-height:38px}.nx-home-download>.nx-button{justify-content:center;width:40px;min-height:38px;padding:0}.nx-home-download+.nx-quick-link{align-self:flex-start}.nx-kicker{color:var(--nx-faint);letter-spacing:.16em;font-size:9px;font-weight:600;display:block}.nx-proxy-top{grid-template-columns:minmax(0,1.2fr) minmax(240px,.8fr);gap:14px;display:grid}.nx-subscribe-summary{flex-direction:column;align-items:flex-start;gap:13px;display:flex}.nx-subscribe-copy h3{letter-spacing:-.02em;margin-top:6px;font-size:18px;font-weight:600}.nx-subscribe-copy p{max-width:52ch;color:var(--nx-muted);margin-top:5px;font-size:12px}.nx-subscribe-summary>.nx-button{margin-top:auto}.nx-proxy-connection{flex-direction:column;gap:14px;display:flex}.nx-proxy-connection-row{align-items:center;gap:12px;display:flex}.nx-proxy-connection-row .nx-control-copy{flex:1;min-width:0}.nx-proxy-connection-row .nx-control-copy strong{font-size:14px;font-weight:600}.nx-proxy-connection-row .nx-control-copy p{color:var(--nx-muted);margin-top:3px;font-size:11px}.nx-accel-page{flex-direction:column;gap:20px;display:flex}.nx-accel-control{border:1px solid var(--nx-line);background:radial-gradient(90% 180% at 0% 50%, color-mix(in srgb, var(--nx-accent) 13%, transparent), transparent 60%), var(--nx-panel);border-radius:20px;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:0 20px;padding:26px 28px;display:grid;position:relative;overflow:hidden}.nx-accel-control.is-on{border-color:color-mix(in srgb, var(--nx-accent) 38%, var(--nx-line))}.nx-accel-orb{border:1px solid var(--nx-line);background:var(--nx-input);width:58px;height:58px;color:var(--nx-muted);border-radius:18px;flex:0 0 58px;grid-row:1/span 2;place-items:center;display:grid}.nx-accel-control.is-on .nx-accel-orb{background:var(--nx-accent);color:var(--nx-accent-ink);box-shadow:0 0 0 6px color-mix(in srgb, var(--nx-accent) 14%, transparent);border-color:#0000}.nx-accel-copy{min-width:0}.nx-accel-copy h2{letter-spacing:-.03em;margin-top:5px;font-size:28px;font-weight:650}.nx-accel-copy p{max-width:62ch;color:var(--nx-muted);margin-top:4px;font-size:12px}.nx-accel-control>.nx-button{grid-column:2;justify-self:start;margin-top:14px}.nx-button.nx-large{white-space:nowrap;min-height:46px;padding-inline:24px;font-size:14px}.nx-accel-grid{grid-template-columns:minmax(0,1.45fr) minmax(280px,.85fr);align-items:stretch;gap:20px;display:grid}.nx-accel-facts{flex-direction:column;gap:14px;display:flex}.nx-fact{border-bottom:1px solid var(--nx-line);justify-content:space-between;align-items:center;gap:16px;padding-bottom:13px;display:flex}.nx-fact>span{color:var(--nx-muted);font-size:11px}.nx-fact>strong{text-align:right;font-size:12px;font-weight:550}.nx-fact-link{color:var(--nx-accent);gap:4px;padding:0;font-size:11px}.nx-accel-facts .nx-help{margin-top:auto}.nx-accel-lower{grid-template-columns:minmax(0,1.2fr) minmax(300px,.8fr);align-items:start;gap:20px;display:grid}.nx-accel-lower.nx-single{grid-template-columns:minmax(0,1fr)}.nx-view-stack,.nx-dashboard{gap:20px;min-width:0;display:grid}.nx-dashboard-grid{grid-template-columns:minmax(0,1.75fr) minmax(218px,1fr);align-items:start;gap:20px;display:grid}.nx-dashboard-main,.nx-dashboard-side{gap:20px;min-width:0;display:grid}.nx-dashboard-hero{grid-template-columns:minmax(0,1.8fr) minmax(238px,.95fr);align-items:stretch}.nx-dashboard-tiles{grid-template-columns:minmax(0,1.35fr) minmax(185px,.82fr) minmax(190px,.9fr)}.nx-dashboard-lower{grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);align-items:start;gap:20px;display:grid}.nx-accelerate-card{flex-direction:column;display:flex}.nx-switch-row{justify-content:space-between;align-items:center;gap:16px;display:flex}.nx-switch-row strong{font-size:13px;font-weight:550}.nx-switch-row p{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:4px;font-size:11px}.nx-accelerate-card>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-accelerate-state{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:4px;font-size:12px}.nx-accelerate-card .nx-block{width:100%;min-height:44px;margin-top:15px;font-size:14px}.nx-line-card{flex-direction:column;display:flex}.nx-line-current{align-items:baseline;gap:10px;min-width:0;display:flex}.nx-line-current strong{letter-spacing:-.02em;overflow-wrap:anywhere;font-size:22px;font-weight:600}.nx-line-delay{color:var(--nx-accent);font-variant-numeric:tabular-nums;white-space:nowrap;font-size:12px}.nx-line-meta{color:var(--nx-faint);flex-wrap:wrap;gap:4px 12px;margin-top:5px;font-size:11px;display:flex}.nx-line-actions{flex-wrap:wrap;align-items:center;gap:10px;margin-top:auto;padding-top:17px;display:flex}.nx-line-select select{max-width:150px}.nx-line-actions .nx-button{margin-left:auto}.nx-line-off{flex-direction:column;align-items:flex-start;gap:12px;display:flex}.nx-line-off p{color:var(--nx-muted);font-size:12px}.nx-donut-row{align-items:center;gap:18px;display:flex}.nx-donut{border-radius:50%;flex:0 0 78px;place-items:center;width:78px;height:78px;display:grid;position:relative}.nx-donut:after{content:\"\";background:var(--nx-panel);border-radius:50%;position:absolute;inset:9px}.nx-donut span{z-index:1;color:var(--nx-muted);font-variant-numeric:tabular-nums;font-size:12px;position:relative}.nx-traffic-legend{flex-direction:column;gap:10px;min-width:0;display:flex}.nx-traffic-legend>div{flex-direction:column;gap:2px;display:flex}.nx-traffic-legend span{color:var(--nx-muted);align-items:center;gap:5px;font-size:11px;display:flex}.nx-traffic-legend strong{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;font-size:13px;font-weight:500}.nx-legend-down svg{color:var(--nx-accent)}.nx-legend-up svg{color:#8f9a94}.nx-traffic-card>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-two-columns{grid-template-columns:minmax(0,1.55fr) minmax(230px,1fr);align-items:start;gap:20px;display:grid}.nx-panel{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:16px;min-width:0;padding:20px}.nx-panel-heading{justify-content:space-between;align-items:center;gap:10px;min-height:22px;margin-bottom:16px;display:flex}.nx-panel-heading>div{min-width:0}.nx-panel-heading .nx-kicker+h2{margin-top:4px}.nx-panel-heading h2{color:var(--nx-text);align-items:center;gap:9px;display:flex}.nx-panel-heading h2>svg{color:var(--nx-muted)}.nx-section-heading{justify-content:space-between;align-items:center;gap:16px;display:flex}.nx-section-heading p{color:var(--nx-muted);margin-top:5px;font-size:12px}.nx-subtle,.nx-help{color:var(--nx-muted);font-size:12px}.nx-help{max-width:70ch;line-height:1.7}.nx-panel>.nx-help+.nx-button{margin-top:14px}.nx-empty-inline{color:var(--nx-faint);padding:20px 0 6px;font-size:12px}.nx-button{appearance:none;min-height:34px;color:var(--nx-text);white-space:nowrap;background:0 0;border:1px solid #0000;border-radius:9px;justify-content:center;align-items:center;gap:7px;padding:7px 12px;font-size:12px;font-weight:550;line-height:1.4;transition:background .15s,border-color .15s,color .15s;display:inline-flex}.nx-button svg{stroke-width:1.7px}.nx-primary{background:var(--nx-accent);color:var(--nx-accent-ink);border-color:var(--nx-accent)}.nx-primary:hover:not(:disabled){filter:brightness(.94)}.nx-primary:active:not(:disabled){filter:brightness(.88)}.nx-secondary{color:#dae8df;background:#252d29;border-color:#37463d}.nx-secondary:hover:not(:disabled){background:#303d35;border-color:#4b6053}.nx-quiet{color:var(--nx-muted);font-weight:450}.nx-quiet:hover:not(:disabled){background:color-mix(in srgb, var(--nx-text) 7%, transparent);color:var(--nx-text)}.nx-icon-button{min-width:32px;min-height:32px;padding:6px}.nx-danger-text{color:var(--nx-error)}.nx-actions{flex-wrap:wrap;align-items:center;gap:8px;display:flex}.nx-switch{border:1px solid var(--nx-line);background:var(--nx-input);border-radius:99px;flex:0 0 44px;width:44px;height:25px;padding:3px;transition:background .18s,border-color .18s;position:relative}.nx-switch>span{background:var(--nx-muted);border-radius:50%;width:17px;height:17px;transition:transform .18s,background .18s;display:block;transform:translate(0)}.nx-switch[aria-checked=true]{background:var(--nx-accent);border-color:var(--nx-accent)}.nx-switch[aria-checked=true]>span{background:#193b2a;transform:translate(18px)}.nx-switch--small{transform-origin:0;margin-right:-6px;transform:scale(.86)}.nx-notice{background:color-mix(in srgb, var(--nx-accent) 9%, var(--nx-panel));color:var(--nx-text);border:1px solid var(--nx-line);border-radius:10px;flex-shrink:0;justify-content:space-between;align-items:center;gap:12px;margin:0 30px 18px;padding:10px 12px;font-size:12px;display:flex}.nx-notice--error{color:var(--nx-error);background:#2e2023;border-color:#4b3037}.nx-notice>span{overflow-wrap:anywhere;min-width:0}.nx-notice .nx-button{color:inherit;flex-shrink:0}.nx-acceleration{background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel));align-items:center;gap:17px;padding:23px 24px;display:flex}.nx-acceleration-icon{background:color-mix(in srgb, var(--nx-accent) 10%, var(--nx-panel));width:52px;height:52px;color:var(--nx-muted);border-radius:16px;flex:0 0 52px;place-items:center;display:grid}.nx-acceleration-icon.is-on{color:var(--nx-accent);background:#294d3a}.nx-acceleration-copy{flex:1;min-width:0}.nx-acceleration-copy h2{align-items:center;gap:10px;font-size:17px;font-weight:600;display:flex}.nx-acceleration-copy p{color:var(--nx-muted);overflow-wrap:anywhere;margin-top:6px;font-size:12px}.nx-badge{border:1px solid var(--nx-line);color:var(--nx-muted);white-space:nowrap;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:450}.nx-badge.is-on{color:var(--nx-accent);background:#233a2d;border-color:#3e5c4a}.nx-acceleration>.nx-button{min-height:39px;padding-inline:16px}.nx-node-toolbar{justify-content:space-between;align-items:center;gap:12px;margin:-2px 0 10px;display:flex}.nx-optimize{white-space:nowrap;margin-left:auto}.nx-node-head-actions{align-items:center;gap:6px;display:flex}.nx-line-groups{flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px;display:flex}.nx-line-group{border:1px solid var(--nx-line);color:var(--nx-muted);background:0 0;border-radius:999px;padding:6px 12px;font-size:11px;transition:background .16s,border-color .16s,color .16s}.nx-line-group:hover{background:var(--nx-panel-hover);color:var(--nx-text)}.nx-line-group.is-active{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 10%, transparent);color:var(--nx-text)}.nx-line-groups .nx-subtle{margin-left:auto}.nx-line-list{flex-direction:column;max-height:430px;margin:0 -8px;display:flex;overflow:auto}.nx-line-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:6px;display:flex}.nx-line-row:last-child{border-bottom:0}.nx-line-choice{min-width:0;color:var(--nx-text);text-align:left;background:0 0;border:0;border-radius:10px;flex:1;align-items:center;gap:12px;padding:13px 8px;display:flex}.nx-line-choice:hover{background:var(--nx-panel-hover)}.nx-line-row.is-selected .nx-line-choice{background:color-mix(in srgb, var(--nx-accent) 7%, transparent)}.nx-line-radio{border:1px solid var(--nx-line);width:16px;height:16px;color:var(--nx-accent-ink);border-radius:50%;flex:0 0 16px;place-items:center;display:grid}.nx-line-row.is-selected .nx-line-radio{border-color:var(--nx-accent);background:var(--nx-accent)}.nx-line-name{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;font-size:13px;overflow:hidden}.nx-line-meter{background:var(--nx-line);border-radius:999px;flex:0 0 120px;width:120px;height:4px;overflow:hidden}.nx-line-meter i{border-radius:inherit;background:var(--nx-accent);height:100%;transition:width .3s;display:block}.nx-line-meter.is-mid i{background:var(--nx-warning)}.nx-line-meter.is-slow i{background:var(--nx-error)}.nx-line-meter.is-unknown i{background:var(--nx-faint)}.nx-line-ms{width:62px;color:var(--nx-muted);font-variant-numeric:tabular-nums;text-align:right;flex:0 0 62px;font-size:11px}.nx-line-refresh{opacity:.35}.nx-line-row:hover .nx-line-refresh,.nx-line-row.is-selected .nx-line-refresh{opacity:1}.nx-node-list{max-height:380px;margin-inline:-8px;overflow:auto}.nx-node-list--compact{max-height:206px}.nx-node{border-radius:9px;align-items:center;min-width:0;display:flex}.nx-node:hover{background:color-mix(in srgb, var(--nx-text) 4%, transparent)}.nx-node.is-selected{background:#25352b}.nx-node-choice{text-align:left;width:100%;min-width:0;min-height:43px;color:var(--nx-text);background:0 0;border:0;border-radius:9px;align-items:center;gap:11px;padding:10px 9px;display:flex}.nx-node-name{text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:13px;overflow:hidden}.nx-node-delay{color:var(--nx-faint);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11px}.is-selected .nx-node-delay{color:#91b69e}.nx-radio-mark{border:1px solid #4d5a52;border-radius:50%;flex-shrink:0;place-items:center;width:16px;height:16px;display:grid}.is-selected .nx-radio-mark{background:var(--nx-accent);border-color:var(--nx-accent);color:var(--nx-accent-ink)}.nx-node-search{margin-bottom:10px}.nx-add-profile{margin-top:13px;padding-inline:4px;font-size:11px}.nx-select-wrap{align-items:center;gap:6px;min-width:0;display:flex;position:relative}.nx-select-wrap select{appearance:none;color:var(--nx-text);outline-offset:3px;cursor:pointer;background:0 0;border:0;max-width:220px;padding:1px 20px 1px 0;font-size:12px}.nx-select-wrap svg{pointer-events:none;color:var(--nx-faint);position:absolute;right:0}.nx-select-wrap option{background:var(--nx-panel);color:var(--nx-text)}.nx-speed{flex-direction:column;padding-bottom:15px;display:flex}.nx-speed-values{flex-wrap:wrap;gap:30px;margin-top:3px;display:flex}.nx-speed-values>span{align-items:center;gap:7px;min-width:0;display:flex}.nx-speed-values strong{letter-spacing:-.025em;font-variant-numeric:tabular-nums;font-size:19px;font-weight:550}.nx-speed-values small{color:var(--nx-faint);padding-top:4px;font-size:10px}.nx-speed-values>span:first-child>svg{color:var(--nx-accent)}.nx-speed-values>span:nth-child(2)>svg{color:var(--blue,#a2b8c6)}.nx-plot{min-height:153px;color:var(--nx-accent);flex:1;margin:17px -6px 0}.nx-plot>svg{width:100%;height:100%;overflow:visible}.nx-chart-grid{stroke:var(--nx-line);stroke-width:1px;fill:none;vector-effect:non-scaling-stroke}.nx-chart-area{stroke:none}.nx-chart-download{stroke:var(--nx-accent);stroke-width:2px;stroke-linejoin:round;stroke-linecap:round;fill:none;vector-effect:non-scaling-stroke}.nx-chart-upload{stroke:var(--blue,#8a9ca5);stroke-width:1.5px;stroke-dasharray:4 5;fill:none;vector-effect:non-scaling-stroke;opacity:.65}.nx-chart-axis{color:var(--nx-faint);justify-content:space-between;gap:10px;margin-top:8px;font-size:10px;display:flex}.nx-chart-wait{height:100%;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:6px;font-size:12px;display:flex}.nx-chart-wait small{color:var(--nx-faint);font-size:11px}.nx-mode-options{flex-direction:column;gap:5px;display:flex}.nx-mode{width:100%;color:var(--nx-muted);text-align:left;background:0 0;border:1px solid #0000;border-radius:10px;align-items:center;gap:11px;min-width:0;padding:10px 8px;display:flex}.nx-mode:hover:not(:disabled){background:var(--nx-line)}.nx-mode[aria-checked=true]{color:var(--nx-text);background:#28372d;border-color:#3d5143}.nx-mode>span:nth-child(2){flex:1;gap:3px;min-width:0;display:grid}.nx-mode strong{font-size:12px;font-weight:550}.nx-mode small{color:var(--nx-faint);font-size:10px;line-height:1.5}.nx-mode-dot{border:1px solid #5c6c61;border-radius:50%;flex-shrink:0;width:13px;height:13px}.nx-mode[aria-checked=true] .nx-mode-dot{border:4px solid var(--nx-accent)}.nx-modes>.nx-help{margin-top:10px;font-size:11px}.nx-local-info>strong{color:var(--nx-muted);font-size:12px;font-weight:500}.nx-address{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;letter-spacing:-.015em;margin:7px 0 10px;font-size:18px;font-weight:500}.nx-local-info>.nx-button{padding-left:0;font-size:11px}.nx-total>div:not(.nx-panel-heading){justify-content:space-between;align-items:center;gap:12px;margin-top:11px;display:flex}.nx-total>div>span{color:var(--nx-muted);align-items:center;gap:6px;font-size:12px;display:flex}.nx-total strong{font-variant-numeric:tabular-nums;font-size:14px;font-weight:500}.nx-total>.nx-help{color:var(--nx-faint);margin-top:15px;font-size:10px}.nx-input{border:1px solid var(--nx-line);background:var(--nx-input);width:100%;min-width:0;min-height:38px;color:var(--nx-text);accent-color:var(--nx-accent);border-radius:9px;padding:9px 12px;font-size:12px;line-height:1.5}.nx-input::placeholder{color:#839188;opacity:1}.nx-input option{background:var(--nx-panel);color:var(--nx-text)}.nx-inline-form{align-items:center;gap:10px;min-width:0;display:flex}.nx-inline-form>.nx-input{flex:1}.nx-inline-form>.nx-button{flex-shrink:0;min-height:38px}.nx-input-with-icon,.nx-input-with-action{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-input-with-icon>svg{color:var(--nx-faint);pointer-events:none;position:absolute;left:12px}.nx-input-with-icon>.nx-input{padding-left:38px}.nx-input-with-action>.nx-input{padding-right:42px}.nx-input-with-action>.nx-button{position:absolute;right:4px}.nx-fit-select{min-width:100px;flex:0 auto!important;width:auto!important}.nx-form{gap:15px;display:grid}.nx-form>.nx-button{justify-self:start}.nx-form-grid{grid-template-columns:1fr 1fr;gap:16px;display:grid}.nx-form-grid>label{gap:7px;min-width:0;display:grid}.nx-form-grid>label>span{color:var(--nx-muted);font-size:12px}.nx-code{resize:vertical;font-family:Cascadia Code,Consolas,monospace;font-size:12px;line-height:1.7}.nx-import>.nx-help{margin-bottom:13px}.nx-import-options{flex-wrap:wrap;gap:14px;margin-top:8px;display:flex}.nx-import-options>.nx-button{padding-left:0;font-size:11px}.nx-import>.nx-form{margin-top:12px}.nx-import-running{justify-content:space-between;align-items:center;gap:12px;margin-top:14px;display:flex}.nx-import-running .nx-button{font-size:11px}.nx-import>.nx-help:last-child{margin-top:12px;margin-bottom:0}.nx-site-shortcuts{flex-wrap:wrap;align-items:center;gap:4px;margin-top:8px;display:flex}.nx-site-shortcuts>span{color:var(--nx-faint);margin-right:4px;font-size:10px}.nx-site-shortcuts .nx-button{min-height:27px;padding:4px 6px;font-size:10px}.nx-recent{padding:18px 20px}.nx-recent>.nx-section-heading{margin-bottom:9px}.nx-event{border-bottom:1px solid #252e28;align-items:center;gap:11px;padding:11px 0;font-size:12px;display:flex}.nx-event>svg{color:var(--nx-faint)}.nx-event>span{overflow-wrap:anywhere;flex:1;min-width:0}.nx-event>time{color:var(--nx-faint);white-space:nowrap;font-size:10px}.nx-event:last-child{border-bottom:0;padding-bottom:0}.nx-empty{text-align:center;color:var(--nx-faint);flex-direction:column;justify-content:center;align-items:center;gap:11px;padding:52px 20px;display:flex}.nx-empty>svg{color:#83968a;margin-bottom:3px}.nx-empty>strong{color:var(--nx-text);font-size:14px;font-weight:500}.nx-empty>p{max-width:35ch;color:var(--nx-muted);font-size:12px;line-height:1.7}.nx-empty>.nx-button{margin-top:5px}.nx-empty--small{padding:27px 10px}.nx-empty--small strong{font-size:12px}.nx-empty--small p{font-size:11px}.nx-control-row{align-items:center;gap:15px;display:flex}.nx-control-row--plain{padding:0}.nx-control-icon{color:#bfd0c4;background:#28322b;border-radius:11px;flex:0 0 40px;place-items:center;width:40px;height:40px;display:grid}.nx-control-copy{flex:1;min-width:0}.nx-control-copy strong{font-size:13px;font-weight:550}.nx-control-copy p{color:var(--nx-muted);margin-top:4px;font-size:11px;line-height:1.6}.nx-settings-fold{padding-top:3px}.nx-settings-fold>.nx-panel{margin-top:12px}.nx-detail-list{max-width:650px;margin:12px 0}.nx-detail-list>div{border-bottom:1px solid var(--nx-line);color:var(--nx-muted);justify-content:space-between;gap:15px;padding:10px 0;font-size:12px;display:flex}.nx-detail-list>div>span:last-child{align-items:center;gap:5px;display:flex}.nx-detail-list code{color:var(--nx-text);font-size:11px}.nx-download-composer>.nx-inline-form{margin-bottom:5px}.nx-download-stats{border:1px solid var(--nx-line);background:var(--nx-panel);border-radius:14px;grid-template-columns:repeat(3,minmax(0,1fr));display:grid;overflow:hidden}.nx-download-stats>div{justify-content:space-between;align-items:baseline;gap:10px;padding:12px 18px;display:flex}.nx-download-stats>div+div{border-left:1px solid var(--nx-line)}.nx-download-stats span{color:var(--nx-muted);font-size:11px}.nx-download-stats strong{font-variant-numeric:tabular-nums;font-size:15px;font-weight:600}.nx-download-composer.is-dragging{border-color:color-mix(in srgb, var(--nx-accent) 55%, var(--nx-line));background:color-mix(in srgb, var(--nx-accent) 7%, var(--nx-panel))}.nx-download-options{flex-wrap:wrap;gap:8px 18px;margin:9px 0 4px;display:flex}.nx-download-options>label{color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-download-options select{border:1px solid var(--nx-line);background:var(--nx-input);min-height:30px;color:var(--nx-text);border-radius:8px;padding:4px 8px;font-size:11px}.nx-options-button{padding-left:0;font-size:11px}.nx-download-composer>.nx-form-grid{padding-top:13px}.nx-checkbox{align-self:end;align-items:center;min-height:38px;gap:8px!important;display:flex!important}.nx-checkbox>input{accent-color:var(--nx-accent)}.nx-list-toolbar{justify-content:space-between;align-items:center;gap:12px;display:flex}.nx-filter-tabs{align-items:center;gap:5px;display:flex}.nx-filter-tabs>button{min-height:32px;color:var(--nx-muted);background:0 0;border:0;border-radius:8px;align-items:center;gap:7px;padding:6px 10px;font-size:12px;display:flex}.nx-filter-tabs>button.active{color:var(--nx-text);background:#29332c}.nx-filter-tabs>button:hover{background:#242e27}.nx-filter-tabs>button>span{color:var(--nx-faint);font-size:10px}.nx-task-list{padding:0 20px}.nx-download-row{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr) auto;align-items:center;column-gap:15px;padding:23px 0;display:grid}.nx-download-row:last-child{border-bottom:0}.nx-file-icon{color:#b3d5bd;background:#29352c;border-radius:10px;place-items:center;width:40px;height:45px;display:grid}.nx-download-body{min-width:0}.nx-task-title{justify-content:space-between;align-items:baseline;gap:12px;min-width:0;display:flex}.nx-task-title>strong{text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;overflow:hidden}.nx-task-title>span{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-progress-track{background:#313b34;border-radius:99px;height:4px;margin:10px 0 8px;overflow:hidden}.nx-progress-track>span{background:var(--nx-accent);border-radius:inherit;height:100%;transition:width .25s;display:block}.nx-task-meta{color:var(--nx-faint);font-variant-numeric:tabular-nums;flex-wrap:wrap;justify-content:space-between;gap:10px;font-size:10px;display:flex}.nx-meta-divider{color:var(--nx-faint);margin-inline:6px}.nx-task-controls{align-items:center;gap:5px;display:flex}.nx-task-details{grid-column:2/-1;gap:13px;padding:17px 0 0;display:grid}.nx-task-details>.nx-subtle{overflow-wrap:anywhere;font-size:11px}.nx-small-select{color:var(--nx-muted);align-items:center;gap:8px;font-size:11px;display:flex}.nx-small-select select{background:var(--nx-input);border:1px solid var(--nx-line);min-height:30px;color:var(--nx-text);border-radius:7px;padding:4px 7px}.nx-state-error{color:var(--nx-error)!important}.nx-diagnose-start{text-align:center;padding:30px 28px 23px}.nx-diagnose-symbol{width:49px;height:49px;color:var(--nx-accent);background:#2a3d30;border-radius:15px;place-items:center;margin:0 auto 15px;display:grid}.nx-diagnose-start>h2{letter-spacing:-.025em;font-size:19px;font-weight:550}.nx-diagnose-start>p{color:var(--nx-muted);margin-top:7px;font-size:12px}.nx-diagnose-start>.nx-inline-form{max-width:580px;margin:22px auto 0}.nx-diagnose-options{color:var(--nx-muted);flex-wrap:wrap;justify-content:center;align-items:center;gap:20px;margin-top:17px;font-size:11px;display:flex}.nx-diagnose-options>label{cursor:pointer;align-items:center;gap:5px;display:flex}.nx-diagnose-options input{accent-color:var(--nx-accent);width:12px;height:12px;margin:0}.nx-report-heading{align-items:center;gap:14px;margin-bottom:20px;display:flex}.nx-result-icon{width:44px;height:44px;color:var(--nx-accent);background:#273f2f;border-radius:13px;place-items:center;display:grid}.nx-result-icon.is-failure{color:var(--nx-warning);background:#3c3324}.nx-report-heading h2{font-size:16px}.nx-report-heading p{color:var(--nx-muted);margin-top:4px;font-size:11px}.nx-check-list{gap:0;display:grid}.nx-check-row{border-bottom:1px solid var(--nx-line);grid-template-columns:20px minmax(0,1fr) auto 66px;align-items:center;gap:11px;min-height:47px;display:grid}.nx-check-row:last-child{border-bottom:0}.nx-check-status{width:18px;height:18px;color:var(--nx-accent);border:1px solid #3f5b49;border-radius:50%;place-items:center;display:grid}.nx-check-status.is-failure{color:var(--nx-error);border-color:#70504d}.nx-check-row strong{font-size:12px;font-weight:450}.nx-check-row>span:not(.nx-check-status){color:var(--nx-muted);font-size:11px}.nx-check-row time{color:var(--nx-faint);text-align:right;font-variant-numeric:tabular-nums;font-size:11px}.nx-report-advice{color:var(--nx-muted);font-size:12px;line-height:1.8;margin-top:17px!important}.nx-report-detail-button{margin-top:10px;padding-left:0;font-size:11px}.nx-check-evidence{gap:14px;margin-top:10px;display:grid}.nx-check-evidence>div{background:var(--nx-input);border-radius:9px;min-width:0;padding:12px}.nx-check-evidence strong{color:var(--nx-muted);font-size:11px;font-weight:500}.nx-check-evidence p{overflow-wrap:anywhere;white-space:pre-wrap;color:var(--nx-faint);margin-top:6px;font-size:11px;line-height:1.7}.nx-history>.nx-section-heading{padding-bottom:10px}.nx-history-row{border:0;border-bottom:1px solid var(--nx-line);text-align:left;width:100%;color:var(--nx-text);background:0 0;align-items:center;gap:12px;padding:13px 2px;display:flex}.nx-history-row:hover{background:color-mix(in srgb, var(--nx-text) 3%, transparent)}.nx-history-row>strong{text-overflow:ellipsis;flex:1;min-width:0;font-size:12px;font-weight:500;overflow:hidden}.nx-history-row>span:not(.nx-history-result),.nx-history-row>time{color:var(--nx-faint);font-size:10px}.nx-history-result{color:var(--nx-accent)}.nx-history-result.is-failure{color:var(--nx-warning)}.nx-diagnose-empty{padding-block:28px;font-size:12px}.nx-diagnose-pending>p{color:var(--nx-muted);margin-block:15px;font-size:12px}.nx-skeleton{background:linear-gradient(100deg, var(--nx-line) 20%, #303b33 45%, var(--nx-line) 70%);background-size:220% 100%;border-radius:8px;animation:1.6s infinite nx-loading-sheen}.nx-skeleton-title{width:180px;height:15px}.nx-skeleton-row{width:100%;height:35px;margin-block:10px}.nx-loading-banner{height:100px}.nx-loading-grid{grid-template-columns:1.7fr 1fr;gap:20px;margin-top:20px;display:grid}.nx-loading-chart{height:250px}.nx-loading>p{color:var(--nx-muted);margin-top:18px;font-size:12px}.nx-loading>.nx-button{margin-top:14px}.nx-interface-list{padding-block:0}.nx-interface{border-bottom:1px solid var(--nx-line);grid-template-columns:40px minmax(0,1fr);gap:16px;padding:22px 0;display:grid}.nx-interface:last-child{border:0}.nx-interface strong{font-size:13px;font-weight:500}.nx-interface dl{gap:7px;margin:10px 0 0;display:grid}.nx-interface dl>div{gap:18px;min-width:0;font-size:11px;display:flex}.nx-interface dt{min-width:52px;color:var(--nx-faint)}.nx-interface dd{color:var(--nx-muted);overflow-wrap:anywhere;margin:0}.nx-query-result{border-top:1px solid var(--nx-line);padding-top:14px}.nx-query-address{font-variant-numeric:tabular-nums;margin-top:8px;font-size:13px}.nx-rule-row{grid-template-columns:minmax(0,1fr) minmax(100px,.65fr) 30px;gap:8px;display:grid}.nx-table-panel{padding:0;overflow:hidden}.nx-table-scroll{max-width:100%;overflow:auto}.nx-table{border-collapse:collapse;white-space:nowrap;text-align:left;width:100%;font-size:12px}.nx-table th{color:var(--nx-faint);border-bottom:1px solid var(--nx-line);padding:13px 17px;font-size:10px;font-weight:450}.nx-table td{color:var(--nx-muted);border-bottom:1px solid #29312c;padding:14px 17px}.nx-table tr:last-child td{border-bottom:0}.nx-table td strong{color:var(--nx-text);text-overflow:ellipsis;max-width:180px;font-size:12px;font-weight:500;display:block;overflow:hidden}.nx-table td small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-table tbody tr:hover{background:#202822}.nx-table .nx-data-cell{font-variant-numeric:tabular-nums;font-size:11px}.nx-protocol{color:var(--nx-faint);border:1px solid #39433c;border-radius:4px;padding:2px 5px;font-size:10px}.nx-connection-state{color:var(--nx-faint);font-size:11px}.nx-connection-state.is-live{color:#9bc9ac}.nx-table-loading{padding:10px 18px}.nx-load-more{border-top:1px solid var(--nx-line);border-radius:0;width:100%;min-height:39px;font-size:11px}.nx-application-actions{grid-template-columns:1fr 1fr;gap:24px;padding-block:8px;display:grid}.nx-application-actions p{color:var(--nx-muted);margin:6px 0 13px;font-size:11px}.nx-transaction-list>.nx-panel-heading{margin-bottom:5px}.nx-transaction{border-bottom:1px solid var(--nx-line);align-items:center;gap:13px;padding:16px 0;display:flex}.nx-transaction:last-child{border-bottom:0}.nx-transaction-icon{color:var(--nx-faint)}.nx-transaction>div{overflow-wrap:anywhere;flex:1;min-width:0}.nx-transaction strong{font-size:12px;font-weight:500}.nx-transaction p,.nx-transaction small{color:var(--nx-faint);margin-top:3px;font-size:10px;display:block}.nx-status-text{color:var(--nx-muted);white-space:nowrap;font-size:10px}.nx-status-text.is-warning{color:var(--nx-warning)}.nx-schedule-form{margin-top:15px}.nx-schedule-row{border-bottom:1px solid var(--nx-line);align-items:center;gap:12px;padding:15px 0;display:flex}.nx-schedule-row:last-child{border-bottom:0}.nx-schedule-row>div{flex:1;min-width:0}.nx-schedule-row strong{overflow-wrap:anywhere;font-size:12px;font-weight:500}.nx-schedule-row small{color:var(--nx-faint);margin-top:4px;font-size:10px;display:block}.nx-settings-rows{padding-block:0}.nx-settings-rows>div{border-bottom:1px solid var(--nx-line);justify-content:space-between;align-items:center;gap:24px;padding:20px 0;display:flex}.nx-settings-rows>div:last-child{border:0}.nx-settings-rows strong{font-size:12px;font-weight:500;display:block}.nx-settings-rows small{color:var(--nx-muted);margin-top:5px;font-size:11px;display:block}.nx-host .plugin-page-instance{height:100%}.nx-quick-app{--nx-text:var(--theme-backdrop-text,var(--theme-main-text,#e8eeeb));--nx-muted:color-mix(in srgb, var(--nx-text) 60%, transparent);--nx-faint:color-mix(in srgb, var(--nx-text) 40%, transparent);--nx-line:color-mix(in srgb, var(--nx-text) 11%, transparent);--nx-accent:var(--green,#8ae6bf);--nx-accent-ink:color-mix(in srgb, var(--green,#8ae6bf) 18%, #000);--nx-panel:transparent;--nx-panel-hover:color-mix(in srgb, var(--nx-text) 7%, transparent);--nx-input:color-mix(in srgb, var(--nx-text) 5%, transparent);background:0 0;border:0;border-radius:0;width:100%;max-width:100%;height:auto;min-height:0;padding:0;display:block;overflow:visible}.nx-pill-list{flex-direction:column;gap:8px;display:flex}.nx-quick-pill{border:1px solid color-mix(in srgb, var(--nx-text) 9%, transparent);background:color-mix(in srgb, var(--nx-text) 4%, transparent);width:100%;min-height:46px;box-shadow:inset 0 1px 0 color-mix(in srgb, var(--nx-text) 5%, transparent);color:var(--nx-text);border-radius:999px;align-items:center;gap:8px;padding:6px 8px 6px 10px;transition:border-color .16s,background .16s;display:flex}.nx-quick-pill:focus-within{border-color:color-mix(in srgb, var(--nx-accent) 42%, var(--nx-line))}.nx-quick-pill.is-on{border-color:color-mix(in srgb, var(--nx-accent) 30%, transparent);background:color-mix(in srgb, var(--nx-accent) 6%, transparent)}.nx-pill-icon{background:color-mix(in srgb, var(--nx-text) 6%, transparent);width:30px;height:30px;color:var(--nx-muted);border-radius:50%;flex:0 0 30px;place-items:center;display:grid}.nx-quick-pill.is-on .nx-pill-icon{background:color-mix(in srgb, var(--nx-accent) 13%, transparent);color:var(--nx-accent)}.nx-pill-value{min-width:0;color:var(--nx-muted);font-variant-numeric:tabular-nums;letter-spacing:-.01em;flex:1;font-size:11px}.nx-pill-value.is-live{color:var(--nx-accent)}.nx-mini-action{border:1px solid var(--nx-line);width:32px;height:32px;color:var(--nx-muted);background:0 0;border-radius:50%;flex:0 0 32px;place-items:center;padding:0;transition:border-color .16s,background .16s,color .16s;display:grid}.nx-mini-action:hover:not(:disabled){border-color:color-mix(in srgb, var(--nx-accent) 36%, var(--nx-line));color:var(--nx-text)}.nx-mini-action.is-on,.nx-mini-action.is-ready{background:var(--nx-accent);color:var(--nx-accent-ink);border-color:#0000}.nx-mini-action:disabled{opacity:.38}.nx-node-wrap{flex:1;align-items:center;min-width:0;display:flex;position:relative}.nx-node-select{width:100%;min-width:0;height:32px;color:var(--nx-text);text-overflow:ellipsis;appearance:none;cursor:pointer;background:0 0;border:0;padding:0 18px 0 2px;font-size:11px}.nx-node-select:focus{outline:none}.nx-chevron{color:var(--nx-faint);pointer-events:none;position:absolute;right:2px}.nx-download-form{flex:1;align-items:center;gap:6px;min-width:0;display:flex}.nx-download-form>input{min-width:0;height:32px;color:var(--nx-text);background:0 0;border:0;outline:none;flex:1;padding:0 2px;font-size:11px}.nx-download-form>input::placeholder{color:var(--nx-faint)}.nx-quick-error,.nx-quick-note{overflow-wrap:anywhere;font-size:10px;line-height:1.5;margin:8px 4px 0!important}.nx-quick-error{color:var(--nx-error)}.nx-quick-note{color:var(--nx-accent)}@keyframes nx-loading-sheen{to{background-position:-220% 0}}@container nx-shell (width<=850px){.nx-sidebar{flex-basis:76px;width:76px;padding-inline:9px}.nx-header{padding:23px 22px 20px}.nx-content{padding:0 22px 24px}.nx-notice{margin-inline:22px}.nx-panel{padding:17px}.nx-dashboard-grid{grid-template-columns:minmax(0,1.65fr) minmax(205px,1fr);gap:16px}.nx-dashboard-hero{grid-template-columns:minmax(0,1.5fr) minmax(210px,1fr)}.nx-dashboard-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-dashboard-lower{grid-template-columns:minmax(0,1fr)}.nx-stat-bar{grid-template-columns:repeat(2,minmax(0,1fr))}.nx-stat:nth-child(3){border-top:1px solid var(--nx-line);border-left:0}.nx-stat:nth-child(4){border-top:1px solid var(--nx-line)}.nx-home-grid{grid-template-columns:minmax(0,1fr)}.nx-quick-card{min-height:0}.nx-proxy-top{grid-template-columns:minmax(0,1fr)}.nx-accel-control{grid-template-columns:auto minmax(0,1fr)}.nx-accel-control>.nx-button{grid-column:1/-1;width:100%}.nx-accel-grid,.nx-accel-lower{grid-template-columns:minmax(0,1fr)}.nx-dashboard-main,.nx-dashboard-side{gap:16px}.nx-acceleration{gap:13px;padding:19px 20px}.nx-acceleration-copy h2{font-size:16px}.nx-acceleration-icon{border-radius:13px;flex-basis:44px;width:44px;height:44px}.nx-speed-values{gap:19px}.nx-speed-values strong{font-size:17px}.nx-speed-values small{display:none}.nx-two-columns{grid-template-columns:minmax(0,1.4fr) minmax(205px,1fr);gap:16px}.nx-task-list{padding-block:0}.nx-task-meta{font-size:10px}.nx-total strong{font-size:13px}}@container nx-shell (width<=680px){.nx-dashboard-grid,.nx-two-columns{grid-template-columns:minmax(0,1fr)}.nx-line-meter{display:none}.nx-download-stats{grid-template-columns:minmax(0,1fr)}.nx-download-stats>div+div{border-top:1px solid var(--nx-line);border-left:0}.nx-dashboard-side{grid-template-columns:1fr 1fr;display:grid}.nx-dashboard-side>.nx-modes{grid-column:1/-1}.nx-dashboard-side .nx-mode-options{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;display:grid}.nx-dashboard-side .nx-mode{align-items:flex-start;gap:7px;padding:10px 8px}.nx-dashboard-side .nx-mode>svg{display:none}.nx-dashboard-side .nx-mode-dot{width:12px;height:12px;margin-top:2px}.nx-mode small{font-size:10px}.nx-acceleration-copy p{font-size:11px}.nx-acceleration>.nx-button{padding-inline:12px;font-size:11px}.nx-section-heading{gap:10px}.nx-section-heading p{font-size:11px}.nx-form-grid{grid-template-columns:1fr}.nx-application-actions{grid-template-columns:1fr;gap:22px}.nx-plot{height:160px}.nx-node-list--compact{max-height:190px}}@container nx-shell (width<=520px){.nx-sidebar{flex-basis:59px;width:59px;padding:18px 6px 12px}.nx-brand{padding-bottom:18px}.nx-brand span{display:none}.nx-nav-item{border-radius:9px;gap:4px;min-height:47px}.nx-nav-item span{font-size:10px}.nx-nav-item svg{width:18px;height:18px}.nx-nav-divider{margin-block:11px}.nx-sidebar-foot>span:last-child{display:none}.nx-header{padding:20px 16px 18px}.nx-header h1{font-size:23px}.nx-header p{font-size:11px}.nx-content{padding:0 16px 22px}.nx-notice{margin:0 16px 14px}.nx-header-actions{gap:5px}.nx-live-label{font-size:10px}.nx-live-label>.nx-live-dot{display:none}.nx-acceleration{flex-wrap:wrap;gap:12px;padding:17px}.nx-acceleration-copy{min-width:130px}.nx-acceleration-copy h2{gap:7px}.nx-acceleration>.nx-button{min-height:34px;margin-left:56px}.nx-acceleration-icon{flex-basis:42px;width:42px;height:42px}.nx-panel{padding:16px}.nx-dashboard,.nx-view-stack{gap:16px}.nx-dashboard-side{grid-template-columns:minmax(0,1fr)}.nx-dashboard-side>.nx-modes{grid-column:auto}.nx-dashboard-side .nx-mode-options{display:flex}.nx-dashboard-side .nx-mode>svg{display:block}.nx-dashboard-side .nx-mode{align-items:center}.nx-plot{height:140px}.nx-speed-values{gap:23px}.nx-speed-values strong{font-size:16px}.nx-inline-form{gap:8px}.nx-inline-form>.nx-button{padding-inline:10px;font-size:11px}.nx-inline-form .nx-fit-select{min-width:82px;font-size:11px}.nx-site-shortcuts{gap:1px}.nx-site-shortcuts>span{width:100%;margin-bottom:3px}.nx-download-row{grid-template-columns:28px minmax(0,1fr) auto;gap:10px;padding-block:19px}.nx-file-icon{border-radius:8px;width:28px;height:35px}.nx-file-icon>svg{width:17px}.nx-task-title{flex-direction:column;align-items:flex-start;gap:3px}.nx-task-title>strong{max-width:100%;font-size:12px}.nx-task-title>span{font-size:9px}.nx-task-controls{gap:1px}.nx-task-controls>.nx-icon-button{min-width:27px;padding:4px}.nx-task-meta{gap:4px;font-size:9px}.nx-task-meta>span{width:100%}.nx-task-details{grid-column:1/-1;padding-top:14px}.nx-filter-tabs>button{padding-inline:8px;font-size:11px}.nx-task-list{padding-block:0}.nx-diagnose-start{padding:24px 16px 18px}.nx-diagnose-start>h2{font-size:17px}.nx-diagnose-start>.nx-inline-form{margin-top:18px}.nx-diagnose-options{gap:12px;font-size:10px}.nx-check-row{grid-template-columns:18px minmax(0,1fr) auto 47px;gap:8px}.nx-check-row strong{font-size:11px}.nx-check-row time{font-size:10px}.nx-history-row{gap:9px}.nx-history-row>span:not(.nx-history-result){display:none}.nx-history-row>time{font-size:9px}.nx-section-heading>div{min-width:0}.nx-section-heading h2{font-size:13px}.nx-section-heading>.nx-button{padding-inline:9px;font-size:11px}.nx-schedule-form{flex-wrap:wrap}.nx-schedule-form>.nx-input:first-child{flex-basis:100%}.nx-schedule-row{gap:8px}.nx-schedule-row>.nx-button:not(.nx-icon-button){padding-inline:5px;font-size:10px}.nx-schedule-row strong{font-size:11px}.nx-settings-rows>div{gap:12px}.nx-settings-rows small{font-size:10px}.nx-event{gap:8px;font-size:11px}.nx-event>time{font-size:9px}.nx-rule-row{grid-template-columns:minmax(0,1fr) 96px 24px;gap:5px}.nx-rule-row .nx-input{padding-inline:8px;font-size:11px}.nx-loading-grid{grid-template-columns:1fr}.nx-loading-grid>.nx-skeleton:last-child{display:none}}@media (prefers-reduced-motion:reduce){.nx-app *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}";
 //#endregion
 //#region ../src/lamtools_core/plugins/bundled/network-exploration/ui/src/page.mjs
-function ep(e, t) {
-	if (t.addStyle) return t.addStyle($f);
+function Qf(e, t) {
+	if (t.addStyle) return t.addStyle(Zf);
 	let n = e.ownerDocument, r = n.createElement("style");
-	return r.nonce = n.querySelector("style[nonce]")?.nonce || "", r.dataset.networkPluginStyle = "true", r.textContent = $f, n.head.append(r), () => r.remove();
+	return r.nonce = n.querySelector("style[nonce]")?.nonce || "", r.dataset.networkPluginStyle = "true", r.textContent = Zf, n.head.append(r), () => r.remove();
 }
-function tp(e, t) {
-	return rp(e, t, If);
+function $f(e, t) {
+	return tp(e, t, Pf);
 }
-function np(e, t) {
-	return rp(e, t, Qf);
+function ep(e, t) {
+	return tp(e, t, Xf);
 }
-function rp(e, t, n) {
-	let r = ep(e, t), i = !1, a = document.createElement("div");
-	a.className = n === Qf ? "nx-mount nx-mount--quick" : "nx-mount", e.append(a), ip++;
+function tp(e, t, n) {
+	let r = Qf(e, t), i = !1, a = document.createElement("div");
+	a.className = n === Xf ? "nx-mount nx-mount--quick" : "nx-mount", e.append(a), np++;
 	let o = e.closest(".split-plugin-page");
 	o?.classList.add("nx-host");
 	let s = e.closest(".workspace-main");
 	s?.classList.add("nx-plugin-full");
 	let c = is(n, { context: t });
-	c.config.idPrefix = `network-${ip}`;
+	c.config.idPrefix = `network-${np}`;
 	let l = () => {
 		i || (i = !0, t.signal?.removeEventListener("abort", l), c.unmount(), r(), a.remove(), o?.classList.remove("nx-host"), s?.classList.remove("nx-plugin-full"));
 	};
@@ -5733,6 +5709,6 @@ function rp(e, t, n) {
 	}
 	return t.signal?.addEventListener("abort", l, { once: !0 }), l;
 }
-var ip = 0;
+var np = 0;
 //#endregion
-export { tp as mount, np as mountQuick };
+export { $f as mount, ep as mountQuick };

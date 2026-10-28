@@ -14,6 +14,10 @@ from ..queue_state import latest_active_turn_id
 from .context import CoreLiveContext, CoreLiveOperationOutcome
 
 
+# user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(同一代次的重复终止共用收尾任务，避免堆积数据库等待和会话副本)。
+_CANCEL_FINALIZERS: dict[tuple[Any, ...], asyncio.Task[None]] = {}
+
+
 async def handle_turn_cancel_operation(
     *,
     request_id: int | str | None,
@@ -35,6 +39,18 @@ async def handle_turn_cancel_operation(
     requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
     registry = context.host.runtime_task_registry
     live_turn_id = registry.active_run_id(thread_id) or ""
+    active_turn = getattr(registry, "active_turn_id", None)
+    logical_turn_id = (active_turn(thread_id) if callable(active_turn) else "") or live_turn_id
+    if requested_turn_id and live_turn_id and requested_turn_id != logical_turn_id:
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, {
+            "status": "stale_target", "current_turn_id": logical_turn_id, "event": None,
+        }))
+    generation_getter = getattr(registry, "control_generation", None)
+    generation = generation_getter(thread_id) if callable(generation_getter) else None
+    key = (registry, thread_id, requested_turn_id or logical_turn_id, generation, terminate)
+    existing = _CANCEL_FINALIZERS.get(key)
+    if existing is not None and not existing.done():
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, {"status": "cancelling", "event": None}))
     # Interrupt provider I/O before any persistence work.  Previously the
     # task was cancelled only after append_batch/load completed, which made
     # Stop appear inert for several seconds under write contention.
@@ -43,7 +59,7 @@ async def handle_turn_cancel_operation(
     if (
         callable(request_cancel)
         and live_turn_id
-        and (not requested_turn_id or requested_turn_id == live_turn_id)
+        and (not requested_turn_id or requested_turn_id == logical_turn_id)
     ):
         preempted_live_task = request_cancel(
             thread_id,
@@ -57,21 +73,29 @@ async def handle_turn_cancel_operation(
     # interrupt for minutes and the UI timed out (30s transport limit) while
     # the turn was in fact being torn down.
     matched_live = bool(live_turn_id) and (
-        not requested_turn_id or requested_turn_id == live_turn_id
+        not requested_turn_id or requested_turn_id == logical_turn_id
     )
-    _spawn_live_background(
+    finalizer = _spawn_live_background(
         _turn_cancel_finalizer(
             context=context,
             thread_id=thread_id,
-            requested_turn_id=requested_turn_id,
+            requested_turn_id=requested_turn_id or logical_turn_id,
             expected_revision=expected_revision,
             live_turn_id=live_turn_id,
             preempted_live_task=preempted_live_task,
             terminate=terminate,
+            generation=generation,
         ),
         label="turn-cancel-finalizer",
         thread_id=thread_id,
     )
+    _CANCEL_FINALIZERS[key] = finalizer
+
+    def forget(done: asyncio.Task[None]) -> None:
+        if _CANCEL_FINALIZERS.get(key) is done:
+            _CANCEL_FINALIZERS.pop(key, None)
+
+    finalizer.add_done_callback(forget)
     status = "cancelling" if matched_live else "idle"
     return CoreLiveOperationOutcome(
         response=rpc_result(request_id, {"status": status, "event": None})
@@ -105,6 +129,7 @@ async def _turn_cancel_finalizer(
     live_turn_id: str,
     preempted_live_task: bool,
     terminate: bool = False,
+    generation: int | None = None,
 ) -> None:
     """Settle a turn interrupt off the RPC critical path.
 
@@ -118,67 +143,89 @@ async def _turn_cancel_finalizer(
     from .runtime_tasks import _mirror_turn_status
     from .terminal_state import _persist_cancelled_terminal
     from .turn_pause import _settle_thread_continuations
+    from .background import _logger
     registry = context.host.runtime_task_registry
-    targets_live_run = bool(live_turn_id) and (
-        not requested_turn_id or requested_turn_id == live_turn_id
-    )
+
+    def owns_generation() -> bool:
+        return generation is None or registry.control_generation(thread_id) == generation
+
+    if not owns_generation():
+        return
+    # The handler validated the logical turn; live_turn_id identifies its
+    # execution, which changes when a paused turn resumes.
+    targets_live_run = bool(live_turn_id)
     task = None
     if targets_live_run:
         task_getter = getattr(registry, "task", None)
         task = task_getter(thread_id, run_id=live_turn_id) if callable(task_getter) else None
     had_live_task = bool(preempted_live_task or task is not None)
-    recorded_turn_id = await _append_interrupting_record(
-        context=context,
-        thread_id=thread_id,
-        requested_turn_id=requested_turn_id,
-        expected_revision=expected_revision,
-        live_turn_id=live_turn_id,
-    )
-    if task is not None and not task.done():
-        await _escalate_and_wait_cancel(thread_id, task)
-    # Release the claim only after the record landed (and the task had its
-    # grace): turn.start stays blocked while the old turn is still dying.
-    # Skipped entirely when the request targeted a foreign/stale turn.
-    if targets_live_run or recorded_turn_id:
-        registry.cancel(
-            thread_id,
-            run_id=recorded_turn_id or live_turn_id or None,
-            force=True,
-        )
-    if recorded_turn_id and (not had_live_task or task is None or task.done()):
-        # A task cancelled before its coroutine starts cannot emit a terminal
-        # item. Also cover a restart with no task. The terminal write is
-        # idempotent when the runtime already settled normally.
-        await _persist_cancelled_terminal(
-            context=context,
-            thread_id=thread_id,
-            turn_id=recorded_turn_id,
-        )
-    await _settle_thread_continuations(
-        context=context, thread_id=thread_id, reason="turn terminated"
-    )
-    await _close_open_interactions(
-        context=context,
-        thread_id=thread_id,
-        reason="turn_terminated" if terminate else "turn_cancelled",
-        include_member_cards=True,
-    )
-    # A user Stop pauses the whole session: the members this session left
-    # running are interrupted too, so one Stop leaves nothing working behind it
-    # (and one Resume brings everything back). A pause keeps members waiting on
-    # an unanswered question; a terminate discards those cards.
-    await _interrupt_session_members(
-        context=context,
-        thread_id=thread_id,
-        include_paused=terminate,
-        final_status="terminated" if terminate else None,
-    )
-    await _mirror_turn_status(
-        context=context,
-        thread_id=thread_id,
-        turn_id=recorded_turn_id or live_turn_id,
-        status="cancelled",
-    )
+    # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(实际停止不依赖数据库成功，每个持久化步骤失败仍继续其他清理)。
+    errors: list[Exception] = []
+
+    async def attempt(label: str, operation: Any) -> Any:
+        try:
+            return await operation
+        except Exception as exc:
+            errors.append(exc)
+            _logger.exception("[live:cancel] %s failed thread_id=%s", label, thread_id)
+            return None
+
+    async def settle() -> None:
+        if not owns_generation():
+            return
+        recorded_turn_id = await attempt("interrupting record", _append_interrupting_record(
+            context=context, thread_id=thread_id, requested_turn_id=requested_turn_id,
+            expected_revision=expected_revision, live_turn_id=live_turn_id,
+            generation=generation,
+        ))
+        turn_id = recorded_turn_id or requested_turn_id
+        if not owns_generation():
+            return
+        if turn_id and (not had_live_task or task is None or task.done()):
+            await attempt("terminal state", _persist_cancelled_terminal(
+                context=context, thread_id=thread_id, turn_id=turn_id,
+            ))
+        if not owns_generation():
+            return
+        await attempt("continuations", _settle_thread_continuations(
+            context=context, thread_id=thread_id, reason="turn terminated", turn_id=turn_id or None,
+        ))
+        if not owns_generation():
+            return
+        await attempt("interactions", _close_open_interactions(
+            context=context, thread_id=thread_id,
+            reason="turn_terminated" if terminate else "turn_cancelled",
+            include_member_cards=True, turn_id=turn_id or None,
+        ))
+        if owns_generation() and turn_id and not errors:
+            await attempt("mirror status", _mirror_turn_status(
+                context=context, thread_id=thread_id, turn_id=turn_id, status="cancelled",
+            ))
+
+    try:
+        if not owns_generation():
+            return
+        member_cleanup = attempt("members", _interrupt_session_members(
+            context=context, thread_id=thread_id, include_paused=terminate,
+            final_status="terminated" if terminate else None,
+        ))
+        if task is not None and not task.done():
+            await asyncio.gather(_escalate_and_wait_cancel(thread_id, task), member_cleanup)
+        else:
+            await member_cleanup
+        # Serialize the short durable controls with start/resume. A generation
+        # check after acquiring the actor prevents a late cleanup touching a
+        # newly resumed execution of the same logical turn.
+        actors = getattr(context.host, "session_actors", None)
+        if actors is None:
+            await settle()
+        else:
+            await actors.run(thread_id, settle)
+    finally:
+        if owns_generation() and targets_live_run:
+            registry.cancel(thread_id, run_id=live_turn_id, force=True)
+    if errors:
+        raise ExceptionGroup("turn cancellation cleanup failed", errors)
 
 
 async def _interrupt_session_members(
@@ -231,6 +278,7 @@ async def _append_interrupting_record(
     requested_turn_id: str,
     expected_revision: int | None,
     live_turn_id: str,
+    generation: int | None = None,
 ) -> str:
     """Durably record the user interrupt for the active turn and publish it.
 
@@ -249,7 +297,10 @@ async def _append_interrupting_record(
     del expected_revision  # validated at request time only
 
     async def write_action(db: AsyncSession):
-        snapshot = await context.persistence.load(db, thread_id)
+        loader = getattr(context.persistence, "load_metadata", context.persistence.load)
+        snapshot = await loader(db, thread_id)
+        if generation is not None and context.host.runtime_task_registry.control_generation(thread_id) != generation:
+            return "", []
         turn_id = requested_turn_id or latest_active_turn_id(snapshot) or _paused_turn_id(snapshot) or live_turn_id
         # Fallback to the in-memory registry: when the snapshot has lost the
         # active turn (e.g. a sub-agent DB-lock error rewrote state before the

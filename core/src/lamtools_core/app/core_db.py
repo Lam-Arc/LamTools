@@ -974,6 +974,37 @@ class SqlAlchemyRuntimeStateStore:
             return []
         return _json_safe(row.history_json)
 
+    async def read_history_page(self, session_id: str, *, after_seq: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        # user:“上下文应当能够被精确召回”+(使用会话与序号索引限制读取数量，召回被压缩视图隐藏的原文)。
+        if type(after_seq) is not int or after_seq < 0 or type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid history page bounds")
+        async with self.session_factory() as db:
+            rows = (await db.execute(
+                select(CoreHistoryEntry).where(
+                    CoreHistoryEntry.thread_id == session_id, CoreHistoryEntry.seq > after_seq,
+                ).order_by(CoreHistoryEntry.seq.asc()).limit(limit)
+            )).scalars().all()
+            if rows:
+                return [{**row.message_json, "metadata": {**(row.message_json.get("metadata") or {}), "history_seq": row.seq}} for row in rows]
+            # An exhausted modern archive must not fall back to an old blob.
+            existing = await db.scalar(select(CoreHistoryEntry.seq).where(CoreHistoryEntry.thread_id == session_id).limit(1))
+            if existing is not None:
+                return []
+            # Legacy blobs are also projected in SQLite, so one recall does
+            # not materialize a whole old conversation in Python memory.
+            legacy_rows = (await db.execute(text(
+                "SELECT CAST(j.key AS INTEGER) + 1 AS seq, j.value AS message "
+                "FROM core_runtime_sessions AS s, json_each(s.history_json) AS j "
+                "WHERE s.thread_id = :sid AND CAST(j.key AS INTEGER) >= :after_seq "
+                "ORDER BY CAST(j.key AS INTEGER) LIMIT :page_limit"
+            ), {"sid": session_id, "after_seq": after_seq, "page_limit": limit})).all()
+            result = []
+            for seq, value in legacy_rows:
+                row = json.loads(value) if isinstance(value, str) else value
+                if isinstance(row, dict):
+                    result.append({**row, "metadata": {**(row.get("metadata") or {}), "history_seq": seq}})
+            return result
+
     async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None:
         change_id = await self._save(state, history=history)
         await self._publish_sync_change(change_id)

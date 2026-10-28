@@ -2548,6 +2548,7 @@ def create_core_agent_operations(
             approval_policy="require",
             permission_preset=controls["permission_preset"],
             active_tier=controls["base_tier"],
+            allow_access_outside_workdir=bool(controls["base_allow_access_outside_workdir"]),
             session_prefix="plugin-sub-agent",
             state_store=runtime_state_store,
             artifact_store=artifact_store,

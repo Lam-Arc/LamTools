@@ -75,6 +75,26 @@
 .qqb-metric-label { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 .qqb-metric-value { font-size: 15px; font-weight: 600; }
 
+.qqb-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+.qqb-session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md, 8px);
+  background: var(--dsw-alias-bg-layer-3);
+}
+.qqb-session-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qqb-session-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qqb-session-meta { font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+
 .qqb-pill {
   padding: 4px 12px;
   border: 1px solid var(--dsw-alias-border-l2);
@@ -244,4 +264,76 @@
 .imqb2-readonly {
   margin: 12px 0 0; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px; color: var(--dsw-alias-label-secondary); word-break: break-all;
+}
+
+/* 右侧栏只保留“在当前会话创建机器人”，按窄栏收紧留白和字号。 */
+.qqb-side-panel {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  padding: 2px 2px 8px;
+  font-size: 13px;
+}
+.qqb-side-panel .qqb-header {
+  max-width: none;
+  margin: 0 0 10px;
+}
+.qqb-side-panel .qqb-title {
+  font-size: 17px;
+}
+.qqb-side-panel .qqb-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+}
+.qqb-side-body {
+  min-width: 0;
+}
+.qqb-side-panel .imqb-panel {
+  min-height: 0;
+  padding: 6px 0 4px;
+  gap: 10px;
+}
+.qqb-side-panel .imqb-title {
+  font-size: 14px;
+}
+.qqb-side-panel .imqb-hint {
+  font-size: 12px;
+  line-height: 1.55;
+}
+.qqb-side-panel .imqb-icon {
+  font-size: 26px;
+}
+.qqb-side-panel .imqb-qr {
+  width: 168px;
+  height: 168px;
+  padding: 8px;
+}
+.qqb-side-panel .imqb-btn {
+  width: 100%;
+  padding: 8px 12px;
+}
+.qqb-side-panel .imqb-row {
+  width: 100%;
+}
+.qqb-side-panel .imqb-row .imqb-pill {
+  width: auto;
+}
+.qqb-side-panel .imqb-link {
+  font-size: 12px;
+  word-break: break-all;
+}
+.qqb-side-panel .imqb-error {
+  font-size: 12px;
+  text-align: left;
+  word-break: break-word;
+}
+
+.qqb-session[data-selected='true'] {
+  border-color: var(--dsw-alias-brand, #4d6bfe);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(77, 107, 254, 0.08));
+}
+.qqb-session {
+  width: 100%;
+  font: inherit;
+  color: inherit;
 }

@@ -7,25 +7,9 @@ import os
 import time
 from pathlib import Path
 import subprocess
-from urllib.parse import unquote, urlparse
-
 from lamtools_core.tool import ToolResult
 
 ROOT = Path(__file__).resolve().parent
-
-
-def _download_filename(url):
-    """Derive the same safe filename the UI uses when only a URL is given."""
-    try:
-        parsed = urlparse(str(url or "").strip())
-    except ValueError:
-        return ''
-    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
-        return ''
-    name = unquote(parsed.path.rsplit('/', 1)[-1])
-    name = ''.join('_' if ch in '\\/:*?"<>|' or ord(ch) < 32 else ch for ch in name)
-    name = name.rstrip(' .')[:200]
-    return name or 'download.bin'
 
 
 class NetworkRuntime:
@@ -50,25 +34,12 @@ class NetworkRuntime:
     async def network_download(self, call):
         # user:“把 download 给做成一个工具，传参下载链接，可指定为前台和后台，以及路径”+(薄封装现有 aria2 队列；后台立即返回，前台轮询到结束或超时)。
         args = call.arguments if isinstance(call.arguments, dict) else {}
-        url = str(args.get('url') or '').strip()
-        filename = str(args.get('filename') or '').strip() or _download_filename(url)
-        if not filename:
-            return ToolResult(call_id=call.id, name=call.name, status='failed', error='需要有效的 HTTP/HTTPS 下载链接')
-        try:
-            connections = int(args.get('connections') or 8)
-        except (TypeError, ValueError):
-            return ToolResult(call_id=call.id, name=call.name, status='failed', error='connections 必须是 1–16 的整数')
-        if not 1 <= connections <= 16:
-            return ToolResult(call_id=call.id, name=call.name, status='failed', error='connections 必须是 1–16 的整数')
-        payload = {'url': url, 'filename': filename, 'connections': connections}
-        directory = str(args.get('directory') or '').strip()
-        if directory:
-            path = Path(directory).expanduser()
-            if not path.is_absolute():
-                return ToolResult(call_id=call.id, name=call.name, status='failed', error='directory 必须是绝对路径')
-            payload['directory'] = str(path)
-        if args.get('proxy') is True:
-            payload['proxy'] = True
+        # user:“修”+(下载参数原样交给 Rust 统一验证和补默认值；工具只管理等待方式)。
+        fields = ('url', 'filename', 'directory', 'connections', 'proxy', 'route', 'sha256', 'bytes_per_second')
+        payload = {key: args[key] for key in fields if key in args}
+        url = payload.get('url', '')
+        filename = payload.get('filename', '')
+        directory = payload.get('directory', '')
         try:
             added = await self.call('transfer.add', payload)
         except Exception as exc:  # noqa: BLE001 - tool handlers report failures instead of raising
@@ -82,13 +53,14 @@ class NetworkRuntime:
             'url': url,
         }
         if args.get('foreground') is not True:
-            result['status'] = 'queued'
+            result['status'] = str(added.get('status') or 'waiting')
             return ToolResult(call_id=call.id, name=call.name, status='ok', content=json.dumps(result, ensure_ascii=False))
         try:
             wait_seconds = max(1, min(900, int(args.get('wait_seconds') or 300)))
         except (TypeError, ValueError):
             wait_seconds = 300
         deadline = time.monotonic() + wait_seconds
+        status = 'unknown'
         while time.monotonic() < deadline:
             try:
                 snapshot = await self.call('transfer.list', {})
@@ -108,8 +80,11 @@ class NetworkRuntime:
                 result['status'] = status
                 result['error'] = str(row.get('errorCode') or '下载未完成')
                 return ToolResult(call_id=call.id, name=call.name, status='failed', content=json.dumps(result, ensure_ascii=False), error=result['error'])
-            await asyncio.sleep(1.5)
-        result.update({'status': 'downloading', 'still_running': True, 'waited_seconds': wait_seconds})
+            if status in {'paused', 'recoverable'}:
+                result.update({'status': status, 'still_running': False})
+                return ToolResult(call_id=call.id, name=call.name, status='ok', content=json.dumps(result, ensure_ascii=False))
+            await asyncio.sleep(min(1.5, max(0, deadline - time.monotonic())))
+        result.update({'status': status or 'unknown', 'still_running': status in {'active', 'waiting'}, 'timed_out': True, 'waited_seconds': wait_seconds})
         return ToolResult(call_id=call.id, name=call.name, status='ok', content=json.dumps(result, ensure_ascii=False))
 
     async def start(self, context):

@@ -107,6 +107,24 @@ class MemoryRefIndexStore:
         self._map[key] = entry
 
 
+def _drop(logger: logging.Logger | None, ctx: "MiddlewareContext", reason: str) -> None:
+    """Record every inbound rejection; silent drops are undebuggable."""
+    message = ctx.message
+    bot_id = str(getattr(ctx.bot, "bot_id", "") or "")
+    if logger is not None:
+        logger.warning(
+            "QQ inbound dropped botId=%s reason=%s kind=%s messageId=%s sender=%s attachments=%d content=%r",
+            bot_id,
+            reason,
+            message.kind,
+            message.message_id,
+            message.sender_id,
+            len(message.attachments or []),
+            (message.content or "")[:160],
+        )
+    ctx.stop(reason)
+
+
 # ── Middleware implementations ─────────────────────────────────────────────
 
 def message_filter(
@@ -122,16 +140,14 @@ def message_filter(
     async def middleware(ctx: MiddlewareContext, next_fn: Next) -> None:
         message = ctx.message
         if skip_self_echo and (message.raw.get("author") or {}).get("bot"):
-            ctx.stop("self-echo")
+            _drop(logger, ctx, "self-echo")
             return
         message_id = message.message_id
         now = time.time()
         if message_id:
             previous = seen.get(message_id)
             if previous is not None and now - previous <= window:
-                if logger is not None:
-                    logger.debug("dropping duplicate messageId=%s", message_id)
-                ctx.stop("deduplication")
+                _drop(logger, ctx, f"deduplication:messageId={message_id}")
                 return
             seen[message_id] = now
             if len(seen) > max_size:
@@ -176,9 +192,7 @@ def access_policy(access: dict[str, Any], *, logger: logging.Logger | None = Non
         else:
             allowed, reason = True, ""
         if not allowed:
-            if logger is not None:
-                logger.debug("access blocked %s message from %s: %s", message.kind, message.sender_id, reason)
-            ctx.stop(f"access:{reason}")
+            _drop(logger, ctx, f"access:{reason}")
             return
         await next_fn()
 
@@ -245,9 +259,7 @@ def mention_gate(*, require_mention: bool = True, logger: logging.Logger | None 
             "reason": reason,
         }
         if not should_answer:
-            if logger is not None:
-                logger.debug("mention gate skipped group message (no_mention)")
-            ctx.stop("mention-gate:no_mention")
+            _drop(logger, ctx, "mention-gate:no_mention")
             return
         await next_fn()
 
@@ -326,6 +338,7 @@ def rate_limiter(
     per_sender: tuple[int, int] | None = None,
     per_group: tuple[int, int] | None = None,
     global_limit: tuple[int, int] | None = None,
+    logger: logging.Logger | None = None,
 ) -> Middleware:
     sender_window = SlidingWindow(*per_sender) if per_sender else None
     group_window = SlidingWindow(*per_group) if per_group else None
@@ -335,13 +348,13 @@ def rate_limiter(
         message = ctx.message
         group_key = message.group_openid or message.sender_id
         if global_window is not None and not global_window.check("__global__"):
-            ctx.stop("rate-limit:global")
+            _drop(logger, ctx, "rate-limit:global")
             return
         if group_window is not None and not group_window.check(group_key):
-            ctx.stop("rate-limit:perGroup")
+            _drop(logger, ctx, "rate-limit:perGroup")
             return
         if sender_window is not None and not sender_window.check(message.sender_id):
-            ctx.stop("rate-limit:perSender")
+            _drop(logger, ctx, "rate-limit:perSender")
             return
         await next_fn()
 
@@ -592,7 +605,7 @@ def build_agent_body(ctx: MiddlewareContext, *, history_limit: int) -> str | Non
     dynamic = _build_dynamic_context(message, state)
     base = f"{dynamic}{user_message}" if dynamic else user_message
     history = state.get("history") or []
-    if not is_group or not was_mentioned or not history:
+    if history_limit <= 0 or not is_group or not was_mentioned or not history:
         return base
     lines = [
         f"[{item.get('senderName') or short_sender_id(str(item.get('senderId') or ''))} "
@@ -713,11 +726,13 @@ def _build_dynamic_context(message: InboundMessage, state: dict[str, Any]) -> st
 
 
 def _render_media_line(kind: str, filename: str | None, local_path: str | None, url: str | None, size: int | None) -> str:
+    # user:“附件不要直接传，用 @路径 来传”+(落盘文件以 @路径 交给模型，
+    # 由它按需读取；不再把附件对象直传给运行器)。
     if kind == "image":
-        return f"Image: {local_path or url or filename or 'image'}"
+        return f"@{local_path or url or filename or 'image'}"
     if kind == "video":
-        return f"Video: {local_path}" if local_path else f"Video: {filename or 'video'} (download failed)"
-    return f"File: {local_path}" if local_path else f"File: {filename or 'file'} ({format_file_size(size or 0)})"
+        return f"@{local_path}" if local_path else f"Video: {filename or 'video'} (download failed)"
+    return f"@{local_path}" if local_path else f"File: {filename or 'file'} ({format_file_size(size or 0)})"
 
 
 __all__ = [

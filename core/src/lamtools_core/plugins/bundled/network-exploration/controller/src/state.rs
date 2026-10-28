@@ -108,12 +108,15 @@ impl Controller {
                 let result = self.engines.start_proxy(p).await;
                 if result.is_ok() {
                     self.proxy_expected = true;
+                    // user:“修”+(线路启停同步到已运行的本机加速器)。
+                    self.accelerator.set_fallback(Some(17890));
                 }
                 result
             }
             "proxy.stop" => {
                 self.rollback_kind("proxy").await?;
                 self.proxy_expected = false;
+                self.accelerator.set_fallback(None);
                 self.engines.stop_proxy().await
             }
             "proxy.inspect" => self.engines.proxy_inspect().await,
@@ -125,9 +128,14 @@ impl Controller {
             // user:“本机加速层 你学习一下呗…它该抄就抄”+(本地 CONNECT 加速，代理内核只作为非命中域名的兜底)。
             "accelerator.start" => {
                 let fallback = self.proxy_expected.then_some(17890);
-                self.accelerator.start(fallback).await
+                let result = self.accelerator.start(fallback).await?;
+                self.reroute_auto_downloads(Some(self.accelerator.port)).await?;
+                Ok(result)
             }
             "accelerator.stop" => {
+                // user:“修”+(后台同样先恢复系统代理；恢复失败不关闭监听，避免断网)。
+                self.rollback_accelerator().await?;
+                self.reroute_auto_downloads(None).await?;
                 self.accelerator.stop();
                 Ok(json!({"running":false,"port":0}))
             }
@@ -151,16 +159,8 @@ impl Controller {
     pub async fn status(&mut self) -> Reply {
         self.check_proxy_exit().await;
         let proxy = self.engines.proxy_status().await;
-        let downloads: Vec<_> = self
-            .saved
-            .downloads
-            .iter()
-            .map(|row| {
-                let mut value = row.clone();
-                value.as_object_mut().unwrap().remove("protected_request");
-                value
-            })
-            .collect();
+        // user:“修”+(所有面板直接消费统一下载快照，避免首页速度和数量停留在旧值)。
+        let downloads = self.download_snapshot().await?["tasks"].clone();
         let transactions:Vec<_>=self.saved.transactions.iter().map(|row|json!({"id":row["id"],"time":row["time"],"status":row["status"],"request":row["request"]})).collect();
         Ok(
             json!({"controller_pid":std::process::id(),"revision":self.saved.revision,"settings":self.saved.settings,
@@ -266,10 +266,10 @@ impl Controller {
         }
     }
     pub async fn shutdown(&mut self) {
-        self.accelerator.stop();
         if let Err(error) = self.restore_all().await {
             self.event("recovery", &error);
         }
+        self.accelerator.stop();
         self.engines.shutdown().await;
         let _ = self.persist();
     }
@@ -285,6 +285,7 @@ impl Controller {
             .unwrap_or(false);
         if !alive {
             self.proxy_expected = false;
+            self.accelerator.set_fallback(None);
             if let Err(error) = self.rollback_kind("proxy").await {
                 self.event("recovery", &error);
             }

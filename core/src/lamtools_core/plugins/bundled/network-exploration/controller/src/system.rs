@@ -241,6 +241,24 @@ fn decode_snapshot(value: &Value) -> Reply {
     }
 }
 impl Controller {
+    // user:“修”+(系统代理只指向插件已启动的服务；本机加速不再依赖 Mihomo)。
+    fn validate_proxy_target(&self, p: &Value) -> Result<(), String> {
+        let port = p["server"]
+            .as_str()
+            .unwrap_or("127.0.0.1:17890")
+            .strip_prefix("127.0.0.1:")
+            .and_then(|value| value.parse::<u16>().ok())
+            .ok_or("系统代理地址无效")?;
+        if (port == 17890 && self.engines.proxy.is_some())
+            || (port > 0
+                && port == self.accelerator.port
+                && self.accelerator.status()["running"] == true)
+        {
+            Ok(())
+        } else {
+            Err("请先启动对应的本机加速或代理服务".into())
+        }
+    }
     pub async fn apply_system(&mut self, mut p: Value) -> Reply {
         validate(&p)?;
         if matches!(p["kind"].as_str(), Some("firewall" | "qos"))
@@ -248,8 +266,8 @@ impl Controller {
         {
             return Err("应用文件不存在，请选择实际的程序文件".into());
         }
-        if p["kind"] == "proxy" && self.engines.proxy.is_none() {
-            return Err("请先启动 Mihomo，避免设置不可用的系统代理".into());
+        if p["kind"] == "proxy" {
+            self.validate_proxy_target(&p)?;
         }
         if self.saved.transactions.iter().any(|t| {
             t["status"] == "applied"
@@ -351,6 +369,23 @@ impl Controller {
             })
             .ok_or("没有可恢复的事务")?;
         self.restore_index(index).await
+    }
+    // user:“修”+(关闭加速只恢复指向自身端口的事务，不影响独立运行的代理)。
+    pub async fn rollback_accelerator(&mut self) -> Result<(), String> {
+        let server = format!("127.0.0.1:{}", self.accelerator.port);
+        for index in (0..self.saved.transactions.len()).rev() {
+            let row = &self.saved.transactions[index];
+            if row["request"]["kind"] == "proxy"
+                && row["request"]["server"] == server
+                && matches!(
+                    row["status"].as_str(),
+                    Some("applied" | "prepared" | "recovery_required")
+                )
+            {
+                self.restore_index(index).await?;
+            }
+        }
+        Ok(())
     }
     pub async fn rollback_kind(&mut self, kind: &str) -> Result<(), String> {
         for i in (0..self.saved.transactions.len()).rev() {
@@ -507,5 +542,53 @@ mod tests {
             &json!({"rows":[{"family":2,"servers":["192.168.2.1"],"manual":false}]}),
             &json!({"rows":[{"family":2,"servers":["192.168.1.1"],"manual":false}]})
         ));
+    }
+    // user:“修”+(本机加速无需订阅；仅允许指向确实由插件启动的监听端口)。
+    #[tokio::test]
+    async fn regression_proxy_target_accepts_local_accelerator_without_mihomo() {
+        let dir = std::env::temp_dir().join(format!("network-target-{}", uuid::Uuid::new_v4()));
+        let mut controller = Controller::new(dir.clone()).unwrap();
+        assert!(controller
+            .validate_proxy_target(&json!({"server":"127.0.0.1:17890"}))
+            .is_err());
+        controller.accelerator.start(None).await.unwrap();
+        let port = controller.accelerator.port;
+        assert!(controller
+            .validate_proxy_target(&json!({"server":format!("127.0.0.1:{port}")}))
+            .is_ok());
+        assert!(controller
+            .validate_proxy_target(&json!({"server":"127.0.0.1:1"}))
+            .is_err());
+        controller.accelerator.stop();
+        assert!(controller
+            .validate_proxy_target(&json!({"server":format!("127.0.0.1:{port}")}))
+            .is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn regression_failed_recovery_keeps_listener_and_unrelated_proxy_is_untouched() {
+        // user:“修”+(快照损坏时也不能停止仍被系统代理使用的服务；测试不读取或改写系统设置)。
+        let dir = std::env::temp_dir().join(format!("network-stop-{}", uuid::Uuid::new_v4()));
+        let mut controller = Controller::new(dir.clone()).unwrap();
+        controller.accelerator.start(None).await.unwrap();
+        let port = controller.accelerator.port;
+        controller.saved.transactions.push(json!({"request":{"kind":"proxy","server":format!("127.0.0.1:{port}")},"status":"applied","before":{"protected":"invalid"}}));
+        assert!(controller
+            .call("accelerator.stop", json!({}))
+            .await
+            .is_err());
+        assert_eq!(controller.accelerator.port, port);
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok());
+        controller.saved.transactions[0]["request"]["server"] = json!("127.0.0.1:1");
+        controller
+            .call("accelerator.stop", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(controller.saved.transactions[0]["status"], "applied");
+        assert_eq!(controller.accelerator.port, 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

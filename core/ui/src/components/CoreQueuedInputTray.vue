@@ -257,7 +257,9 @@ function isSubmitting(itemId: string): boolean {
               border-radius 200ms ease 50ms;
 }
 
-.core-queued-input-actions:hover {
+/* user:“做吧”+(键盘进入队列操作区时，同样展开并显示操作按钮)。 */
+.core-queued-input-actions:hover,
+.core-queued-input-actions:focus-within {
   width: 92px;
   border-radius: var(--radius);
   transition: width 250ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -307,7 +309,8 @@ function isSubmitting(itemId: string): boolean {
   transition: opacity 180ms ease 60ms, transform 180ms ease 60ms;
 }
 
-.core-queued-input-actions:hover .core-queued-input-buttons {
+.core-queued-input-actions:hover .core-queued-input-buttons,
+.core-queued-input-actions:focus-within .core-queued-input-buttons {
   opacity: 1;
   transform: translateX(0);
   pointer-events: auto;

@@ -9,20 +9,20 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from qqbot.runtime import QQBotRuntime  # noqa: E402
-from qqbot.state import set_runtime  # noqa: E402
+from qqbot.manager import QQBotManager  # noqa: E402
+from qqbot.state import set_manager  # noqa: E402
 
 
-class Runtime(QQBotRuntime):
+class Runtime(QQBotManager):
     async def start(self, context=None):
-        set_runtime(self)
+        set_manager(self)
         await super().start(context)
 
     async def stop(self):
         try:
             await super().stop()
         finally:
-            set_runtime(None)
+            set_manager(None)
 
 
 def create_plugin(context):

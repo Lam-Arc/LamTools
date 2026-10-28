@@ -5,9 +5,8 @@ import CoreSplitWorkspace from '../src/components/CoreSplitWorkspace.vue'
 import CoreAppPage from '../src/components/CoreAppPage.vue'
 import AppRail from '../src/components/AppRail.vue'
 import { useSplitWorkspace, type SplitWorkspaceController } from '../src/split/useSplitWorkspace'
-import { moveTab } from '../src/split/layout'
+import { moveTab, layoutRects } from '../src/split/layout'
 import { closeContextMenu, contextMenuState } from '../src/components/context-menu/context-menu'
-import { t } from '../src/i18n'
 
 vi.mock('../src/components/CoreSettings.vue', () => ({ __esModule: true, default: defineComponent({ name: 'TestSettings', props: ['hideNav', 'activeSection'], setup: (props, { expose }) => { expose({ requestNavigation: (proceed: () => void) => proceed() }); return () => h('div', { 'data-local-nav': !props.hideNav }, 'settings') } }) }))
 vi.mock('../src/components/LibraryHomeView.vue', () => ({ __esModule: true, default: defineComponent({ name: 'TestLibrary', setup(_, { expose }) { const dirty = ref(true); expose({ hasUnsavedChanges: () => dirty.value, savePendingChanges: async () => { dirty.value = false; return true }, discardPendingChanges: () => { dirty.value = false } }); return () => h('div', 'library') } }) }))
@@ -77,54 +76,124 @@ describe('Split Pane integrated interaction', () => {
     expect(labels).toContain('向右分屏')
     expect(labels).not.toContain('收起分屏')
   })
-  // user:“在分屏内选择分屏类型和标签页”+(点击手柄先选方向，再从同一菜单选内容)。
-  it('offers split directions and tab content from the pane handle', async () => {
-    const { wrapper, controller } = workspace(); await flushPromises()
-    const handle = wrapper.find('.split-split-handle')
-    expect(handle.exists()).toBe(true)
-    handle.element.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 900, clientY: 100, bubbles: true }))
-    window.dispatchEvent(new MouseEvent('pointerup', { button: 0, clientX: 900, clientY: 100, bubbles: true }))
-    await flushPromises()
-    const right = contextMenuState.items.find(item => item.type === 'submenu' && item.label === t('向右分屏'))
-    if (!right || right.type !== 'submenu') throw Error('missing right direction')
-    const settings = right.children.find(item => 'label' in item && item.label === t('设置'))
-    if (!settings || !('action' in settings) || !settings.action) throw Error('missing settings content')
-    settings.action(); await flushPromises()
-    expect(Object.keys(controller.state.panes)).toHaveLength(2)
-    expect(controller.tabs.value.some(({ tab }) => tab.kind === 'page' && tab.resource === 'settings')).toBe(true)
+  // user:“分屏的右上角，只需要留一个加号来新增标签页即可，一个 x 来关闭此分屏，不需要再有一个分屏键了”+(头部只保留加号、关闭和右下角拖拽角柄)。
+  it('keeps only add-tab and close-pane controls plus a corner grip', async () => {
+    const { wrapper } = workspace(); await flushPromises()
+    expect(wrapper.find('.split-split-handle').exists()).toBe(false)
+    expect(wrapper.find('.split-corner-grip').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="打开内容"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="关闭分屏"]').exists()).toBe(true)
   })
-  // user:“通过拖动拉起，而不是点击按钮。就类似 blender”+(按住手柄横向拖动直接落下一块新屏，不再弹菜单)。
-  it('pulls out a new pane by dragging the split handle', async () => {
+  it('closes the whole pane from the header X', async () => {
     const { wrapper, controller } = workspace(); await flushPromises()
-    const handle = wrapper.find('.split-split-handle').element
-    handle.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 900, clientY: 100, bubbles: true }))
-    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 400, clientY: 100, bubbles: true }))
+    await wrapper.find('[aria-label="关闭分屏"]').trigger('click')
+    await flushPromises()
+    expect(Object.keys(controller.state.panes)).toHaveLength(0)
+  })
+  // user:“从分屏的角进行拖拽，来起一个新的分屏”+(按住角柄拖出方向，松手直接落屏，不再弹菜单)。
+  it('pulls out a new pane by dragging the corner grip', async () => {
+    const { wrapper, controller } = workspace(); await flushPromises()
+    const grip = wrapper.find('.split-corner-grip').element
+    grip.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 900, clientY: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 1000, clientY: 100, bubbles: true }))
     await flushPromises()
     expect(document.body.classList.contains('split-is-pulling')).toBe(true)
-    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 400, clientY: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 1000, clientY: 100, bubbles: true }))
     await flushPromises()
     expect(Object.keys(controller.state.panes)).toHaveLength(2)
     expect(contextMenuState.open).toBe(false)
     expect(document.body.classList.contains('split-is-pulling')).toBe(false)
   })
-  // user:“点一下这个分屏键，自动在右边起一个分屏...分屏键里面不需要有任何东西”+(标题栏动作只分屏；已收起时恢复)。
-  it('splits the active pane right from the header action and restores a collapsed split', async () => {
+  // user:“分割线位置跟着鼠标...起始角决定新区域落在哪一侧”+(左上角起拖向右拉，新屏落在左侧，原屏右移)。
+  it('places the new pane at the pointer on the starting corner side', async () => {
+    const { wrapper, controller } = workspace(); await flushPromises()
+    const source = Object.keys(controller.state.panes)[0]
+    const before = layoutRects(controller.state.tree, { x: 0, y: 0, width: 1440, height: 900 }).panes[source]
+    const grip = wrapper.find('.split-corner-grip').element
+    grip.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 900, clientY: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 1000, clientY: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 1000, clientY: 100, bubbles: true }))
+    await flushPromises()
+    const after = layoutRects(controller.state.tree, { x: 0, y: 0, width: 1440, height: 900 }).panes
+    expect(Object.keys(after)).toHaveLength(3)
+    expect(after[source].x).toBeGreaterThan(before.x)
+    const created = Object.entries(after).find(([id]) => id !== source && id !== 'main')?.[1]
+    expect(created?.x).toBeLessThan(after[source].x)
+    expect((created?.x || 0) + (created?.width || 0)).toBeLessThanOrEqual(after[source].x)
+  })
+  // user:“为什么左下角那个角铁是不可拖动的”+(左下角铁与左上使用同一套拖拽判定，能直接拉出下方分屏)。
+  it('pulls out a new pane from the bottom-left corner grip', async () => {
+    const { wrapper, controller } = workspace(); await flushPromises()
+    const grip = wrapper.find('.split-corner-grip--bottom-left').element
+    grip.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 900, clientY: 800, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 900, clientY: 600, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 900, clientY: 600, bubbles: true }))
+    await flushPromises()
+    expect(Object.keys(controller.state.panes)).toHaveLength(2)
+    expect(document.querySelectorAll('.split-corner-grip--bottom-left').length).toBe(2)
+  })
+  // user:“该对齐的就全部都去对齐”“我要体验一致化”+(角柄拖到相邻分屏上直接合并，两块区域同时描边)。
+  it('joins a pane by dragging its corner grip onto a sibling pane', async () => {
+    let controller!: SplitWorkspaceController
+    const Child = defineComponent({ setup() { return () => h('div') } })
+    const Harness = defineComponent({ setup() {
+      controller = useSplitWorkspace(computed(() => 'split-join'))
+      const first = controller.split('main', 'right')!, second = controller.split(first, 'bottom')!
+      controller.add('page', 'res-a', 'A', first); controller.add('page', 'res-b', 'B', second)
+      return () => h(CoreSplitWorkspace, { controller, workRoot: 'E:/project' }, { default: () => h(Child) })
+    } })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, width: 1440, height: 900, left: 0, top: 0, right: 1440, bottom: 900, toJSON() {} })
+    const wrapper = mount(Harness, { attachTo: document.body }); wrappers.push(wrapper); await flushPromises()
+    const [first, second] = Object.keys(controller.state.panes)
+    const grip = wrapper.findAll('.split-pane-frame')[0].find('.split-corner-grip').element
+    grip.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 900, clientY: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 1000, clientY: 700, bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.split-split-preview--join').exists()).toBe(true)
+    expect(wrapper.findAll('.split-split-preview--join .split-split-preview-area')).toHaveLength(2)
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 1000, clientY: 700, bubbles: true }))
+    await flushPromises()
+    expect(controller.state.panes[first]).toBeUndefined()
+    expect(controller.state.panes[second].tabs.map(tab => tab.resource)).toEqual(['res-b', 'res-a'])
+    expect(layoutRects(controller.state.tree, { x: 0, y: 0, width: 1440, height: 900 }).panes[second].height).toBeGreaterThan(450)
+  })
+  // user:“边框右键合并/交换”+(分隔线右键提供与 Blender Area Options 对应的非拖拽入口)。
+  it('offers merge and swap actions on a pane border', async () => {
+    let controller!: SplitWorkspaceController
+    const Child = defineComponent({ setup() { return () => h('div') } })
+    const Harness = defineComponent({ setup() {
+      controller = useSplitWorkspace(computed(() => 'split-border'))
+      const first = controller.split('main', 'right')!, second = controller.split(first, 'bottom')!
+      controller.add('page', 'res-a', 'A', first); controller.add('page', 'res-b', 'B', second)
+      return () => h(CoreSplitWorkspace, { controller, workRoot: 'E:/project' }, { default: () => h(Child) })
+    } })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, width: 1440, height: 900, left: 0, top: 0, right: 1440, bottom: 900, toJSON() {} })
+    const wrapper = mount(Harness, { attachTo: document.body }); wrappers.push(wrapper); await flushPromises()
+    const [first, second] = Object.keys(controller.state.panes)
+    const rows = wrapper.findAll('[role=separator]').find(element => element.classes('split-divider--rows'))
+    if (!rows) throw Error('missing row divider')
+    rows.element.dispatchEvent(new MouseEvent('contextmenu', { clientX: 1000, clientY: 455, bubbles: true, cancelable: true }))
+    await flushPromises()
+    const labels = contextMenuState.items.map(item => 'label' in item ? item.label : '')
+    expect(labels).toContain('合并这两块分屏')
+    expect(labels).toContain('交换这两块分屏')
+    const swap = contextMenuState.items.find(item => 'label' in item && item.label === '交换这两块分屏')
+    if (!swap || !('action' in swap) || !swap.action) throw Error('missing swap action')
+    swap.action(); await flushPromises()
+    expect(controller.state.panes[first].tabs.map(tab => tab.resource)).toEqual(['res-b'])
+    expect(controller.state.panes[second].tabs.map(tab => tab.resource)).toEqual(['res-a'])
+  })
+  // user:“分屏键...那个分屏的意思是打开分屏和折起分屏”+(标题栏开关循环打开、收起与恢复)。
+  it('opens, collapses and restores the split from the header toggle', async () => {
     let controller!: SplitWorkspaceController
     const Harness = defineComponent({ setup() { controller = useSplitWorkspace(computed(() => 'split-header')); return () => h('div') } })
     const wrapper = mount(Harness); wrappers.push(wrapper); await flushPromises()
-    const first = controller.splitRight()
-    expect(first).toBeTruthy()
+    controller.toggle()
     expect(Object.keys(controller.state.panes)).toHaveLength(1)
-    expect(controller.splitRight()).toBeTruthy()
-    expect(Object.keys(controller.state.panes)).toHaveLength(2)
-    controller.state.activePane = first!
-    controller.state.hidden = true
-    expect(controller.splitRight()).toBeNull()
+    controller.toggle()
+    expect(controller.state.hidden).toBe(true)
+    controller.toggle()
     expect(controller.state.hidden).toBe(false)
-    expect(Object.keys(controller.state.panes)).toHaveLength(2)
-    controller.setBounds(1600, 1000)
-    controller.state.activePane = 'main'
-    expect(controller.splitRight()).toBeTruthy()
-    expect(Object.keys(controller.state.panes)).toHaveLength(3)
+    expect(Object.keys(controller.state.panes)).toHaveLength(1)
   })
 })

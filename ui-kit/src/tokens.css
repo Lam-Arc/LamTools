@@ -1,0 +1,93 @@
+/*
+  user:"把红换成白，然后用这套组件做成可复用的 sunday 样式并投入使用，注意浅暗色模式与文字颜色，白底必须黑字，反之同理"
+  需求：信号色不再使用红色/橙色，改为 Sunday 的控件反转对——暗色象牙底+石墨字，浅色石墨底+象牙字。
+  所有填充块必须配其反色文字；层级只靠 1px 线、表面色阶、间距和短促运动。
+*/
+
+:root {
+  color-scheme: dark;
+
+  --font-ui: Inter, "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: var(--font-ui);
+  --font-mono: "JetBrains Mono", "Monaspace Neon", "Monaspace Argon", "Cascadia Code",
+    "Cascadia Mono", "Fira Code", "SFMono-Regular", "Noto Sans Mono CJK SC",
+    "Source Han Mono SC", "Sarasa Mono SC", Consolas, ui-monospace, monospace;
+
+  /* Dark: Sunday graphite ground, ivory ink, ivory control with graphite text. */
+  --paper: #1b1d22;
+  --surface: #22242a;
+  --raised: #262a31;
+  --ink: #fbf7f0;
+  --ink-2: #c7c3bb;
+  --ink-3: #94908a;
+  --line: #313337;
+  --line-strong: #74757a;
+
+  /* The signal is the control pair, not a hue. Text on control is control-ink. */
+  --control: #fbf7f0;
+  --control-ink: #2e3138;
+  --control-line: #d5d3cf;
+  --control-line-strong: #b0afad;
+  --control-hover: #ede9e1;
+  --control-strong: #ffffff;
+  --control-wash: rgba(46, 49, 56, 0.06);
+  --control-wash-strong: rgba(46, 49, 56, 0.11);
+  --accent: var(--control);
+  --accent-ink: var(--control-ink);
+
+  --wash: rgba(251, 247, 240, 0.06);
+  --wash-strong: rgba(251, 247, 240, 0.1);
+
+  --r-xs: 3px;
+  --r-sm: 6px;
+  --r-md: 6px;
+  --r-lg: 12px;
+  --r-xl: 12px;
+  --r-pill: 999px;
+
+  --h-sm: 28px;
+  --h-md: 34px;
+  --h-lg: 42px;
+
+  --track: 4px;
+  --track-radius: 2px;
+  --thumb: 16px;
+  --progress-height: 6px;
+
+  --dur-1: 90ms;
+  --dur-2: 150ms;
+  --dur-3: 220ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --ring: 2px solid var(--control);
+}
+
+/* Light: Sunday ivory ground, graphite ink, graphite control with ivory text. */
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --paper: #fdfbf7;
+  --surface: #f7f4ee;
+  --raised: #ffffff;
+  --ink: #2e3138;
+  --ink-2: #595b60;
+  --ink-3: #6c6e72;
+  --line: #e8e7e2;
+  --line-strong: #8b887f;
+
+  --control: #2e3138;
+  --control-ink: #fbf7f0;
+  --control-line: #53565a;
+  --control-line-strong: #6a6d72;
+  --control-hover: #3a3d44;
+  --control-strong: #000000;
+  --control-wash: rgba(251, 247, 240, 0.07);
+  --control-wash-strong: rgba(251, 247, 240, 0.12);
+  --accent: var(--control);
+  --accent-ink: var(--control-ink);
+
+  --wash: rgba(46, 49, 56, 0.05);
+  --wash-strong: rgba(46, 49, 56, 0.09);
+}

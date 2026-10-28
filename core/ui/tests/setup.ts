@@ -14,6 +14,12 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
   })
 }
 
+// jsdom has no document.fonts; SundaySegmented waits for font metrics before
+// laying out, which otherwise fails while mounting the plugin manager in tests.
+if (typeof document !== 'undefined' && !document.fonts) {
+  Object.defineProperty(document, 'fonts', { value: { ready: Promise.resolve() } })
+}
+
 // jsdom has no requestIdleCallback either; without a stub the idle-mount
 // scheduler falls back to a timer that really fires mid-test, which makes any
 // test mounting the app shell flaky. The stub queues callbacks without ever

@@ -9,7 +9,7 @@ import {
   ChevronsUpDown,
   ArrowDownToLine,
 } from "lucide-vue-next";
-import { filenameFromUrl, useNetwork } from "./session.mjs";
+import { useNetwork } from "./session.mjs";
 const props = defineProps({ context: Object });
 const context = Object.create(props.context);
 context.compact = true;
@@ -58,16 +58,8 @@ async function chooseNode(event) {
 }
 async function startDownload() {
   const link = url.value.trim();
-  const filename = filenameFromUrl(link);
-  if (!filename) {
-    s.error = "请输入有效的下载链接";
-    return;
-  }
-  const result = await s.run(
-    "transfer.add",
-    { url: link, filename, connections: 8 },
-    "已开始下载",
-  );
+  // user:“修”+(快捷入口只提交链接，文件名、默认参数与线路由后台决定)。
+  const result = await s.run("transfer.add", { url: link }, "已开始下载");
   if (!result) return;
   url.value = "";
   await s.loadTasks();

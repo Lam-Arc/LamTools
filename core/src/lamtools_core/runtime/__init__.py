@@ -205,6 +205,21 @@ class InMemoryRuntimeStateStore:
     async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
         return deepcopy(self._history.get(session_id, [])[after_seq:])
 
+    async def read_history_page(self, session_id: str, *, after_seq: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        # user:“上下文应当能够被精确召回”+(按原始消息序号分页读取，不应用压缩过滤，也不改写历史)。
+        if type(after_seq) is not int or after_seq < 0 or type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid history page bounds")
+        result = []
+        for index, message in enumerate(self._history.get(session_id, []), 1):
+            seq = (message.get("metadata") or {}).get("history_seq", index)
+            if seq > after_seq:
+                row = deepcopy(message)
+                row["metadata"] = {**(row.get("metadata") or {}), "history_seq": seq}
+                result.append(row)
+                if len(result) == limit:
+                    break
+        return result
+
     async def history_max_seq(self, session_id: str) -> int:
         return len(self._history.get(session_id, []))
 
