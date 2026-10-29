@@ -246,6 +246,49 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('[data-project-empty]').isVisible()).toBe(false)
   })
 
+  it('renders a single-icon new-session button immediately left of each project name', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{ id: 'docs', name: 'Docs', sessions: [{ id: 'guide', title: 'Guide' }] }],
+      },
+    })
+
+    const row = wrapper.get('[data-project-row="docs"]')
+    const button = row.get('[data-project-new-session="docs"]')
+    const name = row.get('[data-project-entry="docs"]')
+
+    expect(button.text().trim()).toBe('')
+    expect(button.find('svg').exists()).toBe(true)
+    expect(button.attributes('title')).toBe('新建会话')
+    expect(button.attributes('aria-label')).toContain('Docs')
+    expect(button.element.nextElementSibling).toBe(name.element)
+
+    await button.trigger('click')
+    expect(wrapper.emitted('new-session')).toEqual([['docs']])
+  })
+
+  it('disables the project new-session icon while that project is creating a session', () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{ id: 'docs', name: 'Docs', sessions: [] }],
+        busyProjectIds: ['docs'],
+      },
+    })
+
+    expect(wrapper.get('[data-project-new-session="docs"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('omits the project new-session icon when the host disables project new sessions', () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{ id: 'docs', name: 'Docs', sessions: [] }],
+        allowProjectNewSession: false,
+      },
+    })
+
+    expect(wrapper.find('[data-project-new-session="docs"]').exists()).toBe(false)
+  })
+
   it('uses the explicit project boundary when a host reports no projects', () => {
     const wrapper = mount(SessionSidebar, {
       props: {

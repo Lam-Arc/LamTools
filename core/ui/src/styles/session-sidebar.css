@@ -320,6 +320,13 @@
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
   outline-offset: 1px;
 }
+.project-new-session {
+  flex: 0 0 auto;
+}
+.project-action:disabled {
+  opacity: .45;
+  pointer-events: none;
+}
 .project-action.menu-trigger {
   width: 28px;
   font-size: var(--sidebar-font);

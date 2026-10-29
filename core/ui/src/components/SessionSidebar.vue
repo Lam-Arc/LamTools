@@ -95,6 +95,19 @@
         @drop.prevent="dropProject(group.id, section.id)"
         @dragend="finishDrag"
       >
+        <!-- user:“项目名旁边...左侧加一个新建会话按钮，单图标”+(项目行最左侧放单图标入口，避免占用项目名宽度) -->
+        <button
+          v-if="allowProjectNewSession && group.canManage !== false"
+          class="project-action project-new-session"
+          type="button"
+          :disabled="isProjectBusy(group.id)"
+          :title="t('新建会话')"
+          :aria-label="t('在 {0} 中新建会话', { 0: group.name })"
+          :data-project-new-session="group.id"
+          @click.stop="emit('new-session', group.id)"
+        >
+          <MessageSquarePlus :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
         <button
           type="button"
           class="project-name project-main clickable"
