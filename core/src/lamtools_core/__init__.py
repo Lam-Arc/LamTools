@@ -1,6 +1,6 @@
 """LamTools Core SDK - protocols, types, and base interfaces."""
 
-__version__ = "0.3.28"
+__version__ = "0.3.30"
 
 from lamtools_core.llm import (
     ChatMessage,

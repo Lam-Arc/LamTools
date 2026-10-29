@@ -473,6 +473,10 @@ class QQApi:
         content: str,
         keyboard: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self.logger.info(
+            "QQ api send_markdown appId=%s scope=%s target=%s content=%r",
+            self.app_id, target.scope, target.target_id, content,
+        )
         body: dict[str, Any] = {"msg_type": C.MSG_TYPE_MARKDOWN, "markdown": {"content": content}}
         if keyboard:
             body["keyboard"] = keyboard
@@ -482,6 +486,10 @@ class QQApi:
         return await self.send_raw(target, {"msg_type": C.MSG_TYPE_TEXT, "content": content})
 
     async def send_proactive_markdown(self, target: ReplyTarget, content: str) -> dict[str, Any]:
+        self.logger.info(
+            "QQ api send_proactive appId=%s scope=%s target=%s content=%r",
+            self.app_id, target.scope, target.target_id, content,
+        )
         return await self.send_raw(
             ReplyTarget(target.scope, target.target_id),
             {"msg_type": C.MSG_TYPE_MARKDOWN, "markdown": {"content": content}},

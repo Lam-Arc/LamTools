@@ -1221,6 +1221,13 @@ class CoreToolbox:
         # and supplied by the host's plugin assembly; Core does not name a
         # concrete plugin here.
         self.plugin_tool_providers = list(plugin_tool_providers or [])
+        # user:“宿主能力补齐和接口完善与文档更新”+(主/子代理沿用同一 provider 传播宿主扩展，实际执行仍走本工具箱审批)。
+        from lamtools_core.plugin_system.tool_extensions import ToolExtensionProvider
+        self._tool_extension_hosts = list(dict.fromkeys(
+            provider.host for provider in self.plugin_tool_providers if isinstance(provider, ToolExtensionProvider)
+        ))
+        self._bound_session_id = ""
+        self._native_operation_levels: dict[str, int] = {}
         self.plugin_tool_handlers = dict(plugin_tool_handlers or {})
         self.plugin_availability = plugin_availability
         # v2 agent plan: when set, only these tools are visible and executable.
@@ -1334,6 +1341,7 @@ class CoreToolbox:
         )
         # The resolver is the only writer of the gate's live inputs;
         # prepare_call and the kernel's re-preparation both go through it.
+        self.approval_gate.declared_operation_levels.update(self._native_operation_levels)
         self.permission_resolver = PermissionResolver(self.approval_gate)
         self._specs = [
             *default_core_tool_specs(),
@@ -1341,6 +1349,8 @@ class CoreToolbox:
             *plugin_manager_specs,
             *self.plugin_tool_specs,
         ]
+        for tool_host in self._tool_extension_hosts:
+            tool_host.reserve(spec.name for spec in self._specs)
         self._handlers = self._build_handlers(
             command_timeout=command_timeout,
             max_list_items=max_list_items,
@@ -1355,7 +1365,7 @@ class CoreToolbox:
         )
 
     @staticmethod
-    def _invoke_plugin_provider(provider: Callable[..., Any], work_root: Path) -> Any:
+    def _invoke_plugin_provider(provider: Callable[..., Any], work_root: Path, session_id: str = "") -> Any:
         """Ask a plugin provider for the current project-scoped bundle.
 
         Providers written before project-scoped plugin contexts were added are
@@ -1368,17 +1378,25 @@ class CoreToolbox:
         except (TypeError, ValueError):
             parameters = {}
         work_root_parameter = parameters.get("work_root")
+        session_kwargs = {"session_id": session_id} if "session_id" in parameters else {}
         accepts_kwargs = any(
             item.kind == inspect.Parameter.VAR_KEYWORD
             for item in parameters.values()
         )
         if work_root_parameter is not None and work_root_parameter.kind != inspect.Parameter.POSITIONAL_ONLY:
-            return provider(work_root=str(work_root))
+            return provider(work_root=str(work_root), **session_kwargs)
         if accepts_kwargs:
-            return provider(work_root=str(work_root))
+            return provider(work_root=str(work_root), **session_kwargs)
         if work_root_parameter is not None:
-            return provider(str(work_root))
-        return provider()
+            return provider(str(work_root), **session_kwargs)
+        return provider(**session_kwargs)
+
+    def bind_session(self, session_id: str) -> None:
+        self._bound_session_id = session_id
+
+    def _tool_session(self) -> str:
+        from lamtools_core.plugin_system.tool_extensions import current_session
+        return current_session(self._bound_session_id)
 
     @staticmethod
     def _call_work_root(call: ToolCall, fallback: Path) -> Path:
@@ -1392,19 +1410,49 @@ class CoreToolbox:
         return fallback
 
     def _dynamic_plugin_specs(self, *, work_root: Path | None = None) -> list[ToolSpec]:
+        from lamtools_core.plugin_system.tool_extensions import ToolExtensionProvider
         specs: list[ToolSpec] = []
+        native_ids: set[int] = set()
+        native_names: set[str] = set()
+        other_names: set[str] = set()
         effective_root = work_root or self.work_root
         for provider in self.plugin_tool_providers:
             try:
-                bundle = self._invoke_plugin_provider(provider, effective_root)
+                bundle = self._invoke_plugin_provider(provider, effective_root, self._tool_session())
             except Exception:  # noqa: BLE001 — plugin tools must never break the toolbox
                 continue
-            specs.extend(list(getattr(bundle, "specs", []) or []))
+            contributed = [spec for spec in list(getattr(bundle, "specs", []) or []) if self._plugin_spec_available(spec)]
+            specs.extend(contributed)
+            if isinstance(provider, ToolExtensionProvider):
+                native_ids.update(id(spec) for spec in contributed)
+                native_names.update(spec.name for spec in contributed)
+            else:
+                other_names.update(spec.name for spec in contributed)
+        # user:“宿主能力补齐和接口完善与文档更新”+(新旧动态提供方同名时关闭两个入口，不能按提供方顺序误执行)。
+        self._dynamic_conflicts = native_names & other_names
+        specs = [spec for spec in specs if spec.name not in self._dynamic_conflicts]
         specs = [spec for spec in specs if self._plugin_spec_available(spec)]
         # Dynamic plugin tools carry their own permission on the
         # spec; register it so the approval gate treats them per declaration
         # instead of defaulting unknown names to HARD_BLOCK.
         for spec in specs:
+            if id(spec) in native_ids:
+                # Existing toolboxes keep the stricter permission if a name
+                # is reused; stale approvals are fenced separately by token.
+                strength = {"auto_allow": 0, "ask_user": 1, "hard_block": 2}
+                previous = self.manifest_tool_permissions.get(spec.name, spec.permission)
+                permission = max((previous, spec.permission), key=lambda item: strength.get(item, 2))
+                self.manifest_tool_permissions[spec.name] = permission
+                self.tool_permissions[spec.name] = permission
+                declared_level = spec.metadata["operation_level"]
+                previous_level = self._native_operation_levels.get(spec.name, declared_level)
+                level = 0 if 0 in {previous_level, declared_level} else max(previous_level, declared_level)
+                self._native_operation_levels[spec.name] = level
+                gate = getattr(self, "approval_gate", None)
+                if gate is not None:
+                    gate.manifest_tool_permissions[spec.name] = permission
+                    gate.tool_permissions[spec.name] = permission
+                    gate.declared_operation_levels[spec.name] = level
             self.manifest_tool_permissions.setdefault(spec.name, spec.permission)  # type: ignore[assignment]
             if spec.permission == HARD_BLOCK:
                 # Keep this union monotonic for the lifetime of the toolbox:
@@ -1450,7 +1498,8 @@ class CoreToolbox:
             for spec in self._dynamic_plugin_specs()
             if spec.name not in self.disabled_tools and spec.name not in self.manifest_hard_block_tools
         ]
-        return [*specs, *plugin_specs]
+        return [spec for spec in [*specs, *plugin_specs]
+                if all(host.allows(spec.name, self._tool_session()) for host in self._tool_extension_hosts)]
 
     def _effective_tool_permission(self, name: str, fallback: PermissionTier | str) -> str:
         if name in self.manifest_hard_block_tools:
@@ -1619,6 +1668,17 @@ class CoreToolbox:
 
     def prepare_call(self, call: ToolCall) -> ToolCall:
         self._refresh_runtime_permissions()
+        self._dynamic_plugin_specs(work_root=self._call_work_root(call, self.work_root))
+        if call.name in self._dynamic_conflicts:
+            return replace(call, requires_approval=False, metadata={**dict(call.metadata or {}), "approval": {
+                "tier": HARD_BLOCK, "blocked": True, "requires_approval": False, "reason": "Conflicting dynamic tool providers",
+            }})
+        for host in self._tool_extension_hosts:
+            blocked = host.binding_error(call, self._tool_session())
+            if blocked is not None:
+                return replace(call, requires_approval=False, metadata={**dict(call.metadata or {}), "approval": {
+                    "tier": HARD_BLOCK, "blocked": True, "requires_approval": False, "reason": blocked.error,
+                }})
         # user:“把 MCP 从 toolbox 里面拿出去”+(旧会话中的协议工具立即拒绝，不再要求一次无效审批)。
         if call.name in {"mcp_activate", "mcp_tool"} or call.name.startswith("mcp__"):
             return replace(call, requires_approval=False, metadata={**dict(call.metadata or {}), "approval": {
@@ -1737,7 +1797,34 @@ class CoreToolbox:
             metadata={**dict(prepared.metadata or {}), "approval": approval},
         )
 
+    async def pre_tool_call(self, call: ToolCall, context: ToolContext) -> ToolResult | None:
+        self._dynamic_plugin_specs(work_root=self._call_work_root(call, self.work_root))
+        if call.name in self._dynamic_conflicts:
+            return ToolResult(call.id, call.name, status="blocked", error="Conflicting dynamic tool providers", error_code="tool/name-conflict")
+        for host in self._tool_extension_hosts:
+            blocked = await host.before(call, context)
+            if blocked is not None:
+                return blocked
+        return None
+
+    async def observe_tool_result(self, call: ToolCall, result: ToolResult, context: ToolContext) -> None:
+        for host in self._tool_extension_hosts:
+            await host.observe(call, result, context)
+
     async def execute(self, call: ToolCall, context: ToolContext | None = None) -> ToolResult:
+        from lamtools_core.plugin_system.tool_extensions import tool_execution_context, observers_deferred
+        actual_context = context or ToolContext(session_id=self._bound_session_id, work_root=str(self.work_root))
+        with tool_execution_context(actual_context):
+            result = await self.pre_tool_call(call, actual_context)
+            if result is None:
+                result = await self._execute_existing(call, actual_context)
+                for host in self._tool_extension_hosts:
+                    result = await host.after(call, result, actual_context)
+            if not observers_deferred():
+                await self.observe_tool_result(call, result, actual_context)
+            return result
+
+    async def _execute_existing(self, call: ToolCall, context: ToolContext | None = None) -> ToolResult:
         self._refresh_runtime_permissions()
         if self.capability_tool_whitelist is not None and call.name not in self.capability_tool_whitelist:
             return ToolResult(call_id=call.id, name=call.name, status="blocked", error="This assistant has read-only tools")
@@ -1747,6 +1834,8 @@ class CoreToolbox:
         # ``prepare_call`` first.
         provider_root = self._call_work_root(call, self.work_root)
         self._dynamic_plugin_specs(work_root=provider_root)
+        if call.name in self._dynamic_conflicts:
+            return ToolResult(call.id, call.name, status="blocked", error="Conflicting dynamic tool providers", error_code="tool/name-conflict")
         if (
             self.agent_tool_whitelist is not None
             and call.name not in self.agent_tool_whitelist
@@ -1820,11 +1909,13 @@ class CoreToolbox:
                 status="blocked",
                 error=f"Plugin disabled: {plugin_name}",
             )
-        handler = self._handlers.get(call.name)
+        # user:“宿主能力补齐和接口完善与文档更新”+(已绑定的受管工具只从其真实所有者取 handler，旧提供方未声明的处理函数不能抢占)。
+        owned_providers = [host.provider for host in self._tool_extension_hosts if call.name in host.known]
+        handler = None if owned_providers else self._handlers.get(call.name)
         if handler is None:
-            for provider in self.plugin_tool_providers:
+            for provider in owned_providers or self.plugin_tool_providers:
                 try:
-                    bundle = self._invoke_plugin_provider(provider, provider_root)
+                    bundle = self._invoke_plugin_provider(provider, provider_root, self._tool_session())
                     handler = (getattr(bundle, "handlers", {}) or {}).get(call.name)
                 except Exception:  # noqa: BLE001
                     handler = None

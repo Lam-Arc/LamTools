@@ -652,6 +652,10 @@ class CoreBaseAgentKit:
         return ""
 
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(工具目录在模型请求前绑定实际会话，保证会话专属注册按范围显示)。
+        bind_session = getattr(self.toolbox, "bind_session", None)
+        if callable(bind_session):
+            bind_session(state.session_id)
         state.metadata["agent_id"] = self.config.agent_id
         state.metadata["work_root"] = str(self.work_root)
         # user:“一次性处理干净 不要留尾巴”+(运行档在审批等待前持久保留，恢复时仍采用相同规则与工具边界)。
@@ -1421,6 +1425,10 @@ class CoreBaseAgentKit:
         )
 
     async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+        # user:“宿主能力补齐和接口完善与文档更新”+(执行入口与模型工具目录使用相同会话范围)。
+        bind_session = getattr(self.toolbox, "bind_session", None)
+        if callable(bind_session):
+            bind_session(state.session_id)
         current_names = {tool_name(tool) for tool in self._filtered_tools()}
         if call.name not in current_names:
             # A tool removed from the model-visible surface must not be
@@ -1916,6 +1924,25 @@ def ensure_plugin_host_services(
     from lamtools_core.plugin_system.model_catalog import ModelCatalogService
     from lamtools_core.plugin_system.prompt_waterfall import SystemPromptWaterfall
     from lamtools_core.plugin_system.secrets import PluginSecretStore
+    from lamtools_core.plugin_system.tool_extensions import ensure_tool_extensions
+    from lamtools_core.tool.default_toolbox import default_core_tool_specs, bundled_core_tool_specs
+    from lamtools_core.plugin_system.capabilities import _read_tools
+
+    # user:“宿主能力补齐和接口完善与文档更新”+(工具入口先于插件 start 就绪；动态注册不能遮蔽核心或清单工具)。
+    reserved = {spec.name for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]}
+    for manifest in manifests:
+        try:
+            reserved.update(spec.name for spec in _read_tools(manifest))
+        except Exception:
+            pass  # Existing declaration assembly owns malformed-manifest diagnostics.
+    ensure_tool_extensions(plugin_context, reserved_names=reserved)
+    # user:“宿主能力补齐和接口完善与文档更新”+(命令入口先于 start 就绪，保留内置及静态清单名称，运行时仍统一经 command.execute)。
+    from lamtools_core.plugin_system.command_extensions import ensure_command_extensions
+    from lamtools_core.composer_commands import load_command_catalog, default_core_resource_roots
+    from lamtools_core.plugin_system.capabilities import assemble_capabilities
+    command_names = {c.name for c in load_command_catalog(core_roots=default_core_resource_roots(), member_roots=[])}
+    command_names.update(c.name for c in assemble_capabilities(manifests).commands)
+    ensure_command_extensions(plugin_context, reserved_names=command_names)
 
     agent_presets = plugin_context.services.get("agent_presets")
     fresh_presets = build_agent_preset_registry(

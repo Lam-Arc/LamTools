@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+import subprocess
+import sys
 from dataclasses import replace
 from typing import Any, Protocol
 
@@ -125,14 +127,16 @@ class HookEngine:
             if hook.handler.required:
                 return HookDecision(decision="block", reason="required hook has empty command"), audit
             return HookDecision(), audit
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=event.project_root or event.cwd or None,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
+        kwargs: dict[str, Any] = {
+            "cwd": event.project_root or event.cwd or None,
+            "stdin": asyncio.subprocess.PIPE,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "env": env,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        proc = await asyncio.create_subprocess_exec(*argv, **kwargs)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(body), timeout=hook.handler.timeout)

@@ -188,6 +188,8 @@ class ApprovalGate:
         from .operation_trust import OperationTrustStore
         self.trust_store = trust_store or OperationTrustStore()
         self.operation_levels = dict(operation_levels or {})
+        # user:“宿主能力补齐和接口完善与文档更新”+(动态工具提供等级默认值，显式用户等级覆盖仍是同一审批权威)。
+        self.declared_operation_levels: dict[str, int] = {}
         self.auto_approve_level = auto_approve_level
         self.available_level = available_level
         self.mcp_operation_level = mcp_operation_level
@@ -264,7 +266,7 @@ class ApprovalGate:
             return ToolApprovalDecision(False, reason or f"Tool '{tool_name}' is hard-blocked", HARD_BLOCK,
                                         blocked=True, level=0, auto_approve_level=threshold, available_level=cap)
         try:
-            level = operation_level(tool_name, params, levels=self.operation_levels,
+            level = operation_level(tool_name, params, levels={**self.declared_operation_levels, **self.operation_levels},
                                     mcp_level=self.mcp_operation_level,
                                     mcp_call_level=self.mcp_call_level)
             if not valid_level(level):

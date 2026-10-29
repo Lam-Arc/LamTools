@@ -319,6 +319,11 @@ async def handle_thread_start_operation(
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
 
     async def write(db: AsyncSession):
+        # user:“宿主能力补齐和接口完善与文档更新”+(插件创建新会话必须在事务内排除已有实体，不能覆盖 revision=0 的项目空白会话)。
+        if params.get("require_new") is True:
+            row = await db.get(context.persistence.snapshot_store.snapshot_model, thread_id)
+            if row is not None:
+                return None, None
         await context.persistence.assert_revision(db, thread_id, expected_revision)
         member_payload = await context.host.member_hooks.materialize_thread(
             db=db,
@@ -337,6 +342,11 @@ async def handle_thread_start_operation(
         return event, await context.persistence.load(db, thread_id)
 
     event, snapshot = await context.persistence.write(write)
+    if event is None:
+        return CoreLiveOperationOutcome(response=rpc_error(
+            request_id, code=INVALID_REQUEST, message="session already exists",
+            data={"code": "SESSION_ALREADY_EXISTS"},
+        ))
     await context.hub.publish(event)
     return CoreLiveOperationOutcome(
         response=rpc_result(

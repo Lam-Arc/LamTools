@@ -6,15 +6,16 @@ new assembly.  LamTools' prompt assembly is synchronous, so the host-side
 contract is a synchronous waterfall.  A handler that returns an awaitable is
 rejected with a clear error instead of being silently ignored.
 
-The waterfall is deliberately independent from the plugin manifest: a backend
-registers a handler at runtime (and unregisters it on stop), which keeps
-prompt text out of global config and lets a plugin scope its section by
-agent/session.
+Managed backends use context.prompts for staged, automatically withdrawn
+sections, variables and handlers. The legacy register() API remains available
+and requires its caller to manage cleanup. Assembly uses detached snapshots so
+errors leave the builtin prompt available for the existing application fallback.
 """
 
 from __future__ import annotations
 
 import inspect
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -35,7 +36,7 @@ class PromptContext:
 @dataclass
 class PromptSection:
     name: str
-    order: int
+    order: int | float
     text: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -52,14 +53,14 @@ class PromptAssembly:
         name: str,
         text: str,
         *,
-        order: int = 100,
+        order: int | float = 100,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         text = str(text or "")
         if not text.strip():
             return
         self.sections.append(
-            PromptSection(name=str(name), order=int(order), text=text, metadata=dict(metadata or {}))
+            PromptSection(name=str(name), order=order, text=text, metadata=dict(metadata or {}))
         )
         current = self.text.rstrip()
         self.text = f"{current}\n\n{text}" if current else text
@@ -91,20 +92,26 @@ class SystemPromptWaterfall:
     """Ordered, plugin-owned prompt transformations."""
 
     def __init__(self) -> None:
-        self._handlers: list[tuple[int, int, str, PromptHandler]] = []
+        self._handlers: list[tuple[int | float, int, str, PromptHandler]] = []
         self._sequence = 0
+        from .prompt_extensions import PromptContributions
+        self._contributions = PromptContributions(self)
+
+    def for_scope(self, scope):
+        return self._contributions.for_scope(scope)
 
     def register(
         self,
         handler: PromptHandler,
         *,
         plugin: str = "",
-        order: int = 100,
+        order: int | float = 100,
     ) -> Callable[[], None]:
         if not callable(handler):
             raise TypeError("system prompt handler must be callable")
         self._sequence += 1
-        entry = (int(order), self._sequence, str(plugin or ""), handler)
+        from .prompt_extensions import _order
+        entry = (_order(order), self._sequence, str(plugin or ""), handler)
         self._handlers.append(entry)
 
         def unregister() -> None:
@@ -119,9 +126,12 @@ class SystemPromptWaterfall:
         self._handlers = [entry for entry in self._handlers if entry[2] != str(plugin)]
 
     def assemble(self, context: PromptContext, assembly: PromptAssembly) -> PromptAssembly:
+        # user:“宿主能力补齐和接口完善与文档更新”+(所有变换在副本上提交，失败后主程序可以真正回退未被插件污染的原提示词)。
+        context = deepcopy(context)
+        assembly = self._contributions.apply(context, deepcopy(assembly))
         for _order, _sequence, plugin, handler in sorted(self._handlers, key=lambda item: (item[0], item[1])):
             try:
-                result = handler(context, assembly)
+                result = handler(deepcopy(context), assembly)
             except Exception as exc:  # a plugin must not break prompt assembly
                 raise RuntimeError(f"system prompt handler from '{plugin or 'unknown'}' failed: {exc}") from exc
             if inspect.isawaitable(result):
@@ -139,7 +149,16 @@ class SystemPromptWaterfall:
                         "PromptAssembly or None"
                     )
                 assembly = result
-        return assembly
+        # user:“接口完善”+(插件返回损坏的结构必须在回退边界内报错，已交付结果与插件保留的对象分离)。
+        from .prompt_extensions import _order
+        if not isinstance(assembly.text, str) or not isinstance(assembly.sections, list):
+            raise TypeError("prompt assembly requires string text and a section list")
+        for section in assembly.sections:
+            if (not isinstance(section, PromptSection) or not isinstance(section.name, str)
+                    or not isinstance(section.text, str) or not isinstance(section.metadata, dict)):
+                raise TypeError("invalid prompt section")
+            _order(section.order)
+        return deepcopy(assembly)
 
     @property
     def handler_count(self) -> int:

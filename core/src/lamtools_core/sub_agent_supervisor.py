@@ -1515,39 +1515,99 @@ class SubAgentSupervisor:
             ).fetchone()
         return int((row["n"] if row else 0) or 0)
 
-    def _write_member_event(self, record: SubAgentRecord, event: str, *, detail: str = "") -> None:
-        """Persist one member state change as a durable, session-scoped event."""
-        payload = json.dumps(
-            {
-                "event": event,
-                "name": record.name,
-                "type": record.type,
-                "status": record.status,
-                # user:“把最多 500 字符这个限制给去掉”+(完成通知向主代理传递完整最终消息。)
-                "summary": record.summary or "",
-                "detail": str(detail or "")[:500],
-                "elapsed_ms": record.elapsed_ms,
-                "occurred_at": record.completed_at or time.time(),
-            },
-            ensure_ascii=False,
-        )
+    def _write_member_event(self, record: SubAgentRecord, event: str, *, detail: str = "") -> str:
+        """Persist one member state change as a durable, session-scoped event.
+
+        Returns the inserted row id, or ``""`` when the transition was already
+        recorded. The id doubles as the guidance id of the live delivery, so a
+        parent checkpoint acknowledgement marks exactly this row delivered.
+        """
+        event_id = uuid.uuid4().hex
+        event_payload = {
+            "event": event,
+            "name": record.name,
+            "type": record.type,
+            "status": record.status,
+            # user:“把最多 500 字符这个限制给去掉”+(完成通知向主代理传递完整最终消息。)
+            "summary": record.summary or "",
+            "detail": str(detail or "")[:500],
+            "elapsed_ms": record.elapsed_ms,
+            "occurred_at": record.completed_at or time.time(),
+        }
         key = f"{event}:{record.name}:{record.completed_at or record.started_at or 0}"
         try:
             with self._connection() as db:
                 cursor = db.execute(
                     "INSERT OR IGNORE INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at) VALUES(?,?,?,?,?,?)",
-                    (uuid.uuid4().hex, self.parent_thread_id, record.name, payload, key, time.time()),
+                    (event_id, self.parent_thread_id, record.name, json.dumps(event_payload, ensure_ascii=False), key, time.time()),
                 )
         except Exception:
             # Registry state survives; the application reconciliation retries
             # publication. Keep the failed outbox write observable in logs.
             _logger.exception("sub-agent lifecycle event write failed parent=%s name=%s event=%s",
                               self.parent_thread_id, record.name, event)
-            return
+            return ""
         if cursor.rowcount == 0:
-            return
+            return ""
         self._notify_activity()
         _notify_member_event()
+        # user:“子代理异常，主诉：子代理完成后不会回传最终回复”+(父回合还在跑时，
+        # 成员一完成就把完整最终消息作为指导注入该回合；回合已结束则由持久事件
+        # 的 member-wake 路径在下一回合投递，两条路都靠 delivered_at 去重。)
+        self._deliver_member_event_live(record, event, event_payload, event_id)
+        return event_id
+
+    def _deliver_member_event_live(
+        self,
+        record: SubAgentRecord,
+        event: str,
+        payload: dict[str, Any],
+        event_id: str,
+    ) -> bool:
+        """Hand a finished member's final message to a still-running parent.
+
+        Uses the same guidance channel as the child ``message`` tool, so the
+        kernel takes it at its next step boundary and forces one more step if
+        the parent had already produced a final answer. A parent run that is no
+        longer alive rejects the injection; the durable row then stays pending
+        for the next-turn wake path.
+        """
+        if event not in MEMBER_WAKE_EVENTS:
+            return False
+        sink = getattr(self.runner, "parent_guidance_sink", None)
+        if not callable(sink):
+            return False
+        text = member_wake_prompt([{"payload": payload}])
+        if not text:
+            return False
+        metadata = {
+            "source": "sub_agent",
+            "name": record.name,
+            "type": record.type,
+            "status": record.status,
+            "summary": record.summary,
+            "session_id": record.sub_session_id,
+            "sub_session_id": record.sub_session_id,
+            "model_id": record.model_id,
+            "reasoning_level": record.reasoning_level,
+            "parent_call_id": record.source_call_id,
+            "parent_run_id": record.source_run_id,
+            "parent_turn_id": record.source_turn_id,
+            "lifecycle_event": event,
+        }
+        args = (self.parent_thread_id, record.source_run_id, text, event_id)
+        try:
+            inspect.signature(sink).bind(*args, metadata)
+        except (TypeError, ValueError):
+            # Keep compatibility with injected/legacy four-argument sinks.
+            try:
+                return bool(sink(*args))
+            except BaseException:
+                return False
+        try:
+            return bool(sink(*args, metadata))
+        except BaseException:
+            return False
 
     async def _record_member_event(self, record: SubAgentRecord, event: str, *, detail: str = "") -> None:
         """Persist a member state change and publish it to the open session.

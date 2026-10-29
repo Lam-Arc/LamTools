@@ -330,15 +330,24 @@ class OutboundRouter:
             return
         try:
             target = resolve_reply_target(session.reply_target, self.limiter, self.cache, allow_event=True)
+            self.logger.info(
+                "QQ outbound send tag=%s scope=%s target=%s content=%r",
+                tag, target.scope, target.target_id, text,
+            )
             await self.api.send_markdown(target, text)
         except Exception as exc:
             self.logger.error("QQ %s send failed: %s", tag, exc)
 
     async def _send(self, session: Any, text: str, tag: str) -> None:
         limit = int(self.config.get("textChunkLimit") or 4500)
-        for chunk in split_bubbles(text, limit, options=self.bubble_options):
+        chunks = split_bubbles(text, limit, options=self.bubble_options)
+        for index, chunk in enumerate(chunks, start=1):
             try:
                 target = resolve_reply_target(session.reply_target, self.limiter, self.cache, allow_event=True)
+                self.logger.info(
+                    "QQ outbound send tag=%s scope=%s target=%s chunk=%d/%d content=%r",
+                    tag, target.scope, target.target_id, index, len(chunks), chunk,
+                )
                 await self.api.send_markdown(target, chunk)
             except Exception as exc:
                 self.logger.error("QQ %s send failed: %s", tag, exc)

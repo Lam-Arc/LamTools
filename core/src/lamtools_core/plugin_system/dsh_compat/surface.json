@@ -1,0 +1,1430 @@
+{
+  "schemaVersion": 1,
+  "hostContracts": {
+    "commands": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": ["context.commands.register", "command.catalog", "command.execute", "CommandInvocation", "CommandResult"],
+      "documentation": "agent_docs/plugin_command_extensions.md",
+      "evidence": "core/tests/test_plugin_command_extensions.py",
+      "limits": ["managed desktop Python host only", "text action commands; no attachments or DSH raw Agent", "explicit session_id override; no Cordis scope bridge", "Sunday strips input whitespace; execute takes command/arguments separately", "registration token is epoch-specific; no stable definitionId", "no commands/change or DSH command/run/done log format", "current UI requests global catalog only; scoped discovery requires thread_id", "no JS handler translation or automatic tool approval bypass"]
+    },
+    "prompts": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": ["context.prompts.section", "context.prompts.variable", "context.prompts.on_assemble", "PromptContext", "PromptAssembly", "PromptSection"],
+      "documentation": "agent_docs/plugin_prompt_extensions.md",
+      "evidence": "core/tests/test_plugin_prompt_extensions.py",
+      "limits": ["managed desktop Python host only", "synchronous providers and assembly only", "owned sections append after builtins; ordered among plugin contributions", "explicit session/agent_id scopes, plugin-prefixed section names", "no complete prompt, dynamic context/refresh/suppression or central order map", "no change event, tool schema provider or model selection/toolSet snapshot", "Sunday logs errors and falls back to untouched builtin prompt; DSH rejects assembly", "no automatic update of frozen model prompt, JS runtime or Cordis scope bridge"]
+    },
+    "tools": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": ["context.tools.register", "context.tools.restrict", "context.tools.guard", "context.tools.on", "ToolDecision", "ToolPatch"],
+      "documentation": "agent_docs/plugin_tool_extensions.md",
+      "evidence": "core/tests/test_plugin_tool_extensions.py",
+      "limits": ["managed desktop Python host only", "flat primitive object schema subset only", "pre-execute allow/deny only; no argument rewrite or dynamic ask", "post-execute content patch only; result observers read-only", "no tools/execute waterfall or retry wrapper", "existing numeric permission gate and model tool snapshot rules apply", "no JS/Cordis runtime compatibility"]
+    },
+    "sessions": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": ["SESSIONS", "sessions.create", "sessions.state", "sessions.prompt", "sessions.update_queue", "sessions.cancel", "sessions.events", "sessions.follow", "sessions.wait"],
+      "documentation": "agent_docs/plugin_session_control.md",
+      "evidence": "core/tests/test_plugin_session_control.py",
+      "limits": ["desktop Python host only", "text messages only", "durable Sunday event vocabulary, no transient token stream", "no DSH Agent factory or Typert Remote implementation", "create does not bind a workspace or preset", "paused input remains queued until explicit resume", "acceptance receipt is not task completion"]
+    },
+    "ownedServices": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": ["ServiceKey", "ServiceRef.call", "PluginContext.register_service", "PluginContext.bind_service", "PluginContext.effect", "PluginContext.on_dispose"],
+      "documentation": "agent_docs/plugin_owned_services.md",
+      "evidence": "core/tests/test_plugin_owned_services.py",
+      "limits": ["managed Python startup only", "no automatic Cordis dependency tree reload", "no JS/TS runtime compatibility", "raw objects retained from get() bypass later lifetime checks"]
+    }
+  },
+  "upstreamCommit": "f3803c96974ad4a94195fb97e5c637e9c2a3afe3",
+  "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/capability-seams.zh.md",
+  "services": [
+    {
+      "dsh": "actionCards",
+      "status": "gap",
+      "sunday": "补齐 actionCards 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/action-cards"
+    },
+    {
+      "dsh": "pluginRecommendations",
+      "status": "gap",
+      "sunday": "补齐 pluginRecommendations 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/plugin-recommendations"
+    },
+    {
+      "dsh": "headlessStartup",
+      "status": "gap",
+      "sunday": "补齐 headlessStartup 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/headless"
+    },
+    {
+      "dsh": "cotTranslation",
+      "status": "gap",
+      "sunday": "补齐 cotTranslation 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/client-ui-cot-translation"
+    },
+    {
+      "dsh": "translator",
+      "status": "gap",
+      "sunday": "补齐 translator 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/translator"
+    },
+    {
+      "dsh": "hmr",
+      "status": "candidate",
+      "sunday": "显式 plugin.system.reload",
+      "phase": 2,
+      "boundary": "显式重载可复用；不承诺任意模块图自动热替换。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/management.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/boot/hmr"
+    },
+    {
+      "dsh": "pluginRegistryProbe",
+      "status": "gap",
+      "sunday": "补齐 pluginRegistryProbe 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/ui-plugin-manager"
+    },
+    {
+      "dsh": "pluginManager",
+      "status": "candidate",
+      "sunday": "plugin.system.* 管理操作",
+      "phase": 2,
+      "boundary": "复用 supervisor 与事务，不新增第二份生命周期状态。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/management.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/boot/plugin-manager"
+    },
+    {
+      "dsh": "pluginMarket",
+      "status": "candidate",
+      "sunday": "plugin.market.*",
+      "phase": 3,
+      "boundary": "需适配源、搜索、安装状态与取消。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/market.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/boot/plugin-market"
+    },
+    {
+      "dsh": "profileContext",
+      "status": "candidate",
+      "sunday": "profile.list / profile.resolve",
+      "phase": 2,
+      "boundary": "需公开当前组合、来源与路径的只读视图。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/profiles.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/boot/app-boot"
+    },
+    {
+      "dsh": "connection",
+      "status": "candidate",
+      "sunday": "LamToolsTransport",
+      "phase": 3,
+      "boundary": "现有传输不同于 Typert；需协议适配，不转发未知方法。",
+      "evidence": [
+        "core/ui/src/transport/index.ts"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/connection"
+    },
+    {
+      "dsh": "forge",
+      "status": "gap",
+      "sunday": "补齐 forge 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/forge"
+    },
+    {
+      "dsh": "forgeSession",
+      "status": "gap",
+      "sunday": "补齐 forgeSession 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/forge-session"
+    },
+    {
+      "dsh": "forgePanel",
+      "status": "gap",
+      "sunday": "补齐 forgePanel 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/client-ui-forge"
+    },
+    {
+      "dsh": "worktrees",
+      "status": "gap",
+      "sunday": "补齐 worktrees 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/worktree"
+    },
+    {
+      "dsh": "workingDirectory",
+      "status": "candidate",
+      "sunday": "PluginContext.for_work_root",
+      "phase": 2,
+      "boundary": "已有工作目录视图；缺会话持久目录变更与运行中进程边界。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/context.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/working-directory"
+    },
+    {
+      "dsh": "mcpResources",
+      "status": "candidate",
+      "sunday": "MCP 声明与装配",
+      "phase": 2,
+      "boundary": "MCP 工具已有；资源读写/订阅的作用域契约需单独核验。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/capabilities.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/mcp/mcp-resources"
+    },
+    {
+      "dsh": "browserUse",
+      "status": "gap",
+      "sunday": "补齐 browserUse 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/browser-use/browser-use"
+    },
+    {
+      "dsh": "computerUse",
+      "status": "gap",
+      "sunday": "补齐 computerUse 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/computer-use/computer-use"
+    },
+    {
+      "dsh": "cuaAccess",
+      "status": "gap",
+      "sunday": "补齐 cuaAccess 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/cua"
+    },
+    {
+      "dsh": "officeToPdf",
+      "status": "gap",
+      "sunday": "补齐 officeToPdf 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/document/office-to-pdf"
+    },
+    {
+      "dsh": "attachments",
+      "status": "gap",
+      "sunday": "补齐 attachments 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/attachment/attachment"
+    },
+    {
+      "dsh": "fileUploads",
+      "status": "gap",
+      "sunday": "补齐 fileUploads 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/file-upload"
+    },
+    {
+      "dsh": "llm",
+      "status": "candidate",
+      "sunday": "llm_client / model_catalog",
+      "phase": 2,
+      "boundary": "模型目录与客户端已有；缺 DSH registerAdapter、消息与流适配。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/model_catalog.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/llm/llm"
+    },
+    {
+      "dsh": "deepseekLlmApiExtensions",
+      "status": "gap",
+      "sunday": "补齐 deepseekLlmApiExtensions 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/llm/deepseek-llm-api-extensions"
+    },
+    {
+      "dsh": "tokenMeter",
+      "status": "gap",
+      "sunday": "补齐 tokenMeter 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/llm/token-meter"
+    },
+    {
+      "dsh": "toolResultPruner",
+      "status": "gap",
+      "sunday": "补齐 toolResultPruner 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/compaction/compaction-tool-result-pruner"
+    },
+    {
+      "dsh": "sessions",
+      "status": "candidate",
+      "sunday": "SESSIONS / sessions 公开契约 + session_store",
+      "phase": 2,
+      "boundary": "Python 已公开创建、状态、文本投递、取消、队列和持久事件；Sunday 事件格式不同，仍需 DSH 语义适配，非原样 append 日志。",
+      "evidence": [
+        "core/src/lamtools_core/app/core_session_store.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/session"
+    },
+    {
+      "dsh": "speechController",
+      "status": "gap",
+      "sunday": "补齐 speechController 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/api-speech-to-text"
+    },
+    {
+      "dsh": "sessionController",
+      "status": "candidate",
+      "sunday": "SESSIONS / sessions 公开契约 + 桌面 live 控制",
+      "phase": 3,
+      "boundary": "需适配请求字段、消息回执、等待和流；操作存在不代表 Remote 方法等价。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/session-controller"
+    },
+    {
+      "dsh": "sessionFileReferences",
+      "status": "gap",
+      "sunday": "补齐 sessionFileReferences 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/session-controller"
+    },
+    {
+      "dsh": "sessionSkillCatalog",
+      "status": "candidate",
+      "sunday": "技能装配",
+      "phase": 3,
+      "boundary": "需冷会话可读的技能目录及权限过滤。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/capabilities.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/session-controller"
+    },
+    {
+      "dsh": "jobController",
+      "status": "gap",
+      "sunday": "补齐 jobController 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/job-controller"
+    },
+    {
+      "dsh": "credentialsController",
+      "status": "gap",
+      "sunday": "补齐 credentialsController 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/settings-controller"
+    },
+    {
+      "dsh": "settingsController",
+      "status": "gap",
+      "sunday": "补齐 settingsController 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/settings-controller"
+    },
+    {
+      "dsh": "workspaceFiles",
+      "status": "candidate",
+      "sunday": "现有文件工具与插件 RPC",
+      "phase": 3,
+      "boundary": "需受工作区约束的 stat/read/readBytes/list/changes 公开契约。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/context.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/workspace-files"
+    },
+    {
+      "dsh": "workspaceChanges",
+      "status": "gap",
+      "sunday": "补齐 workspaceChanges 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/deliverables/workspace-changes"
+    },
+    {
+      "dsh": "terminalController",
+      "status": "candidate",
+      "sunday": "桌面终端状态",
+      "phase": 3,
+      "boundary": "现有状态不是通用 PTY Remote 服务，需显式适配。",
+      "evidence": [
+        "core/src/lamtools_core/app/live/terminal_state.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/terminal-controller"
+    },
+    {
+      "dsh": "workspaceController",
+      "status": "candidate",
+      "sunday": "现有项目与会话操作",
+      "phase": 3,
+      "boundary": "需 Remote 请求、状态基线及重连同步契约。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/workspace-controller"
+    },
+    {
+      "dsh": "directoryPickerController",
+      "status": "gap",
+      "sunday": "补齐 directoryPickerController 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/workspace-controller"
+    },
+    {
+      "dsh": "typert",
+      "status": "gap",
+      "sunday": "补齐 typert 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/typert/registry"
+    },
+    {
+      "dsh": "typertGateway",
+      "status": "gap",
+      "sunday": "补齐 typertGateway 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/gateway"
+    },
+    {
+      "dsh": "remoteAccess",
+      "status": "gap",
+      "sunday": "补齐 remoteAccess 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/remote-access"
+    },
+    {
+      "dsh": "sessionPersistence",
+      "status": "candidate",
+      "sunday": "CoreSessionStore",
+      "phase": 2,
+      "boundary": "需公开冷读取、恢复、持久化与分叉边界。",
+      "evidence": [
+        "core/src/lamtools_core/app/core_session_store.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/session-persistence"
+    },
+    {
+      "dsh": "configEditor",
+      "status": "candidate",
+      "sunday": "config_store",
+      "phase": 2,
+      "boundary": "需对齐写入、重载事务与配置作用域。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/config_store.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/boot/config-editor"
+    },
+    {
+      "dsh": "settings",
+      "status": "candidate",
+      "sunday": "config schema / config_store",
+      "phase": 2,
+      "boundary": "已有表单与持久配置；需动态 namespace、脱敏读写契约。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/config_store.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/settings/settings"
+    },
+    {
+      "dsh": "subagentModelSelection",
+      "status": "candidate",
+      "sunday": "子代理与模型配置",
+      "phase": 2,
+      "boundary": "需明确委派时的默认值、覆盖和持久化。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/subagent/tool-subagent"
+    },
+    {
+      "dsh": "credentials",
+      "status": "candidate",
+      "sunday": "插件私有 secrets",
+      "phase": 2,
+      "boundary": "仅当前插件凭据视图；不可映射为任意插件凭据读取。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/secrets.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/credentials/credentials"
+    },
+    {
+      "dsh": "deepseekAccount",
+      "status": "gap",
+      "sunday": "补齐 deepseekAccount 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/credentials/deepseek-account"
+    },
+    {
+      "dsh": "authorization",
+      "status": "gap",
+      "sunday": "补齐 authorization 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/credentials/authorization"
+    },
+    {
+      "dsh": "productAnalytics",
+      "status": "gap",
+      "sunday": "补齐 productAnalytics 的 Sunday 公开接口或提供方注册",
+      "phase": 3,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/product-analytics"
+    },
+    {
+      "dsh": "otel",
+      "status": "gap",
+      "sunday": "补齐 otel 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/telemetry/otel"
+    },
+    {
+      "dsh": "productTelemetry",
+      "status": "gap",
+      "sunday": "补齐 productTelemetry 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/host/product-telemetry-otel"
+    },
+    {
+      "dsh": "sessionTelemetry",
+      "status": "gap",
+      "sunday": "补齐 sessionTelemetry 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/session-telemetry"
+    },
+    {
+      "dsh": "storage",
+      "status": "candidate",
+      "sunday": "插件独立数据目录",
+      "phase": 2,
+      "boundary": "文件目录不是通用存储 service；需公开 KV/domain 原语。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/plugin_data.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/storage/storage"
+    },
+    {
+      "dsh": "storageDomain",
+      "status": "candidate",
+      "sunday": "插件数据隔离",
+      "phase": 2,
+      "boundary": "需类型化领域与多后端初始化契约。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/plugin_data.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/storage/storage-domain"
+    },
+    {
+      "dsh": "messageFeedback",
+      "status": "gap",
+      "sunday": "补齐 messageFeedback 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/feedback/message-feedback"
+    },
+    {
+      "dsh": "sessionFeedback",
+      "status": "gap",
+      "sunday": "补齐 sessionFeedback 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/feedback/command-feedback"
+    },
+    {
+      "dsh": "workspaceRegistry",
+      "status": "candidate",
+      "sunday": "项目与会话操作",
+      "phase": 3,
+      "boundary": "需对齐工作区身份、排序、归档和会话归属。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/workspace/workspace"
+    },
+    {
+      "dsh": "sessionQuery",
+      "status": "candidate",
+      "sunday": "CoreSessionStore",
+      "phase": 2,
+      "boundary": "需公开过滤、游标与跨会话读取权限。",
+      "evidence": [
+        "core/src/lamtools_core/app/core_session_store.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session-query/session-query"
+    },
+    {
+      "dsh": "fileReferences",
+      "status": "gap",
+      "sunday": "补齐 fileReferences 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/context/file-reference"
+    },
+    {
+      "dsh": "sessionReferenceResolver",
+      "status": "gap",
+      "sunday": "补齐 sessionReferenceResolver 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/context/session-reference"
+    },
+    {
+      "dsh": "sessionTitle",
+      "status": "candidate",
+      "sunday": "会话自动标题",
+      "phase": 2,
+      "boundary": "需公开标题提供方注册与持久状态。",
+      "evidence": [
+        "core/src/lamtools_core/app/session_autotitle.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/session-title"
+    },
+    {
+      "dsh": "systemPrompt",
+      "status": "candidate",
+      "sunday": "context.prompts.section/variable/on_assemble + system_prompt_waterfall",
+      "phase": 2,
+      "boundary": "已验收受管同步 section/variable/assemble、插件排序及会话/agent_id 覆盖。追加于内置段之后；完整替换、动态上下文、集中顺序表、change 事件、工具 schema 及 DSH 失败语义仍需适配。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/prompt_waterfall.py",
+        "core/src/lamtools_core/plugin_system/prompt_extensions.py",
+        "core/tests/test_plugin_prompt_extensions.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/system-prompt"
+    },
+    {
+      "dsh": "tools",
+      "status": "candidate",
+      "sunday": "context.tools.register/restrict/guard/on + 清单 tools.jsonc",
+      "phase": 2,
+      "boundary": "动态注册、收窄、守卫与 pre/post/result 基础子集已验收；仅扁平 schema，原数值审批。execute 包装、参数改写、动态 ask 与 DSH 决策语义仍需适配。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/capabilities.py",
+        "core/src/lamtools_core/plugin_system/tool_extensions.py",
+        "core/tests/test_plugin_tool_extensions.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/tools"
+    },
+    {
+      "dsh": "userQuestions",
+      "status": "candidate",
+      "sunday": "交互请求与频道回答路径",
+      "phase": 2,
+      "boundary": "需公开 provider 无关的问答接口，不得以审批假代普通问题。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/interaction/user-questions"
+    },
+    {
+      "dsh": "planMode",
+      "status": "candidate",
+      "sunday": "plan 内置插件清单",
+      "phase": 2,
+      "boundary": "需公开计划状态、评审和退出模式；不以提示词代替强制限制。",
+      "evidence": [
+        "core/src/lamtools_core/plugins/bundled/plan/plugin.json"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/plan/plan-mode"
+    },
+    {
+      "dsh": "agentPresets",
+      "status": "candidate",
+      "sunday": "agent_presets",
+      "phase": 2,
+      "boundary": "已有组合和服务注册；需逐会话版本与撤回语义适配。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/agent_presets.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/preset/agent-preset-registry"
+    },
+    {
+      "dsh": "commands",
+      "status": "candidate",
+      "sunday": "context.commands.register + command.catalog/execute + 声明式 commands",
+      "phase": 2,
+      "boundary": "已验收受管文本 handler、会话覆盖、目录/执行、撤回与排空。Sunday 裁剪输入空白；附件、完整行解析、稳定定义 ID、变更通知及 DSH 日志需适配。界面当前仅查询全局目录。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/commands.py",
+        "core/src/lamtools_core/plugin_system/command_extensions.py",
+        "core/tests/test_plugin_command_extensions.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/interaction/commands"
+    },
+    {
+      "dsh": "sessionProjections",
+      "status": "gap",
+      "sunday": "补齐 sessionProjections 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/session-projection"
+    },
+    {
+      "dsh": "sessionProjectionCache",
+      "status": "gap",
+      "sunday": "补齐 sessionProjectionCache 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/session-projection-cache"
+    },
+    {
+      "dsh": "skills",
+      "status": "candidate",
+      "sunday": "清单 skills 与 SkillRegistry",
+      "phase": 2,
+      "boundary": "可迁移静态技能目录；动态 provider 与加载行为需适配。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/capabilities.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/skill/skill"
+    },
+    {
+      "dsh": "agents",
+      "status": "candidate",
+      "sunday": "PluginContext 的 sub_agent_runner / run_profile",
+      "phase": 2,
+      "boundary": "需统一 create/resume/followup/steer/cancel/dispose；保留 Sunday 现有调度权威。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/agent"
+    },
+    {
+      "dsh": "agentDefaultModel",
+      "status": "candidate",
+      "sunday": "model_catalog.default / 模型配置",
+      "phase": 2,
+      "boundary": "需明确会话选择与全局默认的写入边界。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/model_catalog.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/agent-default-model"
+    },
+    {
+      "dsh": "agentLoop",
+      "status": "candidate",
+      "sunday": "Sunday 主代理循环",
+      "phase": 2,
+      "boundary": "不是可直接替换的 Cordis loop；扩展点先映射到现有循环。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/agent-loop"
+    },
+    {
+      "dsh": "schedule",
+      "status": "candidate",
+      "sunday": "workflow 调度器",
+      "phase": 2,
+      "boundary": "插件调度不等价于全局持久定时消息服务，需提升宿主契约。",
+      "evidence": [
+        "core/src/lamtools_core/plugins/bundled/workflow/backend/runner_scheduler.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/schedule/schedule"
+    },
+    {
+      "dsh": "goals",
+      "status": "candidate",
+      "sunday": "目标状态与延续驱动",
+      "phase": 2,
+      "boundary": "需定义持久目标、轮次驱动与停止的公开契约。",
+      "evidence": [
+        "core/src/lamtools_core/runtime/goal.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/goal/goal"
+    },
+    {
+      "dsh": "ssh",
+      "status": "gap",
+      "sunday": "补齐 ssh 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/ssh/ssh"
+    },
+    {
+      "dsh": "subprocess",
+      "status": "gap",
+      "sunday": "补齐 subprocess 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/subprocess/subprocess"
+    },
+    {
+      "dsh": "shell",
+      "status": "gap",
+      "sunday": "补齐 shell 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/shell/shell"
+    },
+    {
+      "dsh": "shellEnv",
+      "status": "gap",
+      "sunday": "补齐 shellEnv 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/shell/shell-env"
+    },
+    {
+      "dsh": "terminals",
+      "status": "gap",
+      "sunday": "补齐 terminals 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/terminal/terminal"
+    },
+    {
+      "dsh": "sandbox",
+      "status": "gap",
+      "sunday": "补齐 sandbox 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/sandbox/sandbox"
+    },
+    {
+      "dsh": "sandboxPolicy",
+      "status": "gap",
+      "sunday": "补齐 sandboxPolicy 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/sandbox/sandbox-policy"
+    },
+    {
+      "dsh": "approval",
+      "status": "candidate",
+      "sunday": "permission_service / approval.respond",
+      "phase": 2,
+      "boundary": "保留原审批链；需转换一次性请求、取消和回答者生命周期。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/interaction/user-approval"
+    },
+    {
+      "dsh": "permissionPresets",
+      "status": "candidate",
+      "sunday": "权限操作和预设",
+      "phase": 2,
+      "boundary": "需模型工具/用户终端分别定义授权，不自动提升权限。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/interaction/permission-presets"
+    },
+    {
+      "dsh": "ptcRuntime",
+      "status": "gap",
+      "sunday": "补齐 ptcRuntime 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/ptc-runtime/ptc-runtime"
+    },
+    {
+      "dsh": "fs",
+      "status": "gap",
+      "sunday": "补齐 fs 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/fs/fs"
+    },
+    {
+      "dsh": "compaction",
+      "status": "candidate",
+      "sunday": "agent preset compaction 服务",
+      "phase": 2,
+      "boundary": "已有 compact_now 路径；需统一压力测量、手动调用和失败恢复。",
+      "evidence": [
+        "core/src/lamtools_core/context_compaction/controller.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/compaction/compaction"
+    },
+    {
+      "dsh": "subagents",
+      "status": "candidate",
+      "sunday": "sub_agent_runner / sub_agent_runner_factory",
+      "phase": 2,
+      "boundary": "需对齐 continuation、fork、控制句柄与所有权。",
+      "evidence": [
+        "core/src/lamtools_core/app/default_agent.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/subagent/subagent"
+    },
+    {
+      "dsh": "speechToText",
+      "status": "gap",
+      "sunday": "补齐 speechToText 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/speech-to-text"
+    },
+    {
+      "dsh": "agentTeams",
+      "status": "gap",
+      "sunday": "补齐 agentTeams 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/agent-team"
+    },
+    {
+      "dsh": "claudeCodeMods",
+      "status": "gap",
+      "sunday": "补齐 claudeCodeMods 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/claude-code-mods"
+    },
+    {
+      "dsh": "inspector",
+      "status": "gap",
+      "sunday": "补齐 inspector 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/capability-seams.zh.md"
+    },
+    {
+      "dsh": "jobs",
+      "status": "gap",
+      "sunday": "补齐 jobs 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/jobs/jobs"
+    },
+    {
+      "dsh": "web",
+      "status": "gap",
+      "sunday": "补齐 web 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/web/web"
+    },
+    {
+      "dsh": "spillStore",
+      "status": "gap",
+      "sunday": "补齐 spillStore 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/spill/spill"
+    },
+    {
+      "dsh": "directoryPicker",
+      "status": "gap",
+      "sunday": "补齐 directoryPicker 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/host/directory-picker"
+    },
+    {
+      "dsh": "webServer",
+      "status": "candidate",
+      "sunday": "插件 HTTP 路由",
+      "phase": 3,
+      "boundary": "已有具名 operation 路由；缺通用 upgrade 和 index 注入等价契约。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/plugin_http.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/host/webserver"
+    },
+    {
+      "dsh": "webApp",
+      "status": "gap",
+      "sunday": "补齐 webApp 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app"
+    },
+    {
+      "dsh": "clientModules",
+      "status": "candidate",
+      "sunday": "Sunday 插件 UI 注册",
+      "phase": 3,
+      "boundary": "Vue 与 React/Cordis 模块图不同；保留既有 UI 生命周期。",
+      "evidence": [
+        "core/ui/src/plugins/registry.ts"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/modules"
+    },
+    {
+      "dsh": "workflowEngine",
+      "status": "candidate",
+      "sunday": "workflow 插件后端",
+      "phase": 4,
+      "boundary": "需公开脚本/子任务/取消协议；不可假设 PTC 源码可直接运行。",
+      "evidence": [
+        "core/src/lamtools_core/plugins/bundled/workflow/backend/operations.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/workflow/workflow"
+    },
+    {
+      "dsh": "webhookRuntime",
+      "status": "candidate",
+      "sunday": "插件 HTTP routes → operation",
+      "phase": 4,
+      "boundary": "需认证交付、规则注册和会话创建映射。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/plugin_http.py"
+      ],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/webhook"
+    },
+    {
+      "dsh": "lsp",
+      "status": "gap",
+      "sunday": "补齐 lsp 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/lsp/lsp"
+    },
+    {
+      "dsh": "dynamicCordisRunner",
+      "status": "gap",
+      "sunday": "补齐 dynamicCordisRunner 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/extensions/cordis-host-runner"
+    },
+    {
+      "dsh": "cordisInspect",
+      "status": "gap",
+      "sunday": "补齐 cordisInspect 的 Sunday 公开接口或提供方注册",
+      "phase": 2,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/extensions/cordis-host-runner"
+    },
+    {
+      "dsh": "liveshareShares",
+      "status": "gap",
+      "sunday": "补齐 liveshareShares 的 Sunday 公开接口或提供方注册",
+      "phase": 4,
+      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
+      "evidence": [],
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/experimental/liveshare"
+    }
+  ],
+  "extensionPoints": [
+    {
+      "kind": "event",
+      "name": "agent/created",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "agent/pre-step",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "agent/request",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "agent/request-error",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "agent/assistant-stream",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "瞬态输出与持久 settlement 分开，并定义取消与断流。"
+    },
+    {
+      "kind": "event",
+      "name": "agent/turn-stopping",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "tools/pre-execute",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "tools/execute",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "tools/post-execute",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "tools/result",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "逐项适配通知/串行/waterfall 类型、决策、next 委托和卸载；不能只改事件名。"
+    },
+    {
+      "kind": "event",
+      "name": "session/event",
+      "phase": 2,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "需映射持久事实，不以实时 UI 通知代替。"
+    },
+    {
+      "kind": "event",
+      "name": "system-prompt/assemble",
+      "phase": 2,
+      "status": "candidate",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md",
+      "boundary": "context.prompts.on_assemble 已验证同步受管变换与失败回退；参数、动态上下文、完整替换与 DSH 严格失败语义仍需适配。"
+    },
+    {
+      "kind": "remote",
+      "name": "session",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/session-controller/src/index.ts",
+      "methods": [
+        "list",
+        "search",
+        "create",
+        "rename",
+        "fork",
+        "prompt",
+        "updateQueue",
+        "cancel",
+        "selectModel",
+        "modelCatalog",
+        "initializeDefaultModel",
+        "attachment",
+        "events",
+        "page",
+        "state",
+        "wait",
+        "observeEvent",
+        "observeProjections",
+        "observeState",
+        "follow",
+        "projections",
+        "control",
+        "canOpenWorkspacePath",
+        "openWorkspacePath",
+        "workspacePathApplications"
+      ],
+      "boundary": "按固定上游请求/响应适配；含身份解析、权限、错误、取消、冷读取与流重连。"
+    },
+    {
+      "kind": "remote",
+      "name": "workspace",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/workspace-controller/src/index.ts",
+      "methods": [
+        "create",
+        "initializeDefault",
+        "rename",
+        "delete",
+        "insertBefore",
+        "insertSessionBefore",
+        "archiveSession",
+        "unarchiveSession",
+        "pinSession",
+        "unpinSession",
+        "follow"
+      ],
+      "boundary": "按固定上游请求/响应适配；含身份解析、权限、错误、取消、冷读取与流重连。"
+    },
+    {
+      "kind": "remote",
+      "name": "workspaceFiles",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/workspace-files/src/index.ts",
+      "methods": [
+        "stat",
+        "read",
+        "readBytes",
+        "list",
+        "changes"
+      ],
+      "boundary": "按固定上游请求/响应适配；含身份解析、权限、错误、取消、冷读取与流重连。"
+    },
+    {
+      "kind": "remote",
+      "name": "terminal",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/terminal-controller/src/index.ts",
+      "methods": [
+        "environment",
+        "shells",
+        "list",
+        "create",
+        "retain",
+        "attach",
+        "rename",
+        "close"
+      ],
+      "boundary": "用户 PTY 与模型 shell 权限分别建模；双向流、取消、停用均需验收。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.session.header.actions",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.session.header.utilities",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.input.left",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.input.right",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.input.overlay",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.composer.dock",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.input.attachments",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.input.model",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.input.permission",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.chat.node",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "tool.call.toolview",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.chat.reasoning.body",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "conversation.chat.assistant-actions",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "sidebar.right.pane.tab",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "sidebar.right.pane.tab.title",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "sidebar.right.tab.document",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    },
+    {
+      "kind": "slot",
+      "name": "sidebar.right.tab.menu.item",
+      "phase": 3,
+      "status": "gap",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/subsystems/slots.zh.md",
+      "boundary": "React/Cordis 到 Vue 的语义迁移；核对单席位/列表/keyed/chain、会话绑定、依赖就绪与卸载。"
+    }
+  ],
+  "extensionCoverage": "核心钩子、四个已核对 Remote 命名空间和常用 UI 位置。此子表不是上游全部方法/事件/插槽的穷尽清单；阶段2/3按包继续细化，107项服务目录是完整基线。"
+}

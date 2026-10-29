@@ -24,6 +24,22 @@ bili-scroll 保留上游 2.2.2 的 34 个 MCP 工具，宿主业务重写为 Pyt
 
 ## 取舍与边界
 
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(动态命令与原命令目录/动作执行保持同一入口，撤回后不能落到旧处理器)。 -->
+[动态命令 v1](plugin_command_extensions.md)使用 `context.commands.register`，复用 `command.catalog/execute` 和 live 分派，支持受管启停、会话覆盖、调用排空与取消。当前文本输入保留 Sunday 的空白裁剪；界面会话目录、附件、稳定定义 ID、change 通知和 DSH 专用日志格式未覆盖。
+
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(提示词与插件启动代共用所有权，失败回退未修改的内置结果)。 -->
+[提示词扩展 v1](plugin_prompt_extensions.md)通过 `context.prompts` 提供受管 section、variable 和 assemble 钩子，显式匹配会话/agent_id。所有变换在副本上组装，异常或结构损坏不会污染内置提示词。当前仅同步追加基础子集，不含 DSH complete、动态上下文、抑制/刷新和 change 事件；错误时沿用 Sunday 的日志与回退策略。
+
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(动态工具复用同一个生命周期、工具箱和审批权威)。 -->
+[动态工具与钩子 v1](plugin_tool_extensions.md)通过 `context.tools` 提供受管注册、工具集收窄、最终守卫及 pre/post/result 子集。主/子代理共用装配路径，停用撤回、调用排空、旧审批令牌隔离；默认按数值等级 3 审批。复杂 schema、参数改写、动态 ask 和 execute/waterfall 尚未实现。
+
+<!-- user:“每一个地方 sunday 都有等价或者近似接口”+(DSH 兼容复用本宿主权威，按契约与行为分阶段验收)。 -->
+DSH 对齐与迁移入口见 [兼容实施说明](dsh_compatibility.md)和[逐项能力对照](dsh_compatibility_matrix.md)。第一阶段提供宿主能力发现和静态迁移准备；同名服务的运行兼容仍需后续逐项实现，不改变本页的 supervisor、审批和代际权威。
+
+第二阶段 2a 已将[受管服务注册、依赖引用与清理](plugin_owned_services.md)接到原有生命周期：健康检查通过后公开服务，撤回后排空调用，逆序清理已登记资源。服务注册 epoch 是启动实例身份，不替代代码更新 generation；会话和工具等具体能力仍按后续批次补齐。
+
+第二阶段 2b 的[桌面会话控制](plugin_session_control.md)已公开为 SESSIONS v1。它先于插件 start 就绪，复用 live 接收与持久事件；提供新建、文本队列/引导、取消、状态、历史与等待。项目/preset 绑定、附件、完整 Agent 工厂和动态工具仍未由该批次覆盖。
+
 现有桌面插件、操作和工具都在同一 Python 事件循环。先统一权威，避免再造一份 Rust 状态表；代码与数据事务已独立，后续可下沉 Rust。插件仍是受信任的本机代码，不将此生命周期重建描述为进程安全隔离。
 
 仅面向桌面。未发布、未替换用户当前安装。后续用户明确授权后，已完成一次真实评论/私信/收藏验证并回读。验收结果见 [验收报告](plugin_host_rebuild_acceptance.md)。本页更新旧生命周期文档中的状态与管理流程；不改变需要重启的模块覆盖边界。

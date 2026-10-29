@@ -31,6 +31,7 @@ normal lifecycle, readiness, stop and generation rules.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import inspect
 import json
 import logging
@@ -80,14 +81,16 @@ class ProcessBackend:
         env = {**os.environ, **{str(key): str(value) for key, value in (self.spec.get("env") or {}).items()}}
         startup_timeout = float(int(self.spec.get("startupTimeoutMs") or 15000)) / 1000.0
         try:
-            self._process = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=str(cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            kwargs: dict[str, Any] = {
+                "cwd": str(cwd),
+                "env": env,
+                "stdin": asyncio.subprocess.PIPE,
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+            }
+            if sys.platform == "win32":
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            self._process = await asyncio.create_subprocess_exec(*command, **kwargs)
         except Exception as exc:
             self._last_error = f"process start failed: {exc}"
             raise ProcessBackendError(self._last_error) from exc

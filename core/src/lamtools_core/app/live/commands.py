@@ -53,6 +53,11 @@ async def handle_command_execute_operation(
         if isinstance(item, dict) and normalize_command_name(item.get("name"))
     }
     definition = catalog.get(command)
+    # user:“宿主能力补齐和接口完善与文档更新”+(已撤回或冲突的动态命令不能落到旧 actions 的同名处理器)。
+    plugin_context = getattr(context.operations, "plugin_context", None)
+    owned_commands = plugin_context.service("command_extensions") if plugin_context is not None else None
+    if definition is None and owned_commands is not None and command in owned_commands.known_names:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=f"Command not available: {command}"))
     # Allow commands registered as actions even if the catalog (which may
     # go through operations) doesn't list them — e.g. "compact" registered
     # via member_hooks.command_action_handlers() or command.execute operation.
@@ -109,6 +114,7 @@ async def handle_command_execute_operation(
                 actions=actions,
                 params=params,
                 arguments=arguments,
+                prefer_operation=bool((definition or {}).get("metadata", {}).get("owned_command_token")),
             )
             async with context.session_factory() as db:
                 snapshot = await context.persistence.load(db, thread_id)
@@ -175,8 +181,10 @@ async def _execute_live_command_action(
     params: dict[str, Any],
     arguments: str = "",
     on_event: Callable[[dict[str, Any]], Any] | None = None,
+    prefer_operation: bool = False,
 ) -> dict[str, Any]:
-    if command in actions:
+    # user:“宿主能力补齐和接口完善与文档更新”+(目录已选择受管命令时必须走其令牌与租约检查，不能被旧 actions 同名处理器抢占)。
+    if command in actions and not prefer_operation:
         return await execute_command_action(
             command=command,
             thread_id=thread_id,

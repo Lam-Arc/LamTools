@@ -1,5 +1,59 @@
 # Plugin backend readiness and recovery
 
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(动态命令沿原目录/执行入口扩展并共享受管资源所有权)。 -->
+Managed backends can use `context.commands.register` with `CommandInvocation`
+and `CommandResult`. The existing command catalog, execution operation and live
+adapter select the current session definition; active handlers hold a scope
+lease. Revocation hides commands, rejects stale selections and drains callbacks
+before cleanup. Legacy same-name actions cannot replace an owned handler.
+This text-only subset does not implement DSH attachment, stable definition ID,
+change notification, or command log contracts. The current UI requests only the
+global catalog. See [dynamic commands v1](../../agent_docs/plugin_command_extensions.md).
+
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(提示词贡献绑定受管启动代，错误时原始提示词可恢复)。 -->
+Managed Python backends use `context.prompts.section/variable/on_assemble` for
+synchronous, scoped prompt contributions. Startup publication and revocation
+follow the existing registration scope. Main and child agents reuse the same
+waterfall. Assembly operates on detached copies, allowing the application to
+log failures and fall back to untouched builtin text. This differs from DSH's
+strict assembly failure. Complete prompts, dynamic context refresh/suppression,
+change events, and shared tool-schema assembly remain unimplemented. See the
+[prompt extensions v1 contract](../../agent_docs/plugin_prompt_extensions.md).
+
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(动态工具与事件随受管启动代撤回，执行复用原工具箱与权限)。 -->
+Managed Python backends can use `context.tools.register/restrict/guard/on`.
+The main and child toolboxes share the provider and numeric approval gate;
+revocation hides contributions immediately and drains active calls. Registration
+tokens fence stale approvals. Supported hooks are pre-execute (allow/deny),
+post-execute (content patch), and result (read-only final observation).
+There is no execute/waterfall wrapper, argument rewrite, dynamic ask, or complex
+schema support. See [dynamic tools contract v1](../../agent_docs/plugin_tool_extensions.md).
+
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(稳定宿主查询接口与 DSH 兼容阶段保持同一份说明)。 -->
+Plugins can call `context.describe_host()` for a versioned, value-free snapshot
+of live service names/scopes and available operations. Use
+`context.require_service(name)` when a missing dependency must fail explicitly.
+These Python host interfaces do not grant external-process callbacks or declare
+DSH runtime compatibility. See [DSH compatibility and porting](../../agent_docs/dsh_compatibility.md)
+for the pinned upstream inventory, offline migration script and remaining stages.
+
+<!-- user:“宿主能力补齐和接口完善与文档更新”+(受管动态服务、依赖引用及 effect 与真实启停共用一个所有者)。 -->
+Managed Python backends may register owned services and effects in `start` /
+`on_load` using `register_service`, `bind_service`, `effect`, and `on_dispose`.
+The host publishes the staged batch after initial health succeeds, withdraws it
+on failure/stop, drains `ServiceRef.call()` leases before stop hooks, and cleans
+effects in reverse order even if a stop hook fails. Failed cleanup blocks a new
+registration epoch. See [owned service contract v1](../../agent_docs/plugin_owned_services.md)
+for versioning, retry, cancellation and the differences from Cordis dependencies.
+
+<!-- user:“每一个地方 sunday 都有等价或者近似接口”+(桌面插件在 start 即可绑定会话契约，消息不绕过 live 接收)。 -->
+The desktop publishes the `SESSIONS` / `sessions` v1 contract before joining
+plugin startup. It exposes create/state/prompt/update_queue/cancel/events/follow/wait
+over the existing live host and durable events. Receipts are acceptance facts,
+not completion; shutdown wakes passive readers before SQLite closes. See
+[session control v1](../../agent_docs/plugin_session_control.md) for exact types,
+queue/steer behavior and the still-unsupported DSH methods.
+
 The rebuilt lifecycle and transaction authority are documented in
 [plugin host rebuild](../../agent_docs/plugin_host_rebuild.md). `plugin.*` management
 operations forward to `plugin.system.*`; the same supervisor owns operations, tools

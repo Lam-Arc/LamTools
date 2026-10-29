@@ -500,9 +500,6 @@ def create_core_agent_http_app(
         from lamtools_core.plugin_system import await_plugin_backends
 
         app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
-        await await_plugin_backends(app_state["plugin_runtimes"])
-        _logger.info("[startup] operation catalog ready in %.3fs", perf_counter() - phase_started)
-        phase_started = perf_counter()
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_artifact_operations(
             agent_operations,
@@ -635,11 +632,17 @@ def create_core_agent_http_app(
         # Plugins that inject messages into a desktop session must use the live
         # turn path, not the agent-operation turn.start: only the former writes
         # the acceptance/user-message projection the UI renders.
-        from .live_plugin_service import LiveTurnService
+        from .plugin_sessions import install_plugin_session_services
 
         plugin_context = getattr(agent_operations, "plugin_context", None)
         if plugin_context is not None:
-            plugin_context.set_service("live_turn_service", LiveTurnService(live_context))
+            # user:“宿主能力补齐和接口完善与文档更新”+(统一插件会话契约与旧频道接口，共用桌面 live 接收路径)。
+            app_state["plugin_session_service"] = install_plugin_session_services(plugin_context, live_context)
+        # Publish the complete live host before the first await lets plugin
+        # starts bind their dependencies. Reuse the normal readiness join.
+        await await_plugin_backends(app_state["plugin_runtimes"])
+        _logger.info("[startup] operation catalog ready in %.3fs", perf_counter() - phase_started)
+        phase_started = perf_counter()
         app_state["plugin_system_host"] = getattr(agent_operations, "plugin_system_host", None)
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
@@ -717,6 +720,9 @@ def create_core_agent_http_app(
             shutdown_sub_agent_supervisors,
         )
 
+        # Wake passive readers before plugin cleanup or SQLite shutdown.
+        if app_state.get("plugin_session_service") is not None:
+            app_state["plugin_session_service"].shutdown()
         set_agent_run_store_factory(None)
         for recovery_task in app_state.get("turn_recovery_tasks") or []:
             recovery_task.cancel()

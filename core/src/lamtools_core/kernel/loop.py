@@ -3491,7 +3491,8 @@ class CoreLoopKernel:
         # user:“ok，那就这么做”+(将原始档案绑定到当前执行任务，工具参数不能跨会话扩大读取范围)。
         async def execute_bound_tool():
             from lamtools_core.tool.context_history import history_scope
-            with history_scope(self.state_store, state.session_id, self._live_history or []):
+            from lamtools_core.plugin_system.tool_extensions import kernel_tool_result_boundary
+            with history_scope(self.state_store, state.session_id, self._live_history or []), kernel_tool_result_boundary():
                 return await self.kit.execute_tool(state, call)
 
         execution = execute_bound_tool()
@@ -3606,7 +3607,7 @@ class CoreLoopKernel:
         call: ToolCall,
     ) -> ToolResult | None:
         if self.hook_engine is None:
-            return None
+            return await self._apply_owned_pre_tool_hook(state, call)
         decision = await self.hook_engine.run(HookEvent(
             event_name="PreToolUse",
             session_id=state.session_id,
@@ -3643,7 +3644,16 @@ class CoreLoopKernel:
             call.metadata["hook_audit"] = decision.audit_events
         if decision.status_message:
             await self._emit_hook_status(state, call.name, decision.status_message)
-        return None
+        return await self._apply_owned_pre_tool_hook(state, call)
+
+    async def _apply_owned_pre_tool_hook(self, state: RuntimeState, call: ToolCall) -> ToolResult | None:
+        # user:“宿主能力补齐和接口完善与文档更新”+(原审批等待前执行受管守卫，无旧钩子引擎时也不能跳过)。
+        callback = getattr(getattr(self.kit, "toolbox", None), "pre_tool_call", None)
+        if not callable(callback):
+            return None
+        from lamtools_core.tool import ToolContext
+        return await callback(call, ToolContext(session_id=state.session_id, run_id=state.run_id,
+                                                work_root=str(call.metadata.get("work_root") or "")))
 
     # ── Post‑tool hook (PostToolUse / PostToolUseFailure) ────────
 
@@ -4690,6 +4700,12 @@ class CoreLoopKernel:
         response_index: int | None = None,
     ) -> None:
         """Emit a tool finished event."""
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(最终观察发生在新旧 post 钩子之后，普通工具箱调用与内核调用不重复通知)。
+        observer = getattr(getattr(self.kit, "toolbox", None), "observe_tool_result", None)
+        if callable(observer):
+            from lamtools_core.tool import ToolContext
+            await observer(call, result, ToolContext(session_id=state.session_id, run_id=state.run_id,
+                                                     work_root=str(call.metadata.get("work_root") or "")))
         event = CoreEvent(
             name="runtime.tool.finished",
             category="tool",

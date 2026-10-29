@@ -27,6 +27,7 @@ from .prompt_waterfall import (
     PromptSection,
     SystemPromptWaterfall,
 )
+from .command_extensions import CommandInvocation, CommandResult
 from .assets import resolve_plugin_asset
 from .backend_runtime import PluginSupervisor, V2RuntimeManager, register_manager
 from .capabilities import (
@@ -49,6 +50,10 @@ from .config_store import (
     write_config_values,
 )
 from .context import PluginContext
+# user:“宿主能力补齐和接口完善与文档更新”+(插件作者从公开 SDK 导入服务键和可撤回引用)。
+from .services import ServiceError, ServiceKey, ServiceRef
+from .sessions import SESSIONS, SessionControl, SessionError
+from .tool_extensions import ToolDecision, ToolPatch, ToolInvocation, ToolOutcome
 from .engine import PluginEngine, check_engine, host_engine_info, read_engine
 from .host import PluginHost, shared_host
 from .hook_engine import HookEngine
@@ -114,6 +119,8 @@ from .ui import (
 )
 
 __all__ = [
+    "CommandInvocation",
+    "CommandResult",
     "MANIFEST_FILENAME",
     "SUPPORTED_SCOPES",
     "AgentAssembly",
@@ -157,6 +164,16 @@ __all__ = [
     "PluginHookSpec",
     "PluginSkillSpec",
     "PluginContext",
+    "ServiceKey",
+    "ServiceRef",
+    "ServiceError",
+    "SESSIONS",
+    "SessionControl",
+    "SessionError",
+    "ToolDecision",
+    "ToolPatch",
+    "ToolInvocation",
+    "ToolOutcome",
     "PluginHost",
     "BudgetExhausted",
     "ProfileBudget",

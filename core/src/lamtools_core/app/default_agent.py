@@ -2314,6 +2314,16 @@ def create_core_agent_operations(
             payload={"error": "approval.respond requires a runtime with a pending approval"},
         )
 
+    def owned_command_host():
+        context = getattr(catalog, "plugin_context", None)
+        return context.service("command_extensions") if context is not None else None
+
+    def merge_owned_commands(commands, payload):
+        # user:“宿主能力补齐和接口完善与文档更新”+(目录与执行均实时合并同一份受管贡献，避免只在发现页可见却无法执行)。
+        host = owned_command_host()
+        session_id = str(payload.get("thread_id") or payload.get("threadId") or payload.get("session_id") or payload.get("sessionId") or "").strip()
+        return host.merge_catalog(commands, session_id=session_id) if host is not None else commands
+
     async def command_catalog(request: OperationRequest) -> OperationResult:
         work_root = request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root
         commands = build_composer_command_catalog(
@@ -2326,7 +2336,7 @@ def create_core_agent_operations(
         )
         return OperationResult(
             name="command.catalog",
-            payload={"commands": [command.to_dict() for command in commands]},
+            payload={"commands": [command.to_dict() for command in merge_owned_commands(commands, request.payload)]},
         )
 
     async def command_execute(request: OperationRequest) -> OperationResult:
@@ -2346,14 +2356,14 @@ def create_core_agent_operations(
             )
         available = {
             item.name: item
-            for item in build_composer_command_catalog(
+            for item in merge_owned_commands(build_composer_command_catalog(
                 core_roots=resolved_command_core_roots,
                 member_roots=resolved_command_member_roots,
                 work_root=request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root,
                 skill_registry=command_skill_registry(),
                 skill_state_store=command_skill_state_store,
                 plugin_manifests=command_plugin_manifests(),
-            )
+            ), request.payload)
         }
         definition = available.get(command)
         if definition is None:
@@ -2380,7 +2390,19 @@ def create_core_agent_operations(
                 payload={"error": f"Command does not accept arguments: {command}"},
             )
         handlers = dict(command_action_handlers or {})
-        if definition.source == "plugin":
+        if definition.metadata.get("owned_command_token"):
+            # user:“宿主能力补齐和接口完善与文档更新”+(命令保持既有用户动作通道，注册令牌和租约阻止停用后或替换后误调用)。
+            if request.payload.get("attachments") or request.payload.get("images") or request.payload.get("files"):
+                return OperationResult(name=request.name, status="error", payload={"error": "Dynamic commands do not accept attachments"})
+            async def owned_action(thread_id: str, work_root: str = "", arguments: str = "", **_: Any):
+                host = owned_command_host()
+                result = await host.dispatch(definition.metadata["owned_command_token"], name=command,
+                    session_id=thread_id, arguments=arguments, work_root=work_root)
+                if result.status == "error":
+                    raise RuntimeError(result.text or "Plugin command failed")
+                return {"plugin_name": definition.metadata["plugin_name"], "status": result.status, "text": result.text}
+            handlers[command] = owned_action
+        elif definition.source == "plugin":
             async def plugin_action(arguments: str = "", **_: Any) -> dict[str, Any]:
                 metadata = dict(definition.metadata)
                 operation_name = str(metadata.get("operation") or "").strip()
@@ -3643,7 +3665,12 @@ def _plugin_toolbox_contributions(plugin_assembly: Mapping[str, Any]) -> dict[st
 
     availability = None
     plugin_context = plugin_assembly.get("plugin_context")
+    providers = list(plugin_assembly.get("plugin_tool_providers") or [])
     if plugin_context is not None:
+        # user:“宿主能力补齐和接口完善与文档更新”+(把宿主动态工具沿已有装配路径同时传入主代理与子代理)。
+        tool_host = plugin_context.service("tool_extensions")
+        if tool_host is not None and tool_host.provider not in providers:
+            providers.append(tool_host.provider)
         manager = plugin_context.service("plugin.v2_runtime_manager")
         candidate = getattr(manager, "is_enabled", None)
         if callable(candidate):
@@ -3651,7 +3678,7 @@ def _plugin_toolbox_contributions(plugin_assembly: Mapping[str, Any]) -> dict[st
     return {
         "specs": specs,
         "handlers": dict(plugin_assembly.get("plugin_tool_handlers") or {}),
-        "providers": list(plugin_assembly.get("plugin_tool_providers") or []),
+        "providers": providers,
         "mode_tool_sets": dict(plugin_assembly.get("plugin_mode_tool_sets") or {}),
         "mode_exclusive_tools": dict(plugin_assembly.get("plugin_mode_exclusive_tools") or {}),
         "availability": availability,

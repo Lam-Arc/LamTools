@@ -827,8 +827,17 @@ class QQBotRuntime:
             key = f"{turn_id}:{item_id}"
             sent_items = self._target_sent_items.setdefault(session_id, set())
             if key in sent_items:
+                self.logger.info(
+                    "QQ target skip duplicate botId=%s session=%s turn=%s item=%s final=%s",
+                    self.bot_id, session_id, turn_id, item_id, bool(body.get("final_response")),
+                )
                 return
             sent_items.add(key)
+            self.logger.info(
+                "QQ target forward botId=%s session=%s turn=%s item=%s final=%s content=%r",
+                self.bot_id, session_id, turn_id, item_id,
+                bool(body.get("final_response")), content,
+            )
             self._target_sent_texts.setdefault(session_id, set()).add(content)
             await self._send_target_text(session_id, content)
             self._prune_target_sent(session_id)
@@ -855,8 +864,14 @@ class QQBotRuntime:
             return
         limit = int(self.config.get("textChunkLimit") or 4500)
         options = BubbleOptions.from_config(self.config)
+        chunks = split_bubbles(text, limit, options=options)
         for peer in peers:
-            for chunk in split_bubbles(text, limit, options=options):
+            for index, chunk in enumerate(chunks, start=1):
+                self.logger.info(
+                    "QQ target send botId=%s session=%s scope=%s target=%s chunk=%d/%d content=%r",
+                    self.bot_id, session_id, peer.scope, peer.target_id,
+                    index, len(chunks), chunk,
+                )
                 try:
                     await self._api.send_proactive_markdown(peer, chunk)
                 except Exception as exc:  # noqa: BLE001
@@ -1178,7 +1193,12 @@ class QQBotRuntime:
         result = None
         limit = int(self.config.get("textChunkLimit") or 4500)
         options = BubbleOptions.from_config(self.config)
-        for chunk in split_bubbles(content, limit, options=options):
+        chunks = split_bubbles(content, limit, options=options)
+        for index, chunk in enumerate(chunks, start=1):
+            self.logger.info(
+                "QQ markdown send botId=%s scope=%s target=%s chunk=%d/%d content=%r",
+                self.bot_id, target.scope, target.target_id, index, len(chunks), chunk,
+            )
             result = await self._outbound.send_markdown(target, chunk)
         return result
 
@@ -1454,6 +1474,10 @@ class QQBotRuntime:
         limit = int(self.config.get("textChunkLimit") or 4500)
         options = BubbleOptions.from_config(self.config)
         chunks = split_bubbles(text, limit, options=options)
+        self.logger.info(
+            "QQ test send botId=%s scope=%s target=%s dryRun=%s chunks=%d content=%r",
+            self.bot_id, scope, target_id, dry_run, len(chunks), chunks,
+        )
         if dry_run:
             return {"ok": True, "dryRun": True, "chunks": chunks}
         results: list[dict[str, Any]] = []

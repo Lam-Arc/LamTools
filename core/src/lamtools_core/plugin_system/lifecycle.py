@@ -66,6 +66,9 @@ def _member(handle: PluginRuntimeHandle, name: str, default: Any = None) -> Any:
 def _detach(handle: PluginRuntimeHandle) -> None:
     if handle.context is None:
         return
+    # user:“每一个地方 sunday 都有等价或者近似接口”+(失败和停用先撤回本代服务，资源清理仍由原有 lifecycle 驱动)。
+    if handle.context._registration_scope is not None:
+        handle.context._registration_scope.revoke()
     for name, value in {handle.plugin.name: handle.value, **{
         f"{handle.plugin.name}.{key}": value for key, value in handle.services.items()
     }}.items():
@@ -153,9 +156,20 @@ def _monitor(handle: PluginRuntimeHandle) -> None:
     if handle.monitor_task is not None and not handle.monitor_task.done():
         return
     async def watch() -> None:
+        async def cleanup_failure() -> None:
+            diagnostic = handle.error
+            try:
+                await stop_plugin_backend(handle)
+            except Exception as error:
+                if diagnostic is not None:
+                    diagnostic = {**diagnostic, "cleanup_error": str(error)}
+            handle.started, handle.state = False, "failed"
+            handle.error = handle.last_error = diagnostic
+
         while handle.state == "ready":
             await asyncio.sleep(1.0)
             if not _resources_alive(handle):
+                await cleanup_failure()
                 return
             try:
                 await _health(handle)
@@ -163,6 +177,7 @@ def _monitor(handle: PluginRuntimeHandle) -> None:
                 raise
             except Exception as exc:
                 _failed(handle, "health", exc)
+                await cleanup_failure()
                 return
     if any(_member(handle, name) is not None for name in ("health_check", "lifecycle_tasks", "lifecycle_processes")):
         try:
@@ -328,9 +343,11 @@ async def start_plugin_backend(handle: PluginRuntimeHandle, context: PluginConte
         _detach(handle)
         start = _member(handle, "start") or _member(handle, "on_load")
         try:
+            scope = runtime_context._begin_registration_scope(handle.plugin.name, handle.attempts)
             if callable(start):
                 await _bounded(handle, start(runtime_context) if _accepts_context(start) else start(), "start")
             await _health(handle)
+            scope.publish({handle.plugin.name, *(f"{handle.plugin.name}.{key}" for key in handle.services)})
             handle.state = "ready"
             if not _resources_alive(handle):
                 raise RuntimeError("backend resources terminated during startup")
@@ -377,8 +394,18 @@ async def _stop_backend(handle: PluginRuntimeHandle) -> None:
             return
         stop = _member(handle, "stop") or _member(handle, "on_unload")
         try:
-            if callable(stop):
-                await _bounded(handle, stop(), "stop")
+            scope = handle.context._registration_scope if handle.context is not None else None
+            if scope is not None:
+                # The bounded await runs in a separate Task, so check the
+                # initiating service caller before scheduling the drain.
+                scope.check_can_drain()
+                await _bounded(handle, scope.drain(), "stop")
+            try:
+                if callable(stop):
+                    await _bounded(handle, stop(), "stop")
+            finally:
+                if scope is not None:
+                    await _bounded(handle, scope.dispose(), "stop")
             pending = {task for task in handle.pending_tasks if not task.done()}
             if pending:
                 _, still_pending = await asyncio.wait(pending, timeout=_timeout(handle, "stop"))
