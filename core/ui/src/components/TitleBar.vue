@@ -1,5 +1,5 @@
 <template>
-  <div v-if="shouldDisplayTitleBar" class="titlebar" data-tauri-drag-region>
+  <div v-if="shouldDisplayTitleBar" class="titlebar" data-tauri-drag-region data-ui-id="shell.titlebar">
     <div class="titlebar-left">
       <span class="brand">
         <strong class="brand-name">Sunday</strong>
@@ -79,12 +79,12 @@
               <span>{{ t("当前配对码") }}</span>
               <strong class="mobile-pairing-code" :aria-label="t('当前六位配对码')">{{ props.mobilePairingCode }}</strong>
               <small v-if="mobilePairingExpiresLabel">{{ t("有效期至") }}{{ mobilePairingExpiresLabel }}</small>
-              <button class="text-btn mobile-pairing-copy" type="button" @click="copyPairingCode">{{ copyLabel }}</button>
+              <button class="btn btn--ghost mobile-pairing-copy" type="button" @click="copyPairingCode">{{ copyLabel }}</button>
             </div>
             <p v-else-if="props.mobilePairingLoading" class="mobile-pairing-empty" role="status">{{ t("正在生成配对码…") }}</p>
             <div v-else class="mobile-pairing-empty">
               <p>{{ t("尚未生成配对码。") }}</p>
-              <button class="text-btn mobile-pairing-action" type="button" @click="$emit('mobilePairingCreate')">{{ t("生成配对码") }}</button>
+              <button class="btn btn--ghost mobile-pairing-action" type="button" @click="$emit('mobilePairingCreate')">{{ t("生成配对码") }}</button>
             </div>
           </details>
         </div>
@@ -219,10 +219,12 @@ function handleMaximizeNativePress(event: Event): void {
 }
 
 function syncTitlebarOffset(): void {
+  // user:“把布局规则全部都做成变量”+(标题栏只登记原生高度，
+  //  --titlebar-offset 由 variables.css 统一推导，编辑器布局变量才能覆盖)
   if (shouldDisplayTitleBar.value) {
-    document.documentElement.style.setProperty('--titlebar-offset', '36px')
+    document.documentElement.style.setProperty('--titlebar-native-height', '36px')
   } else {
-    document.documentElement.style.removeProperty('--titlebar-offset')
+    document.documentElement.style.removeProperty('--titlebar-native-height')
   }
 }
 
@@ -250,7 +252,7 @@ function onClose() { tauriInvoke?.('close_window') }
 
 onUnmounted(() => {
   if (maximizeBoundsFrame !== null) cancelAnimationFrame(maximizeBoundsFrame)
-  document.documentElement.style.removeProperty('--titlebar-offset')
+  document.documentElement.style.removeProperty('--titlebar-native-height')
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
   window.removeEventListener('resize', scheduleMaximizeButtonBoundsSync)

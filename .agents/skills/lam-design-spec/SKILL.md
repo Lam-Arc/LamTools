@@ -18,7 +18,7 @@ Do not create a separate DESIGN.md; that would create competing sources of truth
 
 ## Theme-area mapping (most important)
 
-There are four theme areas. Each has `-background` (a gradient), `-text`, and derived variables. A component must reference the variables for its area, remap locally with `--text: var(--theme-{area}-text)`, and derive hover, border, and secondary text with `color-mix(in srgb, var(--text) X%, transparent)`. Semantic colors `--green`, `--blue`, `--orange`, `--red`, and `--purple` do not change with the theme.
+There are four theme areas. Each has `-background` (fill: solid, gradient or image, chosen per area), `-text`, and derived variables. Glass is a separate material preference (`off | high | low`) that adds `--theme-{area}-glass-filter` and re-tints the fill; image adds `-image`/`-image-size`/`-image-repeat`. A component must reference the variables for its area, remap locally with `--text: var(--theme-{area}-text)`, and derive hover, border, and secondary text with `color-mix(in srgb, var(--text) X%, transparent)`. Semantic colors `--green`, `--blue`, `--orange`, `--red`, and `--purple` do not change with the theme.
 
 | Area | Background variable | Text variable | Derived variables | Used for |
 |---|---|---|---|---|
@@ -42,7 +42,7 @@ Source: `core/ui/src/styles/variables.css` (base colors, radii, and fonts), plus
 - **State alpha:** `--alpha-hover 8%` · `--alpha-active 12%` · `--alpha-press 16%`.
 - **Interaction geometry:** `--interaction-height-sm 28px` · `--interaction-height 34px` · `--interaction-height-lg 42px` · `--interaction-track 4px` · `--interaction-track-radius 2px` · `--interaction-thumb 16px` · `--interaction-thumb-sm 14px` · `--interaction-progress-height 6px` (from `variables.css`).
 - **Row fade:** `--row-fade 20%` (fade width on each side of an option row, relative to row width).
-- **z-index:** `--z-background-info 10` · `--z-stage 15` · `--z-main-surface 20` · `--z-edge-trigger 35` · `--z-composer 40` · `--z-popover 60` · `--z-modal 80` · `--z-toast 90` (from `layout.css`).
+- **z-index:** `--z-background-info 100` · `--z-stage 200` · `--z-main-surface 300` · `--z-edge-trigger 400` · `--z-composer 500` · `--z-popover 600` · `--z-modal 700` · `--z-toast 800` · `--z-fullscreen 900` (from `variables.css`; banded 100-per-layer so each semantic level maps to one layer in the visual editor).
 - **Fonts:** `--font-sans` (Inter plus CJK fallback stack) · `--font-mono` (JetBrains Mono plus fallback stack) · `--font` aliases `--font-sans`.
 
 ## Color semantics

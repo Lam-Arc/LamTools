@@ -150,6 +150,27 @@ class CoreDbSessionStore:
 
     async def get(self, session_id: str) -> SessionRecord | None:
         db = self._db_provider()
+        record = await self.get_readonly(session_id)
+        if record is None:
+            return None
+        if "runtime_preferences" in record.metadata:
+            self._remember_runtime_preferences(record)
+            return record
+
+        # Preserve the existing legacy migration for ordinary session readers.
+        record.metadata = with_session_runtime_preferences(record.metadata)
+        await _persist_legacy_runtime_preferences(db, record)
+        self._remember_runtime_preferences(record)
+        return record
+
+    async def get_readonly(self, session_id: str) -> SessionRecord | None:
+        result = await self.get_readonly_revision(session_id)
+        return result[0] if result is not None else None
+
+    async def get_readonly_revision(self, session_id: str) -> tuple[SessionRecord, int] | None:
+        # user:“宿主能力补齐和接口完善与文档更新”+(插件只读查询沿用会话可见性，不补写旧权限偏好，不刷新运行权限缓存)。
+        # user:“继续，把 2 阶段都做完”+(元数据和修订必须来自同一行读取，禁止拿旧元数据配新修订覆盖并发修改)。
+        db = self._db_provider()
         async with db.session_factory() as connection:
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
@@ -157,17 +178,21 @@ class CoreDbSessionStore:
             if not self._row_is_visible(row):
                 return None
             record = session_record_from_snapshot(row)
-        if "runtime_preferences" in record.metadata:
-            self._remember_runtime_preferences(record)
-            return record
+            revision = _snapshot_revision(row)
+        return record, revision
 
-        # Keep the common read path read-only. Legacy snapshots are
-        # canonicalized once, after the connection is closed, so a GET does
-        # not unnecessarily acquire the SQLite write coordinator.
-        record.metadata = with_session_runtime_preferences(record.metadata)
-        await _persist_legacy_runtime_preferences(db, record)
-        self._remember_runtime_preferences(record)
-        return record
+    async def scan_readonly(self, *, after_id: str = "", scan_limit: int = 1000):
+        # user:“继续，把 2 阶段都做完”+(分页查询限制数据库扫描，隐藏行只供宿主推进内部游标，不能公开元数据或触发旧数据写回)。
+        if type(scan_limit) is not int or not 1 <= scan_limit <= 1000:
+            raise ValueError("scan_limit must be within [1, 1000]")
+        db = self._db_provider()
+        async with db.session_factory() as connection:
+            rows = (await connection.execute(select(CoreThreadSnapshot)
+                .where(CoreThreadSnapshot.thread_id > after_id)
+                .order_by(CoreThreadSnapshot.thread_id).limit(scan_limit + 1))).scalars().all()
+            result = [(str(row.thread_id), session_record_from_snapshot(row) if self._row_is_visible(row) else None)
+                      for row in rows[:scan_limit]]
+        return result, len(rows) > scan_limit
 
     async def list(self, member_id: str | None = None) -> list[SessionRecord]:
         db = self._db_provider()

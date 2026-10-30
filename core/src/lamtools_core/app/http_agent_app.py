@@ -90,6 +90,7 @@ class CoreConfigRoutingLLMClient:
         reasoning_level: str = "",
         max_tokens: int | None = None,
         temperature: float = 0.2,
+        work_root: str | None = None,
     ) -> None:
         self.default_model_ref = default_model_ref
         self.adapter_dirs = tuple(Path(item) for item in adapter_dirs)
@@ -98,6 +99,7 @@ class CoreConfigRoutingLLMClient:
         self.reasoning_level = reasoning_level
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.work_root = work_root
 
     def with_runtime_options(
         self,
@@ -106,6 +108,7 @@ class CoreConfigRoutingLLMClient:
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
         reasoning_level: str | None = None,
+        work_root: str | None = None,
     ) -> "CoreConfigRoutingLLMClient":
         return CoreConfigRoutingLLMClient(
             default_model_ref=model_id or self.default_model_ref,
@@ -115,6 +118,7 @@ class CoreConfigRoutingLLMClient:
             reasoning_level=self.reasoning_level if reasoning_level is None else reasoning_level,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
+            work_root=self.work_root if work_root is None else work_root,
         )
 
     async def complete(self, request: LLMRequest):
@@ -132,7 +136,8 @@ class CoreConfigRoutingLLMClient:
         # hide an invalid/misconfigured selection by silently switching to a
         # different default model; fatal config errors are already excluded
         # from the shared retry loop.
-        config = load_llm_config(model_ref=model_ref)
+        # user:“继续，把 2 阶段都做完”+(项目固定的插件调用沿用同一配置解析器，不能回到全局项目路由)。
+        config = load_llm_config(model_ref=model_ref, work_root=self.work_root) if self.work_root is not None else load_llm_config(model_ref=model_ref)
         profile = _resolve_adapter_profile(config, self.adapter_dirs)
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         thinking_enabled = (

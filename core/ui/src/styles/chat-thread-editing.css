@@ -1,0 +1,213 @@
+/* user:“还有大文件拆分”+(从 ChatThread.vue 的全局样式块拆出：差异标记与消息操作；
+   六个文件按原顺序由组件的 <style src> 引入，全局作用域与层叠顺序保持不变)。 */
+/* Diff line markers — follows Claude Code unified diff style */
+.diff-line--add {
+  background: color-mix(in srgb, var(--green) 7%, var(--theme-main-subtle-background, transparent));
+}
+.diff-line--add .diff-line-content {
+  color: color-mix(in srgb, var(--green) 72%, var(--theme-main-text, #fff) 28%);
+}
+.diff-line--add .diff-line-num {
+  color: color-mix(in srgb, var(--green) 76%, var(--theme-main-text, #fff) 24%);
+  font-weight: 700;
+}
+.diff-line--del {
+  background: color-mix(in srgb, var(--red) 7%, var(--theme-main-subtle-background, transparent));
+}
+.diff-line--del .diff-line-content {
+  color: color-mix(in srgb, var(--red) 74%, var(--theme-main-text, #fff) 26%);
+}
+.diff-line--del .diff-line-num {
+  color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text, #fff) 22%);
+  font-weight: 700;
+}
+.diff-line--meta {
+  background: color-mix(in srgb, var(--blue) 5%, var(--theme-main-subtle-background, transparent));
+}
+.diff-line--meta .diff-line-content {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 60%, transparent);
+}
+@media (max-width: 720px) {
+  .process-tool-row {
+    gap: 6px;
+    padding-inline: 2px;
+  }
+  .tool-card-body--row {
+    margin-left: 24px;
+    width: calc(100% - 24px);
+  }
+  .context-tool-list {
+    padding-left: 14px;
+  }
+  .context-tool-head {
+    grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .process-tool-row,
+  .tool-card-body--row {
+    animation: none;
+    transition: none;
+  }
+  .reasoning-body,
+  .tool-card-body {
+    transition: none !important;
+  }
+}
+
+/* ── Assistant reply hover actions ── */
+.assistant-actions {
+  display: flex;
+  gap: 2px;
+  padding: 4px 0 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+.assistant-message:hover .assistant-actions,
+.assistant-message:focus-within .assistant-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.assistant-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 46%, transparent);
+  cursor: pointer;
+  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.assistant-action:hover,
+.assistant-action:focus-visible {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #fff);
+}
+.assistant-action:active {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+  transform: scale(.96);
+}
+.assistant-action:focus-visible {
+  outline: 2px solid var(--blue, #79bcff);
+  outline-offset: 1px;
+}
+.assistant-action svg {
+  width: 15px;
+  height: 15px;
+}
+.assistant-action--copied {
+  color: var(--green, #32d17d);
+}
+@media (prefers-reduced-motion: reduce) {
+  .process-card-state-icon--running {
+    animation: none;
+    transform: none;
+    opacity: 1;
+  }
+  .process-caption-enter-active,
+  .process-caption-leave-active {
+    transition: none;
+  }
+  .assistant-actions,
+  .assistant-action,
+  .process-card-state-icon,
+  .thread .process-card-header,
+  .thread .process-card-header::before {
+    transition: none;
+  }
+}
+
+/* ── User message hover actions & inline edit ── */
+.user-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 4px 0 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+.user-row:hover .user-actions,
+.user-row:focus-within .user-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Editing takes the message column's full width. A textarea's intrinsic width
+   is its `cols` (20 by default), which otherwise collapses the bubble into a
+   narrow strip and forces the text into a scroll box. */
+.user-stack--editing {
+  width: 100%;
+}
+.user-bubble.user-bubble--editing {
+  display: grid;
+  width: 100%;
+  max-width: 100%;
+  gap: var(--space-2);
+}
+/* Seamless: the editor borrows the bubble's surface and type metrics, so the
+   message keeps its position, size and color when editing starts. */
+.user-bubble.user-bubble--editing .user-edit-input {
+  padding: var(--space-1) 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  caret-color: currentColor;
+  font-family: var(--font-sans, inherit);
+  font-size: inherit;
+  line-height: inherit;
+}
+.user-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+.user-edit-button {
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 65%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+  font-family: var(--font-sans, inherit);
+  cursor: pointer;
+  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.user-edit-button:hover,
+.user-edit-button:focus-visible {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #fff);
+}
+.user-edit-button:active {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+}
+/* Send is the control-area primary recipe; its paired tokens keep the fill and
+   label readable in every theme, unlike a control text on a main-area bubble. */
+.user-edit-button--primary,
+.user-edit-button--primary:hover,
+.user-edit-button--primary:focus-visible,
+.user-edit-button--primary:active {
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+}
+.user-edit-button--primary:hover,
+.user-edit-button--primary:focus-visible {
+  filter: brightness(.94);
+}
+.user-edit-button--primary:active {
+  filter: brightness(.88);
+}
+@media (prefers-reduced-motion: reduce) {
+  .user-actions,
+  .user-edit-button {
+    transition: none;
+  }
+}

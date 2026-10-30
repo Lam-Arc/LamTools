@@ -1,7 +1,7 @@
 <template>
   <!-- inheritAttrs: false — 模板根节点是 div + Teleport 双根，自动继承会把 class/attrs 丢掉；
        显式把 $attrs 绑到消息根节点，保证 class（如 sub-line-chat）能落到 DOM 上 -->
-  <div ref="rootEl" class="message-view" data-region="message" v-bind="$attrs" @contextmenu="onContextMenu">
+  <div ref="rootEl" class="message-view" data-region="message" data-ui-template="template.message" :data-ui-instance="`message:${msg.id}`" v-bind="$attrs" @contextmenu="onContextMenu">
       <!-- Per-message override: product provides full rendering -->
       <slot
         v-if="$slots['message-product']"
@@ -135,7 +135,17 @@
           :class="{ 'assistant-message--live': isLiveMessage(msg), 'assistant-message--complete': !isLiveMessage(msg) }"
         >
           <div class="assistant-meta">
-            <span class="assistant-label">{{ assistantLabel }}</span>
+            <span
+              v-if="assistantAvatarVisible"
+              class="assistant-avatar"
+              :style="assistantAvatarStyle"
+              aria-hidden="true"
+            >
+              <img v-if="assistantAvatarSrc" :src="assistantAvatarSrc" alt="" />
+              <span v-else class="assistant-avatar__initial">{{ assistantInitial }}</span>
+            </span>
+            <!-- user:“支持自定义 Assistant 显示名称和头像”+(名称/头像来自显示偏好，空值回落默认) -->
+            <span class="assistant-label">{{ assistantDisplayName }}</span>
             <span
               v-if="assistantTimestamp"
               class="assistant-timestamp"
@@ -850,17 +860,37 @@
             </div>
             </Transition>
 
-            <div v-if="answerContent(msg)" class="assistant-answer" data-part="conclusion">
-              <slot name="assistant-content" :content="answerContent(msg)" :live="isLiveMessage(msg)">
-                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
-              </slot>
-            </div>
           </template>
 
-          <!-- Fallback: no parts → render flat content -->
-          <slot v-else name="assistant-content" :content="answerContent(msg)">
-            <MarkdownRenderer class="assistant-answer" data-part="conclusion" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
-          </slot>
+          <!-- user:“支持开启或关闭自动气泡拆分”+(正文是唯一渲染入口：过程区在上、结论在下；
+               拆分只发生在这里，多个气泡底层仍是一条消息、一份 parts，不改会话历史) -->
+          <!-- user:“支持开启或关闭自动气泡拆分”+(无 parts 的消息仍保留结论容器，
+               与改造前的回落分支保持一致；有 content 或外部插槽时同样渲染) -->
+          <div v-if="answerContent(msg) || $slots['assistant-content'] || !msg.parts?.length" class="assistant-answer" data-part="conclusion">
+            <slot v-if="$slots['assistant-content']" name="assistant-content" :content="answerContent(msg)" :live="isLiveMessage(msg)">
+              <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
+            </slot>
+            <template v-else-if="answerBubbleParts.length > 1 || answerBubblesVisible">
+              <div
+                v-for="(bubble, index) in answerBubbleParts"
+                :key="bubble.key"
+                :class="[
+                  'assistant-bubble',
+                  {
+                    'assistant-bubble--boxed': answerBubblesVisible,
+                    'optical-glass': answerBubblesVisible,
+                    'optical-glass--low-trans': answerBubblesVisible,
+                  },
+                ]"
+                :data-assistant-bubble="String(index)"
+                data-context-selection-scope
+              >
+                <MarkdownRenderer class="part-text-content" :content="bubble.content" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
+              </div>
+            </template>
+            <MarkdownRenderer v-else class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
+          </div>
+
 
           <!-- 本轮 artifact 产出统一挂到消息结尾；父级抑制避免子代理嵌套重复。 -->
           <Transition :css="false" @enter="artifactsEnter" @leave="fadeSlideLeave">
@@ -1000,9 +1030,13 @@ import { useNarrowViewport } from '@/composables/useNarrowViewport.ts'
 import { useProcessSummaryClock } from '@/composables/useProcessSummaryClock.ts'
 import AutoTextarea from '@/components/AutoTextarea.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import {
+  assistantDisplayPreferences,
+} from '@/composables/useAssistantDisplayPreferences.ts'
+import { splitAssistantBubbles, type AssistantBubble } from '@/helpers/assistantBubbles.ts'
 import CoreSystemEventRow from '@/components/CoreSystemEventRow.vue'
 import { isCoreSystemEvent, type CoreSystemEvent } from '@/appServer/systemEvents.ts'
-import MessageAttachmentDeck from '@/components/MessageAttachmentDeck.vue'
+// user:“合并去重”+(消息附件已统一走 ReferenceItems 图标引用，附件卡导入已无调用方，删除)
 import ReferenceItems from '@/components/ReferenceItems.vue'
 import UserReferenceText from '@/components/UserReferenceText.vue'
 import { artifactListingReference, artifactPathsInText, normalizeArtifactReference, shouldListTurnArtifact, workspaceRelativeFromReportPath } from '@/artifacts/model.ts'
@@ -1169,6 +1203,38 @@ function openSubAgentPane(part: MessagePart): void {
 }
 
 const assistantTimestamp = computed(() => formatAssistantTimestamp(props.msg.timestamp))
+
+
+// user:“Assistant 可选择是否使用消息气泡”“支持自定义 Assistant 显示名称和头像”
+// +(显示偏好放在模块级共享状态里：设置面板一改，这里立刻跟着重渲染，
+// 既不用改 ChatThread 的 props，也不进入消息协议与会话历史)。
+const answerBubblesVisible = computed(() => assistantDisplayPreferences.bubblesEnabled)
+const assistantAvatarSrc = computed(() => assistantDisplayPreferences.avatar.trim())
+const assistantAvatarVisible = computed(() => assistantAvatarSrc.value !== '' || answerBubblesVisible.value)
+// user:“头上头像显示大小太小了 设成可调节，裁切也是圆角率可调节”+
+// (尺寸直接以 px 生效；圆角率 100 对应 50% 半径＝圆形，0 为方形)
+const assistantAvatarStyle = computed<Record<string, string>>(() => ({
+  '--assistant-avatar-size': `${assistantDisplayPreferences.avatarSize}px`,
+  '--assistant-avatar-radius': `${assistantDisplayPreferences.avatarRoundness / 2}%`,
+}))
+const assistantDisplayName = computed(() => assistantDisplayPreferences.name.trim() || props.assistantLabel || 'Assistant')
+const assistantInitial = computed(() => (assistantDisplayName.value.trim().charAt(0) || 'A').toUpperCase())
+
+/**
+ * user:“支持开启或关闭自动气泡拆分”+(拆分只发生在展示层：结果按气泡顺序渲染，
+ * 底层仍是同一条消息的同一段 answerText；思考、工具调用、执行进度依旧留在过程区)。
+ */
+const answerBubbleParts = computed<AssistantBubble[]>(() => {
+  const content = answerContent(props.msg)
+  if (!content.trim()) return []
+  const split = splitAssistantBubbles(content, {
+    structural: assistantDisplayPreferences.splitEnabled,
+    streaming: isLiveMessage(props.msg),
+  })
+  // 没有可拆点就原样返回：默认显示与改动前逐字一致，不做文本规整
+  if (split.length <= 1) return [{ key: 'assistant-bubble-0', content }]
+  return split
+})
 
 type MobileTurnProgress = {
   label: string
@@ -4495,7 +4561,7 @@ function formatContextSummary(c: ContextCounts): string {
 .image-preview-overlay {
   position: fixed;
   inset: 0;
-  z-index: var(--z-fullscreen, 100);
+  z-index: var(--z-fullscreen, 900);
   display: flex;
   align-items: center;
   justify-content: center;

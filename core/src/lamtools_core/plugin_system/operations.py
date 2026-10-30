@@ -14,11 +14,7 @@ from lamtools_core.app import OperationCatalog, OperationRequest, OperationResul
 from .agent import assemble_agents, resolve_agent_plan
 from .capabilities import CapabilityError, assemble_capabilities
 from .config_store import (
-    config_path,
-    read_config_values,
-    read_schema,
-    validate_config,
-    write_config_values,
+    ConfigError, read_config_snapshot, save_config_values,
 )
 from .host import PluginHost
 from .settings import read_config
@@ -325,16 +321,12 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
             )
         # user:“内置插件配置走共享数据目录”+打包态 bundled 目录只读，
         # 值落在 {data_dir}/plugins/<name>.jsonc（与核心读取方同一处）。
-        from .paths import bundled_plugins_dir
-        from .plugin_data import plugin_config_path, read_plugin_config
-
-        data_dir = Path(host.state.path).parent
-        if manifest.root.parent == bundled_plugins_dir().resolve():
-            values = read_plugin_config(data_dir, name)
-            config_file = plugin_config_path(data_dir, name)
-        else:
-            values = read_config_values(manifest)
-            config_file = config_path(manifest)
+        # user:“宿主能力补齐和接口完善与文档更新”+(管理入口和插件读取同一快照/路径/修订，不把 JSONC 或坏文件当作空配置)。
+        try:
+            snapshot = read_config_snapshot(manifest, data_dir=Path(host.state.path).parent)
+        except ConfigError as error:
+            return OperationResult(name=request.name, status="error", payload={"error": str(error), "code": error.code})
+        values, config_file = snapshot.values, snapshot.path
         return OperationResult(
             name=request.name,
             payload={
@@ -342,10 +334,13 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                 "version": manifest.version,
                 "description": manifest.description,
                 "config": values,
+                "revision": snapshot.revision,
+                "validation_level": snapshot.validation.level,
+                "validation_problems": list(snapshot.validation.problems),
                 # user:“缺一个方式告诉模型配置在哪”+路径随读取一起返回，
                 # agent 不必再猜副本位置。
                 "path": str(config_file),
-                "schema": read_schema(manifest, spec),
+                "schema": snapshot.schema,
                 "has_schema": spec.schema is not None,
                 # user:“每一个插件都应该有配置面板”+自定义面板按插件自己的脚本
                 # 挂载，没有脚本时前端用默认表单；两种情况身份信息都由宿主补。
@@ -377,29 +372,15 @@ def register_plugin_system_operations(catalog: OperationCatalog, host: PluginHos
                 payload={"error": "config must be an object"},
             )
         try:
-            spec = read_config(manifest)
-        except CapabilityError as exc:
-            return OperationResult(
-                name=request.name, status="error", payload={"error": exc.message}
-            )
-        problems = validate_config(read_schema(manifest, spec), values)
-        if problems:
-            return OperationResult(
-                name=request.name,
-                status="error",
-                payload={"error": "; ".join(problems)},
-            )
-        from .paths import bundled_plugins_dir
-        from .plugin_data import plugin_config_path, write_plugin_config
-
-        if manifest.root.parent == bundled_plugins_dir().resolve():
-            write_plugin_config(Path(host.state.path).parent, name, values)
-            path = plugin_config_path(Path(host.state.path).parent, name)
-        else:
-            path = write_config_values(manifest, values)
+            saved = save_config_values(manifest, values, data_dir=Path(host.state.path).parent,
+                                       expected_revision=payload.get("expected_revision"))
+        except ConfigError as error:
+            return OperationResult(name=request.name, status="error", payload={"error": str(error), "code": error.code})
+        path = saved.snapshot.path
         return OperationResult(
             name=request.name,
-            payload={"name": name, "saved": True, "path": str(path)},
+            payload={"name": name, "saved": True, "path": str(path), "revision": saved.snapshot.revision,
+                     "applied": False, "requires_reload": True},
         )
 
     async def set_enabled(request: OperationRequest, enabled: bool) -> OperationResult:

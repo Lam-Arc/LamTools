@@ -1,5 +1,5 @@
 <template>
-  <div class="session-sidebar-content">
+  <div class="session-sidebar-content" data-ui-id="shell.sidebar">
     <span ref="dragImageRef" class="sidebar-drag-image" aria-hidden="true"></span>
     <div
       v-if="localFilter || $slots['toolbar-actions']"
@@ -80,6 +80,7 @@
           v-for="group in visibleSectionGroups(section)"
           :key="group.id"
           class="project-block"
+          data-ui-template="template.project"
           :class="{ active: isGroupActive(group) }"
           :data-collapsed="isCollapsed(group.id) || undefined"
         >
@@ -105,7 +106,10 @@
           @contextmenu="handleProjectContextMenu(section.id, group, $event)"
         >
           <ProjectVisualIcon :icon-key="group.iconKey" :color-key="group.colorKey" :size="22" :icon-size="14" />
-          <strong>{{ group.name }}</strong>
+          <!-- user:“我对项目名称进行了字号修改和文字颜色修改，但是并没有生效”+
+               (文字在 strong 上有自己的字号/颜色规则，样式类型标识必须挂在文字节点本身，
+                否则外层规则只能被继承、永远压不过这里的显式样式。) -->
+          <strong data-ui-template="template.project-name">{{ group.name }}</strong>
         </button>
         <!-- user:“新建会话键放在项目名右侧、...左侧”+(项目名与项目菜单之间放单图标入口) -->
         <button
@@ -152,12 +156,14 @@
             {{ isProjectBusy(group.id) ? t("正在创建…") : `＋ ${defaultUiText(newSessionLabel, '新建会话')}` }}
           </button>
         </div>
-        <TransitionGroup name="sidebar-sort" tag="div" class="conversation-items">
+        <TransitionGroup name="sidebar-sort" tag="div" class="conversation-items" data-ui-id="shell.sidebar-items">
           <div
             v-for="s in visibleSessions(group, section.id)"
             :key="s.id"
             v-motion-enter="!initialSessionIds.has(s.id)"
             class="conversation session-row"
+            data-ui-template="template.conversation"
+            :data-ui-instance="`conversation:${s.id}`"
             :class="{
               active: s.id === activeSessionId,
               'is-active': s.id === activeSessionId,
@@ -180,7 +186,7 @@
             @click="selectSession(s.id)"
           >
             <span class="conversation-main">
-              <strong class="session-title">{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
+              <strong class="session-title" data-ui-template="template.session-title">{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
               <span v-if="s.meta">{{ s.meta }}</span>
             </span>
           </button>
@@ -265,7 +271,7 @@
           <ChevronUp v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
-      <div class="conversation-items">
+      <div class="conversation-items" data-ui-id="shell.sidebar-items">
         <div
           v-for="entry in recentEntries"
           :key="`recent-${entry.session.id}`"

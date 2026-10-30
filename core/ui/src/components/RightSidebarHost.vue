@@ -1,6 +1,6 @@
 <template>
   <section
-    class="right-sidebar-host"
+    class="right-sidebar-host" data-ui-id="shell.right-rail"
     :aria-label="t('右侧工具栏')"
     data-right-sidebar-host
   >
@@ -420,7 +420,9 @@ const activeModule = computed<RailModule | null>(() => (
   color: var(--text);
   --optical-glass-surface: var(--theme-backdrop-solid);
   pointer-events: auto;
-  animation: right-card-in var(--dur-fast) var(--ease-out);
+  /* user:“右侧栏的卡片也存在没有做模糊的问题”+
+     (淡入动画不能挂在玻璃面本身：透明度动画会让 WebView2 另开 backdrop root，
+      毛玻璃失效；把动画下放到内层 body，玻璃面保持不透明地稳定采样) */
 }
 @keyframes right-card-in {
   from { opacity: 0; }
@@ -444,6 +446,7 @@ const activeModule = computed<RailModule | null>(() => (
   min-height: 0;
   overflow: auto;
   padding: var(--space-2) var(--space-3) var(--space-3);
+  animation: right-card-in var(--dur-fast) var(--ease-out);
 }
 /* 右侧栏不出模块名标题：面板内部同名 h3 一并隐藏。 */
 .right-sidebar-card-body :deep(.runtime-widget-head h3) {
@@ -451,7 +454,7 @@ const activeModule = computed<RailModule | null>(() => (
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .right-sidebar-card { animation: none; }
+  .right-sidebar-card-body { animation: none; }
   .right-sidebar-rail-btn { transition: none; }
 }
 </style>

@@ -34,6 +34,14 @@
   border-radius: var(--workspace-panel-radius-inner) var(--workspace-panel-radius-outer)
     var(--workspace-panel-radius-outer) var(--workspace-panel-radius-inner);
   background: var(--theme-main-background);
+  /* user:“再加一项/图片……玻璃代表我们的低透或高透玻璃样式”+
+     (图片样式按适应方式铺进主卡；玻璃样式给主卡挂毛玻璃滤镜，其余样式为 none。) */
+  background-image: var(--theme-main-image, none);
+  background-size: var(--theme-main-image-size, auto);
+  background-repeat: var(--theme-main-image-repeat, no-repeat);
+  background-position: center;
+  -webkit-backdrop-filter: var(--theme-main-glass-filter, none);
+  backdrop-filter: var(--theme-main-glass-filter, none);
   color: var(--theme-main-text);
   display: flex;
   flex-direction: column;
@@ -242,7 +250,8 @@
   top: calc(var(--empty-session-composer-top, 50vh) - var(--space-3));
   left: calc(var(--main-left) + (100vw - var(--main-left) - var(--main-right)) / 2);
   z-index: var(--z-stage);
-  width: min(var(--content-width), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding)));
+  /* user:“消息区自适应填满宽度”+(空会话引导块与消息列同宽，跟着填满上限走)。 */
+  width: min(var(--content-fill-width, 1040px), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding)));
   display: grid;
   justify-items: center;
   gap: var(--space-2);
@@ -277,7 +286,8 @@
 }
 
 .thread-header {
-  width: min(var(--content-width), 100%);
+  /* user:“消息区自适应填满宽度”+(会话标题与会话正文列同宽：同样吃填满上限，不再固定 780px)。 */
+  width: min(var(--content-fill-width, 1040px), 100%);
   margin: 0 auto 14px;
   flex: 0 0 auto;
   display: flex;
@@ -385,8 +395,12 @@
 /* Composer 的几何量放在根节点上：固定定位的卡片本体与它下方那条提示带共用同一套
    左缘与宽度，两者不会各自漂移。 */
 .composer-root {
-  --composer-full-width: min(var(--content-width), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding) - 2px));
+  /* user:“消息区自适应填满宽度”+(输入栏与消息列共用同一填满上限，两者不再各按 780px 错位)。 */
+  --composer-full-width: min(var(--content-fill-width, 1040px), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding) - 2px));
   --composer-anchor-left: calc(var(--main-left) + (100vw - var(--main-left) - var(--main-right)) / 2);
+  /* user:“宽度等于输入框宽度减去输入框圆角宽度”+(上方贴片按输入栏圆角内收，
+     输入栏自身轮廓保持原样)。 */
+  --composer-radius: 20px;
 }
 
 .floating-composer {
@@ -403,8 +417,15 @@
   width: var(--composer-full-width);
   transform: translateX(-50%);
   border: 1px solid var(--theme-main-border);
-  border-radius: 20px;
+  border-radius: var(--composer-radius);
   background: var(--theme-composer-background);
+  /* 输入栏同样跟随颜色样式：图片按适应方式铺，玻璃挂毛玻璃滤镜。 */
+  background-image: var(--theme-composer-image, none);
+  background-size: var(--theme-composer-image-size, auto);
+  background-repeat: var(--theme-composer-image-repeat, no-repeat);
+  background-position: center;
+  -webkit-backdrop-filter: var(--theme-composer-glass-filter, none);
+  backdrop-filter: var(--theme-composer-glass-filter, none);
   color: var(--theme-composer-text);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
@@ -417,7 +438,11 @@
 
 /* The goal + guidance panel is a separate sibling surface anchored directly
    to the composer's top edge. It remains outside the input form and moves with
-   the same keyboard, safe-area, and centered-composer geometry. */
+   the same keyboard, safe-area, and centered-composer geometry.
+   user:“只在上面拼接一个下方不是圆角的矩形，上边是圆角，宽度等于输入框宽度减去输入框圆角宽度”
+   +(托盘与发送状态共用这条更窄的上沿，输入栏保持原本的圆角轮廓)。
+   user:“你这个目标和排队区域太宽了，和圆角、底下那个圆角没有对齐，缩窄一点”
+   +(左右各让出一个圆角，边缘对齐输入栏上沿的直边段)。 */
 .composer-root--floating > .composer-queue-panel-host {
   position: fixed;
   left: var(--composer-anchor-left);
@@ -427,13 +452,8 @@
     var(--composer-height, 120px)
   );
   z-index: var(--z-composer, 40);
-  width: var(--composer-full-width);
+  width: calc(var(--composer-full-width) - var(--composer-radius) * 2);
   transform: translateX(-50%);
-}
-
-.composer-root--floating:has(.core-guidance-queue-panel) > .floating-composer {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 /* A blank session presents the composer in the usable content area. This is
@@ -572,6 +592,23 @@
 }
 .floating-composer textarea::placeholder {
   color: color-mix(in srgb, var(--theme-composer-text) 52%, transparent);
+}
+/* user:“修复输入框缩窄时 @ 标签溢出的问题”+(@ 文件标签是可点击的原子块，窄容器里必须能收缩换行，不能按文件名原样撑破输入框；编辑区自身也不许被内容反推变宽，窄窗口和分屏都沿容器宽度收窄)。 */
+.inline-file-composer,
+.inline-file-composer .cm-editor,
+.inline-file-composer .cm-scroller,
+.inline-file-composer .cm-content {
+  min-width: 0;
+  max-width: 100%;
+}
+.inline-file-composer .cm-scroller {
+  overflow-x: hidden;
+}
+.inline-file-composer .composer-file-token {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .composer-input-wrap {
   position: relative;
@@ -1151,30 +1188,7 @@
 }
 .model-empty { margin: 0; padding: 12px 4px 14px 20px; border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 9%, transparent); color: var(--muted); font-size: 12px; }
 
-.text-btn {
-  min-height: 32px;
-  padding: 0 7px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-}
-.text-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent); color: var(--settings-main-text, var(--text)); }
-.text-btn:active:not(:disabled) { background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-active), transparent); }
-.text-btn.danger:hover:not(:disabled) { color: color-mix(in srgb, var(--red) 58%, var(--settings-main-text, var(--theme-main-text, #fff))); }
-.text-btn:disabled { opacity: .45; cursor: default; }
-
-.small-btn {
-  border-radius: 12px;
-  background: var(--settings-control-background, #343331);
-  color: var(--settings-control-text, var(--muted));
-  padding: 8px 11px;
-  font-size: 13px;
-}
-.small-btn:hover {
-  color: var(--settings-control-text, var(--text));
-  filter: brightness(1.08);
-}
+/* user:“合并去重”+(按钮配方已并入 sunday-controls.css 的 .btn 基件，这里不再保留第二套)。 */
 .add-row {
   min-height: 44px;
   border: 1px dashed color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
@@ -1812,6 +1826,19 @@
 .btn-primary-sm:disabled {
   opacity: .4;
   cursor: default;
+}
+/* user:“把主题的色彩设置改成 纯色/渐变/玻璃……图片”+
+   (控件区选图片/玻璃时，主要填充控件跟随适应方式与毛玻璃滤镜，其余样式为 none。) */
+.composer-pill,
+.send,
+.btn-primary,
+.btn-primary-sm {
+  background-image: var(--theme-control-image, none);
+  background-size: var(--theme-control-image-size, auto);
+  background-repeat: var(--theme-control-image-repeat, no-repeat);
+  background-position: center;
+  -webkit-backdrop-filter: var(--theme-control-glass-filter, none);
+  backdrop-filter: var(--theme-control-glass-filter, none);
 }
 .stop-btn {
   height: 26px;
@@ -3345,7 +3372,7 @@
 }
 
 /* ── 启用开关图标按钮（ToggleRight/ToggleLeft，语义化开关）── */
-.text-btn.is-on {
+.btn--ghost.is-on {
   color: var(--green);
 }
 

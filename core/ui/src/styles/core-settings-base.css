@@ -1,0 +1,446 @@
+/* user:“还有大文件拆分，以及你的分类是否覆盖了所有样式”+(由 core-settings.css 按区块拆出：基础行、通用控件与响应式；
+   各分片按原文件顺序挂到 CoreSettings.vue 的多个 <style scoped src>，层叠顺序与拆分前一致)。 */
+/* user:“专门对小屏或者说分屏状态做一下适配”+(按页面实际宽度调整布局，宽窗口中的窄分屏也能独立折叠)。 */
+
+.settings-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+/* ── 上下文与记忆 (global context) editor ── */
+.lc-block {
+  margin-top: 12px;
+}
+
+.lc-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  opacity: 0.85;
+}
+
+.lc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.lc-input {
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
+  font-size: 13px;
+}
+
+.lc-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.lc-priority {
+  width: 84px;
+}
+
+.lc-kind {
+  width: 110px;
+}
+
+/* ── Settings row + toggle ── （.dream-* 为历史类名，被多张卡片共用） */
+.dream-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.dream-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.dream-toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dream-min-turns {
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.85;
+  min-width: 96px;
+}
+
+.lc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.lc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.lc-chip-x {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
+/* ── Responsive: full-screen on narrow viewports ── */
+@container app-page (max-width: 640px) {
+  .settings-card {
+    width: 100vw;
+    max-height: calc(100dvh - var(--titlebar-offset, 36px));
+    border-radius: 0;
+  }
+}
+
+/* ── Existing settings editor styles ── */
+.settings-editor {
+  padding: 18px 0;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
+}
+
+.settings-editor h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.preset-summary {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+}
+
+.preset-summary strong,
+.preset-summary span {
+  display: block;
+}
+
+.preset-summary strong { font-size: 13px; }
+.preset-summary span { margin-top: 3px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.settings-advanced {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 9%, transparent);
+}
+
+.settings-advanced summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-advanced[open] summary { margin-bottom: 12px; color: inherit; }
+
+.advanced-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-advanced-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* user:“合并去重”+(按钮的角色样式由 sunday-controls.css 的 .btn 基件统一提供，
+   设置页不再重复定义 primary 与 quiet)。 */
+
+.config-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.config-form .field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.config-form input,
+.config-form textarea {
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
+  padding: 0 9px;
+}
+
+/* UiSelect 在表单内对齐上面的 control 配方 */
+.config-form :deep(.ui-select-trigger) {
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
+}
+
+.lc-row :deep(.ui-select-trigger) {
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  font-size: 13px;
+}
+
+.config-form textarea {
+  min-height: 104px;
+  padding: 9px;
+  resize: vertical;
+}
+
+.config-form .field-wide {
+  grid-column: 1 / -1;
+}
+
+.permission-list {
+  display: grid;
+  gap: 12px;
+}
+
+.permission-row {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text) 50%, transparent);
+}
+
+.permission-row:last-child {
+  border-bottom: none;
+}
+
+.permission-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: -4px -10px;
+  transition: background 0.12s ease;
+}
+
+.permission-row-top:hover {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+}
+
+.permission-row-top.active {
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+
+.permission-row-header {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  text-align: left;
+  cursor: inherit;
+}
+
+.permission-row-top:hover .permission-row-header {
+  color: color-mix(in srgb, var(--blue) 70%, var(--text));
+}
+
+.permission-radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--theme-main-text) 45%, transparent);
+  background: transparent;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.permission-radio .permission-radio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.permission-radio.active {
+  border-color: var(--green, #4caf50);
+}
+
+.permission-radio.active .permission-radio-dot {
+  background: var(--green, #4caf50);
+}
+
+.permission-radio:hover {
+  border-color: color-mix(in srgb, var(--theme-main-text) 70%, transparent);
+}
+
+.permission-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 4px 16px;
+  padding: 8px 0 4px 0;
+}
+
+.permission-tool-row {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.permission-tools-full {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@container app-page (max-width: 720px) {
+  .config-form {
+    grid-template-columns: 1fr;
+  }
+
+  .advanced-fields,
+  .model-advanced-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .permission-tools {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  }
+}
+
+.capability-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  color: var(--muted);
+}
+.capability-badge.multimodal {
+  background: color-mix(in srgb, var(--blue, #79bcff) 18%, transparent);
+  color: color-mix(in srgb, var(--blue, #79bcff) 80%, var(--text));
+}
+.capability-badge.text {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+}
+
+/* ── Global AGENTS.md editor ── */
+.guide-editor {
+  width: 100%;
+  min-height: 320px;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
+  padding: 9px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.subhead-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.subhead-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.subhead-sub {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.hook-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.skill-error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+/* ── 关于与更新 ── */
+.about-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.about-status {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.about-status.error {
+  color: var(--red);
+}
+.about-notes {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  line-height: 1.5;
+  max-height: 160px;
+  overflow: auto;
+}
+.about-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* user:“可视化主题与布局编辑器”+(界面分区的编辑器入口卡片) */
+.studio-entry { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.studio-entry-copy p { margin: 4px 0 0; color: var(--muted); font-size: var(--type-sm, 12px); line-height: 1.5; }
+/* user:“编辑布局是实验性功能”+(入口与通用设置使用同一种“实验性”标记样式) */
+.studio-entry-title { display: flex; align-items: center; gap: var(--space-2); }
+.studio-entry-badge { flex: 0 0 auto; padding: 1px var(--space-2); border-radius: 999px; background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 65%, transparent); font-size: 10px; line-height: 1.6; }

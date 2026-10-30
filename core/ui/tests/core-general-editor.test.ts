@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 import CoreGeneralEditor from '../src/components/CoreGeneralEditor.vue'
+import { useSplitPreviewPreference } from '../src/split/previewPreference'
 
 type RequestRpc = (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 
@@ -66,8 +67,9 @@ describe('CoreGeneralEditor', () => {
     const { wrapper } = await mountEditor()
     expect(wrapper.get('h1').text()).toBe('通用')
     const titles = wrapper.findAll('.subhead-title').map((node) => node.text())
-    expect(titles).toEqual(['界面语言', 'HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续'])
-    expect(wrapper.findAll('.setting-card')).toHaveLength(5)
+    // user:“支持自定义 Assistant 显示名称和头像”+(通用设置新增一张 Assistant 显示卡片)
+    expect(titles).toEqual(['界面语言', 'HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续', 'Assistant 显示', '实验性功能'])
+    expect(wrapper.findAll('.setting-card')).toHaveLength(7)
   })
 
   it('loads the stored routing settings into the fields', async () => {
@@ -127,7 +129,7 @@ describe('CoreGeneralEditor', () => {
 
     const { wrapper: onWindows } = await mountEditor({}, { platform: 'windows' })
     expect(onWindows.text()).toContain('保持电脑运行')
-    expect(onWindows.findAll('.setting-card')).toHaveLength(7)
+    expect(onWindows.findAll('.setting-card')).toHaveLength(9)
   })
 
   it('persists the keep-awake toggle', async () => {
@@ -156,6 +158,22 @@ describe('CoreGeneralEditor', () => {
     })
     expect(askAutoContinue.enabled).toBe(true)
     expect(toggle.classes()).toContain('is-on')
+  })
+
+  it('marks split file preview as experimental and remembers the switch', async () => {
+    localStorage.clear()
+    useSplitPreviewPreference().setEnabled(true)
+    localStorage.clear()
+    const { wrapper } = await mountEditor()
+    const card = wrapper.get('[data-experimental-preview]')
+    expect(card.text()).toContain('实验性功能')
+    expect(card.text()).toContain('实验性')
+    const toggle = card.get('input[role="switch"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+
+    await toggle.setValue(false)
+    expect(localStorage.getItem('lamtools:split-preview-experimental')).toBe('off')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
   })
 
   it('reverts a toggle when the write fails', async () => {

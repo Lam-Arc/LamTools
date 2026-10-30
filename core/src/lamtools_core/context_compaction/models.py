@@ -161,6 +161,9 @@ class ContextCompactionRequest:
     timeout: float | None = None
     limit_tokens: int = 4096
     input_limit_tokens: int = 0
+    # user:“before_tokens应作为唯一权威实际值”+(触发、布局、分段都只认这一个数，
+    # 本地估算只负责在同一口径内按比例拆分)。
+    authoritative_tokens: int = 0
     existing_summary: str = ""
     on_delta: CompactionDeltaSink | None = None
     on_event: CompactionEventSink | None = None

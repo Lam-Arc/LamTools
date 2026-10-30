@@ -6,6 +6,8 @@ there is no permanent "already compacted" status.
 
 from __future__ import annotations
 
+from math import ceil
+
 from lamtools_core.context_compaction_budget import (
     DEFAULT_RETAINED_STEPS,
     TokenBudget,
@@ -299,9 +301,18 @@ def _split_compaction_messages(
     input_limit_tokens: int,
     existing_summary: str,
     prefix_messages: list[ChatMessage] | None = None,
+    authoritative_tokens: int | None = None,
 ) -> list[list[ChatMessage]]:
     if not messages:
         return [[]]
+    # user:“before_tokens应作为唯一权威实际值”+(有权威总量时只按它定段数，
+    # 本地估算退化成组间权重，不再独立决定切几段)。
+    if authoritative_tokens is not None and authoritative_tokens > 0 and input_limit_tokens > 0:
+        return _split_by_authoritative_tokens(
+            messages,
+            authoritative_tokens=authoritative_tokens,
+            input_limit_tokens=input_limit_tokens,
+        )
     if input_limit_tokens <= 0 or _compaction_request_tokens(
         messages,
         existing_summary,
@@ -332,6 +343,50 @@ def _split_compaction_messages(
             raise ContextCompactionError(
                 "Context compaction failed: one complete conversation turn exceeds the model input limit"
             )
+    if current:
+        chunks.append(current)
+    return chunks or [list(messages)]
+
+
+def _message_weight(messages: list[ChatMessage]) -> int:
+    """Return the raw local estimate used only as a relative group weight."""
+    return max(1, estimate_message_tokens([message.to_dict() for message in messages]))
+
+
+def _split_by_authoritative_tokens(
+    messages: list[ChatMessage],
+    *,
+    authoritative_tokens: int,
+    input_limit_tokens: int,
+) -> list[list[ChatMessage]]:
+    """Split history using the authoritative total and semantic boundaries.
+
+    The segment count comes from the one authoritative number.  Local estimates
+    only decide where the boundaries fall, so they cannot inflate the count.
+    """
+    segment_count = max(1, ceil(authoritative_tokens / max(1, input_limit_tokens)))
+    groups = _semantic_message_groups(messages)
+    total_group_weight = sum(_message_weight(group) for group in groups)
+    target_weight = max(1.0, total_group_weight / segment_count)
+    expanded: list[list[ChatMessage]] = []
+    for group in groups:
+        if _message_weight(group) > target_weight:
+            expanded.extend(_split_oversized_semantic_group(group))
+        else:
+            expanded.append(group)
+    weights = [_message_weight(group) for group in expanded]
+    total_weight = sum(weights)
+    target = total_weight / segment_count
+    chunks: list[list[ChatMessage]] = []
+    current: list[ChatMessage] = []
+    current_weight = 0
+    for group, weight in zip(expanded, weights):
+        if current and len(chunks) < segment_count - 1 and current_weight + weight / 2 > target:
+            chunks.append(current)
+            current = []
+            current_weight = 0
+        current.extend(group)
+        current_weight += weight
     if current:
         chunks.append(current)
     return chunks or [list(messages)]

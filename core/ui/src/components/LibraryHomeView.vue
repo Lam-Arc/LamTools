@@ -1,5 +1,5 @@
 <template>
-  <div class="library-surface full-area-view library-home">
+  <div class="library-surface full-area-view library-home" data-ui-id="library.root">
     <!-- ── 三大项：资料 / 记忆 / 方案 ── -->
     <div class="library-sections" role="tablist" :aria-label="t('资料库分区')" data-library-sections>
       <button

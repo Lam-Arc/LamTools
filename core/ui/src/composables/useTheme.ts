@@ -10,10 +10,16 @@ import {
   type ThemeData,
   type ThemeStop,
   type ThemeArea,
+  type ThemeFillMode,
+  type ThemeGlassPreference,
   DEFAULT_THEME,
   normalizeTheme,
   migrateThemeDefaults,
-  gradientFromStops,
+  themeAreaBackground,
+  themeAreaGlassFilter,
+  themeAreaImageLayer,
+  themeAreaImageRepeat,
+  themeAreaImageSize,
   themeToCSSVars,
   relativeLuminance,
   addGradientStop,
@@ -30,17 +36,9 @@ export function useTheme(storageKey: string) {
   const settingsThemeStyle = computed(() => {
     const lightMain = relativeLuminance(theme.value.mainText) < 0.45
     return {
-      '--settings-backdrop-background': gradientFromStops(
-        theme.value.backdropAngle,
-        theme.value.backdropStops,
-        1,
-      ),
+      '--settings-backdrop-background': themeAreaBackground(theme.value, 'backdrop'),
       '--settings-backdrop-text': theme.value.backdropText,
-      '--settings-main-background': gradientFromStops(
-        theme.value.mainAngle,
-        theme.value.mainStops,
-        theme.value.mainOpacity,
-      ),
+      '--settings-main-background': themeAreaBackground(theme.value, 'main'),
       '--settings-main-text': theme.value.mainText,
       // main 区首停点纯色：卡片实色底（渐变值不可用于 color-mix）
       '--settings-main-solid': theme.value.mainStops[0]?.color || '#111111',
@@ -55,34 +53,19 @@ export function useTheme(storageKey: string) {
   })
 
   // --- Preview styles ---
-  const themePreviewStyle = computed(() => ({
-    background: gradientFromStops(theme.value.backdropAngle, theme.value.backdropStops, 1),
-    color: theme.value.backdropText,
-  }))
-  const themePreviewMainStyle = computed(() => ({
-    background: gradientFromStops(
-      theme.value.mainAngle,
-      theme.value.mainStops,
-      theme.value.mainOpacity,
-    ),
-    color: theme.value.mainText,
-  }))
-  const themePreviewComposerStyle = computed(() => ({
-    background: gradientFromStops(
-      theme.value.composerAngle,
-      theme.value.composerStops,
-      theme.value.composerOpacity,
-    ),
-    color: theme.value.composerText,
-  }))
-  const themePreviewControlStyle = computed(() => ({
-    background: gradientFromStops(
-      theme.value.controlAngle,
-      theme.value.controlStops,
-      theme.value.controlOpacity,
-    ),
-    color: theme.value.controlText,
-  }))
+  const previewStyleFor = (area: ThemeArea, textColor: string) => ({
+    background: themeAreaBackground(theme.value, area),
+    backgroundImage: themeAreaImageLayer(theme.value, area),
+    backgroundSize: themeAreaImageSize(theme.value, area),
+    backgroundRepeat: themeAreaImageRepeat(theme.value, area),
+    backgroundPosition: 'center',
+    backdropFilter: themeAreaGlassFilter(theme.value, area),
+    color: textColor,
+  })
+  const themePreviewStyle = computed(() => previewStyleFor('backdrop', theme.value.backdropText))
+  const themePreviewMainStyle = computed(() => previewStyleFor('main', theme.value.mainText))
+  const themePreviewComposerStyle = computed(() => previewStyleFor('composer', theme.value.composerText))
+  const themePreviewControlStyle = computed(() => previewStyleFor('control', theme.value.controlText))
 
   // --- Presets ---
   const presets = THEME_PRESETS
@@ -93,7 +76,7 @@ export function useTheme(storageKey: string) {
   }
 
   function applyPreset(preset: ThemePreset) {
-    theme.value = normalizeTheme({ ...DEFAULT_THEME, ...preset.theme })
+    theme.value = normalizeTheme(preset.theme)
     saveTheme()
   }
 
@@ -109,6 +92,35 @@ export function useTheme(storageKey: string) {
 
   function setStops(area: ThemeArea, stops: ThemeStop[]) {
     ;(theme.value as Record<string, unknown>)[`${area}Stops`] = stops
+    saveTheme()
+  }
+
+  // --- 颜色样式（纯色/渐变/玻璃/图片） ---
+  function getFillMode(area: ThemeArea): ThemeFillMode {
+    return theme.value[`${area}Fill` as const]
+  }
+
+  function setFillMode(area: ThemeArea, value: ThemeFillMode) {
+    ;(theme.value as Record<string, unknown>)[`${area}Fill`] = value
+    saveTheme()
+  }
+
+  function getGlassLevel(area: ThemeArea): ThemeGlassPreference {
+    return theme.value[`${area}Glass` as const]
+  }
+
+  function setGlassLevel(area: ThemeArea, value: ThemeGlassPreference) {
+    ;(theme.value as Record<string, unknown>)[`${area}Glass`] = value
+    saveTheme()
+  }
+
+  function setImage(area: ThemeArea, dataUrl: string) {
+    ;(theme.value as Record<string, unknown>)[`${area}Image`] = dataUrl
+    saveTheme()
+  }
+
+  function setImageFit(area: ThemeArea, fit: ThemeData['mainImageFit']) {
+    ;(theme.value as Record<string, unknown>)[`${area}ImageFit`] = fit
     saveTheme()
   }
 
@@ -131,7 +143,7 @@ export function useTheme(storageKey: string) {
       if (!raw) return
       const saved = JSON.parse(raw)
       if (saved.theme) {
-        theme.value = migrateThemeDefaults(normalizeTheme({ ...DEFAULT_THEME, ...saved.theme }))
+        theme.value = migrateThemeDefaults(normalizeTheme(saved.theme))
       }
     } catch {
       /* ignore */
@@ -169,6 +181,13 @@ export function useTheme(storageKey: string) {
     onAddGradientStop,
     onRemoveGradientStop,
     onSortGradientStops,
+    // fill modes
+    getFillMode,
+    setFillMode,
+    getGlassLevel,
+    setGlassLevel,
+    setImage,
+    setImageFit,
     // persistence
     loadTheme,
     saveTheme,

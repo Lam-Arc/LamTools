@@ -231,7 +231,7 @@ describe('settings draft protection', () => {
     const wrapper = await settings({}, rpc)
     await wrapper.get('[data-settings-section="agents"]').trigger('click')
     const context = wrapper.findAll('.setting-card').find(card => card.text().includes('全局上下文加载'))!
-    await context.get('.small-btn.quiet').trigger('click')
+    await context.get('.btn--quiet').trigger('click')
     await context.get('.lc-row input').setValue('project.md')
     await context.get('input[placeholder="如 AGENTS.md / CONTEXT.md"]').setValue('secret.md')
     await wrapper.get('[data-settings-section="about"]').trigger('click')

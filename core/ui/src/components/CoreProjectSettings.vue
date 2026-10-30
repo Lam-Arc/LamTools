@@ -57,7 +57,7 @@
                     <code data-project-session-id>#{{ sessionId.slice(0, 8) }}</code>
                   </div>
                   <button
-                    class="text-btn project-session-copy"
+                    class="btn btn--ghost project-session-copy"
                     :class="{ 'is-copied': copiedSessionId }"
                     type="button"
                     data-project-session-copy
@@ -78,8 +78,8 @@
                   <span class="muted subhead-title">{{ t("项目规则") }}<span class="subhead-sub">AGENTS.md</span>
                   </span>
                   <div class="subhead-actions">
-                    <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="rulesDraft.requestReplace(() => emit('refresh-agents'))">{{ t("刷新") }}</button>
-                    <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="saveRules">{{ t("保存") }}</button>
+                    <button class="btn btn--ghost" type="button" :disabled="agentsLoading || agentsSaving" @click="rulesDraft.requestReplace(() => emit('refresh-agents'))">{{ t("刷新") }}</button>
+                    <button class="btn btn--ghost" type="button" :disabled="agentsLoading || agentsSaving" @click="saveRules">{{ t("保存") }}</button>
                   </div>
                 </div>
                 <textarea
@@ -123,8 +123,8 @@ import { t } from '@/i18n/index.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Check, Copy } from 'lucide-vue-next'
 import {
-  gradientFromStops,
   relativeLuminance,
+  themeAreaBackground,
   type ThemeData,
 } from '@/helpers/theme.ts'
 import SettingsShell from '@/components/SettingsShell.vue'
@@ -319,28 +319,16 @@ async function copySessionId(): Promise<void> {
 const settingsThemeStyle = computed(() => {
   const lightMain = relativeLuminance(props.theme.mainText) < 0.45
   return {
-    '--settings-backdrop-background': gradientFromStops(
-      props.theme.backdropAngle,
-      props.theme.backdropStops,
-      1,
-    ),
+    '--settings-backdrop-background': themeAreaBackground(props.theme, 'backdrop'),
     '--settings-backdrop-text': props.theme.backdropText,
-    '--settings-main-background': gradientFromStops(
-      props.theme.mainAngle,
-      props.theme.mainStops,
-      props.theme.mainOpacity,
-    ),
+    '--settings-main-background': themeAreaBackground(props.theme, 'main'),
     '--settings-main-text': props.theme.mainText,
     // main 区首停点纯色：卡片实色底（渐变值不可用于 color-mix）
     '--settings-main-solid': props.theme.mainStops[0]?.color || '#111111',
     // 卡片/浮层面板：main 实色 + 文字色 4% 微调，不透明、与内容区有层级
     '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
     '--settings-card-text': props.theme.mainText,
-    '--settings-control-background': gradientFromStops(
-      props.theme.controlAngle,
-      props.theme.controlStops,
-      props.theme.controlOpacity,
-    ),
+    '--settings-control-background': themeAreaBackground(props.theme, 'control'),
     '--settings-control-text': props.theme.controlText,
     // control 区首停点纯色：color-mix 混透明用的实色底（渐变值不可用于 color-mix）
     '--settings-control-solid': props.theme.controlStops[0]?.color || '#3a3834',

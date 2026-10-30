@@ -57,7 +57,8 @@ def register_durable_operations(
     async def goal_get(request: OperationRequest) -> OperationResult:
         goal = await goal_manager.get(_goal_id(request.payload))
         if goal is None:
-            return _error(request, "Goal not found")
+            # user:“继续，把 2 阶段都做完”+(公开 SDK 需要区分缺失与存储失败，不能按错误文案猜测)。
+            return OperationResult(request.name, status="error", payload={"code": "not-found", "error": "Goal not found"})
         return OperationResult(name=request.name, payload={"goal": goal.to_dict()})
 
     async def goal_list(request: OperationRequest) -> OperationResult:
@@ -151,7 +152,8 @@ def register_durable_operations(
     async def arrange_get(request: OperationRequest) -> OperationResult:
         job = await arrange_manager.get(_job_id(request.payload))
         if job is None:
-            return _error(request, "Arrange job not found")
+            # user:“继续，把 2 阶段都做完”+(计划读侧用错误码表示缺失，不能吞掉持久层错误)。
+            return OperationResult(request.name, status="error", payload={"code": "not-found", "error": "Arrange job not found"})
         return OperationResult(name=request.name, payload={"job": job_payload(job)})
 
     async def arrange_list(request: OperationRequest) -> OperationResult:

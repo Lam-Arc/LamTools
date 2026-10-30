@@ -61,7 +61,7 @@
           v-for="action in region.actions"
           :key="action.id"
           type="button"
-          class="small-btn"
+          class="btn btn--secondary"
           :class="{ 'is-danger': action.dangerous }"
           :disabled="busy === action.id"
           :data-action="action.id"
@@ -99,8 +99,8 @@
           />
         </label>
         <div class="plugin-action-form-actions">
-          <button class="small-btn" type="submit" :disabled="busy !== ''">{{ t("执行") }}</button>
-          <button class="text-btn" type="button" @click="pendingAction = null">{{ t("取消") }}</button>
+          <button class="btn btn--secondary" type="submit" :disabled="busy !== ''">{{ t("执行") }}</button>
+          <button class="btn btn--ghost" type="button" @click="pendingAction = null">{{ t("取消") }}</button>
         </div>
       </form>
     </section>

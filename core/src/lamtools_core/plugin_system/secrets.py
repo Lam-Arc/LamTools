@@ -19,6 +19,10 @@ import json
 import logging
 import os
 import threading
+import tempfile
+import time
+import errno
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,7 +40,12 @@ _CRYPTPROTECT_UI_FORBIDDEN = 0x1
 
 
 class SecretStoreError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: str = "credentials/store"):
+        self.code = code
+        super().__init__(message)
+
+
+_transaction_lock = threading.RLock()
 
 
 if wintypes is not None:
@@ -133,38 +142,113 @@ class PluginSecretStore:
     """Host-owned, per-plugin secret store."""
 
     def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.path = self.root / "secrets.json"
-        self._lock = threading.RLock()
-        self._data: dict[str, Any] = {"version": 1, "plugins": {}}
-        self._load()
+        # user:“宿主能力补齐和接口完善与文档更新”+(磁盘是唯一状态权威；实例不缓存凭据副本，坏文件只在实际操作时明确拒绝)。
+        self._lock = _transaction_lock
 
     def view(self, plugin: str) -> "PluginSecrets":
         return PluginSecrets(self, plugin)
 
-    def _load(self) -> None:
+    def for_scope(self, scope):
+        from .credentials import PluginCredentials
+        scope.check_open()
+        return PluginCredentials(self, scope)
+
+    @contextmanager
+    def _locked(self):
+        # user:“接口完善”+(同一文件的读—改—替换由线程和进程锁串行化，不让旧实例覆盖其他实例新写入的凭据)。
+        with self._lock:
+            try:
+                self.root.mkdir(parents=True, exist_ok=True)
+                stream = (self.root / "secrets.lock").open("a+b")
+            except OSError as error:
+                raise SecretStoreError("Cannot access credential store", code="credentials/io") from None
+            with stream:
+                try:
+                    stream.seek(0, 2)
+                    if not stream.tell():
+                        stream.write(b"0")
+                        stream.flush()
+                    for attempt in range(41):
+                        stream.seek(0)
+                        try:
+                            if os.name == "nt":
+                                import msvcrt
+                                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                            else:
+                                import fcntl
+                                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except OSError as error:
+                            if error.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK, errno.EBUSY}:
+                                raise
+                            if attempt == 40:
+                                raise SecretStoreError("Credential store is busy", code="credentials/busy") from None
+                            time.sleep(0.05)
+                except SecretStoreError:
+                    raise
+                except OSError as error:
+                    raise SecretStoreError("Cannot lock credential store", code="credentials/io") from None
+                try:
+                    yield
+                finally:
+                    try:
+                        stream.seek(0)
+                        if os.name == "nt":
+                            import msvcrt
+                            msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+                            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        # Closing the file releases the lock; do not turn an
+                        # acknowledged save into an apparent rejected mutation.
+                        _logger.warning("Credential lock release failed; closing lock file")
+
+    def _load(self) -> dict[str, Any]:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return
-        except Exception as exc:  # noqa: BLE001 - a corrupt store must be explicit on write
-            _logger.warning("plugin secret store is unreadable: %s", exc)
-            return
-        if isinstance(raw, dict) and isinstance(raw.get("plugins"), dict):
-            self._data = {"version": 1, "plugins": dict(raw["plugins"])}
+            return {"version": 1, "plugins": {}}
+        except OSError as error:
+            raise SecretStoreError("Cannot read credential store", code="credentials/io") from None
+        except ValueError as error:
+            raise SecretStoreError("Credential store is malformed", code="credentials/corrupt") from None
+        if not isinstance(raw, dict) or not isinstance(raw.get("plugins"), dict):
+            raise SecretStoreError("Credential store is malformed", code="credentials/corrupt")
+        if type(raw.get("version")) is not int or raw["version"] != 1:
+            raise SecretStoreError("Unsupported credential store version", code="credentials/version")
+        for plugin, bucket in raw["plugins"].items():
+            if not plugin or not isinstance(bucket, dict):
+                raise SecretStoreError("Credential namespace is malformed", code="credentials/corrupt")
+            for key, entry in bucket.items():
+                if (not key or not isinstance(entry, dict) or not isinstance(entry.get("value"), str)
+                        or not entry["value"].startswith((_DPAPI_PREFIX, _B64_PREFIX))):
+                    raise SecretStoreError("Credential entry is malformed", code="credentials/corrupt")
+        return raw
 
-    def _save(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+    def _save(self, data) -> None:
+        temporary = None
         try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
-        os.replace(temporary, self.path)
+            fd, name = tempfile.mkstemp(dir=self.root, prefix=".secrets-", suffix=".tmp")
+            temporary = Path(name)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                json.dump(data, stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+        except OSError as error:
+            raise SecretStoreError("Cannot persist credential store", code="credentials/io") from None
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    _logger.warning("Credential temporary-file cleanup failed")
 
-    def _plugin_bucket(self, plugin: str) -> dict[str, Any]:
-        plugins = self._data.setdefault("plugins", {})
+    def _plugin_bucket(self, data, plugin: str) -> dict[str, Any]:
+        plugins = data["plugins"]
         bucket = plugins.get(str(plugin))
         if not isinstance(bucket, dict):
             bucket = {}
@@ -172,43 +256,50 @@ class PluginSecretStore:
         return bucket
 
     def get(self, plugin: str, key: str, default: str = "") -> str:
-        with self._lock:
-            entry = self._plugin_bucket(plugin).get(str(key))
+        with self._locked():
+            entry = self._load()["plugins"].get(str(plugin), {}).get(str(key))
             if not isinstance(entry, dict) or not entry.get("value"):
                 return default
             try:
                 return _decode(str(entry["value"]))
-            except Exception as exc:  # noqa: BLE001
-                raise SecretStoreError(f"cannot decrypt secret '{key}' for plugin '{plugin}': {exc}") from exc
+            except Exception as error:
+                raise SecretStoreError("Cannot decrypt credential", code="credentials/decrypt") from None
 
     def set(self, plugin: str, key: str, value: str) -> None:
         key = str(key or "").strip()
         if not key:
             raise ValueError("secret key must not be empty")
-        with self._lock:
+        with self._locked():
+            data = self._load()
             if not str(value):
-                self._plugin_bucket(plugin).pop(key, None)
-                self._save()
+                if data["plugins"].get(str(plugin), {}).pop(key, None) is not None:
+                    self._save(data)
                 return
-            self._plugin_bucket(plugin)[key] = {
-                "value": _encode(str(value)),
+            try:
+                encoded = _encode(str(value))
+            except Exception as error:
+                raise SecretStoreError("Cannot protect credential", code="credentials/protect") from None
+            self._plugin_bucket(data, plugin)[key] = {
+                "value": encoded,
                 "updatedAt": datetime.now(timezone.utc).isoformat(),
             }
-            self._save()
+            self._save(data)
 
     def delete(self, plugin: str, key: str) -> None:
-        with self._lock:
-            if self._plugin_bucket(plugin).pop(str(key), None) is not None:
-                self._save()
+        with self._locked():
+            data = self._load()
+            if data["plugins"].get(str(plugin), {}).pop(str(key), None) is not None:
+                self._save(data)
 
     def keys(self, plugin: str) -> list[str]:
-        with self._lock:
-            return sorted(self._plugin_bucket(plugin).keys())
+        with self._locked():
+            return sorted(self._load()["plugins"].get(str(plugin), {}).keys())
 
     def clear(self, plugin: str) -> None:
-        with self._lock:
-            if self._data.get("plugins", {}).pop(str(plugin), None) is not None:
-                self._save()
+        with self._locked():
+            data = self._load()
+            if data["plugins"].pop(str(plugin), None) is not None:
+                self._save(data)
 
 
 class PluginSecrets:

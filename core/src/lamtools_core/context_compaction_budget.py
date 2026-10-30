@@ -20,7 +20,6 @@ from lamtools_core.llm import ChatMessage
 from lamtools_core.tokens import estimate_message_tokens
 
 
-FAST_ESTIMATE_SAFETY_FACTOR = 8.0
 #: user:“本地估算数值直接改比现在的乘 2.5 倍，不要质疑 直接去做”
 #: +本地估算长期偏低，压缩测量统一乘 2.5；供应商 usage 锚点不受影响。
 LOCAL_ESTIMATE_SCALE = 2.5
@@ -222,7 +221,7 @@ class TokenMeasurement:
     ``source`` names the measurement route for diagnostics: ``fast_estimate``
     and ``exact_estimate`` are local estimators, ``provider_anchor`` means the
     bulk of the prompt came from real provider usage with only the appended
-    tail estimated (see ``context_compaction.usage_anchor``).
+    tail estimated (see ``context_measurement``).
     """
 
     tokens: int
@@ -256,52 +255,12 @@ def context_measurement(
     return TokenMeasurement(tokens=calibrated_tokens(estimate()), exact=True, source="estimate")
 
 
-def measure_for_compaction_trigger(
-    messages: Sequence[ChatMessage],
-    *,
-    trigger_tokens: int,
-    fast_estimate: MessageTokenEstimator | None = None,
-    exact_estimate: MessageTokenEstimator | None = None,
-    fast_safety_factor: float = FAST_ESTIMATE_SAFETY_FACTOR,
-) -> TokenMeasurement:
-    """Use the fast estimator only when it is safely below the trigger.
-
-    Fast estimation is deliberately treated as a lower-bound-like signal:
-    Unicode-heavy text can be substantially undercounted.  Once the scaled
-    fast estimate is near the trigger, the caller's exact estimator is used.
-    Custom estimators let callers include request-level overhead such as tool
-    definitions and response formats.
-    """
-    values = list(messages)
-    fast_fn = fast_estimate or (
-        lambda current: estimate_message_tokens(
-            [message.to_dict() for message in current],
-            fast=True,
-        )
-    )
-    exact_fn = exact_estimate or (
-        lambda current: estimate_message_tokens(
-            [message.to_dict() for message in current],
-            fast=False,
-        )
-    )
-    fast_tokens = calibrated_tokens(fast_fn(values))
-    if fast_tokens * fast_safety_factor < trigger_tokens:
-        return TokenMeasurement(tokens=fast_tokens, exact=False, source="fast_estimate")
-    return TokenMeasurement(
-        tokens=calibrated_tokens(exact_fn(values)),
-        exact=True,
-        source="exact_estimate",
-    )
-
-
 __all__ = [
     "CONTEXT_COMPACTION_NAMESPACE",
     "DEFAULT_SUMMARY_OUTPUT_TOKENS",
     "DEFAULT_SUMMARY_PROTOCOL_TOKENS",
     "DEFAULT_SUMMARY_SAFETY_RATIO",
     "DEFAULT_RETAINED_STEPS",
-    "FAST_ESTIMATE_SAFETY_FACTOR",
     "LOCAL_ESTIMATE_SCALE",
     "calibrated_tokens",
     "context_measurement",
@@ -311,7 +270,6 @@ __all__ = [
     "TokenBudget",
     "TokenMeasurement",
     "load_retained_steps",
-    "measure_for_compaction_trigger",
     "resolve_retained_steps",
     "resolve_compaction_budget",
 ]

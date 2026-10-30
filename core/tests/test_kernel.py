@@ -13,7 +13,6 @@ import pytest
 
 from lamtools_core.context_compaction import (
     COMPACTION_PROMPT,
-    USAGE_ANCHOR_METADATA_KEY,
     CompactionExecution,
     ContextCompactionResult,
 )
@@ -4753,7 +4752,7 @@ class TestKernelContextCompaction:
             "context_usage_prompt_tokens": 900_000,
         }
         # Legacy anchor from an older session must still be cleaned up.
-        state.metadata[USAGE_ANCHOR_METADATA_KEY] = {"prompt_tokens": 900_000}
+        state.metadata["context_usage_anchor"] = {"prompt_tokens": 900_000}
         kernel = _make_kernel(
             MockRuntimeKit(steps=[MockKitStep(decision="done")]),
             llm_client=CapturingLLMClient(),
@@ -4769,7 +4768,7 @@ class TestKernelContextCompaction:
         await kernel._compact_request_if_needed(state, request, history=None)
 
         assert state.metadata["runtime_context_metrics"]["context_compacted"] is True
-        assert USAGE_ANCHOR_METADATA_KEY not in state.metadata
+        assert "context_usage_anchor" not in state.metadata
 
 
 # ---------------------------------------------------------------------------

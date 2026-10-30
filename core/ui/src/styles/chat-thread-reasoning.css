@@ -1,0 +1,291 @@
+/* user:“还有大文件拆分”+(从 ChatThread.vue 的全局样式块拆出：推理面板与差异块；
+   六个文件按原顺序由组件的 <style src> 引入，全局作用域与层叠顺序保持不变)。 */
+/* ── Reasoning collapsible panel ── */
+.process-step--reasoning {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  counter-increment: reasoning-step;
+}
+.process-step--reasoning + .process-step--reasoning {
+  margin-top: 3px;
+}
+.reasoning-toggle {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content) auto;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 2px 6px 2px 0;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 74%, transparent);
+  font: inherit;
+  text-align: left;
+  transition: color .14s ease;
+  position: relative;
+}
+.reasoning-toggle::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.reasoning-toggle:hover {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 88%, transparent);
+}
+.reasoning-toggle:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+.process-step--reasoning .process-step-marker {
+  display: none;
+}
+.process-step--reasoning .process-step-title {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 66%, transparent);
+  font-size: 12px;
+  font-weight: 680;
+}
+.reasoning-duration {
+  min-width: 0;
+  max-width: min(240px, 40vw);
+  justify-self: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 60%, transparent);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+.reasoning-body {
+  margin: 3px 0 8px 24px;
+  max-height: 800px;
+  overflow: auto;
+  padding: 2px 0 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 62%, transparent);
+  font-size: 13px;
+  line-height: 1.65;
+  font-style: normal;
+  text-wrap: pretty;
+  opacity: 1;
+}
+.reasoning-body .process-step-detail {
+  display: block;
+  overflow: visible;
+  color: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-line-clamp: unset;
+}
+
+.compaction-step {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 62%, transparent);
+}
+.compaction-toggle {
+  display: grid;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  position: relative;
+}
+.compaction-toggle::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.compaction-toggle:disabled {
+  cursor: default;
+}
+.compaction-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent, #79bcff) 72%, transparent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.compaction-toggle .process-step-detail {
+  min-width: 0;
+  white-space: nowrap;
+}
+.compaction-toggle:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+.compaction-toggle:hover .compaction-token-detail {
+  color: var(--accent, #79bcff);
+}
+.compaction-toggle:disabled:hover .compaction-token-detail {
+  color: inherit;
+}
+.compaction-step--not_needed .process-card-state-icon {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 45%, transparent);
+}
+.compaction-summary {
+  box-sizing: border-box;
+  width: min(100%, 720px);
+  margin: 6px 0 0 24px;
+  padding: 2px 0 6px;
+  border: 0;
+  background: transparent;
+}
+.compaction-summary-text {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.compaction-summary-text--streaming::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 3px;
+  transform: translateY(2px);
+  background: currentColor;
+  opacity: .58;
+  animation: stream-caret 900ms steps(2, start) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .compaction-summary-text--streaming::after {
+    animation: none;
+  }
+}
+
+/* ── Tool args preview ── */
+.tool-args-preview {
+  grid-area: args;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  max-width: min(100%, 760px);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  justify-self: start;
+}
+
+/* ── Diff-style file blocks ── */
+.diff-block {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  color: var(--theme-main-text, var(--text));
+  max-height: 400px;
+  overflow: auto;
+}
+.diff-header {
+  min-width: 0;
+  min-height: 29px;
+  box-sizing: border-box;
+  padding: 5px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.wrap-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 68%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 2px 0 2px 6px;
+  cursor: pointer;
+}
+.wrap-toggle:hover {
+  color: var(--theme-main-text, var(--text));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.diff-block--read .diff-header {
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, transparent);
+}
+.diff-block--write .diff-header {
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, transparent);
+}
+.diff-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.diff-lines {
+  min-width: max-content;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  min-width: 100%;
+}
+.diff-block:not(.diff-block--wrap) .diff-lines {
+  min-width: max-content;
+}
+.diff-block--wrap .diff-lines {
+  min-width: 0;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  min-height: 20px;
+}
+.diff-line:nth-child(even) {
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 2%, transparent));
+}
+.diff-line-num {
+  width: 34px;
+  padding: 0 6px 0 10px;
+  text-align: right;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 38%, transparent);
+  font-size: 11px;
+  user-select: none;
+  border-right: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent));
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 3%, transparent));
+}
+.diff-line-content {
+  white-space: pre;
+  word-break: normal;
+  color: var(--theme-main-text, var(--text));
+  padding: 0 10px 0 8px;
+  min-width: 0;
+}
+.diff-block--wrap .diff-line-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

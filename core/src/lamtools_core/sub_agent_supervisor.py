@@ -119,6 +119,8 @@ class SubAgentRecord:
     lease_until: float = 0.0
     # user:“修 问题严重的话 就重新设计”+(每次执行与控制动作使用持久令牌，使旧结果失去写入权)。
     execution_token: str = ""
+    # user:“给我把 2 阶段做完，前端除外”+(成员持久捕获执行目录，不改变项目/模型配置根)。
+    execution_directory: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -504,6 +506,7 @@ class SubAgentSupervisor:
         model: object,
         reasoning_level: object,
         source_ids: dict[str, str] | None = None,
+        execution_directory: str | None = None,
     ) -> SubAgentOperationResult:
         child_type = validate_type(type)
         child_name = validate_name(name)
@@ -512,6 +515,13 @@ class SubAgentSupervisor:
         desired = (child_type, child_name, model_id, reasoning)
         async with self._lock:
             existing = self._load(child_name)
+            captured_directory = existing.execution_directory if existing else ""
+            if existing is None and execution_directory is not None:
+                from lamtools_core.plugin_system.working_directory import directory_exists
+                project = Path(self.runner.work_root).resolve()
+                if not isinstance(execution_directory, str) or not Path(execution_directory).is_absolute() or not directory_exists(project, execution_directory):
+                    raise ValueError("Child execution directory must be an existing directory inside the original project")
+                captured_directory = str(Path(execution_directory))
             if existing and existing.status not in {"closed", "interrupted", "terminated", "failed"}:
                 current = (existing.type, existing.name, existing.model_id, existing.reasoning_level)
                 if current != desired:
@@ -537,6 +547,7 @@ class SubAgentSupervisor:
             record = SubAgentRecord(
                 parent_thread_id=self.parent_thread_id, type=child_type, name=child_name,
                 model_id=model_id, reasoning_level=reasoning, status="idle",
+                execution_directory=captured_directory,
                 summary=previous.summary,
                 sub_session_id=f"{self.parent_thread_id}:sub:{child_name}",
                 source_call_id=str(ids.get("call_id") or previous.source_call_id),
@@ -557,6 +568,18 @@ class SubAgentSupervisor:
             self._refresh_source(record, ids)
             self._save(record)
             return SubAgentOperationResult(record, "enabled" if existing else "created")
+
+    def member_execution_directory(self, name):
+        # user:“给我把 2 阶段做完，前端除外”+(恢复继续读取原成员记录；丢失目录明确失败，不跟随父会话漂移)。
+        from lamtools_core.plugin_system.working_directory import directory_exists
+        record = self._load(name)
+        if record is None:
+            raise ValueError("Child member is unavailable")
+        project = Path(self.runner.work_root).resolve()
+        path = record.execution_directory or str(project)
+        if not Path(path).is_absolute() or not directory_exists(project, path):
+            raise ValueError("Captured child execution directory is unavailable")
+        return path
 
     def _refresh_source(
         self,
@@ -840,7 +863,8 @@ class SubAgentSupervisor:
         return ""
 
     async def interrupt_active(
-        self, *, include_paused: bool = False, final_status: str | None = None
+        self, *, include_paused: bool = False, final_status: str | None = None,
+        member_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Interrupt every locally owned active child and return its records.
 
@@ -854,13 +878,18 @@ class SubAgentSupervisor:
         victims: list[SubAgentRecord] = []
         tasks: list[asyncio.Task[None]] = []
         async with self._lock:
-            names = set(self._tasks)
+            # user:“继续”+(单成员入口只筛选这一成员；原会话级停止默认范围保持)。
+            if member_name is not None:
+                self._required(validate_name(member_name))
+            names = {member_name} if member_name is not None else set(self._tasks)
             with self._connection() as db:
                 rows = db.execute(
                     "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
                     (self.parent_thread_id,),
                 ).fetchall()
             for row in rows:
+                if member_name is not None and row["name"] != member_name:
+                    continue
                 record = SubAgentRecord(**json.loads(row["payload"]))
                 task = self._tasks.get(record.name)
                 active = record.status in {"running", "pending"} or (
@@ -922,6 +951,26 @@ class SubAgentSupervisor:
         await self._await_children_settled(victims)
         await self._maybe_report_members_drained()
         return [record.to_dict() for record in victims]
+
+    async def interrupt_member(self, name: str) -> dict[str, Any]:
+        # user:“继续”+(具名单成员中断复用原取消和落盘，不设置会影响所有成员的暂停信号)。
+        child_name = validate_name(name)
+        identity = current_child_identity()
+        if identity is not None and identity[0] is self and identity[2] == child_name:
+            raise ValueError("A member cannot interrupt and join itself")
+        victims = await self.interrupt_active(member_name=child_name)
+        if victims:
+            return {**victims[0], "lifecycle_action": "interrupted"}
+        async with self._lock:
+            return {**self._required(child_name).to_dict(), "lifecycle_action": "unchanged"}
+
+    async def resume_member(self, name: str) -> dict[str, Any]:
+        child_name = validate_name(name)
+        rows = await self._resume_records(statuses={"interrupted"}, prompt=None,
+                                          member_name=child_name, require_continuation=True)
+        if not rows:
+            raise ValueError("Only an inactive interrupted member may be resumed")
+        return {**rows[0], "lifecycle_action": "resumed"}
 
     async def _clear_child_pending(self, session_id: str) -> None:
         """Drop a parked member's durable question when the user terminates.
@@ -1106,16 +1155,25 @@ class SubAgentSupervisor:
         *,
         statuses: set[str],
         prompt: str | None,
+        member_name: str | None = None,
+        require_continuation: bool = False,
     ) -> list[dict[str, Any]]:
         # user:“修 问题严重的话 就重新设计”+(没有真实执行器时不能先写正在恢复)。
         resumed: list[SubAgentRecord] = []
         async with self._lock:
+            # user:“继续”+(具名恢复不能清除父会话暂停，也不能以全新run伪装已提交状态的继续)。
+            if member_name is not None:
+                self._required(validate_name(member_name))
+            if require_continuation and self._pause_event is not None and self._pause_event.is_set():
+                raise ValueError("Parent session is paused; resume it through the session controller")
             with self._connection() as db:
                 rows = db.execute(
                     "SELECT name,payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name",
                     (self.parent_thread_id,),
                 ).fetchall()
             for row in rows:
+                if member_name is not None and row["name"] != member_name:
+                    continue
                 record = SubAgentRecord(**json.loads(row["payload"]))
                 if record.status not in statuses:
                     continue
@@ -1126,6 +1184,20 @@ class SubAgentSupervisor:
                     continue
                 if task is None and _owned_elsewhere(record):
                     continue
+                if require_continuation:
+                    store = getattr(self.runner, "state_store", None)
+                    if not callable(getattr(self.runner, "resume_interrupted", None)) or not callable(getattr(store, "get", None)):
+                        raise ValueError("Committed-state continuation provider is unavailable")
+                    # user:“继续”+(冷恢复尚未重建共享事件时，也遵守父会话已经落盘的暂停状态)。
+                    parent_state = await store.get(self.parent_thread_id)
+                    if parent_state is not None and parent_state.status in {"paused", "suspended"}:
+                        raise ValueError("Parent committed state is paused; resume it through the session controller")
+                    state = await store.get(record.sub_session_id)
+                    if state is None or state.status in LIVE_RUN_STATES:
+                        raise ValueError("Child committed state is missing or still active")
+                    metadata = state.metadata if isinstance(state.metadata, dict) else {}
+                    if not str(metadata.get("turn_id") or state.run_id or "").strip():
+                        raise ValueError("Child logical turn identity is missing")
                 record.status = "running"
                 record.started_at = time.time()
                 record.completed_at = None
@@ -1137,7 +1209,7 @@ class SubAgentSupervisor:
                 self._resume_names.add(record.name)
                 self._resume_prompts[record.name] = prompt
                 self._tasks[record.name] = asyncio.create_task(
-                    self._drive(record.name),
+                    self._drive(record.name, require_continuation=require_continuation),
                     name=f"sub-agent-resume:{self.parent_thread_id}:{record.name}",
                 )
                 resumed.append(record)
@@ -1149,7 +1221,7 @@ class SubAgentSupervisor:
             await self._publish_member_status(record, event="member_running")
         return [record.to_dict() for record in resumed]
 
-    async def _drive(self, name: str) -> None:
+    async def _drive(self, name: str, *, require_continuation: bool = False) -> None:
         execution_token = ""
         try:
             while True:
@@ -1226,6 +1298,9 @@ class SubAgentSupervisor:
                     # run instead of waiting for bookkeeping.
                     async with self.agent_lock(name):
                         async with self._run_semaphore:
+                            # user:“继续”+(实际持有的执行器也须支持继续；克隆缺少能力时失败，不能退回新run)。
+                            if resume and require_continuation and not callable(getattr(run_runner, "resume_interrupted", None)):
+                                raise ValueError("Owned runner does not support committed-state continuation")
                             if resume and hasattr(run_runner, "resume_interrupted"):
                                 result = await run_runner.resume_interrupted(
                                     session_id=record.sub_session_id,
@@ -2104,6 +2179,10 @@ def register_sub_agent_lifecycle_operations(
             }
             if request.name == "sub_agent.list":
                 return OperationResult(request.name, payload={"items": await supervisor.list()})
+            if request.name == "sub_agent.interrupt_member":
+                return OperationResult(request.name, payload=await supervisor.interrupt_member(payload.get("name")))
+            if request.name == "sub_agent.resume_member":
+                return OperationResult(request.name, payload=await supervisor.resume_member(payload.get("name")))
             if request.name == "sub_agent.create":
                 result = await supervisor.create_operation(
                     type=payload.get("type"),
@@ -2111,6 +2190,7 @@ def register_sub_agent_lifecycle_operations(
                     model=payload.get("model"),
                     reasoning_level=payload.get("reasoning_level"),
                     source_ids=source_ids,
+                    execution_directory=payload.get("execution_directory"),
                 )
                 return OperationResult(request.name, payload=result.to_dict())
             if request.name == "sub_agent.close":
@@ -2170,6 +2250,8 @@ def register_sub_agent_lifecycle_operations(
 
     for operation_name in (
         "sub_agent.list",
+        "sub_agent.interrupt_member",
+        "sub_agent.resume_member",
         "sub_agent.terminate",
         "sub_agent.create",
         "sub_agent.close",

@@ -5,6 +5,7 @@ import CoreAppPage from './CoreAppPage.vue'
 import CoreAuxiliaryChat from './CoreAuxiliaryChat.vue'
 import CoreSplitBrowser from './CoreSplitBrowser.vue'
 import CoreSplitTextEditor from './CoreSplitTextEditor.vue'
+import CoreSplitPreview from './CoreSplitPreview.vue'
 import CoreSplitFileTree from './CoreSplitFileTree.vue'
 import CoreSplitPluginPage from './CoreSplitPluginPage.vue'
 import { contributionState, contributionsRpc, ensureContributions } from '@/plugins/contributions'
@@ -15,6 +16,7 @@ import { useSplitAgent } from '@/split/useSplitAgent'
 import type { CoreSubAgentDurableRecord, CoreMessage } from '@/types'
 import type { LamToolsTransport } from '@/transport'
 import type { SplitWorkspaceController } from '@/split/useSplitWorkspace'
+import { openFileInSplit, openFileWithDefaultApp } from '@/split/openFile'
 import type { createSplitDocuments } from '@/split/documents'
 const props = defineProps<{
   tab: SplitTab; pane: string; visible: boolean; controller: SplitWorkspaceController; documents: ReturnType<typeof createSplitDocuments>
@@ -34,13 +36,20 @@ onBeforeUnmount(unregister)
 async function openFile(path: string, bound?: {workRoot: string; projectId?: string; sessionId?: string}) {
   // user:“该修就修，不用停下”+(启动时先完成插件目录加载，再决定文件使用哪个页面)。
   if (!contributionState().loaded && pluginRpc.value) await ensureContributions(pluginRpc.value)
-  const target = props.controller.tabs.value.find(({ tab }) => tab.kind === 'editor')?.pane
-  const pane = target || props.controller.split(props.pane, 'right') || props.pane
-  // user:“该修就修，不用停下”+(已声明的画图文件交给插件页面，其他文件继续使用文本编辑器)。
+  // user:“该修就修，不用停下”+(已声明的画图文件交给插件页面，其他文件继续使用分屏预览或文本编辑器)。
   const pluginPage = findPluginFilePage(contributionState().pages, path)
   const fileRoot = bound?.workRoot || root
-  if (pluginPage) props.controller.openPluginPage(pluginPage, pane, {workRoot:fileRoot, projectId:bound?.projectId ?? props.tab.projectId, sessionId:bound?.sessionId ?? props.tab.sessionId, filePath:path})
-  else props.controller.add('editor', path, path.split(/[\\/]/).pop() || path, pane, bound?.sessionId, fileRoot, bound?.projectId ?? props.tab.projectId)
+  if (pluginPage) {
+    const target = props.controller.tabs.value.find(({ tab }) => tab.kind === 'editor' || tab.kind === 'preview')?.pane
+    const pane = target || props.controller.split(props.pane, 'right') || props.pane
+    props.controller.openPluginPage(pluginPage, pane, {workRoot:fileRoot, projectId:bound?.projectId ?? props.tab.projectId, sessionId:bound?.sessionId ?? props.tab.sessionId, filePath:path})
+  }
+  // user:“分屏预览器不支持图片吗？改一下图片，视频 office，什么东西都尽可能支持一下”+
+  // (富媒体与文档进预览器，文本仍进编辑器；已经有同类标签就复用它)。
+  // user:“设置中把它标记为实验性功能”+(实验性预览关闭时，预览类文件改回默认应用打开)。
+  else if (!openFileInSplit(props.controller, path, { workRoot: fileRoot, projectId: bound?.projectId ?? props.tab.projectId, sessionId: bound?.sessionId ?? props.tab.sessionId, fromPane: props.pane })) {
+    void openFileWithDefaultApp(props.transport, path, fileRoot)
+  }
 }
 function openPluginPage(target: { plugin: string; id: string }) {
   const page = contributionState().pages.find(page => page.plugin === target.plugin && page.id === target.id)
@@ -53,6 +62,7 @@ function openPluginPage(target: { plugin: string; id: string }) {
   <CoreSplitBrowser v-else-if="tab.kind === 'browser'" :tab="tab" :visible="visible" />
   <CoreAuxiliaryChat v-else-if="tab.kind === 'conversation'" :tab="tab" :visible="visible" />
   <CoreSplitTextEditor v-else-if="tab.kind === 'editor'" :tab="tab" :root="root" :controller="controller" :documents="documents" @dirty="(id, value) => emit('dirty', id, value)" />
+  <CoreSplitPreview v-else-if="tab.kind === 'preview'" :tab="tab" :root="root" :pane="pane" :controller="controller" :transport="transport" />
   <CoreSplitFileTree v-else-if="tab.kind === 'files'" :root="tab.resource || root" @open="openFile" />
   <template v-else-if="tab.kind === 'plugin'">
     <CoreSplitPluginPage v-if="pluginRpc" :tab="tab" :work-root="root" :visible="visible" :request-rpc="pluginRpc" @open-page="openPluginPage" @open-file="openFile" />

@@ -106,9 +106,9 @@ watch(() => props.viewport, viewport => {
   <div class="study-graph">
     <div class="study-graph-meta" aria-live="polite"><span>{{ nodes.length }} {{ t("个节点") }}</span><span>{{ edges.length }} {{ t("条关系") }}</span><span v-if="layoutNotice" :title="layoutNotice">{{ t("分层") }}</span></div>
     <div class="study-graph-controls">
-      <button class="text-btn" :title="t('缩小')" :aria-label="t('缩小')" @click="setGraphViewport({ ...viewport, zoom: Math.max(.25, viewport.zoom / 1.2) })"><Minus :size="15" /></button>
-      <button class="text-btn" :title="t('放大')" :aria-label="t('放大')" @click="setGraphViewport({ ...viewport, zoom: Math.min(2, viewport.zoom * 1.2) })"><Plus :size="15" /></button>
-      <button class="text-btn" :title="t('复位')" :aria-label="t('复位')" @click="setGraphViewport({ x: 24, y: 24, zoom: 1 })"><Maximize2 :size="15" /></button>
+      <button class="btn btn--ghost" :title="t('缩小')" :aria-label="t('缩小')" @click="setGraphViewport({ ...viewport, zoom: Math.max(.25, viewport.zoom / 1.2) })"><Minus :size="15" /></button>
+      <button class="btn btn--ghost" :title="t('放大')" :aria-label="t('放大')" @click="setGraphViewport({ ...viewport, zoom: Math.min(2, viewport.zoom * 1.2) })"><Plus :size="15" /></button>
+      <button class="btn btn--ghost" :title="t('复位')" :aria-label="t('复位')" @click="setGraphViewport({ x: 24, y: 24, zoom: 1 })"><Maximize2 :size="15" /></button>
     </div>
     <aside v-if="relationLegend.length" class="study-graph-legend" :aria-label="t('关系图例')"><strong>{{ t("关系") }}</strong><span v-for="relation in relationLegend" :key="relation.type" class="study-graph-legend-item"><i :class="['study-edge-swatch', `study-edge-swatch--${relation.type}`]" aria-hidden="true"></i>{{ relation.label }}</span></aside>
     <p v-if="!nodes.length && !loading" class="study-empty">{{ t("这里还没有可显示的知识点；先在学习会话中让 AI 建立知识网。") }}</p>
@@ -140,6 +140,6 @@ watch(() => props.viewport, viewport => {
         <Handle type="source" :position="Position.Right" />
       </template>
     </VueFlow>
-    <aside v-if="inspected?.relations.length" class="study-related" :aria-label="t('知识关系')"><strong>{{ inspected.node.name }}</strong><button v-for="neighbor in inspected.neighbors.filter(n => n.id !== inspected?.node.id)" :key="neighbor.id" class="text-btn" @click="emit('open-node', neighbor)"><span>{{ neighborLabel(neighbor.id) }}</span>{{ neighbor.name }}</button></aside>
+    <aside v-if="inspected?.relations.length" class="study-related" :aria-label="t('知识关系')"><strong>{{ inspected.node.name }}</strong><button v-for="neighbor in inspected.neighbors.filter(n => n.id !== inspected?.node.id)" :key="neighbor.id" class="btn btn--ghost" @click="emit('open-node', neighbor)"><span>{{ neighborLabel(neighbor.id) }}</span>{{ neighbor.name }}</button></aside>
   </div>
 </template>

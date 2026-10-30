@@ -4,6 +4,7 @@ import { h, nextTick } from 'vue';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { readChatThreadSource } from './chatThreadSource.ts';
 import ChatThread from '../src/components/ChatThread.vue';
 import type { CoreMessage } from '../src/types';
 import { createFakeTransport } from './fake-transport';
@@ -160,7 +161,7 @@ describe('ChatThread process cards', () => {
   })
 
   it('mixes process row icons from theme text and gray while preserving status colors', () => {
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const source = readChatThreadSource(resolve(__dirname, '../src'));
 
     // user:“把过程行那个图标从现在的浅紫色改成文字色与灰色混合” — 常规图标随主题文字色与中性灰混合。
     expect(source).not.toContain('--theme-process-icon-color');
@@ -343,7 +344,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('keeps non-command tool details line-based while preserving the command terminal', () => {
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const source = readChatThreadSource(resolve(__dirname, '../src'));
     const contextRowRule = source.match(/\.context-tool-row\s*\{[^}]+\}/)?.[0] || '';
     const rowOutputRule = source.match(/\.tool-card-body--row \.tool-output,[\s\S]*?\{[^}]+\}/)?.[0] || '';
     const testResultRule = source.match(/\.test-result-card\s*\{[^}]+\}/)?.[0] || '';
@@ -543,7 +544,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('keeps compaction expanded content below the title row', () => {
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const source = readChatThreadSource(resolve(__dirname, '../src'));
     const compactionRule = source.match(/\.compaction-step\s*\{[^}]+\}/)?.[0] || '';
     const summaryRule = source.match(/\.compaction-summary\s*\{[^}]+\}/)?.[0] || '';
 
@@ -1927,7 +1928,7 @@ describe('ChatThread process cards', () => {
     const descriptions = wrapper.findAll('.decision-option-desc')
     const indexes = wrapper.findAll('.decision-option-index')
     const groups = wrapper.findAll('.decision-option-group')
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8')
+    const source = readChatThreadSource(resolve(__dirname, '../src'))
     const cardRule = source.match(/\.decision-card\s*\{[^}]+\}/)?.[0] || ''
     const pendingRule = source.match(/\.decision-card--pending\s*\{[^}]+\}/)?.[0] || ''
     const optionsRule = source.match(/\.decision-options\s*\{[^}]+\}/)?.[0] || ''
@@ -2290,7 +2291,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('does not create an internal scroll container for reasoning bodies', () => {
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const source = readChatThreadSource(resolve(__dirname, '../src'));
     const reasoningBodyRule = source.match(/\.reasoning-body\s*\{[^}]+\}/)?.[0] || '';
     const nestedReasoningBodyRule = source.match(/\.sub-line-block\s+\.reasoning-body\s*\{[^}]+\}/)?.[0] || '';
 
@@ -2303,7 +2304,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('renders process model text as a separated block', () => {
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const source = readChatThreadSource(resolve(__dirname, '../src'));
     const modelTextRule = source.match(/\.process-step--model-text\s*\{[^}]+\}/)?.[0] || '';
     const modelTextContentRule = source.match(/\.process-text-content\s*\{[^}]+\}/)?.[0] || '';
 
@@ -2476,7 +2477,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('uses one-line titles, scrollable three-line previews, scrollable five-line expanded cards, and animated running icons', () => {
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const source = readChatThreadSource(resolve(__dirname, '../src'));
     const headerRule = source.match(/\.thread \.process-card-header\s*\{[^}]+\}/)?.[0] || '';
     const titleRule = source.match(/\.process-card-preview,[\s\S]*?\{[^}]+\}/)?.[0] || '';
     const reasoningPreviewRule = source.match(/\.thread \.reasoning-body\.process-card-body--preview\s*\{[^}]+\}/)?.[0] || '';

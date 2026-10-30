@@ -1,0 +1,1125 @@
+/* user:“还有大文件拆分，以及你的分类是否覆盖了所有样式”+(由 core-settings.css 按区块拆出：模型与供应商双栏工作区；
+   各分片按原文件顺序挂到 CoreSettings.vue 的多个 <style scoped src>，层叠顺序与拆分前一致)。 */
+/* ── 模型与供应商：双栏工作区 ── */
+.models-panel {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+
+
+.models-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(200px, .34fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
+  overflow: hidden;
+}
+
+.provider-rail {
+  position: static;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 2%, transparent);
+  overflow: hidden;
+}
+
+.provider-rail-head {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-1) var(--space-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.provider-rail-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.provider-rail-title strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 13px;
+}
+
+.provider-rail-title span,
+.provider-rail-status {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 48%, transparent);
+  font-size: 11px;
+}
+
+.provider-rail-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-picker {
+  min-height: 0;
+  max-height: min(420px, 50vh);
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  overflow-y: auto;
+  padding-top: var(--space-2);
+}
+
+.provider-picker-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.provider-picker-item:hover {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+}
+
+.provider-picker-item.is-selected {
+  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 18%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-active), transparent);
+}
+
+.provider-picker-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 78%, transparent);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.provider-picker-copy {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.provider-picker-copy strong,
+.provider-picker-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-picker-copy strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.provider-picker-copy span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 48%, transparent);
+  font-size: 11px;
+}
+
+.provider-picker-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 46%, transparent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.provider-picker-state.is-configured {
+  color: color-mix(in srgb, var(--green) 76%, var(--settings-main-text, var(--theme-main-text, #fff)));
+}
+
+.provider-picker-state-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 38%, transparent);
+}
+
+.provider-picker-state.is-configured .provider-picker-state-dot {
+  background: var(--green);
+}
+
+.provider-rail-empty {
+  min-height: 86px;
+  display: grid;
+  align-content: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 64%, transparent);
+  font-size: 12px;
+}
+
+.provider-rail-empty small {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 42%, transparent);
+  font-size: 11px;
+}
+
+.provider-create-btn {
+  width: 100%;
+  min-height: 36px;
+  margin-top: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  border: 1px dashed color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 20%, transparent);
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 72%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.provider-create-btn:hover {
+  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 34%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+}
+
+.provider-rail-footer {
+  margin-top: auto;
+  padding-top: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.provider-rail-footer .btn--ghost {
+  min-height: 28px;
+  padding-inline: var(--space-2);
+  text-align: left;
+}
+
+.provider-detail {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-5) var(--space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.provider-detail-head {
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+}
+
+.provider-detail-identity {
+  min-width: 0;
+}
+
+.provider-detail-context {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 46%, transparent);
+  font-size: 11px;
+}
+
+.provider-detail-identity h2 {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 18px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-detail-identity .provider-meta {
+  margin-top: var(--space-1);
+}
+
+.provider-detail-head .provider-head-actions {
+  align-self: center;
+}
+
+.model-section {
+  min-width: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.model-section-head {
+  min-width: 0;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 0 0 var(--space-4);
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.model-section-title {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.model-section-title h2 {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.model-section-title span {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-section-head .btn--secondary {
+  min-height: 36px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-4);
+  font-weight: 650;
+}
+
+.model-section .model-row:first-child {
+  border-top: 0;
+}
+
+.models-empty-state--main {
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  border: 0;
+  border-radius: 0;
+}
+
+/* The settings main surface is already the card. Keep its chrome; the
+   provider/model columns grow with their content and the page scrolls. */
+:deep(.settings-main--models) {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+:deep(.settings-main--models .settings-content) {
+  height: auto;
+  min-height: 0;
+}
+
+@container app-page (max-width: 720px) {
+  :deep(.settings-main--models) {
+    overflow-y: auto;
+  }
+
+  :deep(.settings-main--models .settings-content) {
+    height: auto;
+  }
+
+  .models-panel {
+    height: auto;
+  }
+
+  .models-workspace {
+    grid-template-columns: 1fr;
+    height: auto;
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .provider-rail {
+    position: static;
+    min-height: 0;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+    overflow: visible;
+  }
+
+  .provider-picker {
+    display: flex;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: var(--space-1);
+  }
+
+  .provider-picker-item {
+    flex: 0 0 min(230px, 68vw);
+  }
+
+  .provider-rail-footer {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .provider-detail-head {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .provider-detail {
+    height: auto;
+    padding: var(--space-4) 0 0;
+    overflow: visible;
+  }
+
+  .provider-detail-head .provider-head-actions {
+    justify-content: flex-end;
+  }
+
+  .model-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .model-section-head .btn--secondary {
+    align-self: flex-end;
+  }
+}
+
+@container app-page (max-width: 480px) {
+  .provider-picker-item {
+    flex-basis: min(236px, calc(100vw - 72px));
+  }
+
+  .provider-detail-identity .provider-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-picker-item,
+  .provider-create-btn {
+    transition: none;
+  }
+}
+
+/* ── 模型与供应商：工作台终稿 ── */
+.settings-card {
+  width: min(1180px, calc(100vw - (var(--space-6) * 2)));
+  height: calc(100dvh - var(--titlebar-offset, 36px) - (var(--space-6) + var(--space-4)));
+  border-radius: var(--radius);
+}
+
+/* 内容自适应高度：面板不随视口撑满，超出部分交给设置页滚动。
+   原先的 height:100% 链会把工作区压成视口剩余高度，下沿把内容裁掉。 */
+:deep(.settings-main--models .settings-content) {
+  width: min(1180px, 100%);
+}
+
+.models-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.models-title {
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+
+.models-workspace {
+  flex: 0 0 auto;
+  /* 内容再少也保持一个完整工作面；左栏因此不会被压到需要内部滚动。
+     两栏都能收缩：就地渲染后设置栏只有主卡宽，任何固定下限都会在窄窗口
+     把右栏顶出容器、被主卡的 overflow 裁掉。 */
+  min-height: 420px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 244px) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+}
+
+.provider-rail {
+  position: static;
+  min-width: 0;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.provider-rail-head {
+  min-height: 36px;
+  padding: 0 0 var(--space-2);
+}
+
+.provider-picker {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: none;
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  overflow: visible;
+  padding: var(--space-2) 0;
+}
+
+.provider-picker-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.provider-picker-item:hover {
+  background: color-mix(in srgb, var(--blue) 6%, transparent);
+}
+
+.provider-picker-item.is-selected {
+  border-color: color-mix(in srgb, var(--blue) 30%, transparent);
+  background: color-mix(in srgb, var(--blue) 11%, transparent);
+}
+
+.provider-picker-item.is-selected .provider-picker-mark {
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+  color: var(--blue);
+}
+
+.provider-picker-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+}
+
+.provider-picker-copy {
+  gap: var(--space-1);
+}
+
+.provider-picker-copy strong {
+  font-size: 13px;
+}
+
+.provider-picker-copy span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 54%, transparent);
+}
+
+.provider-picker-state {
+  font-size: 11px;
+}
+
+.provider-rail-footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.provider-create-btn {
+  width: 100%;
+  min-height: 40px;
+  margin-top: 0;
+  border: 1px dashed color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 24%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 72%, transparent);
+}
+
+.provider-create-btn:hover {
+  border-color: color-mix(in srgb, var(--blue) 40%, transparent);
+  background: color-mix(in srgb, var(--blue) 7%, transparent);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+}
+
+.provider-rail-links {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.provider-rail-links .btn--ghost {
+  min-height: 28px;
+  padding-inline: var(--space-2);
+  text-align: left;
+}
+
+.provider-detail {
+  min-width: 0;
+  height: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  overflow: visible;
+}
+
+.provider-detail-head {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+}
+
+.provider-detail-context {
+  margin-bottom: var(--space-1);
+}
+
+.provider-detail-identity h2 {
+  font-size: 20px;
+  font-weight: 720;
+}
+
+.provider-url {
+  color: var(--blue);
+}
+
+.provider-head-actions .btn--ghost {
+  min-height: 32px;
+  padding-inline: var(--space-2);
+}
+
+.provider-head-actions .btn--danger {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 58%, transparent);
+}
+
+.provider-head-actions .btn--danger:hover {
+  color: var(--red);
+}
+
+.model-section {
+  min-width: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.model-section-head {
+  min-width: 0;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 0 0 var(--space-3);
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+}
+
+.model-section-title {
+  gap: var(--space-1);
+}
+
+.model-section-title h2 {
+  font-size: 16px;
+}
+
+.model-section-title span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 58%, transparent);
+}
+
+.model-section-head .btn--secondary {
+  min-height: 38px;
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-4);
+}
+
+.model-list {
+  display: grid;
+}
+
+.model-row {
+  min-height: 72px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.model-row:hover {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+}
+
+.model-leading {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 1;
+  gap: var(--space-2);
+}
+
+.model-identity {
+  min-width: 0;
+}
+
+.model-row strong {
+  font-size: 15px;
+}
+
+.model-meta {
+  margin-top: var(--space-1);
+}
+
+.model-capabilities {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  align-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.model-capability {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 66%, transparent);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.model-row .row-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: end;
+}
+
+.model-row .btn--ghost {
+  min-height: 32px;
+  padding-inline: var(--space-2);
+}
+
+.model-empty {
+  min-height: 140px;
+  padding: var(--space-6) 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  text-align: center;
+}
+
+.model-empty > div {
+  text-align: center;
+}
+
+.model-empty strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+}
+
+.models-empty-state--main,
+.models-empty-state--full {
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.models-empty-state--full {
+  flex: 1 1 auto;
+  height: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.models-empty-state--full .models-empty-copy {
+  flex: 0 1 auto;
+}
+
+/* 就地渲染后设置页只剩主卡宽度（窗口 - 左栏 - 设置导航），两栏工作台在
+   ~1180 以下就放不下 564px 的下限；低于它改为单栏，而不是被右边缘裁掉。 */
+@container app-page (max-width: 1180px) {
+  :deep(.settings-main--models .settings-content) {
+    width: 100%;
+  }
+
+  .models-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-rail {
+    padding: var(--space-5) 0;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  }
+
+  .provider-rail-footer {
+    margin-top: var(--space-4);
+  }
+
+  .provider-rail-links {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .provider-detail {
+    padding: var(--space-6) 0 0;
+  }
+
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .model-capabilities {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .model-row .row-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+@container app-page (max-width: 480px) {
+  .settings-card {
+    width: calc(100vw - var(--space-6));
+  }
+
+  .provider-detail {
+    padding-top: var(--space-5);
+  }
+
+  .model-row {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .model-leading,
+  .model-capabilities,
+  .model-row .row-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .model-row .row-actions {
+    justify-content: flex-start;
+    padding-top: var(--space-2);
+    border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  }
+
+  .models-empty-state--full {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .models-empty-copy {
+    flex-basis: calc(100% - 56px);
+  }
+
+  .models-empty-state--full .btn--secondary {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-row,
+  .provider-picker-item,
+  .provider-create-btn {
+    transition: none;
+  }
+}
+
+/* ── 模型与供应商：密度收敛 ── */
+.settings-card {
+  width: min(1240px, calc(100vw - (var(--space-6) * 2)));
+}
+
+:deep(.settings-main--models .settings-content) {
+  width: min(1240px, 100%);
+}
+
+.models-title-copy h1 {
+  font-size: 20px;
+}
+
+.models-title-copy p {
+  font-size: 12px;
+}
+
+.provider-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.provider-detail-head {
+  flex: 0 0 auto;
+  min-height: calc(var(--space-6) * 2 + var(--space-2));
+  align-items: start;
+}
+
+.provider-detail-identity {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+}
+
+.provider-detail-context,
+.provider-detail-identity .provider-meta {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.provider-detail-head .provider-head-actions {
+  align-self: center;
+}
+
+.model-section {
+  flex: 0 0 auto;
+}
+
+.provider-detail-context {
+  font-size: 10px;
+}
+
+.provider-detail-identity h2 {
+  font-size: 17px;
+}
+
+.provider-meta {
+  font-size: 11px;
+}
+
+.provider-type {
+  font-size: 10px;
+}
+
+.model-section-title h2 {
+  font-size: 14px;
+}
+
+.model-section-title span {
+  font-size: 10px;
+}
+
+.model-row {
+  min-height: 72px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  padding: var(--space-2) 0;
+  position: relative;
+  isolation: isolate;
+  background: transparent;
+  transition: none;
+}
+
+.model-row:hover {
+  background: transparent;
+}
+
+.model-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+  -webkit-mask-image:
+    linear-gradient(to right, rgb(0 0 0 / 20%), #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgb(0 0 0 / 20%)),
+    linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, rgb(0 0 0 / 20%), #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgb(0 0 0 / 20%)),
+    linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+  mask-repeat: no-repeat;
+  mask-composite: intersect;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.model-row:hover::before {
+  opacity: 0.32;
+}
+
+.model-leading {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  gap: var(--space-2);
+}
+
+.model-name-line {
+  min-width: 0;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.model-name-line strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.model-row strong {
+  font-size: 14px;
+}
+
+.model-id {
+  font-size: 11px;
+}
+
+.model-capability {
+  min-height: 22px;
+  padding-inline: var(--space-1);
+  font-size: 10px;
+}
+
+.model-row .btn--ghost {
+  min-height: 30px;
+  padding-inline: var(--space-1);
+  font-size: 11px;
+}
+
+.model-row .row-actions {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: end;
+}
+
+@container app-page (max-width: 980px) {
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .model-capabilities {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .model-row .row-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+@container app-page (max-width: 799px) {
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .model-capabilities {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .model-row .row-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .provider-detail {
+    padding: var(--space-5) 0 0;
+  }
+}
+
+@container app-page (max-width: 480px) {
+  .settings-card {
+    width: calc(100vw - var(--space-6));
+  }
+
+  .model-row {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .model-leading,
+  .model-capabilities,
+  .model-row .row-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .model-row .row-actions {
+    justify-content: flex-start;
+    padding-top: var(--space-2);
+    border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  }
+
+  .provider-detail {
+    padding-top: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-row::before {
+    transition: none;
+  }
+}

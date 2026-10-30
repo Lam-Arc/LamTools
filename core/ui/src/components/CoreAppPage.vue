@@ -43,7 +43,7 @@ defineExpose({ requestNavigation, handleBack: () => instance.value?.handleBack?.
 </script>
 <template>
   <!-- user:“专门对小屏或者说分屏状态做一下适配”+(主区与辅助屏共用局部宽度容器，内部页面独立适配)。 -->
-  <div class="core-app-page" :class="{ 'core-app-page--auxiliary': auxiliary }">
+  <div class="core-app-page" data-ui-id="page.root" :class="{ 'core-app-page--auxiliary': auxiliary }">
     <component :is="pages[page as keyof typeof pages]" v-if="pages[page as keyof typeof pages]" ref="instance" v-bind="bindings" />
     <div v-else class="split-empty"><BookOpen :size="24" :stroke-width="1.3" /><span>这个界面暂时无法在分屏中打开</span></div>
     <CoreConfirmDialog :open="Boolean(pending)" title="保存修改？" :error="error" :loading="saving" confirm-label="保存并关闭" discard-label="不保存并关闭" @confirm="save" @discard="discard" @cancel="pending = null" />

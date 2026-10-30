@@ -45,6 +45,7 @@ async def summarize_context_messages(
     input_limit_tokens: int = 0,
     summary_budget: SummaryTokenBudget | None = None,
     existing_summary: str = "",
+    authoritative_tokens: int | None = None,
     prefix_messages: list[ChatMessage] | None = None,
     on_delta: CompactionDeltaSink | None = None,
     on_event: CompactionEventSink | None = None,
@@ -77,6 +78,7 @@ async def summarize_context_messages(
             messages,
             input_limit_tokens=summary_input_limit,
             existing_summary=existing_summary,
+            authoritative_tokens=authoritative_tokens,
             prefix_messages=effective_prefix,
         )
     except ContextCompactionError:
@@ -91,6 +93,7 @@ async def summarize_context_messages(
             messages,
             input_limit_tokens=summary_input_limit,
             existing_summary=existing_summary,
+            authoritative_tokens=authoritative_tokens,
             prefix_messages=None,
         )
     segment_count = len(chunks)
@@ -115,6 +118,7 @@ async def summarize_context_messages(
             output_tokens=summary_output_tokens,
             input_limit_tokens=summary_input_limit,
             existing_summary=existing_summary if index == 1 else "",
+            authoritative_tokens=authoritative_tokens,
             prefix_messages=effective_prefix,
             on_delta=on_delta,
             on_event=on_event,
@@ -142,13 +146,12 @@ async def summarize_context_messages(
             )
             for value in summaries
         ]
-        merge_chunks = _split_compaction_messages(
-            summary_messages,
-            input_limit_tokens=summary_input_limit,
-            existing_summary="",
-        )
-        if len(merge_chunks) >= len(summaries):
-            merge_chunks = _pair_compaction_messages(summary_messages, summary_input_limit)
+        # Merging is structural: pair partial summaries instead of re-measuring
+        # them with a second token rule, so a long but valid summary cannot be
+        # rejected by the local estimator on the way out.
+        # Merge input is already bounded by the summary output that produced
+        # it; pair it structurally instead of re-applying the local estimate.
+        merge_chunks = _pair_compaction_messages(summary_messages, 0)
         await emit_event_sink(
             on_event,
             {
@@ -171,6 +174,9 @@ async def summarize_context_messages(
                     output_tokens=summary_output_tokens,
                     input_limit_tokens=summary_input_limit,
                     existing_summary="",
+                    # Merge input comes from our own bounded summaries, so the
+                    # local estimate must not reject it a second time.
+                    authoritative_tokens=0,
                     prefix_messages=None,
                     on_delta=on_delta,
                     on_event=on_event,
@@ -212,6 +218,7 @@ async def _summarize_compaction_chunk(
     retry_policy: RetryPolicy | None,
     on_model_retry: ModelRetrySink | None,
     request_metadata: dict[str, Any] | None,
+    authoritative_tokens: int | None = None,
 ) -> str:
     content = ""
     emitted_delta = False
@@ -230,7 +237,7 @@ async def _summarize_compaction_chunk(
         )
         # user:“去重构吧”+(摘要请求也遵守同一估算倍率，分段后不再换口径)。
         request_tokens = calibrated_tokens(estimate_message_tokens([message.to_dict() for message in summary_request.messages]))
-        if input_limit_tokens > 0 and request_tokens > input_limit_tokens:
+        if authoritative_tokens is None and input_limit_tokens > 0 and request_tokens > input_limit_tokens:
             raise ContextCompactionError(
                 f"Context compaction request exceeds model input limit: {request_tokens} > {input_limit_tokens} tokens"
             )

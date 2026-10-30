@@ -1,5 +1,5 @@
 <template>
-  <div class="composer-root" data-region="composer" :class="'composer-root--' + variant">
+  <div class="composer-root" data-region="composer" data-ui-id="shell.composer" :class="'composer-root--' + variant">
     <div v-if="$slots['queue-panel']" class="composer-queue-panel-host">
       <slot name="queue-panel" />
     </div>
@@ -109,6 +109,12 @@ function onEnterKey(event: KeyboardEvent) {
 </script>
 
 <style scoped>
+/* user:“修复输入框缩窄时 @ 标签溢出的问题”+(卡片宽度只跟容器走：窄窗口或分屏里自身不设下限，内容不许把它顶宽)。 */
+.composer-root {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .composer-root--embedded {
   min-width: 0;
   width: 100%;

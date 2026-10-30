@@ -377,11 +377,11 @@
 
 /* ---------- Press feedback for the existing shared buttons ---------- */
 
-:where(.small-btn, .text-btn, .btn-primary, .btn-primary-sm) {
+:where(.btn--secondary, .btn--ghost, .btn-primary, .btn-primary-sm) {
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
-:where(.small-btn, .text-btn, .btn-primary, .btn-primary-sm):not(:disabled):active {
+:where(.btn--secondary, .btn--ghost, .btn-primary, .btn-primary-sm):not(:disabled):active {
   transform: translateY(1px);
 }
 
@@ -395,7 +395,104 @@
     transition: none;
   }
 
-  :where(.small-btn, .text-btn, .btn-primary, .btn-primary-sm):not(:disabled):active {
+  :where(.btn--secondary, .btn--ghost, .btn-primary, .btn-primary-sm):not(:disabled):active {
     transform: none;
   }
+}
+
+/* user:“合并去重”+(带文案的开关与纯开关共用同一条轨道；文案跟随所在行的颜色) */
+.sunday-switch__label {
+  margin-inline-start: var(--space-2);
+  color: inherit;
+  font-size: inherit;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* user:“把功能相近或者实际相似的样式和组件，统一成一套，并且可复用”+
+   (按钮收成一个基件：.btn 管几何与过渡，角色由 .btn--secondary/primary/quiet/ghost/danger 决定；
+    原来 .btn--secondary 与 .btn--ghost 两套各写一遍的配方并入这里)。 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  border: 1px solid transparent;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    filter var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.btn:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.btn:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.btn--secondary,
+.btn--primary,
+.btn--quiet {
+  min-height: 32px;
+  padding: 8px 11px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.btn--secondary,
+.btn--primary {
+  background: var(--settings-control-background, var(--theme-control-background, #343331));
+  color: var(--settings-control-text, var(--muted));
+}
+
+.btn--secondary:hover:not(:disabled),
+.btn--primary:hover:not(:disabled) {
+  color: var(--settings-control-text, var(--text));
+  filter: brightness(1.08);
+}
+
+/* 文本式按钮：透明底，文字跟随所在面板，不能用控件文字色，
+   否则「亮主区 + 暗控件」的主题下白字会压在浅色面板上。 */
+.btn--quiet {
+  background: transparent;
+  color: var(--settings-main-text, var(--muted));
+}
+
+.btn--quiet:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--settings-main-text, var(--text)) var(--alpha-hover), transparent);
+  color: var(--settings-main-text, var(--text));
+  filter: none;
+}
+
+.btn--ghost {
+  min-height: 32px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--settings-main-text, var(--text));
+}
+
+.btn--ghost:active:not(:disabled) {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-active), transparent);
+}
+
+.btn--danger {
+  color: color-mix(in srgb, var(--red) 80%, var(--settings-main-text, var(--text)) 20%);
+}
+
+.btn--danger:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--red) 58%, var(--settings-main-text, var(--theme-main-text, var(--text))));
 }

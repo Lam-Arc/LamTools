@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { BookOpen, FileText, FolderTree, Globe, PanelLeftClose, PanelTopClose, Columns2, Rows2, Maximize2, X, LayoutGrid } from 'lucide-vue-next'
+import { BookOpen, FileText, FolderTree, Globe, PanelLeftClose, PanelTopClose, Columns2, Rows2, Maximize2, X, LayoutGrid, Image as ImageIcon } from 'lucide-vue-next'
 import CoreSplitPane from './CoreSplitPane.vue'
 import { openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
@@ -53,7 +53,7 @@ function canSplit(pane: string, edge: SplitEdge) {
   return props.controller.canSplit(pane, edge)
 }
 function openMenu(event: MouseEvent, pane: string) {
-  const add = (kind: 'page' | 'browser' | 'editor' | 'files', resource: string, title: string) => () => { props.controller.add(kind, resource, title, pane) }
+  const add = (kind: 'page' | 'browser' | 'editor' | 'preview' | 'files', resource: string, title: string) => () => { props.controller.add(kind, resource, title, pane) }
   const pages = contributionState().pages
   const pluginItems: ContextMenuEntry[] = pages.length ? [{ type: 'submenu', label: t('插件页面'), children: pages.map(page => ({
     label: `${page.title} · ${page.plugin}`, action: () => { props.controller.openPluginPage(page, pane) },
@@ -69,6 +69,7 @@ function openMenu(event: MouseEvent, pane: string) {
     { type: 'separator' },
     { label: t('浏览器'), icon: Globe, action: add('browser', '', t('浏览器')) },
     { label: t('文本编辑器'), icon: FileText, action: add('editor', '', t('未命名')) },
+    { label: t('文件预览'), icon: ImageIcon, action: add('preview', '', t('文件预览')) },
     { label: t('文件树'), icon: FolderTree, action: add('files', props.workRoot, t('文件')) },
   ] })
 }
@@ -90,6 +91,7 @@ function splitContentItems(pane: string, edge: SplitEdge): ContextMenuEntry[] {
     { type: 'separator' as const },
     { label: t('浏览器'), icon: Globe, action: create('browser', '', t('浏览器')) },
     { label: t('文本编辑器'), icon: FileText, action: create('editor', '', t('未命名')) },
+    { label: t('文件预览'), icon: ImageIcon, action: create('preview', '', t('文件预览')) },
     { label: t('文件树'), icon: FolderTree, action: create('files', props.workRoot, t('文件')) },
   ]
 }
@@ -328,7 +330,7 @@ onBeforeUnmount(() => { stopResize?.(); stopPull?.(); clearTimeout(enterTimer); 
 defineExpose({ operations, openMenu, measure })
 </script>
 <template>
-  <div ref="root" class="split-workspace" :class="{ 'split-workspace--open': Object.keys(state.panes).length > 0 }" :style="{ '--split-tabbar-height': `${SPLIT_TAB_BAR_HEIGHT}px` }" data-region="split" @drop="onDrop">
+  <div ref="root" class="split-workspace" data-ui-id="shell.split" :class="{ 'split-workspace--open': Object.keys(state.panes).length > 0 }" :style="{ '--split-tabbar-height': `${SPLIT_TAB_BAR_HEIGHT}px` }" data-region="split" @drop="onDrop">
     <div v-if="drag" class="split-main-drop" :style="css(activeRect('main'))" @dragover="dragOver($event, 'main')"></div>
     <section v-for="pane in state.panes" :key="pane.id" v-show="paneVisible(pane.id)" class="split-pane-frame" :class="{ 'is-entering': entering.has(pane.id), 'is-pulling': pull?.pane === pane.id }" :style="css(activeRect(pane.id))" :aria-label="t('分屏')" @pointerdown="controller.activate(pane.id)" @dragover="dragOver($event, pane.id)">
       <CoreSplitPane :pane="pane" :active="state.activePane === pane.id" :dirty="dirty" @focus="controller.activate(pane.id)" @activate="controller.activate(pane.id, $event)" @open="openMenu($event, pane.id)" @menu="operations($event, pane.id)" @close-pane="controller.closePane(pane.id)" @split-pull="beginSplitPull($event, pane.id, 'top-left')" @close="controller.closeTab(pane.id, $event)" @tab-menu="(event, tab) => tabMenu(event, pane.id, tab)" @drag="(event, tab) => dragStart(event, pane.id, tab)" />

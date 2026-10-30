@@ -307,9 +307,9 @@ onBeforeUnmount(() => {
     <section v-if="selected" ref="card" class="selection-card optical-glass optical-glass--low-trans"
       :style="{ left: x + 'px', top: y + 'px' }" role="dialog" :aria-label="titles[action]" @mouseenter="keepOpen" @pointerdown="hover = false">
       <header>
-        <button v-for="(title, kind) in visibleTitles" :key="kind" class="text-btn" :aria-pressed="action === kind" :disabled="busy" @click="action = kind; hover = false; error = ''">{{ title }}</button>
-        <button v-if="auxiliary" class="text-btn" type="button" title="带入原文和当前结果，继续追问" :disabled="busy" @click="continueInPane()"><MessageCircle :size="13" /> 辅助对话</button>
-        <button class="text-btn selection-close" :aria-label="t('关闭')" @click="close"><X :size="15" /></button>
+        <button v-for="(title, kind) in visibleTitles" :key="kind" class="btn btn--ghost" :aria-pressed="action === kind" :disabled="busy" @click="action = kind; hover = false; error = ''">{{ title }}</button>
+        <button v-if="auxiliary" class="btn btn--ghost" type="button" title="带入原文和当前结果，继续追问" :disabled="busy" @click="continueInPane()"><MessageCircle :size="13" /> 辅助对话</button>
+        <button class="btn btn--ghost selection-close" :aria-label="t('关闭')" @click="close"><X :size="15" /></button>
       </header>
       <blockquote>{{ selected.anchor.quote }}</blockquote>
       <div class="selection-answer" aria-live="polite">
@@ -338,12 +338,12 @@ onBeforeUnmount(() => {
           <p v-if="dictionaryForms(selected.dictionary)" class="selection-dictionary-forms">{{ dictionaryForms(selected.dictionary) }}</p>
         </template>
         <MarkdownRenderer v-else-if="content" class="selection-assistant-markdown" :content="content" :mermaid="false" />
-        <button v-else-if="!busy" class="text-btn" @click="invoke">{{ titles[action] }}</button>
+        <button v-else-if="!busy" class="btn btn--ghost" @click="invoke">{{ titles[action] }}</button>
         <p v-if="busy" role="status">{{ t("正在回答…") }}</p><p v-if="error" class="study-error" role="alert">{{ error }}</p>
       </div>
       <form v-if="action === 'ask'" @submit.prevent="invoke">
         <textarea v-model="question" :aria-label="t('问题')" :placeholder="t('继续问…')" rows="2" maxlength="4000" :disabled="busy" @keydown.ctrl.enter.prevent="invoke" />
-        <button class="text-btn" :aria-label="t('发送')" :disabled="busy || !question.trim()"><Send :size="16" /></button>
+        <button class="btn btn--ghost" :aria-label="t('发送')" :disabled="busy || !question.trim()"><Send :size="16" /></button>
       </form>
     </section>
   </Teleport>

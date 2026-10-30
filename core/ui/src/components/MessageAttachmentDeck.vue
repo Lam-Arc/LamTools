@@ -691,9 +691,10 @@ async function loadItemPreview(item: DeckItem): Promise<void> {
   }
 }
 
+// user:“读图工具行无需展开即可看到缩略图”+(缩略图按全部条目预取，翻页或收起时不再退回图标占位)。
 watch(
-  () => visibleItems.value.map(item => item.key).join('|'),
-  () => { for (const item of visibleItems.value) void loadItemPreview(item) },
+  () => deckItems.value.map(item => item.key).join('|'),
+  () => { for (const item of deckItems.value) void loadItemPreview(item) },
   { immediate: true },
 )
 

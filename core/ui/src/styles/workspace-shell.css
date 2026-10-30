@@ -7,20 +7,8 @@
 /* =========================================================================
    Shared shell layer tokens
    ========================================================================= */
-:root {
-  /* Keep the layer scale available to shells that reuse the shared UI
-     components without mounting the desktop .workspace-shell wrapper (the
-     Capacitor mobile shell is one such host). */
-  --z-background-info: 10;
-  --z-stage: 15;
-  --z-main-surface: 20;
-  --z-edge-trigger: 35;
-  --z-composer: 40;
-  --z-popover: 60;
-  --z-modal: 80;
-  --z-toast: 90;
-  --z-fullscreen: 100;
-}
+/* user:“合并去重”+(层级阶梯已收进 variables.css 的令牌层做唯一来源，
+   原 Capacitor 外壳复用场景由 variables.css 一并覆盖，这里不再重复定义)。 */
 
 /* =========================================================================
    Shell — backdrop layer (full viewport)
@@ -31,17 +19,17 @@
   /* 描边之间的可见背景带 1px。 */
   --left-overlap: -3px;
   --left-peek: 18px;
-  /* 面板与界面下沿的留白（背景色由此透出）。 */
-  --shell-bottom-inset: 6px;
-  /* 最左竖栏（整界面导航）：桌面常驻，移动端为 0 宽不参与几何。 */
-  --rail-width: var(--app-rail-width, 46px);
+  /* 面板与界面下沿的留白（背景色由此透出）。布局变量可覆盖。 */
+  --shell-bottom-inset: var(--layout-bottom-inset, 6px);
+  /* 最左竖栏（整界面导航）：桌面常驻，移动端为 0 宽不参与几何。布局变量可覆盖。 */
+  --rail-width: var(--layout-rail-width, var(--app-rail-width, 46px));
   --main-left: calc(var(--left-peek) + var(--rail-width));
   --left-reveal: calc(var(--left-card-width) - var(--left-overlap));
   --left-visible-width: min(var(--left-card-width), var(--main-left));
   /* 右侧栏 = 贴右缘的图标竖栏（46px），悬停浮出的卡片浮在内容之上，
      不再挤压聊天区宽度。 */
   --right-rail-width: 46px;
-  --right-drawer-width: var(--right-rail-width);
+  --right-drawer-width: var(--layout-right-drawer-width, var(--right-rail-width));
   --right-overlap: 0px;
   --right-peek: 6px;
   /* 子代理分屏：主聊天区让出右侧一条（卡宽 + 卡间留缝），聊天区与输入栏
@@ -55,13 +43,16 @@
   --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
   --main-x-padding: max(22px, 5vw);
   --content-width: 780px;
+  /* user:“消息区自适应填满宽度”+(主题里的内容宽度只约束整版界面；聊天正文列与输入栏
+     改吃这条填满上限，容器窄就铺满，宽屏才收到 1040px，不再固定 780px 留出大片空白)。 */
+  --content-fill-width: 1040px;
   --keyboard-inset: 0px;
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   /* --native-keyboard-inset is published by a host whose window does not shrink
      with the keyboard (the Android shell runs edge-to-edge), where the shared
      viewport measurement cannot see it. Either source lifts the composer. */
   --composer-bottom-offset: calc(max(var(--keyboard-inset), var(--native-keyboard-inset, 0px), var(--safe-area-bottom)) + var(--shell-bottom-inset, 6px));
-  --composer-height: 120px;
+  --composer-height: var(--layout-composer-height, 120px);
   --composer-rest-bottom: 16px;
   --composer-clearance: 24px;
   /* Flat Sunday dark fallback; Vue replaces these with the active preset. */
@@ -86,40 +77,16 @@
   inset: 0;
   overflow: hidden;
   background: var(--theme-backdrop-background);
+  /* 背面区域的图片/玻璃同样跟随颜色样式。 */
+  background-image: var(--theme-backdrop-image, none);
+  background-size: var(--theme-backdrop-image-size, auto);
+  background-repeat: var(--theme-backdrop-image-repeat, no-repeat);
+  background-position: center;
   color: var(--theme-backdrop-text);
 }
 
-/* 会话栏与聊天区之间的可见背景带：垫一层聊天区底色（七成不透明的遮罩），
-   让两卡之间那道缝由纯背景色转为向聊天区的过渡，不再是一条硬边。
-   带宽 = 两卡间距 + 两侧朝内的圆角偏移（各自半径），并整体左移一个半径，
-   正好把两条圆角让出来的凹口一并盖住；上下两端各以一个圆角半径渐隐到全透明，
-   端头不留硬边。收起侧栏时间距为负，带宽归零。 */
-@media (min-width: 641px) {
-  .workspace-shell::before {
-    content: '';
-    position: absolute;
-    top: var(--titlebar-offset, 0px);
-    bottom: var(--shell-bottom-inset, 6px);
-    left: calc(var(--rail-width) + var(--left-card-width) - var(--workspace-panel-radius-inner));
-    width: max(0px, calc(
-      var(--main-left) - var(--rail-width) - var(--left-card-width)
-      + var(--workspace-panel-radius-inner) + var(--workspace-panel-radius-inner)
-    ));
-    background: var(--theme-main-background);
-    opacity: .7;
-    -webkit-mask-image: linear-gradient(to bottom,
-      transparent 0,
-      #000 var(--workspace-panel-radius-inner),
-      #000 calc(100% - var(--workspace-panel-radius-inner)),
-      transparent 100%);
-    mask-image: linear-gradient(to bottom,
-      transparent 0,
-      #000 var(--workspace-panel-radius-inner),
-      #000 calc(100% - var(--workspace-panel-radius-inner)),
-      transparent 100%);
-    pointer-events: none;
-  }
-}
+/* user:“内容区和会话栏中间有一个条 把那个条给去掉”+
+   (不再在两卡之间垫一条渐隐底色带：会话栏和内容区直接相邻，缝隙只留背景色。) */
 
 .workspace-shell.left-open  { --main-left: calc(var(--left-reveal) + var(--rail-width)); }
 .workspace-shell.right-open.right-pinned { --main-right-base: var(--right-peek); }
@@ -135,8 +102,7 @@
 }
 
 @media (min-width: 641px) {
-  /* 两卡之间的过缝带：与左侧会话栏那条同一种做法（垫一层聊天区底色 + 上下渐隐），
-     让缝从纯背景色变成向聊天区的过渡。 */
+  /* 两卡之间的过缝带：垫一层聊天区底色 + 上下渐隐，让缝从纯背景色变成向聊天区的过渡。 */
   .workspace-shell--sub-agent-split::after {
     content: '';
     position: absolute;
@@ -1051,13 +1017,13 @@
    容器查询（sidebar）按栏实际宽度决定，不再依赖窗口断点成对维护。 */
 @media (min-width: 1200px) {
   .workspace-shell {
-    --sidebar-width: var(--sidebar-width-mid);
+    --sidebar-width: var(--layout-sidebar-width, var(--sidebar-width-mid));
   }
 }
 
 @media (min-width: 1600px) {
   .workspace-shell {
-    --sidebar-width: var(--sidebar-width-full);
+    --sidebar-width: var(--layout-sidebar-width, var(--sidebar-width-full));
     --rail-action-size: var(--rail-action-size-full);
   }
 }
@@ -1068,15 +1034,15 @@
 
 @media (max-width: 640px) {
   .workspace-shell {
-    --sidebar-width: min(86vw, 320px);
+    --sidebar-width: var(--layout-sidebar-width, min(86vw, 320px));
     --left-card-width: var(--sidebar-width);
     /* 移动端没有竖栏：几何归零，整界面切换沿用抽屉语义。 */
     --app-rail-width: 0px;
     /* 手机满幅，不做下沿留白。 */
-    --shell-bottom-inset: 0px;
+    --shell-bottom-inset: var(--layout-bottom-inset, 0px);
   }
   .app-rail { display: none; }
-  .workspace-shell { --right-drawer-width: 100vw; }
+  .workspace-shell { --right-drawer-width: var(--layout-right-drawer-width, 100vw); }
   .workspace-shell { --main-x-padding: 14px; }
   .edge { display: none; }
   .workspace-drawer {

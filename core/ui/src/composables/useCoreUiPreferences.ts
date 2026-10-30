@@ -1,6 +1,5 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
-  DEFAULT_THEME,
   DEFAULT_THEME_SCHEDULE,
   SUNDAY_DARK_THEME,
   SUNDAY_LIGHT_THEME,
@@ -15,6 +14,9 @@ import {
   type ResolvedThemeMode,
   type ThemeArea,
   type ThemeData,
+  type ThemeFillMode,
+  type ThemeGlassPreference,
+  type ThemeImageFit,
   type ThemeMode,
   type ThemePreset,
   type ThemeSchedule,
@@ -114,13 +116,14 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     if (value.themeMode === 'system' || value.themeMode === 'light' || value.themeMode === 'dark' || value.themeMode === 'scheduled') themeMode.value = value.themeMode
     themeSchedule.value = normalizeThemeSchedule(value.themeSchedule)
     scheduledThemeMode.value = resolveScheduledThemeMode(themeSchedule.value)
-    const legacyTheme = normalizeTheme({ ...DEFAULT_THEME, ...(value.theme || {}) })
+    // 不能先铺默认主题：默认值里的 fill 会盖掉旧主题按节点数量推断的渐变。
+    const legacyTheme = value.theme ? normalizeTheme(value.theme) : null
     lightTheme.value = migrateSundayThemeDefaults(
-      normalizeTheme({ ...DEFAULT_THEME, ...(value.lightTheme || legacyTheme) }),
+      normalizeTheme(value.lightTheme || legacyTheme || {}),
       'light',
     )
     darkTheme.value = migrateSundayThemeDefaults(
-      normalizeTheme({ ...DEFAULT_THEME, ...(value.darkTheme || legacyTheme) }),
+      normalizeTheme(value.darkTheme || legacyTheme || {}),
       'dark',
     )
   }
@@ -172,8 +175,8 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   }
   function applyThemePreset(preset: ThemePreset) {
     runThemeTransition(() => {
-      lightTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...themeForMode(preset, 'light') })
-      darkTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...themeForMode(preset, 'dark') })
+      lightTheme.value = normalizeTheme(themeForMode(preset, 'light'))
+      darkTheme.value = normalizeTheme(themeForMode(preset, 'dark'))
       void save()
     })
   }
@@ -181,6 +184,16 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   function updateThemeAngle(area: ThemeArea, value: number) { setThemeField(`${area}Angle`, value) }
   function updateThemeOpacity(area: ThemeArea, value: number) { setThemeField(`${area}Opacity`, value) }
   function updateThemeText(area: ThemeArea, value: string) { setThemeField(`${area}Text`, value) }
+  // user:“将主题的色彩设置改成 纯色/渐变/玻璃……再加一项/图片”+
+  // (每个区域独立选样式；玻璃只有现成的高透/低透两档，图片保留 original data URL。)
+  function updateThemeFill(area: ThemeArea, value: ThemeFillMode) { setThemeField(`${area}Fill`, value) }
+  function updateThemeGlass(area: ThemeArea, value: ThemeGlassPreference) { setThemeField(`${area}Glass`, value) }
+  function updateThemeImage(area: ThemeArea, value: string) {
+    setThemeField(`${area}Image`, typeof value === 'string' && value.startsWith('data:image/') ? value : '')
+  }
+  function updateThemeImageFit(area: ThemeArea, value: ThemeImageFit) {
+    setThemeField(`${area}ImageFit`, value)
+  }
   function updateProcessIconColor(value: string) {
     setThemeField('processIconColor', normalizeColor(value, theme.value.processIconColor))
   }
@@ -218,6 +231,7 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     setContentWidth, setThemeMode, setThemeSchedule,
     resetTheme, applyThemePreset, updateThemeStops, updateThemeAngle, updateThemeOpacity,
     updateThemeText, updateProcessIconColor, addStop, removeStop, sortStops,
+    updateThemeFill, updateThemeGlass, updateThemeImage, updateThemeImageFit,
   }
 }
 

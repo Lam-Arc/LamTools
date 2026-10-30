@@ -14,7 +14,7 @@
           <p>{{ t("关闭后工具从工具集移除；启用但 API 地址为空时，调用返回“未配置生图 API”。") }}</p>
         </div>
         <button
-          class="text-btn toggle-btn"
+          class="btn btn--ghost toggle-btn"
           :class="{ 'is-on': form.enabled }"
           type="button"
           :aria-label="t('启用或关闭生图工具')"
@@ -31,8 +31,8 @@
       <div class="subhead">
         <span class="muted subhead-title">{{ t("API 配置") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
-          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveConfig">{{ t("保存") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="loading || saving" @click="saveConfig">{{ t("保存") }}</button>
         </div>
       </div>
 
@@ -189,7 +189,7 @@ onMounted(fetchConfig)
   line-height: 1.5;
 }
 
-.text-btn.is-on {
+.btn--ghost.is-on {
   color: var(--green);
 }
 

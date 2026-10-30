@@ -47,9 +47,9 @@
 .split-entry:is(:hover, :focus-visible) { opacity: 1; background: transparent !important; color: var(--theme-main-text); }
 .split-tab-content > .full-area-view, .split-tab-content > .full-area-column { width: 100%; height: 100%; margin: 0; padding: var(--space-3); box-sizing: border-box; }
 .split-tab-content .full-area-wide { margin: 0; }
-.workspace-shell--split .workspace-main { left: calc(var(--main-left) + var(--split-primary-x, 0px)); top: calc(var(--titlebar-offset, 0px) + var(--split-primary-y, 0px)); right: auto; bottom: auto; width: var(--split-primary-width); height: var(--split-primary-height); visibility: var(--split-primary-visible, visible); --main-x-padding: var(--space-5); transition: none; }
+.workspace-shell--split .workspace-main { left: calc(var(--main-left) + var(--split-primary-x, 0px)); top: calc(var(--titlebar-offset, 0px) + var(--split-primary-y, 0px)); right: auto; bottom: auto; width: var(--layout-split-primary-width, var(--split-primary-width)); height: var(--split-primary-height); visibility: var(--split-primary-visible, visible); --main-x-padding: var(--space-5); transition: none; }
 /* user:“辅助会话的输入栏样式与正常版一样就行”+(主区的固定位置只作用于浮动输入栏，侧屏复用组件时仍留在自身布局中)。 */
-.workspace-shell--split .composer-root--floating { --composer-full-width: min(var(--content-width), calc(var(--split-primary-width) - var(--space-5) * 2)); --composer-anchor-left: calc(var(--main-left) + var(--split-primary-x) + var(--split-primary-width) / 2); --composer-bottom-offset: calc(var(--shell-bottom-inset, 6px) + var(--split-primary-bottom)); visibility: var(--split-primary-visible, visible); }
+.workspace-shell--split .composer-root--floating { --composer-full-width: min(var(--content-width), calc(var(--layout-split-primary-width, var(--split-primary-width)) - var(--space-5) * 2)); --composer-anchor-left: calc(var(--main-left) + var(--split-primary-x) + var(--layout-split-primary-width, var(--split-primary-width)) / 2); --composer-bottom-offset: calc(var(--shell-bottom-inset, 6px) + var(--split-primary-bottom)); visibility: var(--split-primary-visible, visible); }
 .workspace-shell--split .composer-root--floating > .floating-composer { transition: none; }
 .workspace-shell--split.workspace-shell--composer-center .composer-root--floating > .floating-composer { top: auto; bottom: calc(var(--composer-bottom-offset) + var(--space-4)); transform: translateX(-50%); }
 @media (prefers-reduced-motion: reduce) { .split-workspace *, .split-entry { transition: none !important; animation: none !important; } }
@@ -66,8 +66,10 @@
 .split-content-notice { color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-code-editor, .split-browser-host, .split-file-rows { flex: 1; min-height: 0; overflow: auto; }
 .split-code-editor .cm-editor { height: 100%; font-family: var(--font-mono); font-size: 12px; color: var(--theme-main-text); background: var(--theme-main-background); }
-.split-code-editor .cm-scroller { overflow: auto; line-height: 1.75; }
-.split-code-editor .cm-content { padding-block: var(--space-3); caret-color: var(--theme-main-text); }
+/* user:“它出现了行号与内容错位”+(行号画在纵向内边距之外：把上下留白从内容层移到滚动层，
+   让行号槽与正文共用同一个起点，不再相差一个 --space-3)。 */
+.split-code-editor .cm-scroller { overflow: auto; line-height: 1.75; padding-block: var(--space-3); }
+.split-code-editor .cm-content { padding-block: 0; caret-color: var(--theme-main-text); }
 .split-code-editor .cm-line { padding-inline: var(--space-3); }
 .split-code-editor .cm-gutters { color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); background: var(--theme-main-background); border: 0; padding-left: var(--space-1); }
 .split-code-editor .cm-activeLine, .split-code-editor .cm-activeLineGutter { background: var(--theme-main-subtle-background); }
@@ -120,6 +122,44 @@
 .split-divider.is-resizing::before { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
 .split-resize-columns, .split-resize-columns * { cursor: col-resize !important; }
 .split-resize-rows, .split-resize-rows * { cursor: row-resize !important; }
+
+/* user:“分屏预览器不支持图片吗？改一下图片，视频 office，什么东西都尽可能支持一下”+
+   (预览分屏沿用分屏自己的主题变量与按键样式，不另起一套颜色)。 */
+.split-preview { height: 100%; min-height: 0; display: flex; flex-direction: column; --text: var(--theme-main-text); color: var(--text); outline: none; }
+.split-preview-kind { flex: 0 0 auto; padding: 0 var(--space-1); font-size: 11px; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-preview-zoom { min-width: 40px; font-size: 11px; text-align: center; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-preview-body { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--theme-main-sunken-background); }
+.split-preview-body--media { display: grid; place-items: center; padding: var(--space-3); }
+.split-preview-body--media img { display: block; max-width: none; height: auto; margin: 0 auto; border-radius: var(--radius-sm); }
+.split-preview-body--media video { display: block; max-width: 100%; max-height: 100%; border-radius: var(--radius-sm); }
+.split-preview-body--audio { align-items: center; }
+.split-preview-body--audio audio { width: min(560px, 100%); }
+.split-preview-body--document { padding: var(--space-3); }
+/* user:“Markdown 文件也用右边那个展示”+(Markdown 按正文排版铺满预览屏，不显示源码)。 */
+.split-preview-body--markdown { padding: var(--space-4) var(--space-5); background: var(--theme-main-background); }
+.split-preview-markdown { max-width: 920px; margin: 0 auto; }
+.split-preview-markdown img { max-width: 100%; height: auto; }
+.split-preview-pager { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin-bottom: var(--space-2); font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-preview-canvas { display: block; margin: 0 auto; border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); }
+.split-preview-docx { padding: 0; }
+.split-preview-docx .docx-wrapper { padding: 0; background: transparent; }
+.split-preview-docx .docx-wrapper > section.docx { margin: 0 auto var(--space-3); box-shadow: var(--shadow-sm); }
+.split-preview-sheet-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin-bottom: var(--space-2); }
+.split-preview-sheet-tabs button { padding: 4px var(--space-3); border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 65%, transparent); font: inherit; font-size: 12.5px; cursor: pointer; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.split-preview-sheet-tabs button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.split-preview-sheet-tabs button.active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); font-weight: 600; }
+.split-preview-sheet { overflow: auto; background: var(--theme-main-background); border-radius: var(--radius-sm); }
+.split-preview-sheet table { border-collapse: collapse; font-size: 12px; color: var(--text); }
+.split-preview-sheet td, .split-preview-sheet th { border: 1px solid color-mix(in srgb, var(--text) 12%, transparent); padding: 2px var(--space-1); white-space: pre-wrap; vertical-align: top; }
+.split-preview-sheet thead td, .split-preview-sheet thead th { background: var(--theme-main-soft-background); font-weight: 650; }
+.split-preview-slide { margin-bottom: var(--space-3); padding: var(--space-3); border: 1px solid var(--theme-main-border); border-radius: var(--radius); background: var(--theme-main-background); box-shadow: var(--shadow-sm); }
+.split-preview-slide header { display: flex; align-items: baseline; gap: var(--space-2); font-size: 14px; font-weight: 680; color: var(--text); }
+.split-preview-slide-index { flex: 0 0 auto; min-width: 20px; font-size: 11px; font-weight: 600; color: color-mix(in srgb, var(--text) 45%, transparent); }
+.split-preview-slide p { margin: var(--space-1) 0 0 var(--space-5); font-size: 13px; line-height: 1.55; color: var(--text); }
+.split-preview-slide footer { margin: var(--space-2) 0 0 var(--space-5); padding-top: var(--space-1); border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-preview-slide footer p { margin-left: 0; font-size: 12px; }
+.split-preview-slide-images { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0 0 var(--space-5); }
+.split-preview-slide-images img { max-width: min(320px, 100%); max-height: 200px; border-radius: var(--radius-sm); object-fit: contain; background: var(--theme-main-sunken-background); }
 .split-is-dragging .split-pane-tab { cursor: grabbing; }
 .split-drop-enter-active, .split-drop-leave-active { transition: opacity var(--dur-fast) var(--ease-out); }
 .split-drop-enter-from, .split-drop-leave-to { opacity: 0; }

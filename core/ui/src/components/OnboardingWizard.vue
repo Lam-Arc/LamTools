@@ -18,8 +18,8 @@
           <p class="onboarding-subtitle">{{ t("一个本地优先的 Agent 工作台：管理会话、记忆与自动化任务， 你的数据与配置都留在本机。") }}</p>
           <p class="onboarding-hint">{{ t("开始前需要配置一个模型供应商，让 Agent 能思考与回复。") }}</p>
           <div class="onboarding-actions">
-            <button class="btn primary" type="button" data-onboarding-start @click="step = 1">{{ t("开始配置") }}<ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
-            <button class="btn quiet" type="button" data-onboarding-skip @click="emit('skip')">{{ t("跳过") }}</button>
+            <button class="btn btn--primary" type="button" data-onboarding-start @click="step = 1">{{ t("开始配置") }}<ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
+            <button class="btn btn--quiet" type="button" data-onboarding-skip @click="emit('skip')">{{ t("跳过") }}</button>
           </div>
         </section>
 
@@ -72,8 +72,8 @@
             <p v-if="error" class="onboarding-error" role="alert">{{ error }}</p>
 
             <div class="onboarding-actions">
-              <button class="btn quiet" type="button" :disabled="loading" @click="step = 0"><ArrowLeft :size="14" :stroke-width="2" aria-hidden="true" />{{ t("上一步") }}</button>
-              <button class="btn primary" type="submit" data-onboarding-submit :disabled="loading || !canSubmit">
+              <button class="btn btn--quiet" type="button" :disabled="loading" @click="step = 0"><ArrowLeft :size="14" :stroke-width="2" aria-hidden="true" />{{ t("上一步") }}</button>
+              <button class="btn btn--primary" type="submit" data-onboarding-submit :disabled="loading || !canSubmit">
                 {{ loading ? t("保存中…") : t("保存并继续") }} <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" />
               </button>
             </div>
@@ -91,7 +91,7 @@
           </ul>
           <p class="onboarding-hint">{{ t("之后可在 Sunday 设置中继续添加供应商、模型或调整权限模式。") }}</p>
           <div class="onboarding-actions">
-            <button class="btn primary" type="button" data-onboarding-finish @click="emit('finish')">{{ t("开始使用") }}<ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
+            <button class="btn btn--primary" type="button" data-onboarding-finish @click="emit('finish')">{{ t("开始使用") }}<ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
           </div>
         </section>
 
@@ -251,7 +251,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 .onboarding-overlay {
   position: fixed;
   inset: 0;
-  z-index: var(--z-fullscreen, 100);
+  z-index: var(--z-fullscreen, 900);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -474,42 +474,8 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 }
 
 /* 按钮配方（control area）：primary 填充跟随主题；quiet 透明 + alpha 悬停 */
-.btn {
-  min-height: 34px;
-  padding: 0 var(--space-4);
-  border: 0;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.btn.primary {
-  background: var(--theme-control-background, #343331);
-  color: var(--theme-control-text, #f2efeb);
-}
-
-.btn.primary:hover:not(:disabled) {
-  filter: brightness(0.94);
-}
-
-.btn.quiet {
-  background: transparent;
-  color: var(--theme-main-text, #f2efeb);
-}
-
-.btn.quiet:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover, 8%), transparent);
-}
-
-.btn.quiet:active:not(:disabled) {
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-active, 12%), transparent);
-}
+/* user:“把功能相近或者实际相似的样式和组件，统一成一套”+(引导向导的按钮改用全局 .btn 基件，
+   不再自带第二套几何与配色)。 */
 
 @media (prefers-reduced-motion: reduce) {
   .onboarding-overlay,

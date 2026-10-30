@@ -130,7 +130,9 @@ function isSubmitting(itemId: string): boolean {
   position: relative;
   margin: 0;
   overflow: hidden;
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  /* user:“只在上面拼接一个下方不是圆角的矩形，上边是圆角”+(托盘只开上圆角，
+     下方直角贴在输入栏上沿；宽度由输入栏上方的共享挂载点收窄)。 */
+  border-radius: var(--composer-radius) var(--composer-radius) 0 0;
 }
 
 .core-queued-input-tray[data-status='blocked'] {

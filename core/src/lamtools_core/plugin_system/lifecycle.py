@@ -343,7 +343,8 @@ async def start_plugin_backend(handle: PluginRuntimeHandle, context: PluginConte
         _detach(handle)
         start = _member(handle, "start") or _member(handle, "on_load")
         try:
-            scope = runtime_context._begin_registration_scope(handle.plugin.name, handle.attempts)
+            # user:“宿主能力补齐和接口完善与文档更新”+(每代配置门面绑定实际加载的清单，不用可串到其他插件的全局配置缓存)。
+            scope = runtime_context._begin_registration_scope(handle.plugin.name, handle.attempts, manifest=handle.plugin)
             if callable(start):
                 await _bounded(handle, start(runtime_context) if _accepts_context(start) else start(), "start")
             await _health(handle)

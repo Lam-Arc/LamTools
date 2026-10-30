@@ -43,7 +43,8 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--theme-backdrop-solid, var(--bg));
+  /* 玻璃背面区域要让窗口本体透出来，否则毛玻璃后面永远是一块实色。 */
+  background: var(--theme-backdrop-window, var(--theme-backdrop-solid, var(--bg)));
   color: var(--text);
   font-family: var(--font);
   text-rendering: optimizeLegibility;
@@ -87,16 +88,25 @@ textarea::placeholder {
 :is(input, textarea, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .cm-editor.cm-focused, .cm-content, .cm-scroller):is(:focus, :focus-visible) {
   outline: none;
 }
-select:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
-}
-button:focus-visible,
-[role="button"]:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
+/* user:“合并去重”+(键盘焦点环收成一处：宽度、偏移、颜色都走令牌) */
+:is(select, button, [role="button"], a):focus-visible {
+  outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, var(--blue));
+  outline-offset: var(--focus-ring-offset, 2px);
 }
 textarea { resize: vertical; line-height: 1.55; }
 h1, h2, h3, p { margin: 0; }
 a { color: var(--blue); text-decoration: none; }
+
+/* user:“在聊天区，如果我想拖动东西，会直接变成选中文字。在编辑台应该禁用选中文字，专注组件的交互”+
+   (编辑模式开启时 html 挂 studio-editing：拖动组件不触发选字；输入框仍可正常选择/编辑。
+    关闭编辑模式或退出编辑器由组件移除类，立即恢复正常文本选择。) */
+html.studio-editing,
+html.studio-editing * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+html.studio-editing input,
+html.studio-editing textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}

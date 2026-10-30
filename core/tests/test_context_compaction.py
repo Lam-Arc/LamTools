@@ -1759,3 +1759,58 @@ async def test_controller_summary_output_follows_the_model_output_limit():
     assert client.last_request is not None
     assert client.last_request.max_tokens == 131_072
 
+
+@pytest.mark.asyncio
+async def test_compact_context_uses_authoritative_tokens_for_segment_count():
+    """user:“before_tokens应作为唯一权威实际值”+分段只按权威总量切，本地估算只做权重。"""
+    llm = _SegmentingCompactionClient()
+    progress = []
+    messages = [
+        ChatMessage(role="user", content=f"step {index} " + ("x" * 4_000))
+        for index in range(8)
+    ]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            llm_client=llm,
+            model="mock-model",
+            limit_tokens=1_000,
+            input_limit_tokens=2_000,
+            authoritative_tokens=1_500,
+            estimate_tokens=_estimate,
+            on_event=progress.append,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert result.before_tokens == 1_500
+    assert result.segment_count == 1
+    assert len(llm.requests) == 1
+    assert any(event["phase"] == "segment" for event in progress)
+
+
+@pytest.mark.asyncio
+async def test_compact_context_segments_from_authoritative_tokens_even_when_local_estimate_is_small():
+    """权威总量大就切多段，本地估算小也不能把它压成一段。"""
+    llm = _SegmentingCompactionClient()
+    messages = [ChatMessage(role="user", content=f"short {index}") for index in range(10)]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            llm_client=llm,
+            model="mock-model",
+            limit_tokens=1_000,
+            input_limit_tokens=2_000,
+            authoritative_tokens=5_000,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert result.before_tokens == 5_000
+    assert result.segment_count == 3
+

@@ -736,7 +736,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="study-view" aria-label="Study">
-    <p v-if="error" class="study-error" role="alert">{{ error }} <button class="text-btn" :disabled="initializing" @click="ready ? (inGraph ? loadGraph() : initialize()) : initialize()">{{ t("重试") }}</button></p>
+    <p v-if="error" class="study-error" role="alert">{{ error }} <button class="btn btn--ghost" :disabled="initializing" @click="ready ? (inGraph ? loadGraph() : initialize()) : initialize()">{{ t("重试") }}</button></p>
     <HistoryLoadingIndicator v-if="page === 'chat'" :active="preSessionLoading" />
     <div v-if="page === 'chat'" data-study-core-thread-host aria-hidden="true"></div>
     <NotesManager
@@ -780,17 +780,17 @@ onBeforeUnmount(() => {
         @sync-viewport="syncGraphViewport($event).catch(report)"
         @report="report"
       />
-      <footer v-if="net.total > 50" class="study-toolbar"><button class="text-btn" :disabled="offset === 0" @click="saveLayout().then(() => { offset -= 50; return loadGraph() }).catch(report)">{{ t("上页") }}</button><span>{{ offset + 1 }}–{{ Math.min(offset + 50, net.total) }} / {{ net.total }}</span><button class="text-btn" :disabled="offset + 50 >= net.total" @click="saveLayout().then(() => { offset += 50; return loadGraph() }).catch(report)">{{ t("下页") }}</button></footer>
+      <footer v-if="net.total > 50" class="study-toolbar"><button class="btn btn--ghost" :disabled="offset === 0" @click="saveLayout().then(() => { offset -= 50; return loadGraph() }).catch(report)">{{ t("上页") }}</button><span>{{ offset + 1 }}–{{ Math.min(offset + 50, net.total) }} / {{ net.total }}</span><button class="btn btn--ghost" :disabled="offset + 50 >= net.total" @click="saveLayout().then(() => { offset += 50; return loadGraph() }).catch(report)">{{ t("下页") }}</button></footer>
     </div>
   </section>
   <Teleport defer to=".workspace-plugin-header">
     <header class="study-toolbar study-header" data-study-header>
-      <button v-if="page !== 'chat' || notesReturnPending" class="text-btn" @click="back"><ArrowLeft :size="16" />{{ t("返回") }}</button>
-      <button v-else class="text-btn" @click="resumeGraph">{{ t("知识图谱") }}</button>
+      <button v-if="page !== 'chat' || notesReturnPending" class="btn btn--ghost" @click="back"><ArrowLeft :size="16" />{{ t("返回") }}</button>
+      <button v-else class="btn btn--ghost" @click="resumeGraph">{{ t("知识图谱") }}</button>
       <h1 class="study-header-title">{{ page === 'chat' ? (selected?.name || (currentBinding?.subject.kind === 'notes' ? t("笔记助手") : t("学习"))) : page === 'notes' ? (selectedNote?.title || t("笔记")) : (path.at(-1)?.name || net.course?.name || t("图谱")) }}</h1>
-      <button v-if="page === 'notes'" class="text-btn study-note-header-chat" type="button" @click="openNotesChat">{{ t("对话") }}</button>
+      <button v-if="page === 'notes'" class="btn btn--ghost study-note-header-chat" type="button" @click="openNotesChat">{{ t("对话") }}</button>
       <span v-if="page === 'notes' && selectedNote" class="study-note-header-path">{{ selectedNote.path }}</span>
-      <nav v-if="inGraph" class="study-breadcrumbs" :aria-label="t('知识层级')"><button class="text-btn" @click="collapse(0)">{{ net.course?.name || t("图谱") }}</button><template v-for="(item, index) in path" :key="item.id"><ChevronRight :size="12" /><button class="text-btn" @click="collapse(index + 1)">{{ item.name }}</button></template></nav>
+      <nav v-if="inGraph" class="study-breadcrumbs" :aria-label="t('知识层级')"><button class="btn btn--ghost" @click="collapse(0)">{{ net.course?.name || t("图谱") }}</button><template v-for="(item, index) in path" :key="item.id"><ChevronRight :size="12" /><button class="btn btn--ghost" @click="collapse(index + 1)">{{ item.name }}</button></template></nav>
       <span v-if="loading" class="study-header-loading" role="status">{{ t("加载中…") }}</span>
     </header>
   </Teleport>

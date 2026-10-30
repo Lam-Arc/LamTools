@@ -8,11 +8,11 @@ import { marks, showMark, jumpMark, deleteMark } from '@/study/annotations.ts'
   <div class="study-marks">
     <p v-if="!marks.length">{{ t("选中文字后右键，即可解释、询问或翻译。") }}</p>
     <div v-for="mark in marks" :key="mark.id" class="study-mark-row">
-      <button class="text-btn study-mark-quote" :title="mark.anchor.quote" @click="jumpMark(mark)">{{ mark.anchor.quote }}</button>
-      <button v-if="mark.translate" class="text-btn" :title="t('翻译')" :aria-label="t('翻译')" @click="showMark(mark, 'translate')"><Languages :size="14" /></button>
-      <button v-if="mark.explain" class="text-btn" :title="t('解释')" :aria-label="t('解释')" @click="showMark(mark, 'explain')"><Lightbulb :size="14" /></button>
-      <button v-if="mark.thread.length" class="text-btn" :title="t('询问')" :aria-label="t('询问')" @click="showMark(mark, 'ask')"><MessageCircle :size="14" /></button>
-      <button class="text-btn" :title="t('删除标记')" :aria-label="t('删除标记')" @click="deleteMark(mark)"><Trash2 :size="14" /></button>
+      <button class="btn btn--ghost study-mark-quote" :title="mark.anchor.quote" @click="jumpMark(mark)">{{ mark.anchor.quote }}</button>
+      <button v-if="mark.translate" class="btn btn--ghost" :title="t('翻译')" :aria-label="t('翻译')" @click="showMark(mark, 'translate')"><Languages :size="14" /></button>
+      <button v-if="mark.explain" class="btn btn--ghost" :title="t('解释')" :aria-label="t('解释')" @click="showMark(mark, 'explain')"><Lightbulb :size="14" /></button>
+      <button v-if="mark.thread.length" class="btn btn--ghost" :title="t('询问')" :aria-label="t('询问')" @click="showMark(mark, 'ask')"><MessageCircle :size="14" /></button>
+      <button class="btn btn--ghost" :title="t('删除标记')" :aria-label="t('删除标记')" @click="deleteMark(mark)"><Trash2 :size="14" /></button>
     </div>
   </div>
 </template>

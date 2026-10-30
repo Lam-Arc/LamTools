@@ -32,6 +32,8 @@ import { isExternalUrl, openExternalUrl } from '@/helpers/openUrl.ts'
 import { renderAutoMathPlot } from '@/components/mathAutoPlot.ts'
 import { getCachedMarkdown, setCachedMarkdown } from '@/components/markdownRenderCache.ts'
 import { fadeStreamingText, type StreamingTextFade } from '@/components/streamingTextFade.ts'
+// user:“调查所有样式”+(Mermaid 原来写死深色主题，浅色主题下图表仍是深色；改为跟随当前主题)
+import { relativeLuminance } from '@/helpers/theme.ts'
 
 const referenceActions = useReferenceActions()
 defineOptions({ name: 'MarkdownRenderer' })
@@ -98,31 +100,82 @@ const props = withDefaults(
 const contentRoot = ref<HTMLElement | null>(null)
 let localImageGeneration = 0
 const localImageUrls = new Set<string>()
+// user:“图片引用应在会话保存、恢复、重新加载后保持有效”+(本地图片唯一可靠的来源是文件本身，
+// 所以每张图记住自己的显示地址，重渲染或重新挂载时一律重新走传输层取字节；
+// 换新地址只回收这张图旧的 URL，不牵连其他图片)。
+const imageObjectUrls = new WeakMap<HTMLImageElement, string>()
+const imageRetryBudget = new WeakMap<HTMLImageElement, number>()
+const LOCAL_IMAGE_RETRY_LIMIT = 2
+
 function disposeLocalImages() {
   localImageGeneration += 1
   for (const url of localImageUrls) URL.revokeObjectURL(url)
   localImageUrls.clear()
 }
+
+/** 只回收指定图片自己的显示地址，其他图片的 URL 继续有效。 */
+function releaseLocalImage(image: HTMLImageElement) {
+  const previous = imageObjectUrls.get(image)
+  if (!previous) return
+  imageObjectUrls.delete(image)
+  if (localImageUrls.delete(previous)) URL.revokeObjectURL(previous)
+}
+
+function clearImageFallback(image: HTMLImageElement) {
+  const sibling = image.nextElementSibling
+  if (sibling && sibling.classList.contains('markdown-image-fallback')) sibling.remove()
+  image.hidden = false
+  delete image.dataset.fallbackShown
+}
+
+function showImageFallback(image: HTMLImageElement) {
+  if (image.dataset.fallbackShown === 'true') return
+  image.dataset.fallbackShown = 'true'
+  image.hidden = true
+  const fallback = document.createElement('span')
+  fallback.className = 'markdown-image-fallback'
+  fallback.setAttribute('role', 'status')
+  fallback.textContent = t("图片加载失败：{0}", { 0: image.alt || t("教学配图") })
+  image.after(fallback)
+}
+
+/**
+ * 单张本地图片：解析路径 → 走现有传输层读字节 → 生成当前有效的显示地址。
+ * 成功返回 true；失败返回 false，由调用方决定重试还是进入错误态。
+ */
+async function hydrateLocalImage(image: HTMLImageElement, generation: number): Promise<boolean> {
+  try {
+    const actual = await referenceActions.resolve(image.dataset.localImagePath || '')
+    const response = await referenceActions.read(actual)
+    if (generation !== localImageGeneration) return false
+    const mime = response.headers['content-type'] || ''
+    if (!mime.startsWith('image/') || response.body.length > 32 * 1024 * 1024) return false
+    releaseLocalImage(image)
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], { type: mime }))
+    localImageUrls.add(url)
+    imageObjectUrls.set(image, url)
+    clearImageFallback(image)
+    image.src = url
+    image.dataset.localImagePath = actual
+    const anchor = image.closest<HTMLAnchorElement>('a[data-file-path]')
+    if (anchor) { anchor.dataset.filePath = actual; anchor.title = actual }
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function hydrateLocalReferences() {
   const root = contentRoot.value
   if (!root || !props.fileReferences) return
   const generation = localImageGeneration
   void referenceActions.canonicalize(root)
   for (const image of root.querySelectorAll<HTMLImageElement>('img[data-local-image-path]')) {
-    try {
-      const actual = await referenceActions.resolve(image.dataset.localImagePath || '')
-      const response = await referenceActions.read(actual)
-      if (generation !== localImageGeneration || !root.contains(image)) return
-      const mime = response.headers['content-type'] || ''
-      if (!mime.startsWith('image/') || response.body.length > 32 * 1024 * 1024) throw new Error('图片无法预览')
-      const url = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], { type: mime }))
-      localImageUrls.add(url); image.src = url
-      image.dataset.localImagePath = actual
-      const anchor = image.closest<HTMLAnchorElement>('a[data-file-path]')
-      if (anchor) { anchor.dataset.filePath = actual; anchor.title = actual }
-    } catch {
-      if (generation === localImageGeneration && root.contains(image)) image.dispatchEvent(new Event('error'))
-    }
+    // user:“图片引用应在会话保存、恢复、重新加载后保持有效”+(一张图解析失败不能中断其余图片，
+    // 只有整轮渲染被新一轮渲染取代时才整体停手)。
+    if (generation !== localImageGeneration) return
+    if (await hydrateLocalImage(image, generation)) continue
+    if (generation === localImageGeneration && root.contains(image)) image.dispatchEvent(new Event('error'))
   }
 }
 type ReplyBlock = { id: number; target: HTMLElement; kind: 'interactive' | 'writing'; source: string; title?: string; variant?: string }
@@ -155,6 +208,26 @@ const tableCleanup = new Map<Element, () => void>()
 // ── Mermaid init ──
 let mermaidApi: typeof import('mermaid').default | null = null
 let mermaidLoading: Promise<typeof import('mermaid').default | null> | null = null
+let mermaidTheme: 'dark' | 'neutral' | null = null
+let mermaidRenderSeq = 0
+let themeObserver: MutationObserver | null = null
+
+/** 主题文字色偏亮说明是深色底，反之用浅色图表。 */
+function detectMermaidTheme(): 'dark' | 'neutral' {
+  if (typeof document === 'undefined') return 'dark'
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--theme-main-text').trim()
+  if (!/^#[0-9a-f]{3,8}$/i.test(raw)) return 'dark'
+  return relativeLuminance(raw) > 0.5 ? 'dark' : 'neutral'
+}
+
+function mermaidConfig(theme: 'dark' | 'neutral') {
+  return {
+    startOnLoad: false,
+    theme,
+    securityLevel: 'sandbox' as const,
+    fontFamily: 'inherit',
+  }
+}
 
 async function ensureMermaid() {
   if (!props.mermaid) return null
@@ -163,12 +236,8 @@ async function ensureMermaid() {
     mermaidLoading = import('mermaid')
       .then((module) => {
         const api = module.default
-        api.initialize({
-          startOnLoad: false,
-          theme: 'dark',
-          securityLevel: 'sandbox',
-          fontFamily: 'inherit',
-        })
+        mermaidTheme = detectMermaidTheme()
+        api.initialize(mermaidConfig(mermaidTheme))
         mermaidApi = api
         return api
       })
@@ -952,18 +1021,33 @@ async function renderMermaidDiagrams() {
   const mermaid = await ensureMermaid()
   if (!mermaid) return
 
-  const placeholders = contentRoot.value.querySelectorAll<HTMLElement>('.mermaid-placeholder')
-  for (const placeholder of placeholders) {
-    const id = placeholder.dataset.mermaidId
+  // 节点保留 data-mermaid-id：换主题时原地重渲染，不必等消息重新挂载
+  const hosts = contentRoot.value.querySelectorAll<HTMLElement>('[data-mermaid-id]')
+  for (const host of hosts) {
+    const id = host.dataset.mermaidId
     const block = mermaidBlocks.find((b) => b.id === id)
     if (!block) continue
     try {
-      const { svg } = await mermaid.render(`mermaid-svg-${id}`, block.code)
-      placeholder.outerHTML = `<div class="mermaid-diagram">${svg}</div>`
+      const { svg } = await mermaid.render(`mermaid-svg-${id}-${++mermaidRenderSeq}`, block.code)
+      host.className = 'mermaid-diagram'
+      host.innerHTML = svg
     } catch {
-      placeholder.outerHTML = `<pre class="mermaid-error"><code>${escapeHtml(block.code)}</code></pre>`
+      host.className = 'mermaid-error'
+      host.innerHTML = `<code>${escapeHtml(block.code)}</code>`
+      host.setAttribute('data-mermaid-failed', 'true')
     }
   }
+}
+
+/** 根节点主题变量变化时，重设图表主题并重渲染已存在的图。 */
+async function syncMermaidTheme(): Promise<void> {
+  const next = detectMermaidTheme()
+  if (next === mermaidTheme) return
+  const api = await ensureMermaid()
+  if (!api) return
+  mermaidTheme = next
+  api.initialize(mermaidConfig(next))
+  await renderMermaidDiagrams()
 }
 
 watch(renderedHtml, async (html) => {
@@ -1068,14 +1152,20 @@ function onReferenceContextMenu(event: MouseEvent) {
 
 function onRootImageError(event: Event) {
   const image = event.target
-  if (!(image instanceof HTMLImageElement) || image.dataset.fallbackShown === 'true') return
-  image.dataset.fallbackShown = 'true'
-  image.hidden = true
-  const fallback = document.createElement('span')
-  fallback.className = 'markdown-image-fallback'
-  fallback.setAttribute('role', 'status')
-  fallback.textContent = t("图片加载失败：{0}", { 0: image.alt || t("教学配图") })
-  image.after(fallback)
+  if (!(image instanceof HTMLImageElement)) return
+  // user:“图片引用应在会话保存、恢复、重新加载后保持有效”+(显示地址失效或首轮读字节偶发失败时，
+  // 先按原路径重新解析读取一次再判失败；只有重试预算用完才显示错误态，且错误态只作用于这张图)。
+  if (image.dataset.localImagePath) {
+    const remaining = imageRetryBudget.get(image) ?? LOCAL_IMAGE_RETRY_LIMIT
+    if (remaining > 0) {
+      imageRetryBudget.set(image, remaining - 1)
+      void hydrateLocalImage(image, localImageGeneration).then(ok => {
+        if (!ok && image.isConnected) showImageFallback(image)
+      })
+      return
+    }
+  }
+  showImageFallback(image)
 }
 
 onMounted(async () => {
@@ -1085,9 +1175,15 @@ onMounted(async () => {
   if (props.streaming) syncStreamingSegments(props.content, true)
   else renderStaticHtml(renderedHtml.value)
   await renderMermaidDiagrams()
+  if (typeof MutationObserver === 'function') {
+    themeObserver = new MutationObserver(() => { void syncMermaidTheme() })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+  }
 })
 
 onBeforeUnmount(() => {
+  themeObserver?.disconnect()
+  themeObserver = null
   disposeLocalImages()
   disposeInteractiveBlocks()
   contentRoot.value?.removeEventListener('click', onRootClick, true)

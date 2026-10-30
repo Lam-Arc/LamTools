@@ -66,6 +66,12 @@ class ModelCatalogService:
     def set_work_root(self, work_root: str | Path | None) -> None:
         self._work_root = str(Path(work_root).resolve()) if work_root else ""
 
+    def for_scope(self, scope, work_root):
+        # user:“宿主能力补齐和接口完善与文档更新”+(保留旧目录兼容行为，新插件视图固定启动代和项目，复用同一模型存储)。
+        from .model_access import PluginModelAPI
+        scope.check_open()
+        return PluginModelAPI(self._store, scope, work_root)
+
     def _store(self) -> ModelStore:
         return ModelStore()
 

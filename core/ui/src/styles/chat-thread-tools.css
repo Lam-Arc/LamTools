@@ -1,0 +1,341 @@
+/* user:“还有大文件拆分”+(从 ChatThread.vue 的全局样式块拆出：工具卡与重试进度；
+   六个文件按原顺序由组件的 <style src> 引入，全局作用域与层叠顺序保持不变)。 */
+/* ── Expandable tool cards ── */
+.process-stream {
+  align-items: stretch;
+  counter-reset: reasoning-step;
+}
+.process-stream .process-step {
+  max-width: 100%;
+}
+.chat-thread .process-step--context,
+.chat-thread .process-step--tool {
+  display: block !important;
+  grid-template-columns: none !important;
+}
+.process-step--tool {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.process-stream .process-step--tool + .process-step--tool {
+  margin-top: 2px;
+}
+.process-stream .process-step--tool:has(.tool-card-header--command) + .process-step--tool,
+.process-stream .process-step--tool + .process-step--tool:has(.tool-card-header--command) {
+  margin-top: 8px;
+}
+.tool-card-header {
+  position: relative;
+  z-index: 0;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "marker title"
+    ". args";
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 4px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: default;
+  padding: 1px 0 7px;
+  font-size: inherit;
+  text-align: left;
+  overflow: hidden;
+}
+.tool-card-header .process-step-marker {
+  grid-area: marker;
+}
+.tool-card-header .process-step-title {
+  grid-area: title;
+  min-width: 0;
+}
+.tool-card-header .process-step-title:empty {
+  display: none;
+}
+.tool-card-header.has-detail {
+  cursor: pointer;
+}
+.tool-card-header.has-detail:hover .process-step-title {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 86%, transparent);
+}
+.process-tool-row {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 8px;
+  border-radius: 0;
+  background: transparent;
+  padding: 4px 6px;
+  position: relative;
+  transition: color 160ms ease-out;
+}
+.process-tool-row::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.process-tool-row .process-step-title {
+  flex: 0 1 auto;
+}
+.process-tool-row.has-detail:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+.process-tool-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent);
+  outline-offset: 1px;
+}
+.tool-row-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
+}
+.tool-row-args {
+  display: none;
+}
+.tool-row-status {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.tool-row-status--retry {
+  color: var(--orange);
+  cursor: pointer;
+}
+
+/* ── Model retry progress bar ── */
+.model-retry-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 0;
+  min-width: 0;
+}
+.model-retry-bar__label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 550;
+  color: color-mix(in srgb, var(--orange) 70%, var(--theme-main-text));
+  white-space: nowrap;
+}
+.model-retry-bar__track {
+  flex: 0 1 auto;
+  display: flex;
+  gap: 1px;
+  height: 4px;
+  background: color-mix(in srgb, var(--theme-main-text) 8%, transparent);
+  border-radius: 2px;
+}
+.model-retry-bar__segment {
+  flex: 0 0 2px;
+  height: 100%;
+  background: transparent;
+  border-radius: 0.5px;
+  transition: background-color 0.2s ease;
+}
+.model-retry-bar__segment--filled {
+  background: color-mix(in srgb, var(--orange) 70%, var(--theme-main-text));
+}
+.model-retry-bar__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
+}
+.tool-card-header--command .process-step-title {
+  grid-area: title;
+  font-weight: 400;
+}
+.process-step--tool .process-step-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
+}
+.tool-card-body {
+  position: relative;
+  z-index: 0;
+  clear: both;
+  margin-top: 8px;
+  padding-left: 0;
+  width: 100%;
+  min-width: 0;
+  overflow: auto;
+  max-height: 800px;
+  opacity: 1;
+}
+.tool-card-body--row {
+  margin: 2px 0 10px 24px;
+  width: calc(100% - 24px);
+}
+.tool-color--warn + .tool-card-body,
+.tool-color--warn .tool-card-body {
+  opacity: .82;
+}
+.process-inline-toggle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.process-inline-toggle .process-step-title {
+  flex: 0 0 auto;
+}
+.process-inline-toggle .process-step-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.process-detail-panel {
+  grid-column: 1 / -1;
+  margin: 6px 0 8px 22px;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-sunken-background, rgba(0, 0, 0, 0.32));
+}
+.process-detail-panel--error {
+  border-color: color-mix(in srgb, var(--red) 32%, transparent);
+}
+.process-detail-panel pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 28px 10px 9px;
+  color: var(--theme-main-text, var(--text));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.process-detail-copy {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-height: 20px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 70%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.process-step--error .process-step-detail {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+.process-step--context {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+.context-group-header {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.context-group-header .process-step-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-group-header:hover .process-step-title {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.context-tool-list {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding-left: 24px;
+  min-width: 0;
+}
+.context-tool-row {
+  min-width: 0;
+  width: 100%;
+  padding: 5px 0 7px;
+  overflow: hidden;
+}
+.context-tool-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.context-tool-head .tool-args-preview {
+  display: none;
+}
+.context-tool-output {
+  margin-top: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+.tool-output {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent));
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--theme-main-text, var(--text));
+  max-height: 320px;
+  overflow: auto;
+}

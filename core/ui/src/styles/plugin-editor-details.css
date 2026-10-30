@@ -1,0 +1,316 @@
+/* user:“还有大文件拆分”+(从 CorePluginSystemEditor.vue 的 scoped 样式块拆出：卡片正文、操作与抽屉；
+   四个文件按原顺序引入，作用域与层叠顺序保持不变)。 */
+/* ── 卡片正文 ─────────────────────────────────────────────────────────── */
+.plugin-description {
+  display: -webkit-box;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--plugin-text) 74%, transparent);
+  font-size: 12.5px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.plugin-description.is-empty {
+  color: var(--plugin-faint);
+}
+
+.plugin-status-row {
+  min-width: 0;
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--plugin-muted);
+  font-size: 11.5px;
+}
+
+.plugin-status-row.is-success {
+  color: color-mix(in srgb, var(--green) 66%, var(--plugin-text));
+}
+
+.plugin-status-row.is-pending {
+  color: color-mix(in srgb, var(--orange) 76%, var(--plugin-text));
+}
+
+.plugin-status-row.is-danger {
+  color: color-mix(in srgb, var(--red) 78%, var(--plugin-text));
+}
+
+.plugin-status-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.plugin-status-row.is-pending .plugin-status-dot {
+  animation: plugin-status-pulse 1.6s var(--ease-out) infinite;
+}
+
+.plugin-status-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.plugin-status-detail {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: .82;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-retry {
+  flex: 0 0 auto;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: color-mix(in srgb, var(--red) 72%, var(--plugin-text));
+  font-size: 11px;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.plugin-retry:hover {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+
+.plugin-retry:disabled {
+  opacity: .5;
+  cursor: progress;
+}
+
+.plugin-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--red) 20%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  color: color-mix(in srgb, var(--red) 70%, var(--plugin-text));
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.plugin-capabilities {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.plugin-capability {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--plugin-accent) 20%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plugin-accent) 9%, transparent);
+  color: color-mix(in srgb, var(--plugin-accent) 52%, var(--plugin-text));
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.plugin-capability.is-empty {
+  border-color: var(--plugin-border);
+  background: transparent;
+  color: var(--plugin-faint);
+}
+
+.plugin-entries {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  padding-top: var(--space-1);
+}
+
+.plugin-entries-label {
+  color: var(--plugin-faint);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.plugin-entry {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--plugin-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--plugin-muted);
+  font-size: 11px;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.plugin-entry:hover:not(:disabled) {
+  border-color: var(--plugin-border-strong);
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-entry:active:not(:disabled) {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+}
+
+.plugin-entry:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+/* ── 卡片操作 ─────────────────────────────────────────────────────────── */
+.plugin-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid color-mix(in srgb, var(--plugin-text) 8%, transparent);
+}
+
+.plugin-action {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--plugin-muted);
+  font-size: 11.5px;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.plugin-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-action:active:not(:disabled),
+.plugin-action.is-active {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-action:disabled {
+  opacity: .5;
+  cursor: progress;
+}
+
+.plugin-action-chevron {
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.plugin-action.is-active .plugin-action-chevron {
+  transform: rotate(180deg);
+}
+
+.plugin-action-spacer {
+  flex: 1 1 auto;
+}
+
+.plugin-icon-action {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--plugin-faint);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.plugin-icon-action:hover {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-icon-action:active {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+}
+
+.plugin-icon-action.is-danger:hover {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--red);
+}
+
+/* ── 卡片内抽屉 ───────────────────────────────────────────────────────── */
+.plugin-drawer {
+  overflow: hidden;
+}
+
+.plugin-drawer-inner {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding-top: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--plugin-text) 9%, transparent);
+}
+
+.plugin-drawer-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.plugin-drawer-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--plugin-faint);
+  font-size: 10px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.plugin-deps {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--plugin-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.plugin-deps.is-missing {
+  color: color-mix(in srgb, var(--red) 72%, var(--plugin-text));
+}
+
+.plugin-drawer-enter-active,
+.plugin-drawer-leave-active {
+  transition:
+    max-height var(--dur-slow) var(--ease-emphasized),
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-slow) var(--ease-emphasized);
+}
+
+.plugin-drawer-enter-from,
+.plugin-drawer-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.plugin-drawer-enter-to,
+.plugin-drawer-leave-from {
+  max-height: 1200px;
+  opacity: 1;
+  transform: translateY(0);
+}

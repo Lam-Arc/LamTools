@@ -1,7 +1,7 @@
 // user:“第一版就支持多个分屏，左右 / 上下自由组合”+(布局与显示解耦，递归组合任意内容，主区始终没有标签)。
 export type SplitEdge = 'left' | 'right' | 'top' | 'bottom'
 // user:“支持一下”+(独立插件页面是可持久化、可拖动的分屏标签)。
-export type SplitContent = 'page' | 'browser' | 'editor' | 'files' | 'agent' | 'conversation' | 'plugin'
+export type SplitContent = 'page' | 'browser' | 'editor' | 'preview' | 'files' | 'agent' | 'conversation' | 'plugin'
 import type { AuxiliaryContext } from '@/auxiliary/workspace'
 import { validAuxiliaryContext } from '@/auxiliary/workspace'
 // user:“辅助对话”+(侧屏聊天拥有独立会话身份与可恢复的来源引用)。
@@ -193,7 +193,7 @@ export function restoreSplitState(raw: string | null): SplitState {
         if (!pane || pane.id !== node.id || !Array.isArray(pane.tabs) || pane.tabs.length > 100 || typeof pane.activeTab !== 'string') throw Error()
         for (const t of pane.tabs) {
           if (t?.kind === 'conversation' && ((t.context !== undefined && !validAuxiliaryContext(t.context)) || (t.modelId !== undefined && typeof t.modelId !== 'string') || (t.contextSent !== undefined && typeof t.contextSent !== 'boolean'))) throw Error()
-          if (!t || !t.id || !['page','browser','editor','files','agent','conversation','plugin'].includes(t.kind) || ![t.id,t.resource,t.title].every(v => typeof v === 'string') || tabIds.has(t.id) || (t.root !== undefined && typeof t.root !== 'string') || (t.projectId !== undefined && typeof t.projectId !== 'string') || (t.sessionId !== undefined && typeof t.sessionId !== 'string')) throw Error()
+          if (!t || !t.id || !['page','browser','editor','preview','files','agent','conversation','plugin'].includes(t.kind) || ![t.id,t.resource,t.title].every(v => typeof v === 'string') || tabIds.has(t.id) || (t.root !== undefined && typeof t.root !== 'string') || (t.projectId !== undefined && typeof t.projectId !== 'string') || (t.sessionId !== undefined && typeof t.sessionId !== 'string')) throw Error()
           tabIds.add(t.id)
         }
         if (!pane.tabs.some(t => t.id === pane.activeTab)) pane.activeTab = pane.tabs[0]?.id ?? ''

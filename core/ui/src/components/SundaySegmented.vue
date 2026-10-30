@@ -108,7 +108,10 @@ onMounted(() => {
     if (rootEl.value) observer.observe(rootEl.value)
   }
 
-  document.fonts.ready.then(() => layout())
+  // user:“不要留尾巴”+(字体接口不是每个运行环境都有，缺失时跳过这次重排)
+  if (typeof document !== 'undefined' && document.fonts?.ready) {
+    void document.fonts.ready.then(() => layout())
+  }
 })
 
 onBeforeUnmount(() => {

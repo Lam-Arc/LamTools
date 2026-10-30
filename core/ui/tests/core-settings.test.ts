@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import CoreSettings from '../src/components/CoreSettings.vue'
 import CoreConfirmDialog from '../src/components/CoreConfirmDialog.vue'
-import { DEFAULT_THEME } from '../src/helpers/theme'
+import { DEFAULT_THEME, type ThemeData } from '../src/helpers/theme'
 import { t } from '../src/i18n'
 
 const models = [{
@@ -32,6 +32,7 @@ function mountSettings(
     modelGroups?: Array<{ id: string; name: string; model_ids: string[] }>
     catalogView?: 'group' | 'provider'
     commandShellPlatform?: 'windows' | 'linux' | 'mobile' | 'web' | 'other'
+    theme?: ThemeData
   } = {},
   attrs: Record<string, unknown> = {},
 ) {
@@ -43,7 +44,7 @@ function mountSettings(
       catalogView: overrides.catalogView ?? 'provider',
       commandShellPlatform: overrides.commandShellPlatform ?? 'other',
       density: 'standard',
-      theme: structuredClone(DEFAULT_THEME),
+      theme: overrides.theme ?? structuredClone(DEFAULT_THEME),
       requestRpc,
     },
     attrs,
@@ -99,7 +100,7 @@ describe('CoreSettings', () => {
     expect(emptyModels.find('.models-overview-bar').exists()).toBe(false)
     expect(emptyModels.find('.provider-rail-footer [data-provider-create]').exists()).toBe(true)
     expect(emptyModels.find('.model-section-head [data-model-create]').exists()).toBe(true)
-    expect(emptyModels.find('.model-empty .small-btn').exists()).toBe(true)
+    expect(emptyModels.find('.model-empty .btn').exists()).toBe(true)
     emptyModels.unmount()
   })
 
@@ -173,13 +174,25 @@ describe('CoreSettings', () => {
 
     expect(wrapper.findComponent({ name: 'ThemeEditor' }).exists()).toBe(true)
     await wrapper.get('.theme-advanced > summary').trigger('click')
-    await wrapper.get('[data-density="loose"]').trigger('click')
+    // user:“把功能相近或者实际相似的样式和组件，统一成一套”+(密度改用统一分段控件，按文案选中)
+    const looseOption = wrapper.findAll('.theme-density-section .sunday-segmented__item')
+      .find((node) => node.text() === '宽松')
+    expect(looseOption).toBeTruthy()
+    await looseOption!.trigger('click')
     await wrapper.get('[data-theme-mode="dark"]').trigger('click')
     await wrapper.get('[data-theme-process-icon-color]').setValue('#6755e8')
 
     expect(wrapper.emitted('update:density')).toEqual([['loose']])
     expect(wrapper.emitted('update:theme-mode')).toEqual([['dark']])
     expect(wrapper.emitted('update-process-icon-color')).toEqual([['#6755e8']])
+  })
+
+  it('marks the layout editor entry as experimental', async () => {
+    const wrapper = mountSettings()
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+    const entry = wrapper.get('.studio-entry')
+    expect(entry.text()).toContain('编辑布局')
+    expect(entry.get('.studio-entry-badge').text()).toBe('实验性')
   })
 
   it('offers 定时切换 next to the fixed modes and edits the daily switch times', async () => {
@@ -289,13 +302,43 @@ describe('CoreSettings', () => {
   })
 
   it('forwards theme area angle changes from the floating editor', async () => {
-    const wrapper = mountSettings()
+    const gradientTheme = structuredClone(DEFAULT_THEME)
+    gradientTheme.backdropFill = 'gradient'
+    const wrapper = mountSettings(undefined, { theme: gradientTheme })
 
     await wrapper.get('[data-settings-section="appearance"]').trigger('click')
     await wrapper.get('[data-theme-preview-area="backdrop"]').trigger('click')
     await wrapper.get('.theme-area-popover input[type="range"]').setValue(45)
 
     expect(wrapper.emitted('update-angle')).toContainEqual(['backdrop', 45])
+  })
+
+  it('lets each theme area pick a fill and a separate glass preference', async () => {
+    const wrapper = mountSettings()
+
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+    await wrapper.get('[data-theme-preview-area="composer"]').trigger('click')
+
+    const modes = wrapper.findAll('.theme-area-popover [data-theme-fill-mode]')
+      .map((node) => node.attributes('data-theme-fill-mode'))
+    expect(modes).toEqual(['solid', 'gradient', 'image'])
+
+    await wrapper.get('.theme-area-popover [data-theme-fill-mode="image"]').trigger('click')
+    expect(wrapper.emitted('update-fill-mode')).toContainEqual(['composer', 'image'])
+  })
+
+  it('shows the built-in glass materials and forwards the level', async () => {
+    const glassTheme = structuredClone(DEFAULT_THEME)
+    glassTheme.backdropGlass = 'low'
+    const wrapper = mountSettings(undefined, { theme: glassTheme })
+
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+    await wrapper.get('[data-theme-preview-area="backdrop"]').trigger('click')
+
+    expect(wrapper.findAll('.theme-area-popover [data-theme-glass-level]').map((node) => node.attributes('data-theme-glass-level')))
+      .toEqual(['off', 'high', 'low'])
+    await wrapper.get('.theme-area-popover [data-theme-glass-level="high"]').trigger('click')
+    expect(wrapper.emitted('update-glass-level')).toContainEqual(['backdrop', 'high'])
   })
 
   it('uses the same three permission presets as the composer', async () => {
@@ -305,12 +348,17 @@ describe('CoreSettings', () => {
 
     expect(wrapper.text()).toContain('权限审批')
     expect(wrapper.text()).not.toContain('只读调查')
-    expect(wrapper.text()).not.toContain('有限编辑')
-    expect(wrapper.findAll('input, select, textarea').length).toBe(0)
+    // 能力上限说明里本来就有「有限编辑」，这里要守的是权限预设只有三项。
+    expect(wrapper.findAll('[data-default-permission-preset] strong').map((node) => node.text()))
+      .toEqual(['询问', '自动', '完全访问'])
+    // 开关本体是一个隐藏的复选框，这里守的是没有自由输入框。
+    expect(wrapper.findAll('input:not([type="checkbox"]), select, textarea').length).toBe(0)
+    expect(wrapper.findAll('[data-allow-outside-workdir] input[type="checkbox"]').length).toBe(1)
     expect(wrapper.findAll('[data-default-permission-preset]')).toHaveLength(3)
     await wrapper.get('[data-default-permission-preset="full_access"]').trigger('click')
     expect(wrapper.emitted('update-permission-preset')).toEqual([['full_access']])
-    await wrapper.get('[data-allow-outside-workdir]').trigger('click')
+    // 开关是原生复选框，点击落在 input 上；jsdom 不会因为点 label 自动切换。
+    await wrapper.get('[data-allow-outside-workdir] input[type="checkbox"]').setValue(true)
     expect(wrapper.emitted('update-allow-outside-workdir')).toEqual([[true]])
   })
 
@@ -533,16 +581,18 @@ describe('Core settings permission contract', () => {
 
   it('describes the approval-instead-of-block boundary copy', () => {
     const settings = readFileSync(resolve(process.cwd(), 'src/components/CoreSettings.vue'), 'utf8')
-    const presets = readFileSync(resolve(process.cwd(), 'src/composer/execution.ts'), 'utf8')
+    const locale = readFileSync(resolve(process.cwd(), 'src/i18n/locales/zh-CN.json'), 'utf8')
     expect(settings).toContain('工作目录外的读写与命令行访问会先征求你的确认，批准后本次执行。')
     expect(settings).toContain('工作目录外需确认')
-    expect(presets).toContain('在当前能力范围内自动批准（工作目录外仍会确认）')
+    // 批准语义的说明已搬进多语言词条。
+    expect(locale).toContain('在当前能力范围内自动批准（工作目录外仍会确认）')
   })
 
   it('binds the toggle state in the Shared Core App', () => {
 const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
-    expect(source).toContain(':allow-access-outside-workdir="allowAccessOutsideWorkdir"')
-    expect(source).toContain('@update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"')
+    // 设置页现在由 CoreAppPage 通过 pageBindings 装配，不再直接写在应用模板里。
+    expect(source).toContain('allowAccessOutsideWorkdir,')
+    expect(source).toContain('updateAllowAccessOutsideWorkdir,')
     expect(source).toContain("allow_access_outside_workdir")
   })
 })
@@ -552,12 +602,14 @@ describe('Shared Core App settings entry', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
 
     expect(source).toContain('@settings="openSettings"')
-    expect(source).toContain('<CoreSettings')
+    expect(source).toContain('<CoreAppPage v-else-if="fullAreaView" :page="fullAreaView" :bindings="pageBindings" />')
     // Preferences persist under a key split from the shell's so neither
     // schema clobbers the other (audit 19 S3).
     expect(source).toContain("useCoreUiPreferences('lamtools.core.ui.preferences')")
     expect(source).toContain(':content-width="contentWidth"')
-    expect(source).toContain('@update:content-width="uiPreferences.setContentWidth"')
+    // 内容宽度的写回挂在分页绑定里。
+    const bindings = readFileSync(resolve(process.cwd(), 'src/app/useCorePageBindings.ts'), 'utf8')
+    expect(bindings).toContain("'onUpdate:contentWidth': uiPreferences.setContentWidth")
     expect(source).toContain("@import '../styles/theme-editor.css';")
     expect(source).toContain("'config.provider.create'")
     expect(source).toContain("'config.provider.update'")
@@ -578,7 +630,7 @@ describe('Shared Core App settings entry', () => {
 
   it('passes the host command-shell platform to CoreSettings', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
-    expect(source).toContain(':command-shell-platform="commandShellPlatform"')
+    expect(source).toContain('commandShellPlatform,')
     expect(source).toContain("if (appRuntime.platform === 'mobile') return 'mobile'")
     expect(source).toContain("return 'windows' as const")
     expect(source).toContain("return 'linux' as const")

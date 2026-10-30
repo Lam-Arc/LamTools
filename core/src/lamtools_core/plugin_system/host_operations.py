@@ -257,6 +257,9 @@ def register_host_operations(
         )
 
     def _deletable_skill_dir(skill: Any) -> Path | None:
+        # user:“宿主能力补齐和接口完善与文档更新”+(内存技能没有文件路径，管理视图不得把它当作可删除目录)。
+        if skill.location is None:
+            return None
         location = Path(skill.location).resolve()
         source = _skill_source(location, work_root, host.discover())
         if source not in {"project", "user"} or location.name != "SKILL.md":
@@ -284,12 +287,14 @@ def register_host_operations(
         if skill_registry_factory is not None:
             for skill in skill_registry_factory().available(work_root):
                 enabled = skill_state_store.is_enabled(skill.name) if skill_state_store else True
-                source = _skill_source(skill.location, work_root, host.discover())
+                source = "plugin" if skill.location is None else _skill_source(skill.location, work_root, host.discover())
                 skills.append(
                     {
                         "name": skill.name,
                         "description": skill.description,
-                        "location": str(skill.location),
+                        "location": str(skill.location) if skill.location is not None else "",
+                        "model_invocable": getattr(skill, "model_invocable", True),
+                        "user_invocable": getattr(skill, "user_invocable", True),
                         "source": source,
                         "enabled": enabled,
                         "deletable": _deletable_skill_dir(skill) is not None,

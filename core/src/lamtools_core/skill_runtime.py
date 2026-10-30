@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Callable
 
 from lamtools_core.config.root import core_skills_root, lam_home
-from lamtools_core.skills import SkillRegistry
+from lamtools_core.skills import SkillRegistry, Skill
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,7 @@ def create_skill_runtime(
     max_content_chars: int = 30_000,
     sample_files: int = 10,
     plugin_skill_modes: dict[str | Path, Iterable[str]] | None = None,
+    runtime_skills: Callable[[], Iterable[Skill]] | None = None,
 ) -> SkillRuntime:
     """Create the authoritative registry used by every Core Agent entrypoint."""
     roots = assemble_skill_roots(
@@ -81,6 +82,8 @@ def create_skill_runtime(
             max_content_chars=max_content_chars,
             sample_files=sample_files,
             root_modes=plugin_skill_modes,
+            # user:“宿主能力补齐和接口完善与文档更新”+(模型、命令与管理视图复用同一技能注册表，内存贡献不增加目录权限)。
+            runtime_skills=runtime_skills,
         ),
     )
 

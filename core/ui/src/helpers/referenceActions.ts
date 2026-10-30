@@ -6,6 +6,7 @@ import { openExternalUrl } from '@/helpers/openUrl'
 import { normalizeWebLink } from './webLinks'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
 import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
+import { openFileInSplit } from '@/split/openFile'
 
 export function absoluteReference(path: string, root = ''): string {
   const value = path.replace(/\\/g, '/')
@@ -95,7 +96,7 @@ export function useReferenceActions(explicitTransport?: LamToolsTransport, expli
     const url = normalizeWebLink(raw), path = url || absoluteReference(raw, workRoot())
     // user:“右键弹窗与右键成果一致”+(正文和成果共用同一套文件与链接操作)。
     openContextMenu({ event, ownerId: 'file-reference', ariaLabel: url ? '链接操作' : '文件操作', items: [
-      ...(splitWorkspace ? [{ id: 'open-split', label: '在分屏中打开', icon: ExternalLink, action: async () => { try { const actual = url || await resolve(path); splitWorkspace.add(url ? 'browser' : 'editor', actual, url ? new URL(url).hostname : actual.split(/[\\/]/).pop() || actual, undefined, undefined, workRoot()) } catch (error) { notice(error instanceof Error ? error.message : '原文件不存在') } } }] : []),
+      ...(splitWorkspace ? [{ id: 'open-split', label: '在分屏中打开', icon: ExternalLink, action: async () => { try { const actual = url || await resolve(path); if (url) splitWorkspace.add('browser', actual, new URL(url).hostname, undefined, undefined, workRoot()); else openFileInSplit(splitWorkspace, actual, { workRoot: workRoot(), force: true }) } catch (error) { notice(error instanceof Error ? error.message : '原文件不存在') } } }] : []),
       { id: 'open-default', label: url ? '使用默认浏览器打开' : '使用默认应用打开文件', icon: ExternalLink, action: () => open(path) },
       ...(!url ? [{ id: 'open-folder', label: '打开文件夹', icon: FolderOpen, action: () => open(path, true) }] : []),
       { id: 'copy-path', label: url ? '复制链接' : '复制路径', icon: Copy, action: async () => { try { await copyText(url || await resolve(path)) } catch (error) { notice(error instanceof Error ? error.message : '复制失败') } } },

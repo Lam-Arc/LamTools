@@ -21,7 +21,7 @@
   white-space: nowrap;
 }
 .study-breadcrumbs { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: var(--space-1); overflow: hidden; }
-.study-breadcrumbs .text-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.study-breadcrumbs .btn--ghost { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .study-header-loading {
   flex: 0 0 auto;
   color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
@@ -36,11 +36,11 @@
     padding: 0;
   }
 }
-.study-view .text-btn, .selection-card .text-btn, .study-marks .text-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); border-radius: var(--radius-sm); }
-.study-view .text-btn, .selection-card .text-btn { color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); }
-.study-view .text-btn:hover:not(:disabled), .selection-card .text-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
-.study-view .text-btn:active:not(:disabled), .selection-card .text-btn:active:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
-.study-marks .text-btn { color: color-mix(in srgb, var(--theme-backdrop-text) 65%, transparent); }
+.study-view .btn--ghost, .selection-card .btn--ghost, .study-marks .btn--ghost { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); border-radius: var(--radius-sm); }
+.study-view .btn--ghost, .selection-card .btn--ghost { color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); }
+.study-view .btn--ghost:hover:not(:disabled), .selection-card .btn--ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+.study-view .btn--ghost:active:not(:disabled), .selection-card .btn--ghost:active:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
+.study-marks .btn--ghost { color: color-mix(in srgb, var(--theme-backdrop-text) 65%, transparent); }
 .study-error { color: var(--red); padding: var(--space-2); overflow-wrap: anywhere; }
 .study-graph { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .study-graph .vue-flow { flex: 1; background: var(--theme-main-background); }
@@ -138,7 +138,7 @@
 .study-incomplete { color: color-mix(in srgb, var(--theme-main-text) 45%, transparent); }
 .study-empty { position: absolute; top: 64px; left: var(--space-3); right: var(--space-3); }
 .study-related { position: absolute; left: var(--space-2); bottom: var(--space-2); display: flex; flex-direction: column; gap: var(--space-1); max-width: min(280px, 70%); max-height: 35%; overflow: auto; padding: var(--space-2); border-radius: var(--radius); background: var(--theme-main-background); box-shadow: var(--shadow-sm); font-size: 12px; }
-.study-related .text-btn { justify-content: flex-start; text-align: left; }
+.study-related .btn--ghost { justify-content: flex-start; text-align: left; }
 .study-related span { opacity: .65; flex-shrink: 0; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -174,15 +174,15 @@
 .study-note-tree-error { color: var(--red); overflow-wrap: anywhere; }
 .study-note-workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 36px; padding: var(--space-1) 0 var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); }
 .study-note-workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
-.study-note-workspace-actions .text-btn { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); color: color-mix(in srgb, var(--theme-main-text) 68%, transparent); }
-.study-note-workspace-actions .text-btn:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
-.study-note-workspace-actions .text-btn:active { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
+.study-note-workspace-actions .btn--ghost { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); color: color-mix(in srgb, var(--theme-main-text) 68%, transparent); }
+.study-note-workspace-actions .btn--ghost:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+.study-note-workspace-actions .btn--ghost:active { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent); }
 .study-note-detail-state, .study-note-empty-state { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-5) var(--space-3); color: color-mix(in srgb, var(--theme-main-text) 60%, transparent); font-size: 13px; text-align: center; }
 .study-note-empty-state p { margin: 0; }
 .study-note-detail { min-height: 0; }
 .study-note-detail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0 var(--space-2); }
 .study-note-detail-head h2 { min-width: 0; margin: 0; color: var(--theme-main-text); font-size: 18px; font-weight: 760; overflow-wrap: anywhere; }
-.study-note-detail-head .text-btn { display: inline-flex; align-items: center; gap: var(--space-1); }
+.study-note-detail-head .btn--ghost { display: inline-flex; align-items: center; gap: var(--space-1); }
 .study-note-path { margin: var(--space-1) 0 0; color: color-mix(in srgb, var(--theme-main-text) 48%, transparent); font: 11px var(--font-mono); overflow-wrap: anywhere; }
 .study-note-document-layout { display: grid; grid-template-columns: minmax(136px, 180px) minmax(0, 1fr); align-items: start; gap: var(--space-4); }
 .study-note-main { min-width: 0; }
@@ -198,12 +198,12 @@
 .study-note-full-editor { display: block; width: 100%; min-height: min(68vh, 720px); padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent); border-radius: var(--radius); background: var(--theme-main-sunken-background); color: var(--theme-main-text); font: 14px/1.72 var(--font-mono); resize: vertical; outline: 0; white-space: pre-wrap; tab-size: 2; }
 .study-note-full-editor:focus { border-color: color-mix(in srgb, var(--blue) 38%, var(--theme-main-border)); }
 .study-note-detail-error { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2) 0; color: var(--red); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.study-note-detail-error .text-btn { color: var(--orange); }
+.study-note-detail-error .btn--ghost { color: var(--orange); }
 .study-note-locks { margin: var(--space-3) 0 0; padding: var(--space-2) 0; border-top: 1px solid color-mix(in srgb, var(--theme-main-text) 9%, transparent); }
 .study-note-locks ul { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
 .study-note-locks li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; padding: var(--space-1) var(--space-2); border-left: 2px solid color-mix(in srgb, var(--orange) 60%, transparent); color: color-mix(in srgb, var(--theme-main-text) 68%, transparent); font-size: 12px; }
 .study-note-lock-quote { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.study-note-locks .text-btn { display: inline-flex; align-items: center; gap: var(--space-1); flex: 0 0 auto; }
+.study-note-locks .btn--ghost { display: inline-flex; align-items: center; gap: var(--space-1); flex: 0 0 auto; }
 .study-note-references { margin-top: var(--space-5); padding-top: var(--space-2); border-top: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); color: color-mix(in srgb, var(--theme-main-text) 54%, transparent); font-size: 11px; }
 .study-note-references ol { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
 .study-note-references li { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1); line-height: 1.45; }

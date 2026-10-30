@@ -1,0 +1,374 @@
+/* user:“还有大文件拆分”+(从 CorePluginSystemEditor.vue 的 scoped 样式块拆出：搜索筛选与卡片网格；
+   四个文件按原顺序引入，作用域与层叠顺序保持不变)。 */
+/* ── 搜索与筛选 ───────────────────────────────────────────────────────── */
+.plugin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.plugin-search {
+  flex: 1 1 260px;
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--plugin-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plugin-text) 3.5%, transparent);
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.plugin-search:hover {
+  border-color: var(--plugin-border-strong);
+}
+
+.plugin-search-icon {
+  flex: 0 0 auto;
+  color: var(--plugin-faint);
+}
+
+.plugin-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--theme-composer-text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.plugin-search input::placeholder {
+  color: color-mix(in srgb, var(--theme-composer-text) 42%, transparent);
+}
+
+.plugin-search-clear {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--plugin-muted);
+}
+
+.plugin-search-clear:hover {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-search-key {
+  flex: 0 0 auto;
+  min-width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--plugin-border);
+  border-radius: var(--radius-sm);
+  color: var(--plugin-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.plugin-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.plugin-filter {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--plugin-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.plugin-filter:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-filter:disabled {
+  opacity: .42;
+  cursor: default;
+}
+
+.plugin-filter.is-active {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-filter-count {
+  margin-left: var(--space-1);
+  color: var(--plugin-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-filter.is-active .plugin-filter-count {
+  color: color-mix(in srgb, var(--plugin-text) 64%, transparent);
+}
+
+.plugin-result-count {
+  margin-left: auto;
+  color: var(--plugin-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── 卡片网格（按列瀑布流）─────────────────────────────────────────────── */
+.plugin-grid {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.plugin-column {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.plugin-grid--skeleton {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+}
+
+.plugin-card {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--plugin-border);
+  border-radius: var(--radius-lg);
+  background: var(--plugin-card);
+  color: var(--settings-card-text, var(--plugin-text));
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out),
+    background var(--dur-base) var(--ease-out);
+}
+
+.plugin-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px -1px auto;
+  height: 2px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: linear-gradient(90deg, transparent, var(--plugin-accent) 30%, var(--plugin-accent) 70%, transparent);
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+  pointer-events: none;
+}
+
+.plugin-card:hover {
+  border-color: var(--plugin-border-strong);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-2px);
+}
+
+.plugin-card:hover::before,
+.plugin-card:focus-within::before {
+  opacity: .55;
+}
+
+.plugin-card.is-attention {
+  border-color: color-mix(in srgb, var(--red) 26%, var(--plugin-border));
+}
+
+.plugin-card.is-disabled {
+  background: color-mix(in srgb, var(--plugin-card) 94%, var(--plugin-text) 3%);
+}
+
+.plugin-card.is-disabled .plugin-glyph,
+.plugin-card.is-disabled .plugin-capability {
+  filter: grayscale(.7);
+  opacity: .62;
+}
+
+.plugin-card.is-busy {
+  cursor: progress;
+}
+
+/* 卡片进出与排序动画 */
+.plugin-card-enter-active {
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-slow) var(--ease-emphasized);
+  transition-delay: calc(min(var(--card-index, 0), 8) * 35ms);
+}
+
+.plugin-card-enter-from {
+  opacity: 0;
+  transform: translateY(10px) scale(.985);
+}
+
+.plugin-card-leave-active {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plugin-card-move {
+  transition: transform var(--dur-slow) var(--ease-emphasized);
+}
+
+/* ── 卡片头部 ─────────────────────────────────────────────────────────── */
+.plugin-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.plugin-glyph {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--plugin-accent) 26%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--plugin-accent) 13%, transparent);
+  color: color-mix(in srgb, var(--plugin-accent) 62%, var(--plugin-text));
+  font-size: 13px;
+  font-weight: 760;
+  letter-spacing: .02em;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.plugin-card:hover .plugin-glyph {
+  transform: scale(1.04);
+}
+
+.plugin-identity {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.plugin-name-line {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.plugin-name-line strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--settings-card-text, var(--plugin-text));
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-version {
+  flex: 0 0 auto;
+  color: var(--plugin-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.plugin-meta-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--plugin-muted);
+  font-size: 10.5px;
+}
+
+.plugin-scope {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--plugin-text) 16%, transparent);
+  border-radius: 999px;
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+
+.plugin-meta-sep {
+  opacity: .4;
+}
+
+.plugin-root {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 开关 */
+.plugin-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+  margin-top: 1px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--plugin-text) 16%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plugin-text) 12%, transparent);
+  transition:
+    background var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+.plugin-switch:hover {
+  border-color: color-mix(in srgb, var(--plugin-text) 26%, transparent);
+}
+
+.plugin-switch[aria-checked='true'] {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--green) 72%, var(--plugin-card));
+}
+
+.plugin-switch:disabled {
+  opacity: .6;
+  cursor: progress;
+}
+
+.plugin-switch-thumb {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--plugin-text);
+  color: var(--plugin-card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .22);
+  transform: translateX(0);
+  transition: transform var(--dur-base) var(--ease-emphasized), background var(--dur-base) var(--ease-out);
+}
+
+.plugin-switch[aria-checked='true'] .plugin-switch-thumb {
+  transform: translateX(18px);
+  background: var(--plugin-text);
+}

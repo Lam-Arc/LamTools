@@ -48,7 +48,16 @@ const sessionSidebarPath = resolve(packageRoot, 'src/styles/session-sidebar.css'
 const themeEditorPath = resolve(packageRoot, 'src/styles/theme-editor.css')
 const subAgentEditorPath = resolve(packageRoot, 'src/components/CoreSubAgentEditor.vue')
 const uiSelectPath = resolve(packageRoot, 'src/components/UiSelect.vue')
-const chatThreadPath = resolve(packageRoot, 'src/components/ChatThread.vue')
+// user:“还有大文件拆分”+(消息编辑样式在 chat-thread 分片里，规则断言逐个分片查找)
+const chatThreadPartPaths = ['shell', 'tools', 'cards', 'process', 'reasoning', 'editing']
+  .map((part) => resolve(packageRoot, `src/styles/chat-thread-${part}.css`))
+function findChatThreadRule(selector: RegExp): CssRule {
+  for (const path of chatThreadPartPaths) {
+    const rule = readRules(path).find((candidate) => selector.test(candidate.selector))
+    if (rule) return rule
+  }
+  throw new Error(`Missing CSS rule ${selector} in chat-thread parts`)
+}
 
 const componentPaths = [
   ...filesUnder(resolve(packageRoot, 'src/app')).filter((path) => path.endsWith('.vue')),
@@ -141,7 +150,7 @@ describe('input surfaces use the composer area recipe', () => {
       [layoutPath, /\.field-input/],
       [resolve(packageRoot, 'src/components/AutoTextarea.vue'), /\.auto-textarea/],
       [resolve(packageRoot, 'src/components/CoreProjectSettings.vue'), /\.field-input/],
-      [resolve(packageRoot, 'src/components/CoreSettings.vue'), /\.config-form input[\s\S]*\.config-form textarea/],
+      [resolve(packageRoot, 'src/styles/core-settings-base.css'), /\.config-form input[\s\S]*\.config-form textarea/],
       [resolve(packageRoot, 'src/components/OnboardingWizard.vue'), /\.onboarding-form input/],
       [resolve(packageRoot, 'src/components/RightSidebarRag.vue'), /\.right-sidebar-rag-search input/],
       [resolve(workflowUiRoot, 'NodeEditCard.vue'), /\.wf-edit-card[\s\S]*\.field input/],
@@ -245,7 +254,7 @@ describe('transparent title input exceptions', () => {
   })
 
   it('keeps the inline message editor seamless inside the message bubble', () => {
-    const rule = findRule(chatThreadPath, /\.user-bubble\.user-bubble--editing \.user-edit-input/)
+    const rule = findChatThreadRule(/\.user-bubble\.user-bubble--editing \.user-edit-input/)
     expect(rule.body).toMatch(/border:\s*0/)
     expect(rule.body).toMatch(/border-radius:\s*0/)
     expect(rule.body).toMatch(/background:\s*transparent/)

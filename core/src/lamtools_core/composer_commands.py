@@ -147,6 +147,9 @@ def build_composer_command_catalog(
             )
     skill_commands: list[ComposerCommandDefinition] = []
     for skill in registry.available(work_root):
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(用户目录与显式技能选择同时遵守 userInvocable，不借模型权限开放)。
+        if not getattr(skill, "user_invocable", True):
+            continue
         if skill_state_store is not None and not skill_state_store.is_enabled(skill.name):
             continue
         name = normalize_command_name(skill.name)
@@ -199,11 +202,15 @@ def prepare_composer_input(
                 available = ", ".join(
                     item.name
                     for item in registry.available(work_root)
-                    if skill_state_store is None or skill_state_store.is_enabled(item.name)
+                    # user:“接口完善”+(用户读取失败时的候选列表同样排除不可由用户调用的技能)。
+                    if getattr(item, "user_invocable", True)
+                    and (skill_state_store is None or skill_state_store.is_enabled(item.name))
                 )
                 raise ValueError(f'Skill "{requested_name}" not found. Available skills: {available or "none"}')
             if skill_state_store is not None and not skill_state_store.is_enabled(skill.name):
                 raise ValueError(f'Skill "{requested_name}" is disabled')
+            if not getattr(skill, "user_invocable", True):
+                raise ValueError(f'Skill "{requested_name}" does not allow user invocation')
             source_text = str(item.get("source_text") or f"/{requested_name}")
             content = registry.load_prompt_content(work_root, skill.name)
             visible_items.append({"type": "text", "text": source_text})

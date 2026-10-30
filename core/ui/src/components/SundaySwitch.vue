@@ -12,6 +12,9 @@
     <span class="sunday-switch__track" aria-hidden="true">
       <span class="sunday-switch__thumb" />
     </span>
+    <!-- user:“把功能相近或者实际相似的样式和组件，统一成一套”+(带文案的开关不再自己搭轨道，
+         直接把文案放进同一行，整行可点) -->
+    <span v-if="$slots.default" class="sunday-switch__label"><slot /></span>
   </label>
 </template>
 

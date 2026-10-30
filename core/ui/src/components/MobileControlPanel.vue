@@ -17,7 +17,7 @@
             <small>{{ accountStatus.baseUrl || accountStatus.serverId }}</small>
             <small v-if="accountIdentity">Node {{ accountIdentity.nodeId }}</small>
           </div>
-          <button class="small-btn quiet" type="button" :disabled="accountLoading" @click="logoutAccount">{{ t("退出账号") }}</button>
+          <button class="btn btn--quiet" type="button" :disabled="accountLoading" @click="logoutAccount">{{ t("退出账号") }}</button>
         </div>
         <div v-if="accountStatus" class="mobile-control-account-devices">
           <div class="subhead">
@@ -47,10 +47,10 @@
             <input v-model="accountPassword" type="password" :autocomplete="accountMode === 'register' ? 'new-password' : 'current-password'" minlength="8" required>
           </label>
           <div class="mobile-control-account-actions">
-            <button class="small-btn quiet" type="button" :disabled="accountLoading" @click="accountMode = accountMode === 'login' ? 'register' : 'login'">
+            <button class="btn btn--quiet" type="button" :disabled="accountLoading" @click="accountMode = accountMode === 'login' ? 'register' : 'login'">
               {{ accountMode === 'login' ? t("转到注册") : t("返回登录") }}
             </button>
-            <button class="small-btn primary" type="submit" :disabled="accountLoading || !available">
+            <button class="btn btn--primary" type="submit" :disabled="accountLoading || !available">
               {{ accountLoading ? t("处理中…") : accountMode === 'register' ? t("注册") : t("登录") }}
             </button>
           </div>
@@ -103,14 +103,14 @@
         <article class="setting-card mobile-control-pairing-card">
           <div class="subhead">
             <span class="muted subhead-title">{{ t("配对新设备") }}<span class="subhead-sub">{{ t("六位数字码 5 分钟内有效且只能使用一次") }}</span></span>
-            <button class="small-btn primary" type="button" :disabled="loading" @click="createPairing">{{ t("生成配对码") }}</button>
+            <button class="btn btn--primary" type="button" :disabled="loading" @click="createPairing">{{ t("生成配对码") }}</button>
           </div>
           <div v-if="pairing" class="mobile-control-code-layout">
             <div class="mobile-control-code-block" :aria-label="t('当前六位数字配对码')">
               <span>{{ t("当前配对码") }}</span>
               <strong>{{ pairing.code }}</strong>
               <small>{{ t("在 LamTools 手机端输入此数字") }}</small>
-              <button class="text-btn" type="button" @click="copyNumericCode">{{ numericCopyLabel }}</button>
+              <button class="btn btn--ghost" type="button" @click="copyNumericCode">{{ numericCopyLabel }}</button>
             </div>
             <small class="mobile-control-expires">{{ t("有效期至") }}{{ expiresLabel }}</small>
           </div>
@@ -130,7 +130,7 @@
                 <strong>{{ device.name || device.deviceId }}</strong>
                 <small>{{ device.platform || 'mobile' }} · {{ formatDate(device.lastSeenMs || device.pairedAtMs) }}</small>
               </div>
-              <button class="text-btn danger" type="button" :disabled="loading" @click="revoke(device.deviceId)">{{ t("移除") }}</button>
+              <button class="btn btn--ghost btn--danger" type="button" :disabled="loading" @click="revoke(device.deviceId)">{{ t("移除") }}</button>
             </div>
           </div>
           <p v-else class="mobile-control-empty">{{ t("尚未配对手机。") }}</p>
@@ -335,7 +335,7 @@ function formatDate(value?: number): string {
 .mobile-control-code-block { display: grid; justify-items: center; gap: var(--space-1); min-width: min(100%, 280px); padding: var(--space-4) var(--space-5); border: 1px solid color-mix(in srgb, var(--blue) 28%, transparent); border-radius: var(--radius); background: color-mix(in srgb, var(--blue) 7%, var(--theme-main-background)); }
 .mobile-control-code-block span, .mobile-control-code-block small, .mobile-control-expires { color: color-mix(in srgb, var(--text) 58%, transparent); font-size: 11px; }
 .mobile-control-code-block strong { color: var(--blue); font-family: var(--font-mono); font-size: 36px; letter-spacing: .18em; line-height: 1.15; text-indent: .18em; }
-.mobile-control-code-block .text-btn { min-height: 28px; padding: 0 var(--space-2); }
+.mobile-control-code-block .btn--ghost { min-height: 28px; padding: 0 var(--space-2); }
 .mobile-control-warning { margin: var(--space-3) 0 0; color: var(--orange, #e7a65b); font-size: 11px; line-height: 1.5; }
 .mobile-control-phase-note { margin: var(--space-2) 0 0; color: color-mix(in srgb, var(--text) 55%, transparent); font-size: 11px; line-height: 1.5; }
 .mobile-control-trusted-list { display: grid; }

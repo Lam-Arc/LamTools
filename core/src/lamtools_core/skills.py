@@ -5,17 +5,21 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Callable
 
 
 @dataclass(frozen=True)
 class Skill:
     name: str
     description: str
-    location: Path
+    location: Path | None
     content: str
     allow_implicit_invocation: bool = True
     modes: tuple[str, ...] = ()
+    # user:“每一个地方 sunday 都有等价或者近似接口”+(保留静态技能默认策略，内存技能分别控制模型和用户调用且不伪造路径)。
+    model_invocable: bool = True
+    user_invocable: bool = True
+    plugin: str = ""
 
 
 class SkillRegistry:
@@ -28,10 +32,12 @@ class SkillRegistry:
         max_content_chars: int = 30_000,
         sample_files: int = 10,
         root_modes: dict[str | Path, Iterable[str]] | None = None,
+        runtime_skills: Callable[[], Iterable[Skill]] | None = None,
     ) -> None:
         self._explicit_roots = tuple(Path(item).resolve() for item in explicit_roots)
         self._max_content_chars = max_content_chars
         self._sample_files = sample_files
+        self._runtime_skills = runtime_skills
         self._root_modes = {
             Path(root).resolve(): tuple(str(mode).strip() for mode in modes if str(mode).strip())
             for root, modes in (root_modes or {}).items()
@@ -44,6 +50,16 @@ class SkillRegistry:
         self._cached_index: str | None = None
 
     def available(self, work_root: str | Path | None) -> list[Skill]:
+        # user:“宿主能力补齐和接口完善与文档更新”+(磁盘缓存保持原优先级，动态贡献每次读取当前状态，停用后旧注册表不能继续命中缓存)。
+        static = self._filesystem_available(work_root)
+        if self._runtime_skills is None:
+            return static
+        skills = {skill.name: skill for skill in static}
+        for skill in self._runtime_skills():
+            skills.setdefault(skill.name, skill)
+        return sorted(skills.values(), key=lambda skill: skill.name)
+
+    def _filesystem_available(self, work_root: str | Path | None) -> list[Skill]:
         sig = self.signature(work_root)
         if self._cached_signature == sig and self._cached_skills is not None:
             return self._cached_skills
@@ -85,12 +101,13 @@ class SkillRegistry:
         state_store: SkillStateStore | None = None,
         active_mode: str | None = None,
     ) -> str:
-        if state_store is None and active_mode is None and self._cached_index is not None:
+        if self._runtime_skills is None and state_store is None and active_mode is None and self._cached_index is not None:
             return self._cached_index
         skills = [
             skill
             for skill in self.available(work_root)
             if skill.allow_implicit_invocation
+            and getattr(skill, "model_invocable", True)
             and self._visible(skill, active_mode)
             and (state_store is None or state_store.is_enabled(skill.name))
         ]
@@ -103,7 +120,7 @@ class SkillRegistry:
         for skill in skills:
             lines.append(f"- {skill.name}: {self._prompt_description(skill.description)}")
         result = "\n".join(lines)
-        if state_store is None and active_mode is None:
+        if self._runtime_skills is None and state_store is None and active_mode is None:
             self._cached_index = result
         return result
 
@@ -113,6 +130,11 @@ class SkillRegistry:
             available = ", ".join(item.name for item in self.available(work_root) if self._visible(item, active_mode))
             return f'Skill "{name}" not found. Available skills: {available or "none"}'
 
+        if skill.location is None:
+            content = skill.content.strip()
+            if len(content) > self._max_content_chars:
+                content = content[:self._max_content_chars] + "\n\n[Skill content truncated.]"
+            return f'<skill_content name="{skill.name}">\n# Skill: {skill.name}\n\n{content}\n</skill_content>'
         base = skill.location.parent
         files = self._sample_related_files(base)
         content = skill.content.strip()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { BookOpen, Bot, FileText, FolderTree, Globe, MessageCircle, Puzzle, Plus, X } from 'lucide-vue-next'
+import { BookOpen, Bot, FileImage, FileText, FolderTree, Globe, MessageCircle, Puzzle, Plus, X } from 'lucide-vue-next'
 import { t } from '@/i18n'
 import type { SplitPane, SplitTab } from '@/split/layout'
 const props = defineProps<{ pane: SplitPane; active: boolean; dirty?: Set<string> }>()
@@ -28,7 +28,7 @@ function scrollTabs(event: WheelEvent) {
   const next = Math.max(0, Math.min(list.scrollWidth - list.clientWidth, list.scrollLeft + delta))
   if (next !== list.scrollLeft) { event.preventDefault(); list.scrollLeft = next }
 }
-const icons = { page: BookOpen, agent: Bot, editor: FileText, files: FolderTree, browser: Globe, conversation: MessageCircle, plugin: Puzzle }
+const icons = { page: BookOpen, agent: Bot, editor: FileText, preview: FileImage, files: FolderTree, browser: Globe, conversation: MessageCircle, plugin: Puzzle }
 function navigate(event: KeyboardEvent) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
   const buttons = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]'))

@@ -48,7 +48,7 @@ import { PLUGIN_SHELL_SECTIONS, type SettingsSection } from '@/components/settin
 import CorePluginSystemEditor from '@/components/CorePluginSystemEditor.vue'
 import CoreSkillsEditor from '@/components/CoreSkillsEditor.vue'
 import CoreHooksEditor from '@/components/CoreHooksEditor.vue'
-import { gradientFromStops, relativeLuminance, type ThemeData } from '@/helpers/theme.ts'
+import { relativeLuminance, themeAreaBackground, type ThemeData } from '@/helpers/theme.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
 
 const props = defineProps<{
@@ -77,26 +77,14 @@ const settingsThemeStyle = computed(() => {
   const theme = props.theme
   const lightMain = relativeLuminance(theme.mainText) < 0.45
   return {
-    '--settings-backdrop-background': gradientFromStops(
-      theme.backdropAngle,
-      theme.backdropStops,
-      1,
-    ),
+    '--settings-backdrop-background': themeAreaBackground(theme, 'backdrop'),
     '--settings-backdrop-text': theme.backdropText,
-    '--settings-main-background': gradientFromStops(
-      theme.mainAngle,
-      theme.mainStops,
-      theme.mainOpacity,
-    ),
+    '--settings-main-background': themeAreaBackground(theme, 'main'),
     '--settings-main-text': theme.mainText,
     '--settings-main-solid': theme.mainStops[0]?.color || '#111111',
     '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
     '--settings-card-text': theme.mainText,
-    '--settings-control-background': gradientFromStops(
-      theme.controlAngle,
-      theme.controlStops,
-      theme.controlOpacity,
-    ),
+    '--settings-control-background': themeAreaBackground(theme, 'control'),
     '--settings-control-text': theme.controlText,
     '--settings-control-solid': theme.controlStops[0]?.color || '#3a3834',
     ...(lightMain ? {

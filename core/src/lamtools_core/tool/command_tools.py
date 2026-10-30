@@ -193,6 +193,19 @@ class CommandToolHandlers:
         handled by the caller's command policy before this method executes.
         """
         args = call.arguments if isinstance(call.arguments, dict) else {}
+        # user:“继续”+(命令使用送审前固定的cwd，只影响这次启动，不修改项目根或已有进程)。
+        work_root = self._work_root
+        if args.get("cwd") is not None:
+            from lamtools_core.plugin_system.working_directory import directory_exists, WorkingDirectoryError
+            try:
+                raw_cwd = args["cwd"]
+                if type(raw_cwd) is not str or not raw_cwd.strip():
+                    raise ValueError
+                work_root = self._work_root / raw_cwd
+                if not directory_exists(self._work_root, work_root):
+                    raise ValueError
+            except (WorkingDirectoryError, ValueError, TypeError, OSError):
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="Command cwd must be an existing directory within the original project", error_code="command/invalid-cwd")
         command = args.get("command", "")
         timeout = args.get("timeout", None)
         background = bool(args.get("background")) if args.get("background") is not None else False
@@ -259,7 +272,7 @@ class CommandToolHandlers:
                 status="failed", error=f"Invalid timeout value: {timeout}",
             )
 
-        command = _resolve_skill_script_paths(command, self._work_root, self._loaded_skill_roots)
+        command = _resolve_skill_script_paths(command, work_root, self._loaded_skill_roots)
 
         command_shell = resolve_command_shell()
         if sys.platform == 'win32':
@@ -268,7 +281,7 @@ class CommandToolHandlers:
                 if command_shell.kind in {"powershell", "pwsh"}
                 else command
             )
-            argv = command_shell.argv_for(shell_command, cwd=self._work_root)
+            argv = command_shell.argv_for(shell_command, cwd=work_root)
             # The routing settings own the route, so an inherited HTTP_PROXY
             # must not leak into a spawned command.  WSL is the one exception:
             # prepare_environment already applied (and path-translated) them,
@@ -308,7 +321,7 @@ class CommandToolHandlers:
         try:
             _validate_command_paths(
                 validation_argv,
-                self._work_root,
+                work_root,
                 tuple(sorted(self._loaded_skill_roots, key=lambda item: item.as_posix())),
                 allow_outside=self._outside_access_allowed(),
             )
@@ -344,7 +357,7 @@ class CommandToolHandlers:
                         )
                     else:
                         try:
-                            probe_root = _python_http_server_root(command, self._work_root)
+                            probe_root = _python_http_server_root(command, work_root)
                             http_probe = _make_background_http_probe(probe_root, requested_port)
                         except OSError as exc:
                             return ToolResult(
@@ -368,7 +381,7 @@ class CommandToolHandlers:
                     runtime_run_id = str(call.metadata.get("_runtime_run_id") or "")
                     execution = await _run_background_subprocess(
                         argv,
-                        cwd=self._work_root,
+                        cwd=work_root,
                         command=command,
                         env=subprocess_env,
                         http_probe=http_probe,
@@ -405,7 +418,7 @@ class CommandToolHandlers:
 
                     execution = await _run_subprocess(
                         argv,
-                        cwd=self._work_root,
+                        cwd=work_root,
                         timeout=timeout,
                         env=subprocess_env,
                         progress_callback=_emit_command_progress if self._core_event_callback is not None else None,

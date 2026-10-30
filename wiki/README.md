@@ -13,6 +13,7 @@
 - [桌面窗口与导航](articles/desktop-controls.md)
 - [分屏](articles/split-pane.md)
 - [界面外观](articles/appearance.md)
+- [主题填充与玻璃材质](articles/theme-fill-and-glass.md)
 - [快捷键与快速定位](articles/shortcuts.md)
 - [设置总览](articles/settings.md)
 
@@ -32,6 +33,7 @@
 读文件、找内容、管理资料，以及从网上取回内容。
 
 - [读取和查看文件](articles/files.md)
+- [分屏文件预览（实验性）](articles/file-preview.md)
 - [查找文件和内容](articles/file-search.md)
 - [全局搜索](articles/search.md)
 - [附件](articles/attachments.md)
@@ -150,6 +152,7 @@ Sunday 获得额外能力、长期知识和外部工具的四条途径。
 - [故障排查：先看问题发生在哪一层](articles/troubleshooting.md)
 - [常见问题](articles/faq.md)
 - [术语速查](articles/glossary.md)
+- [界面样式体系](articles/interface-style-system.md)
 - [容易混淆的功能怎么选](articles/feature-comparison.md)
 - [数据会去哪里](articles/privacy.md)
 - [查找本地数据和制作备份](articles/data-backup.md)

@@ -12,6 +12,149 @@ export interface ChatOutlineItem {
 
 export const CHAT_OUTLINE_ACTIVATION_RATIO = 0.38
 
+// user:“上下竖向 > 分页，每页 20 条”+(左栏竖向翻页控件每页固定 20 条用户消息)
+export const CHAT_OUTLINE_PAGE_SIZE = 20
+
+/** Catalog filter dimension: guide instructions vs. ordinary prompts. */
+// user:“区分引导消息与普通消息”+(目录卡片按类型筛选，引导与普通是两种不同的用户消息)
+export type ChatOutlineKind = 'all' | 'guide' | 'normal'
+
+/** Time ordering used by the catalog card. */
+export type ChatOutlineSortDirection = 'asc' | 'desc'
+
+/**
+ * Mid-turn guidance reaches the transcript as its own user row whose id is the
+ * only durable marker (`<turn>:user:guide:<event>`), so that suffix is what
+ * separates guide instructions from ordinary user prompts.
+ */
+export function isGuideOutlineMessageId(messageId: string): boolean {
+  return String(messageId || '').includes(':user:guide:')
+}
+
+export function isGuideOutlineItem(item: ChatOutlineItem | null | undefined): boolean {
+  return isGuideOutlineMessageId(item?.message_id || '')
+}
+
+/** Total pages for a user-message count; an empty outline still has one page. */
+export function outlinePageCount(total: number, pageSize = CHAT_OUTLINE_PAGE_SIZE): number {
+  const size = Math.max(1, Math.floor(pageSize))
+  return Math.max(1, Math.ceil(Math.max(0, Math.floor(total)) / size))
+}
+
+/** Keep a page number inside the available range. */
+export function clampOutlinePage(
+  page: number,
+  total: number,
+  pageSize = CHAT_OUTLINE_PAGE_SIZE,
+): number {
+  const last = outlinePageCount(total, pageSize) - 1
+  const value = Number.isFinite(page) ? Math.floor(page) : 0
+  return Math.max(0, Math.min(last, value))
+}
+
+export function sliceOutlinePage<T>(
+  items: readonly T[],
+  page: number,
+  pageSize = CHAT_OUTLINE_PAGE_SIZE,
+): T[] {
+  const size = Math.max(1, Math.floor(pageSize))
+  const start = clampOutlinePage(page, items.length, size) * size
+  return items.slice(start, start + size)
+}
+
+export interface ChatOutlineCatalogEntry {
+  item: ChatOutlineItem
+  /** Position in the original (sequence) order, zero based. */
+  index: number
+  isGuide: boolean
+  /** Parsed timestamp in ms, or null when the row has no usable time. */
+  timestampMs: number | null
+}
+
+/**
+ * Parse an outline timestamp. The server may send an ISO string, epoch
+ * seconds, or epoch milliseconds; anything else yields null so ordering falls
+ * back to the original sequence.
+ */
+export function parseOutlineTimestamp(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 0 && value < 1e12 ? Math.round(value * 1000) : Math.round(value)
+  }
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text) return null
+  if (/^\d{9,14}$/.test(text)) {
+    const number = Number(text)
+    return Number.isFinite(number) ? (number < 1e12 ? Math.round(number * 1000) : number) : null
+  }
+  const parsed = Date.parse(text)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/** `HH:mm` for today, `MM-DD HH:mm` otherwise; empty when the row has no time. */
+export function formatOutlineTimestamp(value: unknown, now: Date = new Date()): string {
+  const ms = parseOutlineTimestamp(value)
+  if (ms === null) return ''
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (part: number): string => String(part).padStart(2, '0')
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate()
+  return sameDay
+    ? time
+    : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`
+}
+
+/**
+ * Record every user message in its original order. The index travels with the
+ * entry so later filtering and time sorting never lose the original position
+ * used to jump back into the transcript.
+ */
+export function buildOutlineCatalog(items: readonly ChatOutlineItem[]): ChatOutlineCatalogEntry[] {
+  return items.map((item, index) => ({
+    item,
+    index,
+    isGuide: isGuideOutlineItem(item),
+    timestampMs: parseOutlineTimestamp(item.timestamp),
+  }))
+}
+
+/** Keyword search over prompt text plus the assistant excerpt, plus type filter. */
+// user:“支持时间排序、关键词搜索和类型筛选”+(目录卡片能按关键词、消息类型筛出要跳转的那条)
+export function filterOutlineCatalog(
+  entries: readonly ChatOutlineCatalogEntry[],
+  query: string,
+  kind: ChatOutlineKind = 'all',
+): ChatOutlineCatalogEntry[] {
+  const needle = String(query || '').trim().toLowerCase()
+  return entries.filter((entry) => {
+    if (kind === 'guide' && !entry.isGuide) return false
+    if (kind === 'normal' && entry.isGuide) return false
+    if (!needle) return true
+    const haystack = `${entry.item.prompt}\u0000${entry.item.response_excerpt}`.toLowerCase()
+    return haystack.includes(needle)
+  })
+}
+
+/**
+ * Order catalog entries by their timestamp. Rows without a usable time stay
+ * behind the timed ones in original order, for both directions, so the list is
+ * always deterministic.
+ */
+export function sortOutlineCatalog(
+  entries: readonly ChatOutlineCatalogEntry[],
+  direction: ChatOutlineSortDirection = 'asc',
+): ChatOutlineCatalogEntry[] {
+  const timed = entries.filter((entry) => entry.timestampMs !== null)
+  const untimed = entries.filter((entry) => entry.timestampMs === null)
+  const ordered = [...timed].sort((left, right) => {
+    const delta = (left.timestampMs as number) - (right.timestampMs as number)
+    return direction === 'desc' ? -delta || right.index - left.index : delta || left.index - right.index
+  })
+  return [...ordered, ...untimed]
+}
+
 /**
  * The navigator intentionally keys refreshes on ids and roles only.  A
  * streamed answer changes the message objects frequently, but does not alter
@@ -109,9 +252,80 @@ export function compactOutlineMarkerPositions(
   ))
 }
 
+export interface OutlineControlBracket {
+  /** Top edge (px from the rail top) of the up-arrow stack. */
+  top: number
+  /** Top edge (px from the rail top) of the down-arrow stack. */
+  bottom: number
+}
+
+/**
+ * user:“紧贴标记组的上下边缘”+(上箭头贴在第一条标记上方，下箭头/目录/页码贴在最后一条标记下方)
+ */
+export function bracketOutlineControls(
+  positions: readonly number[],
+  gap: number,
+  topControlsHeight: number,
+  bottomControlsHeight: number,
+  containerHeight: number,
+): OutlineControlBracket {
+  const spacing = Math.max(0, gap)
+  if (positions.length === 0) return { top: spacing, bottom: spacing }
+  const first = Math.min(...positions)
+  const last = Math.max(...positions)
+  const top = Math.max(0, first - spacing - Math.max(0, topControlsHeight))
+  // Without a measured container the lower stack still hugs the last marker.
+  const bottomLimit = containerHeight > 0
+    ? Math.max(0, containerHeight - Math.max(0, bottomControlsHeight))
+    : Number.POSITIVE_INFINITY
+  const bottom = Math.min(Math.max(0, last + spacing), bottomLimit)
+  return { top, bottom }
+}
+
+export interface OutlineCatalogBounds {
+  /** Distance (px) from the rail bottom to the card's bottom edge. */
+  bottom: number
+  /** Tallest the card may grow inside the space above its bottom edge. */
+  maxHeight: number
+}
+
+/**
+ * user:“点击目录按钮出的那个卡片它现在被输入框给遮挡了”+(目录卡片贴在下翻控件下方、始终留在
+ * 消息区内，向上生长，不再落到被输入框盖住的主卡底部)
+ */
+export function outlineCatalogBounds(
+  rootHeight: number,
+  stackBottom: number,
+  gap: number,
+): OutlineCatalogBounds {
+  const spacing = Math.max(0, gap)
+  const bottom = rootHeight > 0
+    ? Math.max(spacing, rootHeight - stackBottom)
+    : spacing
+  return { bottom, maxHeight: Math.max(0, stackBottom - spacing) }
+}
+
 export interface MountedOutlineMessagePosition {
   index: number
   centerY: number
+}
+
+/**
+ * user:“那个小条的判定框太大了”+(每条标记的悬停/点击判定只取相邻间距的一半，按 2–6px 夹紧)
+ */
+export function outlineMarkerHitRadius(
+  positions: readonly number[],
+  minRadius = 2,
+  maxRadius = 6,
+): number {
+  if (positions.length < 2) return maxRadius
+  let smallest = Number.POSITIVE_INFINITY
+  for (let index = 1; index < positions.length; index += 1) {
+    const gap = Math.abs(positions[index] - positions[index - 1])
+    if (gap > 0 && gap < smallest) smallest = gap
+  }
+  if (!Number.isFinite(smallest)) return maxRadius
+  return Math.min(maxRadius, Math.max(minRadius, smallest / 2))
 }
 
 /** Resolve the active item from mounted message geometry only. */
@@ -172,10 +386,12 @@ export function outlineMarkerStyle(
 ): ChatOutlineMarkerStyle {
   const unit = Math.max(1, markerUnit)
   if (index === selectedIndex) return { length: unit * 3, opacity: 1 }
-  if (selectedIndex < 0) return { length: unit * 0.75, opacity: 0.56 }
+  // user:“它本身不是一种类似淡灰色吗？你把它的那种给整明显一点就行了”+
+  // (标记条整体抬高对比度：未选中也保持可读，远近只做轻微衰减)
+  if (selectedIndex < 0) return { length: unit * 0.75, opacity: 0.62 }
   const distance = Math.abs(index - selectedIndex)
   return {
     length: unit * Math.max(0.75, 2.1 - Math.min(distance, 8) * 0.18),
-    opacity: Math.max(0.44, 0.84 - Math.min(distance, 8) * 0.05),
+    opacity: Math.max(0.5, 0.88 - Math.min(distance, 8) * 0.05),
   }
 }

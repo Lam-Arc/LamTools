@@ -11,7 +11,7 @@ const rows = [
 
 describe('GitHub plugin market', () => {
   it('opens the market from the plugin page while retaining installed management', async () => {
-    Object.defineProperty(document, 'fonts', { value: { ready: Promise.resolve() }, configurable: true })
+    // jsdom 自带 document.fonts 且不可重定义，组件已做缺失守卫，无需再打桩。
     const requestRpc = vi.fn(async (method: string) => method === 'plugin.market.list' ? { plugins: rows } : { plugins: [], errors: [] })
     const wrapper = mount(CorePluginSystemEditor, { props: { requestRpc } })
     await flushPromises()

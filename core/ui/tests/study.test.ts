@@ -279,7 +279,7 @@ describe('Study mode', () => {
     expect(studySource).not.toContain('setInterval')
     expect(appSource).toMatch(/<div\s+v-if="activePluginMode"\s+v-show="!pluginUsesCoreThread && !fullAreaView"\s+class="plugin-mode-surface"/)
     expect(appSource).not.toMatch(/<PluginModeHost\s+[^>]*v-show=/)
-    expect(appSource).toContain('<AttachmentTray')
+    expect(appSource).toContain(':attachments="pendingAttachments"')
     expect(appSource).toContain('workbench.attachments.value = items')
     expect(appSource).toContain('attachmentOnly && pendingAttachments.value.length')
     expect(appSource).toContain('ref="threadBottomSentinel"')
@@ -780,7 +780,7 @@ describe('Study v2 layout and notes', () => {
     await pendingSelection
     expect(wrapper.find('.study-note-full-editor').element).toHaveProperty('value', '# 未保存草稿')
 
-    await wrapper.find('[data-study-header] > button.text-btn').trigger('click')
+    await wrapper.find('[data-study-header] > button.btn--ghost').trigger('click')
     expect(await answerDirtyGate(false)).toBe(true)
     expect(wrapper.find('[data-study-header] .study-note-header-chat').exists()).toBe(true)
 

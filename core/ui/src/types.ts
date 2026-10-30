@@ -422,7 +422,7 @@ export interface CoreMemberDescriptor {
 // Theme types (re-exported from helpers/theme for consumer convenience)
 // ---------------------------------------------------------------------------
 
-export type { ThemeStop, ThemeArea, ThemeData, ThemePreset, ThemeCSSVars } from '@/helpers/theme.ts';
+export type { ThemeStop, ThemeArea, ThemeData, ThemePreset, ThemeCSSVars, ThemeFillMode, ThemeGlassPreference, ThemeImageFit } from '@/helpers/theme.ts';
 
 // ---------------------------------------------------------------------------
 // Member slot declarations

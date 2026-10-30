@@ -9,6 +9,16 @@ const stores: Array<ReturnType<typeof createSplitDocuments>> = []
 const newDocuments = () => { const store = createSplitDocuments(); stores.push(store); return store }
 afterEach(() => { stores.splice(0).forEach(store => store.dispose()); localStorage.clear() })
 const source = (path: string) => readFileSync(resolve(process.cwd(), 'src', path), 'utf8')
+// user:“还有大文件拆分”+(设置样式按区块拆成六份，适配断言按同一顺序读全量，等价于拆分前的整文件)
+const SETTINGS_CSS_PARTS = [
+  'styles/core-settings-base.css',
+  'styles/core-settings-models.css',
+  'styles/core-settings-model-editor.css',
+  'styles/core-settings-workspace.css',
+  'styles/core-settings-surface.css',
+  'styles/core-settings-permissions.css',
+]
+const settingsCss = () => SETTINGS_CSS_PARTS.map(source).join('\n')
 
 describe('split pane paths and compact pages', () => {
   // user:“路径无法访问：文件名、目录名或卷标语法不正确”+(文件树返回的 Windows 路径可以直接读取、修改和保存)。
@@ -34,7 +44,7 @@ describe('split pane paths and compact pages', () => {
   })
 
   it.each(['CoreSettings', 'CoreArrangeManager', 'SearchShell', 'AccountShell'])('%s adapts to its own pane', name => {
-    const css = name === 'CoreSettings' ? source('styles/core-settings.css') : source(`components/${name}.vue`)
+    const css = name === 'CoreSettings' ? settingsCss() : source(`components/${name}.vue`)
     expect(css).toContain('@container app-page')
     expect(css).not.toMatch(/@media\s*\((?:min|max)-width:/)
   })

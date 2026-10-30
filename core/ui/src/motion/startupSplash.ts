@@ -6,8 +6,8 @@ import { gsap } from 'gsap'
 import {
   SUNDAY_DARK_THEME,
   SUNDAY_LIGHT_THEME,
-  gradientFromStops,
   migrateSundayThemeDefaults,
+  themeAreaBackground,
   normalizeTheme,
   normalizeThemeSchedule,
   resolveScheduledThemeMode,
@@ -126,15 +126,16 @@ export function resolveStartupThemePreference(
       : themeMode
   const defaultTheme = effectiveMode === 'dark' ? SUNDAY_DARK_THEME : SUNDAY_LIGHT_THEME
   const savedTheme = effectiveMode === 'dark' ? preferences?.darkTheme : preferences?.lightTheme
-  const theme = migrateSundayThemeDefaults(normalizeTheme({
-    ...defaultTheme,
-    ...(savedTheme || preferences?.theme || {}),
-  }), effectiveMode)
+  // 保存的主题是旧格式时不能先铺默认值，否则渐变会被默认的纯色样式盖掉。
+  const theme = migrateSundayThemeDefaults(
+    normalizeTheme(savedTheme || preferences?.theme || defaultTheme),
+    effectiveMode,
+  )
 
   return {
     effectiveMode,
     theme,
-    backdropBackground: gradientFromStops(theme.backdropAngle, theme.backdropStops, 1),
+    backdropBackground: themeAreaBackground(theme, 'backdrop'),
   }
 }
 

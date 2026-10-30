@@ -8,9 +8,7 @@
  * - prefers-reduced-motion / 无 rAF 环境（jsdom 测试）直接 done()，行为退化为瞬时切换
  */
 import { gsap } from 'gsap'
-
-const DURATION_OPEN = 0.24
-const DURATION_CLOSE = 0.2
+import { MOTION, shouldSkipMotion } from './presets.ts'
 
 interface PanelMetrics {
   maxHeight: number | null
@@ -20,15 +18,6 @@ interface PanelMetrics {
   marginBottom: number
   transition: string
   overflow: string
-}
-
-function shouldSkipMotion(): boolean {
-  return (
-    typeof window === 'undefined'
-    || typeof window.matchMedia !== 'function'
-    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    || typeof requestAnimationFrame !== 'function'
-  )
 }
 
 function readMetrics(el: HTMLElement): PanelMetrics {
@@ -86,8 +75,8 @@ export function panelEnter(el: Element, done: () => void) {
       paddingBottom: m.paddingBottom,
       marginTop: m.marginTop,
       marginBottom: m.marginBottom,
-      duration: DURATION_OPEN,
-      ease: 'power2.out',
+      duration: MOTION.expand.duration,
+      ease: MOTION.expand.ease,
       overwrite: true,
       onComplete: () => {
         restore(target, m)
@@ -112,8 +101,8 @@ export function panelLeave(el: Element, done: () => void) {
     paddingBottom: 0,
     marginTop: 0,
     marginBottom: 0,
-    duration: DURATION_CLOSE,
-    ease: 'power2.in',
+    duration: MOTION.collapse.duration,
+    ease: MOTION.collapse.ease,
     overwrite: true,
     onComplete: () => {
       restore(target, m)

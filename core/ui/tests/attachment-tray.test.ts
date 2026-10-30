@@ -87,8 +87,11 @@ describe('AttachmentTray', () => {
     const wrapper = mountChatThread({ props: { messages } });
 
     expect(wrapper.text()).toContain('看附件');
-    expect(wrapper.text()).toContain('note.md');
-    expect(wrapper.get('.message-attachment-deck').classes()).toContain('message-attachment-deck--right');
+    // user:“气泡下方不要用行，用小图标可以吗”+(附件以图标引用渲染，文件名在可访问名称与 tooltip 里)
+    const attachmentButton = wrapper.get('.reference-items .reference-item');
+    expect(attachmentButton.attributes('aria-label')).toContain('note.md');
+    expect(attachmentButton.attributes('title')).toContain('note.md');
+    expect(wrapper.get('.reference-items').classes()).toContain('reference-items--icons');
   });
 
   it('renders image attachments as thumbnail-only cards', async () => {

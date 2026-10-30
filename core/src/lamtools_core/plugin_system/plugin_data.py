@@ -34,10 +34,10 @@ def read_plugin_config(data_dir: Path | str, plugin_name: str) -> dict[str, Any]
 
 
 def write_plugin_config(data_dir: Path | str, plugin_name: str, config: dict[str, Any]) -> None:
-    from lamtools_core.config.root import atomic_write_text
-
+    # user:“宿主能力补齐和接口完善与文档更新”+(内置插件旧写入方也遵守统一配置文件锁，防止与新门面交错写入)。
+    from .config_store import replace_config_file
     path = plugin_config_path(data_dir, plugin_name)
-    atomic_write_text(path, json.dumps(config, ensure_ascii=False, indent=2))
+    replace_config_file(path, config)
 
 
 def delete_plugin_config(data_dir: Path | str, plugin_name: str) -> None:

@@ -23,8 +23,8 @@
       <div class="subhead">
         <span class="muted subhead-title">{{ t("内核配置") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
-          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveForm">{{ t("保存") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="loading" @click="fetchConfig">{{ t("刷新") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="loading || saving" @click="saveForm">{{ t("保存") }}</button>
         </div>
       </div>
 
@@ -84,8 +84,8 @@
       <div class="subhead">
         <span class="muted subhead-title">{{ t("原始配置") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="configSaving" @click="revertConfig">{{ t("还原") }}</button>
-          <button class="small-btn" type="button" :disabled="configSaving" @click="saveRawConfig">
+          <button class="btn btn--ghost" type="button" :disabled="configSaving" @click="revertConfig">{{ t("还原") }}</button>
+          <button class="btn btn--secondary" type="button" :disabled="configSaving" @click="saveRawConfig">
             {{ configSaving ? t("保存中…") : t("保存") }}
           </button>
         </div>

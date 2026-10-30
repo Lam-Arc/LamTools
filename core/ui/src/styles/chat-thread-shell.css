@@ -1,0 +1,222 @@
+/* user:“还有大文件拆分”+(从 ChatThread.vue 的全局样式块拆出：线程外框与系统消息；
+   六个文件按原顺序由组件的 <style src> 引入，全局作用域与层叠顺序保持不变)。 */
+.chat-thread {
+  /* user:“消息区自适应填满宽度”+(去掉固定 780px 上限，列宽跟着可用宽度走，宽屏才收到 1040px)。 */
+  width: min(var(--content-fill-width, 1040px), 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 0;
+  min-width: 0;
+}
+
+/* A user message and its assistant response form one visual turn. Keep that
+   hand-off compact, while leaving a clearer pause before the next turn. */
+.message-view + .message-view {
+  margin-top: var(--space-3);
+}
+.message-view:has(.user-row) + .message-view:has(.assistant-row) {
+  margin-top: var(--space-1);
+}
+.message-view:has(.assistant-row) + .message-view:has(.user-row) {
+  margin-top: var(--space-5);
+}
+
+/* Skip layout/paint of off-screen messages: a huge thread (thousands of
+   parts) otherwise forces an O(thread) layout on every stream tick. With
+   content-visibility:auto the browser only lays out what is near the viewport,
+   keeping per-tick layout cost O(viewport). contain-intrinsic-size gives the
+   scrollbar an estimate (auto caches the last real size) so scrolling does not
+   jump. */
+.message-view {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+  /* Isolate each message's layout/style invalidation so a streaming text
+     change doesn't reflow/render sibling messages (viewport-wide repaint
+     showed up as 200-300ms render tasks on large threads). */
+  contain: layout style;
+  /* Grid item auto minimum = min-content: any unbreakable content inside a
+     message (wide markdown table etc.) would stretch the whole chat-thread
+     column past the viewport, pushing right-aligned user bubbles off-screen
+     (horizontal scrollbar needed to read them). min-width: 0 keeps the column
+     within the viewport; wide content is contained at the part level instead. */
+  min-width: 0;
+}
+
+/* Per-part wrapper: v-memo cache key carrier. display:contents keeps the
+   wrapper box-less so it never affects layout or CSS selectors. */
+.part-wrap {
+  display: contents;
+}
+
+/* ── System messages ── */
+.chat-thread .system-row {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px;
+}
+.system-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-radius: var(--radius-lg);
+  font-size: 13px;
+  max-width: 640px;
+  line-height: 1.45;
+}
+.system-bubble--info {
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  color: var(--blue);
+  border: 1px solid color-mix(in srgb, var(--blue) 25%, transparent);
+}
+.system-bubble--done {
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 25%, transparent);
+}
+.system-bubble--error {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+}
+.system-bubble--waiting {
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+  color: var(--orange);
+  border: 1px solid color-mix(in srgb, var(--orange) 25%, transparent);
+}
+.system-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.assistant-terminal-error {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--red) 72%, transparent);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text, #fff) 22%);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.assistant-terminal-error__label {
+  flex: none;
+  font-weight: 700;
+}
+.shallow-thinking-pending {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  color: color-mix(in srgb, var(--green) 72%, var(--theme-main-text, #fff) 28%);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.shallow-thinking-pending--process {
+  margin-left: 22px;
+}
+.shallow-thinking-pending-row {
+  padding: 1px 0 2px;
+}
+.reasoning-body--pending {
+  margin-top: 0;
+  margin-bottom: 4px;
+  padding-bottom: 0;
+}
+.shallow-thinking-dots {
+  display: inline-flex;
+  width: 1.2em;
+}
+.shallow-thinking-dots span {
+  animation: shallow-thinking-dot 1.2s ease-in-out infinite;
+}
+.shallow-thinking-dots span:nth-child(2) {
+  animation-delay: .15s;
+}
+.shallow-thinking-dots span:nth-child(3) {
+  animation-delay: .3s;
+}
+
+/* ── Process step color coding — marker 仅 error 时显示红点 ── */
+.process-step--error .process-step-marker {
+  background: var(--red, #e5484d);
+  box-shadow: none;
+}
+@keyframes shallow-thinking-dot {
+  0%, 70%, 100% { opacity: .28; }
+  35% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shallow-thinking-dots span {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* ── Part dot status colors — 以 main area 文字为底 ── */
+.part-dot--completed { color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray); }
+.part-dot--error { color: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
+.part-dot--running { color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray); }
+
+/* ── Assistant 气泡与头像 ──
+   user:“Assistant 可选择是否使用消息气泡”“支持自定义 Assistant 显示名称和头像”
+   +(设置关闭时完全不出现这里的盒子，正文外观与改动前一致；开启后一条回复拆成的
+   多个气泡共用同一套外观，只影响渲染，不动消息结构)。 */
+.assistant-avatar {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  /* user:“头上头像显示大小太小了 设成可调节，裁切也是圆角率可调节”+
+     (尺寸与圆角率来自显示偏好，由消息组件写入这两个变量；默认比原来的 18px 大) */
+  width: var(--assistant-avatar-size, 28px);
+  height: var(--assistant-avatar-size, 28px);
+  overflow: hidden;
+  border-radius: var(--assistant-avatar-radius, 50%);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
+  font-size: calc(var(--assistant-avatar-size, 28px) * .42);
+  font-weight: 720;
+  letter-spacing: 0;
+  line-height: 1;
+  text-transform: none;
+}
+.assistant-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.assistant-avatar__initial {
+  line-height: 1;
+}
+/* user:“助手气泡大小自适应，不要每个都堆到最右边”“气泡连上低透玻璃样式”+
+   (气泡按内容收缩，短回复不再撑满整条消息栏，长内容仍以消息栏宽度为上限换行；
+   盒子本身改用共享的低透玻璃底材，这里只保留几何与间距，底色/边框/模糊交给
+   .optical-glass，避免出现第二套玻璃配方) */
+.assistant-bubble--boxed {
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 13px;
+  border-radius: var(--radius);
+  border-top-left-radius: var(--radius-sm);
+}
+.assistant-bubble + .assistant-bubble {
+  margin-top: 8px;
+}
+/* 只开自动拆分、没开气泡时不套盒子：拆出的段落之间用间距分隔 */
+.assistant-bubble:not(.assistant-bubble--boxed) + .assistant-bubble {
+  margin-top: 10px;
+}
+.assistant-bubble > .part-text-content,
+.sub-line-block .assistant-bubble {
+  min-width: 0;
+}
+/* 子代理分屏里的气泡跟着整套缩一号 */
+.sub-line-block .assistant-bubble--boxed {
+  padding: 7px 10px;
+  border-radius: 11px;
+  border-top-left-radius: 4px;
+}

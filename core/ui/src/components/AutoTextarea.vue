@@ -78,6 +78,9 @@ defineExpose({ focus })
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
+  /* user:“修复输入框缩窄时 @ 标签溢出的问题”+(窄容器里长文件名按任意位置断行，输入框不被内容顶宽)。 */
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .auto-textarea:focus { outline: none; }
 </style>

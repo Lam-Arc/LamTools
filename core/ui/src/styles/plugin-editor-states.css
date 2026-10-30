@@ -1,0 +1,479 @@
+/* user:“还有大文件拆分”+(从 CorePluginSystemEditor.vue 的 scoped 样式块拆出：空态、诊断与窄容器；
+   四个文件按原顺序引入，作用域与层叠顺序保持不变)。 */
+/* ── 空态与骨架 ───────────────────────────────────────────────────────── */
+.plugin-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-5);
+  border: 1px dashed var(--plugin-border-strong);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--plugin-text) 2%, transparent);
+}
+
+.plugin-empty-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--plugin-text) 7%, transparent);
+  color: color-mix(in srgb, var(--plugin-text) 62%, transparent);
+}
+
+.plugin-empty-mark.is-error {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: color-mix(in srgb, var(--red) 70%, var(--plugin-text));
+}
+
+.plugin-empty h2 {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.plugin-empty p {
+  max-width: 56ch;
+  color: var(--plugin-muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.plugin-empty .btn--secondary {
+  margin-top: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.plugin-grid--skeleton .plugin-skeleton {
+  gap: var(--space-3);
+  pointer-events: none;
+}
+
+.skeleton-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.skeleton-block {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--plugin-text) 8%, transparent);
+  animation: plugin-skeleton-pulse 1.4s var(--ease-out) infinite;
+}
+
+.skeleton-lines {
+  flex: 1 1 auto;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.skeleton-line {
+  height: 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plugin-text) 8%, transparent);
+  animation: plugin-skeleton-pulse 1.4s var(--ease-out) infinite;
+}
+
+.skeleton-line.is-wide { width: 82%; }
+.skeleton-line.is-medium { width: 64%; }
+.skeleton-line.is-narrow { width: 38%; }
+.skeleton-line.is-short { width: 24%; }
+
+.skeleton-chips {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.skeleton-chips i {
+  width: 54px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plugin-text) 6%, transparent);
+  animation: plugin-skeleton-pulse 1.4s var(--ease-out) infinite;
+}
+
+/* ── 诊断区 ───────────────────────────────────────────────────────────── */
+.plugin-diagnostics {
+  border: 1px solid var(--plugin-border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--plugin-text) 2.5%, transparent);
+  overflow: hidden;
+}
+
+.plugin-diagnostics-head {
+  width: 100%;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--plugin-text);
+  text-align: left;
+}
+
+.plugin-diagnostics-head:hover {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+}
+
+.plugin-diagnostics-head:active {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+}
+
+.plugin-diagnostics-mark {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--plugin-text) 7%, transparent);
+  color: var(--plugin-muted);
+}
+
+.plugin-diagnostics-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 1px;
+}
+
+.plugin-diagnostics-copy strong {
+  font-size: 12.5px;
+  font-weight: 660;
+}
+
+.plugin-diagnostics-copy small {
+  color: var(--plugin-muted);
+  font-size: 11px;
+}
+
+.plugin-diagnostics-badge {
+  flex: 0 0 auto;
+  min-width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: color-mix(in srgb, var(--red) 72%, var(--plugin-text));
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-diagnostics-chevron {
+  flex: 0 0 auto;
+  color: var(--plugin-faint);
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.plugin-diagnostics.is-open .plugin-diagnostics-chevron {
+  transform: rotate(180deg);
+}
+
+.plugin-diagnostics-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--dur-slow) var(--ease-emphasized),
+    opacity var(--dur-base) var(--ease-out);
+}
+
+.plugin-diagnostics.is-open .plugin-diagnostics-body {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.plugin-diagnostics-clip {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.plugin-diagnostics-inner {
+  display: grid;
+  gap: var(--space-4);
+  padding: 0 var(--space-3) var(--space-4);
+}
+
+.behavior-form {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--plugin-text) 8%, transparent);
+}
+
+.behavior-label {
+  color: var(--plugin-muted);
+  font-size: 11px;
+}
+
+.behavior-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.behavior-input {
+  flex: 1 1 280px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--plugin-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--plugin-text) 3%, transparent);
+  color: var(--plugin-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.behavior-input::placeholder {
+  color: color-mix(in srgb, var(--plugin-text) 42%, transparent);
+}
+
+.behavior-total {
+  color: var(--plugin-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.behavior-results {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.behavior-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--plugin-text) 3%, transparent);
+  font-size: 11.5px;
+}
+
+.behavior-result code {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.behavior-owner {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  color: color-mix(in srgb, var(--green) 62%, var(--plugin-text));
+  font-size: 10px;
+}
+
+.behavior-owner.is-kernel {
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+  color: color-mix(in srgb, var(--purple) 62%, var(--plugin-text));
+}
+
+.behavior-layer {
+  margin-left: auto;
+  color: var(--plugin-faint);
+  font-size: 10px;
+}
+
+.load-errors {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.load-errors-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--plugin-muted);
+  font-size: 11.5px;
+}
+
+.load-errors ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.load-errors li {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--red) 16%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--red) 5%, transparent);
+}
+
+.load-error-name {
+  color: color-mix(in srgb, var(--red) 68%, var(--plugin-text));
+  font-size: 11.5px;
+  font-weight: 640;
+}
+
+.load-error-message {
+  color: var(--plugin-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.load-error-path {
+  color: var(--plugin-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.plugin-diagnostics-inner .muted {
+  color: var(--plugin-faint);
+  font-size: 11.5px;
+}
+
+/* ── 动画 ─────────────────────────────────────────────────────────────── */
+.spin {
+  animation: plugin-spin 1s linear infinite;
+}
+
+@keyframes plugin-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes plugin-status-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 38%, transparent);
+    opacity: .75;
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+    opacity: 1;
+  }
+}
+
+@keyframes plugin-skeleton-pulse {
+  0%, 100% { opacity: .5; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-card,
+  .plugin-card::before,
+  .plugin-glyph,
+  .plugin-switch,
+  .plugin-switch-thumb,
+  .plugin-description,
+  .plugin-entry,
+  .plugin-action,
+  .plugin-action-chevron,
+  .plugin-icon-action,
+  .plugin-search,
+  .plugin-filter,
+  .install-tray-enter-active,
+  .install-tray-leave-active,
+  .plugin-diagnostics-body,
+  .plugin-diagnostics-chevron,
+  .plugin-drawer-enter-active,
+  .plugin-drawer-leave-active,
+  .plugin-card-enter-active,
+  .plugin-card-move {
+    transition: none;
+  }
+
+  .plugin-status-row.is-pending .plugin-status-dot,
+  .skeleton-block,
+  .skeleton-line,
+  .skeleton-chips i,
+  .spin {
+    animation: none;
+  }
+}
+
+/* ── 窄容器适配 ───────────────────────────────────────────────────────── */
+@container plugin-page (max-width: 760px) {
+  .plugin-hero {
+    align-items: center;
+  }
+
+  .plugin-hero-actions {
+    width: 100%;
+  }
+
+  .plugin-stats {
+    gap: var(--space-2);
+  }
+
+  .plugin-result-count {
+    display: none;
+  }
+
+  .install-source {
+    width: 100%;
+  }
+
+  .install-source-option {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .install-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .install-sha-field {
+    max-width: none;
+  }
+
+  .install-submit,
+  .install-update {
+    width: 100%;
+  }
+
+  .plugin-filters {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .plugin-filters::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@container plugin-page (max-width: 480px) {
+  .plugin-card {
+    padding: var(--space-3);
+  }
+
+  .plugin-card-actions {
+    flex-wrap: wrap;
+  }
+
+  .plugin-root {
+    max-width: 150px;
+  }
+
+  .plugin-status-row {
+    flex-wrap: wrap;
+  }
+
+  .plugin-status-detail {
+    flex: 1 1 100%;
+    white-space: normal;
+  }
+}

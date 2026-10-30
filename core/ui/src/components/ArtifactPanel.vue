@@ -8,21 +8,21 @@
       <div class="artifact-actions">
         <button
           v-if="!cleanupMode"
-          class="text-btn danger"
+          class="btn btn--ghost btn--danger"
           type="button"
           :title="t('勾选后从成果库移除')"
           @click="enterCleanup"
         >{{ t("移除") }}</button>
         <template v-else>
           <button
-            class="text-btn danger"
+            class="btn btn--ghost btn--danger"
             type="button"
             :disabled="!selected.length"
             @click="removeSelected"
           >{{ t("从成果库移除 (") }}{{ selected.length }})</button>
-          <button class="text-btn" type="button" @click="exitCleanup">{{ t("取消") }}</button>
+          <button class="btn btn--ghost" type="button" @click="exitCleanup">{{ t("取消") }}</button>
         </template>
-        <button class="text-btn" type="button" :title="t('刷新成果库')" :aria-label="t('刷新成果库')" @click="fetchArtifacts">
+        <button class="btn btn--ghost" type="button" :title="t('刷新成果库')" :aria-label="t('刷新成果库')" @click="fetchArtifacts">
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
@@ -578,11 +578,9 @@ onMounted(() => { void fetchArtifacts() })
 .artifact-panel-title strong { font-size: 13px; font-weight: 760; }
 .artifact-panel-count { color: color-mix(in srgb, var(--text) 52%, transparent); font-size: 10px; }
 .artifact-actions { display: flex; align-items: center; gap: var(--space-1); }
-.text-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; border: 0; border-radius: var(--radius-sm); padding: 0 var(--space-1); background: transparent; color: color-mix(in srgb, var(--text) 64%, transparent); font-size: 11px; }
-.text-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
-.text-btn:active:not(:disabled) { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
-.text-btn.danger { color: color-mix(in srgb, var(--red) 80%, var(--text) 20%); }
-.text-btn:disabled { opacity: .45; }
+/* user:“合并去重”+(按钮几何交给 .btn 基件，这里只声明成果面板自己的取色) */
+.artifact-panel .btn--ghost { min-height: 28px; padding: 0 var(--space-1); font-size: 11px; color: color-mix(in srgb, var(--text) 64%, transparent); }
+.artifact-panel .btn--danger { color: color-mix(in srgb, var(--red) 80%, var(--text) 20%); }
 .artifact-search-row { display: flex; align-items: center; gap: var(--space-1); min-height: 32px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); padding: 0 var(--space-2); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: color-mix(in srgb, var(--theme-composer-text) 52%, transparent); }
 .artifact-search { min-width: 0; flex: 1 1 auto; border: 0; outline: 0; background: transparent; color: var(--theme-composer-text); caret-color: var(--theme-composer-text); font: inherit; font-size: 11px; }
 .artifact-search::placeholder { color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent); }

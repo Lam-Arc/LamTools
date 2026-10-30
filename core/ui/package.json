@@ -48,12 +48,16 @@
     "@vue-flow/controls": "^1.1.2",
     "@vue-flow/core": "^1.41.0",
     "@vue-flow/minimap": "^1.5.2",
+    "docx-preview": "^0.4.1",
     "dompurify": "^3.4.11",
+    "fflate": "^0.8.3",
     "gsap": "^3.15.0",
     "katex": "^0.17.0",
     "lucide-vue-next": "^1.0.0",
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",
+    "pdfjs-dist": "^6.4.299",
+    "read-excel-file": "^9.3.14",
     "vue": "^3.5.38"
   },
   "devDependencies": {

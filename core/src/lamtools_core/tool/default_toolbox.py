@@ -541,6 +541,7 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "input_schema": _schema(
             {
                 "command": {"type": "string", "description": "Command to run"},
+                "cwd": {"type": "string", "description": "Existing working directory within the original project; defaults to the current session execution directory"},
                 "timeout": {"type": "integer", "description": "Timeout in seconds"},
                 "background": {
                     "type": "boolean",
@@ -590,12 +591,14 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "name": "git_status",
         "description": "Run git status in the workspace.",
-        "input_schema": _schema({}),
+        # user:“继续”+(Git执行目录属于调用参数，在送审前固定，不重绑项目配置)。
+        "input_schema": _schema({"cwd": {"type": "string", "description": "Existing directory within the original project; defaults to the current session execution directory"}}),
     },
     {
         "name": "git_diff",
         "description": "Run git diff in the workspace.",
-        "input_schema": _schema({"path": {"type": "string", "description": "Optional path filter"}}),
+        "input_schema": _schema({"path": {"type": "string", "description": "Optional path filter relative to cwd"},
+                                 "cwd": {"type": "string", "description": "Existing directory within the original project; defaults to the current session execution directory"}}),
     },
     {
         "name": "web_search",
@@ -1181,6 +1184,10 @@ class CoreToolbox:
         artifact_store: Any | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
+        # user:“继续”+(执行目录独立于项目配置与插件目录；每次模型请求通过宿主刷新)。
+        self.execution_directory_source = None
+        self._execution_root = self.work_root
+        self._execution_directory_notice = None
         self.work_root.mkdir(parents=True, exist_ok=True)
         if loaded_skill_roots is None and skill_registry is None:
             from lamtools_core.skill_runtime import create_skill_runtime
@@ -1666,7 +1673,43 @@ class CoreToolbox:
             if str(spec.metadata.get("plugin_mode") or spec.metadata.get("category") or "") == active_mode
         }
 
+    async def refresh_execution_directory(self, session_id):
+        if self.execution_directory_source is None:
+            return None
+        value = self.execution_directory_source(session_id)
+        if inspect.isawaitable(value):
+            value = await value
+        if value is None:
+            self._execution_root = self.work_root
+            self._execution_directory_notice = None
+            return None
+        from lamtools_core.plugin_system.working_directory import directory_exists, WorkingDirectoryError
+        root = Path(value)
+        if not directory_exists(self.work_root, root):
+            raise WorkingDirectoryError("working-directory/missing", "Execution directory is unavailable")
+        self._execution_root = root
+        self._execution_directory_notice = str(root)
+        return str(root)
+
+    def _pin_execution_arguments(self, call):
+        # user:“继续”+(相对目标在审批前固定成绝对路径；已固定的目标不得随目录变化再次解析)。
+        if self._execution_directory_notice is None or type(call.arguments) is not dict:
+            return call
+        args = dict(call.arguments)
+        if call.name in {"read_file", "write_file", "edit_file", "list_dir", "search_files", "search_content"}:
+            path = args.get("path", "." if call.name in {"list_dir", "search_files", "search_content"} else None)
+            if isinstance(path, str) and path.strip() and not Path(path).is_absolute():
+                args["path"] = str(self._execution_root / path)
+        elif call.name in {"run_command", "git_status", "git_diff"}:
+            cwd = args.get("cwd")
+            if cwd is None:
+                args["cwd"] = str(self._execution_root)
+            elif isinstance(cwd, str) and cwd.strip() and not Path(cwd).is_absolute():
+                args["cwd"] = str(self._execution_root / cwd)
+        return replace(call, arguments=args)
+
     def prepare_call(self, call: ToolCall) -> ToolCall:
+        call = self._pin_execution_arguments(call)
         self._refresh_runtime_permissions()
         self._dynamic_plugin_specs(work_root=self._call_work_root(call, self.work_root))
         if call.name in self._dynamic_conflicts:
@@ -2010,6 +2053,8 @@ class CoreToolbox:
             name = args.get("name", "")
             if not isinstance(name, str) or not name.strip():
                 return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'name' argument")
+            # user:“接口完善”+(禁用检查和实际查找使用同一规范名称，首尾空白不能绕过禁用账本)。
+            name = name.strip()
 
             # 缺口 #1：已禁用 skill 不加载（SkillStateStore 只在 skill.list
             # 显示层生效的时代结束——load_skill 直接查禁用状态）。
@@ -2023,6 +2068,18 @@ class CoreToolbox:
                 )
 
             try:
+                # user:“宿主能力补齐和接口完善与文档更新”+(模型读取与用户展开分别检查策略，不能仅在索引隐藏却允许按名绕过)。
+                selected = self.skill_registry.get(self.work_root, name, active_mode=self.active_mode)
+            except TypeError:
+                selected = self.skill_registry.get(self.work_root, name)
+            if selected is None:
+                # user:“接口完善”+(模型加载失败也不能把仅供用户调用的技能泄露进候选目录)。
+                error = f'Skill "{name}" not found.'
+                return ToolResult(call.id, call.name, status="failed", content=error, error=error,
+                                  metadata={"skill": name, "found": False})
+            if selected is not None and not getattr(selected, "model_invocable", True):
+                return ToolResult(call.id, call.name, status="failed", error=f'Skill "{name}" does not allow model invocation')
+            try:
                 content = self.skill_registry.load_prompt_content(
                     self.work_root, name, active_mode=self.active_mode
                 )
@@ -2034,7 +2091,7 @@ class CoreToolbox:
                     skill = self.skill_registry.get(self.work_root, name, active_mode=self.active_mode)
                 except TypeError:
                     skill = self.skill_registry.get(self.work_root, name)
-                if skill is not None:
+                if skill is not None and skill.location is not None:
                     base = skill.location.parent.resolve()
                     self.loaded_skill_roots.add(base)
                     # 惰性暴露的关联追踪：on_load 工具按 skill 名过滤

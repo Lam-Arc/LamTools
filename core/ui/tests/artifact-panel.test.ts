@@ -38,9 +38,9 @@ describe('ArtifactPanel', () => {
     await flushPromises()
     requestRpc.mockClear()
 
-    await wrapper.get('.text-btn.danger').trigger('click')
+    await wrapper.get('.btn--danger').trigger('click')
     await wrapper.get('input[type="checkbox"]').setValue(true)
-    await wrapper.get('.artifact-actions .text-btn.danger').trigger('click')
+    await wrapper.get('.artifact-actions .btn--danger').trigger('click')
 
     // 先问一次：确认框开着、RPC 还没发。
     const dialog = wrapper.getComponent(CoreConfirmDialog)
@@ -53,7 +53,7 @@ describe('ArtifactPanel', () => {
     await flushPromises()
     expect(requestRpc).not.toHaveBeenCalledWith('artifact.delete', expect.anything())
 
-    await wrapper.get('.artifact-actions .text-btn.danger').trigger('click')
+    await wrapper.get('.artifact-actions .btn--danger').trigger('click')
     wrapper.getComponent(CoreConfirmDialog).vm.$emit('confirm')
     await flushPromises()
     expect(requestRpc).toHaveBeenCalledWith('artifact.delete', {

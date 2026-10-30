@@ -1,0 +1,608 @@
+/* user:“还有大文件拆分”+(从 ChatThread.vue 的全局样式块拆出：过程分组与流光标题；
+   六个文件按原顺序由组件的 <style src> 引入，全局作用域与层叠顺序保持不变)。 */
+/* ── Compact process group summary ── */
+.process-group-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  border-radius: 0;
+  opacity: 0.8;
+  position: relative;
+}
+.process-group-summary::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.process-group-summary:hover {
+  opacity: 1;
+}
+.process-group-summary:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+.process-group-text {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 运行中：分组摘要收缩到文字宽度，流光扫过范围=文字区域 */
+.process-group-summary--running .process-group-text {
+  justify-self: start;
+}
+.process-group-body {
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+}
+
+.sub-line-heading {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  border-radius: 0;
+  position: relative;
+}
+.sub-line-heading::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.sub-line-heading:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+
+/* 行标题 + 就地展开箭头：标题点击归右侧分屏，箭头保留原来的展开语义。 */
+.sub-line-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1);
+}
+.sub-line-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 55%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.sub-line-toggle:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #fff);
+}
+.sub-line-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.sub-line-toggle-icon {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.sub-line-toggle-icon.is-open { transform: rotate(180deg); }
+
+/* 面板内部的子代理行：明确不可点——没有指针反馈、没有悬停反馈。 */
+.sub-line-heading:disabled,
+.tool-card-header:disabled {
+  cursor: default;
+}
+.sub-line-heading:disabled:hover,
+.tool-card-header:disabled:hover {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sub-line-toggle,
+  .sub-line-toggle-icon { transition: none; }
+}
+
+.sub-line-title {
+  display: inline-block;
+  justify-self: start;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--theme-main-text, var(--text));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* 运行态标题流光（工具行 / sub-agent 行通用）：
+   v-beam 指令给 running 态标题加 .flow-text，通过 background-clip:text
+   与 JS rAF 驱动的 background-position 实现「文字本身渐变流动」。
+   为避免旧版 WebView2/Chromium<111 不支持 color-mix 导致渐变整条失效，
+   RGB 分量由 JS 从 --theme-main-text 解析后写入 --flow-r/g/b。 */
+.process-step--running .process-step-title,
+.sub-line--running .sub-line-title,
+.process-group-summary--running .process-group-text,
+.compaction-step--running .compaction-token-detail {
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 58%, transparent);
+}
+.process-step--running .process-step-title.flow-text,
+.sub-line--running .sub-line-title.flow-text,
+.process-group-summary--running .process-group-text.flow-text,
+.compaction-step--running .compaction-token-detail.flow-text {
+  background-image: linear-gradient(
+    90deg,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 0.18) 0%,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 1) 30%,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 1) 70%,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 0.18) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  will-change: background-position;
+}
+
+/* Thinking/tool titles share one compact recipe. Reasoning keeps its sampled
+   semantic tail; tool titles stay as stable action-and-target labels. */
+.thread .process-card-header {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-areas: "state preview meta";
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 0;
+  min-height: 28px;
+  padding: 4px 0;
+  overflow: hidden;
+  position: relative;
+  border-radius: 4px;
+  transition: color var(--dur-base) var(--ease-out);
+}
+.thread .process-card-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: transparent;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), transparent 100%);
+  transition: background-color var(--dur-base) var(--ease-out);
+}
+.thread .process-card-header[aria-expanded]:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
+.thread .process-card-header[aria-expanded]:active::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+}
+.thread .process-card-header[aria-expanded]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent);
+  outline-offset: 2px;
+}
+/* user:“把过程行那个图标从现在的浅紫色改成文字色与灰色混合” — 使用主题文字色与中性灰各半混合。 */
+.process-card-state-icon {
+  grid-area: state;
+  align-self: center;
+  justify-self: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 0;
+  color: color-mix(in srgb, color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray) 72%, transparent);
+  transform-origin: center;
+  flex: 0 0 auto;
+  transition:
+    color var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+.process-card-state-icon--running {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
+  animation: process-card-breathe 1.8s ease-in-out infinite;
+}
+.process-card-state-icon--pending {
+  color: color-mix(in srgb, var(--orange) 70%, var(--theme-main-text, #fff) 30%);
+}
+.process-card-state-icon--error,
+.process-card-state-icon--failed {
+  color: color-mix(in srgb, var(--red) 70%, var(--theme-main-text, #fff) 30%);
+}
+.process-card-state-icon--completed {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
+  opacity: .72;
+  transform: scale(1);
+}
+.process-card-preview,
+.tool-card-header .process-card-preview,
+.reasoning-toggle .process-card-preview {
+  grid-area: preview;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 70%, transparent);
+}
+.thread .reasoning-body.process-card-body--preview {
+  max-height: calc(3 * 1.65em);
+  overflow: auto;
+  overscroll-behavior: contain;
+  cursor: pointer;
+}
+.thread .reasoning-body.process-card-body--expanded {
+  max-height: calc(5 * 1.65em);
+  /* user:“已展开时鼠标悬浮自动增高，最多 15 行；移出恢复原高度”+(高度按当前字号的行高计算，切换只做短过渡，避免频繁跳动)。 */
+  transition: max-height 140ms var(--ease-out);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.tool-card-body.process-card-body--preview,
+.tool-card-body.process-card-body--expanded {
+  max-height: 800px;
+  overflow: auto;
+}
+.tool-card-body.process-card-body--preview .diff-lines,
+.tool-card-body.process-card-body--preview .test-result-output,
+.tool-card-body.process-card-body--preview .tool-output-content,
+.tool-card-body.process-card-body--preview .command-output-result,
+.tool-card-body.process-card-body--preview > .tool-output {
+  max-height: calc(3 * 1.5em);
+  overflow: auto;
+  overscroll-behavior: contain;
+  cursor: pointer;
+}
+.tool-card-body.process-card-body--expanded .diff-lines,
+.tool-card-body.process-card-body--expanded .test-result-output,
+.tool-card-body.process-card-body--expanded .tool-output-content,
+.tool-card-body.process-card-body--expanded .command-output-result,
+.tool-card-body.process-card-body--expanded > .tool-output {
+  max-height: calc(5 * 1.5em);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+/* user:“已展开时鼠标悬浮自动增高，最多 15 行；移出恢复原高度”+(悬停临时长到内容高度并封顶 15 行，超出仍走内部滚动；未展开态没有悬停规则，悬停不改高度)。 */
+.thread .reasoning-body.process-card-body--expanded:hover {
+  max-height: calc(15 * 1.65em);
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread .reasoning-body.process-card-body--expanded {
+    transition: none;
+  }
+}
+.thread .reasoning-body.process-card-body--expanded,
+.tool-card-body.process-card-body--expanded .diff-lines,
+.tool-card-body.process-card-body--expanded .test-result-output,
+.tool-card-body.process-card-body--expanded .tool-output-content,
+.tool-card-body.process-card-body--expanded .command-output-result,
+.tool-card-body.process-card-body--expanded > .tool-output,
+.compaction-summary-text {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 6px,
+    #000 calc(100% - 6px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 6px,
+    #000 calc(100% - 6px),
+    transparent 100%
+  );
+}
+.process-card-header .reasoning-duration {
+  grid-area: meta;
+  align-self: start;
+  margin-top: 1px;
+}
+.assistant-timestamp,
+.reasoning-duration,
+.compaction-token-detail,
+.tool-output-meta,
+.test-result-meta,
+.sub-line-delivery-meta,
+.model-retry-bar__label,
+.model-retry-bar__detail {
+  font-variant-numeric: tabular-nums;
+}
+.process-caption-enter-active,
+.process-caption-leave-active {
+  transition: opacity .16s ease-out;
+}
+.process-caption-enter-from,
+.process-caption-leave-to {
+  opacity: 0;
+}
+@keyframes process-card-breathe {
+  0%, 100% { transform: scale(.96); opacity: .72; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+.sub-line-status {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.sub-line-delivery-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-left: 18px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sub-line-delivery-meta span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
+}
+
+.sub-line-body {
+  display: grid;
+  gap: 8px;
+}
+
+.sub-line-block .user-row {
+  padding: 1px 0 4px;
+}
+
+.sub-line-block .user-bubble {
+  max-width: min(76%, 520px);
+  border-radius: var(--radius);
+  border-bottom-right-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sub-line-block .assistant-answer {
+  margin-top: 4px;
+}
+
+.sub-line-block .assistant-answer,
+.sub-line-block .part-text-content {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.sub-line-block .process-step {
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.sub-line-block .process-step--tool {
+  border-radius: 0;
+  padding: 0;
+}
+
+.sub-line-block .tool-card-header {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 5px;
+  row-gap: 3px;
+}
+
+.sub-line-block .tool-card-body {
+  margin-top: 6px;
+}
+
+.sub-line-block .tool-output {
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 260px;
+}
+
+.sub-line-block .tool-output-meta {
+  font-size: 10px;
+}
+
+.sub-line-block .tool-output-meta span {
+  padding: 1px 5px;
+}
+
+.sub-line-block .tool-args-preview,
+.sub-line-block .diff-header,
+.sub-line-block .diff-file,
+.sub-line-block .diff-line-num {
+  font-size: 10px;
+}
+
+.sub-line-block .tool-args-preview {
+  margin-left: 0;
+}
+
+.sub-line-block .diff-lines {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.sub-line-block .diff-line {
+  grid-template-columns: 30px minmax(0, 1fr);
+  min-height: 18px;
+}
+
+.sub-line-block .diff-line-num {
+  width: 30px;
+  padding: 0 5px 0 7px;
+}
+
+.sub-line-block .diff-line-content {
+  padding: 0 8px 0 7px;
+}
+
+.sub-line-block .reasoning-toggle {
+  min-height: 24px;
+  gap: 6px;
+}
+
+.sub-line-block .process-step--reasoning .process-step-title {
+  font-size: 11px;
+}
+
+.sub-line-block .reasoning-duration {
+  font-size: 10px;
+}
+
+.sub-line-block .reasoning-body {
+  margin: 2px 0 6px 20px;
+  max-height: none;
+  overflow: visible;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.checklist-card {
+  border-color: color-mix(in srgb, var(--blue) 18%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 3%, transparent);
+}
+
+.checklist-card-head .process-step-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.checklist-items {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: checklist-item;
+}
+
+.checklist-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  counter-increment: checklist-item;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.checklist-item::before {
+  content: counter(checklist-item) ".";
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 44%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.checklist-box {
+  grid-column: 2;
+  width: 14px;
+  height: 14px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 28%, transparent);
+  border-radius: 3px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--green);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.checklist-text {
+  grid-column: 3;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.checklist-item--completed .checklist-text {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 48%, transparent);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.test-result-card {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  margin: 2px 0;
+  padding: 0;
+}
+.test-result-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.test-result-state {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--theme-main-text, var(--text));
+}
+.test-result-card--passed .test-result-state {
+  color: var(--green);
+}
+.test-result-card--failed .test-result-state {
+  color: var(--red);
+}
+.test-result-command {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.test-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.test-result-meta span {
+  padding: 0;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.test-result-meta span + span::before {
+  content: "·";
+  margin-right: 6px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 32%, transparent);
+}
+.test-result-output {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 3px 0 0;
+  color: var(--theme-main-text, var(--text));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

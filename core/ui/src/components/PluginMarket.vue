@@ -3,7 +3,7 @@
   <section class="market" :aria-label="t('插件市场')" :aria-busy="loading || Boolean(busy)">
     <div class="market-heading">
       <div><h2>{{ t('从 GitHub 安装插件') }}</h2><p>{{ t('独立发布，按需安装。网络拓展可用时自动优化下载，安装前校验文件。') }}</p></div>
-      <button class="small-btn" type="button" :disabled="loading || Boolean(busy)" @click="load"><RefreshCw :size="14" :class="{ spin: loading }" />{{ t('检查更新') }}</button>
+      <button class="btn btn--secondary" type="button" :disabled="loading || Boolean(busy)" @click="load"><RefreshCw :size="14" :class="{ spin: loading }" />{{ t('检查更新') }}</button>
     </div>
     <p v-if="error" class="market-error" role="alert"><CircleAlert :size="15" />{{ error }}</p>
     <p v-if="cached" class="market-note" role="status">{{ t('当前显示缓存目录；安装时会重新核对 GitHub 最新发布。') }}</p>
@@ -16,10 +16,10 @@
           <div class="market-title"><h3>{{ t(plugin.title) }}</h3><span>{{ t(plugin.category) }}</span></div>
           <p>{{ t(plugin.description) }}</p>
           <ul class="market-capabilities" :aria-label="t('插件能力')"><li v-for="item in plugin.capabilities" :key="item">{{ t(item) }}</li></ul>
-          <div class="market-meta"><span>{{ plugin.version ? `v${plugin.version}` : t('版本暂不可用') }}</span><span v-if="plugin.installed_version">{{ t('已安装') }} v{{ plugin.installed_version }}</span><button class="text-btn" type="button" @click="openExternalUrl(plugin.repository_url)"><Github :size="13" />{{ t('源代码与许可证') }}<ArrowUpRight :size="12" /></button></div>
+          <div class="market-meta"><span>{{ plugin.version ? `v${plugin.version}` : t('版本暂不可用') }}</span><span v-if="plugin.installed_version">{{ t('已安装') }} v{{ plugin.installed_version }}</span><button class="btn btn--ghost" type="button" @click="openExternalUrl(plugin.repository_url)"><Github :size="13" />{{ t('源代码与许可证') }}<ArrowUpRight :size="12" /></button></div>
         </div>
         <div class="market-action">
-          <button class="small-btn" :class="{ primary: !plugin.installed_version || plugin.update_available }" type="button"
+          <button class="btn btn--secondary" :class="{ primary: !plugin.installed_version || plugin.update_available }" type="button"
             :data-market-action="plugin.id" :disabled="Boolean(busy) || !plugin.installable || Boolean(plugin.installed_version && !plugin.update_available)" @click="install(plugin)">
             <LoaderCircle v-if="busy === plugin.id" :size="14" class="spin" /><Check v-else-if="plugin.installed_version && !plugin.update_available" :size="14" /><Download v-else :size="14" />
             {{ busy === plugin.id ? t('下载并校验中…') : !plugin.installable ? t('暂不可用') : plugin.update_available ? t('更新') : plugin.installed_version ? t('已安装') : t('安装') }}
@@ -28,7 +28,7 @@
         </div>
       </li>
     </ul>
-    <div v-if="!loading && !plugins.length" class="market-loading"><p>{{ t('暂时无法获取市场目录，请检查网络后重试。') }}</p><button class="small-btn" type="button" @click="load">{{ t('重新连接') }}</button></div>
+    <div v-if="!loading && !plugins.length" class="market-loading"><p>{{ t('暂时无法获取市场目录，请检查网络后重试。') }}</p><button class="btn btn--secondary" type="button" @click="load">{{ t('重新连接') }}</button></div>
   </section>
 </template>
 

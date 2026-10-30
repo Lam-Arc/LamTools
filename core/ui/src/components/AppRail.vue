@@ -1,5 +1,5 @@
 <template>
-  <nav class="app-rail" data-app-rail :aria-label="t('主导航')">
+  <nav class="app-rail" data-app-rail data-ui-id="shell.app-rail" :aria-label="t('主导航')">
     <button
       v-for="item in topItems"
       :key="item.id"

@@ -65,9 +65,9 @@ describe('CoreLoadToolsEditor', () => {
 
     expect(wrapper.find('.mode-empty').exists()).toBe(true)
     expect(wrapper.find('.mode-rail-footer .mode-create-btn').exists()).toBe(true)
-    expect(wrapper.find('.mode-empty .small-btn').exists()).toBe(true)
+    expect(wrapper.find('.mode-empty .btn').exists()).toBe(true)
 
-    await wrapper.get('.mode-empty .small-btn').trigger('click')
+    await wrapper.get('.mode-empty .btn').trigger('click')
     expect(wrapper.find('.mode-empty').exists()).toBe(false)
     expect(wrapper.find('.mode-detail').exists()).toBe(true)
   })

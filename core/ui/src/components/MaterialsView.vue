@@ -127,7 +127,12 @@
       </div>
 
       <!-- 卡片墙（网格 = 多列瀑布流，贴近参考图里的错落；列表 = 行式） -->
-      <div v-else-if="view === 'grid'" class="materials-grid" role="list">
+      <div v-else-if="view === 'grid'" class="materials-grid" role="list" data-materials-drag-surface
+        @pointerdown="onDragPointerDown"
+        @pointermove="onDragPointerMove"
+        @pointerup="onDragPointerUp"
+        @pointercancel="onDragPointerUp"
+      >
         <article
           v-for="item in visible"
           :key="item.artifact_id"
@@ -183,7 +188,12 @@
         </article>
       </div>
 
-      <ul v-else class="library-items" role="list">
+      <ul v-else class="library-items" role="list" data-materials-drag-surface
+        @pointerdown="onDragPointerDown"
+        @pointermove="onDragPointerMove"
+        @pointerup="onDragPointerUp"
+        @pointercancel="onDragPointerUp"
+      >
         <li v-for="item in visible" :key="item.artifact_id">
           <div
             class="library-row"
@@ -276,7 +286,9 @@ import {
 } from 'lucide-vue-next'
 import type { ProjectArtifact } from '@/types.ts'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
-import type { LamToolsTransport } from '@/transport/index.ts'
+import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
+import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
+import { openFileInSplit } from '@/split/openFile'
 import { copyText } from '@/helpers/clipboard.ts'
 import { useLibraryZoom } from '@/composables/useLibraryZoom.ts'
 import { openContextMenu, type ContextMenuEntry } from '@/components/context-menu/index.ts'
@@ -571,7 +583,48 @@ function goToFolder(dir: string): void {
 }
 
 function open(item: ProjectArtifact): void {
-  void openWithSystem(item)
+  // 拖选松手那一刻浏览器还会补一次 click，这里吞掉它，免得拖完顺手把文件打开了。
+  if (suppressClickOnce) {
+    suppressClickOnce = false
+    return
+  }
+  void openDefault(item)
+}
+
+const splitWorkspace = useOptionalSplitWorkspace()
+
+/**
+ * user:“默认打开也跟文本文件一样 用分屏预览打开”+
+ * (资料库点击先按类型进分屏，分屏用不了才交给系统默认应用)。
+ */
+async function openDefault(item: ProjectArtifact): Promise<void> {
+  if (await openInSplit(item)) return
+  await openWithSystem(item)
+}
+
+/** 附件先换取磁盘真实路径，工作区文件直接展开；拿不到路径就交给原通道。 */
+async function openInSplit(item: ProjectArtifact): Promise<boolean> {
+  if (!splitWorkspace) return false
+  const reference = item.path || item.uri || ''
+  if (!reference) return false
+  let actual = ''
+  try {
+    if (reference.startsWith('attachment://')) {
+      const attachmentId = reference.slice('attachment://'.length)
+      const response = await props.transport?.request<TransportHttpResponse>({
+        kind: 'http', method: 'GET', path: `/attachments/${encodeURIComponent(attachmentId)}/preview`,
+      })
+      if (!response || response.status !== 200) return false
+      const meta = JSON.parse(new TextDecoder().decode(response.body))
+      if (typeof meta.path === 'string') actual = meta.path
+    } else {
+      actual = absoluteArtifactPath(item, props.workRoot)
+    }
+  } catch { return false }
+  if (!actual) return false
+  try {
+    return Boolean(openFileInSplit(splitWorkspace, actual, { workRoot: props.workRoot || '', projectId: props.projectId || undefined }))
+  } catch { return false }
 }
 
 /** 引用给人看的形态：workspace:// 展开成磁盘绝对路径，其余原样。 */
@@ -617,6 +670,96 @@ function toggleSelected(id: string): void {
 function clearSelection(): void {
   selectedSet.value = new Set()
 }
+
+/* ---- 拖动连续选中 ---- */
+// user:“支持鼠标拖动、触屏滑动连续选中多个条目”+(按下后拖过的条目进入选中，反向拖回同一格则取消；
+// 只在越过位移阈值后接管，单击打开、双击与右键菜单照旧；鼠标与触屏统一走 pointer 事件。)
+interface DragPaintState {
+  pointerId: number
+  startX: number
+  startY: number
+  /** 越过阈值进入拖选之前，任何移动都可能只是一次单击。 */
+  active: boolean
+  /** 上一个经过的条目：同一格里的反复移动不重复切换。 */
+  lastId: string
+  /** 本次拖动改过的条目 → 它原来的选中状态，反向拖回时据此还原。 */
+  painted: Map<string, boolean>
+}
+/** 位移超过这个像素数才算拖动，免得手抖把单击变成拖选。 */
+const DRAG_THRESHOLD = 4
+let dragPaint: DragPaintState | null = null
+/** 拖选松手后紧跟的那次 click 要吞掉，否则顺带就把文件打开了。 */
+let suppressClickOnce = false
+
+function dragItemIdAt(x: number, y: number): string | null {
+  const node = document.elementFromPoint(x, y) as HTMLElement | null
+  return (node?.closest('[data-material]') as HTMLElement | null)?.dataset.material ?? null
+}
+
+function paintDragItem(id: string, state: DragPaintState): void {
+  const original = state.painted.get(id)
+  const next = new Set(selectedSet.value)
+  if (original === undefined) {
+    state.painted.set(id, next.has(id))
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+  } else {
+    // 反向拖回已经改过的条目：还原原状，等于取消这一格的拖选。
+    state.painted.delete(id)
+    if (original) next.add(id)
+    else next.delete(id)
+  }
+  selectedSet.value = next
+}
+
+function onDragPointerDown(event: PointerEvent): void {
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+  const target = event.target as HTMLElement | null
+  // 勾选框、⋯ 菜单、星标这类按钮自己管点击，不能当成拖选的起点。
+  if (target?.closest('button, a, input, textarea, select')) return
+  const id = (target?.closest('[data-material]') as HTMLElement | null)?.dataset.material
+  if (!id) return
+  dragPaint = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, active: false, lastId: id, painted: new Map() }
+  suppressClickOnce = false
+}
+
+function onDragPointerMove(event: PointerEvent): void {
+  const state = dragPaint
+  if (!state || state.pointerId !== event.pointerId) return
+  if (!state.active) {
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return
+    // 触屏竖向滑动是要滚页面，只有横向滑动才进入拖选，免得把滚动抢走。
+    if (event.pointerType === 'touch' && Math.abs(dy) > Math.abs(dx)) {
+      dragPaint = null
+      return
+    }
+    state.active = true
+    suppressClickOnce = true
+    ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
+    document.body.classList.add('library-drag-selecting')
+    paintDragItem(state.lastId, state)
+  }
+  // 拖动期间别让浏览器顺手把卡片上的文字也选了。
+  event.preventDefault()
+  const id = dragItemIdAt(event.clientX, event.clientY)
+  if (!id || id === state.lastId) return
+  state.lastId = id
+  paintDragItem(id, state)
+}
+
+function onDragPointerUp(event: PointerEvent): void {
+  const state = dragPaint
+  if (!state || state.pointerId !== event.pointerId) return
+  dragPaint = null
+  if (!state.active) return
+  ;(event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(event.pointerId)
+  document.body.classList.remove('library-drag-selecting')
+}
+
+onUnmounted(() => { document.body.classList.remove('library-drag-selecting') })
+
 
 const selectedItems = computed(() => items.value.filter(item => selectedSet.value.has(item.artifact_id)))
 
@@ -713,7 +856,8 @@ function openMenu(event: MouseEvent, item: ProjectArtifact): void {
     items: [
       // 语义分组：文件级操作与整理操作各成一组（组头可折叠、状态有记忆）；
       // 危险操作不入组，始终裸露在菜单尾部，不能被折叠藏起来。
-      { id: 'open', get label() { return t("打开") }, group: MATERIALS_FILE_GROUP, action: () => void openWithSystem(item) },
+      { id: 'open', get label() { return t("打开") }, group: MATERIALS_FILE_GROUP, action: () => void openDefault(item) },
+      { id: 'open-system', get label() { return t("使用默认应用打开") }, group: MATERIALS_FILE_GROUP, action: () => void openWithSystem(item) },
       { id: 'copy', get label() { return t("复制路径") }, group: MATERIALS_FILE_GROUP, action: () => void copyText(displayPath(item)) },
       {
         id: 'favorite',

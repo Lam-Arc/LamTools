@@ -95,6 +95,7 @@ DOCX、PDF、XLSX 会尽量转换成 Markdown 后再交给模型：
 ## 参见
 
 - [查找文件和内容](file-search.md)
+- [分屏文件预览（实验性）](file-preview.md)
 - [附件](attachments.md)
 - [资料库](library.md)
 - [上下文与缓存命中](context-and-cache.md)

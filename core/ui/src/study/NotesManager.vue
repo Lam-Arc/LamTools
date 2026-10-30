@@ -352,39 +352,39 @@ defineExpose({ requestNavigation, isDirty: dirty })
     <div v-if="error" class="study-notes-error" role="alert">{{ error }}</div>
     <header class="study-note-workspace-toolbar">
       <div class="study-note-workspace-actions">
-        <button class="text-btn" type="button" :aria-pressed="editMode" @click="toggleEdit"><Pencil v-if="!editMode" :size="14" /><Eye v-else :size="14" />{{ editMode ? t("预览") : t("编辑") }}</button>
+        <button class="btn btn--ghost" type="button" :aria-pressed="editMode" @click="toggleEdit"><Pencil v-if="!editMode" :size="14" /><Eye v-else :size="14" />{{ editMode ? t("预览") : t("编辑") }}</button>
         <template v-if="editMode">
-          <button class="text-btn" type="button" :title="t('插入公式')" @click="insertTemplate('math')"><Braces :size="14" />{{ t("公式") }}</button>
-          <button class="text-btn" type="button" :title="t('插入代码块')" @click="insertTemplate('code')"><Code2 :size="14" />{{ t("代码") }}</button>
-          <button class="text-btn" type="button" :title="t('插入引用')" @click="insertTemplate('quote')"><Quote :size="14" />{{ t("引用") }}</button>
-          <button class="text-btn" type="button" :title="t('插入表格')" @click="insertTemplate('table')"><Table2 :size="14" />{{ t("表格") }}</button>
-          <button class="text-btn" type="button" :title="t('插入 Mermaid 图')" @click="insertTemplate('mermaid')"><GitBranch :size="14" />Mermaid</button>
-          <button class="text-btn" type="button" :title="t('插入 Callout')" @click="insertTemplate('callout')">Callout</button>
+          <button class="btn btn--ghost" type="button" :title="t('插入公式')" @click="insertTemplate('math')"><Braces :size="14" />{{ t("公式") }}</button>
+          <button class="btn btn--ghost" type="button" :title="t('插入代码块')" @click="insertTemplate('code')"><Code2 :size="14" />{{ t("代码") }}</button>
+          <button class="btn btn--ghost" type="button" :title="t('插入引用')" @click="insertTemplate('quote')"><Quote :size="14" />{{ t("引用") }}</button>
+          <button class="btn btn--ghost" type="button" :title="t('插入表格')" @click="insertTemplate('table')"><Table2 :size="14" />{{ t("表格") }}</button>
+          <button class="btn btn--ghost" type="button" :title="t('插入 Mermaid 图')" @click="insertTemplate('mermaid')"><GitBranch :size="14" />Mermaid</button>
+          <button class="btn btn--ghost" type="button" :title="t('插入 Callout')" @click="insertTemplate('callout')">Callout</button>
         </template>
       </div>
       <div class="study-note-workspace-actions">
         <span v-if="saveState === 'saving'" class="study-notes-muted" role="status">{{ t("保存中…") }}</span>
         <span v-else-if="saveState === 'saved'" class="study-note-save-success" role="status">{{ t("已保存") }}</span>
         <span v-else-if="dirty" class="study-notes-muted" role="status">{{ t("未保存") }}</span>
-        <button v-if="dirty" class="text-btn" type="button" :disabled="saveState === 'saving'" @click="saveDocument"><Save :size="14" />{{ t("保存") }}</button>
-        <button v-if="dirty" class="text-btn" type="button" :disabled="saveState === 'saving'" @click="discardChanges">{{ t("放弃") }}</button>
+        <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="saveState === 'saving'" @click="saveDocument"><Save :size="14" />{{ t("保存") }}</button>
+        <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="saveState === 'saving'" @click="discardChanges">{{ t("放弃") }}</button>
       </div>
     </header>
     <div v-if="detailLoading" class="study-note-detail-state" role="status">{{ t("正在加载笔记…") }}</div>
-    <div v-else-if="detailError && !selected" class="study-note-detail-state" role="alert"><p>{{ detailError }}</p><button v-if="onRetryDetail" class="text-btn" type="button" @click="onRetryDetail">{{ t("重试") }}</button></div>
+    <div v-else-if="detailError && !selected" class="study-note-detail-state" role="alert"><p>{{ detailError }}</p><button v-if="onRetryDetail" class="btn btn--ghost" type="button" @click="onRetryDetail">{{ t("重试") }}</button></div>
     <div v-else-if="!selected" class="study-note-empty-state">
-      <FilePlus2 :size="18" aria-hidden="true" /><p>{{ hasRemoteNotes ? t("从左侧文件树打开一篇笔记。") : t("还没有 Markdown 笔记。") }}</p><button v-if="onCreate" class="text-btn" type="button" @click="onCreate">{{ t("通过对话创建笔记") }}</button>
+      <FilePlus2 :size="18" aria-hidden="true" /><p>{{ hasRemoteNotes ? t("从左侧文件树打开一篇笔记。") : t("还没有 Markdown 笔记。") }}</p><button v-if="onCreate" class="btn btn--ghost" type="button" @click="onCreate">{{ t("通过对话创建笔记") }}</button>
     </div>
     <article v-else class="study-note-detail" :data-note-id="selected.id">
-      <header class="study-note-detail-head"><div><h2>{{ selected.title }}</h2><p class="study-note-path">{{ selected.path || `${selected.title}.md` }}</p></div><button v-if="onOpenChat" class="text-btn" type="button" @click="onOpenChat"><MessageSquare :size="14" />{{ t("对话") }}</button></header>
-      <div v-if="detailError" class="study-note-detail-error" role="status">{{ detailError }} <button v-if="onRetryDetail" class="text-btn" type="button" @click="onRetryDetail">{{ t("重试") }}</button></div>
+      <header class="study-note-detail-head"><div><h2>{{ selected.title }}</h2><p class="study-note-path">{{ selected.path || `${selected.title}.md` }}</p></div><button v-if="onOpenChat" class="btn btn--ghost" type="button" @click="onOpenChat"><MessageSquare :size="14" />{{ t("对话") }}</button></header>
+      <div v-if="detailError" class="study-note-detail-error" role="status">{{ detailError }} <button v-if="onRetryDetail" class="btn btn--ghost" type="button" @click="onRetryDetail">{{ t("重试") }}</button></div>
       <div v-if="saveError || lockError" class="study-note-detail-error" role="alert">{{ saveError || lockError }}<span v-if="lockOverlap">{{ t("重合区域：") }}{{ lockOverlap }}</span></div>
       <div class="study-note-document-layout">
         <aside v-if="outline.length" class="study-note-outline" :aria-label="t('文档大纲')"><h3>{{ t("大纲") }}</h3><button v-for="heading in outline" :key="heading.id" class="study-note-outline-link" type="button" :style="{ paddingLeft: `calc(var(--space-2) + (var(--space-2) * ${heading.level - 1}))` }" @click="scrollHeading(heading)">{{ heading.text }}</button></aside>
         <main class="study-note-main">
           <div v-if="editMode" class="study-note-editor-shell" data-study-note-document><textarea ref="editor" class="study-note-full-editor" :aria-label="t('编辑笔记全文')" :value="bodyMd" spellcheck="true" @input="updateBody(($event.target as HTMLTextAreaElement).value)" @contextmenu="handleEditorContextMenu" /></div>
           <div v-else ref="preview" class="study-note-reading study-note-document" data-study-note-document @click="handleDocumentClick"><MarkdownRenderer :content="renderedBody" :mermaid="true" /></div>
-          <section v-if="selected.locks.length" class="study-note-locks" :aria-label="t('已锁定区域')"><h3><LockKeyhole :size="13" />{{ t("Agent 保护区域") }}</h3><ul><li v-for="lock in selected.locks" :key="lock.id"><span class="study-note-lock-quote">{{ lock.quote || `${lock.start}–${lock.end}` }}</span><button v-if="onUnlockRange" class="text-btn" type="button" :aria-label="t('解锁 {0}', { 0: lock.quote || lock.id })" @click="unlock(lock)"><UnlockKeyhole :size="13" />{{ t("解锁") }}</button></li></ul></section>
+          <section v-if="selected.locks.length" class="study-note-locks" :aria-label="t('已锁定区域')"><h3><LockKeyhole :size="13" />{{ t("Agent 保护区域") }}</h3><ul><li v-for="lock in selected.locks" :key="lock.id"><span class="study-note-lock-quote">{{ lock.quote || `${lock.start}–${lock.end}` }}</span><button v-if="onUnlockRange" class="btn btn--ghost" type="button" :aria-label="t('解锁 {0}', { 0: lock.quote || lock.id })" @click="unlock(lock)"><UnlockKeyhole :size="13" />{{ t("解锁") }}</button></li></ul></section>
           <StudyNoteReferences :resources="selected.resources" />
         </main>
       </div>

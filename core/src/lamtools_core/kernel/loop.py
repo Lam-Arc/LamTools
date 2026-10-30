@@ -33,7 +33,6 @@ from lamtools_core.context_compaction import (
     ContextCompactionError,
     ContextCompactionResult,
     RECENT_USER_MESSAGES_METADATA_KEY,
-    USAGE_ANCHOR_METADATA_KEY,
     extract_recent_user_messages,
 )
 from lamtools_core.context_compaction.state import load_compaction_history, persist_compaction

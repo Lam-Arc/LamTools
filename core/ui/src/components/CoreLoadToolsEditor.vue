@@ -9,11 +9,11 @@
       <div class="loadtools-title-actions">
         <span v-if="dirty" class="loadtools-dirty" role="status">
           <span class="loadtools-dirty-dot" aria-hidden="true" />{{ t("有未保存的修改") }}</span>
-        <button class="text-btn loadtools-refresh" type="button" :disabled="loading || saving" @click="modesDraft.requestReplace(() => void fetchModes())">
+        <button class="btn btn--ghost loadtools-refresh" type="button" :disabled="loading || saving" @click="modesDraft.requestReplace(() => void fetchModes())">
           <RefreshCw :size="14" :stroke-width="1.9" aria-hidden="true" />
           <span>{{ t("刷新") }}</span>
         </button>
-        <button class="small-btn primary loadtools-save" type="button" :disabled="loading || saving || !dirty" @click="saveModes">
+        <button class="btn btn--primary loadtools-save" type="button" :disabled="loading || saving || !dirty" @click="saveModes">
           <Save :size="15" :stroke-width="1.9" aria-hidden="true" />
           <span>{{ saving ? t("保存中…") : t("保存") }}</span>
         </button>
@@ -114,7 +114,7 @@
 
             <div class="mode-head-actions">
               <button
-                class="text-btn danger"
+                class="btn btn--ghost btn--danger"
                 type="button"
                 :disabled="saving || orderedModes.length <= 1"
                 @click="removeMode(selectedMode)"
@@ -190,7 +190,7 @@
           <SlidersHorizontal :size="22" :stroke-width="1.7" aria-hidden="true" />
           <strong>{{ t("还没有工作模式") }}</strong>
           <span>{{ t("新增一个模式后，就可以设置它能使用的工具。") }}</span>
-          <button class="small-btn primary" type="button" :disabled="loading || saving" @click="addMode">
+          <button class="btn btn--primary" type="button" :disabled="loading || saving" @click="addMode">
             <Plus :size="15" :stroke-width="2" aria-hidden="true" />
             <span>{{ t("新增模式") }}</span>
           </button>
@@ -584,16 +584,16 @@ onMounted(fetchModes)
   background: var(--orange);
 }
 
-.loadtools-title-actions .text-btn,
-.mode-head-actions .text-btn {
+.loadtools-title-actions .btn--ghost,
+.mode-head-actions .btn--ghost {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-1);
 }
 
-.loadtools-title-actions .small-btn,
-.mode-empty .small-btn {
+.loadtools-title-actions .btn--secondary,
+.mode-empty .btn--secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -602,7 +602,7 @@ onMounted(fetchModes)
   border-radius: var(--radius-sm);
 }
 
-.loadtools-title-actions .small-btn.primary {
+.loadtools-title-actions .btn--primary {
   background: var(--settings-control-background, var(--theme-control-background));
   color: var(--settings-control-text, var(--theme-control-text));
 }

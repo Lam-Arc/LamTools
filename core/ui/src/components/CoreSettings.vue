@@ -1,7 +1,7 @@
 <template>
   <div
     ref="settingsRootEl"
-    class="full-area-column full-area-surface"
+    class="full-area-column full-area-surface" data-ui-id="settings.root"
     :class="{ 'settings-surface--narrow': narrowSurface }"
     :style="settingsThemeStyle"
   >
@@ -83,8 +83,8 @@
                 <span>{{ t("新增供应商") }}</span>
               </button>
               <div class="provider-rail-links">
-                <button v-if="allowEnvironmentImport" class="text-btn" type="button" @click="$emit('import-environment')">{{ t("从当前环境导入") }}</button>
-                <button class="text-btn" type="button" data-reopen-onboarding @click="$emit('reopen-onboarding')">{{ t("重新显示首次引导") }}</button>
+                <button v-if="allowEnvironmentImport" class="btn btn--ghost" type="button" @click="$emit('import-environment')">{{ t("从当前环境导入") }}</button>
+                <button class="btn btn--ghost" type="button" data-reopen-onboarding @click="$emit('reopen-onboarding')">{{ t("重新显示首次引导") }}</button>
               </div>
             </div>
           </aside>
@@ -148,8 +148,8 @@
                 </div>
               </div>
               <div class="provider-head-actions">
-                <button class="text-btn" type="button" :data-provider-edit="selectedProvider.id" @click="startProviderUpdate(selectedProvider)">{{ t("编辑") }}</button>
-                <button class="text-btn danger" type="button" :data-provider-delete="selectedProvider.id" @click="$emit('delete-provider', selectedProvider.id)">{{ t("删除") }}</button>
+                <button class="btn btn--ghost" type="button" :data-provider-edit="selectedProvider.id" @click="startProviderUpdate(selectedProvider)">{{ t("编辑") }}</button>
+                <button class="btn btn--ghost btn--danger" type="button" :data-provider-delete="selectedProvider.id" @click="$emit('delete-provider', selectedProvider.id)">{{ t("删除") }}</button>
               </div>
             </header>
 
@@ -164,7 +164,7 @@
                     <span class="sr-only">{{ t("搜索模型") }}</span>
                     <input v-model.trim="modelQuery" type="search" :placeholder="t('搜索模型')" />
                   </label>
-                  <button class="small-btn primary" type="button" data-model-create @click="startSelectedModelCreate">{{ t("＋ 新增模型") }}</button>
+                  <button class="btn btn--primary" type="button" data-model-create @click="startSelectedModelCreate">{{ t("＋ 新增模型") }}</button>
                 </div>
               </header>
               <div class="model-list">
@@ -187,9 +187,9 @@
                     <span v-else-if="model.capability === 'text'" class="model-capability">{{ t("文本") }}</span>
                   </div>
                   <div class="row-actions">
-                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">{{ t("设为预设首选") }}</button>
-                    <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">{{ t("编辑") }}</button>
-                    <button class="text-btn danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">{{ t("删除") }}</button>
+                    <button v-if="!model.is_default" class="btn btn--ghost model-default-btn" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">{{ t("设为预设首选") }}</button>
+                    <button class="btn btn--ghost" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">{{ t("编辑") }}</button>
+                    <button class="btn btn--ghost btn--danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">{{ t("删除") }}</button>
                   </div>
                 </div>
                 <div v-if="!filteredSelectedProviderModels.length" class="model-empty">
@@ -197,7 +197,7 @@
                     <strong>{{ modelQuery ? t("没有匹配的模型") : t("该供应商下还没有模型") }}</strong>
                     <span>{{ modelQuery ? t("换个关键词试试") : t('为 {0} 添加第一个模型', { 0: selectedProvider.name || selectedProvider.id }) }}</span>
                   </div>
-                  <button v-if="!modelQuery" class="small-btn quiet" type="button" @click="startSelectedModelCreate">{{ t("新增模型") }}</button>
+                  <button v-if="!modelQuery" class="btn btn--quiet" type="button" @click="startSelectedModelCreate">{{ t("新增模型") }}</button>
                 </div>
               </div>
             </section>
@@ -211,8 +211,8 @@
                 <div class="provider-meta"><span>{{ selectedGroupModels.length }}{{ t("个模型，可来自多个供应商") }}</span></div>
               </div>
               <div class="provider-head-actions">
-                <button class="text-btn" type="button" :data-model-group-edit="selectedModelGroup.id" @click="startModelGroupUpdate(selectedModelGroup)">{{ t("重命名") }}</button>
-                <button class="text-btn danger" type="button" :data-model-group-delete="selectedModelGroup.id" @click="$emit('delete-model-group', selectedModelGroup.id)">{{ t("删除组") }}</button>
+                <button class="btn btn--ghost" type="button" :data-model-group-edit="selectedModelGroup.id" @click="startModelGroupUpdate(selectedModelGroup)">{{ t("重命名") }}</button>
+                <button class="btn btn--ghost btn--danger" type="button" :data-model-group-delete="selectedModelGroup.id" @click="$emit('delete-model-group', selectedModelGroup.id)">{{ t("删除组") }}</button>
               </div>
             </header>
             <section class="model-section">
@@ -225,8 +225,8 @@
                     <span class="sr-only">{{ t("搜索模型") }}</span>
                     <input v-model.trim="modelQuery" type="search" :placeholder="t('搜索模型')" />
                   </label>
-                  <button class="small-btn quiet" type="button" data-model-group-members @click="startGroupMembersEdit">{{ t("添加已有模型") }}</button>
-                  <button class="small-btn primary" type="button" data-group-model-create @click="startGroupModelCreate">{{ t("＋ 新增模型") }}</button>
+                  <button class="btn btn--quiet" type="button" data-model-group-members @click="startGroupMembersEdit">{{ t("添加已有模型") }}</button>
+                  <button class="btn btn--primary" type="button" data-group-model-create @click="startGroupModelCreate">{{ t("＋ 新增模型") }}</button>
                 </div>
               </header>
               <div class="model-list">
@@ -241,9 +241,9 @@
                     </div>
                   </div>
                   <div class="row-actions">
-                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" @click="$emit('set-default-model', model.id)">{{ t("设为预设首选") }}</button>
-                    <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">{{ t("编辑") }}</button>
-                    <button class="text-btn danger" type="button" :data-model-group-remove="model.id" @click="removeModelFromSelectedGroup(model.id)">{{ t("移出组") }}</button>
+                    <button v-if="!model.is_default" class="btn btn--ghost model-default-btn" type="button" @click="$emit('set-default-model', model.id)">{{ t("设为预设首选") }}</button>
+                    <button class="btn btn--ghost" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">{{ t("编辑") }}</button>
+                    <button class="btn btn--ghost btn--danger" type="button" :data-model-group-remove="model.id" @click="removeModelFromSelectedGroup(model.id)">{{ t("移出组") }}</button>
                   </div>
                 </div>
                 <div v-if="!filteredSelectedGroupModels.length" class="model-empty">
@@ -266,7 +266,7 @@
           <section v-else class="models-empty-state models-empty-state--main" :aria-label="t('模型组空状态')">
             <div class="models-empty-mark" aria-hidden="true"><span>+</span></div>
             <div class="models-empty-copy"><h2>{{ t("还没有模型组") }}</h2><p>{{ t("创建一个模型组来整理所有供应商下的模型。") }}</p></div>
-            <button class="small-btn primary" type="button" data-model-group-create @click="startModelGroupCreate">{{ t("新建模型组") }}</button>
+            <button class="btn btn--primary" type="button" data-model-group-create @click="startModelGroupCreate">{{ t("新建模型组") }}</button>
           </section>
           </div>
         </div>
@@ -277,7 +277,7 @@
             <h2>{{ t("还没有供应商") }}</h2>
             <p>{{ t("添加一个 OpenAI Compatible 或其他模型供应商") }}</p>
           </div>
-          <button class="small-btn primary" type="button" data-provider-create @click="startProviderCreate">{{ t("新增供应商") }}</button>
+          <button class="btn btn--primary" type="button" data-provider-create @click="startProviderCreate">{{ t("新增供应商") }}</button>
         </section>
       </section>
 
@@ -300,6 +300,10 @@
           :get-angle="getAngle"
           :get-opacity="getOpacity"
           :get-text-color="getTextColor"
+          :get-fill-mode="getFillMode"
+          :get-glass-level="getGlassLevel"
+          :get-image="getImage"
+          :get-image-fit="getImageFit"
           :process-icon-color="theme.processIconColor"
           :presets="presets"
           :theme-preview-style="themePreviewStyle"
@@ -316,11 +320,28 @@
           @update:angle="(area: ThemeArea, angle: number) => $emit('update-angle', area, angle)"
           @update:opacity="(area: ThemeArea, opacity: number) => $emit('update-opacity', area, opacity)"
           @update:text-color="(area: ThemeArea, color: string) => $emit('update-text-color', area, color)"
+          @update:fill-mode="(area: ThemeArea, mode: ThemeFillMode) => $emit('update-fill-mode', area, mode)"
+          @update:glass-level="(area: ThemeArea, level: ThemeGlassPreference) => $emit('update-glass-level', area, level)"
+          @update:image="(area: ThemeArea, dataUrl: string) => $emit('update-image', area, dataUrl)"
+          @update:image-fit="(area: ThemeArea, fit: ThemeImageFit) => $emit('update-image-fit', area, fit)"
           @update:process-icon-color="(color: string) => $emit('update-process-icon-color', color)"
           @add-stop="(area) => $emit('add-stop', area)"
           @remove-stop="(area, index) => $emit('remove-stop', area, index)"
           @sort-stops="(area) => $emit('sort-stops', area)"
         />
+
+        <!-- user:“可视化主题与布局编辑器”+(界面分区提供进入编辑器的入口，进入后是真实界面的编辑态) -->
+        <article class="setting-card studio-entry">
+          <div class="studio-entry-copy">
+            <!-- user:“编辑布局是实验性功能”+(布局编辑器入口明确标注实验性，避免被当成稳定功能) -->
+            <div class="studio-entry-title">
+              <strong>{{ t("编辑布局") }}</strong>
+              <span class="studio-entry-badge">{{ t("实验性") }}</span>
+            </div>
+            <p>{{ t("进入可视化编辑器，调整组件的颜色、背景、圆角、字号与层级；修改会立即预览，发布后保存。") }}</p>
+          </div>
+          <button class="btn btn--primary" type="button" data-open-theme-studio @click="openThemeStudio">{{ t("打开编辑器") }}</button>
+        </article>
       </section>
 
       <section v-if="activeSection === 'loadtools'" class="settings-panel">
@@ -329,7 +350,7 @@
             <span class="muted subhead-title">{{ t("命令行") }}<span class="subhead-sub">{{ t("本机命令工具使用的 shell") }}</span>
             </span>
             <div v-if="commandShellPlatform === 'windows'" class="subhead-actions">
-              <button class="text-btn" type="button" :disabled="commandShellLoading || commandShellSaving" data-command-shell-refresh @click="fetchCommandShellSettings">{{ t("刷新") }}</button>
+              <button class="btn btn--ghost" type="button" :disabled="commandShellLoading || commandShellSaving" data-command-shell-refresh @click="fetchCommandShellSettings">{{ t("刷新") }}</button>
             </div>
           </div>
           <div v-if="commandShellPlatform === 'windows'" class="dream-row">
@@ -430,19 +451,20 @@
                 <strong>{{ t("工作目录外访问") }}</strong>
                 <span>{{ permissionPreset === 'full_access' ? t("完全访问模式会临时允许访问工作目录之外的路径。") : allowAccessOutsideWorkdir ? t("允许读写工作目录之外的路径。") : t("工作目录外的读写与命令行访问会先征求你的确认，批准后本次执行。") }}</span>
               </div>
-              <button
-                type="button"
+              <!-- user:“把功能相近或者实际相似的样式和组件，统一成一套”+(权限开关改用统一开关，
+                   不再自带一套轨道标记；文案作为行内标签，整行可点) -->
+              <SundaySwitch
                 class="permission-switch"
                 data-allow-outside-workdir
                 :class="{ 'is-on': effectiveAllowAccessOutsideWorkdir }"
+                :model-value="effectiveAllowAccessOutsideWorkdir"
                 :disabled="permissionPreset === 'full_access'"
-                :aria-label="t('允许访问工作目录以外')"
-                :aria-pressed="effectiveAllowAccessOutsideWorkdir ? 'true' : 'false'"
-                @click="toggleAllowOutsideWorkdir"
+                :label="t('允许访问工作目录以外')"
+                size="sm"
+                @update:model-value="toggleAllowOutsideWorkdir"
               >
-                <span class="permission-switch-track" aria-hidden="true"><span /></span>
-                <span>{{ permissionPreset === 'full_access' ? t("完全访问已包含") : allowAccessOutsideWorkdir ? t("已允许") : t("需确认") }}</span>
-              </button>
+                {{ permissionPreset === 'full_access' ? t("完全访问已包含") : allowAccessOutsideWorkdir ? t("已允许") : t("需确认") }}
+              </SundaySwitch>
             </div>
 
             <ul class="permission-safety-list">
@@ -518,8 +540,8 @@
               <span v-else class="subhead-sub">AGENTS.md · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
-              <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="agentsSettingsDraft.requestReplace(() => void fetchGlobalAgentsMd())">{{ t("刷新") }}</button>
-              <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="saveGlobalAgentsMd">{{ t("保存") }}</button>
+              <button class="btn btn--ghost" type="button" :disabled="agentsLoading || agentsSaving" @click="agentsSettingsDraft.requestReplace(() => void fetchGlobalAgentsMd())">{{ t("刷新") }}</button>
+              <button class="btn btn--ghost" type="button" :disabled="agentsLoading || agentsSaving" @click="saveGlobalAgentsMd">{{ t("保存") }}</button>
             </div>
           </div>
           <textarea
@@ -541,8 +563,8 @@
               <span v-else class="subhead-sub">load_context.jsonc · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
-              <button class="text-btn" type="button" :disabled="contextLoading || contextSaving" @click="contextSettingsDraft.requestReplace(() => void fetchLoadContext())">{{ t("刷新") }}</button>
-              <button class="text-btn" type="button" :disabled="contextLoading || contextSaving" @click="saveLoadContext">{{ t("保存") }}</button>
+              <button class="btn btn--ghost" type="button" :disabled="contextLoading || contextSaving" @click="contextSettingsDraft.requestReplace(() => void fetchLoadContext())">{{ t("刷新") }}</button>
+              <button class="btn btn--ghost" type="button" :disabled="contextLoading || contextSaving" @click="saveLoadContext">{{ t("保存") }}</button>
             </div>
           </div>
 
@@ -559,9 +581,9 @@
                 :aria-label="t('加载类型')"
                 @update:model-value="item.kind = $event"
               />
-              <button class="text-btn danger" type="button" :disabled="contextSaving" @click="contextAdditions.splice(index, 1)">{{ t("移除") }}</button>
+              <button class="btn btn--ghost btn--danger" type="button" :disabled="contextSaving" @click="contextAdditions.splice(index, 1)">{{ t("移除") }}</button>
             </div>
-            <button class="small-btn quiet" type="button" :disabled="contextLoading || contextSaving" @click="contextAdditions.push({ name: '', priority: 50, kind: 'system' })">{{ t("＋ 追加文件") }}</button>
+            <button class="btn btn--quiet" type="button" :disabled="contextLoading || contextSaving" @click="contextAdditions.push({ name: '', priority: 50, kind: 'system' })">{{ t("＋ 追加文件") }}</button>
           </div>
 
           <div class="lc-block">
@@ -583,7 +605,7 @@
                 :disabled="contextLoading || contextSaving"
                 @keydown.enter.prevent="addContextExcept"
               />
-              <button class="small-btn quiet" type="button" :disabled="contextLoading || contextSaving || !contextExceptDraft.trim()" @click="addContextExcept">{{ t("添加") }}</button>
+              <button class="btn btn--quiet" type="button" :disabled="contextLoading || contextSaving || !contextExceptDraft.trim()" @click="addContextExcept">{{ t("添加") }}</button>
             </div>
           </div>
 
@@ -598,7 +620,7 @@
             </span>
             <div class="subhead-actions">
               <button
-                class="text-btn"
+                class="btn btn--ghost"
                 type="button"
                 data-context-compaction-refresh
                 :disabled="contextCompactionLoading || contextCompactionSaving"
@@ -620,7 +642,7 @@
               :disabled="contextCompactionLoading || contextCompactionSaving"
             />
             <button
-              class="small-btn quiet"
+              class="btn btn--quiet"
               type="button"
               data-context-compaction-save
               :disabled="contextCompactionLoading || contextCompactionSaving"
@@ -647,7 +669,7 @@
           <h3>{{ t("版本信息") }}</h3>
           <div class="about-version-row">
             <span>{{ t("当前版本") }}<strong data-current-version>{{ updateCurrentVersion }}</strong></span>
-            <button class="small-btn quiet" type="button" data-check-updates :disabled="updateStatus === 'checking'" @click="checkForUpdates()">
+            <button class="btn btn--quiet" type="button" data-check-updates :disabled="updateStatus === 'checking'" @click="checkForUpdates()">
               {{ updateStatus === 'checking' ? t("正在检查…") : t("检查更新") }}
             </button>
           </div>
@@ -663,7 +685,7 @@
             <!-- 清单带 sha256 时由宿主下载并校验，再交给平台安装器；没有摘要就退回浏览器下载页。 -->
             <button
               v-if="updateInstallSupported"
-              class="small-btn primary"
+              class="btn btn--primary"
               type="button"
               data-download-installer
               :disabled="updateInstallState === 'downloading' || updateInstallState === 'installing'"
@@ -671,19 +693,19 @@
             >{{ updateInstallState === 'downloading' ? (updateInstallProgressLabel || t("正在下载…")) : updateInstallState === 'downloaded' ? t("重新下载") : t("下载安装包") }}</button>
             <button
               v-if="updateInstallSupported && updateInstallState === 'downloaded'"
-              class="small-btn primary"
+              class="btn btn--primary"
               type="button"
               data-run-installer
               @click="runInstaller()"
             >{{ t("立即安装") }}</button>
             <button
               v-else-if="!updateInstallSupported"
-              class="small-btn primary"
+              class="btn btn--primary"
               type="button"
               data-download-update
               @click="downloadUpdate()"
             >{{ t("下载安装包") }}</button>
-            <button class="small-btn quiet" type="button" data-open-release-page @click="openUpdateReleasePage">{{ t("查看发布说明") }}</button>
+            <button class="btn btn--quiet" type="button" data-open-release-page @click="openUpdateReleasePage">{{ t("查看发布说明") }}</button>
           </div>
           <p v-if="updateInstallError" class="about-status error" data-install-error>{{ updateInstallError }}</p>
           <p v-else-if="updateInstallMessage" class="about-status" data-install-status>{{ updateInstallMessage }}</p>
@@ -744,8 +766,8 @@
               <label class="field field-wide">{{ t("名称") }}<input v-model.trim="modelGroupEditor.name" data-model-group-name required maxlength="80" :placeholder="t('例如：Free')" />
               </label>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="small-btn primary" type="submit">{{ t("保存") }}</button>
+                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
+                <button class="btn btn--primary" type="submit">{{ t("保存") }}</button>
               </div>
             </form>
 
@@ -768,8 +790,8 @@
                 <span v-if="!models.length" class="muted">{{ t("暂无可添加的模型") }}</span>
               </div>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="small-btn primary" type="submit">{{ t("保存成员") }}</button>
+                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
+                <button class="btn btn--primary" type="submit">{{ t("保存成员") }}</button>
               </div>
             </form>
 
@@ -804,7 +826,7 @@
                   <span>{{ providerEditor.base_url }}{{ t("· 将自动添加模板内模型") }}</span>
                   <button
                     v-if="selectedProviderPreset?.apiKeyUrl"
-                    class="text-btn"
+                    class="btn btn--ghost"
                     type="button"
                     data-provider-api-key-link
                     @click="openProviderApiKeyPage"
@@ -855,8 +877,8 @@
                 </div>
               </details>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="small-btn primary" type="submit">{{ providerEditor.mode === 'create' ? t("添加供应商") : t("保存供应商") }}</button>
+                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
+                <button class="btn btn--primary" type="submit">{{ providerEditor.mode === 'create' ? t("添加供应商") : t("保存供应商") }}</button>
               </div>
             </form>
 
@@ -967,8 +989,8 @@
                 </div>
               </details>
               <div class="editor-actions field-wide">
-                <button type="button" class="small-btn quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="small-btn primary" type="submit">{{ modelEditor.mode === 'create' ? t("添加模型") : t("保存模型") }}</button>
+                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
+                <button class="btn btn--primary" type="submit">{{ modelEditor.mode === 'create' ? t("添加模型") : t("保存模型") }}</button>
               </div>
             </form>
             </fieldset>
@@ -983,6 +1005,7 @@
 
 <script setup lang="ts">
 import OperationTrustSettings from './OperationTrustSettings.vue'
+import SundaySwitch from '@/components/SundaySwitch.vue'
 import { useSplitKeyboardScope } from '@/split/keyboardScope'
 const splitKeyboardActive = useSplitKeyboardScope()
 
@@ -990,6 +1013,7 @@ import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
+import { useThemeStudio } from '@/composables/useThemeStudio.ts'
 import { createSettingsDraftGuard, useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '@/data/provider-presets.ts'
@@ -1001,10 +1025,21 @@ import {
   type CorePermissionPreset,
 } from '@/composer/execution.ts'
 import {
-  gradientFromStops,
   relativeLuminance,
+  themeAreaBackground,
+  themeAreaFill,
+  themeAreaGlass,
+  themeAreaGlassFilter,
+  themeAreaImage,
+  themeAreaImageFit,
+  themeAreaImageLayer,
+  themeAreaImageRepeat,
+  themeAreaImageSize,
   type ThemeArea,
   type ThemeData,
+  type ThemeFillMode,
+  type ThemeGlassPreference,
+  type ThemeImageFit,
   type ThemeMode,
   type ThemePreset,
   type ThemeSchedule,
@@ -1160,6 +1195,10 @@ const emit = defineEmits<{
   'update-angle': [area: ThemeArea, angle: number]
   'update-opacity': [area: ThemeArea, opacity: number]
   'update-text-color': [area: ThemeArea, color: string]
+  'update-fill-mode': [area: ThemeArea, mode: ThemeFillMode]
+  'update-glass-level': [area: ThemeArea, level: ThemeGlassPreference]
+  'update-image': [area: ThemeArea, dataUrl: string]
+  'update-image-fit': [area: ThemeArea, fit: ThemeImageFit]
   'update-process-icon-color': [color: string]
   'add-stop': [area: ThemeArea]
   'remove-stop': [area: ThemeArea, index: number]
@@ -1727,28 +1766,16 @@ function onProviderPresetChange(value: string) {
 const settingsThemeStyle = computed(() => {
   const lightMain = relativeLuminance(props.theme.mainText) < 0.45
   return {
-    '--settings-backdrop-background': gradientFromStops(
-      props.theme.backdropAngle,
-      props.theme.backdropStops,
-      1,
-    ),
+    '--settings-backdrop-background': themeAreaBackground(props.theme, 'backdrop'),
     '--settings-backdrop-text': props.theme.backdropText,
-    '--settings-main-background': gradientFromStops(
-      props.theme.mainAngle,
-      props.theme.mainStops,
-      props.theme.mainOpacity,
-    ),
+    '--settings-main-background': themeAreaBackground(props.theme, 'main'),
     '--settings-main-text': props.theme.mainText,
     // main 区首停点纯色：卡片实色底（渐变值不可用于 color-mix）
     '--settings-main-solid': props.theme.mainStops[0]?.color || '#111111',
     // 卡片/浮层面板：main 实色 + 文字色 4% 微调，不透明、与内容区有层级
     '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
     '--settings-card-text': props.theme.mainText,
-    '--settings-control-background': gradientFromStops(
-      props.theme.controlAngle,
-      props.theme.controlStops,
-      props.theme.controlOpacity,
-    ),
+    '--settings-control-background': themeAreaBackground(props.theme, 'control'),
     '--settings-control-text': props.theme.controlText,
     // control 区首停点纯色：color-mix 混透明用的实色底（渐变值不可用于 color-mix）
     '--settings-control-solid': props.theme.controlStops[0]?.color || '#3a3834',
@@ -1761,22 +1788,19 @@ const settingsThemeStyle = computed(() => {
   }
 })
 
-const themePreviewStyle = computed(() => ({
-  background: gradientFromStops(props.theme.backdropAngle, props.theme.backdropStops, 1),
-  color: props.theme.backdropText,
-}))
-const themePreviewMainStyle = computed(() => ({
-  background: gradientFromStops(props.theme.mainAngle, props.theme.mainStops, props.theme.mainOpacity),
-  color: props.theme.mainText,
-}))
-const themePreviewComposerStyle = computed(() => ({
-  background: gradientFromStops(props.theme.composerAngle, props.theme.composerStops, props.theme.composerOpacity),
-  color: props.theme.composerText,
-}))
-const themePreviewControlStyle = computed(() => ({
-  background: gradientFromStops(props.theme.controlAngle, props.theme.controlStops, props.theme.controlOpacity),
-  color: props.theme.controlText,
-}))
+const previewStyleFor = (area: ThemeArea, textColor: string) => ({
+  background: themeAreaBackground(props.theme, area),
+  backgroundImage: themeAreaImageLayer(props.theme, area),
+  backgroundSize: themeAreaImageSize(props.theme, area),
+  backgroundRepeat: themeAreaImageRepeat(props.theme, area),
+  backgroundPosition: 'center',
+  backdropFilter: themeAreaGlassFilter(props.theme, area),
+  color: textColor,
+})
+const themePreviewStyle = computed(() => previewStyleFor('backdrop', props.theme.backdropText))
+const themePreviewMainStyle = computed(() => previewStyleFor('main', props.theme.mainText))
+const themePreviewComposerStyle = computed(() => previewStyleFor('composer', props.theme.composerText))
+const themePreviewControlStyle = computed(() => previewStyleFor('control', props.theme.controlText))
 
 function modelsForProvider(providerId: string): CoreSettingsModel[] {
   return props.models.filter((model) => model.provider_id === providerId)
@@ -2123,7 +2147,30 @@ function getTextColor(area: ThemeArea): string {
   return props.theme[`${area}Text` as keyof ThemeData] as string
 }
 
+function getFillMode(area: ThemeArea): ThemeFillMode {
+  return themeAreaFill(props.theme, area)
+}
+
+function getGlassLevel(area: ThemeArea): ThemeGlassPreference {
+  return themeAreaGlass(props.theme, area)
+}
+
+function getImage(area: ThemeArea): string {
+  return themeAreaImage(props.theme, area)
+}
+
+function getImageFit(area: ThemeArea): ThemeImageFit {
+  return themeAreaImageFit(props.theme, area)
+}
+
 const presets = THEME_PRESETS
+
+// user:“我只要切换界面，编辑就自动取消了，那它不是永远不可能编辑到主界面吗”+
+// (设置页只负责入口：打开状态是应用级单例，编辑器由应用层挂载，切走设置页不中断编辑。)
+const { studioOpen } = useThemeStudio()
+function openThemeStudio(): void {
+  studioOpen.value = true
+}
 
 // All exits share actual draft comparisons, including the host's rail.
 const editorOverlayEl = ref<HTMLElement | null>(null)
@@ -2183,4 +2230,11 @@ onUnmounted(() => {
 </script>
 
 <!-- user:“将大的前端文件拆分成小块”+(设置页样式独立维护，保留组件作用域)。 -->
-<style scoped src="../styles/core-settings.css"></style>
+<!-- user:“还有大文件拆分”+(3059 行的设置样式按区块拆成六份，标签顺序即原文件顺序，
+     层叠与作用域保持不变) -->
+<style scoped src="../styles/core-settings-base.css"></style>
+<style scoped src="../styles/core-settings-models.css"></style>
+<style scoped src="../styles/core-settings-model-editor.css"></style>
+<style scoped src="../styles/core-settings-workspace.css"></style>
+<style scoped src="../styles/core-settings-surface.css"></style>
+<style scoped src="../styles/core-settings-permissions.css"></style>

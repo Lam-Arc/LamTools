@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
+import { readChatThreadSource } from './chatThreadSource.ts'
 import { resolve } from 'node:path'
 import CoreSubAgentPanel from '../src/components/CoreSubAgentPanel.vue'
 import CoreSubAgentDialog from '../src/components/CoreSubAgentDialog.vue'
@@ -455,20 +456,24 @@ describe('CoreSubAgentPanel', () => {
   it('wires the split sub-agent view from both the thread row and the right rail', () => {
     const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
     const hostSource = readFileSync(resolve(process.cwd(), 'src/components/RightSidebarHost.vue'), 'utf8')
-    const threadSource = readFileSync(resolve(process.cwd(), 'src/components/ChatThread.vue'), 'utf8')
+    const threadSource = readChatThreadSource(resolve(process.cwd(), 'src'))
     const shellCss = readFileSync(resolve(process.cwd(), 'src/styles/workspace-shell.css'), 'utf8')
     const paneSource = readFileSync(resolve(process.cwd(), 'src/components/CoreSubAgentPane.vue'), 'utf8')
 
     // 主线程与右栏都汇到同一条打开路径，壳体只按身份解析运行；
     // 解析走定点查找，分屏打开期间不再每帧整会话扫描。
     expect(appSource).toContain('@open-sub-agent="openSubAgentPane"')
-    expect(appSource).toContain("'workspace-shell--sub-agent-split': Boolean(openSubAgentRun)")
-    expect(appSource).toContain('<CoreSubAgentPane')
+    // user:“CoreSubAgentPane，rename to **Split Pane** 分屏”+(子代理改为通用分屏的一页，不再有专属的壳层分裂类)
+    expect(appSource).toContain(":class=\"{ 'workspace-shell--split': splitEnabled }\"")
+    expect(appSource).toContain('<CoreSplitWorkspace')
+    expect(appSource).toContain("splitWorkspace.add('agent'")
     expect(appSource).toContain('selectCoreSubAgentRun(messages.value, ref)')
     expect(appSource).not.toContain('findCoreSubAgentRun(selectCoreSubAgentRuns')
     // 续跑过的子代理以监督者记录为准（状态/耗时在消息投影里看不到）。
     expect(appSource).toContain("'sub_agent.list'")
-    expect(appSource).toContain(':durable-record=')
+    // 监督者记录现在按会话汇到分屏页与右栏，两处同源。
+    expect(appSource).toContain(':durable-records="effectiveSubAgentRecords"')
+    expect(appSource).toContain(':sub-agent-durable-records="effectiveSubAgentRecords"')
     expect(hostSource).toContain("emit('open-sub-agent', run)")
     expect(threadSource).toContain('@open-sub-agent="onOpenSubAgent"')
     // 旧的「定位到源消息并高亮」已由分屏取代。
@@ -476,10 +481,12 @@ describe('CoreSubAgentPanel', () => {
     // 分屏是整块聊天区的分裂：主区右内缩叠加卡宽，输入栏与正文跟着变窄；
     // 子代理卡是同一层级的第二张卡（固定几何 + 自己的圆角描边）。
     expect(shellCss).toContain('--main-right: calc(var(--main-right-base) + var(--sub-agent-split-extra, 0px))')
-    expect(shellCss).toContain('--sub-agent-split-extra: calc(var(--sub-agent-pane-width) + var(--sub-agent-split-gap))')
-    expect(paneSource).toContain('position: fixed')
-    expect(paneSource).toContain('var(--right-peek')
-    expect(paneSource).toContain('<Teleport defer :to="teleportTo">')
+    const splitCss = readFileSync(resolve(process.cwd(), 'src/styles/split-workspace.css'), 'utf8')
+    expect(splitCss).toContain('.workspace-shell--split .workspace-main')
+    const splitContent = readFileSync(resolve(process.cwd(), 'src/components/CoreSplitContent.vue'), 'utf8')
+    expect(splitContent).toContain("import CoreSubAgentView from './CoreSubAgentView.vue'")
+    expect(splitContent).toContain('<CoreSubAgentView')
+    expect(paneSource).toContain('CoreSubAgentView')
   })
 })
 

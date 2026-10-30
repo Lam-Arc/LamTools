@@ -328,6 +328,7 @@ def create_core_agent_operations(
                 *plugin_assembly.get("skill_roots", []),
             ],
             plugin_skill_modes=plugin_assembly.get("skill_modes") or {},
+            runtime_skills=_plugin_skill_provider(plugin_assembly),
             builtin_skill_roots=resolved_command_core_roots,
         ).registry
 
@@ -2556,6 +2557,7 @@ def create_core_agent_operations(
         skill_runtime = create_skill_runtime(
             plugin_skill_roots=plugin_assembly.get("skill_roots") or [],
             plugin_skill_modes=plugin_assembly.get("skill_modes") or {},
+            runtime_skills=_plugin_skill_provider(plugin_assembly),
         )
         plugin_tooling = _plugin_toolbox_contributions(plugin_assembly)
 
@@ -2577,6 +2579,7 @@ def create_core_agent_operations(
             loaded_skill_roots=skill_runtime.roots,
             skill_registry=skill_runtime.registry,
             plugin_tool_specs=plugin_tooling["specs"],
+            skill_state_store=SkillStateStore(Path(paths.data_dir) / "skill_state.json"),
             plugin_tool_handlers=plugin_tooling["handlers"],
             plugin_tool_providers=plugin_tooling["providers"],
             plugin_mode_tool_sets=plugin_tooling["mode_tool_sets"],
@@ -3656,6 +3659,13 @@ async def _persist_core_event_live(
         )
 
 
+def _plugin_skill_provider(plugin_assembly):
+    # user:“宿主能力补齐和接口完善与文档更新”+(目录、主代理、子代理和后台入口读取同一宿主的动态技能，不使用跨宿主全局状态)。
+    context = plugin_assembly.get("plugin_context")
+    host = context.service("skill_extensions") if context is not None else None
+    return host.snapshot if host is not None else None
+
+
 def _plugin_toolbox_contributions(plugin_assembly: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize plugin tool declarations for main and child Agent toolboxes."""
 
@@ -3724,6 +3734,12 @@ async def _build_core_runtime_toolbox(
     parent_guidance_sink: Callable[..., bool] | None = None,
     artifact_store: Any | None = None,
 ):
+    # user:“继续”+(桌面会话原项目缺失时先失败，不能让工具箱构造器重建一个空项目冒充恢复)。
+    directory_context = getattr(operation_catalog, "plugin_context", None) if operation_catalog is not None else None
+    if directory_context is not None and directory_context.service("working_directory") is not None:
+        from lamtools_core.plugin_system.working_directory import directory_exists, WorkingDirectoryError
+        if not directory_exists(Path(work_root), Path(work_root)):
+            raise WorkingDirectoryError("working-directory/missing", "Original session project is unavailable")
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
     from lamtools_core.tool.default_toolbox import build_core_toolbox
@@ -3741,6 +3757,7 @@ async def _build_core_runtime_toolbox(
     skill_runtime = create_skill_runtime(
         plugin_skill_roots=plugin_assembly.get("skill_roots") or [],
         plugin_skill_modes=plugin_assembly.get("skill_modes") or {},
+        runtime_skills=_plugin_skill_provider(plugin_assembly),
     )
     skill_roots = set(skill_runtime.roots)
     # Load tools configuration — prefer config dir, then member override, fallback to Core default
@@ -3863,6 +3880,9 @@ async def _build_core_runtime_toolbox(
         from lamtools_core.skills import SkillStateStore
 
         skill_state_store = SkillStateStore(Path(data_dir) / "skill_state.json")
+    if sub_agent_runner is not None:
+        # user:“宿主能力补齐和接口完善与文档更新”+(主/子助手共享禁用状态，子工具箱不能只继承技能正文而遗漏调用限制)。
+        sub_agent_runner.skill_state_store = skill_state_store
     # 用户权限覆盖（E3 共识）：{data_dir}/tool_permissions.jsonc，
     # 形如 {"permissions": {"rag_search": "ask_user"}}；仅作用于没有
     # manifest 声明的工具。manifest hard_block/permission 优先，disabled_tools
@@ -3928,6 +3948,11 @@ async def _build_core_runtime_toolbox(
     )
     if (runtime_snapshot or {}).get("auxiliary_read_only") is True:
         lock_auxiliary_toolbox(toolbox)
+    # user:“继续”+(统一工具箱构造路径接通主代理、恢复与审批重建后的目录读取)。
+    directory_context = getattr(operation_catalog, "plugin_context", None) if operation_catalog is not None else None
+    if directory_context is not None:
+        from .plugin_working_directory import install_runtime_directory_source
+        install_runtime_directory_source(toolbox, directory_context)
     return toolbox, registry
 
 

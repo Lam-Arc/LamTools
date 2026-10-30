@@ -323,6 +323,10 @@ def _runtime_context_text(fields: Mapping[str, Any]) -> str:
     mode = str(fields.get("mode") or "")
     if mode:
         lines.append(mode)
+    directory = fields.get("execution_directory")
+    if directory:
+        # user:“继续”+(目录以尾部上下文通知模型，不改稳定系统提示词)。
+        lines.append("Current working directory: " + json.dumps(str(directory), ensure_ascii=False) + ".")
     processes = fields.get("processes")
     if isinstance(processes, Mapping) and processes:
         lines.append(format_persistent_process_prompt({
@@ -383,6 +387,9 @@ def _runtime_context_delta(
         return None
 
     lines = ["[Runtime context update]"]
+    # user:“继续”+(目录变化沿用原尾部通道与去重，历史通知保持顺序)。
+    if previous.get("execution_directory") != current.get("execution_directory") and current.get("execution_directory"):
+        lines.append("Current working directory: " + json.dumps(str(current["execution_directory"]), ensure_ascii=False) + ".")
     if previous.get("capability") != current.get("capability"):
         value = str(current.get("capability") or "")
         lines.append(f"- Capability: {value}" if value else "- Capability: cleared")
@@ -1090,6 +1097,9 @@ class CoreBaseAgentKit:
             ]
         retry = metadata.get("empty_stop_retry_instruction")
         return {
+            # user:“继续”+(目录是必需运行上下文，保留在压缩后的快照中)。
+            **({"execution_directory": self.toolbox._execution_directory_notice}
+               if getattr(self.toolbox, "_execution_directory_notice", None) is not None else {}),
             "capability": self._capability_prompt_line(deferred),
             "mode": mode_prompt_line(
                 self.toolbox.load_tools, self.config.active_mode
@@ -1126,6 +1136,10 @@ class CoreBaseAgentKit:
         )
 
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
+        # user:“继续”+(纯聊天请求也验证目录，缺失时先恢复原项目；配置与模型仍绑定原项目)。
+        refresh_directory = getattr(self.toolbox, "refresh_execution_directory", None)
+        if callable(refresh_directory):
+            await refresh_directory(state.session_id)
         study_mode, effective_instructions = self._study_mode_and_instructions()
         if state.metadata is None:
             state.metadata = {}
@@ -1943,6 +1957,12 @@ def ensure_plugin_host_services(
     command_names = {c.name for c in load_command_catalog(core_roots=default_core_resource_roots(), member_roots=[])}
     command_names.update(c.name for c in assemble_capabilities(manifests).commands)
     ensure_command_extensions(plugin_context, reserved_names=command_names)
+    # user:“宿主能力补齐和接口完善与文档更新”+(内存技能能力在插件 start 之前就绪，复用既有受管所有权)。
+    from lamtools_core.plugin_system.skill_extensions import ensure_skill_extensions
+    ensure_skill_extensions(plugin_context)
+    # user:“宿主能力补齐和接口完善与文档更新”+(存储与现有 PluginHost.data_path 使用同一稳定 plugin-data 根，更新代码不迁移状态)。
+    from lamtools_core.plugin_system.storage_access import ensure_plugin_storage
+    ensure_plugin_storage(plugin_context, root=Path(data_dir) / "plugin-data")
 
     agent_presets = plugin_context.services.get("agent_presets")
     fresh_presets = build_agent_preset_registry(
@@ -2232,7 +2252,8 @@ def build_core_plugin_operation_catalog(
                 if skill.root is not None and skill.root.exists()
             }
         )
-        return create_skill_runtime(plugin_skill_roots=plugin_skill_roots).registry
+        return create_skill_runtime(plugin_skill_roots=plugin_skill_roots,
+            runtime_skills=plugin_context.require_service("skill_extensions").snapshot).registry
 
     from lamtools_core.app.operation_catalog import OperationCatalog
 

@@ -7,7 +7,7 @@
     <p v-if="!entries.length && !error">{{ t('暂无已信任操作') }}</p>
     <div v-for="entry in entries" :key="entry.key" class="permission-boundary-row">
       <div class="permission-setting-copy"><strong>{{ label(entry.key) }}</strong><span>{{ t('等级') }} {{ entry.level }}</span></div>
-      <button type="button" class="text-btn" :disabled="busy" data-trust-revoke @click="revoke(entry.key)">{{ t('撤销') }}</button>
+      <button type="button" class="btn btn--ghost" :disabled="busy" data-trust-revoke @click="revoke(entry.key)">{{ t('撤销') }}</button>
     </div>
   </section>
 </template>

@@ -285,6 +285,22 @@ def install_plugin_session_services(context, context_factory: Callable[[], Any])
     service = PluginSessionService(context_factory)
     context.set_service("live_turn_service", LiveTurnService(context_factory))
     context.set_service("sessions", service)
+    # user:“宿主能力补齐和接口完善与文档更新”+(手动压缩使用同一桌面会话宿主，不覆盖旧 agent preset 的 compaction 服务)。
+    from .plugin_compaction import PluginCompactionService
+    context.set_service("compaction_control", PluginCompactionService(service))
+    # user:“宿主能力补齐和接口完善与文档更新”+(权限读取使用同一桌面会话存储，与原权限判断器分开登记)。
+    from .plugin_permissions import PluginPermissionService
+    context.set_service("permission_access", PluginPermissionService(service))
+    from .plugin_session_query import PluginSessionQueryService
+    context.set_service("session_query", PluginSessionQueryService(service))
+    from .plugin_approvals import PluginApprovalService
+    context.set_service("approval_access", PluginApprovalService(service, context._service_registry))
+    # user:“继续，把 2 阶段都做完”+(目录共用原会话存储；另存执行目录，不动原项目身份)。
+    from .plugin_working_directory import PluginWorkingDirectoryService
+    context.set_service("working_directory", PluginWorkingDirectoryService(service))
+    # user:“给我把 2 阶段做完，前端除外”+(附件、标题和投影复用已就绪的桌面数据库)。
+    from .plugin_session_data import PluginSessionDataService
+    context.set_service("session_data", PluginSessionDataService(service, context.data_dir))
     return service
 
 

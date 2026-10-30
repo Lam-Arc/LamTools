@@ -12,11 +12,11 @@
       <div class="row-actions">
         <button
           v-if="!showCreateForm"
-          class="small-btn primary"
+          class="btn btn--primary"
           type="button"
           @click="openCreateForm"
         >{{ t("新建技能") }}</button>
-        <button class="text-btn" type="button" @click="refreshSkills">{{ t("刷新") }}</button>
+        <button class="btn btn--ghost" type="button" @click="refreshSkills">{{ t("刷新") }}</button>
       </div>
     </div>
 
@@ -48,8 +48,8 @@
           ></textarea>
         </label>
         <div class="editor-actions">
-          <button class="small-btn quiet" type="button" @click="closeCreateForm">{{ t("取消") }}</button>
-          <button class="small-btn primary" type="button" :disabled="createSaving" @click="submitCreate">
+          <button class="btn btn--quiet" type="button" @click="closeCreateForm">{{ t("取消") }}</button>
+          <button class="btn btn--primary" type="button" :disabled="createSaving" @click="submitCreate">
             {{ createSaving ? t("创建中…") : t("创建技能") }}
           </button>
         </div>
@@ -88,7 +88,7 @@
             <div class="row-actions">
               <button
                 v-if="skill.deletable"
-                class="text-btn danger icon-btn"
+                class="btn btn--ghost btn--danger icon-btn"
                 type="button"
                 :disabled="deletingName === skill.name"
                 :aria-label="t('删除技能 {0}', { 0: skill.name })"
@@ -98,7 +98,7 @@
                 <Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" />
               </button>
               <button
-                class="text-btn toggle-btn"
+                class="btn btn--ghost toggle-btn"
                 :class="{ 'is-on': skill.enabled }"
                 type="button"
                 :aria-label="skill.enabled ? t('禁用技能 {0}', { 0: skill.name }) : t('启用技能 {0}', { 0: skill.name })"

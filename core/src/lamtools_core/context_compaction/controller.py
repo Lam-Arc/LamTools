@@ -7,6 +7,7 @@ there is no permanent "already compacted" status.
 from __future__ import annotations
 
 import asyncio
+from math import ceil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -17,7 +18,6 @@ from lamtools_core.context_compaction_budget import (
     TokenBudget,
     TokenMeasurement,
     load_retained_steps,
-    measure_for_compaction_trigger,
     calibrated_tokens,
     resolve_retained_steps,
 )
@@ -110,6 +110,7 @@ class ContextCompactor:
         options: CompactionOptions | None = None,
         trigger: str | None = None,
         retained_steps: int | None = None,
+        authoritative_tokens: int = 0,
         _skip_trigger_check: bool = False,
     ) -> ContextCompactionResult | None:
         """Run the common compaction pipeline when the invocation warrants it.
@@ -134,12 +135,22 @@ class ContextCompactor:
                 retained_steps=effective_retained_steps,
             )
         target_tokens = resolved_options.target_tokens or budget.target_tokens
+        measurement: TokenMeasurement | None = None
         if not resolved_options.force and not _skip_trigger_check:
-            measurement = measure_for_compaction_trigger(
-                messages,
-                trigger_tokens=budget.trigger_tokens,
-                fast_estimate=self._estimate_tokens,
-                exact_estimate=self._estimate_exact_tokens,
+            # user:“压缩的数值只应该使用一种权威值”+(触发也用同一个估算口径，
+            # 不再分快慢两路，避免小波动时切换口径)。
+            estimator = self._estimate_exact_tokens or self._estimate_tokens
+            estimate = (
+                estimator(list(messages))
+                if estimator is not None
+                else estimate_message_tokens(
+                    [message.to_dict() for message in messages]
+                )
+            )
+            measurement = TokenMeasurement(
+                tokens=calibrated_tokens(estimate),
+                exact=True,
+                source="estimate",
             )
             if measurement.tokens < budget.trigger_tokens:
                 return None
@@ -155,6 +166,11 @@ class ContextCompactor:
             timeout=self._timeout,
             limit_tokens=target_tokens,
             input_limit_tokens=input_limit_tokens,
+            authoritative_tokens=(
+                authoritative_tokens
+                if authoritative_tokens > 0
+                else (measurement.tokens if measurement is not None else 0)
+            ),
             existing_summary=self._existing_summary,
             request_metadata=dict(self._request_metadata),
             on_delta=self._on_delta,
@@ -390,6 +406,7 @@ class ContextCompactionController:
                 options=CompactionOptions(force=False, target_tokens=limit_tokens),
                 trigger=trigger,
                 retained_steps=retained_steps,
+                authoritative_tokens=resolved_measurement.tokens,
                 _skip_trigger_check=True,
             )
 
@@ -473,11 +490,19 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
             exact=True,
         ),
     )
-    before_tokens = _estimate_compaction_tokens(
+    estimated_before = _estimate_compaction_tokens(
         request,
         request.messages,
         exact=request.estimate_exact_tokens is not None,
     )
+    # user:“before_tokens应作为唯一权威实际值”+(调用方给的真实口径优先，
+    # 没有时估算兜底；下游所有判断都从这一个数派生)。
+    before_tokens = (
+        max(0, int(request.authoritative_tokens))
+        if request.authoritative_tokens > 0
+        else estimated_before
+    )
+    raw_total = _estimate_compaction_tokens(request, request.messages, exact=True)
     # A manual command may be available in a runtime that has no model client
     # (for example a local command catalog).  If the history already fits the
     # requested target, report a harmless no-op instead of trying to summarize
@@ -537,10 +562,14 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
     # user:“用户消息那个也许可以取消？”+(取消最多 50 条原话的常驻附录；当前请求保留原角色，历史原文由召回工具按需读取)。
     existing_recent = extract_recent_user_messages(request.existing_summary)
     required_tail = [message for message in layout.retained_messages if message.role == "user" and not message.metadata.get("internal")][-1:]
-    protected_tokens = _estimate_compaction_tokens(
-        request,
-        [*layout.prefix_messages, *required_tail],
-        exact=True,
+    protected_tokens = _scale_authoritative_tokens(
+        before_tokens,
+        _estimate_compaction_tokens(
+            request,
+            [*layout.prefix_messages, *required_tail],
+            exact=True,
+        ),
+        raw_total,
     )
     if protected_tokens > request.limit_tokens:
         result = _failed_compaction_result(
@@ -556,6 +585,9 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         await _emit_compaction_event(request, result.display_payload)
         return result
 
+    # user:“before_tokens应作为唯一权威实际值”+(整段请求的权威总量直接决定
+    # 摘要分成几段，不再从本地估算里猜可摘要部分)。
+    summarizable_authoritative = before_tokens
     try:
         messages_for_summary = [
             replace(
@@ -581,6 +613,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
                 request.existing_summary,
                 existing_recent if existing_recent else None,
             ),
+            authoritative_tokens=summarizable_authoritative or None,
             prefix_messages=layout.prefix_messages,
             on_delta=request.on_delta,
             on_event=lambda payload: _emit_compaction_event(request, payload),
@@ -626,7 +659,14 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
                 system_prefix=list(layout.prefix_messages),
                 summary_message=summary_message,
                 recent_messages=list(layout.retained_messages),
-                target_tokens=request.limit_tokens,
+                # The fitter works in raw local units; project the one
+                # authoritative target into that unit so the final ratio still
+                # lands under limit_tokens.
+                target_tokens=(
+                    ceil(request.limit_tokens * raw_total / before_tokens)
+                    if 0 < before_tokens < raw_total
+                    else request.limit_tokens
+                ),
             )
         )
     except CompactionBudgetExceeded as exc:
@@ -651,7 +691,14 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         fitted_recent_user_messages
     )
     retained_messages = replacement_messages[prefix_count + 1 :]
-    after_tokens = fit_result.estimated_tokens
+    # The authoritative ratio says whether compaction gained anything; the
+    # smaller estimate keeps the reported number in a sane unit for the UI.
+    after_ratio_tokens = _scale_authoritative_tokens(
+        before_tokens,
+        _estimate_compaction_tokens(request, replacement_messages, exact=True),
+        raw_total,
+    )
+    after_tokens = min(after_ratio_tokens, fit_result.estimated_tokens)
     if after_tokens >= before_tokens:
         result = ContextCompactionResult(
             status="not_needed",
@@ -772,6 +819,15 @@ def _failed_compaction_result(
         limit_tokens=request.limit_tokens,
         display_payload=display_payload,
     )
+
+
+def _scale_authoritative_tokens(
+    authoritative: int, raw_part: int, raw_total: int
+) -> int:
+    """Project a local raw estimate into the authoritative token unit."""
+    if authoritative <= 0 or raw_total <= 0:
+        return max(0, raw_part)
+    return ceil(authoritative * max(0, raw_part) / raw_total)
 
 
 def _estimate_compaction_tokens(

@@ -72,7 +72,7 @@
 
       <p v-if="!fields.length" class="config-empty">{{ t("这个插件没有可配置项。") }}</p>
       <div v-if="fields.length" class="config-actions">
-        <button class="small-btn primary" type="submit" :disabled="saving">
+        <button class="btn btn--primary" type="submit" :disabled="saving">
           {{ saving ? t("保存中…") : t("保存配置") }}
         </button>
       </div>
@@ -517,7 +517,7 @@ textarea.config-input {
   gap: var(--space-2);
 }
 
-.config-actions .small-btn:disabled {
+.config-actions .btn--secondary:disabled {
   opacity: .45;
   cursor: default;
 }

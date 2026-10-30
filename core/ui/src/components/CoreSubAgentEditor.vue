@@ -13,7 +13,7 @@
       <div class="subhead">
         <span class="muted">{{ t("默认多模态解析模型") }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="settingsLoading || settingsSaving" @click="saveSettings">{{ t("保存") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="settingsLoading || settingsSaving" @click="saveSettings">{{ t("保存") }}</button>
         </div>
       </div>
       <UiSelect
@@ -37,7 +37,7 @@
         </div>
         <div class="subhead-actions">
           <button
-            class="text-btn"
+            class="btn btn--ghost"
             type="button"
             :disabled="settingsLoading || delegationStrategySaving"
             data-delegation-strategy-save
@@ -72,14 +72,14 @@
         </div>
         <div class="subhead-actions">
           <button
-            class="text-btn"
+            class="btn btn--ghost"
             type="button"
             :disabled="settingsLoading || roleAssignmentsSaving"
             data-role-assignment-add
             @click="addRoleAssignment"
           >{{ t("新增") }}</button>
           <button
-            class="text-btn"
+            class="btn btn--ghost"
             type="button"
             :disabled="settingsLoading || roleAssignmentsSaving"
             data-role-assignment-save
@@ -164,7 +164,7 @@
             />
           </label>
           <button
-            class="text-btn danger role-assignment-remove"
+            class="btn btn--ghost btn--danger role-assignment-remove"
             type="button"
             :disabled="settingsLoading || roleAssignmentsSaving"
             :aria-label="t('删除角色分配 {0}', { 0: index + 1 })"
@@ -189,8 +189,8 @@
       <div class="subhead">
         <span class="muted">{{ loading ? t("加载中…") : statusLabel }}</span>
         <div class="subhead-actions">
-          <button class="text-btn" type="button" :disabled="loading || saving" @click="guideSettingsDraft.requestReplace(() => void fetchGuide())">{{ t("刷新") }}</button>
-          <button class="text-btn" type="button" :disabled="loading || saving" @click="saveGuide">{{ t("保存") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="loading || saving" @click="guideSettingsDraft.requestReplace(() => void fetchGuide())">{{ t("刷新") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="loading || saving" @click="saveGuide">{{ t("保存") }}</button>
         </div>
       </div>
 

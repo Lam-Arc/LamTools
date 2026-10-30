@@ -409,15 +409,6 @@
           @edit-message="handleEditMessage"
           @open-sub-agent="openSubAgentPane"
         />
-        <!-- user:“做吧”+(发送状态按请求与聊天隔离，保留失败和待确认消息的恢复入口)。 -->
-        <CoreSubmissionStatus
-          :submissions="visibleSubmissions"
-          :can-edit="!composerText.trim() && pendingAttachments.length === 0"
-          :busy="liveComposerController.submitting.value"
-          @retry="liveComposerController.retrySubmission"
-          @edit="liveComposerController.editSubmission"
-          @dismiss="liveComposerController.dismissSubmission"
-        />
         <Transition name="thread-jump-latest">
           <button
             v-if="!isEmptySession && !threadScroll.autoFollow.value"
@@ -466,6 +457,16 @@
     </template>
 
     <template #composer-queue-panel>
+      <!-- user:“你悬浮的胶囊应该在它的上方，它不存在时在输入栏的上方”+(发送状态胶囊
+           与目标/排队托盘共用输入栏上沿的同一挂载点，胶囊排在最上面)。 -->
+      <CoreSubmissionStatus
+        :submissions="visibleSubmissions"
+        :can-edit="!composerText.trim() && pendingAttachments.length === 0"
+        :busy="liveComposerController.submitting.value"
+        @retry="liveComposerController.retrySubmission"
+        @edit="liveComposerController.editSubmission"
+        @dismiss="liveComposerController.dismissSubmission"
+      />
       <CoreQueuedInputTray
         :goal="activeGoal || undefined"
         v-model:draft="queuedInputDraft"
@@ -592,6 +593,9 @@
   </WorkspaceShell>
 
   <ContextMenuHost />
+  <!-- user:“我只要切换界面，编辑就自动取消了，那它不是永远不可能编辑到主界面吗”+
+       (编辑器挂在应用层：从设置页点开后切到任何界面都不卸载，贴着当前界面继续编辑。) -->
+  <ThemeStudio v-if="themeStudioOpen" />
   <CoreConfirmDialog
     :open="Boolean(appConfirm)"
     :title="appConfirm?.title || ''"
@@ -718,10 +722,12 @@ import {
   type CoreComposerControls,
 } from '@/composables/index.ts'
 
-import AttachmentTray from '@/components/AttachmentTray.vue'
+// user:“合并去重”+(附件托盘已并入输入栏，应用侧只保留待发附件状态)
 import AttachmentSourceMenu from '@/components/AttachmentSourceMenu.vue'
 import CoreSubmissionStatus from '@/components/CoreSubmissionStatus.vue'
 import ChatThread from '@/components/ChatThread.vue'
+import { THEME_STUDIO_STORAGE_KEY } from '@/themeStudio/constants.ts'
+import { applyStoredPublishedTheme } from '@/themeStudio/bootstrap.ts'
 import ChatOutlineNavigator from '@/components/ChatOutlineNavigator.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import AppRail, { type AppRailView } from '@/components/AppRail.vue'
@@ -737,6 +743,10 @@ import CoreProjectPicker from '@/components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '@/components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '@/components/CoreSessionTitleEditor.vue'
 import { ContextMenuHost } from '@/components/context-menu/index.ts'
+import { useThemeStudio } from '@/composables/useThemeStudio.ts'
+// 界面编辑器按需加载：打开才拉取编辑器代码，日常运行不为此付出体积（设计 §16 性能验收）。
+const ThemeStudio = defineAsyncComponent(() => import('@/components/ThemeStudio.vue'))
+const { studioOpen: themeStudioOpen } = useThemeStudio()
 import SelectionAssistant from '@/study/SelectionAssistant.vue'
 import type { MarkAnchor } from '@/study/types.ts'
 import { selectionEvents } from '@/study/annotations.ts'
@@ -770,6 +780,7 @@ import { useCorePageBindings } from '@/app/useCorePageBindings'
 import CoreSplitWorkspace from '@/components/CoreSplitWorkspace.vue'
 import CoreSplitContent from '@/components/CoreSplitContent.vue'
 import { useSplitWorkspace } from '@/split/useSplitWorkspace'
+import { openFileInSplit, openFileWithDefaultApp } from '@/split/openFile'
 import { createAuxiliaryWorkspace, AuxiliaryWorkspaceKey } from '@/auxiliary/workspace'
 import { createSplitDocuments } from '@/split/documents'
 import { Columns2 } from 'lucide-vue-next'
@@ -1029,7 +1040,8 @@ async function openMainPluginFile(path: string, scope: {workRoot: string; projec
   if (!contributionState().loaded) await ensureContributions(requestConfigOperation)
   const page = findPluginFilePage(contributionState().pages, path)
   if (page) splitWorkspace.openPluginPage(page, undefined, {...scope, filePath:path})
-  else splitWorkspace.add('editor', path, path.split(/[\\/]/).pop() || path, undefined, scope.sessionId, scope.workRoot, scope.projectId)
+  // user:“分屏预览器不支持图片吗？”+(富媒体与 Office 文档按类型进预览器，文本仍用编辑器)。
+  else if (!openFileInSplit(splitWorkspace, path, scope)) void openFileWithDefaultApp(transport, path, scope.workRoot)
 }
 function onPluginPageRequest(event: Event) {
   const target = (event as CustomEvent<{ plugin?: string; id?: string }>).detail
@@ -4185,17 +4197,27 @@ function openSessionFromSearch(sessionId: string): void {
 }
 
 /**
- * 文件命中行：交给系统默认应用打开（与资料库点文件同一条通道，路径相对
- * 工作根、越界与不存在都会由后端拒绝）。不走带重试的配置通道——打不开要
- * 立刻说话，不能让用户在被重试的等待里沉默几秒。失败向上抛，由搜索面
- * 在结果旁边显示；命中行号一并带上，当前外部应用只会从头显示它——精确
- * 落到某一行需要应用内预览层，属后续能力，不在本轮范围。
+ * 文件命中行：先核实真实路径，再按类型在分屏里打开（文本进编辑器、图片/文档进预览器）；
+ * 分屏不可用的端才回落到系统默认应用。不走带重试的配置通道——打不开要立刻说话，
+ * 不能让用户在被重试的等待里沉默几秒。失败向上抛，由搜索面在结果旁边显示。
  */
 async function openFileFromSearch(hit: { path: string; line?: number }): Promise<void> {
   const path = String(hit.path || '').trim()
   if (!path) throw new Error(t("这一行没有可打开的文件路径"))
   const projectId = activeProjectId.value ?? selectedProjectId.value
   if (!projectId) throw new Error(t("当前没有可用的项目，无法打开文件"))
+  const workRoot = currentWorkRoot()
+  // user:“默认打开也跟文本文件一样 用分屏预览打开”+(搜索命中不再丢给系统应用，默认进分屏)。
+  if (appRuntime.platform !== 'mobile') {
+    let actual = path
+    if (transport) {
+      const query = new URLSearchParams({ path, ...(workRoot ? { work_root: workRoot } : {}) })
+      const response = await transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path: `/files/resolve-reference?${query.toString()}` })
+      const result = response.status === 200 ? JSON.parse(new TextDecoder().decode(response.body)) : null
+      if (typeof result?.path === 'string' && result.path) actual = result.path
+    }
+    if (openFileInSplit(splitWorkspace, actual, { workRoot, projectId })) return
+  }
   await appRuntime.requestRpc('artifact.open', { project_id: projectId, path })
 }
 
@@ -4465,8 +4487,23 @@ defineExpose({
   openProject,
 })
 
+// user:“主题损坏时仍可恢复”+(不依赖能进设置页：Ctrl+Alt+Shift+R 清掉编辑器发布的主题并重载)
+window.addEventListener('keydown', (event) => {
+  if (event.ctrlKey && event.altKey && event.shiftKey && event.key.toLowerCase() === 'r') {
+    try {
+      globalThis.localStorage?.removeItem(THEME_STUDIO_STORAGE_KEY)
+    } catch {
+      /* 存储不可用时直接重载，至少回到默认外观 */
+    }
+    location.reload()
+  }
+})
+
 onMounted(() => {
   void uiPreferences.load()
+  // user:“而且为什么这个点了发布之后 它的修改不生效啊”+
+  // (发布过的主题必须在启动时恢复应用为正式样式，不能只活在编辑器打开期间。)
+  applyStoredPublishedTheme()
   // 全窗口拖拽上传：window 级监听亮起遮罩（Tauri 需 dragDropEnabled: false 才走 HTML5 事件）
   window.addEventListener('dragover', handleWindowDragOver)
   window.addEventListener('dragleave', handleWindowDragLeave)
@@ -4661,7 +4698,7 @@ onUnmounted(() => {
   justify-content: flex-end;
   gap: 6px;
 }
-.wf-create-actions .text-btn,
+.wf-create-actions .btn--ghost,
 .wf-create-actions .primary-btn {
   height: 28px;
   padding: 0 12px;
@@ -4670,7 +4707,7 @@ onUnmounted(() => {
   font-size: 12px;
   cursor: pointer;
 }
-.wf-create-actions .text-btn {
+.wf-create-actions .btn--ghost {
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
 }

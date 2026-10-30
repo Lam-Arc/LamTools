@@ -12,12 +12,12 @@
       <div class="row-actions">
         <button
           v-if="!showHookForm && !showConfig"
-          class="small-btn primary"
+          class="btn btn--primary"
           type="button"
           @click="openHookForm"
         >{{ t("新增 Hook") }}</button>
         <button
-          class="text-btn"
+          class="btn btn--ghost"
           type="button"
           @click="toggleConfigView"
         >
@@ -104,8 +104,8 @@
           </button>
         </div>
         <div class="editor-actions field-wide">
-          <button type="button" class="small-btn quiet" @click="showHookForm = false">{{ t("取消") }}</button>
-          <button class="small-btn primary" type="submit" :disabled="hookFormSaving">
+          <button type="button" class="btn btn--quiet" @click="showHookForm = false">{{ t("取消") }}</button>
+          <button class="btn btn--primary" type="submit" :disabled="hookFormSaving">
             {{ hookFormSaving ? t("保存中…") : t("添加") }}
           </button>
         </div>
@@ -125,9 +125,9 @@
       <div class="subhead">
         <span class="muted" :class="{ 'hook-config-error': configError }">{{ configMessage || t("修改后需重启后端生效。") }}</span>
         <div class="row-actions">
-          <button class="text-btn" type="button" @click="revertConfig">{{ t("还原") }}</button>
+          <button class="btn btn--ghost" type="button" @click="revertConfig">{{ t("还原") }}</button>
           <button
-            class="small-btn"
+            class="btn btn--secondary"
             type="button"
             :disabled="configSaving"
             @click="saveConfig"
@@ -171,19 +171,19 @@
               <span class="hook-status" :class="hook.trusted ? 'is-trusted' : 'is-pending-text'">{{ hook.trusted ? t("已信任") : t("待审核") }}</span>
               <button
                 v-if="!hook.trusted"
-                class="text-btn is-on"
+                class="btn btn--ghost is-on"
                 type="button"
                 @click="trustHook(hook.id)"
               >{{ t("信任") }}</button>
               <button
                 v-else
-                class="text-btn"
+                class="btn btn--ghost"
                 type="button"
                 @click="untrustHook(hook.id)"
               >{{ t("取消") }}</button>
               <button
                 v-if="canDelete(hook)"
-                class="text-btn danger"
+                class="btn btn--ghost btn--danger"
                 type="button"
                 @click="deleteHook(hook.id)"
               >{{ t("删除") }}</button>
@@ -559,7 +559,7 @@ onMounted(fetchHooks)
   color: var(--orange);
 }
 
-.text-btn.is-on {
+.btn--ghost.is-on {
   color: var(--green);
 }
 

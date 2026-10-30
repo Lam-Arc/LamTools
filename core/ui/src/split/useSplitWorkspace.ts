@@ -31,7 +31,7 @@ export function useSplitWorkspace(storageKey: Ref<string>, workRoot?: Ref<string
     if (!pane) pane = splitPane(state, 'main', 'right') || undefined
     if (!pane) return null
     state.focused = null
-    return openTab(state, pane, { id: newTabId(), kind, resource, root, projectId: boundProjectId || undefined, title: title || ({ page: resource, editor: '文本编辑器', files: '文件', browser: '浏览器', agent: '子代理', conversation: '辅助对话', plugin: '插件页面' })[kind], ...(sessionId ? { sessionId } : {}) })
+    return openTab(state, pane, { id: newTabId(), kind, resource, root, projectId: boundProjectId || undefined, title: title || ({ page: resource, editor: '文本编辑器', preview: '文件预览', files: '文件', browser: '浏览器', agent: '子代理', conversation: '辅助对话', plugin: '插件页面' })[kind], ...(sessionId ? { sessionId } : {}) })
   }
   function guardTabs(list: SplitTab[], proceed: () => void) {
     const next = (index: number) => { if (index === list.length) proceed(); else { const guard = guards.get(list[index].id); if (guard) guard(() => next(index + 1)); else next(index + 1) } }

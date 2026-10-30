@@ -304,3 +304,193 @@ def test_command_migration_maps_registration_and_discovery_without_fake_handler_
     assert "suggestedContract" not in report["events"][0]
     assert "plugin_command_extensions.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
     assert report["status"] == "needs-port" and report["runtimeVerified"] is False
+
+
+def test_skill_migration_separates_embedded_registration_from_unimplemented_providers(tmp_path):
+    root = source(tmp_path, {"index.js": '''export function apply(ctx) {
+        ctx.skills.register({name: 'example', modelInvocable: false, userInvocable: true});
+        ctx.skills.list({cwd: '.'});
+        ctx.skills.registerProvider(provider);
+        ctx.skills.snapshot({});
+        ctx.on('skills/change', () => {});
+    }'''})
+    report = export_port(root, tmp_path / "ported")
+    assert report["sundayHostContracts"]["skills"]["status"] == "verified-python"
+    methods = {item["name"]: item for item in report["skillMethods"]}
+    assert methods["register"]["suggestedContract"] == "context.skills.register"
+    assert methods["list"]["suggestedContract"] == "skill.list"
+    assert "suggestedContract" not in methods["registerProvider"]
+    assert "suggestedContract" not in methods["snapshot"]
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert "suggestedContract" not in report["events"][0]
+    assert "plugin_skill_extensions.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+    assert report["status"] == "needs-port" and report["runtimeVerified"] is False
+
+
+def test_model_migration_exposes_read_only_mapping_without_claiming_stream_or_route_policy(tmp_path):
+    root = source(tmp_path, {"index.js": '''export function apply(ctx) {
+        ctx.llm.listModels();
+        ctx.llm.resolveModelInfo({provider: 'one', model: 'wire'});
+        ctx.llm.stream({});
+        ctx.agentDefaultModel.currentSelection();
+        ctx.agentDefaultModel.saveSelection({});
+        ctx.subagentModelSelection.currentSelection();
+    }'''})
+    report = export_port(root, tmp_path / "ported")
+    assert report["sundayHostContracts"]["models"]["status"] == "verified-python"
+    methods = {item["name"]: item for item in report["modelMethods"]}
+    assert methods["llm.listModels"]["suggestedContract"] == "context.models.list"
+    assert methods["llm.resolveModelInfo"]["suggestedContract"] == "context.models.resolve"
+    assert methods["agentDefaultModel.currentSelection"]["suggestedContract"] == "context.models.select"
+    assert methods["llm.stream"]["suggestedContract"] == "context.llm.stream"
+    for name in ("agentDefaultModel.saveSelection", "subagentModelSelection.currentSelection"):
+        assert "suggestedContract" not in methods[name]
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert "plugin_model_access.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+    assert report["status"] == "needs-port" and report["runtimeVerified"] is False
+
+
+def test_storage_migration_requires_domain_redesign_instead_of_blind_open_replacement(tmp_path):
+    root = source(tmp_path, {"index.js": '''export async function apply(ctx) {
+        ctx.storage.register('json', backend);
+        ctx.storage.mount('domain', facility);
+        const domain = await ctx.storageDomain.open(spec);
+        ctx.on('domain/changed', () => {});
+    }'''})
+    report = export_port(root, tmp_path / "ported")
+    assert report["sundayHostContracts"]["storage"]["status"] == "verified-python"
+    methods = {item["name"]: item for item in report["storageMethods"]}
+    assert methods["storageDomain.open"]["candidateContract"] == "context.storage.open"
+    assert all(item["conversion"] == "agent-required" and "suggestedContract" not in item for item in methods.values())
+    assert "candidateContract" not in methods["storage.register"]
+    assert "candidateContract" not in methods["storage.mount"]
+    assert "suggestedContract" not in report["events"][0]
+    assert "plugin_storage_access.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+    assert report["status"] == "needs-port" and report["runtimeVerified"] is False
+
+
+def test_credential_migration_keeps_reference_subset_separate_from_record_and_event_contracts(tmp_path):
+    root = source(tmp_path, {"index.js": '''export async function apply(ctx) {
+        await ctx.credentials.resolve(ref);
+        await ctx.credentials.describe(ref);
+        await ctx.credentials.set(ref, 'value');
+        await ctx.credentials.unset(ref);
+        await ctx.credentials.readRecord(key);
+        await ctx.credentials.modifyRecord(key, change);
+        ctx.on('credentials/reference-updated', () => {});
+    }'''})
+    report = export_port(root, tmp_path / "ported")
+    assert report["sundayHostContracts"]["credentials"]["status"] == "verified-python"
+    methods = {item["name"]: item for item in report["credentialMethods"]}
+    for name in ("resolve", "describe", "set", "unset"):
+        assert methods[name]["suggestedContract"] == "context.credentials." + name
+    for name in ("readRecord", "modifyRecord"):
+        assert "suggestedContract" not in methods[name]
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert "suggestedContract" not in report["events"][0]
+    assert "plugin_credentials.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+    assert report["status"] == "needs-port" and report["runtimeVerified"] is False
+
+
+def test_config_migration_requires_revision_and_separates_save_from_profile_apply(tmp_path):
+    root = source(tmp_path, {"index.js": '''export async function apply(ctx) {
+        await ctx.configEditor.edit(change);
+        ctx.settings.configure({auto: false}, ctx.fiber);
+        ctx.on('config/changed', () => {});
+    }'''})
+    report = export_port(root, tmp_path / "ported")
+    assert report["sundayHostContracts"]["config"]["status"] == "verified-python"
+    methods = {item["name"]: item for item in report["configMethods"]}
+    assert methods["configEditor.edit"]["candidateContract"] == "context.config.replace"
+    assert "suggestedContract" not in methods["configEditor.edit"]
+    assert "candidateContract" not in methods["settings.configure"]
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert "suggestedContract" not in report["events"][0]
+    assert "plugin_config_access.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+    assert report["status"] == "needs-port" and report["runtimeVerified"] is False
+def test_filesystem_methods_require_explicit_semantic_porting(tmp_path):
+    src = source(tmp_path, {"index.ts": 'ctx.fs.stat(target); ctx.fs.readBytes(target); ctx.fs.watch(target); ctx.workingDirectory.get(session); ctx.workingDirectory.set(agent, path);'})
+    report = export_port(src, tmp_path / "ported")
+    methods = {item["name"]: item for item in report["filesystemMethods"]}
+    assert methods["fs.stat"]["suggestedContract"] == "context.filesystem.stat"
+    assert methods["fs.readBytes"]["suggestedContract"] == "context.filesystem.read_bytes"
+    assert "suggestedContract" not in methods["fs.watch"]
+    # user:“继续，把 2 阶段都做完”+(已有持久目录候选仍须人工适配修订和执行视图)。
+    assert methods["workingDirectory.get"]["candidateContract"] == "context.working_directory.get"
+    assert methods["workingDirectory.set"]["candidateContract"] == "context.working_directory.set"
+    assert "suggestedContract" not in methods["workingDirectory.set"]
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert report["runtimeVerified"] is False
+    assert "plugin_filesystem_access.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+
+
+def test_compaction_methods_preserve_manual_only_and_failure_boundaries(tmp_path):
+    # user:“剩下问题交给 agent 来移植”+(只为手动压缩提供近似接口，自动策略与区间压缩不得自动套用)。
+    src = source(tmp_path, {"index.ts": 'ctx.compaction.compactNow(agent, signal); ctx.compaction.compactIfNeeded(agent); ctx.compaction.compactRegion(start, end, agent); ctx.compaction.futureMethod();'})
+    report = export_port(src, tmp_path / "ported")
+    methods = {item["name"]: item for item in report["compactionMethods"]}
+    assert methods["compactNow"]["suggestedContract"] == "context.compaction.compact_now"
+    assert all("suggestedContract" not in methods[name] for name in ("compactIfNeeded", "compactRegion", "futureMethod"))
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert report["runtimeVerified"] is False and report["status"] == "needs-port"
+    handoff = (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+    assert "plugin_compaction_access.md" in handoff and "compactNow" in handoff
+
+
+def test_permission_read_mappings_never_grant_or_imitate_approval_requests(tmp_path):
+    # user:“剩下问题交给 agent 来移植”+(权限读侧不能被脚本替换为批准、修改策略或回答请求)。
+    src = source(tmp_path, {"index.ts": 'ctx.permissionPresets.catalog(); ctx.permissionPresets.current(session); ctx.permissionPresets.set(session, value); ctx.permissionPresets.registerAuto(admit); ctx.approval.request(req); ctx.approval.setPolicy(agent, policy);'})
+    report = export_port(src, tmp_path / "ported")
+    methods = {item["name"]: item for item in report["permissionMethods"]}
+    assert methods["permissionPresets.catalog"]["suggestedContract"] == "context.permissions.catalog"
+    assert methods["permissionPresets.current"]["suggestedContract"] == "context.permissions.read"
+    assert methods["approval.request"]["suggestedContract"] == "context.approvals.request"
+    for name in ("permissionPresets.set", "permissionPresets.registerAuto", "approval.setPolicy"):
+        assert "suggestedContract" not in methods[name] and "candidateContract" not in methods[name]
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert not report["runtimeVerified"] and report["status"] == "needs-port"
+    assert "plugin_permission_access.md" in (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+
+
+def test_process_lookup_handoff_does_not_claim_spawn_or_shell_compatibility(tmp_path):
+    # user:“写好清单，逐项打勾完成，不要出错”+(程序解析只能映射解析，不能把执行和回收待办提前打勾)。
+    src = source(tmp_path, {"index.ts": 'scrubbedParentEnv(); ctx.subprocess.resolveExecutable("python"); ctx.subprocess.spawn(spec); ctx.subprocess.spawnTerminal(spec); ctx.shell.execute(spec);'})
+    report = export_port(src, tmp_path / "ported")
+    methods = {item["name"]: item for item in report["processMethods"]}
+    assert methods["subprocess.resolveExecutable"]["suggestedContract"] == "context.processes.resolve_executable"
+    assert methods["scrubbedParentEnv"]["suggestedContract"] == "context.processes.environment"
+    assert methods["subprocess.spawn"]["suggestedContract"] == "context.processes.spawn"
+    for name in ("subprocess.spawnTerminal",):
+        assert "suggestedContract" not in methods[name] and "candidateContract" not in methods[name]
+    # user:“继续，把 2 阶段都做完”+(受管 PowerShell 新增近似候选，仍不声称直接转换或完整 shell 兼容)。
+    assert methods["shell.execute"]["candidateContract"] == "context.shell.execute"
+    assert "suggestedContract" not in methods["shell.execute"]
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert not report["runtimeVerified"] and report["status"] == "needs-port"
+    text = (tmp_path / "ported/PORTING.md").read_text(encoding="utf-8")
+    assert "plugin_process_access.md" in text and "dsh_compatibility_checklist.md" in text
+
+
+def test_range_and_lstat_migration_preserve_missing_and_window_differences(tmp_path):
+    # user:“写好清单，逐项打勾完成，不要出错”+(新文件子集逐项映射，流和写入仍不标成已实现)。
+    src = source(tmp_path, {"index.ts": 'ctx.fs.readByteRange(target, range, signal); ctx.fs.lstat(path); ctx.fs.streamText(target); ctx.fs.writeText(target, content);'})
+    report = export_port(src, tmp_path / "ported")
+    methods = {item["name"]: item for item in report["filesystemMethods"]}
+    assert methods["fs.readByteRange"]["suggestedContract"] == "context.filesystem.read_byte_range"
+    assert methods["fs.lstat"]["suggestedContract"] == "context.filesystem.lstat"
+    assert methods["fs.streamText"]["suggestedContract"] == "context.filesystem.stream_text"
+    assert methods["fs.writeText"]["suggestedContract"] == "context.filesystem.write_text"
+    assert all(item["conversion"] == "agent-required" for item in methods.values())
+    assert not report["runtimeVerified"] and report["status"] == "needs-port"
+
+
+def test_stream_text_handoff_requires_full_consumption_and_explicit_limits(tmp_path):
+    # user:“继续，列好清单 逐项打勾”+(文本流只映射已验收的有限同步子集，写入和监听仍保留待办)。
+    src = source(tmp_path, {"index.ts": 'ctx.fs.streamText(target, signal); ctx.fs.writeText(target, text); ctx.fs.watch(target, changed, signal);'})
+    report = export_port(src, tmp_path / "ported")
+    methods = {item["name"]: item for item in report["filesystemMethods"]}
+    assert methods["fs.streamText"]["suggestedContract"] == "context.filesystem.stream_text"
+    assert methods["fs.writeText"]["suggestedContract"] == "context.filesystem.write_text"
+    assert "suggestedContract" not in methods["fs.watch"]
+    assert methods["fs.streamText"]["conversion"] == "agent-required"
+    assert not report["runtimeVerified"] and report["status"] == "needs-port"

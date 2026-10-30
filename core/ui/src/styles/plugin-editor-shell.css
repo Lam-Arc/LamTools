@@ -1,0 +1,354 @@
+/* user:“还有大文件拆分”+(从 CorePluginSystemEditor.vue 的 scoped 样式块拆出：页头、安装托盘与提示条；
+   四个文件按原顺序引入，作用域与层叠顺序保持不变)。 */
+.plugin-page {
+  /* user:“那同步底下的那个输入 也要上移呀 不要留太大的空白”+
+     页头—搜索—卡片之间收紧；安装托盘收起时不再占网格行。 */
+  gap: var(--space-3);
+  container: plugin-page / inline-size;
+  --plugin-text: var(--settings-main-text, var(--theme-main-text, var(--text)));
+  --plugin-muted: color-mix(in srgb, var(--plugin-text) 58%, transparent);
+  --plugin-faint: color-mix(in srgb, var(--plugin-text) 40%, transparent);
+  --plugin-border: color-mix(in srgb, var(--plugin-text) 12%, transparent);
+  --plugin-border-strong: color-mix(in srgb, var(--plugin-text) 20%, transparent);
+  --plugin-card: var(--settings-card-background, var(--theme-main-soft-background, #1b1c1c));
+  --plugin-soft: color-mix(in srgb, var(--plugin-text) 5%, transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-page :is(h1, h2, h3, p) {
+  margin: 0;
+}
+
+/* ── 页头 ─────────────────────────────────────────────────────────────── */
+/* 标题只留“插件”两个字：紧凑一行，剩下的信息交给右侧状态和卡片本身。 */
+.plugin-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.plugin-hero-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -.01em;
+}
+
+.plugin-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.plugin-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  color: var(--plugin-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.plugin-stat-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: .5;
+}
+
+.plugin-stat-dot.is-on {
+  background: var(--green);
+  opacity: .9;
+}
+
+.plugin-stat-dot.is-warn {
+  background: var(--orange);
+  opacity: .95;
+}
+
+.plugin-stat.is-warning {
+  color: color-mix(in srgb, var(--orange) 78%, var(--plugin-text));
+}
+
+.plugin-install-toggle {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.plugin-icon-button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--plugin-muted);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.plugin-icon-button:hover {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--plugin-text);
+}
+
+.plugin-icon-button:active {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+}
+
+/* ── 安装托盘 ─────────────────────────────────────────────────────────── */
+.install-tray {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.install-tray-enter-active,
+.install-tray-leave-active {
+  overflow: hidden;
+  transition:
+    grid-template-rows var(--dur-slow) var(--ease-emphasized),
+    opacity var(--dur-base) var(--ease-out);
+}
+
+.install-tray-enter-from,
+.install-tray-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.install-tray-clip {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.install-tray-inner {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  margin-top: var(--space-1);
+  border: 1px solid var(--plugin-border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--plugin-text) 3.5%, transparent);
+}
+
+.install-tray-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.install-tray-head strong {
+  display: block;
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+
+.install-tray-head p {
+  margin-top: 2px;
+  color: var(--plugin-muted);
+  font-size: 11.5px;
+}
+
+.install-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--plugin-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.install-source {
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--plugin-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--plugin-text) 4%, transparent);
+}
+
+.install-source-option {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  border-radius: 999px;
+  color: var(--plugin-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.install-source-option:hover {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  color: var(--plugin-text);
+}
+
+/* 单选圆点视觉隐藏后，键盘聚焦要在整块来源选项上可见。 */
+.install-source-option:has(input:focus-visible) {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.install-source-option.is-active {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-active), transparent);
+  color: var(--plugin-text);
+}
+
+.install-fields {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.install-field {
+  flex: 1 1 240px;
+  min-width: 0;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--plugin-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--plugin-text) 3%, transparent);
+}
+
+.install-sha-field {
+  flex: 0 1 190px;
+}
+
+.install-field-icon {
+  flex: 0 0 auto;
+  color: var(--plugin-faint);
+}
+
+.install-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  /* user:“调查所有样式”+(文本输入统一走输入区令牌，不再借插件面板的主文字色) */
+  color: var(--theme-composer-text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.install-field input::placeholder {
+  color: color-mix(in srgb, var(--theme-composer-text) 42%, transparent);
+}
+
+.install-submit,
+.install-update {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+/* 更新是安装的次要动作：描边式，不与主按钮抢同一块实心背景。 */
+.install-update {
+  border: 1px solid color-mix(in srgb, var(--plugin-text) 16%, transparent);
+  background: transparent;
+  color: var(--plugin-text);
+}
+
+.install-update:hover:not(:disabled) {
+  border-color: var(--plugin-border-strong);
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  filter: none;
+}
+
+.plugin-page .btn--secondary:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.install-hint {
+  color: var(--plugin-faint);
+  font-size: 11px;
+}
+
+/* ── 提示条 ───────────────────────────────────────────────────────────── */
+.plugin-feedback-stack {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.plugin-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--plugin-border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.plugin-feedback.is-error {
+  border-color: color-mix(in srgb, var(--red) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  color: color-mix(in srgb, var(--red) 56%, var(--plugin-text));
+}
+
+.plugin-feedback.is-success {
+  border-color: color-mix(in srgb, var(--green) 26%, transparent);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  color: color-mix(in srgb, var(--green) 52%, var(--plugin-text));
+}
+
+.plugin-feedback.is-warning {
+  border-color: color-mix(in srgb, var(--orange) 28%, transparent);
+  background: color-mix(in srgb, var(--orange) 8%, transparent);
+  color: color-mix(in srgb, var(--orange) 58%, var(--plugin-text));
+}
+
+.plugin-feedback > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.feedback-dismiss {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  opacity: .6;
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.feedback-dismiss:hover {
+  background: color-mix(in srgb, var(--plugin-text) var(--alpha-hover), transparent);
+  opacity: 1;
+}

@@ -46,6 +46,9 @@ export type {
   ThemeData,
   ThemePreset,
   ThemeCSSVars,
+  ThemeFillMode,
+  ThemeGlassPreference,
+  ThemeImageFit,
 } from '@/types.ts';
 
 export type { CoreGoal, CoreArrangeJob } from '@/durable/types.ts';
@@ -247,6 +250,13 @@ export {
   gradientFromStops,
   gradientFromThemeColors,
   normalizeTheme,
+  themeAreaBackground,
+  themeAreaFill,
+  themeAreaGlass,
+  themeAreaGlassFilter,
+  themeAreaImageLayer,
+  themeAreaImageRepeat,
+  themeAreaImageSize,
   themeToCSSVars,
   addGradientStop,
   removeGradientStop,

@@ -245,6 +245,7 @@ class KernelSubAgentRunner:
         runtime_snapshot: dict[str, Any] | None = None,
         loaded_skill_roots: Iterable[Path] | None = None,
         skill_registry: SkillRegistry | None = None,
+        skill_state_store: Any | None = None,
         mcp_caller: MCPToolCaller | None = None,
         mcp_tool_specs: list[ToolSpec] | None = None,
         mcp_config_files: Iterable[Path] | None = None,
@@ -301,6 +302,8 @@ class KernelSubAgentRunner:
         self.thinking_enabled = thinking_enabled
         self.thinking_budget = thinking_budget
         self.approval_policy = approval_policy
+        # user:“宿主能力补齐和接口完善与文档更新”+(子助手和克隆继承同一技能禁用账本，不能绕过管理界面已关闭的技能)。
+        self.skill_state_store = skill_state_store
         self.permission_preset = str(permission_preset or "ask")
         self.active_tier = active_tier
         self.tier_tools = deepcopy(tier_tools) if isinstance(tier_tools, dict) else tier_tools
@@ -391,6 +394,7 @@ class KernelSubAgentRunner:
             permission_preset=self.permission_preset, active_tier=self.active_tier,
             tier_tools=self.tier_tools, runtime_snapshot=self.runtime_snapshot,
             loaded_skill_roots=self.loaded_skill_roots, skill_registry=self.skill_registry,
+            skill_state_store=self.skill_state_store,
             mcp_caller=independent_mcp, mcp_tool_specs=independent_specs,
             mcp_config_files=self.mcp_config_files,
             context_window_tokens=self.context_window_tokens,
@@ -594,6 +598,11 @@ class KernelSubAgentRunner:
         return disabled
 
     def _build_toolbox(self, disabled_tools: set[str], *, active_mode: str | None, mcp_service: Any | None = None) -> CoreToolbox:
+        # user:“给我把 2 阶段做完，前端除外”+(子工具独立捕获目录源，配置/技能/模型仍读取原项目)。
+        from lamtools_core.sub_agent_supervisor import current_child_identity
+        directory_identity = current_child_identity()
+        if directory_identity is not None:
+            directory_identity[0].member_execution_directory(directory_identity[2])
         async def child_message(call: ToolCall):
             from lamtools_core.sub_agent_supervisor import current_child_identity
 
@@ -660,7 +669,7 @@ class KernelSubAgentRunner:
                             [*(str(tool) for tool in tools), SUB_AGENT_CHILD_MESSAGE_TOOL_NAME]
                         )
                     ]
-        return build_core_toolbox(
+        toolbox = build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.approval_policy,
             # user:“处于完全访问状态，但是它运行命令的时候弹审批了”+(子代理继承相同的完全访问授权)。
@@ -669,6 +678,7 @@ class KernelSubAgentRunner:
             tier_tools=child_tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
             skill_registry=self.skill_registry,
+            skill_state_store=self.skill_state_store,
             mcp_service=mcp_service,
             mcp_caller=self.mcp_caller,
             disabled_tools=disabled_tools,
@@ -688,6 +698,12 @@ class KernelSubAgentRunner:
             artifact_store=self.artifact_store,
             plugin_mode_exclusive_tools=self.plugin_mode_exclusive_tools,
         )
+        if directory_identity is not None:
+            supervisor, _, member = directory_identity
+            def source(_session_id):
+                return supervisor.member_execution_directory(member)
+            toolbox.execution_directory_source = source
+        return toolbox
 
     def available_tool_specs(self, *, mode: str = "") -> list[ToolSpec]:
         """Return exactly the tools a workflow Agent node can execute.

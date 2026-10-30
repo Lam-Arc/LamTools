@@ -1,0 +1,134 @@
+/* user:“还有大文件拆分，以及你的分类是否覆盖了所有样式”+(由 core-settings.css 按区块拆出：设置页统一主表面；
+   各分片按原文件顺序挂到 CoreSettings.vue 的多个 <style scoped src>，层叠顺序与拆分前一致)。 */
+/* ── 设置页统一主表面 ── */
+.models-workspace.settings-surface {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
+}
+
+.models-workspace-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(420px, 1fr);
+  overflow: visible;
+}
+
+.resource-search {
+  min-width: 0;
+  display: block;
+}
+
+.resource-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.resource-search input::placeholder {
+  color: color-mix(in srgb, var(--theme-composer-text) 48%, transparent);
+}
+
+.provider-search {
+  flex: 0 0 auto;
+  margin: var(--space-2) 0;
+}
+
+.provider-picker-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.provider-picker-mark {
+  display: none;
+}
+
+.model-section-head {
+  min-height: 58px;
+}
+
+.model-section-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.model-search {
+  width: min(220px, 30vw);
+}
+
+@container app-page (max-width: 959px) {
+  .models-workspace-body {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .provider-rail {
+    padding: var(--space-4);
+  }
+
+  .provider-search {
+    width: min(320px, 100%);
+  }
+
+  .provider-picker {
+    /* 供应商列表整体展示（纵向），滚动交给设置页，左栏不再需要内部滚动。 */
+    display: grid;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .provider-picker-item {
+    flex: 0 0 auto;
+  }
+
+  .provider-detail {
+    padding: var(--space-5);
+  }
+}
+
+@container app-page (max-width: 600px) {
+  .provider-detail {
+    padding: var(--space-4);
+  }
+
+  .model-section-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-section-tools .btn--secondary,
+  .model-search {
+    width: 100%;
+  }
+
+  .model-section-head {
+    align-items: stretch;
+  }
+}
+
+@container app-page (min-width: 960px) and (max-width: 1199px) {
+  .models-workspace,
+  .models-workspace-body {
+    grid-template-columns: 260px minmax(360px, 1fr);
+  }
+}
+
+.models-empty-state--full.settings-surface {
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
+}

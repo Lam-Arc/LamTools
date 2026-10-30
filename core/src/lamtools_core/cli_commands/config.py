@@ -42,7 +42,7 @@ def _get_model_store() -> ModelStore:
     return _default_model_store if _default_model_store is not None else ModelStore()
 
 
-def load_llm_config(*, model_ref: str = "") -> LLMConfig:
+def load_llm_config(*, model_ref: str = "", work_root: str | None = None) -> LLMConfig:
     """Resolve an LLM config from jsonc model + provider definitions.
 
     Model definitions come from the ModelStore (jsonc files); provider
@@ -66,10 +66,12 @@ def load_llm_config(*, model_ref: str = "") -> LLMConfig:
             "session/scene has a model to inherit; 请先添加供应商/模型"
             "（GUI：设置 → 模型与供应商；CLI：--model-id 或 lamtools.modelRouting 路由设置）"
         )
-    model = store.get_sync(ref, work_root=_model_store_work_root)
+    # user:“继续，把 2 阶段都做完”+(插件实际模型调用显式固定项目，不修改进程全局模型上下文)。
+    effective_root = work_root if work_root is not None else _model_store_work_root
+    model = store.get_sync(ref, work_root=effective_root)
     if model is None:
         raise ValueError(f"model not found: {model_ref}")
-    provider = _resolve_provider_for_model(model)
+    provider = _resolve_provider_for_model(model, work_root=work_root) if work_root is not None else _resolve_provider_for_model(model)
     if provider is None:
         raise ValueError(
             f"provider not found for model: {ref} (provider={model.provider or model.provider_id or '?'})"
@@ -106,7 +108,7 @@ def _provider_extra(provider: ProviderConfig) -> dict[str, Any]:
     return provider.to_extra()
 
 
-def _resolve_provider_for_model(model: ModelConfig) -> ProviderConfig | None:
+def _resolve_provider_for_model(model: ModelConfig, *, work_root: str | None = None) -> ProviderConfig | None:
     """Look up a provider by the model's provider_id then by name.
 
     A model with an explicit provider reference must never be rebound to an
@@ -114,18 +116,19 @@ def _resolve_provider_for_model(model: ModelConfig) -> ProviderConfig | None:
     for legacy model records that contain no provider identity at all.
     """
     store = ProviderStore()
+    effective_root = work_root if work_root is not None else _model_store_work_root
     if model.provider_id:
-        provider = store.get_sync(model.provider_id, work_root=_model_store_work_root)
+        provider = store.get_sync(model.provider_id, work_root=effective_root)
         if provider is not None:
             return provider
     if model.provider:
-        provider = store.get_sync(model.provider, work_root=_model_store_work_root)
+        provider = store.get_sync(model.provider, work_root=effective_root)
         if provider is not None:
             return provider
     if model.provider_id or model.provider:
         return None
     # Last resort for legacy records with no provider identity.
-    return store.default_sync(work_root=_model_store_work_root)
+    return store.default_sync(work_root=effective_root)
 
 
 def _model_ref_from_routing() -> str:

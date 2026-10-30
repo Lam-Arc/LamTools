@@ -1,7 +1,7 @@
 <template>
   <div
     ref="shellElement"
-    class="workspace-shell"
+    class="workspace-shell" data-ui-id="shell.root"
     :class="[
       shellClass,
       composerShellClass,
@@ -109,7 +109,7 @@
 
     <!-- ===== Main Area ===== -->
     <main
-      class="workspace-main" data-region="main"
+      class="workspace-main" data-region="main" data-ui-id="shell.main"
       :class="{
         'workspace-main--no-composer': hideComposer,
         'workspace-main--no-header': hideMainHeader,
@@ -222,7 +222,7 @@
       v-if="showRightPanel"
       :id="rightDrawerId"
       ref="rightDrawerRef"
-      data-workspace-right-drawer data-region="right"
+      data-workspace-right-drawer data-region="right" data-ui-id="shell.right-drawer"
       class="workspace-drawer drawer-right optical-glass"
       :class="{ open: rightDrawerShown, pinned: rightPinned, 'drawer-retracting': rightRetracting }"
       @mouseleave="onRightDrawerLeave"

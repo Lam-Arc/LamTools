@@ -19,8 +19,31 @@ from .agent_presets import (
     build_agent_preset_registry,
 )
 from .model_catalog import ModelCatalogService, ModelInfo
+from .model_access import ModelAccessError, ModelDescriptor, ModelSelection
+from .storage_access import StorageError, StoredValue, StoredKey, StorageKeyPage
 from .process_runtime import ProcessBackend, ProcessBackendError, process_runtime_spec
 from .secrets import PluginSecretStore, PluginSecrets, SecretStoreError
+from .credentials import CredentialError, CredentialInfo, ResolvedCredential
+from .config_access import ConfigError, ConfigSnapshot, ConfigValidation, ConfigSaveResult
+from .filesystem_access import FilesystemError, FileInfo, DirectoryListing, FileObservation, FileWriteResult
+from .compaction_access import CompactionError, CompactionResult
+from .permission_access import PermissionAccessError, PermissionPresetInfo, PermissionCatalog, SessionPermissionView
+from .process_access import ProcessAccessError
+from .owned_processes import ProcessOutcome, ProcessOutput
+from .llm_access import LLMAccessError, TokenEstimate
+from .durable_access import DurableAccessError
+from .session_query import SessionQueryError, SessionSummary, SessionQueryPage
+from .approval_access import ApprovalAccessError, ApprovalRequest, ApprovalResult
+from .management_access import HostOperationError
+from .file_watch import FileWatchEvent, FileWatchResult
+from .jobs_access import JobAccessError, JobView, JobOutput
+from .spill_access import SpillAccessError, SpillReference
+from .question_access import QuestionAccessError, UserQuestion, QuestionRequest, UserAnswer, QuestionResult
+from .working_directory import WorkingDirectoryError, WorkingDirectoryState
+from .checkpoint_access import CheckpointAccessError
+from .subagent_access import SubagentAccessError
+from .shell_access import (ShellAccessError, ShellEnvironmentContext, ShellEnvironmentDeclaration,
+                           ShellExecutionSpec, ShellExecutionResult)
 from .prompt_waterfall import (
     PromptAssembly,
     PromptContext,
@@ -119,6 +142,65 @@ from .ui import (
 )
 
 __all__ = [
+    "SubagentAccessError",
+    "CheckpointAccessError",
+    "WorkingDirectoryError",
+    "WorkingDirectoryState",
+    "QuestionAccessError",
+    "UserQuestion",
+    "QuestionRequest",
+    "UserAnswer",
+    "QuestionResult",
+    "JobAccessError",
+    "JobView",
+    "JobOutput",
+    "SpillAccessError",
+    "SpillReference",
+    "ShellAccessError",
+    "ShellEnvironmentContext",
+    "ShellEnvironmentDeclaration",
+    "ShellExecutionSpec",
+    "ShellExecutionResult",
+    "FileWatchEvent",
+    "FileWatchResult",
+    "HostOperationError",
+    "ApprovalAccessError",
+    "ApprovalRequest",
+    "ApprovalResult",
+    "SessionQueryError",
+    "SessionSummary",
+    "SessionQueryPage",
+    "DurableAccessError",
+    "LLMAccessError",
+    "TokenEstimate",
+    "ProcessOutcome",
+    "ProcessOutput",
+    "FileObservation",
+    "FileWriteResult",
+    "ProcessAccessError",
+    "PermissionAccessError",
+    "PermissionPresetInfo",
+    "PermissionCatalog",
+    "SessionPermissionView",
+    "CompactionError",
+    "CompactionResult",
+    "FilesystemError",
+    "FileInfo",
+    "DirectoryListing",
+    "ConfigError",
+    "ConfigSnapshot",
+    "ConfigValidation",
+    "ConfigSaveResult",
+    "CredentialError",
+    "CredentialInfo",
+    "ResolvedCredential",
+    "StorageError",
+    "StoredValue",
+    "StoredKey",
+    "StorageKeyPage",
+    "ModelAccessError",
+    "ModelDescriptor",
+    "ModelSelection",
     "CommandInvocation",
     "CommandResult",
     "MANIFEST_FILENAME",

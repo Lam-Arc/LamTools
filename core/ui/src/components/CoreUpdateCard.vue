@@ -79,6 +79,8 @@ import { t } from '@/i18n/index.ts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowRight, X } from 'lucide-vue-next'
 import { gsap } from 'gsap'
+// user:“动画什么的可复用性，像是下载窗口弹出的那个动画”+(形变参数与守卫收进 presets，组件只声明从哪长出来)
+import { enterFade, enterMorph, enterScrim, leaveMorph, leaveScrim, shouldSkipMotion } from '@/motion/presets.ts'
 
 export type CoreUpdateCardState = 'idle' | 'downloading' | 'downloaded' | 'installing' | 'failed'
 
@@ -148,50 +150,20 @@ const confirmLabel = computed(() => {
 })
 const confirmDisabled = computed(() => installBusy.value || downloaded.value || installing.value)
 
-/** 用户在系统里要求减少动效时不做过冲，只做一次短淡入。 */
-function prefersReducedMotion(): boolean {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-}
-
 let context: gsap.Context | null = null
 let closing = false
-
-/** 卡片中心相对按钮中心的位移，以及要把卡片压到按钮大小所需的缩放。 */
-function morphFrom(origin: HTMLElement, card: HTMLElement) {
-  const from = origin.getBoundingClientRect()
-  const to = card.getBoundingClientRect()
-  return {
-    x: from.left + from.width / 2 - (to.left + to.width / 2),
-    y: from.top + from.height / 2 - (to.top + to.height / 2),
-    scaleX: Math.max(0.06, from.width / to.width),
-    scaleY: Math.max(0.06, from.height / to.height),
-  }
-}
 
 onMounted(() => {
   const card = cardEl.value
   if (!card) return
   context = gsap.context(() => {
-    if (prefersReducedMotion() || !props.origin) {
-      if (scrimEl.value) gsap.fromTo(scrimEl.value, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.18, ease: 'power1.out' })
-      gsap.fromTo(card, { autoAlpha: 0, y: 10 }, { autoAlpha: 1, y: 0, duration: 0.22, ease: 'power2.out' })
+    if (shouldSkipMotion() || !props.origin) {
+      enterScrim(scrimEl.value)
+      enterFade(card)
       return
     }
-    const start = morphFrom(props.origin, card)
-    if (scrimEl.value) gsap.fromTo(scrimEl.value, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.26, ease: 'power1.out' })
-    gsap.set(card, { ...start, autoAlpha: 0.45, transformOrigin: '50% 50%' })
-    gsap.to(card, {
-      x: 0,
-      y: 0,
-      scaleX: 1,
-      scaleY: 1,
-      autoAlpha: 1,
-      duration: 0.62,
-      ease: 'back.out(1.2)',
-      clearProps: 'transformOrigin',
-    })
+    enterScrim(scrimEl.value)
+    enterMorph(card, props.origin)
   }, card)
 })
 
@@ -205,12 +177,9 @@ async function close(): Promise<void> {
   closing = true
   const card = cardEl.value
   const origin = props.origin
-  if (card && origin && !prefersReducedMotion()) {
-    const end = morphFrom(origin, card)
-    await new Promise<void>((resolve) => {
-      if (scrimEl.value) gsap.to(scrimEl.value, { autoAlpha: 0, duration: 0.3, ease: 'power2.in' })
-      gsap.to(card, { ...end, autoAlpha: 0.3, duration: 0.34, ease: 'power3.in', onComplete: resolve })
-    })
+  if (card && origin && !shouldSkipMotion()) {
+    leaveScrim(scrimEl.value)
+    await leaveMorph(card, origin)
   }
   emit('closed')
 }

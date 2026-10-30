@@ -14,7 +14,6 @@ from lamtools_core.llm import ChatMessage, LLMToolCall
 from lamtools_core.runtime import RuntimeCheckpointStore, RuntimeState, RuntimeStateStore
 from lamtools_core.context_compaction_budget import TokenBudget
 from .formatting import RECENT_USER_MESSAGES_METADATA_KEY, extract_recent_user_messages
-from .usage_anchor import USAGE_ANCHOR_METADATA_KEY
 from .models import ContextCompactionResult
 
 if TYPE_CHECKING:
@@ -257,7 +256,7 @@ async def persist_compaction(
     }
     # The manual compaction replaced the message view, so the provider count
     # from the pre-compaction request no longer describes the live context.
-    state.metadata.pop(USAGE_ANCHOR_METADATA_KEY, None)
+    state.metadata.pop("context_usage_anchor", None)
     previous_metrics = state.metadata.get("runtime_context_metrics")
     metrics = dict(previous_metrics) if isinstance(previous_metrics, dict) else {}
     metrics.pop("context_usage_prompt_tokens", None)

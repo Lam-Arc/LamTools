@@ -175,7 +175,11 @@
   overflow-y: auto;
   border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent));
   border-radius: var(--radius);
+  /* user:“加模糊就行，底色不用变”+
+     (弹出面板保持原来的底色，只补一层毛玻璃模糊，压住后面透出来的文字) */
   background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background)));
+  -webkit-backdrop-filter: blur(var(--optical-glass-blur, 8px)) saturate(var(--optical-glass-saturation, 1.14));
+  backdrop-filter: blur(var(--optical-glass-blur, 8px)) saturate(var(--optical-glass-saturation, 1.14));
   color: var(--settings-main-text, var(--theme-main-text));
   box-shadow: var(--shadow-md);
 }
@@ -347,6 +351,122 @@
 .theme-mode-option.is-active > span {
   border-width: var(--space-1);
   border-color: var(--settings-control-text, var(--theme-control-text));
+}
+
+/* user:“将主题的色彩设置改成 纯色/渐变/玻璃……图片，选择后再对应编辑模式”+
+   (区域编辑器顶部先选样式；选中项用控制区实色+文字色，未选中保持透明。) */
+.theme-fill-modes,
+.theme-glass-levels {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
+}
+
+.theme-fill-mode,
+.theme-glass-level {
+  min-height: 30px;
+  min-width: 0;
+  padding-inline: var(--space-2);
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 70%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.theme-fill-mode:hover,
+.theme-glass-level:hover {
+  color: var(--settings-control-text, var(--theme-control-text));
+}
+
+.theme-fill-mode.is-active,
+.theme-glass-level.is-active {
+  background: var(--settings-control-solid, var(--theme-control-solid));
+  color: var(--settings-control-text, var(--theme-control-text));
+  font-weight: 650;
+}
+
+/* user:“玻璃应该单独作为一个 preference 节点”+(玻璃材质与填充分开成两块：标签 + 三档) */
+.theme-glass-preference {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.theme-glass-label {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 72%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.theme-area-hint {
+  margin: 0;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 58%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.theme-area-error {
+  margin: 0;
+  color: var(--red);
+  font-size: 11px;
+}
+
+.theme-image-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.theme-image-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  min-height: 48px;
+  padding: var(--space-1);
+  overflow: hidden;
+}
+
+.theme-image-chip.has-thumb {
+  border-color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 26%, transparent);
+}
+
+.theme-image-chip img,
+.theme-image-preview {
+  display: block;
+  max-width: 132px;
+  max-height: 64px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  object-fit: cover;
+}
+
+.theme-image-fit-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.theme-image-fit {
+  min-width: 108px;
+  min-height: 30px;
+}
+
+.theme-area-mode {
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 66%, transparent);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.5;
 }
 
 .theme-schedule-options {

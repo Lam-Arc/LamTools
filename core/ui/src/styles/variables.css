@@ -29,6 +29,46 @@
   --font: var(--font-sans);
   --shadow: 0 28px 90px rgba(0,0,0,.46);
 
+  /* user:“把功能相近或者实际相似的样式和组件，统一成一套，并且可复用”+(字阶按现有取值收敛成九档，
+     不许再写字面量字号；--type-* 前缀避开颜色令牌 --text 与字体族 --font)。 */
+  --type-2xs: 10px;
+  --type-xs: 11px;
+  --type-sm: 12px;
+  --type-md: 13px;
+  --type-base: 14px;
+  --type-lg: 16px;
+  --type-xl: 18px;
+  --type-2xl: 20px;
+  --type-3xl: 22px;
+
+  /* user:“制表，哪些 function 控制哪类样式”+(图标尺寸与线宽统一成三档加一档线宽，
+     现有 11–26px 的散落取值向这里收敛)。 */
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --icon-lg: 18px;
+  --icon-stroke: 1.8;
+
+  /* user:“提高可维护性和维护效率”+(键盘焦点环收成一处：宽度、间距、颜色都走令牌，
+     组件内不再各自定义 :focus-visible 描边)。 */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--blue);
+
+  /* user:“合并去重”+(层级阶梯原先定义在 workspace-shell.css，移到令牌层做唯一来源；
+     值与顺序保持不变，任何入口只要加载 variables.css 就能拿到)。 */
+  /* 层级令牌按编辑器的图层体系分段：每 100 个 z 一层，层内留 99 个位置。
+     背景信息→第 1 层、舞台→第 2 层、主表面→第 3 层、边缘触发→第 4 层、
+     输入栏→第 5 层、浮层菜单→第 6 层、模态→第 7 层、提示→第 8 层、全屏/编辑器→第 9 层。 */
+  --z-background-info: 100;
+  --z-stage: 200;
+  --z-main-surface: 300;
+  --z-edge-trigger: 400;
+  --z-composer: 500;
+  --z-popover: 600;
+  --z-modal: 700;
+  --z-toast: 800;
+  --z-fullscreen: 900;
+
   /* —— 间距标尺（4px 基，密集工作台）—— */
   --space-1: 4px;
   --space-2: 8px;
@@ -98,9 +138,12 @@
      内侧（两栏相交的间隙处）用小白角。 */
   --workspace-panel-radius-outer: var(--radius);
   --workspace-panel-radius-inner: var(--radius-sm);
-  --sidebar-width: 162px;
+  --sidebar-width: var(--layout-sidebar-width, 162px);
   --sidebar-width-mid: 200px;
   --sidebar-width-full: 232px;
+  /* 标题栏高度：原生标题栏存在时由 TitleBar 写入 --titlebar-native-height；
+     编辑器布局变量优先，全站统一从这条链读取。 */
+  --titlebar-offset: var(--layout-titlebar-height, var(--titlebar-native-height, 0px));
   --sidebar-padding-x: 14px;
   --sidebar-padding-y: 0;
   --sidebar-font: 14px;

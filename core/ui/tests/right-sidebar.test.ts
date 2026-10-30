@@ -205,8 +205,11 @@ afterEach(() => {
     expect(hostSource).toMatch(/\.right-sidebar-card-bridge\s*\{[^}]*right: calc\(var\(--right-rail-width, 46px\) - 2px\);[^}]*width: calc\(var\(--space-2\) \+ 4px\);/)
     expect(hostSource).not.toMatch(/\.right-sidebar-card::after/)
     // 入场只做透明度淡入，且带减弱动态效果回退。
+    // user:“右侧栏的卡片也存在没有做模糊的问题”+(淡入挂在玻璃内部内容层，玻璃面本身不做动画，避免模糊失效)
     expect(hostSource).toMatch(/@keyframes right-card-in\s*\{[^}]*opacity/)
-    expect(hostSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?right-sidebar-card \{ animation: none; \}/)
+    expect(hostSource).toMatch(/\.right-sidebar-card-body\s*\{[^}]*animation: right-card-in/)
+    expect(hostSource).not.toMatch(/\.right-sidebar-card\s*\{[^}]*animation:/)
+    expect(hostSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?right-sidebar-card-body \{ animation: none; \}/)
   })
 
   it('loads module data only when its card opens', async () => {

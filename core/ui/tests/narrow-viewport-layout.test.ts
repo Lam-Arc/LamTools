@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { readChatThreadSource } from './chatThreadSource.ts'
 
 import { describe, expect, it } from 'vitest'
 
@@ -13,7 +14,7 @@ import { describe, expect, it } from 'vitest'
 const layout = readFileSync(resolve(import.meta.dirname, '../src/styles/layout.css'), 'utf8')
 const workspaceShell = readFileSync(resolve(import.meta.dirname, '../src/styles/workspace-shell.css'), 'utf8')
 const markdownRenderer = readFileSync(resolve(import.meta.dirname, '../src/components/MarkdownRenderer.vue'), 'utf8')
-const chatThread = readFileSync(resolve(import.meta.dirname, '../src/components/ChatThread.vue'), 'utf8')
+const chatThread = readChatThreadSource(resolve(import.meta.dirname, '../src'))
 
 /** Slice one `@media (max-width: Npx) { … }` block, braces balanced. */
 function mediaBlock(source: string, width: number): string {

@@ -1,11 +1,11 @@
 <template>
-  <section ref="themeRootEl" class="theme-editor-root">
+  <section ref="themeRootEl" class="theme-editor-root" data-ui-id="settings.theme-editor">
     <section ref="dialogEl" class="theme-editor-dialog theme-editor-dialog--inline" aria-labelledby="theme-editor-title">
           <header class="theme-editor-head">
             <div>
               <h2 id="theme-editor-title">{{ t("主题") }}</h2>
             </div>
-            <button class="small-btn quiet" type="button" @click="$emit('reset-theme')">{{ t("恢复默认") }}</button>
+            <button class="btn btn--quiet" type="button" @click="$emit('reset-theme')">{{ t("恢复默认") }}</button>
           </header>
 
           <div class="theme-editor-scroll">
@@ -167,6 +167,7 @@
                       @click="openAreaPopover(area.key)"
                     >
                       <span class="theme-area-summary-name">{{ area.label }}</span>
+                      <em class="theme-area-mode" :data-theme-area-mode="area.key">{{ fillLabel(area.key) }}</em>
                       <span class="theme-area-nodes" :aria-label="t('{0}颜色节点', { 0: area.label })">
                         <span v-for="(stop, index) in getStops(area.key)" :key="`${stop.color}-${index}`" class="theme-area-node">
                           <i :style="{ background: stop.color }" />
@@ -198,10 +199,18 @@
               :opacity="getOpacity(activeArea)"
               :text-color="getTextColor(activeArea)"
               :show-opacity="activeAreaConfig.showOpacity"
+              :fill-mode="getFillMode(activeArea)"
+              :glass-level="getGlassLevel(activeArea)"
+              :image="getImage(activeArea)"
+              :image-fit="getImageFit(activeArea)"
               @update:stops="(stops) => $emit('update:stops', activeArea!, stops)"
               @update:angle="(angle) => $emit('update:angle', activeArea!, angle)"
               @update:opacity="(opacity) => $emit('update:opacity', activeArea!, opacity)"
               @update:text-color="(color) => $emit('update:text-color', activeArea!, color)"
+              @update:fill-mode="(mode) => $emit('update:fill-mode', activeArea!, mode)"
+              @update:glass-level="(level) => $emit('update:glass-level', activeArea!, level)"
+              @update:image="(dataUrl) => $emit('update:image', activeArea!, dataUrl)"
+              @update:image-fit="(fit) => $emit('update:image-fit', activeArea!, fit)"
               @add-stop="$emit('add-stop', activeArea!)"
               @remove-stop="(index) => $emit('remove-stop', activeArea!, index)"
               @sort-stops="$emit('sort-stops', activeArea!)"
@@ -224,7 +233,7 @@ import ThemeAreaEditor from '@/components/ThemeAreaEditor.vue'
 import ThemePreview from '@/components/ThemePreview.vue'
 import SundayRange from '@/components/SundayRange.vue'
 import SundaySegmented from '@/components/SundaySegmented.vue'
-import { gradientFromStops, themeForMode, DEFAULT_THEME_SCHEDULE, type ThemeArea, type ThemeMode, type ThemePreset, type ThemeSchedule, type ThemeStop } from '@/helpers/theme.ts'
+import { themeAreaBackground, themeAreaFill, themeAreaGlass, themeForMode, DEFAULT_THEME_SCHEDULE, type ThemeArea, type ThemeFillMode, type ThemeGlassPreference, type ThemeImageFit, type ThemeMode, type ThemePreset, type ThemeSchedule, type ThemeStop } from '@/helpers/theme.ts'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 
 const props = withDefaults(defineProps<{
@@ -240,6 +249,10 @@ const props = withDefaults(defineProps<{
   getAngle: (area: ThemeArea) => number
   getOpacity: (area: ThemeArea) => number
   getTextColor: (area: ThemeArea) => string
+  getFillMode: (area: ThemeArea) => ThemeFillMode
+  getGlassLevel: (area: ThemeArea) => ThemeGlassPreference
+  getImage: (area: ThemeArea) => string
+  getImageFit: (area: ThemeArea) => ThemeImageFit
   processIconColor?: string
   presets: ThemePreset[]
   themePreviewStyle: Record<string, string>
@@ -266,6 +279,10 @@ const emit = defineEmits<{
   'update:angle': [area: ThemeArea, angle: number]
   'update:opacity': [area: ThemeArea, value: number]
   'update:text-color': [area: ThemeArea, color: string]
+  'update:fill-mode': [area: ThemeArea, mode: ThemeFillMode]
+  'update:glass-level': [area: ThemeArea, level: ThemeGlassPreference]
+  'update:image': [area: ThemeArea, dataUrl: string]
+  'update:image-fit': [area: ThemeArea, fit: ThemeImageFit]
   'update:process-icon-color': [color: string]
   'add-stop': [area: ThemeArea]
   'remove-stop': [area: ThemeArea, index: number]
@@ -306,18 +323,23 @@ function presetTheme(preset: ThemePreset) {
 }
 
 function presetBackdropStyle(preset: ThemePreset) {
-  const theme = presetTheme(preset)
-  return { background: gradientFromStops(theme.backdropAngle ?? 180, theme.backdropStops || [], 1) }
+  return { background: themeAreaBackground(presetTheme(preset), 'backdrop') }
 }
 
 function presetMainStyle(preset: ThemePreset) {
-  const theme = presetTheme(preset)
-  return { background: gradientFromStops(theme.mainAngle ?? 180, theme.mainStops || [], theme.mainOpacity ?? 1) }
+  return { background: themeAreaBackground(presetTheme(preset), 'main') }
 }
 
 function presetControlStyle(preset: ThemePreset) {
-  const theme = presetTheme(preset)
-  return { background: gradientFromStops(theme.controlAngle ?? 180, theme.controlStops || [], theme.controlOpacity ?? 1) }
+  return { background: themeAreaBackground(presetTheme(preset), 'control') }
+}
+
+function fillLabel(area: ThemeArea): string {
+  const fill = props.getFillMode(area)
+  const fillText = t(fill === 'image' ? '图片' : fill === 'gradient' ? '渐变' : '纯色')
+  const glass = props.getGlassLevel(area)
+  if (glass === 'off') return fillText
+  return `${fillText}·${glass === 'low' ? t('低透玻璃') : t('高透玻璃')}`
 }
 
 function isPresetActive(preset: ThemePreset) {
@@ -331,6 +353,8 @@ function isPresetActive(preset: ThemePreset) {
       && angle === props.getAngle(key)
       && text === props.getTextColor(key)
       && (key === 'backdrop' || opacity === props.getOpacity(key))
+      && themeAreaFill(candidate, key) === props.getFillMode(key)
+      && themeAreaGlass(candidate, key) === props.getGlassLevel(key)
   })
 }
 
