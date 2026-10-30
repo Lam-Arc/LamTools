@@ -330,12 +330,10 @@ jobs:
           ./scripts/verify-update-install.ps1 -BaseUrl https://ainarit.com -InstallDir $install -KeepInstall
 
   build-linux:
-    # package-linux.sh builds the native x64 sidecar and Tauri bundles. Windows
-    # remains in the separate job above, including its repository-owned Inno path.
-    # Waiting for it also gives the two tag uploads one deterministic Release
-    # creator and preserves the existing Windows release sequence.
+    # user:“不需要打移动端和 Linux 端，只打 Windows 就行”+(tag 发布只产出 Windows
+    # 安装包；Linux 只保留手动 workflow_dispatch 的 linux_only 入口，不在 tag 流程里跑)
     needs: build-windows
-    if: ${{ always() && inputs.verify_public_only != true && (needs.build-windows.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.linux_only == true)) }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.linux_only == true }}
     runs-on: ubuntu-22.04
     env:
       EXPECTED_VERSION: ${{ inputs.expected_version }}
