@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Verify the published update channel by installing from it the way the app does.
 
