@@ -161,6 +161,9 @@ export function usePetRuntime() {
       }
       const migrated = migrateConfig(safeParse(text))
       Object.assign(config, migrated.config)
+      // 迁移保存发生在 restorePets 之前：先把宠物列表同步进 ref，否则
+      // saveConfig 会用当时还空的 petRecords 把文件里的角色清空。
+      petRecords.value = Array.isArray(migrated.config.pets) ? migrated.config.pets : []
       configWarnings.value = migrated.warnings
       configMigratedFrom.value = migrated.migratedFrom
       if (migrated.migratedFrom !== null) await saveConfig()

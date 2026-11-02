@@ -52,6 +52,22 @@ describe('配置版本与迁移', () => {
     expect(result.config.useL3).toBe(true)
   })
 
+  it('v1 迁移保留已有宠物列表，不会被空默认值清掉', () => {
+    // 回归：迁移保存发生在 restorePets 之前，曾经用空 petRecords 覆盖文件。
+    const result = migrateConfig({
+      version: 1,
+      useL3: true,
+      pets: [{
+        id: 'my-pet', name: '我的皮肤', packId: 'my-pack', scale: 1, facing: 1,
+        radius: 26, visible: true, actions: {}, spriteWidth: 64, spriteHeight: 64,
+        hitboxes: [], physics: {}, behavior: {}, importWarnings: [],
+      }],
+    })
+    expect(result.config.pets).toHaveLength(1)
+    expect(result.config.pets[0].id).toBe('my-pet')
+    expect(result.config.useL3).toBe(false)
+  })
+
   it('从无版本号的旧配置迁移，并补全提示词模板', () => {
     const legacy = {
       enabled: true,
