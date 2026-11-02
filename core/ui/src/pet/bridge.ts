@@ -195,10 +195,6 @@ export async function readConfigText(): Promise<string | null> {
   return await invoke<string | null>('pet_config_read')
 }
 
-export async function writeConfigText(text: string): Promise<void> {
-  await invoke('pet_config_write', { text })
-}
-
 export async function scanImport(path: string): Promise<ImportScanResult> {
   const scan = await invoke<{ root: string; files: { rel: string; size: number; ext: string }[]; total_bytes: number }>(
     'pet_scan_import',

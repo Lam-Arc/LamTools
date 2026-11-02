@@ -12,7 +12,9 @@ import type { TerrainQuality } from './engine/terrain.ts'
 import type { PetBindingsState } from './agent/host.ts'
 import type { AnimationMap } from './engine/sprite.ts'
 
-export const PET_CONFIG_VERSION = 1
+// v2：L3 默认关闭（v1 的旧配置里遗留的 true 在迁移时统一关掉）；
+// 内置方块人增加 presetVersion，皮肤更新后旧安装会重写角色包。
+export const PET_CONFIG_VERSION = 2
 
 export type PingSectorKind = 'question' | 'exclamation' | 'note' | 'select' | 'chat' | 'switch' | 'custom' | 'subring'
 
@@ -98,6 +100,8 @@ export interface PetConfigV1 {
   pets: PetRecordConfig[]
   /** 内置方块人预设是否已经装过一次；用户删掉后不再自动加回来。 */
   presetInstalled: boolean
+  /** 内置角色包版本：升级内置皮肤时用它触发旧安装重写角色包。 */
+  presetVersion: number
   bindings: PetBindingsState
   perf: {
     /** 渲染上限帧率。 */
@@ -156,6 +160,7 @@ export function defaultConfig(): PetConfigV1 {
     },
     pets: [],
     presetInstalled: false,
+    presetVersion: 0,
     bindings: { pets: {}, ping: { projectId: null, sessionId: null } },
     perf: { maxFps: 60, idleQuality: true, l3RefreshMs: 30_000 },
   }
@@ -193,12 +198,18 @@ export function migrateConfig(raw: unknown): MigrationResult {
     bubbles: { ...base.bubbles, ...(input.bubbles || {}) },
     pets: Array.isArray(input.pets) ? input.pets.map(normalizePetRecord).filter(Boolean) as PetRecordConfig[] : [],
     presetInstalled: input.presetInstalled === true,
+    presetVersion: typeof input.presetVersion === 'number' ? input.presetVersion : 0,
     bindings: {
       pets: { ...(input.bindings?.pets || {}) },
       ping: { ...base.bindings.ping, ...(input.bindings?.ping || {}) },
     },
     perf: { ...base.perf, ...(input.perf || {}) },
     version: PET_CONFIG_VERSION,
+  }
+  if (fromVersion < 2) {
+    // user:"为什么 L3 默认还是开启？"+(v1 的默认值是开，旧配置里的 true 不是
+    // 用户的主动选择；v2 起默认关闭，迁移时统一关掉，需要时可在设置里重新打开。)
+    config.useL3 = false
   }
   if (fromVersion < PET_CONFIG_VERSION) {
     warnings.push(`配置从 v${fromVersion} 迁移到 v${PET_CONFIG_VERSION}`)

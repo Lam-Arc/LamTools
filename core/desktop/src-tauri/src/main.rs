@@ -985,7 +985,7 @@ fn main() {
             pet::pet_desktop_windows,
             pet::pet_autostart,
             pet::pet_config_read,
-            pet::pet_config_write,
+            pet::pet_config_patch,
             pet::pet_scan_import,
             pet::pet_read_import_asset,
             pet::pet_read_zip,

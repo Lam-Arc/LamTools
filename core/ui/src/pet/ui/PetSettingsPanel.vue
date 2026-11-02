@@ -20,7 +20,7 @@ const hubRadius = computed({
     ?? Math.round((props.runtime.config.ping.radius + props.runtime.config.ping.ringWidth / 2) * 0.42),
   set: (value: number) => {
     props.runtime.config.ping.hubRadius = Math.max(10, Math.round(value))
-    props.runtime.scheduleSave()
+    props.runtime.schedulePingSave()
   },
 })
 
@@ -55,7 +55,7 @@ async function pickRingBackground(event: Event): Promise<void> {
       return
     }
     props.runtime.config.ping.background = dataUrl
-    props.runtime.scheduleSave()
+    props.runtime.schedulePingSave()
   } catch (error) {
     backgroundError.value = error instanceof Error ? error.message : String(error)
   }
@@ -64,7 +64,7 @@ async function pickRingBackground(event: Event): Promise<void> {
 function clearRingBackground(): void {
   props.runtime.config.ping.background = undefined
   backgroundError.value = ''
-  props.runtime.scheduleSave()
+  props.runtime.schedulePingSave()
 }
 
 function addSector(): void {
@@ -80,26 +80,31 @@ function addSector(): void {
       enabled: true,
     },
   ]
-  props.runtime.scheduleSave()
+  props.runtime.schedulePingSave()
 }
 
 function removeSector(id: string): void {
   props.runtime.config.ping.sectors = props.runtime.config.ping.sectors.filter(sector => sector.id !== id)
-  props.runtime.scheduleSave()
+  props.runtime.schedulePingSave()
 }
 
 function resetPrompt(sector: PingSectorConfig): void {
   if (sector.kind === 'question') sector.prompt = DEFAULT_PING_PROMPTS.question
   if (sector.kind === 'exclamation') sector.prompt = DEFAULT_PING_PROMPTS.exclamation
   if (sector.kind === 'note') sector.prompt = DEFAULT_PING_PROMPTS.note
-  props.runtime.scheduleSave()
+  props.runtime.schedulePingSave()
 }
 
 async function applyHotkey(value: string): Promise<void> {
   props.runtime.config.ping.hotkey = value
-  props.runtime.scheduleSave()
+  props.runtime.schedulePingSave()
   const bridge = await import('../bridge.ts')
   await bridge.setPingHotkey(value).catch(() => {})
+}
+
+function toggleDebug(key: 'terrain' | 'colliders' | 'path' | 'velocity'): void {
+  props.runtime.debug[key] = !props.runtime.debug[key]
+  props.runtime.scheduleSave()
 }
 
 async function applyZMode(value: 'top' | 'behind' | 'clip'): Promise<void> {
@@ -170,7 +175,7 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
           </label>
           <label class="settings__row">
             <span>L3 视觉边缘识别</span>
-            <input v-model="runtime.config.useL3" type="checkbox" @change="runtime.refreshL3()">
+            <input v-model="runtime.config.useL3" type="checkbox" @change="runtime.setUseL3(runtime.config.useL3)">
           </label>
           <label class="settings__row">
             <span>几何精度</span>
@@ -181,10 +186,10 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
             </select>
           </label>
           <div class="settings__row">
-            <button type="button" @click="runtime.debug.terrain = !runtime.debug.terrain">地形线</button>
-            <button type="button" @click="runtime.debug.colliders = !runtime.debug.colliders">碰撞体</button>
-            <button type="button" @click="runtime.debug.path = !runtime.debug.path">路径</button>
-            <button type="button" @click="runtime.debug.velocity = !runtime.debug.velocity">速度</button>
+            <button type="button" @click="toggleDebug('terrain')">地形线</button>
+            <button type="button" @click="toggleDebug('colliders')">碰撞体</button>
+            <button type="button" @click="toggleDebug('path')">路径</button>
+            <button type="button" @click="toggleDebug('velocity')">速度</button>
           </div>
         </section>
 
@@ -200,11 +205,11 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
           </label>
           <label class="settings__row">
             <span>环半径（环带中心）</span>
-            <input v-model.number="runtime.config.ping.radius" type="number" min="60" max="420" @change="runtime.scheduleSave()">
+            <input v-model.number="runtime.config.ping.radius" type="number" min="60" max="420" @change="runtime.schedulePingSave()">
           </label>
           <label class="settings__row">
             <span>环身宽度（决定外环半径）</span>
-            <input v-model.number="runtime.config.ping.ringWidth" type="number" min="4" max="48" @change="runtime.scheduleSave()">
+            <input v-model.number="runtime.config.ping.ringWidth" type="number" min="4" max="48" @change="runtime.schedulePingSave()">
           </label>
           <label class="settings__row">
             <span>内环半径（中心盘）</span>
@@ -228,7 +233,7 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
           <div v-if="backgroundError" class="settings__error">{{ backgroundError }}</div>
           <label class="settings__row">
             <span>「对话」自动附当前截图</span>
-            <input v-model="runtime.config.ping.autoAttachScreenshot" type="checkbox" @change="runtime.scheduleSave()">
+            <input v-model="runtime.config.ping.autoAttachScreenshot" type="checkbox" @change="runtime.schedulePingSave()">
           </label>
           <div class="settings__row">
             <button type="button" @click="runtime.openSessionPicker('ping')">
@@ -238,17 +243,17 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
 
           <div class="settings__sectors">
             <div v-for="sector in sectors" :key="sector.id" class="settings__sector">
-              <input v-model="sector.icon" class="settings__icon" maxlength="2" @change="runtime.scheduleSave()">
-              <input v-model="sector.label" class="settings__label" @change="runtime.scheduleSave()">
-              <input v-model="sector.color" type="color" @change="runtime.scheduleSave()">
-              <input v-model="sector.enabled" type="checkbox" @change="runtime.scheduleSave()">
+              <input v-model="sector.icon" class="settings__icon" maxlength="2" @change="runtime.schedulePingSave()">
+              <input v-model="sector.label" class="settings__label" @change="runtime.schedulePingSave()">
+              <input v-model="sector.color" type="color" @change="runtime.schedulePingSave()">
+              <input v-model="sector.enabled" type="checkbox" @change="runtime.schedulePingSave()">
               <button type="button" class="settings__danger" @click="removeSector(sector.id)">删除</button>
               <textarea
                 v-if="sector.kind === 'question' || sector.kind === 'exclamation' || sector.kind === 'note'"
                 v-model="sector.prompt"
                 class="settings__prompt"
                 rows="2"
-                @change="runtime.scheduleSave()"
+                @change="runtime.schedulePingSave()"
               />
               <button
                 v-if="sector.kind === 'question' || sector.kind === 'exclamation' || sector.kind === 'note'"

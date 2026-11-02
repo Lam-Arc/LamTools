@@ -21,6 +21,10 @@
         <CoreGeneralEditor :request-rpc="requestRpc || defaultRequestRpc" :platform="commandShellPlatform" />
       </section>
 
+      <section v-if="activeSection === 'pet'" class="settings-panel">
+        <CorePetEditor />
+      </section>
+
       <section v-if="activeSection === 'models'" class="settings-panel models-panel">
         <header class="settings-title models-title">
           <div class="models-title-copy">
@@ -1052,6 +1056,7 @@ import { CORE_SETTINGS_SECTIONS, type SettingsSection } from '@/components/setti
 import ThemeEditor from '@/components/ThemeEditor.vue'
 import CoreSubAgentEditor from '@/components/CoreSubAgentEditor.vue'
 import CoreGeneralEditor from '@/components/CoreGeneralEditor.vue'
+import CorePetEditor from '@/components/CorePetEditor.vue'
 import CoreLoadToolsEditor from '@/components/CoreLoadToolsEditor.vue'
 import MobileControlPanel, {
   type MobileControlAccountDevice,

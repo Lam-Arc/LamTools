@@ -35,6 +35,21 @@ describe('配置版本与迁移', () => {
     expect(config.ping.hotkey).toBe('Ctrl+Alt+Space')
     // user:"默认关闭啦 l3"+(L3 视觉边缘识别默认关闭。)
     expect(config.useL3).toBe(false)
+    expect(config.presetVersion).toBe(0)
+  })
+
+  it('v1 旧配置里遗留的 L3=true 在迁移时关闭', () => {
+    // user:"为什么 L3 默认还是开启？"+(v1 的默认是开；旧配置里的 true 不是用户
+    // 主动选择，v2 迁移统一关闭，用户可在设置里重新打开。)
+    const result = migrateConfig({ version: 1, useL3: true })
+    expect(result.migratedFrom).toBe(1)
+    expect(result.config.version).toBe(PET_CONFIG_VERSION)
+    expect(result.config.useL3).toBe(false)
+  })
+
+  it('v2 配置里用户主动打开的 L3 保持开启', () => {
+    const result = migrateConfig({ version: PET_CONFIG_VERSION, useL3: true })
+    expect(result.config.useL3).toBe(true)
   })
 
   it('从无版本号的旧配置迁移，并补全提示词模板', () => {

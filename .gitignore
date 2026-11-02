@@ -166,6 +166,8 @@ core/scripts/
 core/_swap_checkboxes.py
 *.png
 !core/ui/src/assets/sunday-app-icon-*.png
+# 内置桌宠皮肤：必须随源码入库，否则 CI 构建里没有这张图
+!core/ui/src/pet/assets/sunday-skin.png
 !core/desktop/src-tauri/icons/32x32.png
 !core/desktop/src-tauri/icons/128x128.png
 !core/desktop/src-tauri/icons/128x128@2x.png

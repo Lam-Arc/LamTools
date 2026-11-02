@@ -25,6 +25,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 pub const OVERLAY_LABEL: &str = "pet-overlay";
@@ -65,6 +66,9 @@ pub struct PetState {
     /// 进入 capture（整屏吃鼠标）的时间。
     capture_since: Mutex<Option<Instant>>,
     ping_capture_since: Mutex<Option<Instant>>,
+    /// 配置读改写串行化：主界面设置、桌宠面板、Ping 面板可能同时写同一份
+    /// config.json，patch 必须在同一把锁内完成 read-modify-write。
+    config_write: Mutex<()>,
 }
 
 /// capture 模式最长占用时间：超过就强制恢复穿透。
@@ -1322,10 +1326,7 @@ pub fn pet_config_read() -> Result<Option<String>, String> {
     }
 }
 
-#[tauri::command]
-pub fn pet_config_write(text: String) -> Result<(), String> {
-    // user:“用户配置与默认值具有明确版本号，可从旧版迁移/初始化”+
-    // (配置写盘只由 Rust 侧完成，前端不直接碰磁盘路径。)
+fn write_config_text(text: &str) -> Result<(), String> {
     ensure_pet_root()?;
     if text.len() > 4 * 1024 * 1024 {
         return Err("pet config is too large".into());
@@ -1334,6 +1335,53 @@ pub fn pet_config_write(text: String) -> Result<(), String> {
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, text.as_bytes()).map_err(|error| format!("write pet config failed: {error}"))?;
     std::fs::rename(&temp, &path).map_err(|error| format!("commit pet config failed: {error}"))
+}
+
+/// 对象递归合并：对象字段合并，数组/标量整体替换。
+///
+/// user:“桌宠设置…这份的持久化是唯一源”+(主界面设置、右键面板、Ping 面板
+/// 各自只提交自己拥有的字段；服务端在同一把锁内合并，避免后写者用旧副本
+/// 覆盖别人刚改的字段。)
+fn merge_config_json(target: &mut Value, patch: &Value) {
+    match (target, patch) {
+        (Value::Object(target_map), Value::Object(patch_map)) => {
+            for (key, value) in patch_map {
+                merge_config_json(target_map.entry(key.clone()).or_insert(Value::Null), value);
+            }
+        }
+        (target, patch) => *target = patch.clone(),
+    }
+}
+
+#[tauri::command]
+pub fn pet_config_patch(app: AppHandle, patch: String) -> Result<String, String> {
+    let state = app.state::<PetState>();
+    let _guard = state
+        .config_write
+        .lock()
+        .map_err(|_| "pet config write lock failed".to_string())?;
+    ensure_pet_root()?;
+    let path = pet_root().join("config.json");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "{}".to_string(),
+        Err(error) => return Err(format!("read pet config failed: {error}")),
+    };
+    let mut base: Value = if existing.trim().is_empty() {
+        Value::Object(Default::default())
+    } else {
+        serde_json::from_str(&existing).map_err(|error| format!("parse pet config failed: {error}"))?
+    };
+    let patch_value: Value =
+        serde_json::from_str(&patch).map_err(|error| format!("parse pet config patch failed: {error}"))?;
+    if !patch_value.is_object() {
+        return Err("pet config patch must be a JSON object".into());
+    }
+    merge_config_json(&mut base, &patch_value);
+    let text = serde_json::to_string_pretty(&base)
+        .map_err(|error| format!("serialize pet config failed: {error}"))?;
+    write_config_text(&text)?;
+    Ok(text)
 }
 
 const ALLOWED_ASSET_EXTS: &[&str] = &[
@@ -1897,6 +1945,31 @@ mod tests {
         for args in [browser_args(None), browser_args(Some("")), browser_args(Some("   "))] {
             assert_eq!(args, BASE_BROWSER_ARGS);
         }
+    }
+
+    #[test]
+    fn config_patch_merges_objects_and_replaces_arrays() {
+        // user:“桌宠设置…这份的持久化是唯一源”+(主界面/右键/Ping 只提交自己
+        // 拥有的字段：嵌套对象必须合并，数组（桌宠列表、扇区）整体替换。)
+        let mut base = serde_json::json!({
+            "useL3": true,
+            "ping": {"radius": 132, "sectors": [1, 2]},
+            "pets": [{"id": "old"}],
+            "bindings": {"pets": {}, "ping": {"sessionId": null}}
+        });
+        let patch = serde_json::json!({
+            "useL3": false,
+            "ping": {"radius": 200},
+            "pets": [{"id": "new"}]
+        });
+        merge_config_json(&mut base, &patch);
+        assert_eq!(base["useL3"], serde_json::json!(false));
+        assert_eq!(base["ping"]["radius"], serde_json::json!(200));
+        // 未提交的嵌套字段保留。
+        assert_eq!(base["ping"]["sectors"], serde_json::json!([1, 2]));
+        assert_eq!(base["bindings"]["ping"]["sessionId"], serde_json::json!(null));
+        // 数组整体替换，不做按 id 合并。
+        assert_eq!(base["pets"], serde_json::json!([{"id": "new"}]));
     }
 
     #[test]

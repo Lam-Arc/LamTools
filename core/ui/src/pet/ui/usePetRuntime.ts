@@ -16,6 +16,7 @@ import { QUALITY_PRESETS } from '../engine/terrain.ts'
 import type { PetRecordConfig } from '../config.ts'
 import { clipPrimarySource, hitboxWorldRect, type PetHitbox } from '../engine/sprite.ts'
 import { defaultConfig, migrateConfig, PET_CONFIG_VERSION, type PetConfigV1 } from '../config.ts'
+import { patchPetConfig } from '../configFile.ts'
 import { PetAgentHost } from '../agent/host.ts'
 import { createPetAgentClient, type PetAgentClient } from '../agent/client.ts'
 import * as bridge from '../bridge.ts'
@@ -26,6 +27,10 @@ import { createDefaultSkinCanvas } from '../render/blockySkin.ts'
 import type { AnimationMap } from '../engine/sprite.ts'
 import { createThreePetLayer, type ThreePetLayer } from '../render/threeLayer.ts'
 import type { RenderablePet } from '../render/types.ts'
+
+// 随源码入库的用户皮肤。不能依赖 core/desktop/public/：那个目录被 .gitignore
+// 忽略，CI 构建里没有这张图（0.3.32 安装包缺皮肤的根因）。
+const SUNDAY_SKIN_URL = new URL('../assets/sunday-skin.png', import.meta.url).href
 // user:“你看看 ping 环 要不也自己做窗口？”+(Ping 运行时已迁到独立窗口，
 // 桌宠侧只保留类型引用，便于历史组件继续使用 Ping 的公开类型。)
 export type { PingMarker, PingResultPayload, CardState, PingRuntime } from '../ping/usePingRuntime.ts'
@@ -174,31 +179,13 @@ export function usePetRuntime() {
     }
   }
 
-  /**
-   * Ping 窗口拥有 `ping` 与 `bindings.ping` 两段配置，桌宠窗口拥有其余字段。
-   * 两个窗口共写同一个 config.json，整份写回前必须先从磁盘取回 Ping 的最新值，
-   * 否则桌宠侧持有的旧副本会覆盖 Ping 刚改的快捷键/扇区/目标。
-   */
-  async function mergePingConfigFromDisk(): Promise<void> {
-    try {
-      const parsed = safeParse((await bridge.readConfigText()) || '')
-      if (!parsed || typeof parsed !== 'object') return
-      const record = parsed as Record<string, unknown>
-      const ping = record.ping
-      if (ping && typeof ping === 'object') {
-        config.ping = ping as typeof config.ping
-      }
-      const bindings = record.bindings
-      const pingBinding = bindings && typeof bindings === 'object'
-        ? (bindings as Record<string, unknown>).ping
-        : null
-      if (pingBinding && typeof pingBinding === 'object') {
-        config.bindings.ping = pingBinding as typeof config.bindings.ping
-      }
-    } catch (error) {
-      report('config-merge', error)
-    }
-  }
+  // ping 只在用户在本窗口改过时才提交；否则由 Ping 窗口/主界面设置负责。
+  let pingDirty = false
+  // Ping 目标绑定也单独标记：只改扇区时不能把 Ping 窗口刚改的目标覆盖回去。
+  let pingBindingDirty = false
+  // 自己写入后广播的 config-changed 会回到本窗口：这个时间窗内忽略，避免
+  // 自己刚保存完又走一遍重载。
+  let lastLocalSaveAt = 0
 
   let saveTimer = 0
   async function saveConfig(): Promise<void> {
@@ -206,12 +193,28 @@ export function usePetRuntime() {
     config.debugOverlay = { ...debug }
     config.pets = petRecords.value
     try {
-      await mergePingConfigFromDisk()
-      await bridge.writeConfigText(JSON.stringify(config, null, 2))
-      // user:“你看看 ping 环 要不也自己做窗口？”+(Ping 在独立窗口里持有同一份
-      // 配置的副本：桌宠设置改完（提示词/扇区/快捷键）通知它重读，立即生效。)
-      const { emit } = await import('@tauri-apps/api/event')
-      await emit('pet://ping/config-changed')
+      const patch: Record<string, unknown> = {
+        version: PET_CONFIG_VERSION,
+        enabled: config.enabled,
+        quality: config.quality,
+        useL3: config.useL3,
+        zMode: config.zMode,
+        debugOverlay: { ...debug },
+        bubbles: config.bubbles,
+        pets: petRecords.value,
+        presetInstalled: config.presetInstalled,
+        presetVersion: config.presetVersion,
+        bindings: { pets: config.bindings.pets },
+        perf: config.perf,
+      }
+      if (pingDirty) patch.ping = config.ping
+      if (pingBindingDirty) {
+        patch.bindings = { pets: config.bindings.pets, ping: config.bindings.ping }
+      }
+      lastLocalSaveAt = Date.now()
+      await patchPetConfig(patch)
+      pingDirty = false
+      pingBindingDirty = false
     } catch (error) {
       report('config-save', error)
     }
@@ -220,6 +223,68 @@ export function usePetRuntime() {
   function scheduleSave(): void {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => { void saveConfig() }, 400)
+  }
+
+  /** 桌宠设置面板改 Ping 字段：标记 ping 归属，保存时才提交这段。 */
+  function schedulePingSave(): void {
+    pingDirty = true
+    scheduleSave()
+  }
+
+  /**
+   * 外部（主界面设置 / Ping 面板 / 右键面板）改了同一个 config.json：
+   * 重读文件并把差异应用到这个窗口，保证文件是唯一源。
+   */
+  async function reloadConfigFromDisk(): Promise<void> {
+    // 自己的写入也会广播回来；刚保存的 800ms 内忽略，避免自我重载。
+    if (Date.now() - lastLocalSaveAt < 800) return
+    try {
+      const text = await bridge.readConfigText()
+      if (!text) return
+      const migrated = migrateConfig(safeParse(text))
+      const next = migrated.config
+      const previousPets = [...petRecords.value]
+      const bindings = config.bindings
+      Object.assign(config, next)
+      // host 持有的是 config.bindings 这个对象本身，不能整体替换引用。
+      config.bindings = bindings
+      bindings.pets = next.bindings.pets
+      bindings.ping = next.bindings.ping
+      Object.assign(debug, next.debugOverlay)
+      petRecords.value = next.pets
+      const instance = world.value
+      if (instance) {
+        for (const old of previousPets) {
+          if (!next.pets.some(record => record.id === old.id)) instance.removePet(old.id)
+        }
+        for (const record of next.pets) {
+          const pet = instance.get(record.id)
+          if (pet) {
+            pet.updateSettings({
+              name: record.name,
+              scale: record.scale,
+              facing: record.facing,
+              radius: record.radius,
+              physics: record.physics,
+              behavior: record.behavior,
+              hitboxes: record.hitboxes,
+              actions: record.actions,
+              spriteWidth: record.spriteWidth,
+              spriteHeight: record.spriteHeight,
+              visible: record.visible,
+            })
+          } else {
+            spawnPet(record)
+          }
+        }
+        instance.setQuality(config.quality, config.useL3)
+      }
+      void bridge.setZMode(config.zMode).catch(error => report('config-reload', error))
+      void bridge.setPingHotkey(config.ping.hotkey).catch(error => report('config-reload', error))
+      pingDirty = false
+    } catch (error) {
+      report('config-reload', error)
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -327,6 +392,9 @@ export function usePetRuntime() {
 
   const BLOCKY_PACK_ID = 'sunday-blocky'
   const BLOCKY_DEFAULT_SKIN = 'skins/default.png'
+  // 皮肤/角色包内容变化时 +1：旧安装的 presetInstalled 已经是 true，
+  // 只靠它永远不会重写角色包，用户就看不到新内置皮肤。
+  const BLOCKY_PRESET_VERSION = 2
   const BLOCKY_ACTIONS = ['idle', 'walk', 'jump', 'jump_happy', 'fall', 'climb', 'hang', 'rest', 'dance', 'interact', 'interact_head', 'question']
 
   function blockyActions(skin: string): AnimationMap {
@@ -338,12 +406,23 @@ export function usePetRuntime() {
   }
 
   /**
-   * 默认皮肤：优先用随包的用户皮肤（pet-animlab/user-skin.png），
+   * 默认皮肤：优先用随源码入库的用户皮肤（assets/sunday-skin.png），
    * 取不到再回退到程序生成的 Steve 皮肤。
    *
-   * user:"默认皮肤改为我的皮肤"+(首次安装方块人时直接写入用户自己的 64×64 皮肤。)
+   * user:"默认皮肤改为我的皮肤"+"为什么没有内置我的皮肤？"+
+   * (用户皮肤必须随源码入库；core/desktop/public 被 .gitignore 忽略，
+   *  依赖它会导致 CI 构建的安装包没有这张图。)
    */
   async function defaultSkinBytes(): Promise<Uint8Array> {
+    try {
+      const response = await fetch(SUNDAY_SKIN_URL)
+      if (response.ok) {
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        if (bytes.length > 0) return bytes
+      }
+    } catch {
+      // 打包环境异常时继续尝试旧路径/生成皮肤。
+    }
     try {
       const response = await fetch(new URL('pet-animlab/user-skin.png', window.location.href))
       if (response.ok) {
@@ -351,7 +430,7 @@ export function usePetRuntime() {
         if (bytes.length > 0) return bytes
       }
     } catch {
-      // 打包环境缺少该资源时回退到内置生成皮肤。
+      // 旧开发目录可能不存在，忽略。
     }
     const canvas = createDefaultSkinCanvas('steve')
     const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
@@ -359,21 +438,8 @@ export function usePetRuntime() {
     return new Uint8Array(await blob.arrayBuffer())
   }
 
-  /** 安装内置方块人（写包 + 记录 + 实例）。 */
-  async function installBlockyPreset(): Promise<void> {
-    const skinBytes = await defaultSkinBytes()
-    const manifest = JSON.stringify({
-      schema_version: 1,
-      name: 'Sunday Blocky',
-      hitboxes: [
-        { id: 'body', name: '身体', x: 0.12, y: 0.1, width: 0.76, height: 0.85, action: 'interact', doubleAction: 'jump_happy', enabled: true },
-      ],
-    }, null, 2)
-    await bridge.writePackBundle('Sunday Blocky', [
-      { rel: BLOCKY_DEFAULT_SKIN, bytes: skinBytes },
-      { rel: 'pet.json', bytes: new TextEncoder().encode(manifest) },
-    ])
-    const record: PetRecordConfig = {
+  function blockyRecord(): PetRecordConfig {
+    return {
       id: 'blocky-1',
       name: 'Sunday 方块人',
       packId: BLOCKY_PACK_ID,
@@ -391,9 +457,55 @@ export function usePetRuntime() {
       behavior: {},
       importWarnings: [],
     }
+  }
+
+  function blockyManifest(): string {
+    return JSON.stringify({
+      schema_version: 1,
+      name: 'Sunday Blocky',
+      hitboxes: [
+        { id: 'body', name: '身体', x: 0.12, y: 0.1, width: 0.76, height: 0.85, action: 'interact', doubleAction: 'jump_happy', enabled: true },
+      ],
+    }, null, 2)
+  }
+
+  /** 首次安装：整包写入（此时还没有用户自己的皮肤文件）。 */
+  async function installBlockyPack(): Promise<void> {
+    await bridge.writePackBundle('Sunday Blocky', [
+      { rel: BLOCKY_DEFAULT_SKIN, bytes: await defaultSkinBytes() },
+      { rel: 'pet.json', bytes: new TextEncoder().encode(blockyManifest()) },
+    ])
+  }
+
+  /**
+   * 升级内置皮肤：逐文件覆盖，绝不删除整个角色包目录。
+   * 用户可能在 sunday-blocky 里换过皮肤（skins/skin-xxx.png），整包重写会把它删掉。
+   */
+  async function refreshBlockyPack(): Promise<void> {
+    await bridge.writePackAsset(BLOCKY_PACK_ID, BLOCKY_DEFAULT_SKIN, await defaultSkinBytes())
+    await bridge.writePackAsset(BLOCKY_PACK_ID, 'pet.json', new TextEncoder().encode(blockyManifest()))
+  }
+
+  /** 安装内置方块人（写包 + 记录 + 实例）。 */
+  async function installBlockyPreset(): Promise<void> {
+    await installBlockyPack()
+    const record = blockyRecord()
     petRecords.value = [record]
     spawnPet(record)
     config.presetInstalled = true
+    config.presetVersion = BLOCKY_PRESET_VERSION
+    await saveConfig()
+  }
+
+  /** 只刷新内置角色包和已有方块人记录，不碰用户自己导入的角色。 */
+  async function refreshBlockyPreset(): Promise<void> {
+    await refreshBlockyPack()
+    config.presetVersion = BLOCKY_PRESET_VERSION
+    const record = petRecords.value.find(item => item.packId === BLOCKY_PACK_ID)
+    if (record) {
+      record.actions = blockyActions(BLOCKY_DEFAULT_SKIN)
+      world.value?.get(record.id)?.updateSettings({ actions: record.actions })
+    }
     await saveConfig()
   }
 
@@ -404,7 +516,16 @@ export function usePetRuntime() {
     //  示例包不应成为默认角色。用户自己导入的其他角色不动。)
     const onlyExampleBall = petRecords.value.length === 1
       && (petRecords.value[0]?.packId || '') === 'arc-ball'
-    if (config.presetInstalled && !onlyExampleBall) return
+    const needsPreset = !config.presetInstalled || onlyExampleBall
+    const needsSkinRefresh = (config.presetVersion || 0) < BLOCKY_PRESET_VERSION
+    if (needsSkinRefresh && config.presetInstalled && !onlyExampleBall) {
+      try {
+        await refreshBlockyPreset()
+      } catch (error) {
+        report('preset', error)
+      }
+    }
+    if (!needsPreset) return
     if (petRecords.value.length > 0 && !onlyExampleBall) {
       config.presetInstalled = true
       await saveConfig()
@@ -449,9 +570,17 @@ export function usePetRuntime() {
   async function resetSkinFor(petId: string): Promise<void> {
     const record = petRecords.value.find(item => item.id === petId)
     if (!record) return
-    record.actions = blockyActions(BLOCKY_DEFAULT_SKIN)
-    world.value?.get(petId)?.updateSettings({ actions: record.actions })
-    await saveConfig()
+    try {
+      // 恢复默认必须把内置皮肤写回角色包，不能只改 actions 指向旧的 default.png。
+      if (record.packId === BLOCKY_PACK_ID) {
+        await bridge.writePackAsset(BLOCKY_PACK_ID, BLOCKY_DEFAULT_SKIN, await defaultSkinBytes())
+      }
+      record.actions = blockyActions(BLOCKY_DEFAULT_SKIN)
+      world.value?.get(petId)?.updateSettings({ actions: record.actions })
+      await saveConfig()
+    } catch (error) {
+      report('skin', error)
+    }
   }
 
   function restorePets(): void {
@@ -560,9 +689,9 @@ export function usePetRuntime() {
       await listen<string>('pet://ping/action', ({ payload }) => {
         runPingCustomAction(String(payload || ''))
       })
-      // Ping 窗口改了提示词/扇区/快捷键/目标：把 ping 段同步回内存，避免下一次
-      // 桌宠侧保存时用旧副本覆盖它（两个窗口共写同一个 config.json）。
-      await listen('pet://ping/config-changed', () => { void mergePingConfigFromDisk() })
+      // 主界面设置、右键面板、Ping 面板改的是同一份 config.json：收到广播后
+      // 重读文件并应用，文件是唯一源。
+      await listen('pet://config-changed', () => { void reloadConfigFromDisk() })
       // user:"点击打开桌宠没反应"+(托盘「打开桌宠」的意图是"让我看见它"：
       //  角色被「显隐」藏起来过的，收到这个事件就恢复显示并落盘。)
       await listen('pet://overlay/opened', () => {
@@ -626,6 +755,17 @@ export function usePetRuntime() {
   function setQuality(quality: TerrainQuality): void {
     config.quality = quality
     world.value?.setQuality(quality, config.useL3)
+    void refreshL3()
+    scheduleSave()
+  }
+
+  /**
+   * user:"为什么 L3 默认还是开启？"+(设置面板的 L3 勾选以前只改内存、
+   * 没有落盘，重启后又被旧配置的 true 覆盖；这里统一保存并立即应用。)
+   */
+  function setUseL3(enabled: boolean): void {
+    config.useL3 = enabled
+    world.value?.setQuality(config.quality, enabled)
     void refreshL3()
     scheduleSave()
   }
@@ -1364,6 +1504,7 @@ export function usePetRuntime() {
       // Ping 选择器（从设置面板打开）改的是独立 Ping 目标，不能写成空 petId 的桌宠绑定。
       host.setPingTarget(projectId, sessionId)
       config.ping.target = { projectId, sessionId }
+      pingBindingDirty = true
     } else {
       if (!sessionPicker.petId) return
       // 绑定只存 bindings.pets 一处；桌宠记录里不再保留第二份副本。
@@ -1667,6 +1808,7 @@ export function usePetRuntime() {
     shutdown,
     saveConfig,
     scheduleSave,
+    schedulePingSave,
     attachCanvas,
     attachThreeCanvas,
     attachDebugCanvas,
@@ -1675,6 +1817,7 @@ export function usePetRuntime() {
     refreshWindows,
     refreshL3,
     setQuality,
+    setUseL3,
     pushBubble,
     dismissBubble,
     toggleBubble,

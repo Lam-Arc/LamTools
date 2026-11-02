@@ -14,7 +14,8 @@ import PingAnnotator from './PingAnnotator.vue'
 import SessionPicker, { type SessionPickerView } from './SessionPicker.vue'
 import { createPingRuntime } from '../ping/usePingRuntime.ts'
 import { ringSectors } from '../ping/ringModel.ts'
-import { defaultConfig, parseConfigText, type PetConfigV1 } from '../config.ts'
+import { defaultConfig, parseConfigText, PET_CONFIG_VERSION, type PetConfigV1 } from '../config.ts'
+import { patchPetConfig } from '../configFile.ts'
 import { createPetAgentClient, type PetAgentClient } from '../agent/client.ts'
 import { PetAgentHost } from '../agent/host.ts'
 import * as bridge from '../bridge.ts'
@@ -111,8 +112,8 @@ async function subscribeEvents(): Promise<void> {
     // 只在有可点 UI 时才量矩形（隐藏时窗口整体穿透，不需要命中区）。
     if (overlayActive.value) void reportHitRects()
   }))
-  // 桌宠设置面板改了 Ping 提示词/扇区/快捷键：重新读取配置后立即生效。
-  eventOffs.push(await listen('pet://ping/config-changed', () => { void reloadConfig() }))
+  // 主界面设置/桌宠面板改了同一份 config.json：重读后立即生效。
+  eventOffs.push(await listen('pet://config-changed', () => { void reloadConfig() }))
   // CLI/自动化入口：直接执行某个扇区（不模拟键鼠）。
   // user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”
   eventOffs.push(await listen<string>('pet://ping/test-commit', ({ payload }) => {
@@ -277,15 +278,12 @@ function scheduleSave(): void {
 
 async function persistConfig(): Promise<void> {
   try {
-    const text = await bridge.readConfigText()
-    const latest = text ? JSON.parse(text) : {}
-    latest.ping = config.ping
-    const bindings = latest.bindings && typeof latest.bindings === 'object' ? latest.bindings : {}
-    bindings.ping = { ...(agentHost.value?.bindings.ping || config.bindings.ping) }
-    latest.bindings = bindings
-    await bridge.writeConfigText(JSON.stringify(latest))
-    // 让桌宠窗口也刷新（它持有同一份配置的副本）。
-    await emitToApp('pet://ping/config-changed')
+    // 只提交 Ping 拥有的两段；Rust 在同一把锁里合并，不会覆盖桌宠/主界面刚写的字段。
+    await patchPetConfig({
+      version: PET_CONFIG_VERSION,
+      ping: config.ping,
+      bindings: { ping: { ...(agentHost.value?.bindings.ping || config.bindings.ping) } },
+    })
   } catch (error) {
     console.error('[ping] save config failed', error)
   }
