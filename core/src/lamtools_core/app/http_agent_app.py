@@ -41,6 +41,7 @@ from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arrange
 from lamtools_core.runtime.background_processes import default_background_process_registry
 from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.observer import ObserverSupervisor
+from lamtools_core.runtime.single_instance import SchedulerLease
 from lamtools_core.runtime.persistent_process_store import PersistentProcessStore
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
@@ -67,6 +68,7 @@ from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from lamtools_core.artifact import ArtifactRegistry, ArtifactStore, kind_from_mime
 from lamtools_core.tool.command_runner import warm_command_shell
 from .live_router import create_core_live_router
+from .superagent_operations import register_superagent_operations
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
 
@@ -204,6 +206,59 @@ class _MemberDefaultsHooks(DefaultCoreLiveMemberHooks):
                 turn_payload_extra={**materialized.turn_payload_extra, **session_defaults},
             )
         return materialized
+
+
+
+def _arrange_max_active_jobs() -> int:
+    """同时执行的任务上限。
+
+    user:“全局并发限制（单实例运行）”+(上限必须可配、有安全默认值，
+    改配置不能要求改代码)。
+    """
+    raw = str(os.environ.get("LAMTOOLS_ARRANGE_MAX_ACTIVE_JOBS") or "").strip()
+    if not raw:
+        return 3
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    return max(1, value)
+
+
+def _runtime_health(app_state: dict[str, Any]) -> dict[str, Any]:
+    """把后台循环的真实存活状态暴露到 /api/health。
+
+    user:“后台调度器异常自愈及健康检查”+(ready / degraded / failed 必须能区分，
+    并且能读到在跑数、容量、队列深度与最近错误)。
+    """
+    runner = app_state.get("arrange_runner")
+    observer = app_state.get("observer_supervisor")
+    arrange = runner.health() if runner is not None and hasattr(runner, "health") else {}
+    watch = observer.health() if observer is not None and hasattr(observer, "health") else {}
+    alive = True
+    if arrange:
+        alive = alive and bool(arrange.get("alive"))
+    if watch:
+        alive = alive and bool(watch.get("alive"))
+    failing = bool(arrange.get("consecutive_failures")) or bool(watch.get("consecutive_failures"))
+    lease = app_state.get("scheduler_lease")
+    lease_state = (
+        "acquired"
+        if lease is not None and getattr(lease, "acquired", False)
+        else "held-by-another-process"
+        if lease is not None
+        else "unknown"
+    )
+    if lease_state == "held-by-another-process":
+        status = "failed" if not alive else "degraded"
+    else:
+        status = "failed" if not alive else "degraded" if failing else "ok"
+    return {
+        "status": status,
+        "arrange": arrange,
+        "observer": watch,
+        "scheduler_lease": lease_state,
+    }
 
 
 def create_core_agent_http_app(
@@ -617,12 +672,18 @@ def create_core_agent_http_app(
         arrange_runner = ArrangeRunner(
             core_db_handle.arrange_store,
             execute_arranged_job,
+            # user:“全局并发限制（单实例运行）”+(同时最多跑几个任务，
+            # 与每轮领取批量分开配置；默认 3，可用环境变量覆盖)。
+            max_active_jobs=_arrange_max_active_jobs(),
             new_thread_factory=lambda _job: f"arrange_thread_{uuid.uuid4().hex}",
         )
         observer_supervisor = ObserverSupervisor(
             core_db_handle.arrange_store,
             data_dir=resolved_data_dir,
             wake_runner=arrange_runner.wake,
+            # user:“Observer 正常退出与失败重启策略”+(生命周期要持久化，
+            # 否则重启 Sunday 之后正常退出的观察器又会被拉起来)。
+            lifecycle_store=getattr(core_db_handle, "observer_lifecycle", None),
         )
         register_durable_operations(
             agent_operations,
@@ -630,9 +691,63 @@ def create_core_agent_http_app(
             arrange_manager=arrange_manager,
             wake_runner=arrange_runner.wake,
             cancel_running=arrange_runner.cancel,
+            interrupt_running=arrange_runner.interrupt,
             wake_observers=observer_supervisor.wake,
             observer_status=observer_supervisor.status,
+            observer_health=observer_supervisor.health,
+            observer_rearm=observer_supervisor.rearm,
+            arrange_health=arrange_runner.health,
         )
+        # user:“实现 Source、Policy、Eval、Ticket、Assignment、独立 Worktree 和可靠结果交付”
+        # +(排期仍由 Arrange 负责：这里注入的 scheduler 就是 arrange_manager.create，
+        # 不另外造一套调度器；权限边界由宿主 env 决定，事件正文无法扩权)。
+        from lamtools_core.superagent import (
+            InMemorySuperagentStore,
+            PolicyConfig,
+            PolicyGate,
+            SuperagentService,
+            WorktreeManager,
+        )
+
+        def _split_env(name: str) -> frozenset[str]:
+            raw = str(os.environ.get(name) or "")
+            return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+        async def _schedule_superagent_ticket(ticket):
+            job = await arrange_manager.create(
+                thread_id=f"ticket:{ticket.ticket_id}",
+                work_root=ticket.mandate.repo_root,
+                kind="focus",
+                operation="turn.start",
+                payload={"message": ticket.instructions},
+                trigger={"type": "once"},
+                title=f"ticket {ticket.ticket_id}",
+            )
+            arrange_runner.wake()
+            return job.id
+
+        superagent_service = SuperagentService(
+            store=getattr(core_db_handle, "superagent_store", None)
+            or InMemorySuperagentStore(),
+            policy=PolicyGate(
+                PolicyConfig(
+                    allowed_sources=_split_env("LAMTOOLS_SUPERAGENT_SOURCES"),
+                    allowed_event_types=_split_env("LAMTOOLS_SUPERAGENT_EVENTS"),
+                    trusted_actors=_split_env("LAMTOOLS_SUPERAGENT_ACTORS"),
+                    allowed_repos=_split_env("LAMTOOLS_SUPERAGENT_REPOS"),
+                    allowed_tools=tuple(sorted(_split_env("LAMTOOLS_SUPERAGENT_TOOLS"))),
+                    allow_create_pr=_env_bool("LAMTOOLS_SUPERAGENT_ALLOW_PR", default=False),
+                    version="policy.v1",
+                )
+            ),
+            scheduler=_schedule_superagent_ticket,
+            worktree_manager=WorktreeManager(
+                resolved_data_dir / "superagent",
+                allowed_repo_roots=tuple(sorted(_split_env("LAMTOOLS_SUPERAGENT_REPOS"))),
+            ),
+        )
+        register_superagent_operations(agent_operations, service=superagent_service)
+        app_state["superagent_service"] = superagent_service
         app_state["operations"] = agent_operations
         # Plugins that inject messages into a desktop session must use the live
         # turn path, not the agent-operation turn.start: only the former writes
@@ -697,8 +812,19 @@ def create_core_agent_http_app(
             )
         except Exception:
             _logger.exception("[startup] sub-agent state reconciliation failed; watchdog will retry")
-        await arrange_runner.start()
-        await observer_supervisor.start()
+        # user:“全局并发限制（单实例运行）”+(同一份数据目录只能有一个调度器在跑；
+        # 第二个进程照常提供接口，但不再领任务，避免并发上限被进程数放大)。
+        scheduler_lease = SchedulerLease(resolved_data_dir / "arrange-scheduler.lock")
+        app_state["scheduler_lease"] = scheduler_lease
+        if scheduler_lease.acquire():
+            await arrange_runner.start()
+            await observer_supervisor.start()
+        else:
+            _logger.warning(
+                "[startup] arrange scheduler disabled: another instance holds %s (pid=%s)",
+                scheduler_lease.path,
+                scheduler_lease.holder_pid(),
+            )
         # Watches host memory so a turn stopped by memory exhaustion continues by
         # itself once the machine can afford it, and closes the turns whose
         # recorded ending never reached the snapshot (a memory crash usually
@@ -742,6 +868,10 @@ def create_core_agent_http_app(
         arrange_runner = app_state.get("arrange_runner")
         if arrange_runner is not None:
             await arrange_runner.stop()
+        scheduler_lease = app_state.get("scheduler_lease")
+        if scheduler_lease is not None:
+            scheduler_lease.release()
+            app_state["scheduler_lease"] = None
         await runtime_task_registry.shutdown()
         core_db_handle = app_state.get("core_db")
         if core_db_handle is not None:
@@ -782,7 +912,10 @@ def create_core_agent_http_app(
         enable_core_routes=False,
         frontend_dir=frontend_dir,
         health_payload=lambda: {
-            "status": "ok",
+            # user:“后台调度器异常自愈及健康检查”+(不能只看 HTTP 是否活着：
+            # 调度循环死掉时接口必须自己说出来)。
+            "status": _runtime_health(app_state)["status"],
+            "runtime": _runtime_health(app_state),
             "agent": runtime_spec.member_id,
             "agent_id": runtime_spec.id,
             "agent_name": runtime_spec.name,

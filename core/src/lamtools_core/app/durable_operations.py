@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -23,8 +24,14 @@ def register_durable_operations(
     arrange_manager: ArrangeManager,
     wake_runner: Callable[[], Any] | None = None,
     cancel_running: Callable[[str], Any] | None = None,
+    # user:“运行中任务暂停误变取消”+(暂停只能停执行、不能改库；
+    # 与 cancel_running 分开，避免再出现「点暂停落成取消」)。
+    interrupt_running: Callable[[str], Any] | None = None,
     wake_observers: Callable[[], Any] | None = None,
     observer_status: Callable[[str], dict[str, Any]] | None = None,
+    observer_health: Callable[[], dict[str, Any]] | None = None,
+    observer_rearm: Callable[[str], Any] | None = None,
+    arrange_health: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     def wake() -> None:
         if wake_runner is not None:
@@ -178,13 +185,26 @@ def register_durable_operations(
             if current is None:
                 raise LookupError(f"Arrange job not found: {job_id}")
             if current.status == "running" and status in {"paused", "cancelled"}:
-                if cancel_running is None:
-                    raise RuntimeError("Running Arrange job cannot be stopped by this host")
-                stopped = cancel_running(job_id)
-                if inspect.isawaitable(stopped):
-                    stopped = await stopped
-                if not stopped:
-                    raise RuntimeError(f"Arrange job execution already finished: {job_id}")
+                # user:“运行中任务暂停误变取消”+(顺序必须是「先原子落库目标状态，
+                # 再停执行」。反过来就会像旧实现那样把 paused 写成 cancelled，
+                # 而且旧执行还有机会回写结果)。
+                job = await arrange_manager.request_interrupt(
+                    job_id, status  # type: ignore[arg-type]
+                )
+                stopper = interrupt_running or cancel_running
+                if stopper is not None:
+                    try:
+                        stopped = stopper(job_id)
+                        if inspect.isawaitable(stopped):
+                            await stopped
+                    except Exception:  # noqa: BLE001 — 停执行失败不能掩盖已落库的用户意图
+                        logging.getLogger(__name__).warning(
+                            "arrange interrupt failed for %s", job_id, exc_info=True
+                        )
+                reconcile_observers()
+                return OperationResult(
+                    name=request.name, payload={"job": job_payload(job)}
+                )
             job = await arrange_manager.update_status(
                 job_id, status  # type: ignore[arg-type]
             )
@@ -203,6 +223,47 @@ def register_durable_operations(
 
     async def arrange_cancel(request: OperationRequest) -> OperationResult:
         return await arrange_status(request, "cancelled")
+
+    async def arrange_health(request: OperationRequest) -> OperationResult:
+        # user:“后台调度器异常自愈及健康检查”+(必须能读到循环存活、容量、
+        # 在跑数、队列深度与最近错误，而不是只看 HTTP 是否返回 200)。
+        if arrange_health is None:
+            return _error(request, "Arrange health is not available on this host")
+        snapshot = arrange_health()
+        payload = dict(snapshot) if isinstance(snapshot, dict) else {"value": snapshot}
+        alive = bool(payload.get("alive"))
+        degraded = bool(payload.get("consecutive_failures"))
+        payload["status"] = (
+            "ready" if alive and not degraded else "degraded" if alive else "failed"
+        )
+        return OperationResult(name=request.name, payload={"health": payload})
+
+    async def observer_status_op(request: OperationRequest) -> OperationResult:
+        if observer_status is None:
+            return _error(request, "Observer status is not available on this host")
+        payload = {"observer": observer_status(_job_id(request.payload))}
+        if observer_health is not None:
+            payload["health"] = observer_health()
+        return OperationResult(name=request.name, payload=payload)
+
+    async def observer_rearm_op(request: OperationRequest) -> OperationResult:
+        # user:“Observer 正常退出与失败重启策略”+(正常退出是终态，
+        # 只有人显式 rearm 才会重新拉起)。
+        if observer_rearm is None:
+            return _error(request, "Observer rearm is not available on this host")
+        job_id = _job_id(request.payload)
+        result = observer_rearm(job_id)
+        if inspect.isawaitable(result):
+            result = await result
+        reconcile_observers()
+        return OperationResult(
+            name=request.name,
+            payload={
+                "observer": result
+                if isinstance(result, dict)
+                else {"status": "rearmed"}
+            },
+        )
 
     async def arrange_signal(request: OperationRequest) -> OperationResult:
         try:
@@ -300,6 +361,9 @@ def register_durable_operations(
         "arrange.signal": arrange_signal,
         "arrange.occurrence.get": arrange_occurrence_get,
         "arrange.occurrence.list": arrange_occurrence_list,
+        "arrange.health": arrange_health,
+        "observer.status": observer_status_op,
+        "observer.rearm": observer_rearm_op,
     }
     for name in CORE_DURABLE_OPERATION_NAMES:
         catalog.register(name, handlers[name])

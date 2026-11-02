@@ -123,6 +123,9 @@ CORE_DURABLE_OPERATION_NAMES: tuple[str, ...] = (
     "arrange.signal",
     "arrange.occurrence.get",
     "arrange.occurrence.list",
+    "arrange.health",
+    "observer.status",
+    "observer.rearm",
 )
 
 def register_operation_handlers(
