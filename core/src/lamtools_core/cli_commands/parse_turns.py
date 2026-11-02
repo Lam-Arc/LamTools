@@ -200,7 +200,13 @@ def register_steer(sub: argparse._SubParsersAction) -> None:
 
 def register_queue(sub: argparse._SubParsersAction) -> None:
     from .connection import _add_live_connection_arguments
-    from .turns import cmd_queue_create, cmd_queue_delete, cmd_queue_guide, cmd_queue_update
+    from .turns import (
+        cmd_queue_create,
+        cmd_queue_delete,
+        cmd_queue_guide,
+        cmd_queue_reorder,
+        cmd_queue_update,
+    )
     queue = sub.add_parser("queue", help="Manage live Sunday queued input")
     queue_sub = queue.add_subparsers(dest="queue_command", required=True)
     queue_create = queue_sub.add_parser("create", help="Queue input for the next turn")
@@ -226,6 +232,12 @@ def register_queue(sub: argparse._SubParsersAction) -> None:
     _add_live_connection_arguments(queue_delete)
     queue_delete.add_argument("--raw", action="store_true")
     queue_delete.set_defaults(func=cmd_queue_delete)
+    queue_reorder = queue_sub.add_parser("reorder", help="Reorder queued input (full id order)")
+    queue_reorder.add_argument("thread_id")
+    queue_reorder.add_argument("order", nargs="+", help="Queue item ids in the desired order")
+    _add_live_connection_arguments(queue_reorder)
+    queue_reorder.add_argument("--raw", action="store_true")
+    queue_reorder.set_defaults(func=cmd_queue_reorder)
     queue_guide = queue_sub.add_parser("guide", help="Use queued input to steer the active turn")
     queue_guide.add_argument("thread_id")
     queue_guide.add_argument("turn_id")

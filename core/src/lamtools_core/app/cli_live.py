@@ -197,6 +197,9 @@ class CliLiveFormatter:
             phase = str(payload.get("status") or "queue_updated")
             self.last_status = phase
             return [self.line("phase", phase)]
+        if method == "queue/itemReordered":
+            self.last_status = "queue_reordered"
+            return [self.line("phase", "queue_reordered")]
         if self.verbose:
             return [self.line("runtime_event", f"{method} {json.dumps(payload, ensure_ascii=False)}")]
         return []
@@ -767,6 +770,8 @@ def format_event(event: dict[str, Any]) -> str | None:
         return "[phase] queue_dispatched"
     if method == "queue/itemUpdated":
         return f"[phase] {payload.get('status') or 'queue_updated'}"
+    if method == "queue/itemReordered":
+        return "[phase] queue_reordered"
     return f"[{method}] {json.dumps(payload, ensure_ascii=False)}" if method else None
 
 

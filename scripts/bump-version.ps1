@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-  Bump the LamCore version across all version-bearing files (single source of truth).
+  Bump the Sunday version across all version-bearing files (single source of truth).
 
 .DESCRIPTION
   Usage:

@@ -1620,4 +1620,7 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 /* user:“都把这个链接标蓝可跳转”+(显式与无协议链接保持统一可见性)。 */
 :deep(a[href]) { color: var(--blue); text-decoration-color: color-mix(in srgb, var(--blue) 45%, transparent); text-underline-offset: 3px; }
 :deep(a[href]:hover) { text-decoration: underline; }
+/* user:“渲染的@改为对应文件图标”+(图标与文件名同行居中对齐，图标颜色跟随链接)。 */
+:deep(a.file-reference-link) { display: inline-flex; align-items: center; gap: 3px; }
+:deep(.file-reference-icon) { display: inline-flex; flex: none; }
 </style>

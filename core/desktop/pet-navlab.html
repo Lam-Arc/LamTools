@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sunday Pet · 地图与寻路实验台</title>
+  </head>
+  <body>
+    <!--
+      几何判定框 + 平台地图 + 寻路模型 的独立实验台。
+      user:"比如几何判定框与地图寻路模型，我不要这个透明窗口，你给我单独做一个界面。
+      最简单的界面，不需要有任何样式，就是把这件事儿给整明白"+
+      (普通不透明页面，与透明覆盖层完全分离：不装 Ping、不装动画、不装穿透轮询，
+      引擎模型在这里单独跑、单独看。)
+    -->
+    <div id="navlab"></div>
+    <script type="module" src="/src/pet-navlab.ts"></script>
+  </body>
+</html>

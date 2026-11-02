@@ -51,8 +51,8 @@ dependency inventories belong to the package manifests and module documents.
 - Linux distribution builds use `scripts/package-linux.sh` on native Linux
   (including WSL2). The script keeps Node, Python, Rust, Cargo, package
   caches, and staging on the Linux filesystem, rejects `/mnt/c`, builds an
-  extensionless PyInstaller `LamCore`, and injects it into both Tauri bundles
-  as `lamcore-backend/LamCore`. CI and release jobs call this script instead of
+  extensionless PyInstaller `SundayCore`, and injects it into both Tauri bundles
+  as `sunday-backend/SundayCore`. CI and release jobs call this script instead of
   treating a Windows or bare Tauri build as Linux evidence.
 - Website development/build uses `npm run dev` and `npm run build` from
   `website/`. Repository scripts provide Core startup, packaging, versioning,

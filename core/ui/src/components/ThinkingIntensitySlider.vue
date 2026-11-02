@@ -37,7 +37,9 @@
 
           <!-- user:“刻度点应该在条内用白灰点表示”+(刻度点收进轨道，点击仍可直接跳到该等级)。 -->
           <!-- user:“白条换成白点吧，越向下越透明，然后消散”+(只在 max 档出现的轨道内下落白点)。 -->
-          <div v-if="isMax" class="sunday-thinking-slider__max-dots" aria-hidden="true">
+          <!-- user:“那个max模式下的粒子特效出现时机延后，等到这个条滑块的位置已经固定下来了，再出现粒子特效”
+               +(开卡飞入期间不出现粒子，落位固定后才开始掉落)。 -->
+          <div v-if="isMax && showParticles" class="sunday-thinking-slider__max-dots" aria-hidden="true">
             <span v-for="dot in 6" :key="dot" class="sunday-thinking-slider__max-dot" />
           </div>
 
@@ -78,8 +80,10 @@ const props = withDefaults(defineProps<{
   options: Array<{ value: string; label: string }>
   label: string
   disabled?: boolean
+  showParticles?: boolean
 }>(), {
   disabled: false,
+  showParticles: true,
 })
 
 const emit = defineEmits<{
@@ -192,10 +196,17 @@ function onRailKeydown(event: KeyboardEvent): void {
 
 function updateFromPointer(event: PointerEvent): void {
   const rail = railEl.value
-  if (!rail || railHeight.value <= 0) return
+  if (!rail) return
   const rect = rail.getBoundingClientRect()
-  const usable = Math.max(1, rect.height - KNOB_SIZE)
-  const raw = 1 - ((event.clientY - rect.top) - KNOB_SIZE / 2) / usable
+  // user:“我不建议你单独做一个悬浮条，而是直接用卡片右侧的那个思考等级把它给放倒”
+  // +(同一条滑轨被整体放倒成横向悬浮条时，取值跟随指针横向位置：右端更高、左端更低)。
+  const horizontal = rect.width > rect.height
+  const extent = horizontal ? rect.width : rect.height
+  if (extent <= 0) return
+  const usable = Math.max(1, extent - KNOB_SIZE)
+  const raw = horizontal
+    ? ((event.clientX - rect.left) - KNOB_SIZE / 2) / usable
+    : 1 - ((event.clientY - rect.top) - KNOB_SIZE / 2) / usable
   const position = Math.min(1, Math.max(0, raw))
   const index = indexForPos(position)
   const tick = posForIndex(index)

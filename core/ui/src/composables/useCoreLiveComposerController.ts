@@ -1,11 +1,13 @@
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue'
 import {
   coreComposerActionMode,
+  coreComposerSendIntent,
   coreComposerSubmissionEffects,
   isCoreActiveTurnStatus,
   isCoreSessionBusyError,
   normalizeCoreCommandCatalogItem,
   submitCoreComposerTask,
+  type CoreComposerSendMode,
   type CoreSteerAttempt,
   type CoreWorkbenchTurnStatus,
   type SubmitCoreComposerTaskResult,
@@ -94,6 +96,9 @@ export interface UseCoreLiveComposerControllerOptions {
   text: Ref<string>
   cursor: Ref<number>
   status: Readonly<Ref<CoreWorkbenchTurnStatus>>
+  /** user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(回合运行中普通
+   *  发送键的落点；Ctrl/Cmd+Enter 由 coreComposerSendIntent 取相反落点)。 */
+  sendMode?: Readonly<Ref<CoreComposerSendMode>>
   attachments: Readonly<Ref<CoreInputItem[]>>
   connect(threadId: string): Promise<void>
   startTurn(
@@ -584,7 +589,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     publishSubmissions()
   }
 
-  async function submit(submissionOptions: { clearComposer?: boolean; forceGuide?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
+  async function submit(submissionOptions: { clearComposer?: boolean; specialSend?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
     const pausedTurnId = options.resumableTurnId?.value || ''
     const resuming = Boolean(pausedTurnId || actionMode.value === 'resume')
     if (!resuming && actionMode.value === 'stop') { await stop(); return null }
@@ -613,13 +618,27 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     const prior = [...attempts.values()].find(a => a.threadId === threadId && a.rawText === rawText
       && JSON.stringify(a.attachments) === JSON.stringify(attachments) && ['unknown', 'failed'].includes(a.state))
     if (prior) return await runSubmission(prior)
+    // user:“设置中可调消息发送后直接引导或排队，默认直接引导，默认为enter，特殊发送为ctrl enter”
+    // +(落点由 coreComposerSendIntent 统一决策：普通键按设置，Ctrl/Cmd+Enter 取相反；
+    //   空输入在上方守卫里已经被拦下，两个键都不会再碰已排队的项)。
+    const sendIntent = resuming
+      ? 'resume'
+      : coreComposerSendIntent({
+        status: options.status.value,
+        text,
+        pendingAttachmentCount: attachments.length,
+        sendMode: options.sendMode?.value,
+        specialSend: submissionOptions.specialSend === true,
+      })
+    // 空输入已在上面拦下；这里显式兜底，绝不能再把 none 映射成 start（会开空回合）。
+    if (sendIntent === 'none') return { status: 'ignored' }
     const attempt: SubmissionAttempt = {
       id: crypto.randomUUID(), threadId, text, rawText, attachments,
       state: resuming ? 'sending' : 'preparing', error: '',
       draftVersion, activeTurnId: resuming ? pausedTurnId : options.activeTurnId?.value || '',
       status: options.status.value, catalog, workRoot: options.getWorkRoot(),
       clearComposer: submissionOptions.clearComposer === true || resuming,
-      intent: resuming ? 'resume' : isCoreActiveTurnStatus(options.status.value) ? (submissionOptions.forceGuide ? 'guide' : 'queue') : 'start',
+      intent: sendIntent,
       resumeMembers: (options.resumableSubAgents?.value.length ?? 0) > 0,
     }
     attempts.set(attempt.id, attempt)
@@ -658,10 +677,11 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     if (event.key === 'Enter' && !event.isComposing && !event.repeat && (!event.shiftKey || paletteVisible.value)) {
       event.preventDefault()
       lastEnterHandledAt.value = Date.now()
-      const forceGuide = event.ctrlKey || event.metaKey
+      // Ctrl/Cmd+Enter 是“特殊发送”：执行与设置相反的落点（见 coreComposerSendIntent）。
+      const specialSend = event.ctrlKey || event.metaKey
       const selected = paletteVisible.value ? commandPalette.selected() : null
       if (selected) await selectCommand(selected)
-      else if (canEnterSubmit()) await submit({ clearComposer: true, forceGuide })
+      else if (canEnterSubmit()) await submit({ clearComposer: true, specialSend })
       return true
     }
     return false

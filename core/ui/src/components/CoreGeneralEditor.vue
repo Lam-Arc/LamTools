@@ -165,6 +165,23 @@
 
     <article class="setting-card">
       <div class="subhead">
+        <span class="muted subhead-title">{{ t("消息发送") }}</span>
+      </div>
+      <p class="general-hint">{{ t("会话正在运行时发送消息的去向：直接引导会把消息立即交给当前回合；排队会先进入输入队列，本轮结束后按顺序发出。Ctrl+Enter 永远执行另一种，且两个键都不会改动已排队的项。") }}</p>
+      <UiSelect
+        :model-value="sendBehavior"
+        :options="sendBehaviorOptions"
+        :aria-label="t('消息发送')"
+        :disabled="loading || sendBehaviorSaving"
+        data-send-behavior-select
+        @update:model-value="changeSendBehavior"
+      />
+      <p v-if="sendBehaviorSaved" class="general-saved" role="status">
+        <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
+    </article>
+
+    <article class="setting-card">
+      <div class="subhead">
         <span class="muted subhead-title">{{ t("Assistant 显示") }}</span>
         <div class="subhead-actions">
           <button class="btn btn--ghost" type="button" :disabled="loading || assistantDisplayBusy" @click="saveAssistantIdentity">{{ t("保存") }}</button>
@@ -274,6 +291,13 @@ import { UI_LANGUAGES, uiLanguage, saveUiLanguage } from '@/i18n/index.ts'
 import { useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 import { useSplitPreviewPreference } from '@/split/previewPreference.ts'
 import {
+  CORE_SEND_BEHAVIOR_NAMESPACE,
+  coreSendBehaviorModeRef,
+  normalizeCoreSendBehaviorMode,
+  setCoreSendBehaviorMode,
+} from '@/composables/useCoreSendBehavior.ts'
+import type { CoreComposerSendMode } from '@/appServer/workbenchActions.ts'
+import {
   ASSISTANT_DISPLAY_NAMESPACE,
   AVATAR_ROUNDNESS_MAX,
   AVATAR_ROUNDNESS_MIN,
@@ -300,6 +324,48 @@ async function changeLanguage(locale: string) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     languageSaving.value = false
+  }
+}
+
+// user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(卡片用下拉切换并立即
+//   持久化：写共享单例让发送控制器马上生效，再落 settings 命名空间；失败时回滚)。
+// computed：t() 依赖响应式 uiLanguage，普通数组只在 setup 时求值一次，切语言不刷新。
+const sendBehaviorOptions = computed<Array<{ value: CoreComposerSendMode; label: string }>>(() => [
+  { value: 'guide', label: t("直接引导") },
+  { value: 'queue', label: t("排队") },
+])
+const sendBehavior = coreSendBehaviorModeRef
+const sendBehaviorSaving = ref(false)
+const sendBehaviorSaved = ref(false)
+
+async function fetchSendBehavior(): Promise<void> {
+  try {
+    const value = readValue(await props.requestRpc('settings.get', { namespace: CORE_SEND_BEHAVIOR_NAMESPACE }))
+    const mode = normalizeCoreSendBehaviorMode(value.mode)
+    if (mode) setCoreSendBehaviorMode(mode)
+  } catch (e) {
+    // 读不到就沿用本地偏好（默认直接引导），不拦住其它卡片
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+async function changeSendBehavior(rawMode: string): Promise<void> {
+  const mode = normalizeCoreSendBehaviorMode(rawMode)
+  if (!mode || sendBehaviorSaving.value || mode === sendBehavior.value) return
+  const previous = sendBehavior.value
+  sendBehaviorSaving.value = true
+  sendBehaviorSaved.value = false
+  error.value = ''
+  setCoreSendBehaviorMode(mode)
+  try {
+    await props.requestRpc('settings.update', { namespace: CORE_SEND_BEHAVIOR_NAMESPACE, value: { mode } })
+    sendBehaviorSaved.value = true
+  } catch (e) {
+    // 保存失败就退回上一次生效的模式，界面不能显示一个后端没存下的状态
+    setCoreSendBehaviorMode(previous)
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    sendBehaviorSaving.value = false
   }
 }
 
@@ -685,6 +751,7 @@ async function saveMemoryThreshold() {
 
 onMounted(fetchMemoryResume)
 onMounted(fetchAssistantAppearance)
+onMounted(fetchSendBehavior)
 </script>
 
 <style scoped>

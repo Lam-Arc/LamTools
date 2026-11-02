@@ -2,8 +2,9 @@
 .SYNOPSIS
   Compile the repository-owned Sunday Windows installer with Inno Setup.
 .DESCRIPTION
-  The source directory must contain lamcore.exe and lamcore-backend\LamCore.exe.
-  The bundled backend is deployed as lamcore-backend\sunday-core.exe (renamed
+  The source directory must contain Sunday.exe and sunday-backend\SundayCore.exe
+  (the pre-migration LamCore.exe is still accepted).
+  The bundled backend is deployed as sunday-backend\sunday-core.exe (renamed
   here, see below) so Task Manager attributes it to Sunday.
   Inno Setup can be supplied explicitly, through INNO_SETUP_ISCC, or installed
   in one of its standard machine/current-user locations.
@@ -95,12 +96,21 @@ $icon = if ([string]::IsNullOrWhiteSpace($IconPath)) {
     Get-AbsolutePath $IconPath
 }
 
+$backendDir = Join-Path $source 'sunday-backend'
+$deployedBackend = Join-Path $backendDir 'sunday-core.exe'
+$buildTimeBackends = @(@(
+    (Join-Path $backendDir 'SundayCore.exe'),
+    (Join-Path $backendDir 'LamCore.exe')
+) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+
 $requiredFiles = @(
-    (Join-Path $source 'lamcore.exe'),
-    (Join-Path $source 'lamcore-backend\LamCore.exe'),
+    (Join-Path $source 'Sunday.exe'),
     $icon,
     $scriptPath
 )
+if ($buildTimeBackends.Count -eq 0 -and -not (Test-Path -LiteralPath $deployedBackend -PathType Leaf)) {
+    throw "Installer payload is missing the Sunday backend executable in $backendDir"
+}
 foreach ($requiredFile in $requiredFiles) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required installer input is missing: $requiredFile"
@@ -115,10 +125,7 @@ foreach ($requiredFile in $requiredFiles) {
 # build-time name. Renaming the onedir bootloader is safe - it resolves its own
 # _internal directory relative to its path. The embedded display strings come
 # from the spec's version resource, which a rename cannot add.
-$backendDir = Join-Path $source 'lamcore-backend'
-$buildTimeBackend = Join-Path $backendDir 'LamCore.exe'
-$deployedBackend = Join-Path $backendDir 'sunday-core.exe'
-if (Test-Path -LiteralPath $buildTimeBackend -PathType Leaf) {
+foreach ($buildTimeBackend in $buildTimeBackends) {
     if (Test-Path -LiteralPath $deployedBackend -PathType Leaf) {
         Remove-Item -LiteralPath $buildTimeBackend -Force
     } else {

@@ -420,7 +420,7 @@ describe('编辑器交互补齐', () => {
     await flushPromises()
     target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
     await flushPromises()
-    expect(wrapper.get('.studio-hover-box').exists()).toBe(true)
+    expect(wrapper.find('.studio-hover-box').exists()).toBe(true)
 
     document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
     await flushPromises()
@@ -445,7 +445,7 @@ describe('编辑器交互补齐', () => {
     await wrapper.get('[data-studio-node="shell.app-rail"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('.studio-parent-box').exists()).toBe(true)
+    expect(wrapper.find('.studio-parent-box').exists()).toBe(true)
     const line = wrapper.get('.studio-parent-link')
     expect(line.attributes('x1')).toBeTruthy()
     expect(wrapper.get('[data-studio-parent-hint]').text()).toContain('shell.root')
@@ -469,7 +469,7 @@ describe('编辑器交互补齐', () => {
     await wrapper.get('[data-studio-node="template.conversation"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('.studio-template-sample').exists()).toBe(true)
+    expect(wrapper.find('.studio-template-sample').exists()).toBe(true)
     expect(wrapper.findAll('.studio-template-sibling')).toHaveLength(2)
     wrapper.unmount()
     samples.forEach((node) => node.remove())
@@ -697,7 +697,7 @@ describe('编辑器补齐：属性面板与流程', () => {
     await flushPromises()
     await wrapper.get('[data-studio-node="shell.app-rail"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('.studio-parent-box').exists()).toBe(true)
+    expect(wrapper.find('.studio-parent-box').exists()).toBe(true)
 
     await wrapper.get('[data-studio-edit-mode] input[type="checkbox"]').setValue(false)
     await flushPromises()
@@ -1190,8 +1190,8 @@ describe('编辑器补齐：属性面板与流程', () => {
     await flushPromises()
     await wrapper.get('[data-studio-node="shell.app-rail"]').trigger('click')
     await flushPromises()
+    // get() 本身就会在缺失时失败，不再对返回值调 exists()。
     const handle = wrapper.get('[data-studio-resize="e"]')
-    expect(handle.exists()).toBe(true)
 
     handle.element.dispatchEvent(pointerEvent('pointerdown', 200, 120))
     document.dispatchEvent(pointerEvent('pointermove', 240, 120))

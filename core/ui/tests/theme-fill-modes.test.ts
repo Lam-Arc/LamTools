@@ -90,7 +90,11 @@ describe('主题区域填充样式', () => {
   })
 
   it('旧版“玻璃填充”迁移成纯色填充 + 玻璃偏好，不会被当成旧默认主题迁移掉', () => {
-    const legacyGlass = normalizeTheme({ ...LEGACY_SUNDAY_DARK_THEME, mainFill: 'glass' })
+    // 旧账本里 mainFill 可能是已废弃的 'glass'；类型已收窄，迁移测试必须绕过类型。
+    const legacyGlass = normalizeTheme({
+      ...LEGACY_SUNDAY_DARK_THEME,
+      mainFill: 'glass',
+    } as unknown as Parameters<typeof normalizeTheme>[0])
     expect(themeAreaFill(legacyGlass, 'main')).toBe('solid')
     expect(themeAreaGlass(legacyGlass, 'main')).toBe('high')
     expect(migrateSundayThemeDefaults(legacyGlass, 'dark')).toBe(legacyGlass)

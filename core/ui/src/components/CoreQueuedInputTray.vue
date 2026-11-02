@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+
 import { t } from '@/i18n/index.ts'
 
 import { Goal } from 'lucide-vue-next'
@@ -28,6 +30,7 @@ const emit = defineEmits<{
   guide: [item: CoreQueuedInputTrayItem]
   'cancel-goal': [goal: CoreGoal]
   'update:draft': [value: string]
+  reorder: [items: CoreQueuedInputTrayItem[]]
 }>()
 
 function inputValue(event: Event): string {
@@ -36,6 +39,64 @@ function inputValue(event: Event): string {
 
 function isSubmitting(itemId: string): boolean {
   return props.submittingIds?.has(itemId) === true
+}
+
+// user:“排队项可拖拽上下移动重新排序”+(行内 HTML5 拖拽：按住行拖到目标位置，
+//   上下半区决定插到目标行之前还是之后；松手提交一份完整新顺序，顺序没变不提交)。
+const draggingId = ref('')
+/** 拖拽悬停目标：id + 是否插到该行之前，用来画插入线。 */
+const dropHint = ref<{ id: string; before: boolean } | null>(null)
+
+function canDrag(item: CoreQueuedInputTrayItem): boolean {
+  return item.status === 'queued' && !isSubmitting(item.id) && props.editingId !== item.id
+}
+
+function onDragStart(item: CoreQueuedInputTrayItem, event: DragEvent): void {
+  if (!canDrag(item)) {
+    event.preventDefault()
+    return
+  }
+  draggingId.value = item.id
+  event.dataTransfer?.setData('text/plain', item.id)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragOver(item: CoreQueuedInputTrayItem, event: DragEvent): void {
+  if (!draggingId.value || draggingId.value === item.id) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  const bounds = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
+  const before = bounds ? (event.clientY - bounds.top) < bounds.height / 2 : true
+  dropHint.value = dropHint.value?.id === item.id && dropHint.value.before === before
+    ? dropHint.value
+    : { id: item.id, before }
+}
+
+function onDragLeave(item: CoreQueuedInputTrayItem): void {
+  if (dropHint.value?.id === item.id) dropHint.value = null
+}
+
+function onDrop(item: CoreQueuedInputTrayItem, event: DragEvent): void {
+  event.preventDefault()
+  const hint = dropHint.value
+  dropHint.value = null
+  const draggedId = draggingId.value || event.dataTransfer?.getData('text/plain') || ''
+  draggingId.value = ''
+  if (!draggedId || draggedId === item.id) return
+  const others = props.items.filter(candidate => candidate.id !== draggedId)
+  const targetIndex = others.findIndex(candidate => candidate.id === item.id)
+  if (targetIndex < 0) return
+  const insertIndex = hint?.before ? targetIndex : targetIndex + 1
+  const dragged = props.items.find(candidate => candidate.id === draggedId)
+  if (!dragged) return
+  const next = [...others.slice(0, insertIndex), dragged, ...others.slice(insertIndex)]
+  if (next.every((candidate, index) => candidate.id === props.items[index]?.id)) return
+  emit('reorder', next)
+}
+
+function onDragEnd(): void {
+  draggingId.value = ''
+  dropHint.value = null
 }
 </script>
 
@@ -52,9 +113,26 @@ function isSubmitting(itemId: string): boolean {
       <span class="core-queued-goal-status">{{ goal.status === 'blocked' ? t("已暂停") : t("进行中") }}</span>
       <button type="button" class="core-queued-goal-cancel" @click="emit('cancel-goal', goal)">{{ t("取消") }}</button>
     </div>
-    <div v-for="(item, index) in items" :key="item.id" class="core-queued-input-row" :class="{ 'is-editing': editingId === item.id }">
+    <div
+      v-for="(item, index) in items"
+      :key="item.id"
+      class="core-queued-input-row"
+      :class="{
+        'is-editing': editingId === item.id,
+        'is-dragging': draggingId === item.id,
+        'is-drop-before': dropHint?.id === item.id && dropHint.before,
+        'is-drop-after': dropHint?.id === item.id && !dropHint.before,
+      }"
+      :draggable="canDrag(item)"
+      :aria-label="t('排队项，可拖拽调整顺序')"
+      @dragstart="onDragStart(item, $event)"
+      @dragover="onDragOver(item, $event)"
+      @dragleave="onDragLeave(item)"
+      @drop="onDrop(item, $event)"
+      @dragend="onDragEnd"
+    >
       <div class="core-queued-input-copy">
-        <span class="core-queued-input-status">{{ item.position || index + 1 }}.</span>
+        <span class="core-queued-input-status" :title="t('拖拽调整顺序')">{{ item.position || index + 1 }}.</span>
         <input
           v-if="editingId === item.id"
           :value="draft"
@@ -201,6 +279,25 @@ function isSubmitting(itemId: string): boolean {
 .core-queued-input-row + .core-queued-input-row,
 .core-queued-goal-row + .core-queued-input-row {
   border-top: 1px solid color-mix(in srgb, var(--theme-composer-text) 6%, transparent);
+}
+
+/* --- 拖拽重排序：抓手、拖动中的行、插入位置线 --- */
+
+.core-queued-input-row[draggable='true'] {
+  cursor: grab;
+}
+
+.core-queued-input-row.is-dragging {
+  opacity: 0.45;
+}
+
+/* 插入线画在目标行的上/下边缘，覆盖相邻行共享的 border。 */
+.core-queued-input-row.is-drop-before {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--theme-composer-text) 55%, transparent);
+}
+
+.core-queued-input-row.is-drop-after {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--theme-composer-text) 55%, transparent);
 }
 
 .core-queued-input-copy {

@@ -15,7 +15,8 @@ describe('CoreGeneralEditor assistant avatar upload', () => {
   let storedAvatar = ''
   let storedSize: number | undefined
   let storedRoundness: number | undefined
-  let rpc: ReturnType<typeof vi.fn>
+  type RequestRpc = (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  let rpc: ReturnType<typeof vi.fn> & RequestRpc
 
   function createRpc() {
     return vi.fn(async (method: string, params: Record<string, unknown> = {}) => {

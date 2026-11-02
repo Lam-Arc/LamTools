@@ -35,6 +35,7 @@ const options: Array<{ value: CoreModelCatalogView; label: string }> = [
 </script>
 
 <style scoped>
+/* user:“为什么前面那个面板没有模糊”“修”+(组/供应商切换胶囊和菜单同处一层，也要毛玻璃)。 */
 .model-catalog-view-toggle {
   --text: var(--theme-control-text);
   display: inline-flex;
@@ -44,6 +45,8 @@ const options: Array<{ value: CoreModelCatalogView; label: string }> = [
   border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
   border-radius: 999px;
   background: var(--theme-control-background);
+  -webkit-backdrop-filter: var(--optical-glass-filter);
+  backdrop-filter: var(--optical-glass-filter);
   color: var(--text);
 }
 

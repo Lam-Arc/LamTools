@@ -29,7 +29,8 @@
     "build:app": "vite build --config vite.config.core-app.ts",
     "typecheck": "vue-tsc --noEmit && vue-tsc --noEmit -p tsconfig.workflow-plugin.json && vue-tsc --noEmit -p tsconfig.test.json",
     "preview": "vite preview",
-    "test:contract": "vitest run"
+    "test:contract": "vitest run",
+    "pet:test": "vitest run tests/pet-engine.test.ts tests/pet-render.test.ts tests/pet-blocky.test.ts tests/pet-glb.test.ts tests/pet-zip.test.ts tests/pet-config-import.test.ts tests/pet-isolated-e2e.test.ts tests/pet-behavior.test.ts tests/pet-climb.test.ts tests/pet-card-alignment.test.ts tests/pet-physics.test.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",
@@ -44,6 +45,7 @@
     "@codemirror/theme-one-dark": "^6.1.3",
     "@codemirror/view": "^6.43.6",
     "@icon-park/vue-next": "^1.4.2",
+    "@pixiv/three-vrm": "^3.5.5",
     "@vue-flow/background": "^1.3.2",
     "@vue-flow/controls": "^1.1.2",
     "@vue-flow/core": "^1.41.0",
@@ -58,11 +60,13 @@
     "mermaid": "^11.15.0",
     "pdfjs-dist": "^6.4.299",
     "read-excel-file": "^9.3.14",
+    "three": "^0.180.0",
     "vue": "^3.5.38"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@types/node": "^26.2.0",
+    "@types/three": "^0.180.0",
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/test-utils": "^2.4.11",
     "jsdom": "^29.1.1",

@@ -367,6 +367,81 @@ async def test_sqlalchemy_snapshot_store_load_apply_rebuild(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_snapshot_load_page_includes_open_interactions(tmp_path):
+    """分页快照（会话重开/重连走它）必须带决策池。
+
+    user:"看看桌宠能不能正常转发"+
+    (桌宠只从快照的 core.interactions 读审批/提问；load_page 漏掉它时，
+     客户端退回消息树兜底，标题/选项/子代理来源全部丢失。)
+    """
+    from lamtools_core.app.core_db import CoreTurnInteraction
+
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(CoreTurnInteraction.__table__.create)
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(),
+            )
+            event = RunItemEvent(
+                event_id="run-item-1",
+                kind="message",
+                thread_id="thread-1",
+                run_id="run-1",
+                turn_id="turn-1",
+                item_id="item-1",
+                status="completed",
+                payload={"role": "user", "content": "hello"},
+            )
+            await store.apply(db, _envelope(1, event.to_dict()))
+            db.add(
+                CoreTurnInteraction(
+                    interaction_id="req-1",
+                    thread_id="thread-1",
+                    turn_id="turn-1",
+                    run_id="run-1",
+                    scope="agent:Reviewer",
+                    kind="approval",
+                    status="open",
+                    tool_call_id="req-1",
+                    legacy_request_id="req-1",
+                    title="需要授权：测试",
+                    body="",
+                    context_text="上下文",
+                    facts_json=[],
+                    options_json=[{"id": "approve", "label": "允许"}],
+                    default_answer_json={},
+                    answer_json=None,
+                    expires_at_ms=0,
+                    claim_token="",
+                    created_seq=1,
+                    resolved_seq=0,
+                    metadata_json={
+                        "project_id": "project-1",
+                        "agent_name": "Reviewer",
+                        "agent_session_id": "sub-1",
+                        "delivered_by": "agent:Reviewer",
+                    },
+                    created_at=datetime.now(),
+                    resolved_at=None,
+                )
+            )
+            await db.commit()
+            page = await store.load_page(db, "thread-1")
+            pool = page["core"]["interactions"]
+            assert [item["interaction_id"] for item in pool] == ["req-1"]
+            assert pool[0]["title"] == "需要授权：测试"
+            assert pool[0]["options"] == [{"id": "approve", "label": "允许"}]
+            assert pool[0]["agent_name"] == "Reviewer"
+            assert pool[0]["delivered_by"] == "agent:Reviewer"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_sqlalchemy_snapshot_store_applies_batch_in_one_projection(tmp_path):
     engine, session_factory = await _session_factory(tmp_path)
     try:
@@ -1043,5 +1118,64 @@ async def test_legacy_resource_history_recovers_from_usage_journal(tmp_path):
             assert turn["usage"]["llm_calls"] == 1
             assert len(turn["usage_calls"]) == 2
             assert turn["usage_calls"][1]["parent_item_id"] == "delegate"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_load_carries_durable_task_plan(tmp_path):
+    # user:“重启之后想要继续，往往需要发一条用户指令，这样就会让以前的 checklist
+    # 消失吗？我认为这是不对的”+(checklist 与轮次解耦：快照组装时从 runtime 会话行
+    # 带回持久 task_plan，供前端在消息扫描落空（历史窗口裁剪/重启后新指令）时兜底)。
+    from lamtools_core.app.core_db import CoreRuntimeSession
+
+    engine, session_factory = await _session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(CoreRuntimeSession.__table__.create)
+    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
+    empty = store.projector.empty("thread-plan")
+    task_plan = {
+        "goal": "Task plan",
+        "status": "active",
+        "revision": 2,
+        "current_step_id": "s2",
+        "steps": [
+            {"id": "s1", "description": "第一步", "status": "completed", "deliverables": []},
+            {"id": "s2", "description": "第二步", "status": "in_progress", "deliverables": []},
+        ],
+    }
+    try:
+        async with session_factory() as db:
+            db.add(ThreadSnapshotRow(thread_id="thread-plan", snapshot_seq=3, snapshot_json=empty))
+            db.add(CoreRuntimeSession(
+                thread_id="thread-plan",
+                runtime_state_json={"metadata": {"task_plan": task_plan}},
+            ))
+            await db.commit()
+
+        async with session_factory() as db:
+            loaded = await store.load(db, "thread-plan")
+        assert loaded["core"]["task_plan"] == task_plan
+
+        async with session_factory() as db:
+            metadata_only = await store.load_metadata(db, "thread-plan")
+        assert metadata_only["core"]["task_plan"] == task_plan
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_load_without_runtime_row_has_no_task_plan(tmp_path):
+    engine, session_factory = await _session_factory(tmp_path)
+    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
+    empty = store.projector.empty("thread-plain")
+    try:
+        async with session_factory() as db:
+            db.add(ThreadSnapshotRow(thread_id="thread-plain", snapshot_seq=1, snapshot_json=empty))
+            await db.commit()
+
+        async with session_factory() as db:
+            loaded = await store.load(db, "thread-plain")
+        assert not loaded["core"].get("task_plan")
     finally:
         await engine.dispose()

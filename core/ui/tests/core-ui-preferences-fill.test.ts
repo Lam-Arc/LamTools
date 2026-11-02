@@ -23,12 +23,13 @@ beforeEach(() => {
 })
 
 describe('theme fill preference editing', () => {
-  it('把纯色/渐变/玻璃/图片的选择写进当前主题并持久化', () => {
+  it('把纯色/渐变/玻璃偏好/图片的选择写进当前主题并持久化', () => {
     const { wrapper, api } = mountPreferences()
 
-    api.updateThemeFill('main', 'glass')
+    // 玻璃是独立的材质偏好，不再是填充值（ThemeFillMode 只含 solid/gradient/image）。
+    api.updateThemeFill('main', 'solid')
     api.updateThemeGlass('main', 'low')
-    expect(api.theme.value.mainFill).toBe('glass')
+    expect(api.theme.value.mainFill).toBe('solid')
     expect(api.theme.value.mainGlass).toBe('low')
 
     api.updateThemeFill('backdrop', 'image')
@@ -39,7 +40,7 @@ describe('theme fill preference editing', () => {
     expect(api.theme.value.backdropImageFit).toBe('tile')
 
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
-    expect(stored.lightTheme.mainFill).toBe('glass')
+    expect(stored.lightTheme.mainFill).toBe('solid')
     expect(stored.lightTheme.mainGlass).toBe('low')
     expect(stored.lightTheme.backdropFill).toBe('image')
     expect(stored.lightTheme.backdropImageFit).toBe('tile')

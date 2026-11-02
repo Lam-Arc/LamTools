@@ -1,11 +1,14 @@
-"""Minimal backend entry point for LamCore packaged app.
+"""Minimal backend entry point for the Sunday packaged app.
 
 This module is the PyInstaller entry point.  It only starts the FastAPI
 server -- no Edge launcher, no port management, no idle detection.
 The Tauri shell handles all of that.
 
 Environment variables (set by the Tauri shell):
-    LAMCORE_PORT              – port to listen on (default 5172)
+    SUNDAY_CORE_PORT          – port to listen on (default 5172);
+                                LAMCORE_PORT is still read for old shells
+    SUNDAY_CORE_HOST          – bind host (default 127.0.0.1);
+                                LAMCORE_HOST is still read for old shells
     LAMTOOLS_HOME             – portable user-home (app dir's .lam/) — keeps
                                 every data file beside the app (green mode)
     LAMTOOLS_CORE_DB          – path to core.db
@@ -28,7 +31,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s [%(name)s] %(message)s",
 )
-_log = logging.getLogger("lamcore.backend")
+_log = logging.getLogger("sunday.backend")
 
 
 def _default_data_dir(
@@ -44,9 +47,82 @@ def _default_data_dir(
     if current_platform.startswith("linux"):
         xdg_data_home = current_environ.get("XDG_DATA_HOME", "").strip()
         root = Path(xdg_data_home) if xdg_data_home else current_home / ".local" / "share"
+        # LamTools is the shared family namespace (plugin/hook roots use it
+        # too), so it is deliberately not renamed.
         return root / "LamTools"
     appdata = current_environ.get("APPDATA", "").strip()
+    return (Path(appdata) if appdata else current_home) / "Sunday"
+
+
+def _legacy_data_dir(
+    *,
+    platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> Path | None:
+    """Return the pre-migration data directory, if it can exist.
+
+    The old app used ``APPDATA/LamCore`` on Windows and ``~/LamCore`` on macOS,
+    so the name deliberately does not say "Windows".
+    """
+    current_platform = platform or sys.platform
+    if current_platform.startswith("linux"):
+        return None
+    current_environ = os.environ if environ is None else environ
+    current_home = Path.home() if home is None else home
+    appdata = current_environ.get("APPDATA", "").strip()
     return (Path(appdata) if appdata else current_home) / "LamCore"
+
+
+def _migrate_legacy_data_dir(
+    target: Path,
+    *,
+    platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> bool:
+    """Move the old Windows data directory into place exactly once.
+
+    user:“迁移”+(旧版独立后端把状态写在 LamCore 目录，升级后要原样搬走。)
+    A destination that already holds state always wins. An empty destination is
+    treated as an unfinished attempt (startup may have created it after a failed
+    move) and is replaced on the next run.
+    """
+    legacy = _legacy_data_dir(platform=platform, environ=environ, home=home)
+    if legacy is None or not legacy.is_dir():
+        return False
+    if target.exists():
+        try:
+            if any(target.iterdir()):
+                # 静默放弃会让用户以为旧会话还在，却看到一片空白：必须留下日志。
+                _log.info(
+                    "legacy data directory %s left in place: %s already holds data",
+                    legacy,
+                    target,
+                )
+                return False
+            target.rmdir()
+        except OSError as error:
+            _log.warning("legacy data migration skipped (%s): %s", target, error)
+            return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        legacy.rename(target)
+    except OSError as error:
+        # A stale process holding a file must not stop startup; the next run
+        # will retry.
+        _log.warning("legacy data migration deferred (%s -> %s): %s", legacy, target, error)
+        return False
+    _log.info("migrated legacy data directory %s -> %s", legacy, target)
+    return True
+
+
+def _env_setting(name: str, legacy_name: str, default: str) -> str:
+    """Read the current variable, then its pre-migration spelling."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    return os.environ.get(legacy_name, "").strip() or default
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +136,7 @@ def main() -> None:
         # A fatal startup/request error must land in the log file (not only in
         # the PyInstaller fatal-error dialog) so it can be diagnosed remotely.
         try:
-            logging.getLogger().exception("Fatal error in LamCore backend")
+            logging.getLogger().exception("Fatal error in Sunday backend")
         except BaseException:
             pass
         raise
@@ -87,6 +163,17 @@ def _run() -> None:
         data_dir = Path(lam_home_env)
     else:
         data_dir = _default_data_dir()
+        _migrate_legacy_data_dir(data_dir)
+        # If the move was blocked (an old process holds the tree) and the new
+        # directory does not exist yet, keep using the legacy tree for this run
+        # instead of starting with empty settings.
+        legacy_data_dir = _legacy_data_dir()
+        if (
+            legacy_data_dir is not None
+            and legacy_data_dir.is_dir()
+            and not data_dir.exists()
+        ):
+            data_dir = legacy_data_dir
 
     # Module overrides must be installed before the first lamtools_core import.
     # lamtools_boot is standard-library only for exactly this reason.
@@ -99,8 +186,8 @@ def _run() -> None:
     )
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    port = int(os.environ.get("LAMCORE_PORT", "5172"))
-    host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
+    port = int(_env_setting("SUNDAY_CORE_PORT", "LAMCORE_PORT", "5172"))
+    host = _env_setting("SUNDAY_CORE_HOST", "LAMCORE_HOST", "127.0.0.1")
     from lamtools_core.app.api_access import CoreApiAccessPolicy
 
     # The packaged sidecar is internal; LAN access belongs to a separate
@@ -161,7 +248,7 @@ def _run() -> None:
         frontend_dir=frontend_dir or None,
     )
 
-    _log.info("Starting LamCore backend on %s:%s", host, port)
+    _log.info("Starting Sunday backend on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)
 
 

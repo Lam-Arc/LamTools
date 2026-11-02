@@ -7,7 +7,7 @@
 
   Steps:
     1. Build the Core Desktop UI frontend (Vite SPA)
-    2. Bundle Python backend with PyInstaller into dist/LamCore/
+    2. Bundle Python backend with PyInstaller into dist/SundayCore/
     3. Build the Tauri application executable without a Tauri bundle
     4. Stage the application/backend and compile the repository-owned Inno installer
 #>
@@ -52,7 +52,7 @@ try {
         Write-Host "[FAIL] PyInstaller build failed." -ForegroundColor Red
         exit 1
     }
-    $BundledPluginsDir = "$Root\core\dist\LamCore\_internal\resources\plugins\bundled"
+    $BundledPluginsDir = "$Root\core\dist\SundayCore\_internal\resources\plugins\bundled"
     # user:“网络拓展作为新的内置插件，其他不作为新的内置插件”+(市场插件永不进入主程序安装包)。
     foreach ($ExcludedPlugin in @("workflow", "qq-bot", "bili-scroll", "excalidraw")) {
         $ExcludedPluginDir = "$BundledPluginsDir\$ExcludedPlugin"
@@ -72,14 +72,14 @@ try {
     }
     Write-Host "  Plugin boundary verified (desktop pet and workflow excluded)." -ForegroundColor Green
     & py -3.14 "$Root\scripts\verify-backend-ws.py" `
-        --exe "$Root\core\dist\LamCore\LamCore.exe" `
+        --exe "$Root\core\dist\SundayCore\SundayCore.exe" `
         --port (Get-Random -Minimum 5901 -Maximum 65000)
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[FAIL] Packaged backend WebSocket/Study RPC smoke failed." -ForegroundColor Red
         exit 1
     }
     Write-Host "  Packaged backend Study RPC verified." -ForegroundColor Green
-    Write-Host "  Backend -> core/dist/LamCore/" -ForegroundColor Green
+    Write-Host "  Backend -> core/dist/SundayCore/" -ForegroundColor Green
 } finally {
     Pop-Location
 }
@@ -114,16 +114,16 @@ if (-not $SkipTauri) {
     }
     New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
 
-    $TauriBinary = Join-Path $ReleaseDir "lamcore.exe"
-    $BackendBundle = "$Root\core\dist\LamCore"
+    $TauriBinary = Join-Path $ReleaseDir "Sunday.exe"
+    $BackendBundle = "$Root\core\dist\SundayCore"
     if (-not (Test-Path -LiteralPath $TauriBinary -PathType Leaf)) {
         throw "Tauri application executable is missing: $TauriBinary"
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $BackendBundle "LamCore.exe") -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $BackendBundle "SundayCore.exe") -PathType Leaf)) {
         throw "Backend bundle is missing: $BackendBundle"
     }
-    Copy-Item -LiteralPath $TauriBinary -Destination (Join-Path $StageDir "lamcore.exe")
-    Copy-Item -LiteralPath $BackendBundle -Destination (Join-Path $StageDir "lamcore-backend") -Recurse
+    Copy-Item -LiteralPath $TauriBinary -Destination (Join-Path $StageDir "Sunday.exe")
+    Copy-Item -LiteralPath $BackendBundle -Destination (Join-Path $StageDir "sunday-backend") -Recurse
 
     $InstallerOutput = Join-Path $ReleaseDir "bundle\inno"
     $InstallerBuildArgs = @{
@@ -145,8 +145,8 @@ if (-not $SkipTauri) {
 Write-Host "`n=== Package complete ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Artifacts:"
-Write-Host "  Backend:      $Root\core\dist\LamCore\LamCore.exe"
-Write-Host "  Tauri binary: $Root\core\desktop\src-tauri\target\release\lamcore.exe"
+Write-Host "  Backend:      $Root\core\dist\SundayCore\SundayCore.exe"
+Write-Host "  Tauri binary: $Root\core\desktop\src-tauri\target\release\Sunday.exe"
 Write-Host "  Installer:    $Root\core\desktop\src-tauri\target\release\bundle\inno\Sunday_${Version}_x64-setup.exe"
 Write-Host ""
 Write-Host "Dev mode (skip PyInstaller, uses source Python):" -ForegroundColor Yellow

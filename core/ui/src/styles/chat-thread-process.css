@@ -43,9 +43,10 @@
 .process-group-summary--running .process-group-text {
   justify-self: start;
 }
+/* user:“去除消息流左侧的竖线 层级关系不再用竖线表示 而是缩进，缩进 2px 即可”
+   +(分组展开体同样去掉左边竖线，嵌套层级靠 2px 缩进体现)。 */
 .process-group-body {
-  padding: 4px 0 4px 12px;
-  border-left: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  padding: 4px 0 4px 2px;
 }
 
 .sub-line-heading {

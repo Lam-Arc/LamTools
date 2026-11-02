@@ -6,9 +6,13 @@ export function isPluginOwnedSession(session: CoreSessionListItem | undefined): 
 }
 
 /** Internal orchestration threads must never be offered as Core conversations. */
+export function isInternalSessionId(id: string | null | undefined): boolean {
+  const value = String(id || '')
+  return value.startsWith('workflow_thread_')
+    || value.startsWith('workflow:')
+    || value === 'study:main'
+}
+
 export function isInternalSession(session: CoreSessionListItem | undefined): boolean {
-  return isPluginOwnedSession(session)
-    || Boolean(session?.id.startsWith('workflow_thread_'))
-    || Boolean(session?.id.startsWith('workflow:'))
-    || session?.id === 'study:main'
+  return isPluginOwnedSession(session) || isInternalSessionId(session?.id)
 }

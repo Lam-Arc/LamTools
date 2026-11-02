@@ -8,34 +8,62 @@ import type {
 
 type ChecklistRecord = Record<string, unknown>
 
-export function buildCurrentTurnChecklistGroups(messages: CoreMessage[]): CoreRuntimeStepGroup[] {
-  const latestUserIndex = findLastIndex(messages, (message) => message.role === 'user')
-  let message: CoreMessage | undefined
-  let checklistPart: MessagePart | undefined
-  for (let index = messages.length - 1; index > latestUserIndex; index -= 1) {
+// user:“重启之后想要继续，往往需要发一条用户指令，这样就会让以前的 checklist
+// 消失吗？我认为这是不对的？而且不利于缓存命中”+(checklist 表达的是任务的持续
+// 计划，不绑定轮次：全量回扫最新 checklist part；中断续跑的内部用户消息、重启
+// 后的新指令都不再把它挤出显示窗口。计划本体在后端 state.metadata 里持久存在，
+// 这里的扫描只决定卡片显示哪一份，不产生任何新的历史内容。)
+export function buildChecklistGroups(messages: CoreMessage[]): CoreRuntimeStepGroup[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
     const candidate = messages[index]
     if (candidate.role !== 'assistant') continue
     const part = [...(candidate.parts || [])].reverse().find((item) => checklistSteps(item).length > 0)
     if (!part) continue
-    message = candidate
-    checklistPart = part
-    break
-  }
-  if (!message || !checklistPart) return []
 
-  const steps = checklistSteps(checklistPart)
-  const metadata = asRecord(checklistPart.metadata)
-  const taskPlan = asRecord(metadata.task_plan)
-  const currentStepId = typeof taskPlan.current_step_id === 'string'
-    ? taskPlan.current_step_id
+    const steps = checklistSteps(part)
+    const metadata = asRecord(part.metadata)
+    const taskPlan = asRecord(metadata.task_plan)
+    const currentStepId = typeof taskPlan.current_step_id === 'string'
+      ? taskPlan.current_step_id
+      : undefined
+    return [{
+      id: `${candidate.id}:checklist`,
+      label: 'Checklist',
+      status: groupStatus(steps),
+      steps,
+      ...(currentStepId ? { metadata: { current_step_id: currentStepId } } : {}),
+    }]
+  }
+  return []
+}
+
+// user:“重启之后想要继续，往往需要发一条用户指令，这样就会让以前的 checklist
+// 消失”+(持久计划兜底：快照组装带回 runtime 会话行里的权威 task_plan，消息流
+// 扫描落空（历史窗口裁剪、重启后新轮次还没有 checklist part）时卡片仍有内容)。
+export function buildDurableChecklistGroups(taskPlan: unknown): CoreRuntimeStepGroup[] {
+  const plan = asRecord(taskPlan)
+  const rawSteps = firstArray(plan.steps)
+  if (!rawSteps) return []
+  const steps = normalizePlanSteps(rawSteps, 'durable:checklist:step')
+  if (!steps.length) return []
+  const currentStepId = typeof plan.current_step_id === 'string'
+    ? plan.current_step_id
     : undefined
   return [{
-    id: `${message.id}:checklist`,
+    id: 'durable:checklist',
     label: 'Checklist',
     status: groupStatus(steps),
     steps,
     ...(currentStepId ? { metadata: { current_step_id: currentStepId } } : {}),
   }]
+}
+
+// 两个数据源取更新者：消息里的 checklist part 是写回后的规范快照（_emit_
+// checklist_snapshots 发出后同一内核步才落 checkpoint），存在即比持久行新或相等；
+// 只有扫描完全落空才回退到持久计划。
+export function resolveChecklistGroups(messages: CoreMessage[], taskPlan: unknown): CoreRuntimeStepGroup[] {
+  const scanned = buildChecklistGroups(messages)
+  return scanned.length > 0 ? scanned : buildDurableChecklistGroups(taskPlan)
 }
 
 function checklistSteps(part: MessagePart): CoreRuntimeStep[] {
@@ -46,6 +74,10 @@ function checklistSteps(part: MessagePart): CoreRuntimeStep[] {
   const rawSteps = firstArray(taskPlan.steps, metadata.plan_steps, args.steps)
   if (!rawSteps) return []
 
+  return normalizePlanSteps(rawSteps, `${part.id}:step`)
+}
+
+function normalizePlanSteps(rawSteps: unknown[], idPrefix: string): CoreRuntimeStep[] {
   return rawSteps.flatMap((value, index) => {
     const item = asRecord(value)
     if (!Object.keys(item).length) return []
@@ -55,7 +87,7 @@ function checklistSteps(part: MessagePart): CoreRuntimeStep[] {
       ? item.deliverables.map((value) => String(value).trim()).filter(Boolean)
       : []
     return [{
-      id: String(item.id || `${part.id}:step:${index + 1}`),
+      id: String(item.id || `${idPrefix}:${index + 1}`),
       title,
       status: normalizeStatus(item.status),
       ...(deliverables.length > 0 ? { deliverables } : {}),
@@ -93,11 +125,4 @@ function asRecord(value: unknown): ChecklistRecord {
 
 function firstArray(...values: unknown[]): unknown[] | null {
   return values.find((value): value is unknown[] => Array.isArray(value)) || null
-}
-
-function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (predicate(items[index])) return index
-  }
-  return -1
 }

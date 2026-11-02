@@ -57,7 +57,7 @@ function Assert-True {
 }
 
 function Get-BackendFileCount {
-    $dir = Join-Path $script:installDir 'lamcore-backend'
+    $dir = Join-Path $script:installDir 'sunday-backend'
     if (-not (Test-Path -LiteralPath $dir)) { return 0 }
     return @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue).Count
 }
@@ -116,7 +116,7 @@ function Get-BackendPort {
             if ($read -gt 0) { $snapshot = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read) }
         } finally { $stream.Dispose() }
     } catch { return $null }
-    $found = [regex]::Matches($snapshot, 'Starting LamCore backend on 127\.0\.0\.1:(\d+)')
+    $found = [regex]::Matches($snapshot, 'Starting Sunday backend on 127\.0\.0\.1:(\d+)')
     if ($found.Count -eq 0) { return $null }
     return [int]$found[$found.Count - 1].Groups[1].Value
 }
@@ -137,7 +137,7 @@ function Wait-BackendHealth {
 }
 
 function Start-Application {
-    return Start-Process -FilePath (Join-Path $script:installDir 'lamcore.exe') -PassThru
+    return Start-Process -FilePath (Join-Path $script:installDir 'Sunday.exe') -PassThru
 }
 
 function Send-SessionCloseRequest {
@@ -186,8 +186,8 @@ try {
     Assert-True (Test-Path -LiteralPath $script:installer) "installer exists at $script:installer"
     $code = Invoke-Installer 'fresh-install'
     Assert-True ($code -eq 0) "fresh install succeeded"
-    Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'lamcore.exe')) "lamcore.exe installed"
-    Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'lamcore-backend\sunday-core.exe')) "bundled backend installed"
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'Sunday.exe')) "Sunday.exe installed"
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'sunday-backend\sunday-core.exe')) "bundled backend installed"
     $installedBackend = Get-BackendFileCount
     Write-Host "  backend files: $installedBackend"
 
@@ -217,7 +217,7 @@ try {
     # A payload file no close mechanism watches: corrupting it proves the
     # upgrade rewrote the program files instead of skipping them.
     $sentinel = $null
-    $candidates = Get-ChildItem -LiteralPath (Join-Path $script:installDir 'lamcore-backend\_internal') -Recurse -File |
+    $candidates = Get-ChildItem -LiteralPath (Join-Path $script:installDir 'sunday-backend\_internal') -Recurse -File |
         Where-Object { $_.Extension -notin @('.exe', '.dll', '.pyd') } |
         Sort-Object { if ($_.Extension -eq '.tcl') { 0 } else { 1 } }
     foreach ($candidate in $candidates) {
@@ -243,14 +243,14 @@ try {
     Start-Sleep -Seconds 2
 
     Write-Host "4. upgraded installation still boots"
-    $app = Start-Process -FilePath (Join-Path $script:installDir 'lamcore.exe') -PassThru
+    $app = Start-Process -FilePath (Join-Path $script:installDir 'Sunday.exe') -PassThru
     Assert-True ($null -ne (Wait-BackendHealth)) "upgraded application starts and reports healthy"
     Stop-InstallProcesses
     Start-Sleep -Seconds 2
 
     # --------------------------------------- 5. locked installation is not damaged
     Write-Host "5. update refused when a program file cannot be replaced"
-    $beforeExe = (Get-FileHash -LiteralPath (Join-Path $script:installDir 'lamcore.exe')).Hash
+    $beforeExe = (Get-FileHash -LiteralPath (Join-Path $script:installDir 'Sunday.exe')).Hash
     $beforeCount = Get-BackendFileCount
     $blocker = $null
     foreach ($candidate in $candidates) {
@@ -271,7 +271,7 @@ try {
         $code = Invoke-Installer 'locked-refusal'
         Assert-True ($code -ne 0) "the installer refused instead of replacing what it cannot write"
         Assert-True ((Get-BackendFileCount) -eq $beforeCount) "the backend payload was left complete"
-        Assert-True ((Get-FileHash -LiteralPath (Join-Path $script:installDir 'lamcore.exe')).Hash -eq $beforeExe) "the main executable was left untouched"
+        Assert-True ((Get-FileHash -LiteralPath (Join-Path $script:installDir 'Sunday.exe')).Hash -eq $beforeExe) "the main executable was left untouched"
         Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir '.lam\upgrade-marker.txt')) "refusing kept local configuration"
     } finally {
         Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
@@ -279,7 +279,7 @@ try {
     Start-Sleep -Seconds 2
 
     Write-Host "6. the refused installation still boots after the lock is released"
-    $app = Start-Process -FilePath (Join-Path $script:installDir 'lamcore.exe') -PassThru
+    $app = Start-Process -FilePath (Join-Path $script:installDir 'Sunday.exe') -PassThru
     Assert-True ($null -ne (Wait-BackendHealth)) "installation survived the refused update"
     Stop-InstallProcesses
     Start-Sleep -Seconds 2
@@ -294,7 +294,7 @@ try {
     $restarted = $null
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         Start-Sleep -Seconds 1
-        $restarted = Get-InstallProcesses | Where-Object { $_.Name -eq 'lamcore.exe' } | Select-Object -First 1
+        $restarted = Get-InstallProcesses | Where-Object { $_.Name -eq 'Sunday.exe' } | Select-Object -First 1
         if ($restarted) { break }
     }
     Assert-True ($null -ne $restarted) "the setup started Sunday again by itself (/AUTORESTART=1)"
@@ -313,7 +313,7 @@ try {
         Fail 'uninstaller did not finish within 300s'
     }
     Assert-True ($process.ExitCode -eq 0) "uninstaller succeeded"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:installDir 'lamcore.exe'))) "uninstall removed the program files"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:installDir 'Sunday.exe'))) "uninstall removed the program files"
     Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir '.lam\upgrade-marker.txt')) "uninstall kept local configuration"
     Assert-True (Test-Path -LiteralPath (Join-Path $script:installDir 'lam_projects\upgrade-marker.txt')) "uninstall kept projects"
 

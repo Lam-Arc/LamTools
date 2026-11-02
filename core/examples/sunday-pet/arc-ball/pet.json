@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "name": "Arc Ball",
+  "preview": "arc-ball-preview.png",
+  "scale": 0.16,
+  "physics": {
+    "radius": 40
+  },
+  "actions": {
+    "idle": {
+      "source": "arc-ball-flat.png",
+      "type": "static"
+    },
+    "walk": {
+      "type": "frames",
+      "frames": [
+        "arc-ball-flat.png",
+        "arc-ball-preview.png"
+      ],
+      "fps": 6,
+      "loop": true
+    },
+    "jump": {
+      "type": "frames",
+      "frames": [
+        "arc-ball-preview.png",
+        "arc-ball-flat.png"
+      ],
+      "fps": 8,
+      "loop": false
+    },
+    "jump_happy": {
+      "type": "frames",
+      "frames": [
+        "arc-ball-flat.png",
+        "arc-ball-preview.png"
+      ],
+      "fps": 10,
+      "loop": false
+    },
+    "dance": {
+      "type": "frames",
+      "frames": [
+        "arc-ball-preview.png",
+        "arc-ball-flat.png"
+      ],
+      "fps": 6,
+      "loop": true
+    },
+    "fall": {
+      "source": "arc-ball-flat.png",
+      "type": "static"
+    },
+    "hang": {
+      "source": "arc-ball-preview.png",
+      "type": "static"
+    },
+    "climb": {
+      "type": "frames",
+      "frames": [
+        "arc-ball-flat.png",
+        "arc-ball-preview.png"
+      ],
+      "fps": 8,
+      "loop": true
+    }
+  },
+  "hitboxes": [
+    {
+      "id": "body",
+      "name": "身体",
+      "x": 0.08,
+      "y": 0.08,
+      "width": 0.84,
+      "height": 0.84,
+      "action": "interact",
+      "doubleAction": "jump_happy",
+      "enabled": true
+    }
+  ],
+  "fallbacks": {
+    "walk": "idle",
+    "climb": "idle",
+    "hang": "idle"
+  }
+}

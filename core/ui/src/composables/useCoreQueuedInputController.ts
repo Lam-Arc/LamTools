@@ -12,6 +12,8 @@ export interface UseCoreQueuedInputControllerOptions {
   ensureConnected(threadId: string): Promise<void>
   updateQueueInput(threadId: string, queueItemId: string, text: string): Promise<void>
   deleteQueueInput(threadId: string, queueItemId: string): Promise<void>
+  /** user:“排队项可拖拽上下移动重新排序”+(拖拽后的完整 id 顺序，交给 queue/reorder)。 */
+  reorderQueueInputs(threadId: string, order: string[]): Promise<void>
   guideQueueInput(
     threadId: string,
     turnId: string,
@@ -84,6 +86,26 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
     }
   }
 
+  // user:“排队项可拖拽上下移动重新排序”+(一次拖拽提交一份完整新顺序；写请求在途
+  //   时忽略后续拖拽，避免两次重排交叉把顺序写乱。事件应用到快照后托盘自动重排)。
+  const reordering = ref(false)
+  async function reorder(items: CoreQueuedInputControllerItem[]): Promise<boolean> {
+    if (reordering.value) return false
+    const order = items.map(item => item.id).filter(Boolean)
+    if (order.length < 1) return false
+    reordering.value = true
+    try {
+      await options.ensureConnected(items[0]?.thread_id || '')
+      await options.reorderQueueInputs(items[0]?.thread_id || '', order)
+      return true
+    } catch (error) {
+      reportError(error)
+      return false
+    } finally {
+      reordering.value = false
+    }
+  }
+
   async function guide(item: CoreQueuedInputControllerItem): Promise<boolean> {
     if (item.status !== 'queued' || !canGuide.value || submittingItemIds.value.has(item.id)) return false
     submittingItemIds.value = new Set([...submittingItemIds.value, item.id])
@@ -129,7 +151,9 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
     editingId,
     guide,
     lastError,
+    reordering,
     remove,
+    reorder,
     save,
     submittingItemIds,
   }

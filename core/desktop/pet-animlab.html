@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sunday Pet · 方块人动画实验台</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #eef1f4;
+      }
+      #animlab {
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      方块人动画的独立实验台。
+      user:"现在做方块人的动画，用独立的 HTML 给我展示出来，然后底下要可以控制动作组"+
+      (普通不透明页面，只装方块人骨架与姿态：不装 Ping、不装物理寻路、不装穿透轮询；
+      底部按"移动/表演/互动"分组切换动作。)
+    -->
+    <div id="animlab"></div>
+    <script type="module" src="/src/pet-animlab.ts"></script>
+  </body>
+</html>

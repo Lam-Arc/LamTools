@@ -1,10 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
   Install and launch a Sunday Inno Setup build for local verification.
 
 .DESCRIPTION
   Finds Sunday_<version>_x64-setup.exe, installs it into the versioned
-  E:\setuptest\<version> directory, launches lamcore.exe, and verifies that
+  E:\setuptest\<version> directory, launches Sunday.exe, and verifies that
   both the desktop process and its bundled backend run from that directory.
 #>
 [CmdletBinding()]
@@ -146,8 +146,8 @@ if ($destinationLeaf -ne $packageVersion -or $destination.TrimEnd('\') -ieq $des
 
 New-Item -ItemType Directory -Path $installRootPath -Force | Out-Null
 
-$appPath = [System.IO.Path]::GetFullPath((Join-Path $destination 'lamcore.exe'))
-$backendPath = [System.IO.Path]::GetFullPath((Join-Path $destination 'lamcore-backend\sunday-core.exe'))
+$appPath = [System.IO.Path]::GetFullPath((Join-Path $destination 'Sunday.exe'))
+$backendPath = [System.IO.Path]::GetFullPath((Join-Path $destination 'sunday-backend\sunday-core.exe'))
 $destinationPrefix = $destination.TrimEnd('\') + '\'
 $existingProcesses = @(
     Get-ProcessSnapshot |
@@ -200,7 +200,7 @@ do {
 } while ((Get-Date) -lt $deadline)
 
 if ($mainProcess.Count -eq 0) {
-    throw "lamcore.exe did not remain running within ${StartupTimeoutSeconds}s (initial PID $($launchedProcess.Id))."
+    throw "Sunday.exe did not remain running within ${StartupTimeoutSeconds}s (initial PID $($launchedProcess.Id))."
 }
 
 if ($backendProcesses.Count -eq 0) {

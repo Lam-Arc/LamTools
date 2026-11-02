@@ -46,9 +46,21 @@
             </div>
           </div>
           <template v-else>
-            <div class="user-bubble" data-context-selection-scope>
+            <div class="user-bubble" :class="{ 'user-bubble--folded': isUserBubbleFolded(msg) }" data-context-selection-scope>
               <!-- user:“更适配新的UI”+(辅助对话的引用在原文栏展示，气泡保留真实语义文本供后续选文定位)。 -->
-              <UserReferenceText :text="msg.content" :folded-prefix="typeof msg.metadata?.auxiliary_reference_prefix === 'string' ? msg.metadata.auxiliary_reference_prefix : undefined" />
+              <!-- user:“令用户气泡过长时自动折叠”+(超长消息默认只留 6 行并向下渐隐，
+                   右下角按钮展开/收起；折叠只是展示层，选区与复制仍拿到完整原文)。 -->
+              <div class="user-bubble-text">
+                <UserReferenceText :text="msg.content" :folded-prefix="typeof msg.metadata?.auxiliary_reference_prefix === 'string' ? msg.metadata.auxiliary_reference_prefix : undefined" />
+              </div>
+              <button
+                v-if="userBubbleFoldable(msg)"
+                type="button"
+                class="user-bubble-fold"
+                data-user-bubble-fold
+                :aria-expanded="isUserBubbleFolded(msg) ? 'false' : 'true'"
+                @click="toggleUserBubbleFold(msg)"
+              >{{ isUserBubbleFolded(msg) ? t("展开") : t("收起") }}</button>
             </div>
           </template>
           <ReferenceItems
@@ -334,7 +346,7 @@
                               v-if="toolRowFlagTone(part)"
                               class="process-tool-flag"
                               :class="`process-tool-flag--${toolRowFlagTone(part)}`"
-                            ><template v-if="toolRowFlagTone(part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(part).removed }}</span></template><template v-else>{{ toolRowFlagText(part) }}</template></span>
+                            ><template v-if="toolRowFlagTone(part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(part).removed }}</span></template><template v-else><component :is="toolRowFlagIcon(part)" v-if="toolRowFlagIcon(part)" class="process-tool-flag-icon" :size="12" :stroke-width="2.2" aria-hidden="true" /><span v-if="toolRowFlagText(part)">{{ toolRowFlagText(part) }}</span></template></span>
                           </button>
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div
@@ -519,7 +531,7 @@
                         v-if="toolRowFlagTone(group.part)"
                         class="process-tool-flag"
                         :class="`process-tool-flag--${toolRowFlagTone(group.part)}`"
-                      ><template v-if="toolRowFlagTone(group.part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(group.part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(group.part).removed }}</span></template><template v-else>{{ toolRowFlagText(group.part) }}</template></span>
+                      ><template v-if="toolRowFlagTone(group.part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(group.part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(group.part).removed }}</span></template><template v-else><component :is="toolRowFlagIcon(group.part)" v-if="toolRowFlagIcon(group.part)" class="process-tool-flag-icon" :size="12" :stroke-width="2.2" aria-hidden="true" /><span v-if="toolRowFlagText(group.part)">{{ toolRowFlagText(group.part) }}</span></template></span>
                     </button>
                     <span v-if="!displayToolInputPreview(group.part) && !hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
@@ -1034,6 +1046,7 @@ import {
   assistantDisplayPreferences,
 } from '@/composables/useAssistantDisplayPreferences.ts'
 import { splitAssistantBubbles, type AssistantBubble } from '@/helpers/assistantBubbles.ts'
+import { userBubbleShouldFold } from '@/helpers/userBubbleFold.ts'
 import CoreSystemEventRow from '@/components/CoreSystemEventRow.vue'
 import { isCoreSystemEvent, type CoreSystemEvent } from '@/appServer/systemEvents.ts'
 // user:“合并去重”+(消息附件已统一走 ReferenceItems 图标引用，附件卡导入已无调用方，删除)
@@ -1807,20 +1820,28 @@ function toolRowFlagTone(part: MessagePart): ToolRowFlagTone | '' {
   return fileDiffStat(part) ? 'stat' : ''
 }
 
+// user:“工具行那个✔和✕，用图标，不要纯勾纯 x”+(成败标记改用 Check/X 图标，文字只保留结论)。
+function toolRowFlagIcon(part: MessagePart): LucideIcon | null {
+  const tone = toolRowFlagTone(part)
+  if (tone === 'good') return Check
+  if (tone === 'bad') return X
+  return null
+}
+
 function toolRowFlagText(part: MessagePart): string {
   const memory = memoryRowDirection(part)
   if (memory) return memory === 'read' ? t("读") : t("写")
   if (testArtifact(part)) {
     const meta = testArtifactMetadata(part)
-    if (meta.passed === true) return t("✓ 通过")
-    return meta.summary === 'timed_out' ? t("✗ 超时") : t("✗ 失败")
+    if (meta.passed === true) return t("通过")
+    return meta.summary === 'timed_out' ? t("超时") : t("失败")
   }
   if (isCommandTool(part)) {
     if (part.status === 'running') return commandElapsedLabel(part)
-    if (part.status === 'error' || part.toolError) return t("✗ 失败")
+    if (part.status === 'error' || part.toolError) return t("失败")
     const exit = commandExitCode(part)
-    if (exit !== null && exit !== 0) return t("✗ 退出码 {0}", { 0: exit })
-    return part.status === 'completed' ? '✓' : ''
+    if (exit !== null && exit !== 0) return t("退出码 {0}", { 0: exit })
+    return ''
   }
   return ''
 }
@@ -2235,6 +2256,39 @@ function answerContent(msg: CoreMessage): string {
 const editingMessageId = ref('')
 const editDraft = ref('')
 const editInputRef = ref<{ focus: () => void } | null>(null)
+
+// ── User bubble auto-fold ──
+
+// user:“令用户气泡过长时自动折叠”+(长消息默认折叠，展开与否按消息 id 记忆；
+// 折叠只是展示层裁剪，复制/编辑/另开等动作继续使用完整原文)。
+const userBubbleExpandedIds = ref<Set<string>>(new Set())
+
+/** 引用前缀由原文栏承接、不占气泡，行数估算按去掉前缀后的可见文本计算。 */
+function userBubbleVisibleText(msg: CoreMessage): string {
+  const content = String(msg.content || '')
+  const prefix = msg.metadata?.auxiliary_reference_prefix
+  if (typeof prefix === 'string' && content.startsWith(prefix)) return content.slice(prefix.length)
+  return content
+}
+
+function userBubbleFoldable(msg: CoreMessage): boolean {
+  return userBubbleShouldFold(userBubbleVisibleText(msg))
+}
+
+function isUserBubbleFolded(msg: CoreMessage): boolean {
+  return userBubbleFoldable(msg) && !userBubbleExpandedIds.value.has(String(msg.id || ''))
+}
+
+function toggleUserBubbleFold(msg: CoreMessage) {
+  const id = String(msg.id || '')
+  const next = new Set(userBubbleExpandedIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  userBubbleExpandedIds.value = next
+}
 
 /** Extract the turn id from a `{turn_id}:user` message id (queue guide
  *  messages `…:user:guide:…` don't match and are not editable). */
@@ -4370,6 +4424,9 @@ function formatContextSummary(c: ContextCounts): string {
    非命令行是 flex 行，margin-left 推到行尾；命令行是网格行，
    has-flag 扩出第三列（flag 区）承接。 */
 .process-tool-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
   margin-left: auto;
   padding-left: 8px;
@@ -4380,9 +4437,10 @@ function formatContextSummary(c: ContextCounts): string {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.process-tool-flag-icon { flex: 0 0 auto; }
 .process-tool-flag--good { color: color-mix(in srgb, var(--green) 78%, var(--theme-main-text, #fff) 22%); }
 .process-tool-flag--bad { color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text, #fff) 22%); }
-.process-tool-flag--stat { display: inline-flex; gap: 5px; padding-left: 8px; }
+.process-tool-flag--stat { gap: 5px; padding-left: 8px; }
 .process-tool-flag-add { color: color-mix(in srgb, var(--green) 78%, var(--theme-main-text, #fff) 22%); }
 .process-tool-flag-del { color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text, #fff) 22%); }
 .tool-card-header.has-flag {

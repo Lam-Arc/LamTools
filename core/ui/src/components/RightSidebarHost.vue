@@ -76,7 +76,7 @@ import CoreResourceStats from '@/components/CoreResourceStats.vue'
 import CoreSubAgentPanel from '@/components/CoreSubAgentPanel.vue'
 import { reconcileCoreSubAgentRun, selectCoreSubAgentRuns } from '@/agents/subAgentProjection.ts'
 import { subAgentRunIdentity } from '@/agents/subAgentDisplay.ts'
-import { buildCurrentTurnChecklistGroups } from '@/runtime/checklist.ts'
+import { resolveChecklistGroups } from '@/runtime/checklist.ts'
 import type {
   RightSidebarPluginContribution,
   RightSidebarRpc,
@@ -94,6 +94,8 @@ const props = defineProps<{
   requestRpc?: RightSidebarRpc
   transport?: LamToolsTransport
   messages?: CoreMessage[]
+  /** 快照带回的持久 checklist 计划（runtime 行的 task_plan）：消息扫描落空时兜底。 */
+  taskPlan?: unknown
   memberStatuses?: Record<string, string>
   memberStatusRecords?: Record<string, CoreSubAgentDurableRecord>
   subAgentDurableRecords?: Record<string, CoreSubAgentDurableRecord>
@@ -222,7 +224,7 @@ const subAgentRuns = computed(() => {
   const dismissed = new Set(hidden)
   return runs.filter(run => !dismissed.has(subAgentRunIdentity(run)))
 })
-const checklistGroups = computed(() => buildCurrentTurnChecklistGroups(props.messages ?? []))
+const checklistGroups = computed(() => resolveChecklistGroups(props.messages ?? [], props.taskPlan))
 
 function openSubAgent(subSessionId: string): void {
   const run = subAgentRuns.value.find(item => item.subSessionId === subSessionId)

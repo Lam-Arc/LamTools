@@ -362,7 +362,7 @@ impl ListenerRuntime {
                     thread::sleep(Duration::from_millis(30));
                 }
                 Err(error) => {
-                    eprintln!("[lamcore] remote gateway accept failed: {error}");
+                    eprintln!("[sunday] remote gateway accept failed: {error}");
                     thread::sleep(Duration::from_millis(100));
                 }
             }
@@ -396,7 +396,7 @@ impl ConnectionRuntime {
         if let Err(error) = result {
             // Keep payloads out of logs; only the category is useful for
             // diagnostics and the frontend receives a generic connection error.
-            eprintln!("[lamcore] remote gateway connection closed: {error}");
+            eprintln!("[sunday] remote gateway connection closed: {error}");
         }
         trace(
             "gateway.connection_closed",
@@ -774,7 +774,7 @@ impl ConnectionRuntime {
                     Ok(Some(frame)) => {
                         if frame.masked {
                             eprintln!(
-                                "[lamcore] core websocket protocol error: masked server frame"
+                                "[sunday] core websocket protocol error: masked server frame"
                             );
                             break;
                         }
@@ -783,7 +783,7 @@ impl ConnectionRuntime {
                                 if let Err(error) =
                                     queue_core_message(&core_to_tunnel_tx, opcode, payload)
                                 {
-                                    eprintln!("[lamcore] core reader output failed: {error}");
+                                    eprintln!("[sunday] core reader output failed: {error}");
                                     break;
                                 }
                             }
@@ -793,21 +793,21 @@ impl ConnectionRuntime {
                                     Err(_) => break,
                                 };
                                 if let Err(error) = write_ws_pong(&mut *stream, &payload, true) {
-                                    eprintln!("[lamcore] core reader Pong failed: {error}");
+                                    eprintln!("[sunday] core reader Pong failed: {error}");
                                     break;
                                 }
                             }
                             Ok(WsMessageEvent::Pong | WsMessageEvent::Pending) => {}
                             Ok(WsMessageEvent::Close) => break,
                             Err(error) => {
-                                eprintln!("[lamcore] core websocket protocol error: {error}");
+                                eprintln!("[sunday] core websocket protocol error: {error}");
                                 break;
                             }
                         }
                     }
                     Ok(None) => break,
                     Err(error) => {
-                        eprintln!("[lamcore] core websocket reader failed: {error}");
+                        eprintln!("[sunday] core websocket reader failed: {error}");
                         break;
                     }
                 }
@@ -823,7 +823,7 @@ impl ConnectionRuntime {
                     Ok(frame) => {
                         trace_gateway_frame("gateway.mobile_forwarded", "core_to_mobile", &frame);
                         if let Err(error) = client_writer.send_tunnel_frame(frame) {
-                            eprintln!("[lamcore] tunnel writer failed: {error}");
+                            eprintln!("[sunday] tunnel writer failed: {error}");
                             trace(
                                 "gateway.mobile_forward_failed",
                                 serde_json::json!({"direction": "core_to_mobile", "error": error}),
@@ -847,7 +847,7 @@ impl ConnectionRuntime {
                     break;
                 }
                 if let Err(error) = heartbeat_writer.send_ping() {
-                    eprintln!("[lamcore] mobile tunnel heartbeat failed: {error}");
+                    eprintln!("[sunday] mobile tunnel heartbeat failed: {error}");
                     heartbeat_finished.store(true, Ordering::SeqCst);
                     break;
                 }
@@ -865,7 +865,7 @@ impl ConnectionRuntime {
                             Err(_) => break,
                         };
                         if let Err(error) = write_ws_frame(&mut *stream, &frame, true) {
-                            eprintln!("[lamcore] core websocket writer failed: {error}");
+                            eprintln!("[sunday] core websocket writer failed: {error}");
                             break;
                         }
                     }
@@ -892,7 +892,7 @@ impl ConnectionRuntime {
                 }) {
                     Ok(value) => value,
                     Err(error) => {
-                        eprintln!("[lamcore] mobile tunnel reader failed: {error}");
+                        eprintln!("[sunday] mobile tunnel reader failed: {error}");
                         break;
                     }
                 };
@@ -900,19 +900,19 @@ impl ConnectionRuntime {
                     Ok(mut transport) => match transport.read_message(&encrypted, &mut plain) {
                         Ok(read) => read,
                         Err(error) => {
-                            eprintln!("[lamcore] mobile tunnel decrypt failed: {error}");
+                            eprintln!("[sunday] mobile tunnel decrypt failed: {error}");
                             break;
                         }
                     },
                     Err(_) => {
-                        eprintln!("[lamcore] mobile tunnel state lock failed");
+                        eprintln!("[sunday] mobile tunnel state lock failed");
                         break;
                     }
                 };
                 let frames = match decoder.push(&plain[..read]) {
                     Ok(frames) => frames,
                     Err(error) => {
-                        eprintln!("[lamcore] mobile tunnel frame decode failed: {error}");
+                        eprintln!("[sunday] mobile tunnel frame decode failed: {error}");
                         break;
                     }
                 };
@@ -936,7 +936,7 @@ impl ConnectionRuntime {
                 Ok(frame) => frame,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    eprintln!("[lamcore] bridge input channel closed");
+                    eprintln!("[sunday] bridge input channel closed");
                     break;
                 }
             };
@@ -1026,7 +1026,7 @@ impl ConnectionRuntime {
                         let response = match core_http_request(&core_host, core_port, payload) {
                             Ok(response) => response,
                             Err(error) => {
-                                eprintln!("[lamcore] remote HTTP proxy failed: {error}");
+                                eprintln!("[sunday] remote HTTP proxy failed: {error}");
                                 tunnel_http_error_response(502, "Core request failed")
                             }
                         };

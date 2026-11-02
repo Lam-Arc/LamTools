@@ -20,7 +20,7 @@ Linux 原生构建使用 Ubuntu 22.04（含 WSL2）以及 WebKitGTK 4.1。依赖
 ## Linux x64（WSL/Ubuntu 22.04）
 
 Linux sidecar 必须在 Linux 原生 Python 上构建，不能复用 Windows 的
-`LamCore.exe`。`scripts/package-linux.sh` 会在 WSL 文件系统内准备 Node 24、
+`SundayCore.exe`。`scripts/package-linux.sh` 会在 WSL 文件系统内准备 Node 24、
 uv 管理的 Python 3.14、Rust stable 及其缓存，然后按顺序构建前端、
 Linux sidecar、AppImage 和 `.deb`，并执行后端
 REST/WebSocket/Study smoke 与 `.deb` 内容检查：
@@ -31,7 +31,7 @@ REST/WebSocket/Study smoke 与 `.deb` 内容检查：
 发行包复制回仓库标准输出目录，不会把 Windows `node_modules` 改成 Linux 版本。
 
 验收会在临时 WSL 目录执行 AppImage `--appimage-extract`，断言
-`lamcore-backend/LamCore` 存在且可执行；若启用 Xvfb，还会在
+`sunday-backend/SundayCore` 存在且可执行；若启用 Xvfb，还会在
 `dbus-run-session` 中启动 GUI，只有超时保持存活才算通过。
 
     cd /mnt/e/LamTools
@@ -45,13 +45,13 @@ REST/WebSocket/Study smoke 与 `.deb` 内容检查：
 默认工具链缓存位于 WSL `$HOME/.cache/lamtools-linux`，可用
 `LAMTOOLS_LINUX_TOOL_ROOT` 改到另一个非 `/mnt/c` 路径。构建输出位于：
 
-    artifacts/linux-x64/sidecar/LamCore
+    artifacts/linux-x64/sidecar/SundayCore
     core/desktop/src-tauri/target/release/bundle/appimage/Sunday_<版本>_amd64.AppImage
     core/desktop/src-tauri/target/release/bundle/deb/Sunday_<版本>_amd64.deb
 
 Tauri Linux bundle 通过 `tauri.conf.json` 的 `bundle.resources` 将
-`core/dist/LamCore` 放入 `lamcore-backend/`；Rust shell 在 Linux 上从该资源
-目录启动无扩展名的 `LamCore`。需要跳过可选的 Xvfb GUI smoke 时设置
+`core/dist/SundayCore` 放入 `sunday-backend/`；Rust shell 在 Linux 上从该资源
+目录启动无扩展名的 `SundayCore`。需要跳过可选的 Xvfb GUI smoke 时设置
 `LAMTOOLS_SKIP_XVFB_SMOKE=1`。该脚本仅生成 Linux 产物，不升版本、不发布。
 
 scripts/package.ps1 会从 PATH、INNO_SETUP_ISCC、机器级或当前用户的标准
@@ -66,9 +66,9 @@ core/desktop/installer/build-installer.ps1 传入 -IsccPath。
 
 1. 在 core/desktop 构建 Vite 前端。
 2. 使用唯一的 core/lamtools-core-backend.spec 生成内部 sidecar
-   core/dist/LamCore/LamCore.exe。
+   core/dist/SundayCore/SundayCore.exe。
 3. 执行 npx tauri build --no-bundle，只生成
-   src-tauri/target/release/lamcore.exe，不会调用 Tauri 官方 NSIS bundler。
+   src-tauri/target/release/Sunday.exe，不会调用 Tauri 官方 NSIS bundler。
 4. 将应用壳和 sidecar 暂存到
    src-tauri/target/release/sunday-installer/stage/，再由仓库自有
    installer/Sunday.iss 生成：
@@ -96,27 +96,47 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
     Sunday_<版本>_x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="E:\Apps\Sunday"
 
 - Inno AppId 是稳定升级身份，后续版本不得修改。
-- 应用内部兼容边界继续使用 lamcore.exe（主程序文件名不变）、
-  lamcore-backend/ 内的后端可执行文件与 identifier com.lamtools.lamcore。
+- 当前身份：主程序 `Sunday.exe`、后端目录 `sunday-backend/`、应用标识
+  `com.lamtools.sunday`。旧版 `lamcore.exe` / `lamcore-backend/` /
+  `com.lamtools.lamcore` 只作为升级与迁移的输入存在：安装器先结束旧进程再删除
+  旧文件，应用启动时把旧标识下的数据搬到新标识下。
+
+## 迁移旧身份（lamcore → Sunday）
+
+- 主程序文件名：`Sunday.exe`（Cargo bin target 与 Tauri `mainBinaryName` 都是
+  Sunday）。任务管理器「进程」页显示 Sunday，「详细信息」页显示 `Sunday.exe`。
+- 应用标识：`com.lamtools.sunday`。启动时 `src-tauri/src/migration.rs` 会把
+  `com.lamtools.lamcore`（以及最早的 `com.lamtools.core`）在各平台数据根下原地
+  改名为新标识；Windows 同时覆盖 Roaming（应用数据）和 Local（WebView2 的
+  localStorage / IndexedDB 配置）。只有新目录不存在时才搬，失败只记日志、不阻止
+  启动，下次启动会重试。
+- 独立后端状态目录：Windows 的 `%APPDATA%\LamCore` 会在首次启动时搬成
+  `%APPDATA%\Sunday`；`plugin-system.jsonc` 的读取仍兼容旧位置。
+- 后端凭据：keyring 服务名改为 `com.lamtools.sunday.remote`，读取时回退旧服务
+  `com.lamtools.desktop.remote`，并在首次读取后写入新服务，已配对设备无需重配。
+- 环境变量：壳给后端设置 `SUNDAY_CORE_PORT` / `SUNDAY_CORE_HOST`；Python 入口
+  仍接受旧 `LAMCORE_PORT` / `LAMCORE_HOST`，旧版壳与外部脚本不会失效。
+- 不迁移的边界：`LamTools` 家族目录（`%APPDATA%\LamTools`、XDG 的
+  `LamTools`）、`LAMTOOLS_*` 变量、mDNS 服务类型 `_lamtools._tcp.local.` 和
+  移动端 `com.lamtools.mobile` 都是跨产品/协议契约，改名会断开配对或让其他
+  LamTools 工具读不到数据。
 
 ## 任务管理器里的进程身份
 
 装机版与开发模式在任务管理器里显示的名字不同，这是有意为之，不是缺陷：
 
-- **装机版**：主程序 `lamcore.exe` 的文件描述与产品名都是 Sunday；后端是随包的
-  Python 运行时，安装时部署为 `lamcore-backend\sunday-core.exe`，并带
+- **装机版**：主程序 `Sunday.exe` 带 Sunday 文件描述与产品名；后端是随包的
+  Python 运行时，安装时部署为 `sunday-backend\sunday-core.exe`，并带
   「Sunday Core Backend」文件描述与 Sunday 产品名。所以在任务管理器「进程」页里
   两者分别显示为 Sunday 与 Sunday Core Backend，一眼能看出属于同一产品。
 
-  这里有两件事必须一起做，缺一不可：改名（否则进程名认不出）和嵌入文件描述
-  （否则「描述」列是空的、进程页只会回落到文件名）。改名只发生在安装包 payload
-  组装这一步——`installer/build-installer.ps1` 把 `LamCore.exe` 改成
-  `sunday-core.exe`；PyInstaller 产物本身仍叫 `LamCore.exe`，因为本地构建、CI 与
-  WebSocket 冒烟都按这个名字引用它。重命名 onedir 引导程序是安全的：它按自身路径
-  解析 `_internal`。文件描述来自 `lamtools-core-backend.spec` 里嵌入的版本资源
-  （`version=`）——改名搬不动资源，所以资源必须写在产物上、并在改名之前就进去。
-  应用壳侧的后端查找按「新名优先、旧名兜底」尝试，兼容从原始 PyInstaller 产物
-  直接拼出的便携目录。
+  改名分两处完成，缺一不可：PyInstaller 产物本身已叫 `SundayCore.exe`
+  （`lamtools-core-backend.spec` 的 `name`），安装包 payload 组装这一步再由
+  `installer/build-installer.ps1` 改成 `sunday-core.exe`。改名必须发生在版本资源
+  写入之后——文件描述来自 spec 的 `version=`，改名搬不动资源。重命名 onedir
+  引导程序是安全的：它按自身路径解析 `_internal`。应用壳侧的后端查找顺序是
+  `sunday-core.exe` → `SundayCore.exe` → `LamCore.exe`，项目 `core/dist/` 与
+  便携目录直接使用未改名的 `SundayCore.exe`；旧 `LamCore` 布局仅作兜底。
 
 - **开发模式（`npx tauri dev`）**：后端由**系统** Python 解释器直接跑
   （`py -3.14 -m lamtools_core.cli serve --port 随机`），进程名与文件描述都随
@@ -135,9 +155,11 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
 关闭主窗口只会把 Sunday 收进托盘，进程和打包的后端仍在运行，所以覆盖安装必须
 先让旧程序退出：
 
-- 安装器用 Restart Manager 关闭占用 lamcore.exe、lamcore-backend/ 内程序文件的
-  进程（`CloseApplications=force`）。`CloseApplicationsFilter` 是**逗号分隔**的
-  通配列表；写成分号会让它匹配不到任何文件、整条保护静默失效。
+- 安装器用 Restart Manager 关闭占用 Sunday.exe、sunday-backend/ 内程序文件的
+  进程（`CloseApplications=force`）。从 lamcore 版本升级时，`{app}\lamcore.exe`
+  和旧 `lamcore-backend/` 也在锁检测范围内，同样会先被结束。
+  `CloseApplicationsFilter` 是**逗号分隔**的通配列表；写成分号会让它匹配不到任何
+  文件、整条保护静默失效。
 - Restart Manager 对这一对进程并不可靠（它关不掉「隐藏而不退出」的窗口应用，也
   关不掉无窗口的后端，却仍报告已处理），所以安装步骤开始时会自行结束安装目录内的
   Sunday 进程：只匹配可执行文件路径位于 `{app}` 下的进程，不会误伤同名但装在别处的
@@ -155,7 +177,7 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
 - 应用收到系统级关闭请求（注销、关机）时走完整退出流程，不再只收进托盘，随后由
   后端作业对象保证不留孤儿进程（`windows_close_request`）。普通关闭窗口仍只收进
   托盘。
-- 结束进程后确认 lamcore.exe 与 lamcore-backend/ 内所有文件都能独占打开；仍被占用
+- 结束进程后确认 Sunday.exe 与 sunday-backend/ 内所有文件都能独占打开；仍被占用
   （例如扫描器持有一个数据文件）则拒绝本次安装并保持既有安装完整（`CurStepChanged`
   守卫）。删除动作在该守卫之后，所以拒绝时不会留下半残安装。静默安装不弹窗，以非零
   退出码和 `Refusing to install:` 日志行体现。
@@ -175,7 +197,9 @@ Inno 安装器会检测旧 LamCore / LamTools Core 的卸载注册表项：
 - 默认复用旧 InstallLocation。
 - 新旧安装目录相同时，静默移除旧程序文件后原地安装 Sunday。
 - 用户主动选择不同目录时，不自动卸载旧版，避免让旧目录里的本地数据失去入口。
-- 同目录升级仅替换 lamcore.exe 与 lamcore-backend/。
+- 同目录升级仅替换 `Sunday.exe` 与 `sunday-backend/`；从 lamcore 版本升级时，
+  `[InstallDelete]` 会一并删除旧的 `lamcore.exe`、`lamcore-backend/` 与更早的
+  `LamCore/` 目录，避免留下第二个可启动的旧入口。
 - 默认卸载只移除程序文件、快捷方式和 ARP 注册，始终保留 .lam/ 与
   lam_projects/。清理本地数据需要用户显式手动删除。
 
@@ -208,7 +232,7 @@ setup。安装时仅在未检测到 WebView2 Runtime 时运行该 bootstrapper�
 
 预发布版本（`0.3.7-beta.1`）走同一条链：`bump-version.ps1` 与 release.yml 的
 tag 校验都接受 `X.Y.Z[-pre][+build]`，`update.check` 的版本比较也按 semver
-排序（正式版高于同名预发布）。Cargo.lock 里 `sunday`/`lamcore` 的版本随
+排序（正式版高于同名预发布）。Cargo.lock 里 `sunday` 的版本随
 `cargo build` 自动跟上，提交前确认已同步。
 
 推送 vX.Y.Z tag 后，.github/workflows/release.yml 会完成版本一致性校验、

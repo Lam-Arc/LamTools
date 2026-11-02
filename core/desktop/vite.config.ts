@@ -111,6 +111,16 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
+        // 桌宠覆盖层是独立文档：关掉主界面它也要活着。
+        pet: resolve(__dirname, 'pet.html'),
+        // Ping 独立覆盖层（环/标记/标注/选择器）：与桌宠窗口解耦。
+        ping: resolve(__dirname, 'ping.html'),
+        // Ping 会话卡片是独立窗口（卡片即窗口）：与桌宠覆盖层分离，原生 Acrylic 材质。
+        card: resolve(__dirname, 'card.html'),
+        // 地图与寻路实验台：独立普通页面，几何判定框/平台地图/寻路模型单独调试。
+        petNavLab: resolve(__dirname, 'pet-navlab.html'),
+        // 方块人动画实验台：独立普通页面，动作组切换与姿态单独调试。
+        petAnimLab: resolve(__dirname, 'pet-animlab.html'),
       },
       output: {
         preserveModules: true,

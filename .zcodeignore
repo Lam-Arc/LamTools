@@ -71,6 +71,7 @@ core/mobile/src-tauri/target/
 core/runtime-rs/target/
 core/remote/relay/target/
 core/desktop/src-tauri/lamcore-backend/
+core/desktop/src-tauri/sunday-backend/
 
 data/
 .codex-tmp/
@@ -110,8 +111,15 @@ core/ui/dist-core-app/
 /小说.txt
 /睡前故事_月亮摇篮曲.md
 
-# LamCore runtime data (artifacts, generated images) — never commit or package
+# Sunday runtime data (artifacts, generated images) — never commit or package
 /.lam/
+# 开发态运行目录（debug 构建把 LAMTOOLS_HOME 指向 core/.lam）
+/core/.lam/
+# 桌宠开发/诊断/E2E 本机运行数据与下载的驱动
+/.lam-petdev/
+/.lam-pete2e/
+/.lam-petdiag-probe/
+/.tools/
 
 # 本地 API key / 模型探测文件（含真实密钥，禁止提交）
 .free_key.txt

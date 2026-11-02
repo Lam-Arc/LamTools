@@ -22,6 +22,7 @@ SERIALIZED_SESSION_OPERATIONS = frozenset({
     "queue.update",
     "queue.delete",
     "queue.guide",
+    "queue.reorder",
     "command.execute",
 })
 

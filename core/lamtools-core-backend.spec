@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for LamCore backend sidecar.
+"""PyInstaller spec for the Sunday Core backend sidecar.
 
 Build:
     pyinstaller lamtools-core-backend.spec
@@ -28,7 +28,7 @@ if _IS_WINDOWS:
     subprocess.run([sys.executable, str(_PROJECT_ROOT.parent / "scripts" / "prepare-network-plugin.py")], check=True)
 else:
     _EXCLUDED_BUNDLED_PLUGINS.add("network-exploration")
-_BACKEND_NAME = "LamCore.exe" if _IS_WINDOWS else "LamCore"
+_BACKEND_NAME = "SundayCore.exe" if _IS_WINDOWS else "SundayCore"
 # PyInstaller only embeds executable icons on Windows/macOS.  Passing a PNG
 # on Linux makes older bootloader versions attempt an unsupported conversion;
 # the Linux Tauri icon is configured separately in tauri.conf.json.
@@ -442,5 +442,5 @@ coll = COLLECT(
     strip=False,
     upx=_USE_UPX,
     upx_exclude=[],
-    name="LamCore",
+    name="SundayCore",
 )

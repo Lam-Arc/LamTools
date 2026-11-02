@@ -137,6 +137,7 @@ from .live.queue import (
     handle_queue_create_operation,
     handle_queue_delete_operation,
     handle_queue_guidance_operation,
+    handle_queue_reorder_operation,
     handle_queue_update_operation,
 )
 from .live.queue_dispatch import _dispatch_next_queue_item, _goal_reminder, _session_current_model
@@ -295,6 +296,7 @@ __all__ = [
     "handle_queue_create_operation",
     "handle_queue_delete_operation",
     "handle_queue_guidance_operation",
+    "handle_queue_reorder_operation",
     "handle_queue_update_operation",
     "handle_approval_respond_operation",
     "handle_interaction_list_operation",

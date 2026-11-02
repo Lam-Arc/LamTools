@@ -56,7 +56,7 @@ def main():
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     home = Path(tempfile.mkdtemp(prefix="sunday-market-acceptance-"))
-    env = {**os.environ, "LAMTOOLS_HOME": str(home), "LAMTOOLS_CORE_WORK_ROOT": str(home / "project"), "LAMCORE_PORT": str(port)}
+    env = {**os.environ, "LAMTOOLS_HOME": str(home), "LAMTOOLS_CORE_WORK_ROOT": str(home / "project"), "SUNDAY_CORE_PORT": str(port), "LAMCORE_PORT": str(port)}
     (home / "project").mkdir()
     with (home / "backend.log").open("w", encoding="utf-8") as log:
         process = subprocess.Popen([str(args.exe.resolve())], env=env, stdout=log, stderr=log, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)

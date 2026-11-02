@@ -55,6 +55,16 @@ export {
 } from '@/composables/useCoreAskAutoContinue.ts'
 
 export {
+  CORE_SEND_BEHAVIOR_DEFAULT_MODE,
+  CORE_SEND_BEHAVIOR_NAMESPACE,
+  CORE_SEND_BEHAVIOR_STORAGE_KEY,
+  coreSendBehaviorMode,
+  coreSendBehaviorModeRef,
+  normalizeCoreSendBehaviorMode,
+  setCoreSendBehaviorMode,
+} from '@/composables/useCoreSendBehavior.ts'
+
+export {
   useCoreLiveTurnController,
   type CoreLiveConnectionState,
   type UseCoreLiveTurnControllerOptions,

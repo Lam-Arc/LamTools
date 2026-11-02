@@ -1,9 +1,17 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import { useCoreToast } from '@/composables/useCoreToast.ts'
+import { useCoreToast, type CoreToast } from '@/composables/useCoreToast.ts'
 
 const { toasts, dismiss } = useCoreToast()
+
+function activate(toast: CoreToast): void {
+  try {
+    toast.action?.run()
+  } finally {
+    dismiss(toast.id)
+  }
+}
 </script>
 
 <template>
@@ -19,7 +27,14 @@ const { toasts, dismiss } = useCoreToast()
         :role="toast.kind === 'error' ? 'alert' : 'status'"
         aria-atomic="true"
       >
-        <span class="core-toast__text">{{ toast.text }}</span>
+        <button
+          v-if="toast.action"
+          type="button"
+          class="core-toast__text core-toast__action"
+          :title="toast.action.label"
+          @click="activate(toast)"
+        >{{ toast.text }}</button>
+        <span v-else class="core-toast__text">{{ toast.text }}</span>
         <button
           type="button"
           class="core-toast__dismiss"

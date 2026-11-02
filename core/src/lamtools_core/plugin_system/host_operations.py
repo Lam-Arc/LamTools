@@ -284,9 +284,13 @@ def register_host_operations(
 
     async def skill_list(request: OperationRequest) -> OperationResult:
         skills: list[dict[str, object]] = []
+        # 一次读盘拿到分组表与每个技能的启用/分组状态；逐技能读账本是 N+1。
+        groups, state_entries = skill_state_store.snapshot() if skill_state_store else ([], {})
         if skill_registry_factory is not None:
             for skill in skill_registry_factory().available(work_root):
-                enabled = skill_state_store.is_enabled(skill.name) if skill_state_store else True
+                state = state_entries.get(skill.name)
+                state = state if isinstance(state, dict) else {}
+                enabled = bool(state.get("enabled", True)) if skill_state_store else True
                 source = "plugin" if skill.location is None else _skill_source(skill.location, work_root, host.discover())
                 skills.append(
                     {
@@ -298,16 +302,98 @@ def register_host_operations(
                         "source": source,
                         "enabled": enabled,
                         "deletable": _deletable_skill_dir(skill) is not None,
+                        # user:“skill 界面也做成瀑布流，并分组管理”+(列表直接带上
+                        # 每个技能的分组与完整分组表，界面一次拉取即可渲染筛选。)
+                        "group": str(state.get("group") or ""),
                     }
                 )
         return OperationResult(
             name=request.name,
             payload={
                 "skills": skills,
+                "groups": groups,
                 "total_count": len(skills),
                 "enabled_count": sum(1 for item in skills if item.get("enabled")),
             },
         )
+
+    # ── skill 分组管理 ─────────────────────────────────────────────────────
+    # user:“skill 界面也做成瀑布流，并分组管理”+(分组的增删改名与技能归属
+    # 都走宿主 RPC，状态与启停同账本；CLI 提供同名能力。)
+
+    def _skill_group_store() -> Any:
+        if skill_state_store is None:
+            raise ValueError("skill state store not available")
+        return skill_state_store
+
+    # 界面用这两个字符串做筛选哨兵（全部 / 未分组）；允许建同名分组会让筛选
+    # 无法区分“查看全部”和“查看名为 all 的分组”。
+    _RESERVED_GROUP_NAMES = frozenset({"all", "ungrouped"})
+
+    def _reserved_group_error(name: str) -> str:
+        if name.lower() in _RESERVED_GROUP_NAMES:
+            return f"分组名 '{name}' 是界面保留值"
+        return ""
+
+    async def skill_group_create(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            return OperationResult(name=request.name, status="error", payload={"error": "分组名是必填的"})
+        reserved = _reserved_group_error(name)
+        if reserved:
+            return OperationResult(name=request.name, status="error", payload={"error": reserved})
+        try:
+            store = _skill_group_store()
+        except ValueError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        groups = store.groups()
+        if name in groups:
+            return OperationResult(name=request.name, status="error", payload={"error": f"分组 '{name}' 已存在"})
+        store.set_groups(groups + [name])
+        return OperationResult(name=request.name, payload={"name": name, "groups": store.groups()})
+
+    async def skill_group_rename(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        old = str(payload.get("from") or payload.get("old") or "").strip()
+        new = str(payload.get("to") or payload.get("new") or "").strip()
+        reserved = _reserved_group_error(new)
+        if reserved:
+            return OperationResult(name=request.name, status="error", payload={"error": reserved})
+        try:
+            store = _skill_group_store()
+            store.rename_group(old, new)
+        except ValueError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"from": old, "to": new, "groups": store.groups()})
+
+    async def skill_group_delete(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        name = str(payload.get("name") or "").strip()
+        try:
+            store = _skill_group_store()
+        except ValueError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        try:
+            store.delete_group(name)
+        except ValueError:
+            # delete_group 只会因“分组不存在”抛错。
+            return OperationResult(name=request.name, status="error", payload={"error": f"分组 '{name}' 不存在"})
+        return OperationResult(name=request.name, payload={"name": name, "groups": store.groups()})
+
+    async def skill_group_assign(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        name = str(payload.get("name") or "").strip()
+        group = str(payload.get("group") or "").strip()
+        skill = _resolve_skill(name)
+        if skill is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"Skill '{name}' was not found"})
+        try:
+            store = _skill_group_store()
+            store.set_group(skill.name, group)
+        except ValueError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"name": skill.name, "group": group})
 
     async def skill_create(request: OperationRequest) -> OperationResult:
         """新建技能：标题（name）/ 描述（description）/ 内容（content）三块，
@@ -495,6 +581,10 @@ def register_host_operations(
     catalog.register("skill.enable", skill_enable, owner=OWNER)
     catalog.register("skill.disable", skill_disable, owner=OWNER)
     catalog.register("skill.delete", skill_delete, owner=OWNER)
+    catalog.register("skill.group.create", skill_group_create, owner=OWNER)
+    catalog.register("skill.group.rename", skill_group_rename, owner=OWNER)
+    catalog.register("skill.group.delete", skill_group_delete, owner=OWNER)
+    catalog.register("skill.group.assign", skill_group_assign, owner=OWNER)
     catalog.register("websearch.config.get", websearch_config_get, owner=OWNER)
     catalog.register("websearch.config.update", websearch_config_update, owner=OWNER)
     catalog.register("plugin.list", plugin_list_alias, owner=OWNER)

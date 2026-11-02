@@ -241,7 +241,7 @@ async def test_real_socket_cli_bearer_and_forwarded_header_boundary(tmp_path):
 def test_packaged_sidecar_remains_internal_despite_lan_environment(monkeypatch, tmp_path):
     import desktop_backend
     seen = {}
-    monkeypatch.setenv("LAMCORE_HOST", "127.0.0.1")
+    monkeypatch.setenv("SUNDAY_CORE_HOST", "127.0.0.1")
     monkeypatch.setenv("LAMTOOLS_CORE_ALLOW_LAN", "1")
     monkeypatch.setenv("LAMTOOLS_CORE_API_TOKEN", TOKEN)
     monkeypatch.setenv("LAMTOOLS_CORE_DATA_DIR", str(tmp_path / "data"))
@@ -256,6 +256,13 @@ def test_packaged_sidecar_remains_internal_despite_lan_environment(monkeypatch, 
     assert seen["host"] == "127.0.0.1"
     assert seen["proxy_headers"] is False
     assert seen["policy"] == CoreApiAccessPolicy()
-    monkeypatch.setenv("LAMCORE_HOST", "0.0.0.0")
+    monkeypatch.setenv("SUNDAY_CORE_HOST", "0.0.0.0")
     with pytest.raises(ValueError, match="Non-loopback"):
         desktop_backend._run()
+
+
+def test_legacy_shell_env_names_remain_supported(monkeypatch):
+    import desktop_backend
+    monkeypatch.delenv("SUNDAY_CORE_HOST", raising=False)
+    monkeypatch.setenv("LAMCORE_HOST", "127.0.0.2")
+    assert desktop_backend._env_setting("SUNDAY_CORE_HOST", "LAMCORE_HOST", "127.0.0.1") == "127.0.0.2"

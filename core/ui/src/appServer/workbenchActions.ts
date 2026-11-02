@@ -111,6 +111,29 @@ export function coreComposerActionMode(params: {
     : 'send'
 }
 
+/** 会话运行中一次发送的落点：直接引导（steer 进当前回合）或排队（本轮结束后发）。 */
+export type CoreComposerSendMode = 'guide' | 'queue'
+
+export type CoreComposerSendIntent = 'start' | 'guide' | 'queue' | 'none'
+
+// user:“设置中可调消息发送后直接引导或排队，默认直接引导，默认为enter，特殊发送为ctrl enter”
+// +(回合运行中按设置决定普通发送键的落点，Ctrl/Cmd+Enter 永远执行另一种；空闲会话
+//   两个键都是开新回合；输入框为空时两个键都不发送、不排队、不引导，也不动已排队的项)。
+export function coreComposerSendIntent(params: {
+  status: CoreWorkbenchTurnStatus
+  text: string
+  pendingAttachmentCount?: number
+  sendMode?: CoreComposerSendMode
+  /** Ctrl/Cmd+Enter 的“特殊发送”：执行与设置相反的落点。 */
+  specialSend?: boolean
+}): CoreComposerSendIntent {
+  if (!params.text.trim() && (params.pendingAttachmentCount || 0) === 0) return 'none'
+  if (!isCoreActiveTurnStatus(params.status)) return 'start'
+  const mode: CoreComposerSendMode = params.sendMode === 'queue' ? 'queue' : 'guide'
+  const wanted = params.specialSend ? (mode === 'guide' ? 'queue' : 'guide') : mode
+  return wanted
+}
+
 export async function submitCoreComposerTask(
   options: SubmitCoreComposerTaskOptions,
 ): Promise<SubmitCoreComposerTaskResult> {

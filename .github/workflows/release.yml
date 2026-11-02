@@ -132,7 +132,7 @@ jobs:
       - name: Verify bundled plugin boundary
         shell: pwsh
         run: |
-          $plugins = "core/dist/LamCore/_internal/resources/plugins/bundled"
+          $plugins = "core/dist/SundayCore/_internal/resources/plugins/bundled"
           # user:“网络拓展作为新的内置插件，其他不作为新的内置插件”+(CI 与本地打包验证同一边界)。
           foreach ($name in @("workflow", "qq-bot", "bili-scroll", "excalidraw")) {
             $excluded = "$plugins/$name"
@@ -157,14 +157,15 @@ jobs:
         shell: pwsh
         run: |
           $port = Get-Random -Minimum 5300 -Maximum 5900
+          $env:SUNDAY_CORE_PORT = "$port"
           $env:LAMCORE_PORT = "$port"
-          $env:LAMTOOLS_HOME = "$env:TEMP\lamcore-smoke-$PID"
+          $env:LAMTOOLS_HOME = "$env:TEMP\sunday-smoke-$PID"
           # A frozen backend that starts but never answers health used to leave
           # nothing to diagnose: the child's own output went to a console the
           # runner does not capture. Keep it, and print it when the probe fails.
-          $outLog = Join-Path $env:TEMP "lamcore-smoke-$PID.stdout.log"
-          $errLog = Join-Path $env:TEMP "lamcore-smoke-$PID.stderr.log"
-          $p = Start-Process -FilePath "core/dist/LamCore/LamCore.exe" -PassThru `
+          $outLog = Join-Path $env:TEMP "sunday-smoke-$PID.stdout.log"
+          $errLog = Join-Path $env:TEMP "sunday-smoke-$PID.stderr.log"
+          $p = Start-Process -FilePath "core/dist/SundayCore/SundayCore.exe" -PassThru `
             -RedirectStandardOutput $outLog -RedirectStandardError $errLog
           $ok = $false
           try {
@@ -201,7 +202,7 @@ jobs:
         run: |
           python -c "import websockets" 2>$null
           if ($LASTEXITCODE -ne 0) { pip install websockets }
-          python scripts/verify-backend-ws.py --exe "core/dist/LamCore/LamCore.exe" --port $((Get-Random -Minimum 5300 -Maximum 5900))
+          python scripts/verify-backend-ws.py --exe "core/dist/SundayCore/SundayCore.exe" --port $((Get-Random -Minimum 5300 -Maximum 5900))
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "WebSocket smoke test failed — missing websockets/wsproto in bundle?"
@@ -210,7 +211,7 @@ jobs:
 
       # user:“安装的时候直接从 GitHub 上”+(发布前使用隔离数据目录验证实际市场安装和更新，不携带账号凭据)。
       - name: Verify GitHub plugin market against packaged backend
-        run: python scripts/verify-plugin-market.py --exe "core/dist/LamCore/LamCore.exe"
+        run: python scripts/verify-plugin-market.py --exe "core/dist/SundayCore/SundayCore.exe"
 
       # ---------- 3. Tauri 只构建应用，不调用官方 NSIS bundler ----------
       - name: Build Tauri application executable
@@ -233,8 +234,8 @@ jobs:
             Remove-Item -LiteralPath $stageDir -Recurse -Force
           }
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
-          Copy-Item -LiteralPath (Join-Path $releaseDir "lamcore.exe") -Destination (Join-Path $stageDir "lamcore.exe")
-          Copy-Item -LiteralPath "core/dist/LamCore" -Destination (Join-Path $stageDir "lamcore-backend") -Recurse
+          Copy-Item -LiteralPath (Join-Path $releaseDir "Sunday.exe") -Destination (Join-Path $stageDir "Sunday.exe")
+          Copy-Item -LiteralPath "core/dist/SundayCore" -Destination (Join-Path $stageDir "sunday-backend") -Recurse
 
           $outputDir = Join-Path $releaseDir "bundle/inno"
           & "core/desktop/installer/build-installer.ps1" -Version $version -SourceRoot $stageDir -OutputDir $outputDir
@@ -394,7 +395,7 @@ jobs:
 
       - name: Verify standard Linux artifact paths and sidecar
         run: |
-          test -x artifacts/linux-x64/sidecar/LamCore
+          test -x artifacts/linux-x64/sidecar/SundayCore
           test -n "$(find core/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name 'Sunday_*_amd64.AppImage' -print -quit)"
           test -n "$(find core/desktop/src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name 'Sunday_*_amd64.deb' -print -quit)"
 

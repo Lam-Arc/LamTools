@@ -266,6 +266,19 @@ def latest_active_turn_id(snapshot: dict[str, Any]) -> str | None:
     return str(active[0].get("turn_id") or "") or None
 
 
+def queue_order_key(item: dict[str, Any]) -> tuple[int, int, str]:
+    """Sort key for queue dispatch/display order.
+
+    user:“排队项可拖拽上下移动重新排序”+(重排序给条目写 position：有 position 的
+    条目按它排且始终在无 position 条目之前——那些是重排序之后才入队的新条目，按
+    事件序 seq 垫底；旧数据没有任何 position 时行为与原来的 seq 排序一致)。
+    """
+    position = item.get("position")
+    if isinstance(position, (int, float)) and not isinstance(position, bool):
+        return (0, int(position), str(item.get("queue_item_id") or ""))
+    return (1, int(item.get("seq") or 0), str(item.get("queue_item_id") or ""))
+
+
 def next_dispatchable_queue_item(snapshot: dict[str, Any]) -> dict[str, Any] | None:
     status = effective_thread_status(snapshot)
     if status not in {"completed", "idle"}:
@@ -285,7 +298,7 @@ def next_dispatchable_queue_item(snapshot: dict[str, Any]) -> dict[str, Any] | N
     ]
     if not queued:
         return None
-    queued.sort(key=lambda item: (int(item.get("seq") or 0), str(item.get("queue_item_id") or "")))
+    queued.sort(key=queue_order_key)
     return queued[0]
 
 
@@ -317,4 +330,5 @@ __all__ = [
     "queue_delete_payload",
     "queue_dispatch_payload",
     "queue_item_payload",
+    "queue_order_key",
 ]

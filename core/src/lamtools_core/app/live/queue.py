@@ -14,6 +14,7 @@ from ..queue_state import (
     input_items_text,
     queue_delete_payload,
     queue_item_payload,
+    queue_order_key,
 )
 from ..turn_acceptance import QUEUE_ITEM_ACCEPTED_METHODS
 from .context import CoreLiveContext, CoreLiveOperationOutcome
@@ -408,4 +409,88 @@ async def handle_queue_guidance_operation(
             },
         ),
         publish_events=events,
+    )
+
+
+async def handle_queue_reorder_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    # user:“排队项可拖拽上下移动重新排序”+(拖拽后的顺序以一条 queue/itemReordered
+    #   事件落库；分发与托盘共用 position 排序，事件流重放即可还原顺序)。
+    from .events import _append_app_event
+    from .params import _expected_revision, _include_snapshot_param, _load_snapshot_outside_write_lock
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    order = params.get("order")
+    if not thread_id or not isinstance(order, list):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and order are required")
+        )
+    try:
+        _expected_revision(params)  # 形状校验；重排序是幂等追加，见 write 说明
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
+
+    async def write(db: AsyncSession) -> tuple[str, AppEventEnvelope | None]:
+        existing = await context.persistence.find_client_event(
+            db,
+            thread_id=thread_id,
+            client_message_id=client_message_id,
+            methods={"queue/itemReordered"},
+        )
+        if existing is not None:
+            return "existing", existing
+        # 重排序只需要队列（元数据行），不需要装配全部会话条目。
+        snapshot = await context.persistence.load_metadata(db, thread_id)
+        queued_items = [item for item in (snapshot.get("queue") or []) if isinstance(item, dict)]
+        current_order = [
+            str(item.get("queue_item_id") or "") for item in sorted(queued_items, key=queue_order_key)
+        ]
+        still_queued = set(current_order)
+        requested: list[str] = []
+        seen: set[str] = set()
+        for entry in order:
+            queue_item_id = str(entry or "").strip()
+            # 请求里多出来的 id（并发删除/分发/引导）直接忽略，不让幽灵 id 混进事件。
+            if queue_item_id in still_queued and queue_item_id not in seen:
+                requested.append(queue_item_id)
+                seen.add(queue_item_id)
+        # 没被点名的条目（并发新排队）保持当前相对次序垫底。
+        ordered = [*requested, *[item_id for item_id in current_order if item_id not in seen]]
+        if ordered == current_order:
+            return "unchanged", None
+        event = await _append_app_event(
+            db,
+            context=context,
+            event=AppEventInput(
+                thread_id=thread_id,
+                method="queue/itemReordered",
+                client_message_id=client_message_id,
+                payload={"type": "queue", "order": ordered},
+            ),
+        )
+        return "applied", event
+
+    outcome_kind, payload = await context.persistence.write(write)
+    event = payload
+    applied = outcome_kind == "applied"
+    if applied and event is not None:
+        await context.hub.publish(event)
+    response_payload: dict[str, Any] = {
+        # 与 queue.update 保持一致：只有真正追加了事件才算 applied；重试与顺序未变
+        # 分别返回 already_applied / unchanged，客户端不能靠 reason 猜。
+        "applied": applied,
+        "reason": {"applied": "", "existing": "already_applied", "unchanged": "unchanged"}[outcome_kind],
+        # 重试要带回第一次写入的事件；unchanged 没有事件。
+        "events": [event.to_dict()] if event is not None else [],
+    }
+    if _include_snapshot_param(params):
+        response_payload["snapshot"] = await _load_snapshot_outside_write_lock(context, thread_id)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, response_payload),
+        # 事件已在上方发布；这里仅供显式重放路径使用（桌面路径 publish_events=False）。
+        publish_events=[event] if applied and event is not None else [],
     )

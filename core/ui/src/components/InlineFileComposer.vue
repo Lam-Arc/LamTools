@@ -12,6 +12,7 @@ import { EditorState, Compartment, Prec } from '@codemirror/state'
 import { EditorView, Decoration, WidgetType, ViewPlugin, keymap, placeholder as editorPlaceholder, type DecorationSet } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { activeCompletion, referenceSpans } from '@/composer/fileReferences'
+import { composerEditorMaxHeight } from '@/composer/editorHeight'
 import type { CoreAttachment, CoreCommandCatalogItem } from '@/types'
 import CommandPalette from './CommandPalette.vue'
 import { useReferenceActions } from '@/helpers/referenceActions'
@@ -133,7 +134,11 @@ onMounted(() => {
       keyup(event) { if (event.key === 'Enter' && consumedEnter) { consumedEnter = false; event.preventDefault(); return true } if (!event.isComposing) emit('keyup', event); return event.defaultPrevented },
       paste(event) { emit('paste', event); return event.defaultPrevented },
     })),
-    EditorView.theme({ '&': { color: 'var(--theme-composer-text)', backgroundColor: 'transparent' }, '&.cm-focused': { outline: 'none' }, '.cm-content': { padding: '8px 0', fontFamily: 'var(--font-sans)', minHeight: '38px', caretColor: 'var(--theme-composer-text)' }, '.cm-scroller': { maxHeight: '160px', overflow: 'auto', fontFamily: 'inherit', lineHeight: '1.6' }, '.cm-line': { padding: '0' }, '.cm-placeholder': { color: 'color-mix(in srgb,var(--theme-composer-text) 45%,transparent)' } }),
+    // user:“修复输入栏高度无上限的 bug，多行时可达 8 行高即为极限”+(编辑器最高
+    // 8 行，超出在框内滚动；高度公式统一在 composer/editorHeight.ts 维护)。
+    // user:“修复输入栏中向 Sunday 提出问题的文字颜色过亮的问题”+(正文在主题色
+    // 基础上降到 85%，占位符维持 45% 更淡，保持文字层级)。
+    EditorView.theme({ '&': { color: 'color-mix(in srgb, var(--theme-composer-text) 85%, transparent)', backgroundColor: 'transparent' }, '&.cm-focused': { outline: 'none' }, '.cm-content': { padding: '8px 0', fontFamily: 'var(--font-sans)', minHeight: '38px', caretColor: 'color-mix(in srgb, var(--theme-composer-text) 85%, transparent)' }, '.cm-scroller': { maxHeight: composerEditorMaxHeight(), overflow: 'auto', fontFamily: 'inherit', lineHeight: '1.6' }, '.cm-line': { padding: '0' }, '.cm-placeholder': { color: 'color-mix(in srgb,var(--theme-composer-text) 45%,transparent)' } }),
   ] }) })
 })
 onBeforeUnmount(() => view?.destroy())

@@ -210,6 +210,6 @@ jobs:
 
       - name: Verify standard Linux artifact paths
         run: |
-          test -x artifacts/linux-x64/sidecar/LamCore
+          test -x artifacts/linux-x64/sidecar/SundayCore
           test -n "$(find core/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name 'Sunday_*_amd64.AppImage' -print -quit)"
           test -n "$(find core/desktop/src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name 'Sunday_*_amd64.deb' -print -quit)"

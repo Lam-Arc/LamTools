@@ -240,7 +240,7 @@ pushd "$SOURCE_ROOT/core" >/dev/null
 "$PYTHON_BIN" -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
 popd >/dev/null
 
-SIDECAR="$SOURCE_ROOT/core/dist/LamCore/LamCore"
+SIDECAR="$SOURCE_ROOT/core/dist/SundayCore/SundayCore"
 [[ -f "$SIDECAR" ]] || die "Linux sidecar missing: $SIDECAR"
 chmod +x "$SIDECAR"
 info "Running packaged backend REST/WebSocket/Study smoke"
@@ -340,8 +340,8 @@ dpkg-deb --info "$DEB" >/dev/null || die ".deb metadata check failed"
 _deb_contents="$BUILD_ROOT/deb-contents.txt"
 dpkg-deb --contents "$DEB" >"$_deb_contents" \
   || die ".deb contents could not be listed"
-grep -Eq 'lamcore-backend/LamCore([[:space:]]|$)' "$_deb_contents" \
-  || die ".deb does not contain lamcore-backend/LamCore"
+grep -Eq 'sunday-backend/SundayCore([[:space:]]|$)' "$_deb_contents" \
+  || die ".deb does not contain sunday-backend/SundayCore"
 _appimage_extract_root="$BUILD_ROOT/appimage-extract"
 remove_tool_path "$_appimage_extract_root"
 mkdir -p "$_appimage_extract_root"
@@ -350,9 +350,9 @@ mkdir -p "$_appimage_extract_root"
   "$APPIMAGE" --appimage-extract >/dev/null
 )
 _appimage_sidecar="$(find "$_appimage_extract_root/squashfs-root" -type f \
-  -path '*/lamcore-backend/LamCore' -print -quit 2>/dev/null || true)"
+  -path '*/sunday-backend/SundayCore' -print -quit 2>/dev/null || true)"
 [[ -n "$_appimage_sidecar" && -x "$_appimage_sidecar" ]] \
-  || die "AppImage does not contain an executable lamcore-backend/LamCore"
+  || die "AppImage does not contain an executable sunday-backend/SundayCore"
 
 if [[ "${LAMTOOLS_SKIP_XVFB_SMOKE:-0}" != "1" ]] && command -v xvfb-run >/dev/null 2>&1; then
   command -v dbus-run-session >/dev/null 2>&1 \
@@ -385,7 +385,7 @@ if [[ "${LAMTOOLS_SKIP_XVFB_SMOKE:-0}" != "1" ]] && command -v xvfb-run >/dev/nu
       pid="${pid%/status}"
       _is_descendant_of "$pid" "$_smoke_root_pid" || continue
       exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
-      [[ "$exe" == */lamcore-backend/LamCore ]] || continue
+      [[ "$exe" == */sunday-backend/SundayCore ]] || continue
       start_time="$(awk '{ print $22 }' "/proc/$pid/stat" 2>/dev/null || true)"
       [[ -n "$start_time" ]] && _smoke_backend_start_times["$pid"]="$start_time"
     done
@@ -424,7 +424,7 @@ if [[ "${LAMTOOLS_SKIP_XVFB_SMOKE:-0}" != "1" ]] && command -v xvfb-run >/dev/nu
   if (( ${#_smoke_backend_start_times[@]} == 0 )); then
     printf '%s\n' '--- AppImage smoke log (last 100 lines) ---' >&2
     tail -n 100 "$_xvfb_home/appimage.log" >&2 || true
-    die "Xvfb AppImage smoke never observed the bundled LamCore sidecar"
+    die "Xvfb AppImage smoke never observed the bundled SundayCore sidecar"
   fi
 
   _smoke_cleanup_deadline=$((SECONDS + 5))
@@ -454,12 +454,12 @@ if [[ "${LAMTOOLS_SKIP_XVFB_SMOKE:-0}" != "1" ]] && command -v xvfb-run >/dev/nu
         kill -KILL "$_smoke_pid" 2>/dev/null || true
       fi
     done
-    die "Xvfb AppImage smoke leaked LamCore PID(s): ${_smoke_survivor_pids[*]}"
+    die "Xvfb AppImage smoke leaked SundayCore PID(s): ${_smoke_survivor_pids[*]}"
   fi
 
   # A timeout means the GUI stayed alive, which is the expected smoke result.
   if [[ "$_xvfb_rc" == 124 || "$_xvfb_rc" == 137 ]]; then
-    info "Xvfb AppImage smoke completed with no LamCore survivor (exit $_xvfb_rc)"
+    info "Xvfb AppImage smoke completed with no SundayCore survivor (exit $_xvfb_rc)"
   else
     printf '%s\n' '--- AppImage smoke log (last 100 lines) ---' >&2
     tail -n 100 "$_xvfb_home/appimage.log" >&2 || true
@@ -470,14 +470,14 @@ else
 fi
 
 info "Copying Linux artifacts back to the repository checkout"
-FINAL_SIDECAR="$ROOT/artifacts/linux-x64/sidecar/LamCore"
+FINAL_SIDECAR="$ROOT/artifacts/linux-x64/sidecar/SundayCore"
 FINAL_APPIMAGE="$ROOT/core/desktop/src-tauri/target/release/bundle/appimage/$(basename "$APPIMAGE")"
 FINAL_DEB="$ROOT/core/desktop/src-tauri/target/release/bundle/deb/$(basename "$DEB")"
 
 # These are exact generated output locations, not user-selected directories.
 # Keep the destructive operations narrow so a Linux build cannot erase an
 # unrelated workspace path or the existing Windows sidecar.
-remove_exact_repo_dir "$FINAL_SIDECAR" "$ROOT/artifacts/linux-x64/sidecar/LamCore"
+remove_exact_repo_dir "$FINAL_SIDECAR" "$ROOT/artifacts/linux-x64/sidecar/SundayCore"
 mkdir -p "$(dirname "$FINAL_SIDECAR")"
 cp -a "$SIDECAR" "$FINAL_SIDECAR"
 mkdir -p "$(dirname "$FINAL_APPIMAGE")" "$(dirname "$FINAL_DEB")"

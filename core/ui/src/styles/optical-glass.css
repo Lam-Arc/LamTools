@@ -16,16 +16,8 @@
   border: 2px solid var(--theme-optical-glass-border-color);
   box-shadow: var(--optical-glass-shadow);
   overflow: hidden;
-  -webkit-backdrop-filter:
-    blur(var(--optical-glass-blur))
-    saturate(var(--optical-glass-saturation))
-    brightness(var(--optical-glass-brightness))
-    contrast(var(--optical-glass-contrast));
-  backdrop-filter:
-    blur(var(--optical-glass-blur))
-    saturate(var(--optical-glass-saturation))
-    brightness(var(--optical-glass-brightness))
-    contrast(var(--optical-glass-contrast));
+  -webkit-backdrop-filter: var(--optical-glass-filter);
+  backdrop-filter: var(--optical-glass-filter);
   isolation: isolate;
 }
 

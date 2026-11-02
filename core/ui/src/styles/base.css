@@ -88,6 +88,17 @@ textarea::placeholder {
 :is(input, textarea, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .cm-editor.cm-focused, .cm-content, .cm-scroller):is(:focus, :focus-visible) {
   outline: none;
 }
+/* user:“修复输入栏中有时会出现什么什么什么 deleted 的问题”+(用户截图确认是
+   CodeMirror 删除选区时的读屏公告“Selection deleted”漏显示到输入栏：官方隐藏
+   只靠 position:fixed + top:-10000px，在 WebView2 里可能失效。这里按视觉隐藏
+   的标准写法兜底成 1×1 裁切盒子——读屏仍可播报，界面永不显示)。 */
+.cm-announced {
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  pointer-events: none;
+}
 /* user:“合并去重”+(键盘焦点环收成一处：宽度、偏移、颜色都走令牌) */
 :is(select, button, [role="button"], a):focus-visible {
   outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, var(--blue));

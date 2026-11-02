@@ -133,7 +133,8 @@ describe('submission lifecycle acceptance', () => {
       return true
     } })
     s.status.value = 'running'
-    await s.controller.submit({ forceGuide: true })
+    // 默认「直接引导」模式下运行中的普通发送键就是引导（旧 forceGuide 标记已移除）。
+    await s.controller.submit({ clearComposer: true })
     const id = s.controller.submissions.value[0].id
     s.turn.value = 'different-turn'
     await s.controller.retrySubmission(id)

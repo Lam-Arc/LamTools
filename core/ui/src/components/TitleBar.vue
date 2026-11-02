@@ -1,8 +1,11 @@
 <template>
   <div v-if="shouldDisplayTitleBar" class="titlebar" data-tauri-drag-region data-ui-id="shell.titlebar">
     <div class="titlebar-left">
-      <span class="brand">
+      <span class="brand" :class="{ 'brand--session': Boolean(props.sessionTitle) }">
         <strong class="brand-name">Sunday</strong>
+        <!-- user:“小尺寸时（独屏）标题换到“sunday”那里，不占地”+(窄窗口把会话标题
+             放进标题栏，原来的会话标题行不再单独占一行。) -->
+        <strong v-if="props.sessionTitle" class="brand-session-name" :title="props.sessionTitle">{{ props.sessionTitle }}</strong>
       </span>
     </div>
 
@@ -125,6 +128,8 @@ const props = defineProps<{
   modeLabel?: string
   modeTitle?: string
   canToggleMode?: boolean
+  /** 小窗口（独屏）时显示在“Sunday”位置的当前会话标题。 */
+  sessionTitle?: string
   mobilePairingCode?: string | null
   mobilePairingExpiresAtMs?: number | null
   mobilePairingLoading?: boolean
@@ -289,6 +294,25 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 680;
   letter-spacing: .01em;
+}
+
+/* 会话标题默认不占位；窄窗口下顶替 Sunday 品牌名。 */
+.brand-session-name {
+  display: none;
+  min-width: 0;
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--theme-backdrop-text, #f2efeb);
+  font-size: 13px;
+  font-weight: 680;
+  letter-spacing: .01em;
+}
+
+@media (max-width: 820px) {
+  .brand--session .brand-name { display: none; }
+  .brand-session-name { display: inline-block; }
 }
 
 .titlebar-left {

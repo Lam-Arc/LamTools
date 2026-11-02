@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sunday Ping</title>
+  <style>
+    /* user:“你看看 ping 环 要不也自己做窗口？”+(Ping 覆盖层是独立文档：
+       全屏透明，只有环/标记/标注/选择器自己画东西。) */
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #ping-app {
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      background-color: transparent !important;
+      overflow: hidden;
+    }
+    body {
+      color: #eef3fb;
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+  </style>
+</head>
+<body>
+  <div id="ping-app"></div>
+  <script type="module" src="/src/ping.ts"></script>
+</body>
+</html>

@@ -18,7 +18,7 @@ Run this skill after every Sunday Windows setup build or setup-version update to
 1. Start with the version explicitly provided by the user. If none was provided, let the helper select the newest setup from the Sunday Inno Setup output directory.
 2. Use this skill's `scripts/install_setup.ps1`. By default it matches `core/desktop/src-tauri/target/release/bundle/inno/Sunday_<version>_x64-setup.exe` exactly, then checks for the same filename under `dist/` or `dist-plugins/` if needed.
 3. Install into `E:\setuptest\<version>` by default. Use a separate directory for each version and do not delete older version directories.
-4. After installation, launch `lamcore.exe` from the install directory. Wait for and verify that both the main application and `lamcore-backend\sunday-core.exe` processes run from that version directory.
+4. After installation, launch `Sunday.exe` from the install directory. Wait for and verify that both the main application and `sunday-backend\sunday-core.exe` processes run from that version directory.
 5. The helper installs with Inno Setup options `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=...`; do not fall back to NSIS `/S /D=...`.
 6. Report the actual setup path, installation directory, version, and verified process PIDs. Stop at any failure; do not count an old process as a successful launch of the new version.
 
@@ -42,6 +42,6 @@ If the setup is outside the default build directory, pass `-SetupPath <absolute 
 
 ## Acceptance and boundaries
 
-- If the setup file is missing, its filename version does not match the requested version, the installer returns a nonzero exit code, `lamcore.exe` is missing, or launch times out, report the failure immediately.
+- If the setup file is missing, its filename version does not match the requested version, the installer returns a nonzero exit code, `Sunday.exe` is missing, or launch times out, report the failure immediately.
 - Operate only on the user-specified setup and the isolated version directory. Do not delete older installations, change version numbers, commit, or push code or tags.
 - Use the PowerShell helper's final JSON as evidence. If necessary, verify process paths with `Get-CimInstance Win32_Process`.

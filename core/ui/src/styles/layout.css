@@ -2470,6 +2470,25 @@
 .core-toast__text {
   overflow-wrap: anywhere;
 }
+/* 可点击的提示（例如“会话已完成，点此打开”）：文字按钮保持提示原有排版。 */
+.core-toast__action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.core-toast__action:hover,
+.core-toast__action:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.core-toast__action:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 60%, transparent);
+  outline-offset: 2px;
+}
 .core-toast__dismiss {
   flex: none;
   display: grid;
@@ -2530,6 +2549,9 @@
   .settings-main { padding: 28px 24px 48px; }
 }
 @media (max-width: 820px) {
+  /* user:“小尺寸时（独屏）标题换到“sunday”那里，不占地”+(会话标题已进标题栏，
+     窄窗口不再单独占一行。) */
+  .thread-header[data-session-header] { display: none; }
   .floating-composer { width: var(--composer-full-width); }
   .route-purpose-row,
   .command-policy-row {
@@ -2981,8 +3003,9 @@
   grid-template-columns: minmax(0, 1fr);
   gap: 7px;
   margin: 7px 0 12px;
-  padding: 10px 0 10px 17px;
-  border-left: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
+  /* user:“去除消息流左侧的竖线 层级关系不再用竖线表示 而是缩进，缩进 2px 即可”
+     +(去掉过程区左边的竖线，层级改由缩进表达，一级只缩 2px)。 */
+  padding: 10px 0 10px 2px;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
   counter-reset: reasoning-step;
 }

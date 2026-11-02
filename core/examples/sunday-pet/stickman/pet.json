@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "Sunday Stickman",
+  "scale": 1,
+  "actions": {
+    "idle": {
+      "source": "stickman.glb",
+      "type": "model",
+      "model_clip": "Idle",
+      "loop": true
+    },
+    "walk": {
+      "source": "stickman.glb",
+      "type": "model",
+      "model_clip": "Walk",
+      "loop": true
+    },
+    "jump": {
+      "source": "stickman.glb",
+      "type": "model",
+      "model_clip": "Jump",
+      "loop": false
+    },
+    "dance": {
+      "source": "stickman.glb",
+      "type": "model",
+      "model_clip": "Dance",
+      "loop": true
+    }
+  },
+  "physics": {
+    "radius": 26
+  }
+}

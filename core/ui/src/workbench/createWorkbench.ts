@@ -34,6 +34,7 @@ import {
   useCoreQueuedInputController,
   useCorePendingGuidance,
   useCoreWorkbenchProjectionController,
+  coreSendBehaviorModeRef,
 } from '@/composables/index.ts'
 import type { CoreInputItem, CoreSessionListItem, CoreSubAgentDurableRecord } from '@/types.ts'
 import {
@@ -464,6 +465,9 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     // "is the main agent working" sent a new turn while the server still had one
     // active, and the refusal surfaced as an error.
     status: composerTurnStatus,
+    // user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(发送控制器读共享
+    //   偏好单例：设置页改完立刻生效，不用重开会话)。
+    sendMode: coreSendBehaviorModeRef,
     attachments,
     connect: (threadId) => runtimeController.connect(threadId),
     startTurn: (threadId, input, workRoot, turnOptions, clientMessageId) => (
@@ -610,6 +614,9 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     },
     updateQueueInput: (threadId, itemId, text) => runtimeController.updateQueueInput(threadId, itemId, text),
     deleteQueueInput: (threadId, itemId) => runtimeController.deleteQueueInput(threadId, itemId),
+    reorderQueueInputs: async (threadId, order) => {
+      await runtimeController.reorderQueueInputs(threadId, order)
+    },
     guideQueueInput: async (threadId, turnId, itemId, text) => {
       const result = await runtimeController.guideQueueInput(threadId, turnId, itemId, text)
       if (result.applied) {

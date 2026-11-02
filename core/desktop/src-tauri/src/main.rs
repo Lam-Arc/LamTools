@@ -39,6 +39,8 @@ use tauri::{
     Emitter, Manager, Url, WebviewWindow, WebviewWindowBuilder, WebviewUrl,
 };
 
+mod migration;
+mod pet;
 mod remote;
 mod split_pane;
 #[cfg(windows)]
@@ -55,6 +57,8 @@ use remote::{
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const TRAY_ID: &str = "lamtools-tray";
 const TRAY_OPEN_MAIN_ID: &str = "tray-open-main";
+// user:“桌宠是独立系统：即使桌宠隐藏，也可使用 Ping”+(托盘可直接开/关桌宠覆盖层)
+const TRAY_PET_ID: &str = "tray-pet";
 const TRAY_QUIT_ID: &str = "tray-quit";
 static NEXT_SESSION_EXPORT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -609,28 +613,103 @@ fn open_external_url(url: String) -> Result<(), String> {
     open::that(url).map_err(|e| e.to_string())
 }
 
+/// 在后台线程里把桌宠覆盖层建出来。
+///
+/// user:“点击打开桌宠后未响应了”+(托盘菜单事件跑在主线程上，而建窗口要等事件循环
+/// 把窗口真正造好再回来；在主线程里同步等就是死锁，整个应用表现为“未响应”。
+/// 建窗放到后台线程，事件循环始终可以继续处理消息。)
+/// 等应用事件循环真的跑起来之后再建桌宠覆盖层窗口。
+///
+/// user:“从你启动开始就一直是黑屏未响应状态”+(启动早期建出来的覆盖层窗口是个
+/// 半成品：所有窗口 API 都收不到响应、网页永远不加载，还会一直挡着后面正常的
+/// 建窗。这里改成失败就等一会儿重试，直到拿到真窗口为止。)
+fn open_pet_overlay_when_ready(app: &tauri::AppHandle) -> Result<pet::OverlayBounds, String> {
+    let mut last_error = String::from("overlay window was never created");
+    for _ in 0..40 {
+        match pet::open_overlay_and_poll(app.clone()) {
+            Ok(bounds) => return Ok(bounds),
+            Err(error) => last_error = error,
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(last_error)
+}
+
+fn spawn_pet_overlay_thread(app: &tauri::AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    std::thread::Builder::new()
+        .name("pet-overlay-open".into())
+        .spawn(move || {
+            // 托盘菜单线程自己建窗：这里不在任何 WebView2 回调里，直接走同步版。
+            match pet::open_overlay_and_poll(handle.clone()) {
+                Ok(_) => {
+                    // 页面 ready 后会再刷新一次；这里先把托盘状态从“打开”切过去。
+                    let _ = refresh_tray_menu(&handle);
+                }
+                Err(error) => {
+                    eprintln!("[sunday] desktop pet overlay failed: {error}");
+                }
+            }
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 fn handle_tray_menu(app: &tauri::AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
         TRAY_OPEN_MAIN_ID => reveal_main_window(app),
+        TRAY_PET_ID => {
+            // user:"那个托盘的桌宠，不要一直都叫“打开桌宠”，应该是“打开桌宠”和“关闭桌宠”"+
+            // (入口按覆盖层真实可见性切换：开着就关，关着就开。)
+            if pet::overlay_is_open(app) {
+                if let Err(error) = pet::close_overlay_sync(app) {
+                    eprintln!("[sunday] desktop pet overlay close failed: {error}");
+                }
+                let _ = refresh_tray_menu(app);
+            } else if let Err(error) = spawn_pet_overlay_thread(app) {
+                eprintln!("[sunday] desktop pet overlay failed: {error}");
+            }
+        }
         TRAY_QUIT_ID => request_quit(app),
         _ => {}
     }
 }
 
+/// 托盘菜单的桌宠入口：打开时“关闭桌宠”，关闭时“打开桌宠”。
+///
+/// user:"应该是“打开桌宠”和“关闭桌宠”"+(状态变化时重建菜单；原生托盘菜单重建
+/// 成本很低，比维护一个外部 CheckMenuItem 句柄可靠。)
+fn refresh_tray_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let open = pet::overlay_is_open(app);
+    let open_main = MenuItem::with_id(app, TRAY_OPEN_MAIN_ID, "打开界面", true, None::<&str>)?;
+    let pet_label = if open { "关闭桌宠" } else { "打开桌宠" };
+    let pet_item = MenuItem::with_id(app, TRAY_PET_ID, pet_label, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open_main, &pet_item, &quit])?;
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_menu(Some(menu))?;
+    }
+    Ok(())
+}
+
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_main = MenuItem::with_id(app, TRAY_OPEN_MAIN_ID, "打开界面", true, None::<&str>)?;
+    // user:“托盘无打开桌宠选项”+(托盘必须给出桌宠入口，否则用户找不到打开的路径)
+    let open_pet = MenuItem::with_id(app, TRAY_PET_ID, "打开桌宠", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_main, &quit])?;
+    let menu = Menu::with_items(app, &[&open_main, &open_pet, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .tooltip("LamTools")
+        .tooltip("Sunday")
         .show_menu_on_left_click(true)
         .on_menu_event(handle_tray_menu);
     if let Some(icon) = app.default_window_icon().cloned() {
         builder = builder.icon(icon);
     }
     builder.build(app)?;
+    // 自启/CLI 可能已经把覆盖层打开了：按真实可见性初始化菜单文案。
+    refresh_tray_menu(app.handle())?;
 
     Ok(())
 }
@@ -669,7 +748,33 @@ fn install_taskbar_icon(app: &tauri::App) -> Result<(), Box<dyn std::error::Erro
 // App entry point
 // ---------------------------------------------------------------------------
 
+/// 给配置窗口设置与运行时窗口相同的 WebView2 参数。
+/// 见 `pet::browser_args` 的说明：基线防节流参数 + 自动化模式注入的调试参数。
+fn apply_browser_args(mut context: tauri::Context<tauri::Wry>) -> tauri::Context<tauri::Wry> {
+    let browser_args = pet::browser_args_from_env();
+    for window in &mut context.config_mut().app.windows {
+        window.additional_browser_args = Some(browser_args.clone());
+    }
+    context
+}
+
+/// 桌宠覆盖层安全兜底：任何 panic 先把全屏置顶窗口关掉，再走原 panic 输出。
+/// user:"那个'强制置顶'，你一定要给我记着。如果它一旦发生错误，把它退出置顶
+/// 或者直接关闭。不然的话，就会出现无法访问，但是直接把我的屏幕全给占掉"
+fn install_overlay_panic_safety() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        pet::emergency_close_overlays();
+        previous(info);
+    }));
+}
+
 fn main() {
+    install_overlay_panic_safety();
+    // user:“迁移”+(应用标识从 com.lamtools.lamcore 改成 com.lamtools.sunday，
+    // 旧数据目录必须先搬到新标识下，再让 Tauri 解析 app_data_dir。)
+    migration::migrate_legacy_identity();
+
     // tungstenite uses rustls for the remote Relay connection. Rustls 0.23
     // can expose more than one crypto backend through the dependency graph;
     // install the explicitly selected ring provider before any Relay thread
@@ -691,11 +796,19 @@ fn main() {
         // Single-instance guard: two instances would each spawn a backend
         // writing the same .lam/core.db (SQLite lock storms, config
         // clobbering) (audit 20 S3).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”+(第二实例带
+            // `--ping-commit=<扇区id>` 时直接驱动正在运行的实例执行该扇区，测完后退出。)
+            if let Some(sector) = ping_commit_from_args(&args) {
+                pet::simulate_ping_commit(app, &sector);
+                return;
+            }
             // Focus the existing window instead of starting a second instance.
             reveal_main_window(app);
         }))
         .manage(state)
+        // user:“你现在负责在现有 Sunday 项目中实现「Sunday 桌宠 V1.0」”+(桌宠覆盖层状态独立托管，禁用时不注册任何窗口/钩子)
+        .manage(pet::PetState::default())
         .setup(|app| {
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
@@ -708,6 +821,17 @@ fn main() {
             setup_tray(app)?;
             #[cfg(windows)]
             install_taskbar_icon(app)?;
+            // user:“你看看 ping 环 要不也自己做窗口？”+(Ping 覆盖层独立于桌宠：
+            // 应用启动就把窗口准备好（隐藏），全局热键随时可用；轮询直到事件循环就绪。)
+            let ping_overlay_app = app.handle().clone();
+            thread::spawn(move || {
+                for _ in 0..50 {
+                    if pet::ensure_ping_overlay(&ping_overlay_app).is_ok() {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(200));
+                }
+            });
             // Setup runs before the native event loop. Never wait for Python
             // or network services here: Windows would mark the window hung.
             let app = app.handle().clone();
@@ -719,7 +843,7 @@ fn main() {
                             return;
                         }
                         let Ok(mut api_slot) = state.api_base.lock() else {
-                            eprintln!("[lamcore] backend state lock failed");
+                            eprintln!("[sunday] backend state lock failed");
                             return;
                         };
                         *api_slot = Some(api_base.clone());
@@ -734,7 +858,7 @@ fn main() {
                                 }
                             }
                             Err(error) => {
-                                eprintln!("[lamcore] remote CLI control server failed: {error}")
+                                eprintln!("[sunday] remote CLI control server failed: {error}")
                             }
                         }
                         if state.remote_gateway.auto_start_enabled().unwrap_or(false) {
@@ -742,7 +866,7 @@ fn main() {
                                 .remote_gateway
                                 .start(&api_base, GatewayStartOptions::default())
                             {
-                                eprintln!("[lamcore] remote gateway auto-start failed: {error}");
+                                eprintln!("[sunday] remote gateway auto-start failed: {error}");
                             }
                         }
                         // Watch the backend process: if it dies mid-run (panic,
@@ -751,6 +875,19 @@ fn main() {
                         // every request (audit 20 S3).
                         let app_handle = app.clone();
                         spawn_backend_watcher(app_handle);
+                        // user:“打开桌宠你用 cli”+(带 --pet 或 --open-pet 启动就直接
+                        // 打开覆盖层，不依赖托盘，自动化也能直接驱动。)
+                        // 既支持命令行参数，也支持环境变量：tauri dev 会把 `--` 之后的
+                        // 参数塞进 cargo 自己的参数位，环境变量更稳。
+                        if pet::open_requested() {
+                            match open_pet_overlay_when_ready(&app) {
+                                Ok(bounds) => eprintln!(
+                                    "[sunday] desktop pet overlay opened via --open-pet: {}x{} at ({}, {})",
+                                    bounds.width, bounds.height, bounds.x, bounds.y
+                                ),
+                                Err(error) => eprintln!("[sunday] --open-pet failed: {error}"),
+                            }
+                        }
                         ()
                     }
                     Err(e) => {
@@ -818,7 +955,47 @@ fn main() {
             get_app_info,
             pick_directory,
             pick_files,
-            open_external_url
+            open_external_url,
+            pet::pet_overlay_open,
+            pet::pet_overlay_close,
+            pet::pet_overlay_heartbeat,
+            pet::pet_overlay_ready,
+            pet::pet_set_interactive_rects,
+            pet::pet_main_window_focused,
+            // user:“你看看 ping 环 要不也自己做窗口？”+(Ping 独立覆盖层)
+            pet::pet_ping_overlay_open,
+            pet::pet_ping_overlay_show,
+            pet::pet_ping_overlay_hide,
+            pet::pet_ping_set_interactive_rects,
+            pet::pet_ping_set_input_mode,
+            // user:“卡片即窗口，把 ping 和桌宠拆分开”+(Ping 卡片独立窗口)
+            pet::pet_open_ping_card,
+            pet::pet_show_ping_card,
+            pet::pet_close_ping_card,
+            // user:“ping完之后用一个合适的大小打开Sunday本体”+(复用主窗口)
+            pet::pet_open_main_session,
+            pet::pet_set_input_mode,
+            pet::pet_set_z_mode,
+            pet::pet_monitors,
+            pet::pet_cursor,
+            pet::pet_capture_monitor_under_cursor,
+            pet::pet_capture_monitor,
+            pet::pet_hotkey_set,
+            pet::pet_default_work_root,
+            pet::pet_desktop_windows,
+            pet::pet_autostart,
+            pet::pet_config_read,
+            pet::pet_config_write,
+            pet::pet_scan_import,
+            pet::pet_read_import_asset,
+            pet::pet_read_zip,
+            pet::pet_read_image,
+            pet::pet_install_pack,
+            pet::pet_write_pack_asset,
+            pet::pet_write_pack_bundle,
+            pet::pet_pack_asset,
+            pet::pet_pick_import,
+            pet::pet_pick_import_file
         ])
         .on_window_event(|window, event| {
             let state = window.state::<BackendState>();
@@ -837,7 +1014,7 @@ fn main() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(apply_browser_args(tauri::generate_context!()))
         .expect("failed to build Sunday")
         .run(|_app_handle, _event| {});
 }
@@ -851,7 +1028,17 @@ fn start_backend(
     state: &BackendState,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let started_at = Instant::now();
-    let port = pick_free_port()?;
+    // user:“你给开发版改一下端口吧”+(开发实例优先用固定端口，被占时才退回随机空闲端口，
+    // 避免和其它实例抢同一个监听。)
+    let port = if cfg!(debug_assertions) {
+        std::env::var("LAMTOOLS_DEV_BACKEND_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok())
+            .unwrap_or(pick_free_port()?)
+    } else {
+        pick_free_port()?
+    };
     let api_base = format!("http://127.0.0.1:{port}");
 
     let mut cmd = if cfg!(debug_assertions) {
@@ -882,7 +1069,7 @@ fn start_backend(
         Err(error) => {
             // Starting the backend is still preferable to aborting the app;
             // stop_backend retains its direct-child fallback below.
-            eprintln!("[lamcore] backend process-tree guard unavailable: {error}");
+            eprintln!("[sunday] backend process-tree guard unavailable: {error}");
         }
     }
     *child_slot = Some(child);
@@ -890,7 +1077,7 @@ fn start_backend(
 
     wait_for_health(port, state)?;
     eprintln!(
-        "[lamcore] backend ready in {} ms",
+        "[sunday] backend ready in {} ms",
         started_at.elapsed().as_millis()
     );
     Ok(api_base)
@@ -899,6 +1086,8 @@ fn start_backend(
 fn configure_internal_backend_access(command: &mut Command) {
     // Desktop's API must not inherit standalone LAN configuration/credentials.
     command
+        .env("SUNDAY_CORE_HOST", "127.0.0.1")
+        // Same compatibility window as SUNDAY_CORE_PORT.
         .env("LAMCORE_HOST", "127.0.0.1")
         .env_remove("LAMTOOLS_CORE_ALLOW_LAN")
         .env_remove("LAMTOOLS_CORE_API_TOKEN");
@@ -930,6 +1119,24 @@ fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>>
         // Pin dev mode to this worktree instead of whichever editable
         // lamtools_core installation happens to be active on the machine.
         .env("PYTHONPATH", core_dir.join("src"))
+        // user:“后端是不是与你自己冲突了？能解决吗？”+(开发实例用独立数据目录：
+        // 数据库、配置、项目都不与正式 .lam 共享，避免锁库与串扰。)
+        .env(
+            "LAMTOOLS_HOME",
+            std::env::var("LAMTOOLS_PET_DEV_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| core_dir.join(".lam"))
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .env(
+            "LAMTOOLS_CORE_DATA_DIR",
+            std::env::var("LAMTOOLS_PET_DEV_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| core_dir.join(".lam"))
+                .to_string_lossy()
+                .into_owned(),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -969,7 +1176,7 @@ fn prod_backend_command(
     app: &tauri::AppHandle,
     port: u16,
 ) -> Result<Command, Box<dyn std::error::Error>> {
-    // The PyInstaller output is bundled as a resource at dist/LamCore/.
+    // The PyInstaller output is bundled as a resource at dist/SundayCore/.
     // Tauri copies it to the bundle's resource directory.
     let backend_exe = find_backend_exe(app)?;
     let backend_dir = backend_exe
@@ -991,7 +1198,10 @@ fn prod_backend_command(
     let paths = prod_backend_storage_paths(&app_dir, &storage_root, cfg!(target_os = "linux"));
 
     let mut cmd = Command::new(&backend_exe);
-    cmd.env("LAMCORE_PORT", port.to_string())
+    cmd.env("SUNDAY_CORE_PORT", port.to_string())
+        // A stale portable backend assembled before the rename still reads the
+        // old spelling. Both names carry the same value during the migration.
+        .env("LAMCORE_PORT", port.to_string())
         .env("LAMTOOLS_HOME", &paths.lam_home)
         .env("LAMTOOLS_CORE_DATA_DIR", &paths.data_dir)
         .env("LAMTOOLS_PROJECTS_ROOT", &paths.projects_root)
@@ -1036,38 +1246,56 @@ fn prod_backend_storage_paths(
 ///
 /// The Windows installer deploys the bundled Python runtime as
 /// `sunday-core.exe` so Task Manager attributes it to Sunday instead of an
-/// anonymous name. `LamCore.exe` stays as a fallback for layouts assembled
-/// straight from the raw PyInstaller output (portable copies, the project dist
-/// directory), which still use the build-time name. Linux keeps the
-/// extension-less `LamCore`, which the Linux bundle and its acceptance scripts
+/// anonymous name. `SundayCore.exe` is the raw PyInstaller artifact name used
+/// by portable copies and the project dist directory, and `LamCore.exe` stays
+/// as a fallback for layouts assembled from pre-migration builds. Linux uses
+/// the extension-less forms, which the Linux bundle and its acceptance scripts
 /// pin.
 fn backend_executable_names(windows: bool) -> &'static [&'static str] {
     if windows {
-        &["sunday-core.exe", "LamCore.exe"]
+        &["sunday-core.exe", "SundayCore.exe", "LamCore.exe"]
     } else {
-        &["LamCore"]
+        &["sunday-core", "SundayCore", "LamCore"]
     }
 }
 
 fn find_backend_exe(app: &tauri::AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let executable_names = backend_executable_names(cfg!(windows));
     // 1) Tauri resource directory (bundled flat)
-    let resource = app.path().resource_dir()?.join("lamcore-backend");
+    let resource = app.path().resource_dir()?.join("sunday-backend");
     // 2) Adjacent to the current exe (portable layout)
     let adjacent = env::current_exe()?
         .parent()
         .ok_or("cannot locate app directory")?
+        .join("SundayCore");
+    // 3) Legacy portable layout from pre-migration builds
+    let legacy_adjacent = env::current_exe()?
+        .parent()
+        .ok_or("cannot locate app directory")?
         .join("LamCore");
-    // 3) Project dist directory (dev convenience)
+    // 4) Project dist directory (dev convenience)
     let project_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent() // src-tauri/ -> desktop/
         .and_then(|p| p.parent()) // desktop/ -> core/
         .and_then(|p| p.parent()) // core/ -> repo root
         .ok_or("cannot locate project root")?
         .join("dist")
+        .join("SundayCore");
+    let legacy_project_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .ok_or("cannot locate project root")?
+        .join("dist")
         .join("LamCore");
 
-    for directory in [&resource, &adjacent, &project_dist] {
+    for directory in [
+        &resource,
+        &adjacent,
+        &legacy_adjacent,
+        &project_dist,
+        &legacy_project_dist,
+    ] {
         for executable_name in executable_names {
             let candidate = directory.join(executable_name);
             if candidate.exists() {
@@ -1077,11 +1305,13 @@ fn find_backend_exe(app: &tauri::AppHandle) -> Result<PathBuf, Box<dyn std::erro
     }
 
     Err(format!(
-        "Sunday backend executable ({}) not found at any of:\n  {}\n  {}\n  {}",
+        "Sunday backend executable ({}) not found at any of:\n  {}\n  {}\n  {}\n  {}\n  {}",
         executable_names.join(" or "),
         resource.display(),
         adjacent.display(),
+        legacy_adjacent.display(),
         project_dist.display(),
+        legacy_project_dist.display(),
     )
     .into())
 }
@@ -1270,7 +1500,7 @@ fn spawn_backend_watcher(app_handle: tauri::AppHandle) {
             *guard = None;
             drop(guard);
             close_backend_job(state.inner());
-            eprintln!("[lamcore] backend process exited unexpectedly");
+            eprintln!("[sunday] backend process exited unexpectedly");
             let _ = app_handle.emit("backend-crashed", ());
             return;
         }
@@ -1285,29 +1515,45 @@ mod desktop_shell_tests {
     #[test]
     fn internal_backend_overrides_inherited_lan_configuration() {
         let mut command = std::process::Command::new("not-executed");
-        command.env("LAMCORE_HOST", "0.0.0.0");
+        command.env("SUNDAY_CORE_HOST", "0.0.0.0");
         command.env("LAMTOOLS_CORE_ALLOW_LAN", "1");
         command.env("LAMTOOLS_CORE_API_TOKEN", "standalone-secret");
         super::configure_internal_backend_access(&mut command);
         let environment: std::collections::HashMap<_, _> = command.get_envs().collect();
-        assert_eq!(environment[std::ffi::OsStr::new("LAMCORE_HOST")], Some(std::ffi::OsStr::new("127.0.0.1")));
-        assert_eq!(environment[std::ffi::OsStr::new("LAMTOOLS_CORE_ALLOW_LAN")], None);
-        assert_eq!(environment[std::ffi::OsStr::new("LAMTOOLS_CORE_API_TOKEN")], None);
+        assert_eq!(
+            environment[std::ffi::OsStr::new("SUNDAY_CORE_HOST")],
+            Some(std::ffi::OsStr::new("127.0.0.1"))
+        );
+        assert_eq!(
+            environment[std::ffi::OsStr::new("LAMCORE_HOST")],
+            Some(std::ffi::OsStr::new("127.0.0.1"))
+        );
+        assert_eq!(
+            environment[std::ffi::OsStr::new("LAMTOOLS_CORE_ALLOW_LAN")],
+            None
+        );
+        assert_eq!(
+            environment[std::ffi::OsStr::new("LAMTOOLS_CORE_API_TOKEN")],
+            None
+        );
     }
 
     #[test]
     fn backend_executable_name_is_platform_aware() {
         assert_eq!(
             backend_executable_names(true),
-            &["sunday-core.exe", "LamCore.exe"][..]
+            &["sunday-core.exe", "SundayCore.exe", "LamCore.exe"][..]
         );
-        assert_eq!(backend_executable_names(false), &["LamCore"][..]);
+        assert_eq!(
+            backend_executable_names(false),
+            &["sunday-core", "SundayCore", "LamCore"][..]
+        );
     }
 
     #[test]
     fn production_storage_keeps_portable_windows_and_uses_linux_user_data() {
         let app_dir = Path::new("/opt/sunday");
-        let data_dir = Path::new("/home/user/.local/share/com.lamtools.lamcore");
+        let data_dir = Path::new("/home/user/.local/share/com.lamtools.sunday");
         assert_eq!(
             prod_backend_storage_paths(app_dir, data_dir, false),
             ProdBackendStoragePaths {
@@ -1333,6 +1579,31 @@ fn reveal_main_window(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// 从第二实例命令行里取 `--ping-commit=<扇区id>`（或空格分隔形式）。
+///
+/// user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”+(CLI 直接驱动轮盘，
+/// 自动化测试不再依赖真实键鼠操作。)
+fn ping_commit_from_args(args: &[String]) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix("--ping-commit=") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        if arg == "--ping-commit" {
+            if let Some(value) = iter.next() {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(windows)]

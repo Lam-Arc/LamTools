@@ -1,6 +1,6 @@
-# LamCore 配置说明
+# Sunday 配置说明
 
-安装后在 LamCore.exe 同目录下出现 `.lam/core/config/` 文件夹。
+安装后在 Sunday.exe 同目录下出现 `.lam/core/config/` 文件夹。
 修改这里的文件即可自定义 Agent 行为，无需重新打包。
 
 ## 配置文件
@@ -16,7 +16,7 @@
 
 1. 打开要修改的配置文件
 2. 参考文件内的注释修改
-3. 保存后重启 LamCore 即可生效
+3. 保存后重启 Sunday 即可生效
 
 ## 自定义技能
 

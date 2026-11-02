@@ -224,6 +224,19 @@ async def cmd_queue_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_queue_reorder(args: argparse.Namespace) -> int:
+    from .connection import _invoke_live, _print_live_result
+    result = await _invoke_live(
+        args,
+        lambda client: client.reorder_queue_inputs(
+            thread_id=args.thread_id,
+            order=list(args.order),
+        ),
+    )
+    _print_live_result(args, result, f"reordered {args.thread_id}")
+    return 0
+
+
 async def cmd_queue_guide(args: argparse.Namespace) -> int:
     from .connection import _invoke_live, _print_live_result
     result = await _invoke_live(

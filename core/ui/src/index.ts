@@ -67,7 +67,7 @@ export {
   CORE_CONTEXT_COMPACTION_TRIGGER_RATIO,
   type CoreResourceSummary,
 } from '@/runtime/resources.ts';
-export { buildCurrentTurnChecklistGroups } from '@/runtime/checklist.ts';
+export { buildChecklistGroups, buildDurableChecklistGroups, resolveChecklistGroups } from '@/runtime/checklist.ts';
 export { selectCoreSubAgentRun, selectCoreSubAgentRuns } from '@/agents/subAgentProjection.ts';
 
 // Components
@@ -480,6 +480,7 @@ export {
   coreAppServerDecision,
   coreDecisionSelectionPlan,
   coreComposerActionMode,
+  coreComposerSendIntent,
   coreComposerSubmissionEffects,
   isCoreActiveTurnStatus,
   isCoreGuidableTurnStatus,
@@ -513,6 +514,8 @@ export {
   type CoreAppServerRuntimeState,
   type CoreAppServerThreadSwitchOptions,
   type CoreComposerActionMode,
+  type CoreComposerSendIntent,
+  type CoreComposerSendMode,
   type CoreWorkbenchMessageOptions,
   type CoreWorkbenchTurnStatus,
   type CoreRuntimeItem,

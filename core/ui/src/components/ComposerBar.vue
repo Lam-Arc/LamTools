@@ -7,6 +7,7 @@
       class="floating-composer"
       :class="[{ dragover: dragOver }, 'composer-bar--' + variant]"
       @submit.prevent="$emit('submit')"
+      @keydown="onFormKeydown"
       @dragover.prevent="dragOver = true"
       @dragleave="dragOver = false"
       @drop.prevent="$emit('drop', $event); dragOver = false"
@@ -105,6 +106,16 @@ function onEnterKey(event: KeyboardEvent) {
   const value = (event.target as HTMLTextAreaElement | null)?.value || ''
   if (!value.trim()) return
   emit('submit')
+}
+
+// user:“ctrl+enter作为引导时会把最上面排队的发出去（光标不在输入框也可以）这是bug”
+// +(点击发送/停止后焦点留在 type=submit 按钮上，之后再按 Enter 或 Ctrl+Enter 会
+//   重新激活按钮、在输入框外触发表单提交（停止/继续/发送）。发送的键盘职责只属于
+//   输入框：按钮聚焦时拦下 Enter 的隐式提交，空格激活保留给键盘操作。)
+function onFormKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.isComposing) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button[type="submit"]')) event.preventDefault()
 }
 </script>
 

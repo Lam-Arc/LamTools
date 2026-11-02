@@ -81,7 +81,7 @@ function Get-BackendPort {
             if ($read -gt 0) { $snapshot = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read) }
         } finally { $stream.Dispose() }
     } catch { return $null }
-    $found = [regex]::Matches($snapshot, 'Starting LamCore backend on 127\.0\.0\.1:(\d+)')
+    $found = [regex]::Matches($snapshot, 'Starting Sunday backend on 127\.0\.0\.1:(\d+)')
     if ($found.Count -eq 0) { return $null }
     return [int]$found[$found.Count - 1].Groups[1].Value
 }
@@ -164,14 +164,14 @@ try {
         Fail 'the installer did not finish within 600s'
     }
     Assert-True ($process.ExitCode -eq 0) "the installer exited 0 (got $($process.ExitCode))"
-    Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'lamcore.exe')) 'the installed application is in place'
+    Assert-True (Test-Path -LiteralPath (Join-Path $InstallDir 'Sunday.exe')) 'the installed application is in place'
 
     # ------------------------- 4. the setup must have started the app by itself
     Write-Host '4. the setup must have started the application again'
     $restarted = $null
     $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        $restarted = Get-InstallProcesses | Where-Object { $_.Name -eq 'lamcore.exe' } | Select-Object -First 1
+        $restarted = Get-InstallProcesses | Where-Object { $_.Name -eq 'Sunday.exe' } | Select-Object -First 1
         if ($restarted) { break }
         Start-Sleep -Seconds 1
     }

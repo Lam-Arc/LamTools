@@ -170,6 +170,8 @@ export interface CoreAppQueueItem {
   mode?: string
   input?: CoreAppInputItem[] | unknown
   seq?: number
+  /** 拖拽重排序写入的顺序键：没有它的条目按 seq 垫底（与服务器分发同序）。 */
+  position?: number
   last_method?: string
   runtime_snapshot?: CoreAppRuntimeSnapshot
   [key: string]: unknown
@@ -235,6 +237,8 @@ export interface CoreRuntimeSnapshot {
   interactions?: CoreAppInteraction[]
   /** Decision pool (the same ordered list under its canonical name). */
   decisions?: CoreAppInteraction[]
+  /** 权威 checklist 计划（runtime 会话行的 metadata.task_plan），右侧栏兜底显示。 */
+  task_plan?: Record<string, unknown>
   deleted_agents?: Record<string, boolean>
   status?: CoreAppThreadStatus
 }

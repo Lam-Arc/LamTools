@@ -247,6 +247,25 @@ class CoreAppServerClient:
             {"thread_id": thread_id, "queue_item_id": queue_item_id},
         )
 
+    async def reorder_queue_inputs(
+        self,
+        *,
+        thread_id: str,
+        order: list[str],
+        client_message_id: str | None = None,
+    ) -> dict[str, Any]:
+        """拖拽重排：order 是排队条目的完整 id 顺序（GUI 与 CLI 同一条 RPC）。"""
+        import uuid
+
+        return await self._request_with_events(
+            "queue/reorder",
+            {
+                "thread_id": thread_id,
+                "order": order,
+                "client_message_id": client_message_id or str(uuid.uuid4()),
+            },
+        )
+
     async def respond_approval(self, *, thread_id: str, request_id: str, decision: str, guidance: str = "") -> None:
         response = await self.request(
             "approval.respond",

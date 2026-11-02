@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 import CoreGeneralEditor from '../src/components/CoreGeneralEditor.vue'
+import { setCoreSendBehaviorMode } from '../src/composables'
 import { useSplitPreviewPreference } from '../src/split/previewPreference'
 
 type RequestRpc = (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -12,17 +13,20 @@ function createRequestRpc(initial: Record<string, string> = {}) {
   const askAutoContinue = { enabled: false }
   // The backend default is「开着，4 GB」, so an unset namespace reports nothing.
   const memoryResume: { enabled?: boolean; threshold_gb?: number } = {}
+  const sendBehavior: { mode?: string } = {}
   return {
     stored,
     power,
     askAutoContinue,
     memoryResume,
+    sendBehavior,
     rpc: vi.fn<RequestRpc>(async (method, params) => {
       if (method === 'settings.get') {
         const namespace = params?.namespace
         if (namespace === 'core.keepAwake') return { namespace, value: { ...power } }
         if (namespace === 'core.askAutoContinue') return { namespace, value: { ...askAutoContinue } }
         if (namespace === 'core.memoryResume') return { namespace, value: { ...memoryResume } }
+        if (namespace === 'core.sendBehavior') return { namespace, value: { ...sendBehavior } }
         return { namespace: 'core.network', value: { ...stored } }
       }
       if (method === 'settings.update') {
@@ -40,6 +44,10 @@ function createRequestRpc(initial: Record<string, string> = {}) {
           if (typeof value.threshold_gb === 'number') memoryResume.threshold_gb = value.threshold_gb
           return { namespace: 'core.memoryResume', value: { ...memoryResume } }
         }
+        if (params?.namespace === 'core.sendBehavior') {
+          sendBehavior.mode = String(value.mode || '')
+          return { namespace: 'core.sendBehavior', value: { ...sendBehavior } }
+        }
         const text = value as Record<string, string>
         if (text.proxy && !/^https?:\/\/[^\s]+$/.test(text.proxy)) {
           throw new Error('代理地址必须是形如 http://127.0.0.1:7890 的完整地址')
@@ -56,10 +64,10 @@ async function mountEditor(
   initial: Record<string, string> = {},
   props: Record<string, unknown> = {},
 ) {
-  const { rpc, stored, power, askAutoContinue, memoryResume } = createRequestRpc(initial)
-  const wrapper = mount(CoreGeneralEditor, { props: { requestRpc: rpc, ...props } })
+  const { rpc, stored, power, askAutoContinue, memoryResume, sendBehavior } = createRequestRpc(initial)
+  const wrapperMounted = mount(CoreGeneralEditor, { props: { requestRpc: rpc, ...props } })
   await flushPromises()
-  return { wrapper, rpc, stored, power, askAutoContinue, memoryResume }
+  return { wrapper: wrapperMounted, rpc, stored, power, askAutoContinue, memoryResume, sendBehavior }
 }
 
 describe('CoreGeneralEditor', () => {
@@ -68,8 +76,9 @@ describe('CoreGeneralEditor', () => {
     expect(wrapper.get('h1').text()).toBe('通用')
     const titles = wrapper.findAll('.subhead-title').map((node) => node.text())
     // user:“支持自定义 Assistant 显示名称和头像”+(通用设置新增一张 Assistant 显示卡片)
-    expect(titles).toEqual(['界面语言', 'HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续', 'Assistant 显示', '实验性功能'])
-    expect(wrapper.findAll('.setting-card')).toHaveLength(7)
+    // user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(通用设置新增一张消息发送卡片)
+    expect(titles).toEqual(['界面语言', 'HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续', '消息发送', 'Assistant 显示', '实验性功能'])
+    expect(wrapper.findAll('.setting-card')).toHaveLength(8)
   })
 
   it('loads the stored routing settings into the fields', async () => {
@@ -129,13 +138,13 @@ describe('CoreGeneralEditor', () => {
 
     const { wrapper: onWindows } = await mountEditor({}, { platform: 'windows' })
     expect(onWindows.text()).toContain('保持电脑运行')
-    expect(onWindows.findAll('.setting-card')).toHaveLength(9)
+    expect(onWindows.findAll('.setting-card')).toHaveLength(10)
   })
 
   it('persists the keep-awake toggle', async () => {
     const { wrapper, rpc, power } = await mountEditor({}, { platform: 'windows' })
     const toggle = wrapper.get('[aria-label="保持电脑运行"]')
-    await toggle.trigger('click')
+    await toggle.setValue(true)
     await flushPromises()
 
     expect(rpc).toHaveBeenCalledWith('settings.update', {
@@ -143,13 +152,13 @@ describe('CoreGeneralEditor', () => {
       value: { enabled: true },
     })
     expect(power.enabled).toBe(true)
-    expect(toggle.classes()).toContain('is-on')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
   })
 
   it('persists the unattended ask auto-continue toggle', async () => {
     const { wrapper, rpc, askAutoContinue } = await mountEditor()
     const toggle = wrapper.get('[aria-label="提问自动继续"]')
-    await toggle.trigger('click')
+    await toggle.setValue(true)
     await flushPromises()
 
     expect(rpc).toHaveBeenCalledWith('settings.update', {
@@ -157,11 +166,58 @@ describe('CoreGeneralEditor', () => {
       value: { enabled: true },
     })
     expect(askAutoContinue.enabled).toBe(true)
-    expect(toggle.classes()).toContain('is-on')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
   })
 
-  it('marks split file preview as experimental and remembers the switch', async () => {
-    localStorage.clear()
+  // user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(下拉切换立即写
+  //   settings 命名空间并同步共享单例；写失败时回滚到上一个生效的模式)。
+  function findSendBehaviorSelect(wrapper: ReturnType<typeof mount>) {
+    const select = wrapper.findAllComponents({ name: 'UiSelect' })
+      .find((candidate) => candidate.props('ariaLabel') === '消息发送')
+    expect(select, '消息发送下拉卡片').toBeDefined()
+    return select!
+  }
+
+  it('persists the send behavior pick and updates the shared mode', async () => {
+    setCoreSendBehaviorMode('guide')
+    const { wrapper, rpc, sendBehavior } = await mountEditor()
+    const select = findSendBehaviorSelect(wrapper)
+
+    select.vm.$emit('update:modelValue', 'queue')
+    await flushPromises()
+
+    expect(rpc).toHaveBeenCalledWith('settings.update', {
+      namespace: 'core.sendBehavior',
+      value: { mode: 'queue' },
+    })
+    expect(sendBehavior.mode).toBe('queue')
+    expect(wrapper.text()).toContain('已保存')
+    setCoreSendBehaviorMode('guide')
+  })
+
+  it('reverts the send behavior pick when the write fails', async () => {
+    setCoreSendBehaviorMode('guide')
+    const { rpc, sendBehavior } = createRequestRpc()
+    const base = rpc.getMockImplementation()!
+    let failNext = false
+    rpc.mockImplementation(async (method, params) => {
+      if (failNext && params?.namespace === 'core.sendBehavior') throw new Error('保存失败')
+      return base(method, params)
+    })
+    const wrapper = mount(CoreGeneralEditor, { props: { requestRpc: rpc } })
+    await flushPromises()
+
+    failNext = true
+    findSendBehaviorSelect(wrapper).vm.$emit('update:modelValue', 'queue')
+    await flushPromises()
+
+    expect(wrapper.get('.general-error').text()).toContain('保存失败')
+    expect(sendBehavior.mode).toBeUndefined()
+    expect(wrapper.text()).not.toContain('已保存')
+    setCoreSendBehaviorMode('guide')
+  })
+
+  it('marks split file preview as experimental and remembers the switch', async () => {    localStorage.clear()
     useSplitPreviewPreference().setEnabled(true)
     localStorage.clear()
     const { wrapper } = await mountEditor()
@@ -189,14 +245,21 @@ describe('CoreGeneralEditor', () => {
 
     failNext = true
     const toggle = wrapper.get('[aria-label="提问自动继续"]')
-    await toggle.trigger('click')
+    await toggle.setValue(true)
     await flushPromises()
 
-    expect(toggle.classes()).not.toContain('is-on')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
     expect(wrapper.get('.general-error').text()).toContain('保存失败')
     expect(askAutoContinue.enabled).toBe(false)
   })
 })
+
+/** 按标题找卡片：卡片顺序会随功能增加变化，不能用 at(-1)。 */
+function findSettingCard(wrapper: ReturnType<typeof mount>, title: string) {
+  const card = wrapper.findAll('.setting-card').find(node => node.text().includes(title))
+  expect(card, `设置卡片：${title}`).toBeDefined()
+  return card!
+}
 
 describe('CoreGeneralEditor memory resume', () => {
   it('shows the card on Windows and Linux only', async () => {
@@ -211,17 +274,17 @@ describe('CoreGeneralEditor memory resume', () => {
     const { wrapper, rpc } = await mountEditor({}, { platform: 'windows' })
 
     expect(rpc).toHaveBeenCalledWith('settings.get', { namespace: 'core.memoryResume' })
-    const card = wrapper.findAll('.setting-card').at(-1)!
-    const toggle = card.get('.toggle-btn')
-    expect(toggle.attributes('aria-pressed')).toBe('true')
-    expect((card.get('input').element as HTMLInputElement).value).toBe('4')
+    const card = findSettingCard(wrapper, '内存中断自动续跑')
+    const toggle = card.get('input[role="switch"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    expect((card.get('input[type="number"]').element as HTMLInputElement).value).toBe('4')
   })
 
   it('persists the toggle and the threshold', async () => {
     const { wrapper, rpc, memoryResume } = await mountEditor({}, { platform: 'windows' })
-    const card = wrapper.findAll('.setting-card').at(-1)!
+    const card = findSettingCard(wrapper, '内存中断自动续跑')
 
-    await card.get('.toggle-btn').trigger('click')
+    await card.get('input[role="switch"]').setValue(false)
     await flushPromises()
     expect(rpc).toHaveBeenCalledWith('settings.update', {
       namespace: 'core.memoryResume',
@@ -229,7 +292,7 @@ describe('CoreGeneralEditor memory resume', () => {
     })
     expect(memoryResume.enabled).toBe(false)
 
-    await card.get('input').setValue('8')
+    await card.get('input[type="number"]').setValue('8')
     await card.findAll('.subhead-actions button')[1].trigger('click')
     await flushPromises()
     expect(rpc).toHaveBeenCalledWith('settings.update', {
@@ -241,9 +304,9 @@ describe('CoreGeneralEditor memory resume', () => {
 
   it('refuses a threshold outside the accepted range', async () => {
     const { wrapper, rpc } = await mountEditor({}, { platform: 'windows' })
-    const card = wrapper.findAll('.setting-card').at(-1)!
+    const card = findSettingCard(wrapper, '内存中断自动续跑')
 
-    await card.get('input').setValue('0.1')
+    await card.get('input[type="number"]').setValue('0.1')
     await card.findAll('.subhead-actions button')[1].trigger('click')
     await flushPromises()
 

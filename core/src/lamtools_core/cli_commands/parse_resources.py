@@ -109,8 +109,19 @@ def register_plugin(sub: argparse._SubParsersAction) -> None:
 
 def register_skill(sub: argparse._SubParsersAction) -> None:
     from .connection import _add_live_connection_arguments
-    from .plugins import cmd_skill_create, cmd_skill_delete, cmd_skill_disable, cmd_skill_enable, cmd_skill_list
-    skill = sub.add_parser("skill", help="Manage Core skills (list/create/enable/disable/delete)")
+    from .plugins import (
+        cmd_skill_create,
+        cmd_skill_delete,
+        cmd_skill_disable,
+        cmd_skill_enable,
+        cmd_skill_group_assign,
+        cmd_skill_group_create,
+        cmd_skill_group_delete,
+        cmd_skill_group_list,
+        cmd_skill_group_rename,
+        cmd_skill_list,
+    )
+    skill = sub.add_parser("skill", help="Manage Core skills (list/create/enable/disable/delete/group)")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)
     skill_list = skill_sub.add_parser("list", help="List discovered skills")
     _add_live_connection_arguments(skill_list)
@@ -139,6 +150,34 @@ def register_skill(sub: argparse._SubParsersAction) -> None:
     _add_live_connection_arguments(skill_delete)
     skill_delete.add_argument("--raw", action="store_true")
     skill_delete.set_defaults(func=cmd_skill_delete)
+    skill_group = skill_sub.add_parser("group", help="Manage skill groups (list/create/rename/delete/assign)")
+    group_sub = skill_group.add_subparsers(dest="group_command", required=True)
+    group_list = group_sub.add_parser("list", help="List skill groups")
+    _add_live_connection_arguments(group_list)
+    group_list.add_argument("--raw", action="store_true")
+    group_list.set_defaults(func=cmd_skill_group_list)
+    group_create = group_sub.add_parser("create", help="Create a skill group")
+    group_create.add_argument("name")
+    _add_live_connection_arguments(group_create)
+    group_create.add_argument("--raw", action="store_true")
+    group_create.set_defaults(func=cmd_skill_group_create)
+    group_rename = group_sub.add_parser("rename", help="Rename a skill group")
+    group_rename.add_argument("--from", dest="from_group", required=True)
+    group_rename.add_argument("--to", dest="to_group", required=True)
+    _add_live_connection_arguments(group_rename)
+    group_rename.add_argument("--raw", action="store_true")
+    group_rename.set_defaults(func=cmd_skill_group_rename)
+    group_delete = group_sub.add_parser("delete", help="Delete a skill group (members become ungrouped)")
+    group_delete.add_argument("name")
+    _add_live_connection_arguments(group_delete)
+    group_delete.add_argument("--raw", action="store_true")
+    group_delete.set_defaults(func=cmd_skill_group_delete)
+    group_assign = group_sub.add_parser("assign", help="Assign a skill to a group (--group '' to ungroup)")
+    group_assign.add_argument("name")
+    group_assign.add_argument("--group", default="", help="Target group name; empty removes the assignment")
+    _add_live_connection_arguments(group_assign)
+    group_assign.add_argument("--raw", action="store_true")
+    group_assign.set_defaults(func=cmd_skill_group_assign)
 
 
 def register_command(sub: argparse._SubParsersAction) -> None:

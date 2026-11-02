@@ -179,6 +179,16 @@ async function init() {
   })
   createApp(LamToolsApp, { runtime }).mount('#app')
   completeStartupSplash()
+
+  // user:“启动、退出、隐藏、恢复、休眠/暂停及异常重启路径完整”+
+  // (上次开着桌宠就恢复：由 Rust 侧读配置决定，没配角色的人不会被凭空开窗。)
+  void invoke<boolean>('pet_autostart')
+    .then((opened) => {
+      if (opened) console.log('[Main] desktop pet overlay restored')
+    })
+    .catch((error) => {
+      console.warn('[Main] desktop pet autostart failed:', error)
+    })
 }
 
 init();

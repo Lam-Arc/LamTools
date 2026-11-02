@@ -1,4 +1,5 @@
 import { hydrateSnapshot as defaultHydrateSnapshot } from '@/appServer/snapshot.ts'
+import { compareCoreQueueOrder, coreQueueOrderKey } from '@/appServer/selectors.ts'
 import type {
   CoreAppCommandCatalogItem,
   CoreAppEvent,
@@ -748,6 +749,26 @@ export function createCoreAppServerRuntimeController<
     }
   }
 
+  // user:“排队项可拖拽上下移动重新排序”+(拖拽后的完整顺序交给 queue/reorder：
+  //   服务端写成 queue/itemReordered 事件，响应里的事件会立刻应用到本地快照，
+  //   托盘和本轮结束后的分发顺序都跟着走)。
+  async function reorderQueueInputs(threadId: string, order: string[], clientMessageId?: string) {
+    await ensureClient()
+    if (!order.length) return
+    const response = await requestMutation('queue/reorder', {
+      thread_id: threadId,
+      // 拖拽有重试语义：同一份新顺序复用同一身份，重试不会追加第二条重排事件。
+      client_message_id: clientMessageId || crypto.randomUUID(),
+      order,
+      include_snapshot: false,
+    }, threadId)
+    applyResponse(response)
+    return {
+      applied: response.applied === true,
+      reason: String(response.reason || ''),
+    }
+  }
+
   async function listCommands(workRoot?: string): Promise<CommandItem[]> {
     await ensureClient()
     const response = await runtime.client!.request('command.catalog', {
@@ -980,6 +1001,7 @@ export function createCoreAppServerRuntimeController<
     openClient,
     queueInput,
     reconnectActiveThread,
+    reorderQueueInputs,
     respondApproval,
     scheduleReconnect,
     switchThread,
@@ -1654,6 +1676,7 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
   if (event.method === 'queue/itemUpdated') return applyQueueItemEvent(snapshot, event, null)
   if (event.method === 'queue/itemDispatched') return applyQueueItemEvent(snapshot, event, 'dispatched')
   if (event.method === 'queue/itemDeleted') return removeQueueItem(snapshot, event)
+  if (event.method === 'queue/itemReordered') return applyQueueReorderEvent(snapshot, event)
 
   return snapshot
 }
@@ -1700,6 +1723,32 @@ function removeQueueItem(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAp
   const queue = snapshot.queue ?? []
   const next = queue.filter(item => !isRecord(item) || item.queue_item_id !== queueItemId)
   return next.length === queue.length ? snapshot : { ...snapshot, queue: next }
+}
+
+// user:“排队项可拖拽上下移动重新排序”+(与服务器投影 `_apply_queue_reordered` 同一
+//   语义：给点名的条目写 position，没被点名的（并发新排队）清掉旧 position 后按
+//   seq 垫底，列表用 selectors 里唯一的排序键重排)。
+function applyQueueReorderEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
+  const payload = isRecord(event.payload) ? event.payload : {}
+  const order = Array.isArray(payload.order) ? payload.order : []
+  if (!order.length) return snapshot
+  const queue = [...(snapshot.queue ?? [])]
+  const positionById = new Map<string, number>()
+  let next = 0
+  for (const entry of order) {
+    const queueItemId = String(entry || '').trim()
+    if (queueItemId && !positionById.has(queueItemId)) positionById.set(queueItemId, next++)
+  }
+  if (!positionById.size) return snapshot
+  const reordered = queue.map((item) => {
+    if (!isRecord(item)) return item
+    const nextItem = { ...item }
+    delete nextItem.position
+    const position = positionById.get(String(item.queue_item_id || ''))
+    return position === undefined ? nextItem : { ...nextItem, position }
+  }) as CoreAppQueueItem[]
+  reordered.sort((a, b) => compareCoreQueueOrder(coreQueueOrderKey(a), coreQueueOrderKey(b)))
+  return { ...snapshot, queue: reordered }
 }
 
 function emptyCoreSnapshot(threadId: string): CoreRuntimeSnapshot {

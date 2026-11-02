@@ -29,7 +29,7 @@ feature-level inventories belong in their module documentation.
   Linux PyInstaller sidecar and Tauri bundles, and validates packaged startup.
   Generated Linux artifacts are written under
   `core/desktop/src-tauri/target/release/bundle/`; the standalone sidecar
-  verification copy is `artifacts/linux-x64/sidecar/LamCore`.
+  verification copy is `artifacts/linux-x64/sidecar/SundayCore`.
 
 ## Modules and Responsibilities
 

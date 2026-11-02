@@ -335,5 +335,102 @@ class SkillStateStore:
         skills.pop(name, None)
         self._save(data)
 
+    # ── 分组管理 ──────────────────────────────────────────────────────────
+    # user:“skill 界面也做成瀑布流，并分组管理”+(分组与启用状态同账本存储：
+    # 有序去重的分组名列表 + 每个技能一个 group 字段，未分组即空串。)
+
+    @staticmethod
+    def _clean_groups(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        result: list[str] = []
+        for item in raw:
+            name = str(item).strip()
+            if name and name not in result:
+                result.append(name)
+        return result
+
+    def snapshot(self) -> tuple[list[str], dict[str, Any]]:
+        """一次读盘同时拿到分组表与技能状态（skill.list 逐技能读盘是 N+1）。"""
+        data = self._load()
+        skills = data.get("skills", {})
+        return self._clean_groups(data.get("groups", [])), skills if isinstance(skills, dict) else {}
+
+    def groups(self) -> list[str]:
+        return self._clean_groups(self._load().get("groups", []))
+
+    def set_groups(self, groups: list[str]) -> None:
+        data = self._load()
+        data["groups"] = self._clean_groups(groups)
+        self._save(data)
+
+    def group_of(self, name: str) -> str:
+        skills = self._load().get("skills", {})
+        if not isinstance(skills, dict):
+            return ""
+        entry = skills.get(name, {})
+        if isinstance(entry, dict):
+            return str(entry.get("group") or "")
+        return ""
+
+    def set_group(self, name: str, group: str) -> None:
+        group = str(group).strip()
+        # 只读一次账本：分组校验与技能写入必须基于同一份快照，避免并发下
+        # 用另一份 groups 覆盖别人刚写入的状态。
+        data = self._load()
+        if group and group not in self._clean_groups(data.get("groups", [])):
+            raise ValueError(f"unknown skill group '{group}'")
+        skills = data.get("skills", {})
+        if not isinstance(skills, dict):
+            skills = {}
+            data["skills"] = skills
+        if not group:
+            # 移出分组：技能本来就没有分组记录时不必落盘。
+            entry = skills.get(name)
+            if not isinstance(entry, dict) or not entry.get("group"):
+                return
+        entry = skills.setdefault(name, {})
+        if not isinstance(entry, dict):
+            entry = {}
+            skills[name] = entry
+        if group:
+            entry["group"] = group
+        else:
+            entry.pop("group", None)
+        self._save(data)
+
+    def rename_group(self, old: str, new: str) -> None:
+        old = str(old).strip()
+        new = str(new).strip()
+        if not new:
+            raise ValueError("group name is required")
+        data = self._load()
+        groups = self._clean_groups(data.get("groups", []))
+        if old not in groups:
+            raise ValueError(f"unknown skill group '{old}'")
+        if new != old and new in groups:
+            raise ValueError(f"skill group '{new}' already exists")
+        data["groups"] = [new if item == old else item for item in groups]
+        skills = data.get("skills", {})
+        if isinstance(skills, dict):
+            for entry in skills.values():
+                if isinstance(entry, dict) and entry.get("group") == old:
+                    entry["group"] = new
+        self._save(data)
+
+    def delete_group(self, name: str) -> None:
+        data = self._load()
+        groups = self._clean_groups(data.get("groups", []))
+        # 不存在的分组要报错：静默成功会让前端显示“已删除”，实际什么都没发生。
+        if name not in groups:
+            raise ValueError(f"unknown skill group '{name}'")
+        data["groups"] = [item for item in groups if item != name]
+        skills = data.get("skills", {})
+        if isinstance(skills, dict):
+            for entry in skills.values():
+                if isinstance(entry, dict) and entry.get("group") == name:
+                    entry.pop("group", None)
+        self._save(data)
+
 
 __all__ = ["Skill", "SkillRegistry", "SkillStateStore"]

@@ -59,8 +59,25 @@ pub struct PlatformSecureStore;
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl PlatformSecureStore {
+    /// Keyring namespace. The legacy name is only read, never written, so an
+    /// upgraded install keeps its paired-device credentials without forcing a
+    /// re-pair, and a rollback to the previous build still finds them.
+    const SERVICE: &'static str = "com.lamtools.sunday.remote";
+    const LEGACY_SERVICE: &'static str = "com.lamtools.desktop.remote";
+
+    fn entry_for(service: &str, key: &str) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(service, key).map_err(|error| error.to_string())
+    }
+
     fn entry(key: &str) -> Result<keyring::Entry, String> {
-        keyring::Entry::new("com.lamtools.desktop.remote", key).map_err(|error| error.to_string())
+        Self::entry_for(Self::SERVICE, key)
+    }
+
+    fn decode(value: String) -> Result<Option<Vec<u8>>, String> {
+        base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -68,11 +85,30 @@ impl PlatformSecureStore {
 impl SecureStore for PlatformSecureStore {
     fn load(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
         match Self::entry(key)?.get_password() {
-            Ok(value) => base64::engine::general_purpose::STANDARD
-                .decode(value)
-                .map(Some)
-                .map_err(|error| error.to_string()),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Ok(value) => Self::decode(value),
+            Err(keyring::Error::NoEntry) => {
+                // user:“迁移”+(旧密钥服务名里的凭据要能继续用，不能因为改名让用户重新配对。)
+                match Self::entry_for(Self::LEGACY_SERVICE, key)?.get_password() {
+                    Ok(value) => {
+                        let decoded = Self::decode(value)?;
+                        // Promote to the new service so later loads stop
+                        // depending on the legacy entry. Best effort: a
+                        // locked/unavailable keyring must not break a read.
+                        if let Some(bytes) = decoded.as_ref() {
+                            // 不能把创建新 entry 的失败冒泡出去：凭据已经读到了，
+                            // 提升失败只意味着下次还会走旧服务名。
+                            if let Ok(entry) = Self::entry(key) {
+                                let _ = entry.set_password(
+                                    &base64::engine::general_purpose::STANDARD.encode(bytes),
+                                );
+                            }
+                        }
+                        Ok(decoded)
+                    }
+                    Err(keyring::Error::NoEntry) => Ok(None),
+                    Err(error) => Err(error.to_string()),
+                }
+            }
             Err(error) => Err(error.to_string()),
         }
     }
@@ -85,6 +121,12 @@ impl SecureStore for PlatformSecureStore {
 
     fn delete(&self, key: &str) -> Result<(), String> {
         match Self::entry(key)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        // Best effort: remove the legacy copy too so a deleted credential is
+        // not resurrected by the fallback on the next load.
+        match Self::entry_for(Self::LEGACY_SERVICE, key)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(error.to_string()),
         }

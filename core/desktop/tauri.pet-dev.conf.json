@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sunday Pet Dev",
+  "identifier": "com.lamtools.lamcore.petdev",
+  "build": {
+    "beforeDevCommand": "npm run dev:pet",
+    "devUrl": "http://127.0.0.1:5299",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  }
+}

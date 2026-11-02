@@ -88,6 +88,9 @@
   --optical-glass-saturation: 1.14;
   --optical-glass-brightness: 1.02;
   --optical-glass-contrast: 1.03;
+  /* user:“为什么前面那个面板没有模糊”“修”+(整串毛玻璃滤镜留一个唯一来源：
+     .optical-glass 之外的浮层底板直接复用，不再各自复制 blur/saturate 表达式)。 */
+  --optical-glass-filter: blur(var(--optical-glass-blur)) saturate(var(--optical-glass-saturation)) brightness(var(--optical-glass-brightness)) contrast(var(--optical-glass-contrast));
   --optical-glass-tint: 16%;
   --optical-glass-fallback-tint: 22%;
   --optical-glass-refraction-color: rgb(82 104 91);

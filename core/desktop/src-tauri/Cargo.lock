@@ -2180,33 +2180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lamcore"
-version = "0.3.30"
-dependencies = [
- "base64 0.22.1",
- "getrandom 0.3.4",
- "keyring",
- "local-ip-address",
- "mdns-sd",
- "open",
- "rfd",
- "rustls",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "snow",
- "tauri",
- "tauri-build",
- "tauri-plugin-single-instance",
- "tungstenite",
- "ureq",
- "url",
- "urlencoding",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3851,6 +3824,33 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "sunday"
+version = "0.3.32"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "keyring",
+ "local-ip-address",
+ "mdns-sd",
+ "open",
+ "rfd",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "snow",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-single-instance",
+ "tungstenite",
+ "ureq",
+ "url",
+ "urlencoding",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "swift-rs"

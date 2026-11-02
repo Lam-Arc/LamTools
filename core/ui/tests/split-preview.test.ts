@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import CoreSplitPreview from '../src/components/CoreSplitPreview.vue'
+import ReferenceItems from '../src/components/ReferenceItems.vue'
+import { SplitWorkspaceKey } from '../src/split/useSplitWorkspace'
 import { createSplitState, openTab, splitPane, restoreSplitState } from '../src/split/layout'
 import { openFileInSplit } from '../src/split/openFile'
 import { isTextPath, previewKindFor, splitContentFor } from '../src/split/preview'
@@ -91,6 +93,26 @@ describe('split file preview routing', () => {
     expect(wrapper.find('img').attributes('src')).toBe('blob:preview')
     wrapper.unmount()
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+  })
+
+  it('routes Markdown artifact chips to the split preview instead of the centered overlay', async () => {
+    const add = vi.fn(() => 'tab-1')
+    const request = vi.fn(async () => ({ status: 200, headers: {}, body: new TextEncoder().encode(JSON.stringify({ path: 'E:/p/README.md' })) }))
+    const wrapper = mount(ReferenceItems, {
+      attachTo: document.body,
+      props: {
+        artifacts: [{ kind: 'memory', uri: 'E:/p/README.md', name: 'README.md', metadata: { path: 'E:/p/README.md' } } as never],
+        transport: { request } as never,
+        workRoot: 'E:/p',
+      },
+      global: { provide: { [SplitWorkspaceKey as symbol]: { tabs: { value: [] }, state: { activePane: 'main' }, split: () => null, add } } },
+    })
+    await flushPromises()
+    await wrapper.get('button.reference-item').trigger('click')
+    await flushPromises()
+    expect(add).toHaveBeenCalledWith('preview', 'E:/p/README.md', 'README.md', undefined, undefined, 'E:/p', undefined)
+    expect(document.querySelector('.reference-preview')).toBeNull()
+    wrapper.unmount()
   })
 
   it('renders Markdown in the preview pane and keeps an edit entry', async () => {

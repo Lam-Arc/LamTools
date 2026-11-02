@@ -1,9 +1,17 @@
 [package]
-name = "lamcore"
-version = "0.3.31"
+name = "sunday"
+version = "0.3.32"
 description = "Sunday desktop app"
 authors = ["Lam"]
 edition = "2021"
+
+# user:“进程为什么叫 lamcore 而不是 sunday？”+(可执行文件是用户唯一能看到的进程身份，改名就是迁移，不能只改描述)
+# The package is the build identity; the bin target is the file users see in
+# Task Manager. Keeping an explicit bin name makes it Sunday.exe rather than
+# cargo's lowercase package-name default.
+[[bin]]
+name = "Sunday"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -36,6 +44,7 @@ ureq = { version = "3.4", default-features = false, features = ["json", "rustls"
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
     "Win32_System_JobObjects",

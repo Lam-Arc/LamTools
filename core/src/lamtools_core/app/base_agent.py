@@ -135,9 +135,18 @@ INLINE_VISUALIZATION_PROTOCOL = (
     "Use semantic labeled controls and CSS variables --background, --foreground, --control, --control-text, --border. "
     "The block starts only after the reply finishes. It has no network, external libraries, file, storage, "
     "tool or Sunday API access; keep inputs and calculations local. Never imply that a local form sends data or performs app actions. "
-    "Keep the source under 262144 characters. Ordinary html fences remain code. Use regular Markdown for plain explanations. "
-    # user:“引用的地址可能不对”+(引用工具返回且核实存在的完整路径，不能根据文件名省略成果目录)。
-    "For file/image references, use exact verified paths returned by tools; never reconstruct directories from filenames."
+    "Keep the source under 262144 characters. Ordinary html fences remain code. Use regular Markdown for plain explanations."
+)
+
+# 文件引用规则与内联可视化无关，单独成块：系统提示审计按块归类时不会被记成
+# “inline visualization”。
+# user:“引用的地址可能不对”+(引用工具返回且核实存在的完整路径，不能根据文件名省略成果目录)。
+# user:“让模型写完整路径”+(回复里提到的文件必须写全相对目录，裸文件名会被前端拼到项目根目录，界面显示“原文件不存在”)。
+FILE_REFERENCE_PROTOCOL = (
+    "For file/image references, use exact verified paths returned by tools; never reconstruct directories from filenames. "
+    "When you mention a file anywhere in a reply, write its full workspace-relative path "
+    "including every directory (for example core/ui/tests/app.test.ts, never just the file name app.test.ts); "
+    "the app resolves mentioned paths against the project root, so a bare file name cannot be located."
 )
 
 # Keep the high-frequency tool rules together so the leading system prompt has
@@ -845,12 +854,13 @@ class CoreBaseAgentKit:
                 "Do not damage the structure or tidiness of the project directory while working.",
                 *_COMMON_TOOL_PROTOCOL,
             ])
+            # user:“让模型写完整路径”+(交付清单里的路径也必须带全目录，否则完成的文件在界面上打不开)。
             completion = (
                 "When the task is complete, reply with a short summary covering completed work, "
                 "scope, output locations, and any matters requiring user confirmation. The final "
                 "reply must list each deliverable file created or updated in this turn, with each "
-                "real path wrapped in backticks or a Markdown file link; do not claim a nonexistent "
-                "path was delivered."
+                "real full workspace-relative path (directories included) wrapped in backticks or "
+                "a Markdown file link; do not claim a nonexistent path was delivered."
             )
         push(protocol)
         record("tool_protocol", "tool protocol", protocol)
@@ -858,6 +868,8 @@ class CoreBaseAgentKit:
         record("completion_rule", "completion rule", completion)
         push(INLINE_VISUALIZATION_PROTOCOL)
         record("inline_visualization", "inline visualization", INLINE_VISUALIZATION_PROTOCOL)
+        push(FILE_REFERENCE_PROTOCOL)
+        record("file_references", "file reference rule", FILE_REFERENCE_PROTOCOL)
 
         skill_index = self.toolbox.skill_index()
         if skill_index:

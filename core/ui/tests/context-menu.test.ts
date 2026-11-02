@@ -27,6 +27,10 @@ const opticalGlassCss = readFileSync(
   resolve(import.meta.dirname, '../src/styles/optical-glass.css'),
   'utf8',
 )
+const themeVariablesCss = readFileSync(
+  resolve(import.meta.dirname, '../src/styles/variables.css'),
+  'utf8',
+)
 
 const defaultViewport = {
   width: window.innerWidth,
@@ -98,7 +102,9 @@ describe('ContextMenuHost', () => {
 
   it('keeps every root and submenu card on the stable liquid-glass substrate', () => {
     expect(contextMenuPanelSource).toContain('class="context-menu-panel optical-glass optical-glass--low-trans"')
-    expect(opticalGlassCss).toMatch(/\.optical-glass\s*\{[\s\S]*?blur\(var\(--optical-glass-blur\)\)[\s\S]*?saturate\(var\(--optical-glass-saturation\)\)[\s\S]*?brightness\(var\(--optical-glass-brightness\)\)[\s\S]*?contrast\(var\(--optical-glass-contrast\)\)/)
+    // 滤镜链已收敛到 --optical-glass-filter（宿主只引用变量），完整配方在 variables.css。
+    expect(opticalGlassCss).toMatch(/\.optical-glass\s*\{[\s\S]*?backdrop-filter:\s*var\(--optical-glass-filter\)/)
+    expect(themeVariablesCss).toMatch(/--optical-glass-filter:[^;]*blur\(var\(--optical-glass-blur\)\)[^;]*saturate\(var\(--optical-glass-saturation\)\)[^;]*brightness\(var\(--optical-glass-brightness\)\)[^;]*contrast\(var\(--optical-glass-contrast\)\)/)
     // New glass: no inset edge pseudo at all — the pane keeps only the lower refraction.
     expect(opticalGlassCss).not.toContain('.optical-glass::before')
     expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?radial-gradient[\s\S]*?optical-glass-refraction-color/)

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sunday Pet</title>
+  <style>
+    /* user:“透明无边界桌面渲染层，交互部分接收输入、其他区域穿透”+
+       (覆盖层文档必须完全透明：只有角色、气泡、卡片、轮盘自己画东西。) */
+    :root {
+      color-scheme: dark;
+      --pet-glass: rgba(20, 22, 28, 0.52);
+      --pet-glass-border: rgba(255, 255, 255, 0.16);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #pet-app {
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      background-color: transparent !important;
+      overflow: hidden;
+    }
+    body {
+      color: #eef3fb;
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+  </style>
+</head>
+<body>
+  <div id="pet-app"></div>
+  <script type="module" src="./src/pet.ts"></script>
+</body>
+</html>

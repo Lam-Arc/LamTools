@@ -97,7 +97,7 @@ py -3.14 -m lamtools_core.cli office validate --source <office-file> --manifest 
 py -3.14 -m lamtools_core.cli office render --source <office-file> --manifest <office-data.json> --output-dir <preview-dir> --backend auto --report <report.json>
 ```
 
-打包环境可用同形参数调用 `LamCore.exe office ...`。若 `lamtools_core` 不可导入，但 Skill 文件可用，则直接运行 `py -3.14 <office-renderer目录>\scripts\office.py ...`。只替换入口，不改变 `office validate` / `office render` 子命令及门槛。只提供配置或结构源稿时，明确图片/Office 页面尚未生成。
+打包环境可用同形参数调用 `sunday-core.exe office ...`。若 `lamtools_core` 不可导入，但 Skill 文件可用，则直接运行 `py -3.14 <office-renderer目录>\scripts\office.py ...`。只替换入口，不改变 `office validate` / `office render` 子命令及门槛。只提供配置或结构源稿时，明确图片/Office 页面尚未生成。
 
 ## 后端顺序与状态
 

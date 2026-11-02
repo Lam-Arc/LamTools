@@ -20,6 +20,7 @@ class CoreAppEventHub:
     def __init__(self, *, queue_size: int = 256) -> None:
         self._queue_size = queue_size
         self._subscribers: dict[str, set[asyncio.Queue[Any | None]]] = defaultdict(set)
+        self._settled_notices: set[tuple[str, str, str]] = set()
 
     def subscribe(self, thread_id: str) -> asyncio.Queue[Any | None]:
         queue: asyncio.Queue[Any | None] = asyncio.Queue(maxsize=self._queue_size)
@@ -54,6 +55,35 @@ class CoreAppEventHub:
                     thread_id,
                 )
         await asyncio.sleep(0)
+        # user:“做完了还是在这转啊”“也没有弹窗提示”“只有点进去才知道已经完成任务了”+
+        # (回合收官要通知所有连接刷新会话列表，不再只发给正在看这个会话的客户端；
+        #  否则后台会话的转圈会一直停不下来。)
+        # 这段业务翻译放在投递热路径上，必须隔离失败：派生逻辑一旦抛错，不能连累
+        # 调用方后续事件的广播（default_agent 会把整段 publish 包在同一个 except 里）。
+        try:
+            from .session_notifications import settled_session_notice
+
+            notice = settled_session_notice(event)
+        except Exception:  # noqa: BLE001 - 通知是尽力而为，绝不影响主事件流
+            logger.exception("failed to derive a session notification")
+            notice = None
+        if notice is not None and self._first_settled_notice(notice):
+            await self.broadcast(notice)
+
+    def _first_settled_notice(self, notice: dict[str, Any]) -> bool:
+        """同一条终态可能被投影与 pause/cancel 路径重复写入，只广播一次。"""
+        session = notice.get("payload", {}).get("session", {})
+        key = (
+            str(notice.get("thread_id") or ""),
+            str(notice.get("turn_id") or ""),
+            str(session.get("status") or ""),
+        )
+        if key in self._settled_notices:
+            return False
+        self._settled_notices.add(key)
+        if len(self._settled_notices) > 512:
+            self._settled_notices.clear()
+        return True
 
     async def broadcast(self, event: Any) -> None:
         """Push an event to all connected subscribers regardless of thread_id."""

@@ -17,7 +17,12 @@ from lamtools_core.async_tasks import finish_on_cancel
 from lamtools_core.plugin_system.sessions import (
     CancelReceipt, MessageReceipt, QueueChange, SessionError, SessionEventPage, SessionState, SessionWaitResult,
 )
-from .queue_state import ACTIVE_TURN_STATUSES, effective_thread_status, latest_active_turn_id
+from .queue_state import (
+    ACTIVE_TURN_STATUSES,
+    effective_thread_status,
+    latest_active_turn_id,
+    queue_order_key,
+)
 
 RECEIPT_METHODS = {"queue/itemAccepted", "turn/steered"}
 
@@ -78,7 +83,9 @@ class PluginSessionService:
         paused = [(int(turn.get("last_seq") or turn.get("seq") or 0), str(turn.get("turn_id") or key))
                   for key, turn in turns.items() if isinstance(turn, dict) and turn.get("status") == "paused"]
         queued = [item for item in snapshot.get("queue") or [] if isinstance(item, dict) and item.get("status") == "queued"]
-        queued.sort(key=lambda item: (int(item.get("seq") or 0), str(item.get("queue_item_id") or "")))
+        # 与快照投影/分发使用同一个排序键：重排序写入的 position 优先，未定位条目
+        # 按 seq 垫底；插件侧 queue_ids 必须与真实分发顺序一致。
+        queued.sort(key=queue_order_key)
         return SessionState(session_id, int(snapshot.get("snapshot_seq") or 0), status,
                             status in ACTIVE_TURN_STATUSES or bool(run_id), active, run_id,
                             max(paused)[1] if paused and status == "paused" else None, len(queued),

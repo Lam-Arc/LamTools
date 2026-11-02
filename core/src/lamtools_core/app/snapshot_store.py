@@ -22,6 +22,7 @@ from lamtools_core.snapshot import (
 from lamtools_core.turn.model import LIVE_RUNTIME_STATUSES
 
 from .event_store import CORE_RUN_ITEM_METHOD, AppEventEnvelope
+from .queue_state import queue_order_key
 
 TERMINAL_ERROR_STATUSES = {"failed", "cancelled", "error"}
 TERMINAL_TURN_STATUSES = {"completed", *TERMINAL_ERROR_STATUSES}
@@ -93,6 +94,8 @@ class CoreAppSnapshotProjector:
             self._apply_queue_item(state, event, status="dispatched")
         elif event.method == "queue/itemDeleted":
             self._delete_queue_item(state, event)
+        elif event.method == "queue/itemReordered":
+            self._apply_queue_reordered(state, event)
         elif event.method == CORE_RUN_ITEM_METHOD:
             self._apply_core_run_item(state, event)
             self._sync_status_from_core(state)
@@ -372,6 +375,34 @@ class CoreAppSnapshotProjector:
             if not isinstance(item, dict) or item.get("queue_item_id") != queue_item_id
         ]
 
+    def _apply_queue_reordered(self, state: dict[str, Any], event: AppEventEnvelope) -> None:
+        # user:“排队项可拖拽上下移动重新排序”+(重排序事件携带拖拽后的完整顺序：
+        #   给点名的排队条目写 position 并重排快照列表；没被点名的条目（并发新排队）
+        #   必须清掉旧 position，分发与托盘排序才会把它按 seq 垫在已定位条目之后)。
+        payload = dict(event.payload or {})
+        order = payload.get("order")
+        if not isinstance(order, list):
+            return
+        queue = list(state.get("queue") or [])
+        position_by_id: dict[str, int] = {}
+        next_position = 0
+        for entry in order:
+            queue_item_id = str(entry or "").strip()
+            if queue_item_id and queue_item_id not in position_by_id:
+                position_by_id[queue_item_id] = next_position
+                next_position += 1
+        for item in queue:
+            if not isinstance(item, dict):
+                continue
+            # 未点名条目若保留旧 position，会插到已定位条目中间，与“新排队按 seq
+            # 垫底”的排序契约相反。
+            item.pop("position", None)
+            queue_item_id = str(item.get("queue_item_id") or "")
+            if queue_item_id in position_by_id:
+                item["position"] = position_by_id[queue_item_id]
+        queue.sort(key=queue_order_key)
+        state["queue"] = queue
+
     def _turn(self, state: dict[str, Any], turn_id: str) -> dict[str, Any]:
         turns = state.setdefault("turns", {})
         turn = dict(turns.get(turn_id) or {"turn_id": turn_id, "status": "running", "items": []})
@@ -560,6 +591,7 @@ class SqlAlchemyThreadSnapshotStore:
         decisions = await self._load_open_interactions(db, thread_id)
         core["decisions"] = decisions
         core["interactions"] = decisions
+        core["task_plan"] = await self._load_active_plan(db, thread_id)
         return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
 
     async def load_metadata(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
@@ -586,7 +618,41 @@ class SqlAlchemyThreadSnapshotStore:
         decisions = await self._load_open_interactions(db, thread_id)
         core["decisions"] = decisions
         core["interactions"] = decisions
+        core["task_plan"] = await self._load_active_plan(db, thread_id)
         return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
+
+    async def _load_active_plan(self, db: AsyncSession, thread_id: str) -> dict[str, Any] | None:
+        """The thread's durable checklist, read straight from the runtime row.
+
+        user:“重启之后想要继续，往往需要发一条用户指令，这样就会让以前的 checklist
+        消失吗？我认为这是不对的”+(checklist 与轮次解耦：快照每次读取都带上
+        runtime 会话行里的权威 task_plan，前端在消息流扫描落空（历史窗口裁剪/
+        重启后新指令）时兜底显示，卡不再消失)。
+
+        Mirrors `_load_open_interactions`: the plan's source of truth is the
+        runtime session row (saved on every kernel checkpoint), not the message
+        tree. One primary-key read; a missing row (foreign thread stores, tests
+        with lightweight schemas) simply yields no plan.
+        """
+        try:
+            from .core_db import CoreRuntimeSession
+
+            row = (
+                await db.execute(
+                    select(CoreRuntimeSession.runtime_state_json).where(
+                        CoreRuntimeSession.thread_id == thread_id
+                    )
+                )
+            ).scalar()
+        except Exception:
+            # 只吞查询失败（轻量 schema/外部线程库）；CancelledError 必须继续上抛，
+            # 否则请求/关停时任务无法取消。
+            return None
+        payload = row if isinstance(row, dict) else {}
+        metadata = payload.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        task_plan = metadata.get("task_plan")
+        return task_plan if isinstance(task_plan, dict) else None
 
     async def _load_open_interactions(
         self, db: AsyncSession, thread_id: str
@@ -694,6 +760,13 @@ class SqlAlchemyThreadSnapshotStore:
         core["_page_has_older_items"] = await self._has_older_items(
             db, thread_id, loaded, before_seq=before_seq
         )
+        # 决策池必须随分页快照一起下发：会话重开/断线重连走的是 load_page，
+        # 之前只有完整 load 才注入 interactions，客户端只好退回消息树兜底，
+        # 桌宠与主界面都会丢掉审批/提问的标题、选项和子代理来源。
+        decisions = await self._load_open_interactions(db, thread_id)
+        core["decisions"] = decisions
+        core["interactions"] = decisions
+        core["task_plan"] = await self._load_active_plan(db, thread_id)
         return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
 
     async def _page_state(

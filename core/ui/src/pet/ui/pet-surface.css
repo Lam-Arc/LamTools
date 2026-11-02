@@ -1,0 +1,15 @@
+/* 桌宠覆盖层的基础样式。只有这里声明的东西会出现在桌面上，其余保持透明。 */
+.pet-surface-root {
+  position: fixed;
+  inset: 0;
+}
+
+/* 低透玻璃复用的主题变量兜底：主界面主题注入时会覆盖这两个值。 */
+:root {
+  --pet-glass: rgba(20, 22, 28, 0.52);
+  --pet-glass-border: rgba(255, 255, 255, 0.16);
+}
+
+::selection {
+  background: rgba(96, 148, 255, 0.4);
+}

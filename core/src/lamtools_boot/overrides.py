@@ -108,7 +108,11 @@ def _default_state_path(environ: Mapping[str, str]) -> Path | None:
         return Path(home) / "plugin-system.jsonc"
     appdata = environ.get("APPDATA")
     if appdata:
-        return Path(appdata) / "LamCore" / "plugin-system.jsonc"
+        # user:“迁移”+(新目录优先；如果只有旧版写过的 LamCore 账本，
+        # 仍按旧位置读取，等待壳的一次性搬迁把它挪到 Sunday。)
+        current = Path(appdata) / "Sunday" / "plugin-system.jsonc"
+        legacy = Path(appdata) / "LamCore" / "plugin-system.jsonc"
+        return current if current.exists() or not legacy.exists() else legacy
     # user:“Linux 也要读得到账本”+XDG 数据目录与 desktop_backend 的
     # _default_data_dir 同一处。
     if sys.platform.startswith("linux") or environ.get("XDG_DATA_HOME"):

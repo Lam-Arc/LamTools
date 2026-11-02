@@ -425,6 +425,8 @@ describe('useCoreLiveComposerController', () => {
     const text = ref('')
     const status = ref('running')
     let queueFails = false
+    // user:“设置中可调消息发送后直接引导或排队，默认直接引导，默认为enter，特殊发送为ctrl enter”
+    // +(本用例用「排队」模式验证两条落点都会结算：普通键排队，Ctrl/Cmd+Enter 特殊发送成引导)。
     const controller = useCoreLiveComposerController({
       pauseTurn: async () => undefined,
       activeThreadId: ref<string | null>('thread-1'),
@@ -434,6 +436,7 @@ describe('useCoreLiveComposerController', () => {
       text,
       cursor: ref(0),
       status,
+      sendMode: ref<'guide' | 'queue'>('queue'),
       attachments: ref<CoreInputItem[]>([]),
       connect: async () => undefined,
       startTurn: async () => undefined,
@@ -460,9 +463,9 @@ describe('useCoreLiveComposerController', () => {
       },
     })
 
-    // 引导：不产生用户消息，也必须结算，否则宿主的“待发送”占位永远挂着
+    // 引导（特殊发送）：不产生用户消息，也必须结算，否则宿主的“待发送”占位永远挂着
     text.value = '改成蓝色'
-    await controller.submit({ clearComposer: true, forceGuide: true })
+    await controller.submit({ clearComposer: true, specialSend: true })
 
     // 排队：同样不产生用户消息
     text.value = '顺便把页脚也换掉'
@@ -499,6 +502,7 @@ describe('useCoreLiveComposerController', () => {
       text,
       cursor: ref(0),
       status,
+      sendMode: ref<'guide' | 'queue'>('queue'),
       attachments: ref<CoreInputItem[]>([]),
       connect: async () => undefined,
       startTurn: async () => {
@@ -539,6 +543,63 @@ describe('useCoreLiveComposerController', () => {
     expect(calls).toEqual(['queue'])
   })
 
+  it('special send flips the configured mode while running and never touches the queue on empty input', async () => {
+    const calls: string[] = []
+    const text = ref('')
+    const status = ref('running')
+    // user:“应该为输入框有东西的时候enter排队，ctrl+enter把当前的直接发出去（跳过正在排队），
+    // ctrl enter和enter均不对已经排队的项进行操作，输入框为空的时候ctrl enter和enter均不应该发送任何东西”
+    // +(默认「直接引导」模式：Enter 引导，Ctrl+Enter 排队；空输入两个键都不发)。
+    const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
+      activeThreadId: ref<string | null>('thread-1'),
+      activeTurnId: ref('turn-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(0),
+      status,
+      sendMode: ref<'guide' | 'queue'>('guide'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => {
+        calls.push('start')
+      },
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      steerTurn: async () => {
+        calls.push('steer')
+        return { ok: true }
+      },
+      queueInput: async () => {
+        calls.push('queue')
+      },
+      listCommands: async () => [],
+      getWorkRoot: () => '',
+      executeCommand: async () => true,
+      clearComposer: () => {
+        text.value = ''
+      },
+      setStatusText: () => undefined,
+    })
+
+    // 空输入：Enter 与 Ctrl+Enter 都不发送、不排队、不引导
+    await controller.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }))
+    expect(calls).toEqual([])
+
+    // Enter：直接引导进当前回合
+    text.value = '补充一句'
+    await controller.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(calls).toEqual(['steer'])
+    expect(text.value).toBe('')
+
+    // Ctrl+Enter：特殊发送——跳过引导，进队列
+    text.value = '晚点再做'
+    await controller.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }))
+    expect(calls).toEqual(['steer', 'queue'])
+    expect(text.value).toBe('')
+  })
+
   it('owns command loading, palette selection, and live submission effects', async () => {
     const calls: string[] = []
     const activeThreadId = ref<string | null>('thread-1')
@@ -554,7 +615,9 @@ describe('useCoreLiveComposerController', () => {
     let clearedAttachments = 0
 
     const controller = useCoreLiveComposerController({
-      pauseTurn: async () => undefined,
+      pauseTurn: async (threadId) => {
+        calls.push(`pause:${threadId}`)
+      },
       activeThreadId,
       activeTurnId,
       connectedThreadId,
@@ -592,8 +655,9 @@ describe('useCoreLiveComposerController', () => {
         clearedTexts.push(submittedText)
         if (text.value.trim() === submittedText) text.value = ''
       },
-      clearAttachments: () => {
-        clearedAttachments += 1
+      clearAttachments: (files) => {
+        // 只统计“真的带走了附件”的清空：引导等无附件提交也会走清空回调（清的是空列表）。
+        if (files?.length) clearedAttachments += 1
         attachments.value = []
       },
       setStatusText: (value) => {
@@ -628,14 +692,16 @@ describe('useCoreLiveComposerController', () => {
 
     text.value = 'stop now'
     status.value = 'running'
-    await controller.submit({ clearComposer: true, forceGuide: true })
+    // 默认「直接引导」模式下，运行中的普通发送键就是引导（不再需要旧的 forceGuide 标记）。
+    await controller.submit({ clearComposer: true })
     expect(calls).toContain('steer:thread-1:turn-1:[{"type":"text","text":"stop now"}]')
     expect(statusText.value).toBe('Guided by member')
     expect(clearedTexts).toContain('stop now')
 
     text.value = ''
     await controller.submit({ clearComposer: true })
-    expect(calls).toContain('stop:thread-1')
+    // 单击/提交的停止动作是“暂停”契约：走 pauseTurn，不直接 interrupt。
+    expect(calls).toContain('pause:thread-1')
     expect(statusText.value).toBe('Stopping by member')
     status.value = 'cancelled'
     await nextTick()

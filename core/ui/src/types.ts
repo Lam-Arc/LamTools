@@ -513,10 +513,14 @@ export interface CoreSkillItem {
   source: string;
   enabled: boolean;
   deletable: boolean;
+  /** 用户自定义分组名；空串表示未分组。 */
+  group?: string;
 }
 
 export interface CoreSkillListPayload {
   skills: CoreSkillItem[];
+  /** 全部分组名（有序），与 skill.list 一并返回。 */
+  groups?: string[];
   total_count: number;
   enabled_count: number;
 }

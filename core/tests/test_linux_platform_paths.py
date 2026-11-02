@@ -27,7 +27,7 @@ def test_backend_default_data_dir_preserves_windows_appdata_behavior() -> None:
         platform="win32",
         environ={"APPDATA": "C:/Users/example/AppData/Roaming"},
         home=Path("C:/Users/example"),
-    ) == Path("C:/Users/example/AppData/Roaming/LamCore")
+    ) == Path("C:/Users/example/AppData/Roaming/Sunday")
 
 
 def test_user_hooks_use_xdg_config_home_on_linux(monkeypatch) -> None:
@@ -44,3 +44,40 @@ def test_user_hooks_keep_portable_home_precedence_on_linux(monkeypatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg-config")
     monkeypatch.setattr(hook_config.sys, "platform", "linux")
     assert hook_config.default_user_hooks_path() == Path("/portable/.lam/hooks.json")
+
+
+def test_backend_migrates_legacy_windows_data_dir(tmp_path) -> None:
+    appdata = tmp_path / "Roaming"
+    legacy = appdata / "LamCore"
+    legacy.mkdir(parents=True)
+    (legacy / "plugin-system.jsonc").write_text("{}", encoding="utf-8")
+    environ = {"APPDATA": str(appdata)}
+
+    target = desktop_backend._default_data_dir(
+        platform="win32", environ=environ, home=tmp_path
+    )
+    assert target == appdata / "Sunday"
+    assert desktop_backend._migrate_legacy_data_dir(
+        target, platform="win32", environ=environ, home=tmp_path
+    )
+    assert (target / "plugin-system.jsonc").read_text(encoding="utf-8") == "{}"
+    assert not legacy.exists()
+    # Idempotent: a second start never merges or overwrites.
+    assert not desktop_backend._migrate_legacy_data_dir(
+        target, platform="win32", environ=environ, home=tmp_path
+    )
+
+
+def test_backend_retries_migration_when_target_is_an_empty_placeholder(tmp_path) -> None:
+    appdata = tmp_path / "Roaming"
+    legacy = appdata / "LamCore"
+    legacy.mkdir(parents=True)
+    (legacy / "plugin-system.jsonc").write_text("{}", encoding="utf-8")
+    target = appdata / "Sunday"
+    target.mkdir()
+    environ = {"APPDATA": str(appdata)}
+
+    assert desktop_backend._migrate_legacy_data_dir(
+        target, platform="win32", environ=environ, home=tmp_path
+    )
+    assert (target / "plugin-system.jsonc").read_text(encoding="utf-8") == "{}"

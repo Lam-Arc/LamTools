@@ -1,4 +1,4 @@
-# Package LamCore with MSVC toolchain preloaded.
+﻿# Package Sunday with MSVC toolchain preloaded.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\package-msvc.ps1
 $ErrorActionPreference = "Stop"
 

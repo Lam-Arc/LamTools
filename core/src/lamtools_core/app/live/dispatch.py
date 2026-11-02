@@ -24,6 +24,7 @@ from .queue import (
     handle_queue_create_operation,
     handle_queue_delete_operation,
     handle_queue_guidance_operation,
+    handle_queue_reorder_operation,
     handle_queue_update_operation,
 )
 from .steering import handle_turn_steer_operation
@@ -75,6 +76,7 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "queue.update": handle_queue_update_operation,
     "queue.delete": handle_queue_delete_operation,
     "queue.guide": handle_queue_guidance_operation,
+    "queue.reorder": handle_queue_reorder_operation,
     "process.list": handle_process_list_operation,
     "process.kill": handle_process_kill_operation,
     "process.forget": handle_process_forget_operation,

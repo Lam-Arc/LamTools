@@ -27,7 +27,7 @@
 #define AppName "Sunday"
 #define AppTagline "AI software"
 #define AppDisplayName "Sunday"
-#define AppExeName "lamcore.exe"
+#define AppExeName "Sunday.exe"
 
 [Setup]
 ; Never change AppId: it is the upgrade/uninstall identity for every Sunday release.
@@ -132,13 +132,17 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [InstallDelete]
 ; Replace implementation files while deliberately preserving .lam and
-; lam_projects beside the app.
+; lam_projects beside the app. The lamcore entries are the pre-migration
+; executable and backend tree: an upgrade must not leave a second, runnable
+; copy of the old app behind.
+Type: files; Name: "{app}\lamcore.exe"
 Type: filesandordirs; Name: "{app}\lamcore-backend"
 Type: filesandordirs; Name: "{app}\LamCore"
+Type: filesandordirs; Name: "{app}\sunday-backend"
 
 [Files]
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceDir}\lamcore-backend\*"; DestDir: "{app}\lamcore-backend"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\sunday-backend\*"; DestDir: "{app}\sunday-backend"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#WebView2Bootstrapper}"; DestDir: "{tmp}"; DestName: "MicrosoftEdgeWebView2Setup.exe"; Flags: deleteafterinstall; Check: NeedsWebView2
 
 [Icons]
@@ -151,7 +155,8 @@ Filename: "{app}\{#AppExeName}"; Description: "启动 Sunday"; WorkingDir: "{app
 
 [Code]
 const
-  AppMainExe = 'lamcore.exe';
+  AppMainExe = 'Sunday.exe';
+  LegacyMainExe = 'lamcore.exe';
   LegacyLamCoreKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\LamCore';
   LegacyLamToolsCoreKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\LamTools Core';
   WebView2ClientKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
@@ -266,7 +271,7 @@ end;
 // ---------------------------------------------------------------------------
 // Locked-file guard.
 //
-// Updating deletes the whole lamcore-backend tree and rewrites lamcore.exe. If
+// Updating deletes the whole sunday-backend tree and rewrites Sunday.exe. If
 // one of those files is still open, the delete fails halfway and leaves an
 // installation the user cannot start. Closing the running programs comes first
 // (the close-applications check, then StopProcessesInInstallDir); this guard is
@@ -337,6 +342,11 @@ begin
   LockedFileCount := 0;
   FirstLockedFile := '';
   NoteLockedFile(ExpandConstant('{app}\') + AppMainExe);
+  // An install being upgraded from the pre-migration build is running
+  // lamcore.exe, which the new [Files] list never touches but [InstallDelete]
+  // removes. It must trigger the same close-and-retry path.
+  NoteLockedFile(ExpandConstant('{app}\') + LegacyMainExe);
+  ScanLockedFiles(ExpandConstant('{app}\sunday-backend'));
   ScanLockedFiles(ExpandConstant('{app}\lamcore-backend'));
   ScanLockedFiles(ExpandConstant('{app}\LamCore'));
   Sample := FirstLockedFile;

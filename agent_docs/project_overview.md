@@ -103,8 +103,8 @@ risks. This is an initial review; no refactoring was performed.
 
 Linux x64 is supported as a native PyInstaller/Tauri distribution through
 `scripts/package-linux.sh`, producing an AppImage and a Debian package. The
-Linux sidecar is an extensionless `LamCore` executable and is stored inside
-both packages at `lamcore-backend/LamCore`. Linux mutable state follows the
+Linux sidecar is an extensionless `SundayCore` executable and is stored inside
+both packages at `sunday-backend/SundayCore`. Linux mutable state follows the
 Tauri XDG data/config roots and Linux Secret Service provides persistent
 credential storage. Windows keeps its existing portable layout. macOS is
 deferred and is not a supported artifact in the current distribution scope.

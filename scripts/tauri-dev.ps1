@@ -11,7 +11,7 @@
   本脚本做的事：
     1. 校验 core/desktop 依赖在位；
     2. 检查 5173 占用情况。占用者是本项目 core/desktop 的旧 vite 时，可用 -CleanStaleVite
-       清理（仅在无 lamcore.exe 窗口进程运行时才允许）；其他任何进程一律不动，直接报错
+       清理（仅在无 Sunday.exe 窗口进程运行时才允许）；其他任何进程一律不动，直接报错
        退出（避免误杀别人的进程，或误杀 Tauri 的 vite）；
     3. 以脱离调用会话的方式启动 `npm run tauri dev`，输出重定向落盘到固定日志位置；
     4. 轮询核验：前端 5173 可服务、后端已监听随机端口且 /api/health 应答、窗口进程已起来；
@@ -22,7 +22,7 @@
 .PARAMETER CleanStaleVite
   允许清理占用 5173 的本项目旧 vite 残留。仅当该进程命令行同时命中 vite 与
   core/desktop 时才清理，其他进程绝不处理。此外还有一道守卫：只要检测到窗口进程
-  lamcore.exe 在运行（观测环境可能正处于使用中），即使带了本开关也不清理，直接退出，
+  Sunday.exe 在运行（观测环境可能正处于使用中），即使带了本开关也不清理，直接退出，
   以免误杀正在服务的 vite。
 
 .PARAMETER LogPath
@@ -89,8 +89,8 @@ function Test-IsProjectVite { param([int]$ProcessId)
     return ($cl -match 'vite' -and $cl -match 'core[\\/]desktop')
 }
 
-function Get-LamcorePids {
-    return @(Get-Process -Name lamcore -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+function Get-SundayPids {
+    return @(Get-Process -Name Sunday -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 }
 
 # 后端随机端口从命令行 `--port <n>` 解析。
@@ -99,9 +99,9 @@ function Get-PortFromCommandLine { param([string]$CommandLine)
     return 0
 }
 
-# 从 lamcore 的子进程里找后端 python 及其端口。
-function Get-BackendForLamcore { param([int]$LamcorePid)
-    $kids = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$LamcorePid" -ErrorAction SilentlyContinue |
+# 从 Sunday 的子进程里找后端 python 及其端口。
+function Get-BackendForSunday { param([int]$SundayPid)
+    $kids = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$SundayPid" -ErrorAction SilentlyContinue |
               Where-Object { $_.Name -match '^python(w)?\.exe$' })
     foreach ($k in $kids) {
         $port = Get-PortFromCommandLine ([string]$k.CommandLine)
@@ -124,19 +124,19 @@ function Test-HttpOk { param([string]$Url)
 # 轮询直到前端可服务 + 后端监听随机端口且健康应答。返回状态对象（Ok 标记成功），
 # 超时也返回已探测到的部分信息，便于诊断。
 function Wait-Environment {
-    param([int[]]$PreExistingLamcore, [int]$TimeoutSec)
+    param([int[]]$PreExistingSunday, [int]$TimeoutSec)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    $state = [pscustomobject]@{ Ok = $false; FrontendOk = $false; LamcorePid = 0; BackendPid = 0; BackendPort = 0 }
+    $state = [pscustomobject]@{ Ok = $false; FrontendOk = $false; SundayPid = 0; BackendPid = 0; BackendPort = 0 }
     while ((Get-Date) -lt $deadline) {
         if (-not $state.FrontendOk) {
             $state.FrontendOk = ((Get-ListenerPids $FrontendPort).Count -gt 0)
         }
-        if ($state.LamcorePid -eq 0) {
-            $cand = @(Get-LamcorePids | Where-Object { $PreExistingLamcore -notcontains $_ })
-            if ($cand.Count -gt 0) { $state.LamcorePid = [int]$cand[0] }
+        if ($state.SundayPid -eq 0) {
+            $cand = @(Get-SundayPids | Where-Object { $PreExistingSunday -notcontains $_ })
+            if ($cand.Count -gt 0) { $state.SundayPid = [int]$cand[0] }
         }
-        if ($state.LamcorePid -ne 0 -and $state.BackendPort -eq 0) {
-            $b = Get-BackendForLamcore $state.LamcorePid
+        if ($state.SundayPid -ne 0 -and $state.BackendPort -eq 0) {
+            $b = Get-BackendForSunday $state.SundayPid
             if ($b) { $state.BackendPid = $b.Pid; $state.BackendPort = $b.Port }
         }
         if ($state.FrontendOk -and $state.BackendPort -ne 0) {
@@ -187,9 +187,9 @@ function Invoke-Main {
             exit 1
         }
         # 守卫：窗口进程在跑说明观测环境可能正被使用，此时绝不清理，避免误杀正在服务的 vite。
-        $liveLamcore = @(Get-LamcorePids)
-        if ($liveLamcore.Count -gt 0) {
-            Write-Err2 "检测到窗口进程 lamcore.exe 正在运行（pid: $($liveLamcore -join ', ')），观测环境可能正处于使用中。"
+        $liveSunday = @(Get-SundayPids)
+        if ($liveSunday.Count -gt 0) {
+            Write-Err2 "检测到窗口进程 Sunday.exe 正在运行（pid: $($liveSunday -join ', ')），观测环境可能正处于使用中。"
             Write-Err2 "即使带了 -CleanStaleVite 也不清理，已退出，以免误杀正在服务的 vite。"
             Write-Err2 "请先完全退出观测环境（关闭窗口并结束相关进程）后再重跑。"
             exit 1
@@ -206,7 +206,7 @@ function Invoke-Main {
     # -- 脱离会话启动 --
     $logDir = Split-Path -Parent $LogPath
     if ($logDir -and -not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
-    $preExisting = @(Get-LamcorePids)
+    $preExisting = @(Get-SundayPids)
 
     Write-Info "脱离当前会话启动: npm run tauri dev  (cwd=$DesktopDir)"
     Write-Info "日志: $LogPath"
@@ -214,10 +214,10 @@ function Invoke-Main {
     Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $cmdLine -WorkingDirectory $DesktopDir -WindowStyle Hidden | Out-Null
 
     Write-Info "等待环境就绪（前端 5173 + 后端健康，最多 $TimeoutSec 秒；首次需编译 Rust，较慢）..."
-    $state = Wait-Environment -PreExistingLamcore $preExisting -TimeoutSec $TimeoutSec
+    $state = Wait-Environment -PreExistingSunday $preExisting -TimeoutSec $TimeoutSec
 
     if (-not $state.Ok) {
-        Write-Err2 "环境在 $TimeoutSec 秒内未就绪。已探测：前端=$($state.FrontendOk) 窗口pid=$($state.LamcorePid) 后端端口=$($state.BackendPort)"
+        Write-Err2 "环境在 $TimeoutSec 秒内未就绪。已探测：前端=$($state.FrontendOk) 窗口pid=$($state.SundayPid) 后端端口=$($state.BackendPort)"
         if (Test-Path $LogPath) {
             Write-Err2 "日志末尾 30 行："
             Get-Content -LiteralPath $LogPath -Tail 30 | ForEach-Object { Write-Host "  $_" }
@@ -230,7 +230,7 @@ function Invoke-Main {
     Write-Host "观测环境就绪：" -ForegroundColor Green
     Write-Host ("  前端 : http://127.0.0.1:{0}" -f $FrontendPort)
     Write-Host ("  后端 : http://127.0.0.1:{0}  (pid {1})" -f $state.BackendPort, $state.BackendPid)
-    Write-Host ("  窗口 : lamcore.exe pid {0}" -f $state.LamcorePid)
+    Write-Host ("  窗口 : Sunday.exe pid {0}" -f $state.SundayPid)
     Write-Host ("  日志 : {0}" -f $LogPath)
     Write-Host ""
     Write-Info "环境为独立进程，关闭本终端不影响运行。"

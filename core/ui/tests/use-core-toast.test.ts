@@ -130,4 +130,18 @@ describe('CoreToastHost', () => {
     const wrapper = mount(CoreToastHost)
     expect(wrapper.findAll('.core-toast')).toHaveLength(0)
   })
+
+  it('runs a toast action and dismisses it, so a finished session can be opened from the notice', async () => {
+    const run = vi.fn()
+    showToast('success', '会话「鱼丸」已完成', 8000, { label: '打开', run })
+    const wrapper = mount(CoreToastHost)
+    await nextTick()
+
+    const action = wrapper.get('.core-toast__action')
+    expect(action.text()).toContain('鱼丸')
+    await action.trigger('click')
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('.core-toast')).toHaveLength(0)
+  })
 })

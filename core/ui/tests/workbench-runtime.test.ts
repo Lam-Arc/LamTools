@@ -803,7 +803,8 @@ describe('shared Workbench runtime', () => {
     })
 
     runtime.composerText.value = '改成只读'
-    await runtime.composer.submit({ clearComposer: true, forceGuide: true })
+    // 默认「直接引导」模式：运行中的普通发送键引导；引导被拒后回退排队（本用例的断言目标）。
+    await runtime.composer.submit({ clearComposer: true })
 
     expect(client.methods).toContain('turn/steer')
     expect(client.methods).toContain('queue/create')

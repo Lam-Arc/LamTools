@@ -189,7 +189,24 @@ export function selectTurnControl(state: CoreAppSnapshot): CoreTurnControl {
   }
 }
 
-export function selectQueueTray(state: CoreAppSnapshot): CoreAppQueueItem[] {  return [...(state.queue ?? [])].sort((a, b) => Number(a.seq ?? 0) - Number(b.seq ?? 0))
+// user:“排队项可拖拽上下移动重新排序”+(position 是重排序写入的第一排序键；没有
+//   position 的条目（重排序后才入队/旧数据）按事件序 seq 垫底，与服务器分发同序)。
+export function coreQueueOrderKey(item: CoreAppQueueItem): [number, number, string] {
+  const position = item.position
+  if (typeof position === 'number' && Number.isFinite(position)) {
+    return [0, position, String(item.queue_item_id || '')]
+  }
+  return [1, Number(item.seq ?? 0), String(item.queue_item_id || '')]
+}
+
+export function selectQueueTray(state: CoreAppSnapshot): CoreAppQueueItem[] {
+  return [...(state.queue ?? [])].sort((a, b) => compareCoreQueueOrder(coreQueueOrderKey(a), coreQueueOrderKey(b)))
+}
+
+export function compareCoreQueueOrder(a: [number, number, string], b: [number, number, string]): number {
+  if (a[0] !== b[0]) return a[0] - b[0]
+  if (a[1] !== b[1]) return a[1] - b[1]
+  return a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0
 }
 
 export function selectApprovalCards(state: CoreAppSnapshot): CoreAppRequestState[] {

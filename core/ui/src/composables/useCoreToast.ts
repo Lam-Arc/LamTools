@@ -29,6 +29,17 @@ export interface CoreToast {
   text: string
   createdAt: number
   duration: number
+  action?: CoreToastAction
+}
+
+/**
+ * Optional activation for a toast (user:“只有点进去才知道已经完成任务了”):
+ * a finished background session's notice opens that session directly instead
+ * of leaving the user to find the row in the sidebar.
+ */
+export interface CoreToastAction {
+  label: string
+  run: () => void
 }
 
 const DEFAULT_DURATION: Record<CoreToastKind, number> = {
@@ -55,7 +66,12 @@ function _dismiss(id: number) {
   if (index !== -1) toasts.value.splice(index, 1)
 }
 
-export function showToast(kind: CoreToastKind, text: string, duration?: number): number {
+export function showToast(
+  kind: CoreToastKind,
+  text: string,
+  duration?: number,
+  action?: CoreToastAction,
+): number {
   const normalized = String(text ?? '').trim()
   if (!normalized) return -1
   const now = Date.now()
@@ -71,6 +87,7 @@ export function showToast(kind: CoreToastKind, text: string, duration?: number):
     text: normalized,
     createdAt: now,
     duration: duration ?? DEFAULT_DURATION[kind],
+    ...(action ? { action } : {}),
   }
   toasts.value.push(toast)
   timers.set(

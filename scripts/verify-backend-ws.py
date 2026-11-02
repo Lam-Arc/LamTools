@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Verify a packaged LamCore backend can serve real WebSocket traffic.
+"""Verify a packaged Sunday backend can serve real WebSocket traffic.
 
 Used by:
   - Local packaging flow (scripts/package.ps1 follow-up)
   - CI smoke test (release.yml) to catch missing websockets/wsproto deps
 
 Usage:
-  python scripts/verify-backend-ws.py --exe <path-to-LamCore.exe> --port 6233
+  python scripts/verify-backend-ws.py --exe <path-to-SundayCore.exe> --port 6233
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def verify_ws(port: int) -> tuple[bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exe", required=True, help="Path to packaged LamCore.exe")
+    parser.add_argument("--exe", required=True, help="Path to packaged SundayCore.exe")
     parser.add_argument("--port", type=int, default=6233)
     args = parser.parse_args()
 
@@ -136,8 +136,10 @@ def main() -> int:
         print(f"[FAIL] backend exe not found: {args.exe}")
         return 1
 
-    tmp_home = tempfile.mkdtemp(prefix="lamcore-verify-")
+    tmp_home = tempfile.mkdtemp(prefix="sunday-verify-")
     env = os.environ.copy()
+    env["SUNDAY_CORE_PORT"] = str(args.port)
+    # A pre-migration build still reads the old spelling.
     env["LAMCORE_PORT"] = str(args.port)
     env["LAMTOOLS_HOME"] = tmp_home
 

@@ -66,10 +66,12 @@
 .split-content-notice { color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-code-editor, .split-browser-host, .split-file-rows { flex: 1; min-height: 0; overflow: auto; }
 .split-code-editor .cm-editor { height: 100%; font-family: var(--font-mono); font-size: 12px; color: var(--theme-main-text); background: var(--theme-main-background); }
-/* user:“它出现了行号与内容错位”+(行号画在纵向内边距之外：把上下留白从内容层移到滚动层，
-   让行号槽与正文共用同一个起点，不再相差一个 --space-3)。 */
-.split-code-editor .cm-scroller { overflow: auto; line-height: 1.75; padding-block: var(--space-3); }
-.split-code-editor .cm-content { padding-block: 0; caret-color: var(--theme-main-text); }
+/* user:“它出现了行号与内容错位”+
+   user:“内容不见了 要向下滚动很长很长才能看见内容”+
+   (CodeMirror 只把内容层的 padding 计入视口和行号定位；上下留白必须放在 .cm-content，
+   不能放在 .cm-scroller，否则滚动后的视口计算会偏，内容看起来被推到很远)。 */
+.split-code-editor .cm-scroller { overflow: auto; line-height: 1.75; }
+.split-code-editor .cm-content { padding-block: var(--space-3); caret-color: var(--theme-main-text); }
 .split-code-editor .cm-line { padding-inline: var(--space-3); }
 .split-code-editor .cm-gutters { color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); background: var(--theme-main-background); border: 0; padding-left: var(--space-1); }
 .split-code-editor .cm-activeLine, .split-code-editor .cm-activeLineGutter { background: var(--theme-main-subtle-background); }

@@ -58,6 +58,8 @@ SNAPSHOT_TRIGGER_EVENTS = frozenset({
     "queue/itemUpdated",
     "queue/itemDeleted",
     "queue/itemDispatched",
+    # queue/itemReordered 不在此列：事件本身携带完整 order，客户端可确定性重放；
+    # 再加一次整线程快照只会在每次拖拽时传一份可能几十 MB 的冗余数据。
 })
 # Safety net: even for snapshot-trigger events, at most one snapshot per
 # connection per interval — the next trigger (or thread/resume) delivers the

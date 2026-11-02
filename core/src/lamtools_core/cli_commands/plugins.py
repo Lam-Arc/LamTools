@@ -307,8 +307,10 @@ async def cmd_skill_list(args: argparse.Namespace) -> int:
     for item in skills:
         state = "enabled" if item.get("enabled") else "disabled"
         access = "deletable" if item.get("deletable") else "read-only"
+        group = str(item.get("group") or "")
+        suffix = f" <{group}>" if group else ""
         print(
-            f"{item.get('name')} [{state}, {item.get('source')}, {access}] ({item.get('location')})",
+            f"{item.get('name')} [{state}, {item.get('source')}, {access}] ({item.get('location')}){suffix}",
             flush=True,
         )
     return 0
@@ -353,4 +355,58 @@ async def cmd_skill_delete(args: argparse.Namespace) -> int:
             return 1
     result = await _invoke_live(args, lambda client: client.request("skill.delete", {"name": args.name}))
     _print_live_result(args, result, f"skill '{args.name}' deleted")
+    return 0
+
+
+# user:“skill 界面也做成瀑布流，并分组管理”+(分组管理与 GUI 同能力集：
+# list/create/rename/delete/assign 全部转发宿主 skill.group.* RPC。)
+async def cmd_skill_group_list(args: argparse.Namespace) -> int:
+    from .connection import _invoke_live
+    result = await _invoke_live(args, lambda client: client.request("skill.list", {}))
+    groups = result.get("groups") if isinstance(result, dict) else []
+    if args.raw:
+        print(json.dumps({"groups": groups}, ensure_ascii=False), flush=True)
+        return 0
+    if not groups:
+        print("No skill groups defined.", flush=True)
+        return 0
+    for name in groups:
+        print(name, flush=True)
+    return 0
+
+
+async def cmd_skill_group_create(args: argparse.Namespace) -> int:
+    from .connection import _invoke_live, _print_live_result
+    result = await _invoke_live(args, lambda client: client.request("skill.group.create", {"name": args.name}))
+    _print_live_result(args, result, f"skill group '{args.name}' created")
+    return 0
+
+
+async def cmd_skill_group_rename(args: argparse.Namespace) -> int:
+    from .connection import _invoke_live, _print_live_result
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "skill.group.rename", {"from": args.from_group, "to": args.to_group}
+        ),
+    )
+    _print_live_result(args, result, f"skill group '{args.from_group}' renamed to '{args.to_group}'")
+    return 0
+
+
+async def cmd_skill_group_delete(args: argparse.Namespace) -> int:
+    from .connection import _invoke_live, _print_live_result
+    result = await _invoke_live(args, lambda client: client.request("skill.group.delete", {"name": args.name}))
+    _print_live_result(args, result, f"skill group '{args.name}' deleted")
+    return 0
+
+
+async def cmd_skill_group_assign(args: argparse.Namespace) -> int:
+    from .connection import _invoke_live, _print_live_result
+    result = await _invoke_live(
+        args,
+        lambda client: client.request("skill.group.assign", {"name": args.name, "group": args.group}),
+    )
+    detail = f"skill '{args.name}' assigned to group '{args.group}'" if args.group else f"skill '{args.name}' ungrouped"
+    _print_live_result(args, result, detail)
     return 0

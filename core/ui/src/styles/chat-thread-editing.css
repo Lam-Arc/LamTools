@@ -211,3 +211,44 @@
     transition: none;
   }
 }
+
+/* ── User bubble auto-fold ──
+   user:“令用户气泡过长时自动折叠”+
+   (超长用户消息默认只保留 6 行并向下渐隐提示还有内容，气泡表面、圆角与配色不变；
+    展开/收起按钮放在气泡内右下角，沿用编辑按钮“透明 → 悬停加亮”的配方)。 */
+.user-bubble--folded .user-bubble-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+}
+.user-bubble-fold {
+  display: block;
+  margin: 4px 0 0 auto;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 60%, transparent);
+  font-family: var(--font-sans, inherit);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.user-bubble-fold:hover,
+.user-bubble-fold:focus-visible {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #fff);
+}
+.user-bubble-fold:active {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-active), transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .user-bubble-fold {
+    transition: none;
+  }
+}

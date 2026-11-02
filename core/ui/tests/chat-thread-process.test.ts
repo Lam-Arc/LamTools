@@ -968,18 +968,27 @@ describe('ChatThread process cards', () => {
     const headers = wrapper.findAll('.tool-card-header');
     const rowWith = (text: string) => headers.find(row => row.text().includes(text));
 
-    // 命令成功：绿勾；命令失败：红叉带退出码。
-    expect(rowWith('运行 echo ok')!.find('.process-tool-flag--good').text()).toBe('✓');
-    expect(rowWith('运行 exit 3')!.find('.process-tool-flag--bad').text()).toBe('✗ 退出码 3');
+    // user:“工具行那个✔和✕，用图标，不要纯勾纯 x”+(成败标记改成图标，文字里不再出现 ✓/✗)。
+    // 命令成功：绿勾图标；命令失败：红叉图标带退出码。
+    const okFlag = rowWith('运行 echo ok')!.find('.process-tool-flag--good');
+    expect(okFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(okFlag.text()).toBe('');
+    const failFlag = rowWith('运行 exit 3')!.find('.process-tool-flag--bad');
+    expect(failFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(failFlag.text()).toBe('退出码 3');
     // 命令运行中：显示已运行时长（取整秒）。
     expect(rowWith('运行 sleep 60')!.find('.process-tool-flag--muted').text()).toMatch(/^\d+s$/);
     // 文件改动：增删行数徽章，+绿 −红。
     const editRow = rowWith('编辑 notes.txt')!;
     expect(editRow.find('.process-tool-flag--stat .process-tool-flag-add').text()).toBe('+2');
     expect(editRow.find('.process-tool-flag--stat .process-tool-flag-del').text()).toBe('−1');
-    // 测试结论：通过绿、失败红。
-    expect(rowWith('运行 vitest run')!.find('.process-tool-flag--good').text()).toBe('✓ 通过');
-    expect(rowWith('运行 vitest run --bail')!.find('.process-tool-flag--bad').text()).toBe('✗ 失败');
+    // 测试结论：通过绿、失败红，同样用图标，文字只留结论。
+    const testPassFlag = rowWith('运行 vitest run')!.find('.process-tool-flag--good');
+    expect(testPassFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(testPassFlag.text()).toBe('通过');
+    const testFailFlag = rowWith('运行 vitest run --bail')!.find('.process-tool-flag--bad');
+    expect(testFailFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(testFailFlag.text()).toBe('失败');
   });
 
   it('shows the collapsed process group step count and hides it when expanded', async () => {

@@ -46,7 +46,9 @@ describe('file references in the real interface', () => {
     expect(wrapper.text()).not.toContain('gone.png')
   })
   it('does not refetch previews on each parent render and can read restored path-only icons', async () => {
-    const request = vi.fn(async () => ({ status: 200, headers: {}, body: new TextEncoder().encode('{}') }))
+    const request = vi.fn(async (input: { path: string }) => input.path.startsWith('/files/resolve-reference')
+      ? { status: 200, headers: {}, body: new TextEncoder().encode(JSON.stringify({ path: 'C:/note.txt' })) }
+      : { status: 200, headers: { 'content-type': 'text/plain' }, body: new TextEncoder().encode('note') })
     const file = { id: 'a', path: 'C:/note.txt', filename: 'note.txt', mime_type: 'text/plain', preview_type: 'text', size: 1 }
     const wrapper = mount(ReferenceItems, { props: { compact: true, attachments: [file], transport: { request } as never } })
     mounted.push(wrapper)
@@ -69,7 +71,12 @@ describe('file references in the real interface', () => {
     const host = document.createElement('div')
     host.innerHTML = '<p>@"C:/资料/a.png" and report.md</p><pre><code>report.md</code></pre>'
     renderFileReferenceNodes(host, 'C:/project')
-    expect([...host.querySelectorAll('a')].map(a => a.textContent)).toEqual(['@a.png', '@report.md'])
+    // user:“渲染的@改为对应文件图标”+(引用开头的 @ 字符换成按扩展名选择的文件图标，文件名保留)。
+    expect([...host.querySelectorAll('a')].map(a => a.textContent)).toEqual(['a.png', 'report.md'])
+    const icons = [...host.querySelectorAll('a svg')]
+    expect(icons).toHaveLength(2)
+    expect(icons[0]!.classList.contains('lucide-image')).toBe(true)
+    expect(icons[1]!.classList.contains('lucide-file-text')).toBe(true)
     expect(host.querySelector('a')?.title).toBe('C:/资料/a.png')
     expect(host.querySelector('pre')?.textContent).toBe('report.md')
   })

@@ -105,9 +105,10 @@ function blobUrl(response: TransportHttpResponse, mime: string) {
   owned.add(url); return url
 }
 // user:“点击文件优先在分屏中预览”+(分屏工作区可用时，点击文件先在分屏里按类型打开：
-// 图片、音视频、PDF、Office 用预览器，文本用编辑器；分屏用不了才回落到弹窗预览)。
+// 图片、音视频、PDF、Office、Markdown 用预览器，其他文本用编辑器；分屏用不了才回落到弹窗预览)。
+// user:“Markdown 还是弹中间的浮层”+(记忆/方案类 Markdown 也带真实路径，同样进分屏，不再单独弹浮层)。
 function previewInSplit(item: Item): boolean {
-  if (!splitWorkspace || !item.path || item.link || item.memory) return false
+  if (!splitWorkspace || !item.path || item.link || item.inline) return false
   try {
     const actual = resolvedPaths[item.id] || actions.absolute(item.path)
     return Boolean(openFileInSplit(splitWorkspace, actual, { workRoot: props.workRoot || '' }))
@@ -156,6 +157,22 @@ async function preview(item: Item) {
   item.path = resolvedPaths[item.id] || item.path
   if (item.link) { await actions.open(item.path); return }
   if (previewInSplit(item)) return
+  // 点击可能早于后台路径核实完成：先补一次核实，再决定是否进分屏，避免 Markdown 抢先弹浮层。
+  if (item.attachment && !resolvedPaths[item.id] && props.transport) {
+    try {
+      const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path: `/attachments/${encodeURIComponent(item.attachment)}/preview` })
+      if (response.status === 200) {
+        const meta = JSON.parse(new TextDecoder().decode(response.body))
+        if (typeof meta.path === 'string' && meta.path) { item.path = meta.path; resolvedPaths[item.id] = meta.path }
+      }
+    } catch { /* Keep the existing preview fallback. */ }
+  } else if (!item.attachment && item.path && !item.inline && !resolvedPaths[item.id]) {
+    try {
+      const actual = await actions.resolve(item.path)
+      item.path = actual; resolvedPaths[item.id] = actual
+    } catch { /* The preview fallback shows the failure. */ }
+  }
+  if (previewInSplit(item)) return
   previousFocus = document.activeElement as HTMLElement
   selected.value = item; loading.value = true; previewError.value = errors[item.id] || ''; previewText.value = null; previewUrl.value = ''; previewZoom.value = 100
   const run = ++previewGeneration
@@ -163,7 +180,7 @@ async function preview(item: Item) {
   try {
     previewError.value = ''
     delete errors[item.id]
-    if (!item.attachment && item.path && !item.memory && !item.inline) {
+    if (!item.attachment && item.path && !item.inline && !resolvedPaths[item.id]) {
       const actual = await actions.resolve(item.path)
       if (run !== previewGeneration) return
       item.path = actual; resolvedPaths[item.id] = actual

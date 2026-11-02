@@ -128,7 +128,7 @@ describe('实例级覆盖的工作台行为', () => {
     node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await flushPromises()
     // user:“我编辑了一个会话行，所有的会话行都会被应用成一样的东西”+默认模板作用域。
-    expect(wrapper.get('[data-studio-scope]').element.value).toBe('base')
+    expect((wrapper.get('[data-studio-scope]').element as HTMLSelectElement).value).toBe('base')
     await wrapper.get('[data-studio-field="color"]').setValue('#123456')
     await flushPromises()
     const templateCss = previewStyle()?.textContent || ''
@@ -179,11 +179,11 @@ describe('实例级覆盖的工作台行为', () => {
     node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await flushPromises()
     await wrapper.get('[data-studio-scope]').setValue('instance')
-    expect(wrapper.get('[data-studio-scope]').element.value).toBe('instance')
+    expect((wrapper.get('[data-studio-scope]').element as HTMLSelectElement).value).toBe('instance')
 
     await wrapper.get('[data-studio-node="shell.sidebar"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-studio-scope]').element.value).toBe('base')
+    expect((wrapper.get('[data-studio-scope]').element as HTMLSelectElement).value).toBe('base')
 
     await wrapper.get('[data-studio-field="color"]').setValue('#776655')
     await flushPromises()

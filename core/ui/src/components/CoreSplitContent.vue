@@ -61,7 +61,7 @@ function openPluginPage(target: { plugin: string; id: string }) {
   <CoreAppPage v-if="tab.kind === 'page'" ref="pageRef" :page="tab.resource" :bindings="localBindings" auxiliary @close="controller.closeTab(pane, tab)" />
   <CoreSplitBrowser v-else-if="tab.kind === 'browser'" :tab="tab" :visible="visible" />
   <CoreAuxiliaryChat v-else-if="tab.kind === 'conversation'" :tab="tab" :visible="visible" />
-  <CoreSplitTextEditor v-else-if="tab.kind === 'editor'" :tab="tab" :root="root" :controller="controller" :documents="documents" @dirty="(id, value) => emit('dirty', id, value)" />
+  <CoreSplitTextEditor v-else-if="tab.kind === 'editor'" :tab="tab" :root="root" :visible="visible" :controller="controller" :documents="documents" @dirty="(id, value) => emit('dirty', id, value)" />
   <CoreSplitPreview v-else-if="tab.kind === 'preview'" :tab="tab" :root="root" :pane="pane" :controller="controller" :transport="transport" />
   <CoreSplitFileTree v-else-if="tab.kind === 'files'" :root="tab.resource || root" @open="openFile" />
   <template v-else-if="tab.kind === 'plugin'">

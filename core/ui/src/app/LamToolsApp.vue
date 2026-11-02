@@ -7,6 +7,7 @@
     :mode-label="activeAppMode.title"
     :mode-title="nextAppModeTitle"
     :can-toggle-mode="appModes.length > 1"
+    :session-title="activeSessionTitle"
     :mobile-pairing-code="remotePairing?.code"
     :mobile-pairing-expires-at-ms="remotePairing?.expiresAtMs"
     :mobile-pairing-loading="remoteGatewayLoading"
@@ -479,6 +480,7 @@
         @cancel="queueController.cancelEdit"
         @delete="(item) => queueController.remove(item as CoreQueuedInput)"
         @guide="(item) => queueController.guide(item as CoreQueuedInput)"
+        @reorder="(items) => queueController.reorder(items as CoreQueuedInput[])"
         @cancel-goal="handleCancelGoal"
       />
     </template>
@@ -576,6 +578,7 @@
         :request-rpc="requestConfigOperation"
         :transport="transport"
         :messages="messages"
+        :task-plan="snapshot?.core?.task_plan"
         :context-window="executionControls.activeModel.value?.context_window"
         :process-signal="lastWorkbenchEvent"
         :active-plugin-id="activePluginMode?.pluginId || null"
@@ -686,6 +689,7 @@ import type {
   CoreSubAgentRun,
 } from '@/types.ts'
 import { isInternalSession, isPluginOwnedSession } from '@/sessions/visibility.ts'
+import { useSessionCompletionNotices } from '@/composables/useSessionCompletionNotices.ts'
 import { createModeSessionState } from '@/sessions/mode-state.ts'
 import {
   buildCoreProjectGroups,
@@ -704,7 +708,7 @@ import {
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 import type { LamToolsRuntime, RuntimeFileSource } from '@/app/runtime.ts'
 import { buildCoreComposerHighlightSegments } from '@/composer/inputItems.ts'
-import { buildCurrentTurnChecklistGroups } from '@/runtime/checklist.ts'
+import { resolveChecklistGroups } from '@/runtime/checklist.ts'
 import {
   coreApplyHistoryScrollCeiling,
   coreHistoryAutoLoadThreshold,
@@ -942,6 +946,16 @@ const loadError = ref<string | null>(null)
 function setLoadError(text: string) {
   loadError.value = text
 }
+
+// user:“做完了还是在这转啊”“也没有弹窗提示”“只有点进去才知道已经完成任务了”
+// +(后台会话完成后立刻停转圈并弹一条可点击的提示——详见这个组合函数的验收测试。)
+useSessionCompletionNotices({
+  sessions,
+  activeSessionId,
+  openSession: selectSession,
+  refreshSessions,
+})
+
 const showProjectCreate = ref(false)
 const projectCreateLoading = ref(false)
 const projectCreateError = ref('')
@@ -2161,8 +2175,12 @@ const sidebarPrimaryActionLabel = computed(() => (
     ? readPluginSurface(activePluginSurface.value.sidebar.primaryActionLabel, '')
     : t("新建项目")
 ))
+// 没有活动会话时返回空串：TitleBar 以“是否非空”决定显示品牌名还是会话名，
+// 恒非空会让窄窗口永远顶掉 Sunday 品牌。
 const activeSessionTitle = computed(() => (
-  sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session'
+  activeSessionId.value
+    ? (sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session')
+    : ''
 ))
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
@@ -2294,7 +2312,7 @@ watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId
 const visibleSubmissions = computed(() => liveComposerController.submissions.value.filter(
   submission => submission.threadId === activeSessionId.value && !submission.displayed,
 ))
-const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
+const stepGroups = computed(() => resolveChecklistGroups(messages.value, snapshot.value?.core?.task_plan))
 
 // user:“主区无需标签”+(主区保持原有标题，新增内容由独立分屏宿主管理)。
 const splitStorageKey = computed(() => `${settingsStorageKey}:split-workspace`)
@@ -4535,6 +4553,24 @@ onMounted(() => {
     void import('@tauri-apps/api/event').then(({ listen }) => {
       void listen('backend-crashed', () => {
         backendCrashed.value = true
+      })
+      // user:“ping完之后用一个合适的大小打开Sunday本体…这样最大程度复用”+
+      // (Ping 发出后由 Rust 唤起主窗口并调到合适大小，这里切到对应会话。)
+      void listen<{ projectId?: string | null; sessionId?: string }>('app://open-session', ({ payload }) => {
+        const sessionId = String(payload?.sessionId || '')
+        if (!sessionId) return
+        // Rust 侧已经知道目标项目；先切项目再选会话，避免会话没有 work_root 时
+        // 反查不到正确项目。
+        const projectId = String(payload?.projectId || '')
+        if (projectId) selectedProjectId.value = projectId
+        void (async () => {
+          try {
+            await refreshSessions()
+            await selectSession(sessionId)
+          } catch (error) {
+            composerErrorText.value = messageFromError(error)
+          }
+        })()
       })
     }).catch(() => {})
   }

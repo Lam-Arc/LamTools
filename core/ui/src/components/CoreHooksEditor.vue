@@ -141,57 +141,80 @@
       <p>{{ t("未发现任何 Hook。点击「新增 Hook」创建事件钩子，或切换到「原始配置」手写 JSON。") }}</p>
     </article>
 
-    <!-- Hook list -->
-    <div v-else-if="!showConfig && !showHookForm" class="provider-list">
-      <section
-        v-for="(group, event) in groupedHooks"
-        :key="event"
-        class="provider-group"
-      >
-        <header class="provider-head">
-          <div class="provider-identity">
-            <strong>{{ eventLabel(event) }}</strong>
-            <span>{{ group.length }}{{ t("个") }}</span>
-          </div>
-        </header>
+    <!-- Hook 卡片墙：事件筛选 + 一面卡片网格 -->
+    <template v-else-if="!showConfig && !showHookForm">
+      <div class="hook-filters" role="group" :aria-label="t('按事件筛选')">
+        <button
+          class="hook-filter"
+          :class="{ 'is-active': eventFilter === 'all' }"
+          type="button"
+          data-hook-filter="all"
+          :aria-pressed="eventFilter === 'all'"
+          @click="eventFilter = 'all'"
+        >{{ t("全部") }}<span class="hook-filter-count">{{ hooks.length }}</span></button>
+        <button
+          v-for="event in presentEvents"
+          :key="event"
+          class="hook-filter"
+          :class="{ 'is-active': eventFilter === event }"
+          type="button"
+          :data-hook-filter="event"
+          :aria-pressed="eventFilter === event"
+          @click="eventFilter = event"
+        >{{ eventLabel(event) }}<span class="hook-filter-count">{{ eventCounts[event] || 0 }}</span></button>
+      </div>
 
-        <div class="model-list">
-          <div
-            v-for="hook in group"
-            :key="hook.id"
-            class="model-row"
-            :class="{ 'is-pending': !hook.trusted }"
-          >
-            <div class="model-identity">
-              <strong>{{ hook.matcher === '*' ? t("全部工具") : hook.matcher }}</strong>
-              <span class="hook-meta">{{ hook.handler_type }} · {{ hook.source_name || hook.source }}</span>
-              <span v-if="hook.command" class="skill-path">{{ hook.command }}</span>
-            </div>
+      <div v-if="visibleHooks.length" class="hook-grid">
+        <article
+          v-for="hook in visibleHooks"
+          :key="hook.id"
+          class="hook-card"
+          :class="{ 'is-attention': !hook.trusted }"
+          :data-hook-card="hook.id"
+        >
+          <div class="hook-card-head">
+            <span class="hook-event" :data-event="hook.event">
+              <i class="hook-event-dot" aria-hidden="true"></i>{{ eventLabel(hook.event) }}
+            </span>
+            <span class="hook-trust" :class="hook.trusted ? 'is-trusted' : 'is-pending'">
+              {{ hook.trusted ? t("已信任") : t("待审核") }}
+            </span>
+          </div>
+          <div class="hook-card-matcher">
+            <strong>{{ hook.matcher === '*' ? t("全部工具") : hook.matcher }}</strong>
+            <span class="hook-handler">{{ hook.handler_type }}</span>
+          </div>
+          <p v-if="hook.command" class="hook-card-target">{{ hook.command }}</p>
+          <div class="hook-card-foot">
+            <span class="hook-card-source">{{ hook.source_name || hook.source }}</span>
             <div class="row-actions">
-              <span class="hook-status" :class="hook.trusted ? 'is-trusted' : 'is-pending-text'">{{ hook.trusted ? t("已信任") : t("待审核") }}</span>
               <button
                 v-if="!hook.trusted"
                 class="btn btn--ghost is-on"
                 type="button"
+                data-hook-trust
                 @click="trustHook(hook.id)"
               >{{ t("信任") }}</button>
               <button
                 v-else
                 class="btn btn--ghost"
                 type="button"
+                data-hook-untrust
                 @click="untrustHook(hook.id)"
               >{{ t("取消") }}</button>
               <button
                 v-if="canDelete(hook)"
                 class="btn btn--ghost btn--danger"
                 type="button"
+                :data-hook-delete="hook.id"
                 @click="deleteHook(hook.id)"
               >{{ t("删除") }}</button>
             </div>
           </div>
-        </div>
-      </section>
-    </div>
+        </article>
+      </div>
+      <p v-else class="muted hook-filter-empty">{{ t("这个事件下没有 Hook。切回「全部」看看其他事件。") }}</p>
+    </template>
 
     <CoreConfirmDialog
       :open="Boolean(pendingDeleteHook)"
@@ -281,18 +304,24 @@ const handlerTypeOptions = [
   { value: 'prompt', get label() { return t("prompt (内联提示)") } },
 ]
 
-const groupedHooks = computed(() => {
-  const groups: Record<string, CoreHookItem[]> = {}
-  for (const event of eventOrder) groups[event] = []
+// user:“hook 界面自行设计”+(事件筛选 chips：按事件过滤卡片墙，
+// 没有出现的事件不占位置。)
+const eventFilter = ref('all')
+
+const eventCounts = computed(() => {
+  const counts: Record<string, number> = {}
   for (const hook of hooks.value) {
     const ev = hook.event || 'PreToolUse'
-    ;(groups[ev] || (groups[ev] = [])).push(hook)
+    counts[ev] = (counts[ev] || 0) + 1
   }
-  const result: Record<string, CoreHookItem[]> = {}
-  for (const [key, list] of Object.entries(groups)) {
-    if (list.length) result[key] = list
-  }
-  return result
+  return counts
+})
+
+const presentEvents = computed(() => eventOrder.filter((event) => (eventCounts.value[event] || 0) > 0))
+
+const visibleHooks = computed(() => {
+  if (eventFilter.value === 'all') return hooks.value
+  return hooks.value.filter((hook) => (hook.event || 'PreToolUse') === eventFilter.value)
 })
 
 function eventLabel(event: string): string {
@@ -529,34 +558,185 @@ onMounted(fetchHooks)
   font-size: 13px;
 }
 
-.skill-path {
+/* ── 事件筛选行（与技能页分组筛选同一配方）────────────────────────────── */
+
+.hook-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.hook-filter {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 64%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.hook-filter:hover {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--settings-main-text, #fff);
+}
+
+.hook-filter.is-active {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-active), transparent);
+  color: var(--settings-main-text, #fff);
+}
+
+.hook-filter-count {
+  margin-left: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 45%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.hook-filter-empty {
+  font-size: 12px;
+  padding: var(--space-4) 0;
+  text-align: center;
+}
+
+/* ── Hook 卡片网格（事件徽标 + 信任状态 + 目标预览）────────────────────── */
+
+.hook-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+}
+
+.hook-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  border-radius: var(--radius);
+  background: var(--settings-card-background, color-mix(in srgb, var(--settings-main-text, #fff) 4%, transparent));
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+
+.hook-card:hover {
+  border-color: color-mix(in srgb, var(--settings-main-text, #fff) 24%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 待审核 = 需要用户处理的卡片：边框混入警示色，不只靠文字。 */
+.hook-card.is-attention {
+  border-color: color-mix(in srgb, var(--orange) 32%, transparent);
+}
+
+.hook-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.hook-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hook-event-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 45%, transparent);
+}
+
+/* 事件色：语义色固定，不随主题走。 */
+.hook-event[data-event='SessionStart'] .hook-event-dot { background: var(--blue); }
+.hook-event[data-event='UserPromptSubmit'] .hook-event-dot { background: var(--purple); }
+.hook-event[data-event='PreToolUse'] .hook-event-dot,
+.hook-event[data-event='PermissionRequest'] .hook-event-dot { background: var(--orange); }
+.hook-event[data-event='PostToolUse'] .hook-event-dot { background: var(--green); }
+.hook-event[data-event='PostToolUseFailure'] .hook-event-dot { background: var(--red); }
+
+.hook-trust {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+}
+
+.hook-trust.is-trusted {
+  color: color-mix(in srgb, var(--green) 78%, var(--settings-main-text, #fff));
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.hook-trust.is-pending {
+  color: color-mix(in srgb, var(--orange) 78%, var(--settings-main-text, #fff));
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
+}
+
+.hook-card-matcher {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.hook-card-matcher strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hook-handler {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 58%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 8%, transparent);
+}
+
+.hook-card-target {
+  margin: 0;
   font-family: var(--font-mono);
   font-size: 11px;
-  opacity: .7;
-  margin-top: 2px !important;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 55%, transparent);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-all;
 }
 
-.hook-meta {
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  font-size: 11px !important;
+.hook-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: auto;
 }
 
-.model-row.is-pending {
-  opacity: .7;
-}
-
-.hook-status {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.hook-status.is-trusted {
-  color: var(--green);
-}
-
-.hook-status.is-pending-text {
-  color: var(--orange);
+.hook-card-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 45%, transparent);
 }
 
 .btn--ghost.is-on {
@@ -610,5 +790,12 @@ onMounted(fetchHooks)
 
 .hook-form .editor-actions {
   gap: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hook-card,
+  .hook-filter {
+    transition: none;
+  }
 }
 </style>
