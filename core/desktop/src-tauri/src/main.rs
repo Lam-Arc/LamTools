@@ -803,6 +803,20 @@ fn main() {
                 pet::simulate_ping_commit(app, &sector);
                 return;
             }
+            // 隔离测试：冻结截图页心跳，让看门狗把"页面死掉"的整屏窗口收回去。
+            if args.iter().any(|arg| arg == "--capture-freeze-heartbeat") {
+                pet::simulate_capture_heartbeat_stall(app);
+                return;
+            }
+            // 隔离测试：只在本实例打开/收起 Ping 环，不触发正式实例的全局快捷键。
+            if args.iter().any(|arg| arg == "--ping-ring-open") {
+                pet::simulate_ping_ring(app, "down");
+                return;
+            }
+            if args.iter().any(|arg| arg == "--ping-ring-close") {
+                pet::simulate_ping_ring(app, "up");
+                return;
+            }
             // Focus the existing window instead of starting a second instance.
             reveal_main_window(app);
         }))
@@ -980,6 +994,12 @@ fn main() {
             pet::pet_cursor,
             pet::pet_capture_monitor_under_cursor,
             pet::pet_capture_monitor,
+            // user:“重新设计与实现 Ping 的框选工具”+(独立截图窗口 + 心跳看门狗)
+            pet::pet_ping_capture_open,
+            pet::pet_ping_capture_frame,
+            pet::pet_ping_capture_show,
+            pet::pet_ping_capture_heartbeat,
+            pet::pet_ping_capture_close,
             pet::pet_hotkey_set,
             pet::pet_default_work_root,
             pet::pet_desktop_windows,

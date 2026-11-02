@@ -140,6 +140,33 @@ export async function setPingInputMode(mode: 'auto' | 'capture' | 'passthrough')
 }
 
 /**
+ * 独立截图窗口：拍下静态截图并打开专门的框选/标注窗口。
+ *
+ * user:“重新设计与实现 Ping 的框选工具”+(不再让 Ping 覆盖层吃掉整屏鼠标；
+ * 截图窗口可聚焦、可收键盘、可被看门狗强制收起。)
+ */
+export async function openPingCapture(): Promise<OverlayBounds> {
+  return await invoke('pet_ping_capture_open')
+}
+
+export async function fetchPingCaptureFrame(): Promise<CapturedFrame> {
+  const buffer = await invoke<ArrayBuffer>('pet_ping_capture_frame')
+  return decodeCapturedFrame(buffer)
+}
+
+export async function showPingCapture(): Promise<void> {
+  await invoke('pet_ping_capture_show')
+}
+
+export async function heartbeatPingCapture(): Promise<void> {
+  await invoke('pet_ping_capture_heartbeat')
+}
+
+export async function closePingCapture(): Promise<void> {
+  await invoke('pet_ping_capture_close')
+}
+
+/**
  * 覆盖层心跳：告诉宿主"这块窗口还有人画"。
  *
  * user:“从你启动开始就一直是黑屏未响应状态”+(宿主侧没人画的全屏窗口必须能被
@@ -296,7 +323,7 @@ export async function captureMonitorUnderCursor(): Promise<CapturedFrame> {
   return decodeCapturedFrame(buffer)
 }
 
-function decodeCapturedFrame(raw: ArrayBuffer | Uint8Array): CapturedFrame {
+export function decodeCapturedFrame(raw: ArrayBuffer | Uint8Array): CapturedFrame {
   const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw)
   if (bytes.length < 24) throw new Error('截图数据不完整（可能被系统拦截）')
   const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3])

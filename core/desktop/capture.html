@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sunday Capture</title>
+  <style>
+    /* user:“重新设计与实现 Ping 的框选工具”+(截图是独立窗口：静态底图 + 框选/标注，
+       不透明、可聚焦，不受 Ping 覆盖层鼠标穿透影响。) */
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #capture-app {
+      width: 100%;
+      height: 100%;
+      background: #05070a;
+      overflow: hidden;
+    }
+    body {
+      color: #eef3fb;
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+  </style>
+</head>
+<body>
+  <div id="capture-app"></div>
+  <script type="module" src="/src/capture.ts"></script>
+</body>
+</html>

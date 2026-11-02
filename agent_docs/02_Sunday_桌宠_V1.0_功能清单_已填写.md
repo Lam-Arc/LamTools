@@ -137,9 +137,11 @@
 - `[~]` **PING-10** 默认截鼠标所在整屏：`pet_capture_monitor_under_cursor`（`MonitorFromPoint` + 该显示器矩形）。未真机验证。
 - `[~]` **PING-11** 标记坐标准确传回：坐标同时写入图像与文本（屏幕坐标 + 显示器矩形 + 缩放）。跨 DPI 精度未验证。
 - `[x]` **PING-12** 不把轮盘/卡片拍进原图：截图瞬间隐藏覆盖层再恢复（`capture_with_overlay_hidden`），Ping 真机项同批核验；早期记录的 `WDA_EXCLUDEFROMCAPTURE` 方案已弃用（它会把远程桌面/录屏整屏变黑，见 platform.rs 注释）。
-- `[~]` **PING-13** 框选任意区域并保留坐标：`PingAnnotator` 拖选区域 → 裁剪 → 记录选区坐标。
-- `[~]` **PING-14** 胶囊输入 + `?`/`!`/箭头/文字/画笔：六件套齐备（文字用 `prompt()` 输入）。
-- `[~]` **PING-15** 撤销/重做/清除/取消、标注进图：`undo/redo/clearAll/cancel` 与合成导出。
+- `[x]` **PING-13** 框选任意区域并保留坐标：独立 `ping-capture` 窗口显示静态截图，拖选 → 裁剪 → 记录选区屏幕坐标（`selectionMeta` 叠加显示器原点与缩放）。**2026-11-01 隔离实例真机验证**：实际拖拽出选框、标注工具与空格键输入均可用；反向拖拽/黑边/负坐标副屏由 `ping-capture.test.ts` 几何用例覆盖。
+- `[x]` **PING-14** 胶囊输入 + `?`/`!`/箭头/文字/画笔：六件套齐备；文字块改为窗口内联输入框（不再用会阻塞心跳的 `prompt()`）；底部工具条按图标内容自适应，输入栏宽度 = 工具条宽度 + 左右各 32px（鼠标实测：工具条 348、输入栏 412 CSS px）。
+- `[x]` **PING-15** 撤销/重做/清除/取消、标注进图：`undo/redo/clearAll/cancel` 与合成导出；导出画布按选区裁剪后再叠加标注。
+- `[x]` **PING-20** 主环只显示图标、不显示文字：询问/注意/记录/框选/对话/切换分别用 `MessageCircleQuestionMark`/`TriangleAlert`/`NotebookPen`/`SquareDashed`/`MessagesSquare`/`ArrowLeftRight`，完整名称只放在悬停 `title`；二三级项目/会话仍保持纯文字。**2026-11-01 隔离实例真机截图确认**：六个扇区图标方向正确，悬停白色高亮时图标自动转深色。
+- `[x]` **PING-19** 框选永不锁死桌面：截图窗口独立、可聚焦、可收键盘；页面 keydown + 宿主原生 Esc 轮询双通道退出；心跳看门狗在页面无响应时跨线程 `ShowWindow(SW_HIDE)` 并销毁窗口，重开前清理旧窗口（不重入）。**2026-11-01 隔离实例验证**：刚打开未点击时 Esc 立即关闭；`--capture-freeze-heartbeat` 冻结心跳后 5 秒内看门狗回收整屏窗口；重新打开后心跳恢复、窗口保持正常。
 - `[~]` **PING-16** 「对话」打开卡片并按配置附截图且不自动发送：`openPingConversation` 上传后放入 `pending.attach`，卡片可删除附件、需手动点发送。
 - `[~]` **PING-17** 轮盘内「切换会话」立即影响后续 Ping：`SessionPicker` → `host.setPingTarget` → 写回 `config.ping.target`。
 - `[x]` **PING-18** 截图失败不伪造：`decodeCapturedFrame` 对 magic/长度/像素数校验，失败抛错并显示 `capture.lastError`。
@@ -273,6 +275,9 @@
 - `core/ui/src/pet/ui/pingModel.ts`（轮盘分层与扇区命中）
 - `core/ui/src/pet/ui/PingMarkerFx.vue`（标记脉冲动画）
 - `core/ui/tests/pet-render.test.ts`（15）、`core/ui/tests/pet-zip.test.ts`（9）、`core/ui/tests/pet-isolated-e2e.test.ts`（9）
+- `core/ui/tests/ping-capture.test.ts`（29：几何/窗口/看门狗/前端退出与发送契约）
+- `core/ui/src/pet/capture/geometry.ts`（截图 ↔ 窗口坐标、选区裁剪、屏幕元数据）
+- `core/ui/src/pet/ui/CaptureEditor.vue` / `CaptureApp.vue`、`core/desktop/capture.html`、`core/desktop/src/capture.ts`（独立截图窗口）
 - Rust：`pet_read_zip`、`pet_write_pack_bundle`（二进制整包写入）
 
 修改：

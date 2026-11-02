@@ -310,7 +310,8 @@ describe('覆盖层样式与主界面同源', () => {
     expect(surface).toContain('createPingRuntime')
     expect(surface).toContain('PingRing')
     expect(surface).toContain('PingMarkerFx')
-    expect(surface).toContain('PingAnnotator')
+    // user:“重新设计与实现 Ping 的框选工具”+(框选移出覆盖层，改为独立截图窗口。)
+    expect(surface).toContain('openCapture')
     expect(surface).toContain('attachNativeEvents')
     expect(surface).toContain('showPingOverlay')
     // user:“通过 ping 环切到目标会话那一项，是不是还依赖着桌宠的那个窗口了？”

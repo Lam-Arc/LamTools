@@ -11,8 +11,66 @@
  * user:"ping 环跟桌宠应当是解耦的，它们是两个独立的功能"+
  * (组件只依赖 Ping 运行时（ping/），不引用桌宠运行时与宠物实例。)
  */
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
+import {
+  ArrowLeftRight,
+  Layers,
+  MessageCircleQuestionMark,
+  MessagesSquare,
+  NotebookPen,
+  Sparkles,
+  SquareDashed,
+  TriangleAlert,
+} from 'lucide-vue-next'
 import type { PingRuntime } from '../ping/usePingRuntime.ts'
+
+/**
+ * user:“ping 环内的什么询问记录图标自己去找，不要再用文字了”+
+ * (主环每个扇区只显示图标：询问/记录/注意/框选/对话/切换各有对应的
+ *  lucide 图标，不再把单字或标签当文字画在扇区里。)
+ */
+const ICON_BY_KIND: Record<string, Component> = {
+  question: MessageCircleQuestionMark,
+  exclamation: TriangleAlert,
+  note: NotebookPen,
+  select: SquareDashed,
+  chat: MessagesSquare,
+  switch: ArrowLeftRight,
+  subring: Layers,
+  custom: Sparkles,
+}
+
+/** 旧配置里的单字图标 / 可写的图标名仍然能对上合适的图形。 */
+const ICON_BY_NAME: Record<string, Component> = {
+  '?': MessageCircleQuestionMark,
+  question: MessageCircleQuestionMark,
+  'message-circle-question': MessageCircleQuestionMark,
+  'message-circle-question-mark': MessageCircleQuestionMark,
+  '!': TriangleAlert,
+  alert: TriangleAlert,
+  'triangle-alert': TriangleAlert,
+  '记': NotebookPen,
+  note: NotebookPen,
+  notebook: NotebookPen,
+  'notebook-pen': NotebookPen,
+  '框': SquareDashed,
+  select: SquareDashed,
+  'square-dashed': SquareDashed,
+  '聊': MessagesSquare,
+  chat: MessagesSquare,
+  messages: MessagesSquare,
+  'messages-square': MessagesSquare,
+  '⇄': ArrowLeftRight,
+  switch: ArrowLeftRight,
+  'arrow-left-right': ArrowLeftRight,
+  layers: Layers,
+  'layers-2': Layers,
+  sparkles: Sparkles,
+}
+
+function sectorIcon(kind: string, icon: string): Component {
+  return ICON_BY_KIND[kind] || ICON_BY_NAME[icon] || Sparkles
+}
 
 const props = defineProps<{ ping: PingRuntime }>()
 
@@ -63,8 +121,8 @@ const geometry = computed(() => {
     band * 1.4,
     outer * 0.82,
   )
-  const iconSize = Math.max(18, outer * 0.15)
-  const labelSize = Math.max(11, outer * 0.075)
+  // 没有文字标签后图标可以放在环带中央，稍微靠外一点更好读。
+  const iconSize = Math.max(20, outer * 0.16)
   const iconRadius = hub + (outer - hub) * 0.52
   const corner = Math.max(3, Math.min(10, outer * 0.032))
 
@@ -76,6 +134,7 @@ const geometry = computed(() => {
     const iconY = center + Math.sin(mid) * iconRadius
     return {
       id: sector.id,
+      kind: sector.kind,
       icon: sector.icon,
       label: sector.label,
       active: ring.hovered === sector.id
@@ -83,8 +142,6 @@ const geometry = computed(() => {
       slicePath: describeSlice(center, center, hub, outer, start, end, corner),
       iconX,
       iconY,
-      labelX: iconX,
-      labelY: iconY + iconSize * 0.82 + labelSize * 0.9,
     }
   })
 
@@ -145,7 +202,6 @@ const geometry = computed(() => {
     outer,
     hub,
     iconSize,
-    labelSize,
     cssSize,
     left: centerX - cssSize / 2,
     top: centerY - cssSize / 2,
@@ -299,31 +355,22 @@ function clamp(value: number, min: number, max: number): number {
 
       <!-- user:“中间的圆心完全透明”+(中心不放任何填充和十字，直接透出桌面。) -->
 
-      <!-- 主轮盘图标 + 标签。 -->
+      <!-- 主轮盘：只有图标，不显示任何文字标签；完整名称放在 title 里。 -->
       <g
         v-for="arc in geometry.arcs"
         :key="`${arc.id}-item`"
         class="ping-ring__item"
         :class="{ 'is-active': arc.active }"
       >
-        <text
-          :x="arc.iconX"
-          :y="arc.iconY"
-          text-anchor="middle"
-          dominant-baseline="central"
-          :fill="arc.active ? '#15171d' : 'rgba(244, 247, 255, 0.94)'"
-          :font-size="geometry.iconSize"
-          font-weight="650"
-        >{{ arc.icon }}</text>
-        <text
-          :x="arc.labelX"
-          :y="arc.labelY"
-          text-anchor="middle"
-          dominant-baseline="central"
-          :fill="arc.active ? '#1a1c22' : 'rgba(226, 234, 248, 0.76)'"
-          :font-size="geometry.labelSize"
-          font-weight="600"
-        >{{ arc.label }}</text>
+        <title>{{ arc.label }}</title>
+        <component
+          :is="sectorIcon(arc.kind, arc.icon)"
+          :x="arc.iconX - geometry.iconSize / 2"
+          :y="arc.iconY - geometry.iconSize / 2"
+          :size="geometry.iconSize"
+          :stroke-width="1.9"
+          :color="arc.active ? '#15171d' : 'rgba(244, 247, 255, 0.94)'"
+        />
       </g>
     </svg>
   </div>

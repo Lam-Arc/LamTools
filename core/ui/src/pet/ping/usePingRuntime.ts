@@ -82,6 +82,12 @@ export interface PingRuntimeDeps {
   notify: (input: { petId?: string; sessionId: string; title: string; body: string }) => void
   /** 轮盘「切换会话」扇区打开选择器的入口（选择器 UI 由组合方提供）。 */
   openSessionPicker: (projectId?: string) => void
+  /**
+   * 「框选」扇区打开独立截图窗口的入口。
+   * user:“重新设计与实现 Ping 的框选工具”+(框选不再在 Ping 覆盖层里做，
+   * 由组合方打开一个可聚焦、可被看门狗回收的独立窗口。)
+   */
+  openCapture?: () => void | Promise<void>
   /** 三级会话选择：项目列表（第 2 级轮盘）。 */
   listProjects?: () => Promise<{ id: string; name: string }[]>
   /** 三级会话选择：项目内会话（第 3 级轮盘，取最近 6 条 + 更多）。 */
@@ -167,9 +173,6 @@ export function createPingRuntime(deps: PingRuntimeDeps) {
     get: () => activeCardSessionId.value,
     set: (value: string | null) => { activeCardSessionId.value = value },
   })
-
-  /** 框选标注的请求体：由轮盘扇区发起，PingAnnotator 消费。 */
-  const selectionRequest = ref<{ x: number; y: number; sector: PingSectorConfig } | null>(null)
 
   /** 会话宿主/客户端的只读视图（组合方boot完成后才有值）。 */
   const host = computed(() => deps.getHost())
@@ -643,7 +646,11 @@ export function createPingRuntime(deps: PingRuntimeDeps) {
       return
     }
     if (sector.kind === 'select') {
-      selectionRequest.value = { x: point.x, y: point.y, sector }
+      // user:“重新设计与实现 Ping 的框选工具”+(静态截图在独立窗口里框选；
+      // 环先收起，避免截图时还盖着一层 UI。)
+      cancelRing()
+      if (!deps.openCapture) throw new Error('框选入口未绑定')
+      await deps.openCapture()
       return
     }
     if (sector.kind === 'subring') {
@@ -974,7 +981,6 @@ export function createPingRuntime(deps: PingRuntimeDeps) {
     pending,
     cards,
     activeCardSession,
-    selectionRequest,
     host,
     client,
     sectorAt,

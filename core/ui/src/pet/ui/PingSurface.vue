@@ -10,7 +10,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import PingRing from './PingRing.vue'
 import PingMarkerFx from './PingMarkerFx.vue'
-import PingAnnotator from './PingAnnotator.vue'
 import SessionPicker, { type SessionPickerView } from './SessionPicker.vue'
 import { createPingRuntime } from '../ping/usePingRuntime.ts'
 import { ringSectors } from '../ping/ringModel.ts'
@@ -58,6 +57,9 @@ const ping = createPingRuntime({
   report: (scope, error) => console.error(`[ping] ${scope}`, error),
   notify: input => { void emitToApp('pet://ping/notify', input) },
   openSessionPicker: (projectId?: string) => { void openPicker(projectId) },
+  // user:“重新设计与实现 Ping 的框选工具”+(截图/框选交给独立窗口；
+  // 覆盖层只负责把入口点开，不再整屏吃鼠标。)
+  openCapture: () => bridge.openPingCapture().then(() => undefined),
   // 三级会话轮盘的数据源（项目 → 项目内最近会话）。
   listProjects: async () => {
     const client = agentClient.value
@@ -148,7 +150,6 @@ if (import.meta.hot) {
 const overlayActive = computed(() => (
   ping.ring.visible
   || ping.markerFx.visible
-  || Boolean(ping.selectionRequest.value)
   || picker.open
 ))
 
@@ -157,12 +158,6 @@ watch(overlayActive, active => {
   void bridge.showPingOverlay().catch(error => {
     console.error('[ping] show overlay failed', error)
   })
-})
-
-// 框选是整屏交互：用 capture 模式让整块窗口接收鼠标。
-// 轮盘的二三级浮层走命中矩形（悬停/点击都在浮层 DOM 上），不需要整屏捕获。
-watch(() => Boolean(ping.selectionRequest.value), active => {
-  void bridge.setPingInputMode(active ? 'capture' : 'auto').catch(() => undefined)
 })
 
 // -------------------------------------------------------------------------
@@ -327,12 +322,6 @@ function onSelectionEscape(event: KeyboardEvent): void {
     picker.open = false
     return
   }
-  if (ping.selectionRequest.value) {
-    event.preventDefault()
-    ping.selectionRequest.value = null
-    void bridge.setPingInputMode('auto').catch(() => undefined)
-    return
-  }
   if (ping.ring.visible) {
     event.preventDefault()
     ping.cancelRing()
@@ -378,9 +367,6 @@ onBeforeUnmount(() => {
   teardownEvents()
   if (rectRetryTimer) window.clearTimeout(rectRetryTimer)
   if (saveTimer) window.clearTimeout(saveTimer)
-  if (ping.selectionRequest.value) {
-    void bridge.setPingInputMode('auto').catch(() => undefined)
-  }
   void bridge.hidePingOverlay().catch(() => undefined)
 })
 </script>
@@ -389,7 +375,6 @@ onBeforeUnmount(() => {
   <div class="ping-surface" data-region="ping-surface">
     <PingRing :ping="ping" />
     <PingMarkerFx :ping="ping" />
-    <PingAnnotator :ping="ping" />
     <SessionPicker
       :picker="picker"
       :load-sessions="loadSessions"

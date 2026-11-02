@@ -211,13 +211,37 @@ describe('Ping 解耦与零宠物可用', () => {
   })
 
   it('Ping 组件只依赖 Ping 运行时，不再引用 usePetRuntime', () => {
-    for (const name of ['PingRing.vue', 'PingMarkerFx.vue', 'PingAnnotator.vue', 'SessionCard.vue', 'PingCardWindow.vue']) {
+    for (const name of ['PingRing.vue', 'PingMarkerFx.vue', 'SessionCard.vue', 'PingCardWindow.vue']) {
       const source = sourceOf(`ui/${name}`)
       expect(source, `${name} 不得引用桌宠运行时`).not.toContain('usePetRuntime')
       expect(source, `${name} 应改为接收 ping 运行时`).toContain('PingRuntime')
     }
+    // 截图窗口是独立文档：它只依赖 Agent 宿主，不引用桌宠运行时或 Ping 运行时。
+    for (const name of ['CaptureEditor.vue', 'CaptureApp.vue']) {
+      const source = sourceOf(`ui/${name}`)
+      expect(source, `${name} 不得引用桌宠运行时`).not.toContain('usePetRuntime')
+    }
     // 组合点保留在桌宠运行时里：由它创建 Ping 并注入共享能力。
     expect(sourceOf('ui/usePetRuntime.ts')).toContain("from '../ping/usePingRuntime.ts'")
+  })
+
+  it('Ping 主环用图标而不是文字，完整名称留在 title 里', () => {
+    const ring = sourceOf('ui/PingRing.vue')
+    for (const icon of [
+      'MessageCircleQuestionMark',
+      'NotebookPen',
+      'TriangleAlert',
+      'SquareDashed',
+      'MessagesSquare',
+      'ArrowLeftRight',
+    ]) {
+      expect(ring, `主环缺少 ${icon} 图标`).toContain(icon)
+    }
+    expect(ring).toContain('sectorIcon')
+    const rootItems = ring.slice(ring.indexOf('主轮盘：只有图标'), ring.indexOf('</svg>'))
+    expect(rootItems).toContain('<title>')
+    // 主环扇区不再画单字/标签；二三级项目/会话仍然保持文字。
+    expect(rootItems).not.toContain('<text')
   })
 
   function makeDeps(overrides: Partial<PingRuntimeDeps> = {}): PingRuntimeDeps {

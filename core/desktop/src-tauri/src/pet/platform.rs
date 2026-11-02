@@ -122,10 +122,10 @@ mod imp {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
-        GetWindowThreadProcessId, IsIconic, IsWindowVisible, PostMessageW, SetWindowLongPtrW,
-        SetWindowPos, GWL_EXSTYLE,
-        HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WM_CLOSE, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW,
+        GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindowVisible, PostMessageW,
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+        HWND_BOTTOM, HWND_NOTOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, WM_CLOSE,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     };
 
     fn sinfo_to_monitor(info: &MONITORINFOEXW, primary: bool, scale: f64) -> MonitorInfo {
@@ -354,6 +354,33 @@ mod imp {
             );
         }
         Ok(())
+    }
+
+    /// Esc 是否处于按下状态（原生全局兜底：窗口没拿到键盘焦点也能退出）。
+    pub fn escape_down() -> bool {
+        unsafe { (GetAsyncKeyState(0x1B) as u16 & 0x8000) != 0 }
+    }
+
+    /// 截图窗口是否已被系统判定为无响应。
+    pub fn is_window_hung(hwnd: isize) -> bool {
+        unsafe { IsHungAppWindow(hwnd as HWND) != 0 }
+    }
+
+    /// 看门狗线程跨线程恢复桌面：直接隐藏窗口并取消置顶。
+    /// ShowWindow/SetWindowPos 允许从其它线程调用，即使主事件循环卡死也能先让桌面可用。
+    pub fn emergency_hide_window(hwnd: isize) {
+        unsafe {
+            ShowWindow(hwnd as HWND, SW_HIDE);
+            SetWindowPos(
+                hwnd as HWND,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
     }
 
     /// 框选/标注需要键盘（Esc 取消）：临时让覆盖层可激活并拿到焦点。
@@ -610,8 +637,8 @@ mod imp {
 #[cfg(windows)]
 pub use imp::{
     capture, close_overlay_windows, configure_overlay_window, cursor_position, desktop_windows,
-    hotkey_active, monitor_at, monitors, parse_hotkey, set_overlay_activatable, set_z_mode,
-    virtual_screen_bounds,
+    emergency_hide_window, escape_down, hotkey_active, is_window_hung, monitor_at, monitors, parse_hotkey,
+    set_overlay_activatable, set_z_mode, virtual_screen_bounds,
 };
 
 // ---------------------------------------------------------------------------
@@ -649,6 +676,16 @@ mod stub {
     pub fn set_overlay_activatable(_window: &WebviewWindow, _activatable: bool) -> Result<(), String> {
         Ok(())
     }
+
+    pub fn escape_down() -> bool {
+        false
+    }
+
+    pub fn is_window_hung(_hwnd: isize) -> bool {
+        false
+    }
+
+    pub fn emergency_hide_window(_hwnd: isize) {}
 
     pub fn set_z_mode(_window: &WebviewWindow, _mode: &str) -> Result<(), String> {
         Ok(())
@@ -1037,14 +1074,14 @@ mod tests {
 
 /// 截图二进制帧：`PETC` + u32 宽 + u32 高 + i32 屏幕 x + i32 屏幕 y + f64 缩放 + RGBA。
 /// 用二进制而不是 base64，4K 截图不必额外膨胀 1/3。
-pub fn encode_capture(
+pub fn encode_capture_bytes(
     x: i32,
     y: i32,
     scale: f64,
     width: u32,
     height: u32,
     pixels: Vec<u8>,
-) -> tauri::ipc::Response {
+) -> Vec<u8> {
     let mut frame = Vec::with_capacity(24 + pixels.len());
     frame.extend_from_slice(b"PETC");
     frame.extend_from_slice(&width.to_le_bytes());
@@ -1053,5 +1090,16 @@ pub fn encode_capture(
     frame.extend_from_slice(&y.to_le_bytes());
     frame.extend_from_slice(&scale.to_le_bytes());
     frame.extend_from_slice(&pixels);
-    tauri::ipc::Response::new(frame)
+    frame
+}
+
+pub fn encode_capture(
+    x: i32,
+    y: i32,
+    scale: f64,
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+) -> tauri::ipc::Response {
+    tauri::ipc::Response::new(encode_capture_bytes(x, y, scale, width, height, pixels))
 }

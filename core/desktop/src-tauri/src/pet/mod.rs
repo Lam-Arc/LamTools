@@ -20,7 +20,7 @@ mod platform;
 pub mod cards;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,8 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Webview
 pub const OVERLAY_LABEL: &str = "pet-overlay";
 /// Ping 独立覆盖层窗口：环/标记/标注/会话选择器，与桌宠覆盖层解耦。
 pub const PING_OVERLAY_LABEL: &str = "ping-overlay";
+/// 独立截图窗口：与 Ping 覆盖层分离，截图静态显示、可聚焦、可正常收到 Esc。
+pub const PING_CAPTURE_LABEL: &str = "ping-capture";
 /// 命中矩形、光标、快捷键轮询周期。8ms 让环显形/抓取的边界判定足够跟手，
 /// 同时不改变其他窗口的输入（只有状态变化时才改窗口属性）。
 const POLL_INTERVAL: Duration = Duration::from_millis(8);
@@ -66,6 +68,14 @@ pub struct PetState {
     /// 进入 capture（整屏吃鼠标）的时间。
     capture_since: Mutex<Option<Instant>>,
     ping_capture_since: Mutex<Option<Instant>>,
+    /// 独立截图窗口：截图帧、页面心跳、看门狗代次。
+    /// user:“任何步骤按 Esc 都可以安全退出；即使发生异常，也必须存在可靠的恢复办法”+
+    /// (截图窗口独立于 Ping 覆盖层，心跳和看门狗只作用于这个窗口。)
+    capture_frame: Mutex<Option<Vec<u8>>>,
+    capture_heartbeat: Mutex<Option<Instant>>,
+    capture_gen: AtomicU64,
+    /// 测试注入：模拟页面死掉（心跳停更），只在开发/隔离测试里使用。
+    capture_heartbeat_frozen: AtomicBool,
     /// 配置读改写串行化：主界面设置、桌宠面板、Ping 面板可能同时写同一份
     /// config.json，patch 必须在同一把锁内完成 read-modify-write。
     config_write: Mutex<()>,
@@ -932,6 +942,23 @@ pub async fn pet_ping_set_input_mode(app: AppHandle, mode: String) -> Result<(),
 // Ping 卡片窗口（卡片即窗口：与桌宠覆盖层分离，原生 Acrylic 材质）
 // ---------------------------------------------------------------------------
 
+/// 隔离测试：不模拟真实键鼠，直接给 Ping 页发"按下/松开"事件。
+///
+/// 正式 Sunday 也注册了同一个全局快捷键；自动化截图时如果真按 Ctrl+Alt+Space，
+/// 两个实例会同时开环。这里只对当前实例发事件，绝不碰另一个实例。
+pub fn simulate_ping_ring(app: &AppHandle, phase: &str) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let (x, y) = platform::cursor_position().unwrap_or((0, 0));
+    eprintln!("[pet] ping test-ring phase={phase} at {x},{y}");
+    let _ = app.emit_to(
+        PING_OVERLAY_LABEL,
+        "pet://ping/hotkey",
+        serde_json::json!({ "phase": phase, "x": x, "y": y }),
+    );
+}
+
 /// 测试/自动化入口：让正在运行的实例直接执行某个 Ping 扇区动作。
 ///
 /// user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”+(单实例回调收到
@@ -1225,6 +1252,274 @@ pub async fn pet_capture_monitor(app: AppHandle, monitor_id: String) -> Result<t
         let _ = (app, monitor_id);
         Err("screen capture is only implemented on Windows".into())
     }
+}
+
+// ---------------------------------------------------------------------------
+// 独立截图窗口（框选 → 标注 → 发送）
+// ---------------------------------------------------------------------------
+//
+// user:“重新设计与实现 Ping 的框选工具……旧实现会冻结桌面、无法点击、Esc 不生效”+
+// (旧实现把整块屏幕交给 Ping 覆盖层：那个窗口是 WS_EX_NOACTIVATE 的鼠标穿透层，
+//  既拿不到焦点也收不到键盘，页面一旦卡住就没人能把整屏窗口收回去。新实现改成
+//  一个独立的、可激活的截图窗口：它只负责显示一张静态截图，Ping 覆盖层回到穿透，
+//  任何一步退出都销毁这个窗口；另外用看门狗兜底，页面无响应时直接原生隐藏窗口。)
+const CAPTURE_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn capture_bounds_for(monitor: &MonitorInfo) -> OverlayBounds {
+    OverlayBounds {
+        x: monitor.x,
+        y: monitor.y,
+        width: monitor.width,
+        height: monitor.height,
+        scale: monitor.scale,
+    }
+}
+
+/// 收起 Ping 覆盖层的交互能力，让截图窗口独占鼠标与键盘。
+fn park_ping_overlay(app: &AppHandle) {
+    let state = app.state::<PetState>();
+    if let Ok(mut mode) = state.ping_input_mode.lock() {
+        *mode = "auto".to_string();
+    }
+    if let Ok(mut since) = state.ping_capture_since.lock() {
+        *since = None;
+    }
+    if let Ok(mut rects) = state.ping_interactive.lock() {
+        rects.clear();
+    }
+    if let Some(window) = app.get_webview_window(PING_OVERLAY_LABEL) {
+        let _ = window.set_ignore_cursor_events(true);
+        #[cfg(windows)]
+        let _ = platform::set_overlay_activatable(&window, false);
+    }
+    state.ping_click_through_applied.store(true, Ordering::SeqCst);
+}
+
+fn reset_capture_window(app: &AppHandle) {
+    let state = app.state::<PetState>();
+    state.capture_gen.fetch_add(1, Ordering::SeqCst);
+    state
+        .capture_heartbeat_frozen
+        .store(false, Ordering::SeqCst);
+    if let Ok(mut frame) = state.capture_frame.lock() {
+        *frame = None;
+    }
+    if let Ok(mut beat) = state.capture_heartbeat.lock() {
+        *beat = None;
+    }
+    if let Some(window) = app.get_webview_window(PING_CAPTURE_LABEL) {
+        let _ = window.destroy();
+    }
+}
+
+/// 看门狗：页面心跳停止或窗口被系统判定无响应时，跨线程把整屏窗口藏起来。
+///
+/// user:“任何步骤按 Esc 都可以安全退出……异常也必须存在可靠的恢复办法”+
+/// (不能依赖页面自己收尾：页面卡死时只有原生线程还能恢复桌面。)
+fn start_capture_watchdog(app: AppHandle, hwnd: isize) {
+    let generation = app
+        .state::<PetState>()
+        .capture_gen
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    std::thread::spawn(move || {
+        // Esc 用原生轮询兜底：截图窗口刚打开时 WebView 还没拿到键盘焦点，
+        // 页面里的 keydown 可能收不到；这里不依赖焦点，40ms 一次总能退出。
+        let mut esc_armed = false;
+        let mut last_health_check = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(40));
+            let state = app.state::<PetState>();
+            if state.capture_gen.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if !esc_armed {
+                // 打开窗口时用户可能还按着 Esc：先等它松开，避免一开就关。
+                if !platform::escape_down() {
+                    esc_armed = true;
+                }
+                continue;
+            }
+            if platform::escape_down() {
+                eprintln!("[capture] Esc pressed; closing capture window (native fallback)");
+                platform::emergency_hide_window(hwnd);
+                reset_capture_window(&app);
+                let _ = app.emit("pet://ping/capture-closed", ());
+                return;
+            }
+            if last_health_check.elapsed() < Duration::from_millis(500) {
+                continue;
+            }
+            last_health_check = Instant::now();
+            let beat = state.capture_heartbeat.lock().ok().and_then(|slot| *slot);
+            let stale = beat
+                .map(|instant| instant.elapsed() > CAPTURE_HEARTBEAT_TIMEOUT)
+                .unwrap_or(false);
+            let hung = platform::is_window_hung(hwnd);
+            if stale || hung {
+                eprintln!(
+                    "[capture] watchdog recover: stale={stale} hung={hung}; hiding capture window"
+                );
+                platform::emergency_hide_window(hwnd);
+                // 和正常退出走同一套清理：清空截图帧、心跳和代次，避免占着内存。
+                reset_capture_window(&app);
+                let _ = app.emit(
+                    "pet://ping/capture-recovered",
+                    serde_json::json!({ "stale": stale, "hung": hung }),
+                );
+                return;
+            }
+        }
+    });
+}
+
+#[tauri::command]
+pub async fn pet_ping_capture_open(app: AppHandle) -> Result<OverlayBounds, String> {
+    #[cfg(windows)]
+    {
+        // 不重入：上一次的截图窗口和帧先彻底清掉，再拍新的一张。
+        reset_capture_window(&app);
+        park_ping_overlay(&app);
+
+        let (frame, monitor) = capture_with_overlay_hidden(&app, || {
+            let (x, y) = platform::cursor_position()?;
+            let monitor = platform::monitor_at(x, y)?;
+            let (width, height, pixels) = platform::capture(&monitor)?;
+            Ok((
+                platform::encode_capture_bytes(
+                    monitor.x,
+                    monitor.y,
+                    monitor.scale,
+                    width,
+                    height,
+                    pixels,
+                ),
+                monitor,
+            ))
+        })?;
+        let bounds = capture_bounds_for(&monitor);
+        {
+            let state = app.state::<PetState>();
+            *state
+                .capture_frame
+                .lock()
+                .map_err(|_| "capture frame lock failed".to_string())? = Some(frame);
+            *state
+                .capture_heartbeat
+                .lock()
+                .map_err(|_| "capture heartbeat lock failed".to_string())? = Some(Instant::now());
+        }
+
+        let builder = WebviewWindowBuilder::new(
+            &app,
+            PING_CAPTURE_LABEL,
+            WebviewUrl::App("capture.html".into()),
+        )
+        .title("Sunday Capture")
+        .decorations(false)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .closable(false)
+        .focused(false)
+        .visible(false)
+        .transparent(false)
+        .background_color(tauri::window::Color(0, 0, 0, 255))
+        .shadow(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .additional_browser_args(&browser_args_from_env());
+        let window = builder
+            .build()
+            .map_err(|error| format!("create capture window failed: {error}"))?;
+        place_overlay(&window, &bounds)?;
+        // 先显示，隐藏的 WebView2 会被节流，页面脚本（截图解码/心跳）会迟到。
+        // 背景是纯黑，页面解码完成后立刻覆盖成截图。
+        let _ = window.show();
+        let _ = window.set_focus();
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("capture window handle unavailable: {error}"))?
+            .0 as isize;
+        start_capture_watchdog(app.clone(), hwnd);
+        eprintln!(
+            "[capture] window opened at {},{} {}x{} scale {}",
+            bounds.x, bounds.y, bounds.width, bounds.height, bounds.scale
+        );
+        Ok(bounds)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("screen capture is only implemented on Windows".into())
+    }
+}
+
+/// 页面取回静态截图（PETC 二进制帧）。异步命令避免 IPC 线程重入窗口 API。
+#[tauri::command]
+pub async fn pet_ping_capture_frame(app: AppHandle) -> Result<tauri::ipc::Response, String> {
+    let frame = app
+        .state::<PetState>()
+        .capture_frame
+        .lock()
+        .map_err(|_| "capture frame lock failed".to_string())?
+        .clone()
+        .ok_or_else(|| "capture frame is not ready".to_string())?;
+    Ok(tauri::ipc::Response::new(frame))
+}
+
+/// 页面已完成首帧绘制：确保窗口可见并拿到焦点（Esc 才能进来）。
+#[tauri::command]
+pub async fn pet_ping_capture_show(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(PING_CAPTURE_LABEL)
+        .ok_or_else(|| "capture window is not open".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    let _ = window.set_focus();
+    if let Ok(mut beat) = app.state::<PetState>().capture_heartbeat.lock() {
+        *beat = Some(Instant::now());
+    }
+    Ok(())
+}
+
+/// 页面心跳：只更新内存时间戳，不触碰窗口 API，可安全地同步执行。
+#[tauri::command]
+pub fn pet_ping_capture_heartbeat(app: AppHandle) {
+    let state = app.state::<PetState>();
+    if state.capture_heartbeat_frozen.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Ok(mut beat) = state.capture_heartbeat.lock() {
+        *beat = Some(Instant::now());
+    };
+}
+
+/// 隔离测试：冻结截图页心跳，验证看门狗能在页面死掉时收回整屏窗口。
+///
+/// 只由单实例命令行 `--capture-freeze-heartbeat` 调用，不暴露给页面；
+/// 每次 open/close 都会把标志复位，正常使用不受影响。
+pub fn simulate_capture_heartbeat_stall(app: &AppHandle) {
+    // 正式包不响应测试入口：只有开发/隔离实例允许冻结心跳。
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let state = app.state::<PetState>();
+    state
+        .capture_heartbeat_frozen
+        .store(true, Ordering::SeqCst);
+    if let Ok(mut beat) = state.capture_heartbeat.lock() {
+        *beat = Some(Instant::now());
+    }
+    eprintln!("[capture] test: heartbeat frozen");
+}
+
+/// 退出截图（Esc / 取消 / 关闭 / 发送完成共用）：销毁窗口并发出关闭事件。
+#[tauri::command]
+pub async fn pet_ping_capture_close(app: AppHandle) -> Result<(), String> {
+    reset_capture_window(&app);
+    let _ = app.emit("pet://ping/capture-closed", ());
+    eprintln!("[capture] window closed");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

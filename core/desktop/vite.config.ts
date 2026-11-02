@@ -117,6 +117,8 @@ export default defineConfig({
         ping: resolve(__dirname, 'ping.html'),
         // Ping 会话卡片是独立窗口（卡片即窗口）：与桌宠覆盖层分离，原生 Acrylic 材质。
         card: resolve(__dirname, 'card.html'),
+        // 独立截图窗口：静态截图 + 框选/标注，Esc/取消/发送都只作用于这个窗口。
+        capture: resolve(__dirname, 'capture.html'),
         // 地图与寻路实验台：独立普通页面，几何判定框/平台地图/寻路模型单独调试。
         petNavLab: resolve(__dirname, 'pet-navlab.html'),
         // 方块人动画实验台：独立普通页面，动作组切换与姿态单独调试。
