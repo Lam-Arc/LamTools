@@ -27,10 +27,7 @@ import { createDefaultSkinCanvas } from '../render/blockySkin.ts'
 import type { AnimationMap } from '../engine/sprite.ts'
 import { createThreePetLayer, type ThreePetLayer } from '../render/threeLayer.ts'
 import type { RenderablePet } from '../render/types.ts'
-
-// 随源码入库的用户皮肤。不能依赖 core/desktop/public/：那个目录被 .gitignore
-// 忽略，CI 构建里没有这张图（0.3.32 安装包缺皮肤的根因）。
-const SUNDAY_SKIN_URL = new URL('../assets/sunday-skin.png', import.meta.url).href
+import { sundaySkinBytes } from '../assets/sundaySkin.ts'
 // user:“你看看 ping 环 要不也自己做窗口？”+(Ping 运行时已迁到独立窗口，
 // 桌宠侧只保留类型引用，便于历史组件继续使用 Ping 的公开类型。)
 export type { PingMarker, PingResultPayload, CardState, PingRuntime } from '../ping/usePingRuntime.ts'
@@ -397,7 +394,8 @@ export function usePetRuntime() {
   const BLOCKY_DEFAULT_SKIN = 'skins/default.png'
   // 皮肤/角色包内容变化时 +1：旧安装的 presetInstalled 已经是 true，
   // 只靠它永远不会重写角色包，用户就看不到新内置皮肤。
-  const BLOCKY_PRESET_VERSION = 2
+  // v3：皮肤改为内嵌 base64 解码（v2 的 fetch(data:) 被 CSP 拦截）。
+  const BLOCKY_PRESET_VERSION = 3
   const BLOCKY_ACTIONS = ['idle', 'walk', 'jump', 'jump_happy', 'fall', 'climb', 'hang', 'rest', 'dance', 'interact', 'interact_head', 'question']
 
   function blockyActions(skin: string): AnimationMap {
@@ -418,13 +416,10 @@ export function usePetRuntime() {
    */
   async function defaultSkinBytes(): Promise<Uint8Array> {
     try {
-      const response = await fetch(SUNDAY_SKIN_URL)
-      if (response.ok) {
-        const bytes = new Uint8Array(await response.arrayBuffer())
-        if (bytes.length > 0) return bytes
-      }
+      const bytes = sundaySkinBytes()
+      if (bytes.length > 0) return bytes
     } catch {
-      // 打包环境异常时继续尝试旧路径/生成皮肤。
+      // base64 损坏时继续尝试旧路径/生成皮肤。
     }
     try {
       const response = await fetch(new URL('pet-animlab/user-skin.png', window.location.href))
