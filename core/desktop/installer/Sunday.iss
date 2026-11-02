@@ -139,6 +139,15 @@ Type: files; Name: "{app}\lamcore.exe"
 Type: filesandordirs; Name: "{app}\lamcore-backend"
 Type: filesandordirs; Name: "{app}\LamCore"
 Type: filesandordirs; Name: "{app}\sunday-backend"
+; 旧版 LamCore/LamTools Core 的快捷方式不再由旧卸载器清理，这里一并移除。
+Type: filesandordirs; Name: "{userprograms}\LamTools Core"
+Type: filesandordirs; Name: "{userprograms}\LamCore"
+Type: files; Name: "{autodesktop}\LamTools Core.lnk"
+Type: files; Name: "{autodesktop}\LamCore.lnk"
+Type: filesandordirs; Name: "{commonprograms}\LamTools Core"
+Type: filesandordirs; Name: "{commonprograms}\LamCore"
+Type: files; Name: "{commondesktop}\LamTools Core.lnk"
+Type: files; Name: "{commondesktop}\LamCore.lnk"
 
 [Files]
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -159,6 +168,8 @@ const
   LegacyMainExe = 'lamcore.exe';
   LegacyLamCoreKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\LamCore';
   LegacyLamToolsCoreKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\LamTools Core';
+  // Inno appends _is1 to AppId for the non-administrative install used here.
+  AppUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6B191096-6A27-42BF-B8E3-98E01D43DBB4}_is1';
   WebView2ClientKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 
 var
@@ -223,39 +234,130 @@ begin
   end;
 end;
 
+// Close only processes whose executable lives in the directory being updated.
+// The pre-migration uninstaller waits for lamcore.exe to exit, and the app keeps
+// running in the tray, so the old uninstaller would block forever and the setup
+// would look stuck on "Preparing to install".
+function StopProcessesInDir(const Directory: String): Boolean;
+var
+  Parameters: String;
+  ResultCode: Integer;
+  EscapedDirectory: String;
+begin
+  // A Windows user name may contain an apostrophe; double it so the path stays
+  // a valid PowerShell single-quoted string.
+  EscapedDirectory := Directory;
+  StringChangeEx(EscapedDirectory, '''', '''''', True);
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
+    + '$d=' + #39 + EscapedDirectory + #39 + '; '
+    // The legacy uninstaller runs its second phase from a temporary _unins.tmp,
+    // so its executable path is not under the install directory. Match that
+    // process (and other known app processes) by command line as well.
+    + '$names=@(''sunday.exe'',''lamcore.exe'',''sunday-core.exe'',''lamcore-backend.exe'',''unins000.exe'',''unins001.exe'',''_unins.tmp''); '
+    + 'Get-CimInstance Win32_Process | '
+    + 'Where-Object { ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase)) -or (($names -contains $_.Name.ToLower()) -and $_.CommandLine -and $_.CommandLine.IndexOf($d, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) } | '
+    + 'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
+  Result := Exec('powershell.exe', Parameters, Directory, SW_HIDE,
+    ewWaitUntilTerminated, ResultCode);
+  Log('Closing processes in "' + Directory + '" finished with ' +
+    IntToStr(ResultCode));
+end;
+
+// Inno names the new uninstaller uninsNNN based on the stale pairs already in
+// the directory, so an old pair left by a failed 0.3.31 update would survive
+// forever. After a successful install, remove every pair except the one just
+// registered. Doing this at ssDone (rather than before the install) keeps the
+// previous uninstaller available when the lock guard refuses an update.
+procedure RemoveStaleUninstallerFiles;
+var
+  UninstallString: String;
+  KeepExeName: String;
+  KeepDatName: String;
+  FindRec: TFindRec;
+  FileName: String;
+  Patterns: array[0..1] of String;
+  PatternIndex: Integer;
+begin
+  if not (RegQueryStringValue(HKCU, AppUninstallKey, 'UninstallString', UninstallString) or
+          RegQueryStringValue(HKLM, AppUninstallKey, 'UninstallString', UninstallString)) then
+  begin
+    Log('Current uninstaller is not registered; leaving uninstaller files untouched');
+    Exit;
+  end;
+  UninstallString := StripOuterQuotes(UninstallString);
+  KeepExeName := ExtractFileName(UninstallString);
+  KeepDatName := ChangeFileExt(KeepExeName, '.dat');
+  if KeepExeName = '' then
+    Exit;
+  Patterns[0] := 'unins*.exe';
+  Patterns[1] := 'unins*.dat';
+  for PatternIndex := 0 to 1 do
+  begin
+    if not FindFirst(ExpandConstant('{app}\') + Patterns[PatternIndex], FindRec) then
+      Continue;
+    try
+      repeat
+        if ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0) and
+           (CompareText(FindRec.Name, KeepExeName) <> 0) and
+           (CompareText(FindRec.Name, KeepDatName) <> 0) then
+        begin
+          FileName := ExpandConstant('{app}\') + FindRec.Name;
+          if DeleteFile(FileName) then
+            Log('Removed stale uninstaller file: ' + FileName)
+          else
+            Log('Could not remove stale uninstaller file: ' + FileName);
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  ResultCode: Integer;
   CurrentInstallDir: String;
-  LegacyParameters: String;
 begin
   Result := '';
   CurrentInstallDir := ExpandConstant('{app}');
-  if not FindLegacyInstall(LegacyInstallDir, LegacyUninstaller) then
-    Exit;
+  // user:“0.3.31 下载最新更新后无法安装，setup 进度不动”+
+  // (0.3.31 的 unins000.exe 在 /UPDATE 下会一直等待/直接失败，不能再把它放进
+  //  升级主路径。这里只结束旧应用进程；旧程序文件交给 [InstallDelete]，
+  //  旧卸载注册表与多余卸载器在安装成功后清理，.lam 与 lam_projects 不动。)
+  StopProcessesInDir(CurrentInstallDir);
+  Sleep(500);
+end;
 
-  if not SamePath(LegacyInstallDir, CurrentInstallDir) then
-  begin
-    Log('Legacy LamCore installation is in a different directory; leaving it ' +
-      'untouched so its local data is not orphaned.');
-    Exit;
-  end;
+function ReadLegacyLocation(RootKey: Integer; KeyName: String;
+  var InstallDir: String): Boolean;
+begin
+  Result := RegQueryStringValue(RootKey, KeyName, 'InstallLocation', InstallDir);
+  if Result then
+    InstallDir := StripOuterQuotes(InstallDir);
+end;
 
-  LegacyParameters := '/S /UPDATE _?="' + LegacyInstallDir + '"';
-  Log('Migrating legacy LamCore installation in place with: ' +
-    LegacyUninstaller + ' ' + LegacyParameters);
-  if not Exec(LegacyUninstaller, LegacyParameters, LegacyInstallDir, SW_HIDE,
-    ewWaitUntilTerminated, ResultCode) then
+// 只删除指向本次安装目录的旧卸载键；别的目录里的 LamCore 安装不能被误伤。
+procedure DeleteLegacyUninstallKey(RootKey: Integer; const KeyName: String);
+var
+  InstallDir: String;
+begin
+  if ReadLegacyLocation(RootKey, KeyName, InstallDir) and
+     SamePath(InstallDir, ExpandConstant('{app}')) then
   begin
-    Result := '无法启动旧版 LamCore 卸载程序。请退出旧版应用后重试。';
-    Exit;
+    if RegDeleteKeyIncludingSubkeys(RootKey, KeyName) then
+      Log('Removed legacy uninstall key: ' + KeyName);
   end;
-  if ResultCode <> 0 then
-  begin
-    Result := Format('旧版 LamCore 卸载失败（退出代码 %d）。请退出旧版应用后重试。', [ResultCode]);
-    Exit;
-  end;
-  Log('Legacy LamCore program files removed; .lam and lam_projects are preserved.');
+end;
+
+// 旧版卸载器不再运行，它留下的卸载注册表项必须清掉，否则“应用和功能”里会
+// 出现一个指向已不存在的 LamCore/LamTools Core 的条目。HKCU 一定可写；
+// HKLM 只在管理员安装时才会存在，失败就忽略。
+procedure DeleteLegacyUninstallKeys;
+begin
+  DeleteLegacyUninstallKey(HKCU, LegacyLamCoreKey);
+  DeleteLegacyUninstallKey(HKCU, LegacyLamToolsCoreKey);
+  DeleteLegacyUninstallKey(HKLM, LegacyLamCoreKey);
+  DeleteLegacyUninstallKey(HKLM, LegacyLamToolsCoreKey);
 end;
 
 function NeedsWebView2: Boolean;
@@ -359,21 +461,8 @@ end;
 // programs here - only processes whose executable lives in the directory being
 // updated, never a same-named program installed elsewhere.
 function StopProcessesInInstallDir: Boolean;
-var
-  Directory: String;
-  Parameters: String;
-  ResultCode: Integer;
 begin
-  Directory := ExpandConstant('{app}');
-  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
-    + '$d=' + #39 + Directory + #39 + '; '
-    + 'Get-CimInstance Win32_Process | '
-    + 'Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase) } | '
-    + 'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
-  Result := Exec('powershell.exe', Parameters, Directory, SW_HIDE,
-    ewWaitUntilTerminated, ResultCode);
-  Log('Closing Sunday processes in "' + Directory + '" finished with ' +
-    IntToStr(ResultCode));
+  Result := StopProcessesInDir(ExpandConstant('{app}'));
 end;
 
 // 应用内更新走静默安装，而 [Run] 里的「启动 Sunday」带 skipifsilent——那条路
@@ -393,6 +482,9 @@ var
 begin
   if CurStep = ssDone then
   begin
+    // 旧版卸载器不再运行；安装成功后再清掉指向本目录的旧卸载键。
+    DeleteLegacyUninstallKeys;
+    RemoveStaleUninstallerFiles;
     // 只在静默安装里补这一步：非静默那趟由 [Run] 的 postinstall 负责，
     // 两条路同时跑会让应用被启动两次。
     if WantsRestartAfterInstall and WizardSilent then
