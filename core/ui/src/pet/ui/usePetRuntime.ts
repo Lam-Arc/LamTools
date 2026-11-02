@@ -500,15 +500,16 @@ export function usePetRuntime() {
     await saveConfig()
   }
 
-  /** 只刷新内置角色包和已有方块人记录，不碰用户自己导入的角色。 */
+  /**
+   * 只刷新内置角色包，不碰用户自己导入的角色/皮肤。
+   *
+   * 内置记录本来就指向 skins/default.png；覆盖这个文件即可换新皮肤。
+   * 不要重写 record.actions：用户导入过自定义皮肤时，actions 指向
+   * skins/skin-xxx.png，重写会把他的皮肤选择覆盖掉。
+   */
   async function refreshBlockyPreset(): Promise<void> {
     await refreshBlockyPack()
     config.presetVersion = BLOCKY_PRESET_VERSION
-    const record = petRecords.value.find(item => item.packId === BLOCKY_PACK_ID)
-    if (record) {
-      record.actions = blockyActions(BLOCKY_DEFAULT_SKIN)
-      world.value?.get(record.id)?.updateSettings({ actions: record.actions })
-    }
     await saveConfig()
   }
 
