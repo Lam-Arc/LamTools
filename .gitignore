@@ -223,3 +223,8 @@ core/tests/fixtures/context_compaction/real_api_runs/
 .codex_workflow_hidden_resources/
 AGENTS.md
 # codex-workflow-managed-end
+
+# `tauri::generate_context!` reads these at compile time. Without them a clean
+# checkout cannot build the Android host at all, which is exactly what the
+# android-apk workflow found.
+!core/android-host/src-tauri/icons/*.png
