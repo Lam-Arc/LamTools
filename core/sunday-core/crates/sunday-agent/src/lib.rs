@@ -14,6 +14,7 @@ use sunday_protocol::{
 };
 use sunday_store::{Continuation, Guidance, Store};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Approval {
     /// Policy already decided; run it.
     Auto,

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.lamtools.sunday.core",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../../ui/dist-android-app"
   },
   "app": {
     "windows": [

@@ -1,45 +1,62 @@
-//! One writer per data directory.
+//! One writer per data directory, enforced by the operating system.
 //!
-//! Two cores must never write the same database. The guard is a lock file that
-//! records who holds it and a heartbeat that proves the holder is alive.
+//! The previous version used a heartbeat: the holder rewrote the lock file every
+//! few hundred milliseconds and any claimant whose record looked old took over.
+//! That cannot distinguish a dead process from a paused one, and on Android a
+//! backgrounded app can be frozen for minutes while still holding every intent to
+//! write. Taking over there would put two live writers on one database, which is
+//! the single failure this guard exists to prevent.
 //!
-//! Why a heartbeat instead of an OS advisory lock: the heartbeat works the same
-//! on Windows, Linux and Android without a platform dependency, and it survives
-//! the case an advisory lock cannot fix, which is a holder that is alive but
-//! wedged. The cost is a small reclaim window after a crash, which the caller
-//! states explicitly.
+//! This version asks the kernel instead:
+//!
+//!   * Unix: `flock(LOCK_EX | LOCK_NB)` on the lock file
+//!   * Windows: `LockFileEx` with no sharing
+//!
+//! Both are released by the operating system when the process dies, and *not*
+//! released by a suspended process. That is exactly the semantics needed: a
+//! stopped process still owns the directory, a killed one does not.
+//!
+//! Two consequences of using a real lock, both learned by running the tests:
+//!
+//!   * **There is no reclaim window.** A crashed holder's lock is gone the moment
+//!     the kernel reaps it, so a restart succeeds immediately.
+//!   * **The lock file must not be deleted on release.** Deleting it opens a
+//!     classic unlink race: A unlocks and removes while B has already created a
+//!     new file and locked it, so A deletes B's lock. The file is therefore left
+//!     in place; a lock file nobody holds is just a file.
+//!
+//! Because a held lock also blocks reads of the locked bytes on Windows, the
+//! human-readable description lives in a separate `core.lock.owner` file that is
+//! never locked. It is diagnostics only. Authority is the kernel lock, never the
+//! contents of these files.
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sunday_protocol::CoreError;
 
 pub const LOCK_FILE: &str = "core.lock";
+/// Diagnostics only. Never locked, safe to read while the directory is held.
+pub const OWNER_FILE: &str = "core.lock.owner";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LockRecord {
     /// Who claims the directory. Free-form, for diagnostics.
     pub owner: String,
     pub pid: u32,
-    /// Random per-acquisition token, so a release cannot delete someone else's
-    /// lock by accident.
+    /// Changes on every acquisition, so the owner file can be matched against a
+    /// process that thinks it still holds the directory.
     pub token: String,
     pub acquired_at_ms: u64,
-    pub heartbeat_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LockError {
-    /// Another writer holds it and is still alive.
-    Busy {
-        owner: String,
-        pid: u32,
-        age_ms: u64,
-    },
+    /// Another live process holds the directory.
+    Busy { owner: String, pid: u32 },
     /// The directory cannot be used at all.
     Io(String),
 }
@@ -47,9 +64,9 @@ pub enum LockError {
 impl std::fmt::Display for LockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Busy { owner, pid, age_ms } => write!(
+            Self::Busy { owner, pid } => write!(
                 f,
-                "another core is writing this data directory: {owner} (pid {pid}, heartbeat {age_ms}ms ago)"
+                "another core is writing this data directory: {owner} (pid {pid})"
             ),
             Self::Io(reason) => write!(f, "lock failure: {reason}"),
         }
@@ -61,7 +78,7 @@ impl std::error::Error for LockError {}
 impl From<LockError> for CoreError {
     fn from(error: LockError) -> Self {
         match error {
-            LockError::Busy { owner, pid, .. } => CoreError::Rejected {
+            LockError::Busy { owner, pid } => CoreError::Rejected {
                 reason: format!("data directory is locked by {owner} (pid {pid})"),
             },
             LockError::Io(reason) => CoreError::Storage { reason },
@@ -70,148 +87,84 @@ impl From<LockError> for CoreError {
 }
 
 pub struct SingleWriterLock {
-    path: PathBuf,
+    file: File,
+    owner_path: PathBuf,
     token: String,
-    stop: Arc<AtomicBool>,
-    heartbeat: Option<std::thread::JoinHandle<()>>,
+    held: AtomicBool,
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
-fn read_record(path: &Path) -> Option<LockRecord> {
-    let mut text = String::new();
-    File::open(path).ok()?.read_to_string(&mut text).ok()?;
+/// Best-effort description of the current holder. Never used to decide anything.
+fn read_owner(path: &Path) -> Option<LockRecord> {
+    let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
 
-/// How long ago the lock file itself last changed.
-///
-/// A corrupt record is not proof the holder is dead: it may be a file being
-/// rewritten this instant. Falling back to the file's own modification time is
-/// the only signal left, and it is a truthful one, because a live holder
-/// rewrites the file every heartbeat.
-fn file_age_ms(path: &Path) -> u64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(u64::MAX)
-}
-
-fn write_record(path: &Path, record: &LockRecord) -> std::io::Result<()> {
-    let body = serde_json::to_string_pretty(record).unwrap_or_default();
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)?;
-    file.write_all(body.as_bytes())?;
-    file.sync_all()
-}
-
 impl SingleWriterLock {
-    /// Acquires the directory or says who has it.
+    /// Takes the directory or reports who has it.
     ///
-    /// `stale_after` is the reclaim window: a holder whose heartbeat is older
-    /// than this is presumed dead and the lock is taken over. Choose it larger
-    /// than any pause you can tolerate, because taking over a live writer is the
-    /// one failure this design cannot undo.
-    pub fn acquire(
-        dir: impl AsRef<Path>,
-        owner: &str,
-        stale_after: Duration,
-    ) -> Result<Self, LockError> {
+    /// There is no timeout argument any more: liveness is the kernel's answer,
+    /// not a number the caller guesses.
+    pub fn acquire(dir: impl AsRef<Path>, owner: &str) -> Result<Self, LockError> {
         let dir = dir.as_ref();
         std::fs::create_dir_all(dir).map_err(|e| LockError::Io(e.to_string()))?;
         let path = dir.join(LOCK_FILE);
-        let token = format!("{:x}-{}", now_ms(), std::process::id());
+        let owner_path = dir.join(OWNER_FILE);
 
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let record = LockRecord {
-                    owner: owner.to_owned(),
-                    pid: std::process::id(),
-                    token: token.clone(),
-                    acquired_at_ms: now_ms(),
-                    heartbeat_ms: now_ms(),
-                };
-                let body = serde_json::to_string_pretty(&record).unwrap_or_default();
-                file.write_all(body.as_bytes())
-                    .map_err(|e| LockError::Io(e.to_string()))?;
-                file.sync_all().map_err(|e| LockError::Io(e.to_string()))?;
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                let existing = read_record(&path);
-                // A parsed record states its own heartbeat. An unparseable one
-                // falls back to the file mtime: a live holder rewrites the file
-                // every heartbeat, so a fresh mtime still means "someone is
-                // there". Using u64::MAX here would make every corrupt file
-                // instantly reclaimable and could put two writers on one
-                // database, which is the failure this guard exists to prevent.
-                let age = existing
-                    .as_ref()
-                    .map(|r| now_ms().saturating_sub(r.heartbeat_ms))
-                    .unwrap_or_else(|| file_age_ms(&path));
-                if age < stale_after.as_millis() as u64 {
-                    return Err(match existing {
-                        Some(record) => LockError::Busy {
-                            owner: record.owner,
-                            pid: record.pid,
-                            age_ms: age,
-                        },
-                        None => LockError::Busy {
-                            owner: "unknown (unreadable lock file)".into(),
-                            pid: 0,
-                            age_ms: age,
-                        },
-                    });
-                }
-                // Stale: the holder stopped breathing. Take it over, but write the
-                // new record atomically so a reader never sees a half file.
-                let record = LockRecord {
-                    owner: owner.to_owned(),
-                    pid: std::process::id(),
-                    token: token.clone(),
-                    acquired_at_ms: now_ms(),
-                    heartbeat_ms: now_ms(),
-                };
-                let tmp = path.with_extension("lock-tmp");
-                write_record(&tmp, &record).map_err(|e| LockError::Io(e.to_string()))?;
-                std::fs::rename(&tmp, &path).map_err(|e| LockError::Io(e.to_string()))?;
-            }
-            Err(err) => return Err(LockError::Io(err.to_string())),
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| LockError::Io(e.to_string()))?;
+
+        // The whole guarantee. A failure here means a live process holds it.
+        if let Err(error) = file.try_lock_exclusive() {
+            let record = read_owner(&owner_path);
+            return Err(match record {
+                Some(record) => LockError::Busy {
+                    owner: record.owner,
+                    pid: record.pid,
+                },
+                None => LockError::Busy {
+                    // Locked but no readable description: a holder mid-startup,
+                    // or a description we cannot parse. The kernel still says it
+                    // is held, and that is what counts.
+                    owner: format!("unknown ({})", error.kind()),
+                    pid: 0,
+                },
+            });
         }
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let heartbeat_path = path.clone();
-        let heartbeat_token = token.clone();
-        let heartbeat_stop = stop.clone();
-        let handle = std::thread::spawn(move || {
-            while !heartbeat_stop.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(500));
-                if heartbeat_stop.load(Ordering::SeqCst) {
-                    break;
-                }
-                if let Some(mut record) = read_record(&heartbeat_path) {
-                    if record.token == heartbeat_token {
-                        record.heartbeat_ms = now_ms();
-                        let _ = write_record(&heartbeat_path, &record);
-                    }
-                }
-            }
-        });
+        let token = format!("{:x}-{}", now_ms(), std::process::id());
+        let record = LockRecord {
+            owner: owner.to_owned(),
+            pid: std::process::id(),
+            token: token.clone(),
+            acquired_at_ms: now_ms(),
+        };
+        // A failure to describe ourselves is not fatal: the lock is what matters.
+        if let Some(parent) = owner_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let body = serde_json::to_string_pretty(&record).unwrap_or_default();
+        if let Ok(mut handle) = File::create(&owner_path) {
+            let _ = handle.write_all(body.as_bytes());
+            let _ = handle.sync_all();
+        }
 
         Ok(Self {
-            path,
+            file,
+            owner_path,
             token,
-            stop,
-            heartbeat: Some(handle),
+            held: AtomicBool::new(true),
         })
     }
 
@@ -219,47 +172,50 @@ impl SingleWriterLock {
         &self.token
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// True when this guard's record is still the one on disk.
+    /// True while this guard still holds the directory.
+    ///
+    /// With an OS lock this cannot be stolen from a live process, so the answer
+    /// is "did we release it", not "does the file still say our name".
     pub fn still_owner(&self) -> bool {
-        read_record(&self.path)
-            .map(|r| r.token == self.token)
-            .unwrap_or(false)
+        self.held.load(Ordering::SeqCst)
     }
 
     pub fn record(&self) -> Option<LockRecord> {
-        read_record(&self.path)
+        read_owner(&self.owner_path)
     }
 
-    /// Releases only if the record still belongs to this guard. A takeover by
-    /// another process must not be undone by a late drop.
+    /// Releases the directory.
+    ///
+    /// The lock file is deliberately left in place: removing it would race a new
+    /// writer that has already created and locked its own file.
     pub fn release(mut self) -> bool {
         self.finish()
     }
 
     fn finish(&mut self) -> bool {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.heartbeat.take() {
-            let _ = handle.join();
+        if !self.held.swap(false, Ordering::SeqCst) {
+            return false;
         }
-        match read_record(&self.path) {
-            Some(record) if record.token == self.token => std::fs::remove_file(&self.path).is_ok(),
-            _ => false,
+        // Only clear the description if it is still ours.
+        if read_owner(&self.owner_path)
+            .map(|record| record.token == self.token)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&self.owner_path);
         }
+        // Qualified on purpose: std gained its own  in 1.89 and this
+        // workspace targets 1.80, so the trait method must be named explicitly.
+        FileExt::unlock(&self.file).is_ok()
     }
 }
 
-/// Debug prints the identity that matters when diagnosing a conflicting writer
-/// and deliberately omits the heartbeat thread handle.
+/// Debug prints the identity that matters when diagnosing a conflicting writer.
 impl std::fmt::Debug for SingleWriterLock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SingleWriterLock")
-            .field("path", &self.path)
+            .field("owner_path", &self.owner_path)
             .field("token", &self.token)
-            .field("heartbeat_running", &self.heartbeat.is_some())
+            .field("held", &self.held.load(Ordering::SeqCst))
             .finish()
     }
 }
@@ -274,17 +230,13 @@ impl Drop for SingleWriterLock {
 mod tests {
     use super::*;
 
-    fn short() -> Duration {
-        Duration::from_millis(400)
-    }
-
     #[test]
     fn a_second_writer_is_refused_and_told_who_has_it() {
         let dir = tempfile::tempdir().unwrap();
-        let first = SingleWriterLock::acquire(dir.path(), "core-a", short()).unwrap();
-        let err = SingleWriterLock::acquire(dir.path(), "core-b", short()).unwrap_err();
-        match err {
-            LockError::Busy { owner, pid, .. } => {
+        let first = SingleWriterLock::acquire(dir.path(), "core-a").unwrap();
+        let error = SingleWriterLock::acquire(dir.path(), "core-b").unwrap_err();
+        match error {
+            LockError::Busy { owner, pid } => {
                 assert_eq!(owner, "core-a");
                 assert_eq!(pid, std::process::id());
             }
@@ -294,85 +246,53 @@ mod tests {
     }
 
     #[test]
-    fn releasing_lets_the_next_writer_in() {
+    fn releasing_lets_the_next_writer_in_immediately() {
         let dir = tempfile::tempdir().unwrap();
-        let first = SingleWriterLock::acquire(dir.path(), "core-a", short()).unwrap();
+        let first = SingleWriterLock::acquire(dir.path(), "core-a").unwrap();
         assert!(first.release());
-        let second = SingleWriterLock::acquire(dir.path(), "core-b", short()).unwrap();
+        // No reclaim window to wait out: the next acquire succeeds at once.
+        let second = SingleWriterLock::acquire(dir.path(), "core-b").unwrap();
+        assert!(second.still_owner());
         assert_eq!(second.record().unwrap().owner, "core-b");
     }
 
+    /// A stale *description* on disk must not block a new writer: the
+    /// description is not authority, the kernel lock is.
     #[test]
-    fn a_lock_whose_holder_stopped_breathing_is_reclaimed() {
+    fn a_leftover_description_does_not_block_a_new_writer() {
         let dir = tempfile::tempdir().unwrap();
-        // A record with an old heartbeat, as a killed process would leave behind.
-        let record = LockRecord {
+        let stale = LockRecord {
             owner: "dead-core".into(),
             pid: 999_999,
             token: "dead".into(),
             acquired_at_ms: 0,
-            heartbeat_ms: 0,
         };
-        write_record(&dir.path().join(LOCK_FILE), &record).unwrap();
+        std::fs::write(
+            dir.path().join(OWNER_FILE),
+            serde_json::to_string_pretty(&stale).unwrap(),
+        )
+        .unwrap();
 
-        let lock = SingleWriterLock::acquire(dir.path(), "core-new", Duration::from_millis(50))
-            .expect("a stale lock must be reclaimed");
+        let lock = SingleWriterLock::acquire(dir.path(), "core-new")
+            .expect("a description without a live kernel lock must not block");
+        assert!(lock.still_owner());
         assert_eq!(lock.record().unwrap().owner, "core-new");
     }
 
     #[test]
-    fn a_late_drop_does_not_delete_someone_elses_lock() {
+    fn a_corrupt_description_is_replaced_not_trusted() {
         let dir = tempfile::tempdir().unwrap();
-        let first =
-            SingleWriterLock::acquire(dir.path(), "core-a", Duration::from_millis(50)).unwrap();
-        let path = first.path().to_path_buf();
-        // Simulate a takeover while the first guard is still in memory.
-        let stolen = LockRecord {
-            owner: "core-b".into(),
-            pid: 1234,
-            token: "other".into(),
-            acquired_at_ms: now_ms(),
-            heartbeat_ms: now_ms(),
-        };
-        write_record(&path, &stolen).unwrap();
-        assert!(!first.still_owner());
-        assert!(!first.release(), "a stale owner must not release the lock");
-        assert!(path.exists(), "the new owner's lock must survive");
-        assert_eq!(read_record(&path).unwrap().owner, "core-b");
+        std::fs::write(dir.path().join(OWNER_FILE), b"{not json").unwrap();
+        let lock = SingleWriterLock::acquire(dir.path(), "core-b").expect("must succeed");
+        assert_eq!(lock.record().unwrap().owner, "core-b");
     }
 
+    /// Killing the holder must free the directory with no waiting at all.
     #[test]
-    fn the_heartbeat_advances_while_the_guard_lives() {
-        let dir = tempfile::tempdir().unwrap();
-        let lock =
-            SingleWriterLock::acquire(dir.path(), "core-a", Duration::from_secs(30)).unwrap();
-        let first = lock.record().unwrap().heartbeat_ms;
-        std::thread::sleep(Duration::from_millis(1_200));
-        let second = lock.record().unwrap().heartbeat_ms;
-        assert!(
-            second > first,
-            "heartbeat did not advance: {first} -> {second}"
-        );
-    }
-
-    #[test]
-    fn a_corrupt_lock_file_is_treated_as_held_not_free() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(LOCK_FILE), b"{not json").unwrap();
-        let err =
-            SingleWriterLock::acquire(dir.path(), "core-b", Duration::from_secs(30)).unwrap_err();
-        assert!(matches!(err, LockError::Busy { .. }), "got {err:?}");
-    }
-
-    #[test]
-    fn a_killed_holder_is_reclaimed_after_the_window() {
-        // The child takes the lock and is killed without releasing it.
+    fn a_killed_holder_is_reclaimed_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_path_buf();
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            // The test is nested in this module, so the filter needs the full
-            // path; a bare `lock_child_helper` matches nothing and the child
-            // would exit without ever taking the lock.
             .args([
                 "--exact",
                 "lock::tests::lock_child_helper",
@@ -382,33 +302,77 @@ mod tests {
             .env("SUNDAY_LOCK_CHILD", path.to_string_lossy().to_string())
             .spawn()
             .expect("spawn child");
-        // Wait until the child actually holds it.
+
+        // Wait for the child to describe itself, which it does only after taking
+        // the lock. Polling by *acquiring* would fight the child for the lock and
+        // make it fail spuriously, which is exactly what the first version of
+        // this test did.
         let mut held = false;
-        for _ in 0..100 {
-            if read_record(&path.join(LOCK_FILE)).is_some() {
+        for _ in 0..200 {
+            if read_owner(&path.join(OWNER_FILE))
+                .map(|record| record.owner == "child-holder")
+                .unwrap_or(false)
+            {
                 held = true;
                 break;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        assert!(held, "the child never took the lock; the filter is wrong");
         assert!(
-            SingleWriterLock::acquire(&path, "probe", Duration::from_secs(30)).is_err(),
-            "the child should still hold the lock"
+            held,
+            "the child never took the lock: {:?}",
+            child.try_wait()
         );
+
         child.kill().unwrap();
         let _ = child.wait();
 
-        // The reclaim window must pass: a heartbeat written a moment ago is
-        // indistinguishable from a live holder, and that is the intended trade.
+        // Immediately, with no sleep: the kernel released it when the process died.
+        let lock = SingleWriterLock::acquire(&path, "after-crash")
+            .expect("a killed holder must be reclaimed at once");
+        assert!(lock.still_owner());
+    }
+
+    /// A process that was *suspended* still owns the directory. This is the case
+    /// the heartbeat design got wrong: it would have taken the lock away.
+    #[test]
+    fn a_suspended_holder_keeps_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lock::tests::lock_child_helper",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("SUNDAY_LOCK_CHILD", path.to_string_lossy().to_string())
+            .spawn()
+            .expect("spawn child");
+
+        let mut held = false;
+        for _ in 0..200 {
+            if read_owner(&path.join(OWNER_FILE))
+                .map(|record| record.owner == "child-holder")
+                .unwrap_or(false)
+            {
+                held = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(held, "the child never took the lock");
+
+        // Long enough that any heartbeat design would have declared it dead.
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let attempt = SingleWriterLock::acquire(&path, "thief");
         assert!(
-            SingleWriterLock::acquire(&path, "too-early", Duration::from_secs(30)).is_err(),
-            "reclaiming inside the window would race a live writer"
+            matches!(attempt, Err(LockError::Busy { .. })),
+            "a suspended holder lost the directory: {attempt:?}"
         );
-        std::thread::sleep(Duration::from_millis(500));
-        let lock = SingleWriterLock::acquire(&path, "after-crash", Duration::from_millis(200))
-            .expect("a killed holder must be reclaimed once the window passes");
-        assert_eq!(lock.record().unwrap().owner, "after-crash");
+
+        child.kill().unwrap();
+        let _ = child.wait();
     }
 
     #[test]
@@ -417,9 +381,9 @@ mod tests {
         let Ok(dir) = std::env::var("SUNDAY_LOCK_CHILD") else {
             return;
         };
-        let _lock = SingleWriterLock::acquire(dir, "child-holder", Duration::from_secs(300))
-            .expect("child must get the lock");
-        // Hold it until killed.
-        std::thread::sleep(Duration::from_secs(30));
+        let _lock =
+            SingleWriterLock::acquire(dir, "child-holder").expect("child must get the lock");
+        // Hold it until killed. Deliberately not heartbeating: holding is enough.
+        std::thread::sleep(std::time::Duration::from_secs(60));
     }
 }

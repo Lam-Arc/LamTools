@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "core-ipc",
+  "description": "The minimum the in-app core needs: call its own commands, and listen for the events it emits. Nothing else is granted, so a compromised page cannot reach the filesystem or the shell.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

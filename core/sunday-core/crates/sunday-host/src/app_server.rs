@@ -26,7 +26,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use sunday_protocol::PROTOCOL_VERSION;
 use tungstenite::{accept, Message};
@@ -153,6 +153,31 @@ pub trait TurnRunner: Send + Sync {
         Err(NOT_IMPLEMENTED.to_owned())
     }
 
+    /// The slash commands this core offers.
+    ///
+    /// Returning an empty list is honest only when the core truly has none. The
+    /// workbench renders whatever comes back, so a core that supports commands
+    /// must list them or the palette will look empty for no stated reason.
+    fn command_catalog(&self) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
+
+    /// Expands a command into the prompt a turn will run.
+    ///
+    /// Refusing with a reason is required: expanding to an empty string would
+    /// start a turn with no instruction and report success.
+    fn expand_command(&self, name: &str, _arguments: &str) -> Result<String, String> {
+        Err(format!("unknown command: {name}"))
+    }
+
+    /// Threads with a turn currently running.
+    ///
+    /// Not part of the wire protocol. A host needs it for lifecycle decisions
+    /// such as "the app went to the background, so note what was mid-flight".
+    fn running_threads(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Stop the live turn. The difference between pause, interrupt, terminate
     /// and force_reset is how much cleanup the caller wants, not whether it
     /// stops, so they share one implementation with a policy argument.
@@ -194,12 +219,40 @@ pub struct BridgeEvent {
 pub struct AppServer {
     listener: TcpListener,
     runner: Arc<dyn TurnRunner>,
+    /// Required on every connection. `None` is only for a transport that is not
+    /// reachable from outside this process: tests, and Tauri IPC.
+    token: Option<String>,
 }
 
 impl AppServer {
+    /// Binds without authentication.
+    ///
+    /// Only for tests and for a transport that is unreachable from outside this
+    /// process. A host serving a socket must use
+    /// [`AppServer::bind_authenticated`]: a random loopback port is not access
+    /// control, because any process on the device can enumerate listeners, and on
+    /// Android any app can dial another app's loopback socket.
     pub fn bind(addr: &str, runner: Arc<dyn TurnRunner>) -> std::io::Result<Self> {
         let listener = TcpListener::bind(addr)?;
-        Ok(Self { listener, runner })
+        Ok(Self {
+            listener,
+            runner,
+            token: None,
+        })
+    }
+
+    /// Binds and requires a token on every connection.
+    pub fn bind_authenticated(
+        addr: &str,
+        runner: Arc<dyn TurnRunner>,
+        token: impl Into<String>,
+    ) -> std::io::Result<Self> {
+        let listener = TcpListener::bind(addr)?;
+        Ok(Self {
+            listener,
+            runner,
+            token: Some(token.into()),
+        })
     }
 
     pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
@@ -210,14 +263,44 @@ impl AppServer {
     /// workbench opens a dedicated socket per window.
     pub fn serve(self) {
         let runner = self.runner.clone();
+        let token = self.token.clone().map(Arc::new);
         for stream in self.listener.incoming() {
             let Ok(stream) = stream else { break };
             let runner = runner.clone();
+            let token = token.clone();
             std::thread::spawn(move || {
-                let _ = handle_client(stream, runner);
+                let _ = handle_client(stream, runner, token);
             });
         }
     }
+}
+
+/// Where dispatch sends things that are not the RPC reply.
+///
+/// This exists so the same dispatch serves both transports. A WebSocket writes
+/// frames to its socket; Tauri IPC emits to the webview. Without it, a second
+/// transport would need a second copy of every method, which is how the CLI and
+/// Android runners drifted apart in the first place.
+/// The socket transport's sink: hands frames to the thread that owns the socket.
+impl FrameSink for Sender<Outbound> {
+    fn event(&self, body: serde_json::Value) {
+        let _ = self.send(Outbound::Event { body });
+    }
+    fn orphan_error(&self, code: i32, message: String) {
+        let _ = self.send(Outbound::Error {
+            id: serde_json::Value::Null,
+            code,
+            message,
+            data: None,
+        });
+    }
+}
+
+pub trait FrameSink: Send + Sync {
+    /// One `CoreAppEvent` envelope, already JSON-shaped.
+    fn event(&self, body: serde_json::Value);
+    /// An error that has no request id because it came from a worker thread.
+    fn orphan_error(&self, code: i32, message: String);
 }
 
 /// Frames the main loop still has to write. A turn thread produces them; only
@@ -241,17 +324,28 @@ enum Outbound {
 struct State {
     thread_id: String,
     initialized: bool,
+    /// Cleared until a correct token arrives. Everything except `initialize` is
+    /// refused while this is false.
+    authenticated: bool,
 }
 
-fn handle_client(stream: TcpStream, runner: Arc<dyn TurnRunner>) -> std::io::Result<()> {
+fn handle_client(
+    stream: TcpStream,
+    runner: Arc<dyn TurnRunner>,
+    token: Option<Arc<String>>,
+) -> std::io::Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(READ_TICK))?;
     let mut socket = accept(stream).map_err(std::io::Error::other)?;
     let mut state = State {
         thread_id: String::new(),
         initialized: false,
+        // A transport with no token configured is trusted by construction: it is
+        // either a test or IPC that never touches a socket.
+        authenticated: token.is_none(),
     };
     let (tx, rx): (Sender<Outbound>, Receiver<Outbound>) = std::sync::mpsc::channel();
+    let sink: Arc<dyn FrameSink> = Arc::new(tx.clone());
 
     loop {
         let message = match socket.read() {
@@ -303,7 +397,15 @@ fn handle_client(stream: TcpStream, runner: Arc<dyn TurnRunner>) -> std::io::Res
             continue;
         }
 
-        match dispatch(&method, &params, &mut state, runner.clone(), &tx) {
+        let expected = token.as_ref().map(|value| value.as_str());
+        match dispatch(
+            &method,
+            &params,
+            &mut state,
+            runner.clone(),
+            &sink,
+            expected,
+        ) {
             Ok(result) => {
                 // `_events` is scaffolding, never part of the client's result.
                 let events = result
@@ -395,6 +497,8 @@ pub const DISPATCHED: &[&str] = &[
     "queue/delete",
     "queue/guide",
     "queue/reorder",
+    "command.catalog",
+    "command.execute",
     "approval/respond",
 ];
 
@@ -430,10 +534,29 @@ fn dispatch(
     params: &serde_json::Value,
     state: &mut State,
     runner: Arc<dyn TurnRunner>,
-    tx: &Sender<Outbound>,
+    tx: &Arc<dyn FrameSink>,
+    expected_token: Option<&str>,
 ) -> Reply {
-    // The runner is cloned per worker thread below; nothing here needs a
-    // borrowed alias, so do not create one.
+    // The authentication gate. Everything except `initialize` is refused until a
+    // correct token has been presented, and `initialize` itself refuses a wrong
+    // one. Putting the check here, rather than at the socket, means a new method
+    // cannot be added without inheriting it.
+    if let Some(expected) = expected_token {
+        if !state.authenticated {
+            if method != "initialize" {
+                return Err((-32001, "not authenticated".into(), None));
+            }
+            let presented = params
+                .get("auth")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if !crate::token::matches(expected, presented) {
+                return Err((-32001, "invalid credentials".into(), None));
+            }
+            state.authenticated = true;
+        }
+    }
+
     let thread = thread_param(params);
 
     match method {
@@ -603,6 +726,63 @@ fn dispatch(
                 "queue": items.iter().map(queue_json).collect::<Vec<_>>(),
             }))
         }
+        // The slash-command surface. The workbench calls `command.catalog` to
+        // fill the palette and `command.execute` to run one, so a MODULE_NOT_FOUND
+        // here made the palette fail rather than show an empty list.
+        "command.catalog" => {
+            let commands = runner.command_catalog();
+            Ok(serde_json::json!({ "commands": commands }))
+        }
+        "command.execute" => {
+            let thread = if thread.is_empty() {
+                state.thread_id.clone()
+            } else {
+                thread
+            };
+            if thread.is_empty() {
+                return Err((-32602, "thread_id is required".into(), None));
+            }
+            state.thread_id = thread.clone();
+            let name = params
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let arguments = params
+                .get("arguments")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            if name.is_empty() {
+                return Err((-32602, "command is required".into(), None));
+            }
+            // A command either expands to a prompt or is refused with a reason.
+            // Silently doing nothing would look like a successful run to the UI.
+            let expanded = runner
+                .expand_command(&name, &arguments)
+                .map_err(|e| (-32602, e, None))?;
+            let client_id = params
+                .get("client_message_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let worker = runner.clone();
+            let sink_sender = Arc::clone(tx);
+            let error_sender = Arc::clone(tx);
+            let thread_for_run = thread.clone();
+            let prompt = expanded.clone();
+            std::thread::spawn(move || {
+                let sink = move |event: BridgeEvent| {
+                    sink_sender.event(event_json(&thread_for_run, &event));
+                };
+                // A command runs as an ordinary turn: it gets the same journal,
+                // approvals and cancellation as anything else.
+                if let Err(error) = worker.start_turn(&thread, &prompt, &client_id, &sink) {
+                    error_sender.orphan_error(-32000, error);
+                }
+            });
+            Ok(serde_json::json!({ "expanded": expanded }))
+        }
         "turn/steer" => {
             let thread = if thread.is_empty() {
                 state.thread_id.clone()
@@ -651,22 +831,15 @@ fn dispatch(
                 _ => StopMode::ForceReset,
             };
             let worker = runner.clone();
-            let sink_sender = tx.clone();
-            let error_sender = tx.clone();
+            let sink_sender = Arc::clone(tx);
+            let error_sender = Arc::clone(tx);
             let thread_for_run = thread.clone();
             std::thread::spawn(move || {
                 let sink = move |event: BridgeEvent| {
-                    let _ = sink_sender.send(Outbound::Event {
-                        body: event_json(&thread_for_run, &event),
-                    });
+                    sink_sender.event(event_json(&thread_for_run, &event));
                 };
                 if let Err(error) = worker.stop_turn(&thread, mode, &sink) {
-                    let _ = error_sender.send(Outbound::Error {
-                        id: serde_json::Value::Null,
-                        code: -32000,
-                        message: error,
-                        data: None,
-                    });
+                    error_sender.orphan_error(-32000, error);
                 }
             });
             Ok(serde_json::json!({}))
@@ -710,22 +883,15 @@ fn dispatch(
             // The turn runs on its own thread so this loop can still read a
             // `turn/cancel` while the answer streams.
             let worker = runner.clone();
-            let sink_sender = tx.clone();
-            let error_sender = tx.clone();
+            let sink_sender = Arc::clone(tx);
+            let error_sender = Arc::clone(tx);
             let thread_for_run = thread.clone();
             std::thread::spawn(move || {
                 let sink = move |event: BridgeEvent| {
-                    let _ = sink_sender.send(Outbound::Event {
-                        body: event_json(&thread_for_run, &event),
-                    });
+                    sink_sender.event(event_json(&thread_for_run, &event));
                 };
                 if let Err(error) = worker.start_turn(&thread, &prompt, &client_id, &sink) {
-                    let _ = error_sender.send(Outbound::Error {
-                        id: serde_json::Value::Null,
-                        code: -32000,
-                        message: error,
-                        data: None,
-                    });
+                    error_sender.orphan_error(-32000, error);
                 }
             });
             Ok(serde_json::json!({}))
@@ -781,25 +947,18 @@ fn dispatch(
             }
             // Approval resolution also continues work, so it runs off the loop.
             let worker = runner.clone();
-            let sink_sender = tx.clone();
-            let error_sender = tx.clone();
+            let sink_sender = Arc::clone(tx);
+            let error_sender = Arc::clone(tx);
             let thread_for_run = thread.clone();
             let decision_owned = decision.to_owned();
             std::thread::spawn(move || {
                 let sink = move |event: BridgeEvent| {
-                    let _ = sink_sender.send(Outbound::Event {
-                        body: event_json(&thread_for_run, &event),
-                    });
+                    sink_sender.event(event_json(&thread_for_run, &event));
                 };
                 if let Err(error) =
                     worker.respond(&thread, &request_id, &decision_owned, &guidance, &sink)
                 {
-                    let _ = error_sender.send(Outbound::Error {
-                        id: serde_json::Value::Null,
-                        code: -32000,
-                        message: error,
-                        data: None,
-                    });
+                    error_sender.orphan_error(-32000, error);
                 }
             });
             Ok(serde_json::json!({}))
@@ -958,5 +1117,83 @@ impl EventBuffer {
             .get(thread)
             .map(|events| events.iter().filter(|e| e.seq > seq).cloned().collect())
             .unwrap_or_default()
+    }
+}
+
+/// One client conversation, decoupled from any transport.
+///
+/// Tauri IPC uses this: the webview calls a command, the command hands the
+/// method and params here, and the result goes straight back. No socket is opened,
+/// so nothing outside the app process can reach it — which is a stronger
+/// guarantee than a token on a listening port.
+///
+/// The WebSocket transport uses the same `dispatch` through `handle`, so the two
+/// cannot answer differently.
+pub struct Session {
+    state: Mutex<State>,
+    runner: Arc<dyn TurnRunner>,
+    token: Option<String>,
+}
+
+impl Session {
+    /// A session for a transport that is unreachable from outside this process.
+    pub fn trusted(runner: Arc<dyn TurnRunner>) -> Self {
+        Self {
+            state: Mutex::new(State {
+                thread_id: String::new(),
+                initialized: false,
+                authenticated: true,
+            }),
+            runner,
+            token: None,
+        }
+    }
+
+    /// A session that requires the token on `initialize`.
+    pub fn authenticated(runner: Arc<dyn TurnRunner>, token: impl Into<String>) -> Self {
+        Self {
+            state: Mutex::new(State {
+                thread_id: String::new(),
+                initialized: false,
+                authenticated: false,
+            }),
+            runner,
+            token: Some(token.into()),
+        }
+    }
+
+    /// Handles one request. Events produced by a turn are delivered to `sink`.
+    ///
+    /// Returns the frame the caller should answer with: either a result or an
+    /// error code and message. Deliberately not a `Result`, because a JSON-RPC
+    /// error is a valid reply, not a Rust failure.
+    pub fn handle(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+        sink: Arc<dyn FrameSink>,
+    ) -> Reply {
+        let mut state = self.state.lock().unwrap();
+        let expected = self.token.as_deref();
+        let reply = dispatch(
+            method,
+            params,
+            &mut state,
+            Arc::clone(&self.runner),
+            &sink,
+            expected,
+        )?;
+        // `_events` is transport scaffolding; the caller gets the rest.
+        let mut result = reply;
+        if let Some(object) = result.as_object_mut() {
+            object.remove("_events");
+        }
+        Ok(result)
+    }
+
+    /// Which thread this session last worked on. Used by a host that needs to
+    /// resume after being backgrounded.
+    pub fn thread_id(&self) -> String {
+        self.state.lock().unwrap().thread_id.clone()
     }
 }

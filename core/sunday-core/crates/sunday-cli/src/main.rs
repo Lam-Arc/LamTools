@@ -31,7 +31,7 @@ fn usage() {
          self-test:\n\
            store selftest --db <path>\n\n\
          turn:\n\
-           turn --db <path> --workspace <dir> --thread <id> --prompt <text> --script <file> [--auto-approve]\n\
+           turn --db <path> --workspace <dir> --thread <id> --prompt <text> --script <file> [--grant <tool-id>]\n\
            approve --db <path> --workspace <dir> --thread <id> --approval <id> [--script <file>] [--auto-approve]\n\
            steer --db <path> --thread <id> --text <text>\n\
            children --db <path> --parent <id>\n\n\
@@ -253,7 +253,9 @@ fn serve(args: &[String]) -> ExitCode {
         listen,
         model,
         model_id,
-        auto_approve: has_flag(args, "--auto-approve"),
+        // Read-only unless the caller names specific tools with --grant.
+        policy: serve::policy_from_args(args),
+        announce_token_path: true,
     };
     match serve::run(options) {
         Ok(()) => ExitCode::SUCCESS,

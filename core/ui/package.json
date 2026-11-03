@@ -30,7 +30,8 @@
     "typecheck": "vue-tsc --noEmit && vue-tsc --noEmit -p tsconfig.workflow-plugin.json && vue-tsc --noEmit -p tsconfig.test.json",
     "preview": "vite preview",
     "test:contract": "vitest run",
-    "pet:test": "vitest run tests/pet-engine.test.ts tests/pet-render.test.ts tests/pet-blocky.test.ts tests/pet-glb.test.ts tests/pet-zip.test.ts tests/pet-config-import.test.ts tests/pet-isolated-e2e.test.ts tests/pet-behavior.test.ts tests/pet-climb.test.ts tests/pet-card-alignment.test.ts tests/pet-physics.test.ts tests/ping-capture.test.ts"
+    "pet:test": "vitest run tests/pet-engine.test.ts tests/pet-render.test.ts tests/pet-blocky.test.ts tests/pet-glb.test.ts tests/pet-zip.test.ts tests/pet-config-import.test.ts tests/pet-isolated-e2e.test.ts tests/pet-behavior.test.ts tests/pet-climb.test.ts tests/pet-card-alignment.test.ts tests/pet-physics.test.ts tests/ping-capture.test.ts",
+    "build:android": "vite build --config vite.config.android-app.ts && node -e \"require('fs').renameSync('dist-android-app/index-android.html','dist-android-app/index.html')\""
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",

@@ -10,8 +10,13 @@ description = "Composition layer: single-writer lock and the core.app_server.v1 
 sunday-protocol.workspace = true
 sunday-store.workspace = true
 sunday-agent.workspace = true
+sunday-platform.workspace = true
+sunday-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+fs2 = "0.4"
+getrandom = "0.3"
+async-trait.workspace = true
 tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
 tokio.workspace = true
 

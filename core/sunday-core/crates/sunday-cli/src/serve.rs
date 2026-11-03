@@ -1,47 +1,42 @@
 //! `serve` — exposes a real core over `core.app_server.v1`.
 //!
-//! This is the piece that lets the existing Vue workbench talk to the new core.
-//! It is deliberately a host: it owns the socket, the single-writer lock and the
-//! model choice, and everything it drives is the real store, the real agent loop
-//! and the real tools. The only substitutes are the ones named on the command
-//! line.
+//! This file is now only assembly. It used to carry a full `TurnRunner`
+//! implementation, which the Android host then copied; both drifted. The runner
+//! lives in `sunday_host::runner` and both hosts share it.
 //!
-//! Two model sources, because a test needs both:
-//!   * `--script <file>` replays fixed turns, so a protocol test is repeatable.
-//!   * `--model-url <url> --model <id>` calls a real OpenAI-compatible provider.
+//! What a host is allowed to do here, and nothing more:
+//!
+//!   * take the single-writer lock before opening the database
+//!   * resolve paths and load or create the connection token
+//!   * pick a model
+//!   * decide the grant policy
+//!   * bind the transport and print where it listens
+//!
+//! Everything about how a turn runs is below this layer.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use sunday_agent::{Approval, Approver, AutoApprove, Env, TurnInput};
-use sunday_host::app_server::{
-    AppServer, BridgeEvent, EventBuffer, EventSink, HistoryPage, QueueView, SteerOutcome, StopMode,
-    TurnRunner,
-};
+use std::path::Path;
+use std::sync::Arc;
+use sunday_host::app_server::AppServer;
 use sunday_host::lock::{LockError, SingleWriterLock};
-use sunday_llm::{LlmClient, ProviderConfig};
-use sunday_protocol::{
-    CancelToken, CoreError, EventKind, HostKind, Model, Permission, RunBudget, RunOutcome,
-    ToolCall, ToolSpec,
-};
-use sunday_store::Store;
-use sunday_tools::file_read::ReadFile;
-use sunday_tools::file_write::WriteFile;
+use sunday_host::policy::GrantPolicy;
+use sunday_host::runner::{CoreOptions, CoreRunner};
+use sunday_host::token;
 
-/// How long a holder may go without a heartbeat before another core may take
-/// the directory. Five seconds is longer than any pause this host can produce
-/// and short enough that a crash does not need a manual cleanup.
-const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Who gets asked. A tool marked `AskUser` always asks; everything that reached
-/// the model is either allowed automatically or not offered at all.
-struct PolicyApprover;
-
-impl Approver for PolicyApprover {
-    fn decide(&self, _call: &ToolCall, spec: &ToolSpec) -> Approval {
-        match spec.permission {
-            Permission::AskUser => Approval::Ask,
-            _ => Approval::Auto,
+/// Blocks a moment for a previous instance to finish dying.
+///
+/// With an OS lock there is no reclaim window, so this is usually immediate. It
+/// exists because a relaunch a few milliseconds after a kill can genuinely race
+/// the kernel reaping the old process, and failing there would look like "the app
+/// will not open".
+fn acquire_with_wait(dir: &Path, owner: &str) -> Result<SingleWriterLock, String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match SingleWriterLock::acquire(dir, owner) {
+            Ok(lock) => return Ok(lock),
+            Err(LockError::Busy { .. }) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(error) => return Err(error.to_string()),
         }
     }
 }
@@ -50,589 +45,70 @@ pub struct Options {
     pub db: String,
     pub workspace: String,
     pub listen: String,
-    pub model: Arc<dyn Model>,
+    pub model: Arc<dyn sunday_protocol::Model>,
     pub model_id: String,
-    pub auto_approve: bool,
+    /// Which tools may run without asking. Defaults to reads only.
+    pub policy: GrantPolicy,
+    /// Print the token path, never the token itself.
+    pub announce_token_path: bool,
 }
 
-struct Runner {
-    store: Mutex<Store>,
-    model: Arc<dyn Model>,
-    model_id: String,
-    workspace: String,
-    auto_approve: bool,
-    seq: AtomicU64,
-    buffer: EventBuffer,
-    /// One cancel token per thread, so stopping one conversation does not stop
-    /// another.
-    cancel: Mutex<HashMap<String, CancelToken>>,
-    /// Threads with a turn currently running. Used to answer `turn/steer`
-    /// honestly: guidance only applies to a live turn.
-    live: Mutex<HashMap<String, bool>>,
-}
+pub fn run(options: Options) -> Result<(), sunday_protocol::CoreError> {
+    use sunday_protocol::CoreError;
 
-impl Runner {
-    fn cancel_flag(&self, thread: &str) -> CancelToken {
-        let mut map = self.cancel.lock().unwrap();
-        map.entry(thread.to_owned()).or_default().clone()
-    }
+    let db_path = Path::new(&options.db);
+    let dir = db_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| Path::new(".").to_path_buf());
 
-    /// Turns the agent's journal into protocol events. The journal is the source
-    /// of truth; this only renames kinds and copies the fields the UI reads.
-    fn emit_journal(&self, thread: &str, sink: EventSink<'_>, from_seq: u64) {
-        let events = {
-            let store = self.store.lock().unwrap();
-            store.events(thread, from_seq).unwrap_or_default()
-        };
-        for event in events {
-            let (method, payload) = translate(&event.kind, &event.payload);
-            let bridge = BridgeEvent {
-                method,
-                seq: event.seq,
-                payload,
-                client_message_id: None,
-            };
-            self.buffer.push(thread, bridge.clone());
-            sink(bridge);
-        }
-    }
+    // Lock before touching the database.
+    let lock = acquire_with_wait(&dir, "sunday-serve").map_err(|reason| CoreError::Rejected {
+        reason: format!("{reason}. Close the other core first."),
+    })?;
 
-    fn mark_cancel(&self, thread: &str) {
-        let mut map = self.cancel.lock().unwrap();
-        let flag = map.entry(thread.to_owned()).or_default();
-        flag.cancel();
-    }
-}
+    let store = sunday_store::Store::open(&options.db)?;
+    let connection_token = token::load_or_create(&dir)?;
+    let token_path = token::path_in(&dir);
 
-/// The agent writes `EventKind`; the workbench dispatches on `method`. Keeping
-/// the mapping in one function means a new kind fails loudly at the call site
-/// rather than silently disappearing from the UI.
-///
-/// The payload is also adapted, not just renamed: the agent records
-/// `approval_id` while the workbench reads `payload.request_id` (it later sends
-/// that value back as `approval/respond`'s `request_id`). Without this the UI
-/// would render an approval card with no id and could not answer it.
-fn translate(kind: &EventKind, payload: &serde_json::Value) -> (String, serde_json::Value) {
-    let method = match kind {
-        EventKind::CommandAccepted => "turn/accepted",
-        EventKind::RunStarted => "turn/started",
-        EventKind::ModelStarted => "turn/model_started",
-        EventKind::ModelCompleted => "turn/model_completed",
-        EventKind::ToolPrepared => "item/tool_prepared",
-        EventKind::ApprovalRequested => "item/approval_request",
-        EventKind::ApprovalResolved => "item/approval_resolved",
-        EventKind::ToolDispatched => "item/tool_dispatched",
-        EventKind::ToolSucceeded => "item/completed",
-        EventKind::ToolFailed => "item/failed",
-        EventKind::ToolOutcomeUnknown => "item/outcome_unknown",
-        EventKind::ToolReplayed => "item/replayed",
-        EventKind::GuidanceReceived => "item/guidance",
-        EventKind::RunCancelled => "turn/cancelled",
-        EventKind::RunCompleted => "turn/completed",
-        EventKind::RunWaitingForReconciliation => "turn/waiting_for_reconciliation",
-        EventKind::ContextCompacted => "turn/context_compacted",
-    };
-    let mut payload = payload.clone();
-    if matches!(
-        kind,
-        EventKind::ApprovalRequested | EventKind::ApprovalResolved
-    ) {
-        if let Some(object) = payload.as_object_mut() {
-            if !object.contains_key("request_id") {
-                if let Some(id) = object.get("approval_id").cloned() {
-                    object.insert("request_id".into(), id);
-                }
-            }
-        }
-    }
-    (method.to_owned(), payload)
-}
-
-impl TurnRunner for Runner {
-    fn start_turn(
-        &self,
-        thread_id: &str,
-        prompt: &str,
-        client_message_id: &str,
-        sink: EventSink<'_>,
-    ) -> Result<(), String> {
-        // Acceptance must be the first frame and it must be a real journal
-        // event: the client treats it as authoritative and also orders every
-        // later event by `seq`. A synthetic seq would collide with the journal
-        // and make the UI drop or reorder real work.
-        let accepted = {
-            let mut store = self.store.lock().unwrap();
-            let request_id = if client_message_id.is_empty() {
-                format!("{thread_id}:{}", now_ms())
-            } else {
-                client_message_id.to_owned()
-            };
-            let envelope = sunday_protocol::CommandEnvelope {
-                protocol_version: sunday_protocol::PROTOCOL_VERSION.to_string(),
-                request_id,
-                thread_id: thread_id.to_owned(),
-                expected_revision: None,
-                payload: sunday_protocol::Command::TurnStart {
-                    text: prompt.to_owned(),
-                },
-            };
-            store
-                .accept_command("local", &envelope)
-                .map_err(|e| e.to_string())?
-        };
-        let accept_seq = accepted.seq.ok_or_else(|| {
-            "the store accepted the command without returning a sequence".to_owned()
-        })?;
-        let accept_event = {
-            let store = self.store.lock().unwrap();
-            store
-                .events(thread_id, accept_seq.saturating_sub(1))
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find(|event| event.seq == accept_seq)
-                .ok_or_else(|| "the acceptance event is missing from the journal".to_owned())?
-        };
-        {
-            let (method, payload) = translate(&accept_event.kind, &accept_event.payload);
-            sink(BridgeEvent {
-                method,
-                seq: accept_seq,
-                payload,
-                client_message_id: Some(client_message_id.to_owned()),
-            });
-        }
-
-        let cancel = self.cancel_flag(thread_id);
-        cancel.reset();
-        // Marked live before the model is called, so a steer that arrives during
-        // the first round is applied instead of being told nothing is running.
-        self.live.lock().unwrap().insert(thread_id.to_owned(), true);
-
-        let files = sunday_platform::LocalFiles::new(&self.workspace).map_err(|e| e.to_string())?;
-        let files = Arc::new(files);
-        let read = ReadFile::new(files.clone());
-        let write = WriteFile::new(files);
-        let tools: Vec<&dyn sunday_protocol::Tool> = vec![&read, &write];
-        let auto = AutoApprove;
-        let policy = PolicyApprover;
-        let approver: &dyn Approver = if self.auto_approve { &auto } else { &policy };
-
-        let env = Env {
-            store: &self.store,
-            model: self.model.as_ref(),
-            tools: &tools,
-            approver,
-            cancel: &cancel,
-            workspace: "local".into(),
-            host: HostKind::Server,
-            context: None,
-        };
-        let input = TurnInput {
-            thread_id: thread_id.to_owned(),
-            turn_id: format!("turn-{}", self.seq.load(Ordering::SeqCst)),
-            model_id: self.model_id.clone(),
-            system: Some("You are Sunday. Use the tools you are given.".into()),
-            prompt: prompt.to_owned(),
-        };
-
-        // The agent is async; this trait is sync because the adapter calls it
-        // from a worker thread.
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("runtime: {e}"))?;
-        let run = runtime.block_on(sunday_agent::run_turn(&env, input, RunBudget::default()));
-
-        // Report whatever the run produced, whether it succeeded or not. Start
-        // after the acceptance event so the client does not see it twice.
-        self.emit_journal(thread_id, sink, accept_seq);
-
-        // The turn is no longer live as soon as it stops producing.
-        self.live
-            .lock()
-            .unwrap()
-            .insert(thread_id.to_owned(), false);
-
-        match run {
-            Ok(RunOutcome::Completed { .. })
-            | Ok(RunOutcome::NeedsApproval { .. })
-            | Ok(RunOutcome::Cancelled) => Ok(()),
-            Ok(RunOutcome::WaitingForReconciliation { tool_call_id, hint }) => {
-                Err(format!("outcome unknown for {tool_call_id}: {hint}"))
-            }
-            Ok(RunOutcome::BudgetExhausted { reason }) => {
-                Err(format!("budget exhausted: {reason:?}"))
-            }
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
-    fn respond(
-        &self,
-        thread_id: &str,
-        request_id: &str,
-        decision: &str,
-        guidance: &str,
-        sink: EventSink<'_>,
-    ) -> Result<(), String> {
-        match decision {
-            "approve" | "trust" => {}
-            "deny" | "skip" => {
-                // Denying must not execute the tool. Record the decision and let
-                // the caller resume on the next turn.
-                let mut store = self.store.lock().unwrap();
-                store
-                    .respond_approval(request_id, "", now_ms(), false)
-                    .map_err(|e| e.to_string())?;
-                drop(store);
-                self.emit_journal(thread_id, sink, 0);
-                return Ok(());
-            }
-            "guide" => {
-                // Guidance is a new instruction, not an approval. It is stored
-                // so the next turn picks it up.
-                let mut store = self.store.lock().unwrap();
-                let guidance_id = format!("{thread_id}:guide:{}", now_ms());
-                store
-                    .append_guidance(thread_id, &guidance_id, guidance)
-                    .map_err(|e| e.to_string())?;
-                drop(store);
-                self.emit_journal(thread_id, sink, 0);
-                return Ok(());
-            }
-            other => return Err(format!("unsupported decision {other}")),
-        }
-
-        // The digest binds this decision to the exact arguments the user was
-        // shown, so approving one call cannot silently authorise another.
-        let digest = {
-            let store = self.store.lock().unwrap();
-            match store.pending_call(request_id) {
-                Ok(Some((_, digest))) => digest,
-                Ok(None) => return Err("that approval has no pending call".into()),
-                Err(e) => return Err(e.to_string()),
-            }
-        };
-        let cancel = self.cancel_flag(thread_id);
-
-        let files = sunday_platform::LocalFiles::new(&self.workspace).map_err(|e| e.to_string())?;
-        let files = Arc::new(files);
-        let read = ReadFile::new(files.clone());
-        let write = WriteFile::new(files);
-        let tools: Vec<&dyn sunday_protocol::Tool> = vec![&read, &write];
-        let auto = AutoApprove;
-        let policy = PolicyApprover;
-        let approver: &dyn Approver = if self.auto_approve { &auto } else { &policy };
-
-        let env = Env {
-            store: &self.store,
-            model: self.model.as_ref(),
-            tools: &tools,
-            approver,
-            cancel: &cancel,
-            workspace: "local".into(),
-            host: HostKind::Server,
-            context: None,
-        };
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("runtime: {e}"))?;
-        let run = runtime.block_on(sunday_agent::resume_turn(
-            &env,
-            thread_id,
-            request_id,
-            &digest,
-            RunBudget::default(),
-        ));
-
-        self.emit_journal(thread_id, sink, 0);
-        match run {
-            Ok(_) => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
-    fn cancel(&self, thread_id: &str) -> Result<Vec<BridgeEvent>, String> {
-        self.mark_cancel(thread_id);
-        Ok(Vec::new())
-    }
-
-    fn open_thread(&self, thread_id: &str) -> Result<Vec<BridgeEvent>, String> {
-        // Opening is reading: a thread exists once its journal has events, and
-        // that is created by the first accepted command. Nothing is written here,
-        // so a retried press cannot fork a thread or bump a revision.
-        let events = {
-            let store = self.store.lock().unwrap();
-            store.events(thread_id, 0).unwrap_or_default()
-        };
-        Ok(events
-            .into_iter()
-            .map(|event| {
-                let (method, payload) = translate(&event.kind, &event.payload);
-                BridgeEvent {
-                    method,
-                    seq: event.seq,
-                    payload,
-                    client_message_id: None,
-                }
-            })
-            .collect())
-    }
-
-    fn history(
-        &self,
-        thread_id: &str,
-        before_seq: Option<u64>,
-        limit: usize,
-    ) -> Result<HistoryPage, String> {
-        let store = self.store.lock().unwrap();
-        let (events, has_more) = store
-            .history_page(thread_id, before_seq, limit)
-            .map_err(|e| e.to_string())?;
-        let total = store.event_count(thread_id).map_err(|e| e.to_string())?;
-        Ok(HistoryPage {
-            events: events
-                .into_iter()
-                .map(|event| {
-                    let (method, payload) = translate(&event.kind, &event.payload);
-                    BridgeEvent {
-                        method,
-                        seq: event.seq,
-                        payload,
-                        client_message_id: None,
-                    }
-                })
-                .collect(),
-            has_more,
-            total_items: total,
-        })
-    }
-
-    fn queue(&self, thread_id: &str) -> Result<Vec<QueueView>, String> {
-        let store = self.store.lock().unwrap();
-        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
-        Ok(items.into_iter().map(queue_view).collect())
-    }
-
-    fn queue_create(
-        &self,
-        thread_id: &str,
-        queue_item_id: &str,
-        text: &str,
-    ) -> Result<Vec<QueueView>, String> {
-        let mut store = self.store.lock().unwrap();
-        store
-            .enqueue(thread_id, queue_item_id, text)
-            .map_err(|e| e.to_string())?;
-        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
-        Ok(items.into_iter().map(queue_view).collect())
-    }
-
-    fn queue_update(
-        &self,
-        thread_id: &str,
-        queue_item_id: &str,
-        text: &str,
-    ) -> Result<Vec<QueueView>, String> {
-        let mut store = self.store.lock().unwrap();
-        let changed = store
-            .update_queue_item(thread_id, queue_item_id, text)
-            .map_err(|e| e.to_string())?;
-        if !changed {
-            return Err(format!("no queue item {queue_item_id} in {thread_id}"));
-        }
-        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
-        Ok(items.into_iter().map(queue_view).collect())
-    }
-
-    fn queue_delete(&self, thread_id: &str, queue_item_id: &str) -> Result<Vec<QueueView>, String> {
-        let mut store = self.store.lock().unwrap();
-        // Deleting something already gone is the state the caller wanted, so a
-        // double click must not surface as a failure.
-        store
-            .delete_queue_item(thread_id, queue_item_id)
-            .map_err(|e| e.to_string())?;
-        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
-        Ok(items.into_iter().map(queue_view).collect())
-    }
-
-    fn queue_reorder(&self, thread_id: &str, order: &[String]) -> Result<Vec<QueueView>, String> {
-        let mut store = self.store.lock().unwrap();
-        store
-            .reorder_queue(thread_id, order)
-            .map_err(|e| e.to_string())?;
-        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
-        Ok(items.into_iter().map(queue_view).collect())
-    }
-
-    fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<SteerOutcome, String> {
-        // A steer only applies while a turn is actually live on this thread.
-        // Answering "applied" with nothing running would make the UI show the
-        // text as delivered while the user never sees it again.
-        let live = {
-            let map = self.live.lock().unwrap();
-            map.get(thread_id).copied().unwrap_or(false)
-        };
-        if !live {
-            return Ok(SteerOutcome {
-                applied: false,
-                queued: false,
-                reason: if turn_id.is_empty() {
-                    "run_not_active".into()
-                } else {
-                    "active_turn_mismatch".into()
-                },
-            });
-        }
-        let mut store = self.store.lock().unwrap();
-        let guidance_id = format!("{thread_id}:steer:{}", now_ms());
-        store
-            .append_guidance(thread_id, &guidance_id, text)
-            .map_err(|e| e.to_string())?;
-        Ok(SteerOutcome {
-            applied: true,
-            queued: false,
-            reason: String::new(),
-        })
-    }
-
-    fn stop_turn(
-        &self,
-        thread_id: &str,
-        mode: StopMode,
-        sink: EventSink<'_>,
-    ) -> Result<(), String> {
-        // Every mode stops the loop. What differs is how much state is cleared,
-        // not whether the work stops.
-        self.mark_cancel(thread_id);
-        if matches!(mode, StopMode::Terminate | StopMode::ForceReset) {
-            // A terminated turn must not be resumable, so drop the continuation
-            // that would otherwise continue it on the next press.
-            let mut store = self.store.lock().unwrap();
-            store
-                .clear_continuation(thread_id)
-                .map_err(|e| e.to_string())?;
-        }
-        sink(BridgeEvent {
-            method: "turn/completed".into(),
-            seq: self.seq.fetch_add(1, Ordering::SeqCst) + 1,
-            payload: serde_json::json!({
-                "status": "cancelled",
-                "mode": format!("{mode:?}"),
-            }),
-            client_message_id: None,
-        });
-        Ok(())
-    }
-
-    fn events(&self, thread_id: &str, after: u64) -> Result<Vec<BridgeEvent>, String> {
-        // Prefer the journal: it survives a restart, which the in-memory buffer
-        // deliberately does not.
-        let stored = {
-            let store = self.store.lock().unwrap();
-            store.events(thread_id, after).unwrap_or_default()
-        };
-        let mut out: Vec<BridgeEvent> = stored
-            .into_iter()
-            .map(|event| {
-                let (method, payload) = translate(&event.kind, &event.payload);
-                BridgeEvent {
-                    method,
-                    seq: event.seq,
-                    payload,
-                    client_message_id: None,
-                }
-            })
-            .collect();
-        if out.is_empty() {
-            out = self.buffer.after(thread_id, after);
-        }
-        out.sort_by_key(|e| e.seq);
-        Ok(out)
-    }
-}
-
-/// One stored queue row, as the workbench renders it.
-fn queue_view(item: sunday_store::QueueItem) -> QueueView {
-    QueueView {
-        queue_item_id: item.queue_item_id,
-        position: item.position,
-        input: item.input,
-        status: item.status,
-    }
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-/// Runs the server until the listener closes. Returns a process exit code.
-pub fn run(options: Options) -> Result<(), CoreError> {
-    // One writer per data directory, or refuse. This is the guard that stops two
-    // cores from corrupting the same database.
-    let lock = match SingleWriterLock::acquire(options.db_dir(), "sunday-serve", STALE_AFTER) {
-        Ok(lock) => lock,
-        Err(LockError::Busy { owner, pid, age_ms }) => {
-            return Err(CoreError::Rejected {
-                reason: format!(
-                    "another core is writing this data directory: {owner} (pid {pid}, \
-                     heartbeat {age_ms}ms ago). Close it first."
-                ),
-            })
-        }
-        Err(LockError::Io(reason)) => return Err(CoreError::Storage { reason }),
-    };
-
-    let store = Store::open(&options.db)?;
-    let runner = Arc::new(Runner {
-        store: Mutex::new(store),
+    let runner = Arc::new(CoreRunner::new(CoreOptions {
+        store,
         model: options.model,
         model_id: options.model_id,
         workspace: options.workspace,
-        auto_approve: options.auto_approve,
-        seq: AtomicU64::new(0),
-        buffer: EventBuffer::default(),
-        cancel: Mutex::new(HashMap::new()),
-        live: Mutex::new(HashMap::new()),
-    });
+        host_kind: sunday_protocol::HostKind::Server,
+        policy: options.policy,
+        system: Some("You are Sunday. Use the tools you are given.".into()),
+    }));
 
-    let server = AppServer::bind(&options.listen, runner)
+    let server = AppServer::bind_authenticated(&options.listen, runner, connection_token)
         .map_err(|e| CoreError::storage(format!("cannot listen on {}: {e}", options.listen)))?;
     let addr = server
         .local_addr()
         .map_err(|e| CoreError::storage(format!("cannot read the bound address: {e}")))?;
-    // The host prints the real address so a UI can be pointed at it even when
-    // port 0 was requested.
+
+    // The address is printed so a UI can be pointed at it; the token is not, only
+    // where to find it. A token in a log is a token in every crash report.
     println!("listening ws://{addr} protocol core.app_server.v1");
+    if options.announce_token_path {
+        println!("connection token: {}", token_path.display());
+    }
+
     server.serve();
     let _ = lock.release();
     Ok(())
 }
 
-impl Options {
-    /// The lock protects the data directory, so it lives beside the database.
-    fn db_dir(&self) -> String {
-        std::path::Path::new(&self.db)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .filter(|p| !p.is_empty())
-            .unwrap_or_else(|| ".".into())
-    }
-}
-
-/// Builds a model from the command line. Kept here so the `serve` command has
-/// no hidden default: without an explicit choice there is no model at all.
+/// Builds a model from the command line. Kept here so `serve` has no hidden
+/// default: without an explicit choice there is no model at all.
 pub fn model_from_args(
     script: Option<String>,
     model_url: Option<String>,
     model_id: Option<String>,
     api_key: Option<String>,
-) -> Result<(Arc<dyn Model>, String), CoreError> {
+) -> Result<(Arc<dyn sunday_protocol::Model>, String), sunday_protocol::CoreError> {
+    use sunday_protocol::CoreError;
     if let Some(path) = script {
         let text = std::fs::read_to_string(&path)
             .map_err(|e| CoreError::invalid(format!("cannot read {path}: {e}")))?;
@@ -641,11 +117,33 @@ pub fn model_from_args(
     }
     match (model_url, model_id) {
         (Some(url), Some(id)) => {
-            let client = LlmClient::new(ProviderConfig::openai(url, api_key.unwrap_or_default()))?;
+            let client = sunday_llm::LlmClient::new(sunday_llm::ProviderConfig::openai(
+                url,
+                api_key.unwrap_or_default(),
+            ))?;
             Ok((Arc::new(client), id))
         }
         _ => Err(CoreError::invalid(
             "pass either --script <file>, or --model-url <url> and --model <id>",
         )),
     }
+}
+
+/// Parses the grant policy from flags. Default is reads only.
+///
+/// There is no `--auto-approve` any more. A flag that approves every side effect
+/// cannot be made safe by documentation, and it was the default on Android.
+pub fn policy_from_args(args: &[String]) -> GrantPolicy {
+    let mut policy = GrantPolicy::read_only();
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--grant" {
+            if let Some(id) = args.get(index + 1) {
+                policy.granted.insert(id.clone());
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    policy
 }

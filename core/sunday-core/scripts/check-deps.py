@@ -36,9 +36,18 @@ ALLOWED = {
     "sunday-llm": {"sunday-protocol"},
     "sunday-context": {"sunday-protocol"},
     "sunday-agent": {"sunday-protocol", "sunday-store", "sunday-context"},
-    # Composition layer. It wires a runnable core together, so it may see the
-    # store and the agent, but nothing below it may depend on it.
-    "sunday-host": {"sunday-protocol", "sunday-store", "sunday-agent"},
+    # Composition layer. It wires a runnable core together and now owns the one
+    # shared TurnRunner, so it may see the store, the agent, and the two ports it
+    # assembles: tools (what the agent can do) and platform (where the files are).
+    # Nothing below it may depend on it. It deliberately does NOT see sunday-llm:
+    # a host picks the model and passes it in, so the runner stays provider-neutral.
+    "sunday-host": {
+        "sunday-protocol",
+        "sunday-store",
+        "sunday-agent",
+        "sunday-platform",
+        "sunday-tools",
+    },
     "sunday-cli": {
         "sunday-protocol",
         "sunday-store",
