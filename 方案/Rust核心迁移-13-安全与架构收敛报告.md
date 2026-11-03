@@ -284,10 +284,21 @@ python scripts/check-deps.py                          ok 10 crates
 cargo test --workspace                               见下
 ```
 
-测试总数（默认集 + ignored）：
+真实数字：
 
-- 默认集：全部通过，无失败
-- ignored：32（分类见 5.2）
+- **181 passed / 0 failed / 32 ignored**
+- 安全负向 6 项、锁 6 项、策略 6 项均在默认集内
+
+远端 CI（运行 41646885854，提交 `7f05476e`）：**四项全部成功**
+
+| 作业 | 结果 |
+|---|---|
+| windows build and tests | 成功 |
+| linux build and tests | 成功 |
+| android target check | 成功 |
+| dependency rules | 成功 |
+
+注意 `android target check` 只验证交叉编译，**不覆盖 APK 打包与安装**。那部分本轮仍是手工执行（阻断项 5）。
 
 安全负向测试 6 项、锁测试 6 项、策略测试 6 项均在默认集内。
 
