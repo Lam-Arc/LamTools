@@ -128,3 +128,26 @@ python -m pytest core/tests -p no:cacheprovider -q
 
 **注意**：全量 222 个既有失败说明这个仓库在本地环境的绿灯基线本来就很差，不能把
 "分支 205 failed" 当成可接受状态；它只说明"没有比原始 HEAD 更差"。
+
+## 9. 夹具修复与由此暴露的隐藏失败
+
+`.agents/` 是 gitignore 的本地目录，独立工作树里没有，`test_plugin_packaging_boundary.py`
+在模块顶层直接读它 → 收集阶段就崩，整个套件根本跑不起来。
+
+修法：
+1. 该文件的读取改成惰性（收集阶段不再碰文件系统）。
+2. `core/tests/conftest.py` 增加会话级自动夹具：从 `git worktree list` 列出的任意检出里
+   把 `.agents/skills` 复制过来；都找不到时给一条可操作的报错，而不是一个看不懂的
+   FileNotFoundError。
+
+实测：删掉 `.agents` 后直接跑该文件，夹具自动补回，3 passed。
+
+**由此暴露两条此前被收集错误掩盖的既有失败（不是本轮引入）**：
+
+- `test_local_packaging_boundary_checks_excluded_and_required_plugins`
+- `test_release_workflow_boundary_checks_excluded_and_required_plugins`
+
+两者都是把 `scripts/package.ps1` / `.github/workflows/release.yml` 的字面量写法
+（`foreach ($ExcludedPlugin in @("workflow"))` 等）当契约，脚本重构后断言就失效。
+分类：**测试契约过期（静态字符串断言绑定实现写法）**。要修得改成校验行为而不是字符串，
+本轮未做。

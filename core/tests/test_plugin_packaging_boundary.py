@@ -11,7 +11,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = (ROOT / "core" / "lamtools-core-backend.spec").read_text(encoding="utf-8")
 PACKAGE_SCRIPT = (ROOT / "scripts" / "package.ps1").read_text(encoding="utf-8")
 RELEASE_WORKFLOW = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-RELEASE_SKILL = (ROOT / ".agents" / "skills" / "release-lamtools" / "SKILL.md").read_text(encoding="utf-8")
+def _release_skill() -> str:
+    """惰性读取：.agents/ 是本地目录，收集阶段读会让独立工作树直接崩。"""
+    return (ROOT / ".agents" / "skills" / "release-lamtools" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
 
 EXCLUDED_PLUGINS = {"workflow"}
 
@@ -44,10 +48,11 @@ def test_release_workflow_boundary_checks_excluded_and_required_plugins() -> Non
 
 
 def test_release_skill_documents_the_same_plugin_boundary() -> None:
-    assert "`resources/plugins/bundled/workflow`" in RELEASE_SKILL
-    required_line = re.search(r"(?m)^- Still contains (.+)$", RELEASE_SKILL)
+    release_skill = _release_skill()
+    assert "`resources/plugins/bundled/workflow`" in release_skill
+    required_line = re.search(r"(?m)^- Still contains (.+)$", release_skill)
     assert required_line, "release skill must explicitly list the required bundled plugins"
     required_plugins = re.findall(r"`([^`]+)`", required_line.group(1))
     assert len(required_plugins) == 3
     assert set(required_plugins) == {"git", "websearch", "imagegen"}
-    assert "四个必要内置插件" not in RELEASE_SKILL
+    assert "四个必要内置插件" not in release_skill
