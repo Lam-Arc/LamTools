@@ -3939,9 +3939,15 @@ class TestKernelContextCompaction:
         assert len(summary_messages) == 1
         assert "Current Objective And Done Criteria" in summary_messages[0].content
         assert "Active User Instructions" in summary_messages[0].content
-        assert "## Recent user messages" in summary_messages[0].content
-        assert summary_messages[0].content.endswith("6. current task")
-        assert "1. old user 0 " in summary_messages[0].content
+        # The standing verbatim user appendix is gone (controller.py), and the
+        # latest user turn now keeps its own role instead of being appended as
+        # a numbered entry.
+        assert "## Recent user messages" not in summary_messages[0].content
+        assert "6. current task" not in summary_messages[0].content
+        assert any(
+            message.role == "user" and str(message.content) == "current task"
+            for message in llm.last_request.messages
+        )
         raw_messages = [
             str(m.content)
             for m in llm.last_request.messages
@@ -4047,8 +4053,7 @@ class TestKernelContextCompaction:
             if message.metadata.get("key") == "context_compaction_summary"
         ]
         assert len(summary_messages) == 1
-        assert "## Recent user messages" in summary_messages[0].content
-        assert summary_messages[0].content.endswith("6. current task")
+        assert "## Recent user messages" not in summary_messages[0].content
         assert "tool output " not in summary_messages[0].content
 
     @pytest.mark.asyncio
@@ -4254,9 +4259,11 @@ class TestKernelContextCompaction:
             if message.metadata.get("key") != "context_compaction_summary"
         ]
         assert "CURRENT_TOOL_RESULT_SENTINEL" not in "\n".join(raw_messages)
-        assert llm.last_request.messages[-1].role == "system"
-        assert llm.last_request.messages[-1].content.endswith(
-            "1. current long task with exact acceptance criteria"
+        # The latest user turn is retained as its own message, so it is last
+        # and unambiguous rather than being a numbered line inside the summary.
+        assert llm.last_request.messages[-1].role == "user"
+        assert llm.last_request.messages[-1].content == (
+            "current long task with exact acceptance criteria"
         )
         metrics_events = [event for event in sink.events if event.name == "runtime.metrics"]
         assert len(metrics_events) >= 2
@@ -4388,7 +4395,10 @@ class TestKernelContextCompaction:
         ]
         assert len(summaries) == 1
         text = "\n".join(str(message.content) for message in final_request.messages)
-        assert "old user 4" in text
+        # Older raw user messages stay summarized away: the appendix that used
+        # to carry them verbatim no longer exists, so only the retained span and
+        # the new turn may appear outside the summary.
+        assert "old user 4" not in text
         assert "current task" in text
         # The compacted raw messages must not resurface; the summary may still
         # reference them by content, so only inspect non-summary messages.
@@ -4646,9 +4656,12 @@ class TestKernelContextCompaction:
             event.name for event in anchored_sink.events if event.name == "runtime.context_compacted"
         ] == ["runtime.context_compacted"]
         anchored_metrics = anchored_state.metadata["runtime_context_metrics"]
-        assert anchored_metrics["context_measurement_source"] == "usage"
-        assert anchored_metrics["context_usage_prompt_tokens"] == 900_000
         assert anchored_metrics["context_compacted"] is True
+        # After compaction the recorded metrics describe the new, smaller
+        # request: the provider count belonged to the request that was just
+        # replaced, so it is dropped and the fresh estimate becomes the source.
+        assert anchored_metrics["context_measurement_source"] == "estimate"
+        assert "context_usage_prompt_tokens" not in anchored_metrics
 
         # Same messages, same policy, no provider usage: the local estimate sees
         # a small prompt and leaves the context alone.
