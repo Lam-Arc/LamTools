@@ -1,0 +1,13 @@
+[package]
+name = "sunday-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Frozen types for the Sunday core. No business logic, no platform code."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true

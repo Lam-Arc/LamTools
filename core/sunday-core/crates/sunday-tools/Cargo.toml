@@ -1,0 +1,19 @@
+[package]
+name = "sunday-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Frozen tool implementations. Each tool declares its hosts and side effect."
+
+[dependencies]
+sunday-protocol.workspace = true
+sunday-platform.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+regex-lite.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true

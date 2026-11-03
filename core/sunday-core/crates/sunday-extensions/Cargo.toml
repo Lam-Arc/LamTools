@@ -1,0 +1,19 @@
+[package]
+name = "sunday-extensions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sub-agent orchestration. Reuses the agent loop; it never runs a second one."
+
+[dependencies]
+sunday-protocol.workspace = true
+sunday-store.workspace = true
+sunday-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+tempfile.workspace = true

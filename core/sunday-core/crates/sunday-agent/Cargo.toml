@@ -1,0 +1,19 @@
+[package]
+name = "sunday-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Turn loop, queue, cancel and approval hand-off. No IO of its own."
+
+[dependencies]
+sunday-protocol.workspace = true
+sunday-store.workspace = true
+sunday-context.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true

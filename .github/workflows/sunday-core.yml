@@ -1,0 +1,101 @@
+name: sunday-core
+
+# The new core is a separate workspace. Its own workflow means a red core cannot
+# be hidden behind the existing desktop or mobile jobs, and the existing jobs are
+# not touched while the migration is in progress.
+on:
+  push:
+    # Any branch: the point of a dedicated workflow is that a feature branch can
+    # prove the core green before anyone merges it.
+    paths:
+      - "core/sunday-core/**"
+      - ".github/workflows/sunday-core.yml"
+  pull_request:
+    paths:
+      - "core/sunday-core/**"
+      - ".github/workflows/sunday-core.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: sunday-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rules:
+    name: dependency rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Enforce crate edges and forbidden tokens
+        run: python core/sunday-core/scripts/check-deps.py
+
+  linux:
+    name: linux build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/sunday-core
+      - name: Format
+        working-directory: core/sunday-core
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        working-directory: core/sunday-core
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        working-directory: core/sunday-core
+        run: cargo test --workspace -- --test-threads=4
+      - name: Headless smoke
+        working-directory: core/sunday-core
+        run: |
+          cargo run -q -p sunday-cli -- health
+          cargo run -q -p sunday-cli -- store selftest --db "$RUNNER_TEMP/selftest.db"
+          cargo run -q -p sunday-cli -- db inspect --db "$RUNNER_TEMP/selftest.db"
+
+  windows:
+    name: windows build and tests
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/sunday-core
+      - name: Tests
+        working-directory: core/sunday-core
+        run: cargo test --workspace -- --test-threads=4
+      - name: Headless smoke
+        working-directory: core/sunday-core
+        run: |
+          cargo run -q -p sunday-cli -- health
+          cargo run -q -p sunday-cli -- store selftest --db "$env:RUNNER_TEMP\selftest.db"
+
+  android-target:
+    name: android target check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/sunday-core
+      - name: Install NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+      - name: Build the core for Android
+        working-directory: core/sunday-core
+        run: cargo build --target aarch64-linux-android -p sunday-protocol -p sunday-store -p sunday-platform -p sunday-agent

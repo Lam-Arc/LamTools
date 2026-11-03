@@ -1,0 +1,8 @@
+# Build output
+/target/
+
+# Local scratch databases created by `sunday store selftest`
+.lam-selftest/
+*.db
+*.db-wal
+*.db-shm

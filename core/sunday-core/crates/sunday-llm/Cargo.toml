@@ -1,0 +1,16 @@
+[package]
+name = "sunday-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Model adapters. Streaming, retry and typed failures. No agent logic."
+
+[dependencies]
+sunday-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+futures-util = "0.3"

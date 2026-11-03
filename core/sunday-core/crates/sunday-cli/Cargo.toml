@@ -1,0 +1,22 @@
+[package]
+name = "sunday-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Headless entry point: inspection, self-test and an end-to-end turn."
+
+[[bin]]
+name = "sunday"
+path = "src/main.rs"
+
+[dependencies]
+sunday-protocol.workspace = true
+sunday-store.workspace = true
+sunday-agent.workspace = true
+sunday-platform.workspace = true
+sunday-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "sunday-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Platform ports. Traits plus one OS-neutral local implementation."
+
+[dependencies]
+sunday-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true

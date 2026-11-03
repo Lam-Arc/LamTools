@@ -1,0 +1,16 @@
+[package]
+name = "sunday-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Durable event journal, command receipts, tool stages and approvals."
+
+[dependencies]
+sunday-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

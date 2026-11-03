@@ -1,0 +1,12 @@
+[package]
+name = "sunday-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Token budget, message selection and compaction. Decides what the model sees, not when."
+
+[dependencies]
+sunday-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
