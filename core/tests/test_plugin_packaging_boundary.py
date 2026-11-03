@@ -20,6 +20,32 @@ def _release_skill() -> str:
 EXCLUDED_PLUGINS = {"workflow"}
 
 
+def _declared_plugin_lists(script: str) -> list[set[str]]:
+    """Every ``foreach (... in @("a", "b"))`` plugin list in a PowerShell step.
+
+    Pinning the whole loop text made these checks fail whenever the list grew,
+    even though a longer exclusion list is strictly safer.  Parsing the lists
+    keeps the contract about which plugins are excluded/required, and lets the
+    local script and the release workflow be compared with each other.
+    """
+    return [
+        {item.strip().strip('"') for item in match.split(",") if item.strip().strip('"')}
+        for match in re.findall(r'foreach \(\$\w+ in @\(([^)]*)\)\)', script)
+    ]
+
+
+def _excluded_plugins(script: str) -> set[str]:
+    matches = [names for names in _declared_plugin_lists(script) if "workflow" in names]
+    assert len(matches) == 1, "each build path must declare exactly one excluded plugin list"
+    return matches[0]
+
+
+def _required_plugins(script: str) -> set[str]:
+    matches = [names for names in _declared_plugin_lists(script) if "imagegen" in names]
+    assert len(matches) == 1, "each build path must declare exactly one required plugin list"
+    return matches[0]
+
+
 def _spec_excluded_plugins(spec: str) -> set[str]:
     match = re.search(r"_EXCLUDED_BUNDLED_PLUGINS\s*=\s*(\{[^\n]+\})", spec)
     assert match, "spec must declare the excluded bundled plugin set"
@@ -38,13 +64,27 @@ def test_spec_embeds_manifest_declared_websearch_python_handler() -> None:
 
 
 def test_local_packaging_boundary_checks_excluded_and_required_plugins() -> None:
-    assert 'foreach ($ExcludedPlugin in @("workflow"))' in PACKAGE_SCRIPT
-    assert 'foreach ($RequiredPlugin in @("git", "imagegen", "websearch"))' in PACKAGE_SCRIPT
+    excluded = _excluded_plugins(PACKAGE_SCRIPT)
+    required = _required_plugins(PACKAGE_SCRIPT)
+
+    assert EXCLUDED_PLUGINS <= excluded
+    assert {"imagegen", "websearch"} <= required
+    # A plugin cannot be both required and forbidden: that combination would
+    # make the build fail no matter what the spec embedded.
+    assert not (excluded & required)
 
 
 def test_release_workflow_boundary_checks_excluded_and_required_plugins() -> None:
-    assert 'foreach ($name in @("workflow"))' in RELEASE_WORKFLOW
-    assert 'foreach ($name in @("git", "imagegen", "websearch"))' in RELEASE_WORKFLOW
+    excluded = _excluded_plugins(RELEASE_WORKFLOW)
+    required = _required_plugins(RELEASE_WORKFLOW)
+
+    assert EXCLUDED_PLUGINS <= excluded
+    assert {"imagegen", "websearch"} <= required
+    assert not (excluded & required)
+    # The local script and CI must enforce the same boundary; a plugin checked
+    # in one place and not the other ships silently.
+    assert excluded == _excluded_plugins(PACKAGE_SCRIPT)
+    assert required == _required_plugins(PACKAGE_SCRIPT)
 
 
 def test_release_skill_documents_the_same_plugin_boundary() -> None:
