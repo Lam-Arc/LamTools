@@ -108,6 +108,126 @@ class InMemoryObserverLifecycleStore:
             return deepcopy(current)
 
 
+class _SyncStreamReader:
+    """把阻塞的管道读包装成 awaitable 的 read(n)。
+
+    读的是无缓冲 FileIO：管道里有数据就返回，不会等满 n 字节。
+    读取放线程里做，因为句柄来自 CreateProcessW 而不是 asyncio 的 transport。
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+
+    async def read(self, size: int) -> bytes:
+        if self._stream is None:
+            return b""
+        try:
+            return await asyncio.to_thread(self._stream.read, size)
+        except (OSError, ValueError):
+            return b""
+
+
+class _SyncStreamWriter:
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+
+    def write(self, data: bytes) -> None:
+        if self._stream is None:
+            return
+        self._stream.write(data)
+
+    async def drain(self) -> None:
+        if self._stream is None:
+            return
+        await asyncio.to_thread(self._stream.flush)
+
+
+class _ChildHandle:
+    """Observer 子进程的统一句柄（Windows 走 job，其他平台退回 asyncio）。"""
+
+    def __init__(self, backend: str, process: Any) -> None:
+        self.backend = backend
+        self._process = process
+        if backend == "job":
+            self.stdout = _SyncStreamReader(process.stdout)
+            self.stderr = _SyncStreamReader(process.stderr)
+            self.stdin = _SyncStreamWriter(process.stdin)
+        else:
+            self.stdout = process.stdout
+            self.stderr = process.stderr
+            self.stdin = process.stdin
+
+    @property
+    def pid(self) -> int:
+        return int(getattr(self._process, "pid", 0) or 0)
+
+    @property
+    def returncode(self) -> int | None:
+        return getattr(self._process, "returncode", None)
+
+    async def wait(self) -> int:
+        if self.backend == "job":
+            return int(await asyncio.to_thread(self._process.wait))
+        return await self._process.wait()
+
+    def poll(self) -> int | None:
+        return getattr(self._process, "poll", lambda: None)()
+
+    def terminate_tree(self) -> bool:
+        """优先用 job 一次收掉整棵树。"""
+        if self.backend == "job":
+            try:
+                return bool(self._process.terminate_tree())
+            except Exception:
+                return False
+        return False
+
+    def kill(self) -> None:
+        try:
+            self._process.kill()
+        except ProcessLookupError:
+            pass
+
+    def close(self) -> None:
+        close = getattr(self._process, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
+def _spawn_observer_child(
+    argv: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    creationflags: int,
+) -> _ChildHandle:
+    """创建观察器子进程。
+
+    user:“实现进程创建阶段原子加入 Job Object，消除 spawn 后再登记的竞态窗口”
+    +(优先用 CreateProcessW + PROC_THREAD_ATTRIBUTE_JOB_LIST；不可用时退回
+    asyncio 并在 spawn 后补登记，同时明确标记降级)。
+    """
+    if os.name == "nt":
+        try:
+            from lamtools_core.runtime.win_job_spawn import spawn_in_job
+
+            child = spawn_in_job(
+                argv,
+                cwd=cwd,
+                env=env,
+                pipes=True,
+                creationflags=creationflags,
+            )
+            return _ChildHandle("job", child)
+        except Exception:  # noqa: BLE001 — 原生路径不可用就降级，不能因此不跑观察器
+            _logger.warning("atomic job spawn unavailable, falling back to asyncio", exc_info=True)
+    return _ChildHandle("asyncio", None)
+
+
+
 @dataclass
 class _ObserverProcess:
     job: ArrangeJob
@@ -346,21 +466,33 @@ class ObserverSupervisor:
             # 独立进程组：停止时要能连带收掉观察器自己起的孙进程。
             creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         try:
-            process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-u",
-                str(entry),
-                cwd=str(work_root),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                creationflags=creationflags,
-                start_new_session=os.name != "nt",
-            )
-        except OSError as exc:
+            if os.name == "nt":
+                # 创建期就进 job：spawn 与登记的窗口不存在，强杀不留孤儿。
+                handle = await asyncio.to_thread(
+                    _spawn_observer_child,
+                    [sys.executable, "-u", str(entry)],
+                    cwd=str(work_root),
+                    env=env,
+                    creationflags=creationflags,
+                )
+            else:
+                raw = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-u",
+                    str(entry),
+                    cwd=str(work_root),
+                    env=env,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    creationflags=creationflags,
+                    start_new_session=True,
+                )
+                handle = _ChildHandle("asyncio", raw)
+        except (OSError, RuntimeError) as exc:
             await self._schedule_restart(job, str(exc))
             return
+        process = handle
         task = asyncio.create_task(
             self._monitor(job, process),
             name=f"arrange-observer:{job.id}",
@@ -596,8 +728,10 @@ class ObserverSupervisor:
         process = active.process
         if process.returncode is None:
             # job object 优先：一次调用收掉整棵树，taskkill 只作兜底。
-            if active.job_handle is None or not terminate_kill_on_close_job(
-                active.job_handle
+            killed = process.terminate_tree() if hasattr(process, "terminate_tree") else False
+            if not killed and (
+                active.job_handle is None
+                or not terminate_kill_on_close_job(active.job_handle)
             ):
                 _terminate_tree(process)
             try:
@@ -607,6 +741,9 @@ class ObserverSupervisor:
                 await process.wait()
         await asyncio.gather(active.task, return_exceptions=True)
         release_kill_on_close_job(active.job_handle)
+        closer = getattr(process, "close", None)
+        if callable(closer):
+            closer()
         if self._processes.get(job_id) is active:
             self._processes.pop(job_id, None)
 
