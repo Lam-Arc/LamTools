@@ -178,7 +178,18 @@ fn deny_traversal(rel: &str) -> Result<(), CoreError> {
         return Err(CoreError::invalid("empty path"));
     }
     let path = Path::new(rel);
-    if path.is_absolute() {
+    // `Path::is_absolute` is platform-specific: `C:/x` is not absolute on Linux.
+    // The check has to be shape-based so Windows, Android and Linux agree, which
+    // is the only way one core can behave the same on both hosts.
+    let looks_absolute = path.is_absolute()
+        || rel.starts_with('/')
+        || rel.starts_with('\\')
+        || rel
+            .as_bytes()
+            .get(1)
+            .map(|colon| *colon == b':')
+            .unwrap_or(false);
+    if looks_absolute {
         return Err(CoreError::PermissionDenied {
             resource: format!("{rel} is absolute"),
         });
@@ -362,15 +373,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refuses_absolute_paths() {
+    async fn refuses_absolute_paths_in_every_shape() {
         let (_dir, files) = files();
-        let err = files
-            .read(&FileHandle::Workspace {
-                rel: "C:/Windows/win.ini".into(),
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, CoreError::PermissionDenied { .. }));
+        for rel in [
+            "C:/Windows/win.ini",
+            "C:\\Windows\\win.ini",
+            "/etc/passwd",
+            "\\\\server\\share\\x",
+        ] {
+            let err = files
+                .read(&FileHandle::Workspace { rel: rel.into() })
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, CoreError::PermissionDenied { .. }),
+                "{rel} should be refused, got {err:?}"
+            );
+        }
     }
 
     #[tokio::test]
