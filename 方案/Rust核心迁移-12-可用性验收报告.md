@@ -365,7 +365,16 @@ cargo test --workspace              166 passed / 0 failed / 32 ignored
 
 依赖检查本轮仍有效：`note sunday-context (tests only) -> ['sunday-llm']` 说明测试依赖被单独列出而非豁免。
 
-远端 CI 在提交后补记，不预填。
+远端 CI（运行 41618088813，提交 `eee1b1de`）：**四项全部成功**
+
+| 作业 | 结果 |
+|---|---|
+| windows build and tests | 成功 |
+| linux build and tests | 成功 |
+| android target check | 成功 |
+| dependency rules | 成功 |
+
+这是真实 GitHub Actions 结果，不是预估。注意 `android target check` 只验证交叉编译，不覆盖 APK 打包与安装，那部分本轮是手工执行（见阻断项 9）。
 
 ---
 
