@@ -151,3 +151,51 @@ python -m pytest core/tests -p no:cacheprovider -q
 （`foreach ($ExcludedPlugin in @("workflow"))` 等）当契约，脚本重构后断言就失效。
 分类：**测试契约过期（静态字符串断言绑定实现写法）**。要修得改成校验行为而不是字符串，
 本轮未做。
+
+## 10. 全量测试审计（第 1 项）
+
+### 10.1 基线差异
+
+| | pristine | branch |
+|---|---|---|
+| failed | 222 | 205 |
+| passed | 4043 | 4089 |
+| shared failures | — | **203** |
+| 分支新增失败 | — | **2** |
+| 分支修好 | — | **19** |
+
+### 10.2 两项新增失败的复现结论
+
+| 场景 | 结果 |
+|---|---|
+| 独立运行 ×5 | 5/5 通过 |
+| 8 个 CPU 忙进程负载下 ×4 | 4/4 通过 |
+| 全量套件（700 秒、4000+ 用例同一进程） | 失败 |
+
+- `test_v2_observer_advances_cursor_only_after_host_ack`：全量下 `acked` 只到 1 个事件，
+  即等待游标的 10 秒窗口内第二个事件没落库。
+- `test_http_total_deadline_expires_despite_continuous_data`：截止时间先到，第二次读取没发生。
+
+**结论：不是确定性回归，但也没能定性为纯环境问题。**只在"同一进程跑完 4000+ 用例"的
+状态下复现，说明与进程内累积状态或系统长时间高负载有关，而不是我改动的那两个模块本身
+（两者都不在改动范围内）。分类暂记 **偶发/环境时序（待冻结提交复测）**。
+按你的要求没有靠加超时掩盖。
+
+### 10.3 203 项共有失败的粗分类
+
+按错误签名（不是逐个用例判定）：
+
+| 类别 | 数量 | 说明 |
+|---|---|---|
+| `AssertionError` / `assert` | 175 | 断言不符，可能混合"测试契约过期"与"产品行为差异"，需逐个看 |
+| `AttributeError` | 10 | 接口形状变化 |
+| 环境类（Rust 控制器缺失、连接被拒、DNS） | ≈22 | 缺 `build-network-controller.ps1`、外网不可达 |
+| `IndexError/TypeError/ValueError/KeyError` | 9 | 逻辑或契约 |
+| `FileNotFoundError/ModuleNotFoundError` | 3 | 夹具/路径 |
+
+失败最集中的文件：`test_default_toolbox.py`(27)、`test_context_compaction.py`(16)、
+`test_kernel.py`(12)、`test_core_cli.py`(10)、`test_core_sub_agent_runner.py`(10)。
+
+**这是粗分类，不是逐项定性。**要给出"每项属于产品缺陷/契约过期/环境缺失"的确定结论，
+需要逐文件过一遍，本轮未做。
+
