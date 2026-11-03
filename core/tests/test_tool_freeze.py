@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lamtools_core.app.tool_freeze import (
+from lamtools_core.runtime.tool_freeze import (
     TOOL_FREEZE_MESSAGE,
     freeze_tool_specs,
     frozen_tool_block_message,

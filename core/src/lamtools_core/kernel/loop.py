@@ -76,7 +76,7 @@ from lamtools_core.prompt.movable import (
     is_movable_context_notice,
 )
 from lamtools_core.runtime.context_delta import is_runtime_context_delta, RUNTIME_CONTEXT_METADATA_KEY
-from lamtools_core.app.tool_freeze import reset_session_tool_freeze
+from lamtools_core.runtime.tool_freeze import reset_session_tool_freeze
 from lamtools_core.runtime.goal_continuation import (
     GOAL_CONTINUATION_KEY,
     goal_continuation_message,

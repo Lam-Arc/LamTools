@@ -64,7 +64,7 @@ from lamtools_core.runtime.context_delta import (
     RUNTIME_CONTEXT_METADATA_KEY,
 )
 from lamtools_core.snapshot import reduce_run_item_events
-from lamtools_core.app.tool_freeze import (
+from lamtools_core.runtime.tool_freeze import (
     freeze_tool_specs,
     frozen_tool_block_message,
     frozen_tool_names,

@@ -5997,7 +5997,7 @@ class TestKernelRuntimeSettings:
 
     @pytest.mark.asyncio
     async def test_mode_change_resets_the_frozen_tool_array(self):
-        from lamtools_core.app.tool_freeze import (
+        from lamtools_core.runtime.tool_freeze import (
             freeze_tool_specs,
             frozen_tool_names,
             reset_tool_freeze_cache,
