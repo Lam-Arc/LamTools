@@ -82,3 +82,20 @@
 
 机制现在是真的，小批量数据干净。但你给的门槛是 1000 轮有效强杀 + 基线修复 + 新提交长跑，
 三条都还没齐，**不合并、不 push**。
+
+## 7. 全量基线审计（进行中）
+
+**全量套件的正确跑法**：必须从仓库根执行 `python -m pytest core/tests`。
+从 `core/` 目录跑会在收集阶段就报 4 个 error（`ModuleNotFoundError: No module named 'core'`、
+`test_plugin_packaging_boundary.py` 的 FileNotFoundError），这是导入路径问题，不是产品缺陷。
+
+**第 8 项 `test_toolbox_missing_dependency_placeholder`（未修复）**
+
+- 事实一：产品把"依赖缺失"归为 `blocked`（前置条件不满足、没有执行），断言已按此同步。
+- 事实二：同步后仍失败，`result.error` 是 `Tool requires approval and was not routed
+  through a waiting request.`，metadata 里 `requires_approval: True`。
+- 说明**审批闸门先于依赖占位检查**执行，测试想验证的 "missing dependencies + pip install"
+  在这个测试上下文里根本走不到。
+- 待定：这是产品顺序问题（依赖检查应早于审批），还是测试缺少审批上下文，需要单独判断，
+  不能用改断言掩盖。
+

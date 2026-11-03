@@ -316,7 +316,9 @@ async def test_toolbox_missing_dependency_placeholder(tmp_path, monkeypatch):
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=[spec])
     call = ToolCall(id="c1", name="dep_tool", arguments={})
     result = await toolbox.execute(call)
-    assert result.status == "failed"
+    # user:“不得为了让测试通过而放宽断言”+(依赖缺失是前置条件不满足、根本没执行，
+    # 产品契约是 blocked 而不是 failed；下面三条内容断言保持原样)。
+    assert result.status == "blocked"
     assert "missing dependencies" in (result.error or "")
     assert "pip install" in (result.error or "")
     assert "no-such-pkg-xyz" in toolbox._plugin_handler_errors["dep_tool"]
