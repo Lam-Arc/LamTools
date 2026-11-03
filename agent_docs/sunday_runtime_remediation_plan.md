@@ -90,3 +90,57 @@
 2. 2 项新增失败只在全量进程内复现，尚未定性。
 3. `test_plugin_packaging_boundary` 2 项把 PowerShell 字面量当契约，属过期断言，未修。
 4. 24 小时 Soak 与 1000 次强杀均针对更早提交，需在冻结后重跑。
+
+## 6. P1 根因定位结论（27 项 test_default_toolbox）
+
+### 6.1 现象
+
+27 项失败跨工具规格、审批标记、路径放行、MCP 调用、子 Agent、模式拦截、生图，
+但错误签名高度集中：
+
+- `操作等级 2 超过免问线 1，需要确认` ×12（断言 `'blocked' == 'ok'`）
+- `'blocked' == 'failed'` ×4
+- `True is False` ×5（放行/拦截布尔断言）
+
+### 6.2 机制
+
+`ApprovalGate.check()`（`core/src/lamtools_core/tool/approval.py:247-294`）：
+
+```python
+threshold = self.auto_approve_level
+if threshold is None:
+    threshold = AUTO_APPROVE_LEVELS.get(preset, 1)   # preset 默认 "ask" → 1
+...
+ask = not blocked and not approved_mcp and level > threshold
+```
+
+而 `AUTO_APPROVE_LEVELS = {"ask": 1, "auto": 2, "full_access": 3}`
+（`tool/operation_levels.py:8`），`ApprovalGate.__init__` 的 `permission_preset` 默认是
+`"ask"`（`approval.py:175`）。
+
+用例统一用 `build_core_toolbox(approval_policy="auto_approve")` 构造，指望 tier-2 的写操作被放行；
+但 `approval_policy` 与 `permission_preset` 是**两个正交维度**：
+
+| 维度 | 取值 | 作用 |
+|---|---|---|
+| `approval_policy` | `require` / `auto_approve` | 谁来回答审批（人 / 自动） |
+| `permission_preset` | `ask`(1) / `auto`(2) / `full_access`(3) | 免问线在哪一级 |
+
+所以 `auto_approve` 只代表"不必等人回答"，不代表"放宽到第 2 级"。当前产品行为是自洽的。
+
+### 6.3 判定：测试契约过期，不是产品缺陷
+
+- `default_toolbox.py:1125` 的 docstring 写着 `auto_approve bypasses the gate`，这句是过时注释，
+  与现在的两维模型冲突，需要同步修正文案（不是改逻辑）。
+- 若反过来让 `auto_approve` 隐含 `permission_preset="auto"`，等于**把免问线从 1 抬到 2**，
+  属于放宽安全语义 —— 按约束（不得为测试通过改安全语义）**不予采纳**。
+
+### 6.4 修复方案（未执行，仅记录）
+
+1. 逐个用例判断真实意图：
+   - 意图是"自动回答审批、但仍受档位限制" → 保留 `approval_policy`，断言改为期望 blocked/requires_approval；
+   - 意图是"验证 tier-2 可放行" → 显式加 `permission_preset="auto"`。
+2. 27 项必须逐项判断，不能批量 sed，否则会把"应该拦截"的用例也放开。
+3. 同步修正 `default_toolbox.py:1125` 的过时 docstring。
+
+**这一步没做**：需要逐项读用例语义，属于下一轮的第一件事。
