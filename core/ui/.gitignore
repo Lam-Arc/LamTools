@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.tsbuildinfo
 dist-core-app/
+# Built by `npm run build:android` and embedded in the APK. The android-apk
+# workflow produces it on CI; it is not source.
+dist-android-app/

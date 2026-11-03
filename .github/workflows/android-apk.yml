@@ -1,0 +1,94 @@
+name: android-apk
+
+# The APK is built from scratch on every push that could change it: the generated
+# Android project is disposable, the Kotlin that carries the Activity callbacks lives
+# in core/android-host/android-src, and this job is the proof that a clean checkout can
+# put the two back together. It exists because that bridge has already been lost once
+# to a regenerate, and a green local build is not evidence that the Kotlin injection
+# survived on a machine that has never built it.
+on:
+  push:
+    paths:
+      - "core/android-host/**"
+      - "core/sunday-core/**"
+      - "core/ui/**"
+      - ".github/workflows/android-apk.yml"
+  pull_request:
+    paths:
+      - "core/android-host/**"
+      - "core/sunday-core/**"
+      - "core/ui/**"
+      - ".github/workflows/android-apk.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: build apk from a clean project
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The embedded UI is the real application shell, not a placeholder: a build that
+      # skips it would prove the Android pipeline works but say nothing about the app.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: core/ui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/android-host/src-tauri
+
+      - name: Point the toolchain at the NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+
+      - name: Build the UI the app embeds
+        working-directory: core/ui
+        run: |
+          npm ci
+          npm run build:android
+
+      - name: Install the Tauri CLI
+        working-directory: core/android-host
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund @tauri-apps/cli@^2
+
+      - name: Initialise, inject the Kotlin, build and verify
+        working-directory: core/android-host
+        # `all` runs `tauri android init` when the generated project is absent, copies
+        # android-src into it, builds, then asserts the APK really contains the bridge
+        # class and the Rust library. A build that compiles is not that assertion.
+        run: python3 scripts/android_project.py all --debug --target aarch64
+
+      - name: Prove the injected sources survived
+        working-directory: core/android-host
+        run: |
+          test -f src-tauri/gen/android/app/src/main/java/com/lamtools/sunday/core/LifecycleBridge.kt
+          test -f src-tauri/gen/android/app/src/main/java/com/lamtools/sunday/core/MainActivity.kt
+          echo "injected sources present after a clean init"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sunday-android-debug-apk
+          path: core/android-host/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
