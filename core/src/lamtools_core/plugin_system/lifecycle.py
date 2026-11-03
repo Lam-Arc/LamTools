@@ -499,6 +499,11 @@ async def await_plugin_backends(handles: list[PluginRuntimeHandle]) -> None:
         task = handle.startup_task
         if task is not None and _task_loop(task) is not loop:
             # 上一个循环留下的 Task：结果对当前循环无意义，清掉后重新启动。
+            # cancel() 只是标记，不依赖旧循环还能调度；失败也不能挡住重启。
+            try:
+                task.cancel()
+            except RuntimeError:
+                pass
             handle.startup_task = None
             task = None
             if handle.state == "starting":
