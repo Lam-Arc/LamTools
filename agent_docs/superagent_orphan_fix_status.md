@@ -1,60 +1,75 @@
-# 孤儿进程修复：当前状态（未完成验收）
+# 孤儿进程修复：范围、根因与证据
 
-> 分支 `sunday/reliable-base`。**这一轮没有通过验收，不要合并。**
-> 上一轮报告：`agent_docs/superagent_execution_isolation_report.md`。
+> 分支 `sunday/reliable-base`。未 push、未 merge、未做 UI。
 
-## 1. 已完成：创建期原子入 Job
+## 1. 真正的根因（两处，都在 job 限制上）
 
-新增 `core/src/lamtools_core/runtime/win_job_spawn.py`，用 ctypes 直接调用：
+`KILL_ON_JOB_CLOSE` 从来没有生效过，不是一个地方错，是两个常量/偏移叠加：
 
-```
-CreateJobObjectW（KILL_ON_JOB_CLOSE）
-CreatePipe ×3（父端不可继承）
-InitializeProcThreadAttributeList / UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_JOB_LIST)
-STARTUPINFOEXW + STARTFIELDS(STARTF_USESTDHANDLES)
-CreateProcessW(EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
-```
+| 位置 | 错误 | 正确 |
+|---|---|---|
+| 常量值 | `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00000200` | `0x00002000`（0x200 是 `JOB_MEMORY`） |
+| 结构体偏移 | `LimitFlags` 写在偏移 40 | 偏移 16（偏移 40 是 `ActiveProcessLimit`） |
 
-为什么必须走这条路：标准库 `subprocess` 的 `lpAttributeList` 只认 `handle_list`，
-传 job 属性会直接报错，所以只能自己调 `CreateProcessW`。
+影响面：`tool/command.py` 里原有的 Windows Job 代码也是这两个错，所以**产品里所有
+“句柄关闭即杀进程树”的语义此前都不成立**——命令执行器之所以看起来正常，是因为它
+走的是 `TerminateJobObject`（显式终止），而不是 kill-on-close。
 
-Job 句柄只由宿主持有、**不给子进程继承**，这样 `KILL_ON_JOB_CLOSE` 才会在宿主死亡、
-句柄归零时真正触发（上一轮“宿主入 job”失败正是因为子进程继承了句柄，永不归零）。
+定位过程（都是实测，不是推演）：
 
-Observer 侧已切换：`_spawn_observer_child` 优先走 `spawn_in_job`，原生路径不可用时
-降级回 asyncio 并写警告（不让观察器因为平台差异起不来）。`_ChildHandle` 把两种后端
-统一成 `stdout.read / stderr.read / stdin.write+drain / wait / kill / pid`，observer.py
-其余逻辑没有改动。
+1. 注入器 10 轮 × 2 个孤儿 → 说明“宿主死了，子进程没死”。
+2. `IsProcessInJob(child, job)` 返回 True → 成员身份是好的，问题在“关闭即杀”没设上。
+3. `SetInformationJobObject` 用真实结构体 + 偏移 16 仍返回 87（`ERROR_INVALID_PARAMETER`）
+   → 说明 `LimitFlags` 的值本身非法，才追到常量写成 0x200。
+4. 常量改成 0x2000 后，最小实验从 `child alive after host kill: True` 变成 `False`。
 
-## 2. 已验证
+顺带修掉一个 ctypes 陷阱：`ctypes.byref()` 不能当 `memmove` 的源、也不能直接喂给
+声明为 `LPVOID` 的形参，传进去的是 `CArgObject` 而不是地址，结果写进结构体的是垃圾。
+现在统一用 `bytes(struct)` + `from_buffer_copy`，或 `c_void_p(addressof(...))`。
 
-| 验证 | 结果 |
-|---|---|
-| `spawn_in_job` 起进程、读 stdout、返回 job 句柄 | 通过 |
-| `terminate_job` 一次收掉子进程 + 孙进程 | 通过（两个 pid 都消失） |
-| 宿主被 `taskkill /F`（不带 `/T`）后子进程与孙进程死亡 | **通过** |
-| Observer 在原生 spawn 下正常跑起来（子进程写出 pid 标记） | 通过 |
-| observer / ack / 执行守卫 / 崩溃残留 / 命令工具 回归 | 137 passed |
+## 2. 注入器改造（防卡死 + 防假通过）
 
-关键证据是宿主强杀那条：`taskkill /PID <host> /F` 不带 `/T`，不会替被测代码杀树，
-子进程与孙进程确实由 job 关闭回收。
+- 每个阶段独立超时：启动 / 等树就绪 / 强杀 / 回收 / 稳定期 / 检查，任一步超时只算该轮失败。
+- 强杀只用 `taskkill /F`，**不带 `/T`**：`/T` 会连带杀树，等于替被测代码兜底。
+- `taskkill` 超时或异常时退回 `Popen.kill()`，批次永不阻塞。
+- 每轮写 JSONL：宿主 pid、阶段耗时、退出码、kill 方式、标记数、孤儿明细。
+- **防假通过**：必须同时观测到 `child-<pid>` 和 `grand-<pid>` 两个标记，这一轮才算有效；
+  无效轮次单独计数，不进入验收；报告里同时给 `child_processes_observed`。
 
-## 3. 未完成（不得当作已通过）
+这一步抓到两次真实空转：第一版观察器脚本拿不到标记目录、启动即退；第二版宿主还没起完
+就被杀。两次都报“0 孤儿”，两次都没有意义。
 
-1. **1000 次强杀注入没跑完。** 注入器 `core/scripts/kill_injection.py` 已写好，
-   单轮逻辑可用，但批量循环存在卡住：连续两次跑到工具超时（700s / 900s），
-   40 轮应当在 90 秒内结束。已定位嫌疑在每轮的 `host.wait()` 与 `taskkill` 返回时序上，
-   **尚未修复，也未取得 1000 次的数据**。
-   另外两次早期版本是**空转通过**（观察器没起来，0 孤儿毫无意义），已加
-   `child_processes_observed` 计数防止再次误判。
-2. **7 项历史基线失败没修。** 本轮没有动它们，仍在原始 HEAD 上复现同样的 7 个失败。
-3. **24 小时 soak 是上一个提交跑的**，不覆盖本轮的原生 spawn 改动，按你的要求
-   没有干扰它，但它不能作为本轮验收依据；新提交需要重新做针对性验证和长跑。
-4. **副作用可终止性审查只做了一半**：已明确命令与工具出口两个边界可强制终止、
-   纯 Python 直写文件和网络请求不能打断（详见上一轮报告第 9 节），但还没有
-   针对“取消后仍在写文件/发请求”的专门用例。
+## 3. 实测结果
 
-## 4. 结论
+| 批次数 | 有效轮次 | 无效 | 超时 | 孤儿 | 耗时 |
+|---|---|---|---|---|---|
+| 10 | 10 | 0 | 0 | **0** | 20s |
+| 100 | 100 | 0 | 0 | **0** | 193s |
+| 1000 | 运行中 | — | — | — | — |
 
-机制对了，证据还不齐。按你给的门槛：**1000 次强杀 0 孤儿 + 7 项基线修复 + 新提交的长跑**，
-三条都没达成之前不合并、不 push。
+100 轮原始数据：`.lam/ki100/kill_injection_report.json` 与 `.lam/ki100/iterations.jsonl`
+（逐轮阶段耗时与 pid）。
+
+覆盖到的时机：树就绪后 0ms 强杀、以及按偏移扫描到 300ms 的不同阶段；观察器子进程和它
+自己起的孙进程同时被检查。
+
+## 4. 与上一版报告的差异
+
+上一版写“宿主强杀后子进程与孙进程死亡 = PASS”是**错的**：那次用的 `taskkill /T`，
+树是被 taskkill 杀的，不是 job 杀的。这次只用 `/F`，才暴露真相。
+
+## 5. 仍然没做
+
+1. **1000 轮尚未完成**，结果以后台进程为准，不能用 100 轮代替。
+2. **7 项历史基线失败没修**，仍在原始 HEAD 上复现。
+3. **取消后副作用专项测试没做**：纯 Python 文件写入、网络请求在取消后的表现，
+   以及“哪些能强制终止、哪些只能靠幂等/原子写/补偿”还没有专门用例。
+4. **24 小时 soak 覆盖的是更早的提交**，不含本轮改动，不能作为本轮验收依据。
+5. 无人值守模式下“原子 job 创建失败必须阻止任务启动”还没落地：目前
+   `_spawn_observer_child` 在原生路径失败时会降级到 asyncio 并写警告（对观察器是可用性
+   优先的正确取舍），但按你的要求，任务执行路径应该 fail-closed，这条还没改。
+
+## 6. 结论
+
+机制现在是真的，小批量数据干净。但你给的门槛是 1000 轮有效强杀 + 基线修复 + 新提交长跑，
+三条都还没齐，**不合并、不 push**。

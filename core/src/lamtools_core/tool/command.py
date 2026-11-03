@@ -131,7 +131,9 @@ def terminate_process_tree(
 # whose intermediate process already restructured, and a survivor inherits the
 # stdout/stderr pipe handles so the parent's communicate() never sees EOF —
 # exactly the "interrupt never returns" failure mode.
-_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00000200
+# 0x200 是 JOB_OBJECT_LIMIT_JOB_MEMORY；KILL_ON_JOB_CLOSE 是 0x2000。
+# 之前写成 0x200，等于从来没设过「句柄关闭即杀」。
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1
 _WINDOWS_JOB_HANDLES: set[int] = set()
@@ -181,7 +183,9 @@ def _windows_job_assign(process: subprocess.Popen[Any]) -> int | None:
         assigned = False
         for size in (168, 144):
             buffer = _ctypes.create_string_buffer(size)
-            struct.pack_into("<I", buffer, 40, _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+            # LimitFlags 在 JOBOBJECT_BASIC_LIMIT_INFORMATION 里偏移 16；
+            # 偏移 40 是 ActiveProcessLimit。
+            struct.pack_into("<I", buffer, 16, _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
             if _kernel32.SetInformationJobObject(
                 job,
                 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
@@ -227,7 +231,9 @@ def install_kill_on_close_host_job() -> int | None:
         configured = False
         for size in (168, 144):
             buffer = _ctypes.create_string_buffer(size)
-            struct.pack_into("<I", buffer, 40, _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+            # LimitFlags 在 JOBOBJECT_BASIC_LIMIT_INFORMATION 里偏移 16；
+            # 偏移 40 是 ActiveProcessLimit。
+            struct.pack_into("<I", buffer, 16, _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
             if _kernel32.SetInformationJobObject(
                 job,
                 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,

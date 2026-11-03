@@ -20,6 +20,7 @@ import ctypes
 from ctypes import wintypes
 import logging
 import os
+import struct
 import subprocess
 import sys
 
@@ -35,7 +36,7 @@ CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 STARTF_USESTDHANDLES = 0x00000100
 HANDLE_FLAG_INHERIT = 0x00000001
-JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00000200
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000  # 0x200 是 JOB_MEMORY，写错就等于没设
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
@@ -95,6 +96,39 @@ if IS_WINDOWS:
             ("hThread", wt.HANDLE),
             ("dwProcessId", wt.DWORD),
             ("dwThreadId", wt.DWORD),
+        ]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wt.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wt.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wt.DWORD),
+            ("SchedulingClass", wt.DWORD),
+        ]
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
         ]
 
     _kernel32.CreateJobObjectW.restype = wt.HANDLE
@@ -183,29 +217,46 @@ class NativeSpawnError(RuntimeError):
 
 
 def create_kill_on_close_job() -> int | None:
-    """新建一个 job：句柄关闭时杀掉其中所有进程。"""
+    """新建一个 job：句柄关闭时杀掉其中所有进程。
+
+    手写字节偏移踩过坑（LimitFlags 曾在 40，那其实是 ActiveProcessLimit，
+    导致 KILL_ON_JOB_CLOSE 从没生效），所以这里用真实结构体，
+    让 ctypes 的 sizeof 成为唯一事实来源。
+    """
     if not IS_WINDOWS:
         return None
     job = _kernel32.CreateJobObjectW(None, None)
     if not job:
         raise NativeSpawnError(f"CreateJobObject failed: {ctypes.get_last_error()}")
-    configured = False
-    for size in (168, 144):
-        buffer = ctypes.create_string_buffer(size)
-        ctypes.memmove(
-            ctypes.addressof(buffer) + 40,
-            ctypes.byref(ctypes.c_uint(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)),
-            4,
+    info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    struct_size = ctypes.sizeof(info)
+    # 关键教训：不要用 ctypes.byref() 去喂 memmove 或 LPVOID 实参——
+    # CArgObject 不是地址，拷进去的是垃圾，API 只会回 ERROR_INVALID_PARAMETER(87)。
+    # bytes(struct) 取的是结构体的真实内存，再 from_buffer_copy 得到可传的缓冲区。
+    raw_bytes = bytes(info)
+    last_error = 0
+    tried: set[int] = set()
+    for buffer_size in (struct_size, 168, 144):
+        if buffer_size < struct_size or buffer_size in tried:
+            continue
+        tried.add(buffer_size)
+        raw = (ctypes.c_char * buffer_size).from_buffer_copy(
+            raw_bytes + b"\0" * (buffer_size - struct_size)
         )
         if _kernel32.SetInformationJobObject(
-            job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS, buffer, size
+            job,
+            JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+            ctypes.cast(raw, ctypes.c_void_p),
+            buffer_size,
         ):
-            configured = True
-            break
-    if not configured:
-        _kernel32.CloseHandle(job)
-        raise NativeSpawnError("SetInformationJobObject failed")
-    return _handle_int(job)
+            return _handle_int(job)
+        last_error = ctypes.get_last_error()
+    _kernel32.CloseHandle(job)
+    raise NativeSpawnError(
+        f"SetInformationJobObject(KILL_ON_JOB_CLOSE) failed: {last_error} "
+        f"struct={struct_size}"
+    )
 
 
 class WinChild:
