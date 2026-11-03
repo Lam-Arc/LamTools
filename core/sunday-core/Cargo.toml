@@ -8,6 +8,7 @@ members = [
     "crates/sunday-agent",
     "crates/sunday-extensions",
     "crates/sunday-tools",
+    "crates/sunday-host",
     "crates/sunday-cli",
 ]
 resolver = "2"
@@ -26,6 +27,8 @@ sunday-context = { path = "crates/sunday-context" }
 sunday-extensions = { path = "crates/sunday-extensions" }
 sunday-agent = { path = "crates/sunday-agent" }
 sunday-tools = { path = "crates/sunday-tools" }
+sunday-llm = { path = "crates/sunday-llm" }
+sunday-host = { path = "crates/sunday-host" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

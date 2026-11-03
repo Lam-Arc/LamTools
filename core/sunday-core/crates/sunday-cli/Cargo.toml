@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 sunday-protocol.workspace = true
 sunday-store.workspace = true
+sunday-llm.workspace = true
+sunday-host.workspace = true
 sunday-agent.workspace = true
 sunday-platform.workspace = true
 sunday-tools.workspace = true

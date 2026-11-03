@@ -1,0 +1,19 @@
+[package]
+name = "sunday-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Composition layer: single-writer lock and the core.app_server.v1 adapter."
+
+[dependencies]
+sunday-protocol.workspace = true
+sunday-store.workspace = true
+sunday-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

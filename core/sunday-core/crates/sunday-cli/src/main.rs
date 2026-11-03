@@ -8,6 +8,7 @@
 //! Nothing here touches a user database: every path is given explicitly.
 
 mod scripted;
+mod serve;
 
 use std::process::ExitCode;
 use std::sync::Mutex;
@@ -100,6 +101,7 @@ fn main() -> ExitCode {
         },
         "turn" => run_async(turn(&args[1..])),
         "approve" => run_async(approve(&args[1..])),
+        "serve" => serve(&args[1..]),
         "steer" => steer(&args[1..]),
         "children" => children(&args[1..]),
         other => {
@@ -214,6 +216,48 @@ async fn run_once(
             println!("budget_exhausted: {reason:?}");
             ExitCode::from(11)
         }
+    }
+}
+
+/// Exposes a real core over `core.app_server.v1` so the existing UI can drive it.
+///
+/// The single-writer lock is taken inside `serve::run`, before the store is
+/// opened, so two hosts can never write the same database.
+fn serve(args: &[String]) -> ExitCode {
+    let (db, workspace, listen) = match (
+        required(args, "--db"),
+        required(args, "--workspace"),
+        arg_value(args, "--listen"),
+    ) {
+        (Ok(db), Ok(workspace), listen) => (
+            db,
+            workspace,
+            listen.unwrap_or_else(|| "127.0.0.1:0".into()),
+        ),
+        (Err(err), ..) | (_, Err(err), ..) => return fail(err),
+    };
+
+    let (model, model_id) = match serve::model_from_args(
+        arg_value(args, "--script"),
+        arg_value(args, "--model-url"),
+        arg_value(args, "--model"),
+        arg_value(args, "--api-key"),
+    ) {
+        Ok(pair) => pair,
+        Err(err) => return fail(err),
+    };
+
+    let options = serve::Options {
+        db,
+        workspace,
+        listen,
+        model,
+        model_id,
+        auto_approve: has_flag(args, "--auto-approve"),
+    };
+    match serve::run(options) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => fail(err),
     }
 }
 

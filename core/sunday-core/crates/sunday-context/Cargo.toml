@@ -10,3 +10,10 @@ description = "Token budget, message selection and compaction. Decides what the 
 sunday-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+# Only the quality test needs a real model. It is not a dependency of the crate
+# itself: compaction takes a Summarizer it is given, which is the whole point of
+# the port.
+[dev-dependencies]
+sunday-llm.workspace = true
+tokio.workspace = true
