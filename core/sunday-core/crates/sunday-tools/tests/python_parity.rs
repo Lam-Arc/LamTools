@@ -34,7 +34,10 @@ async fn the_truncation_marker_is_the_documented_one() {
     let body = format!("{}TAIL", "x".repeat(40_000));
     let length = body.chars().count();
     let base = serve(body);
-    let tool = sunday_tools::web_fetch::WebFetch::default();
+    // Explicit: this fixture is a local server, which is refused by default.
+    let tool = sunday_tools::web_fetch::WebFetch::allowing_local_endpoints(
+        std::time::Duration::from_secs(30),
+    );
     let out = tool
         .execute(serde_json::json!({"url": base}), &ToolCtx::default())
         .await
@@ -83,10 +86,13 @@ fn script_and_style_bodies_never_reach_the_model() {
         .build()
         .unwrap();
     let out = runtime.block_on(async {
-        sunday_tools::web_fetch::WebFetch::default()
-            .execute(serde_json::json!({"url": base}), &ToolCtx::default())
-            .await
-            .unwrap()
+        // Explicit: a local fixture server, refused by default in production.
+        sunday_tools::web_fetch::WebFetch::allowing_local_endpoints(std::time::Duration::from_secs(
+            30,
+        ))
+        .execute(serde_json::json!({"url": base}), &ToolCtx::default())
+        .await
+        .unwrap()
     });
     let parsed: serde_json::Value = serde_json::from_str(&out.content).unwrap();
     let text = parsed["content"].as_str().unwrap();

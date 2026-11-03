@@ -237,11 +237,27 @@ fn serve(args: &[String]) -> ExitCode {
         (Err(err), ..) | (_, Err(err), ..) => return fail(err),
     };
 
+    // The data directory holds the provider bindings, so it has to be resolved
+    // before the model: whether this key may be sent is decided against it.
+    let data_dir = std::path::Path::new(&db)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
     let (model, model_id) = match serve::model_from_args(
-        arg_value(args, "--script"),
-        arg_value(args, "--model-url"),
-        arg_value(args, "--model"),
-        arg_value(args, "--api-key"),
+        serve::ModelChoice {
+            script: arg_value(args, "--script"),
+            base_url: arg_value(args, "--model-url"),
+            model_id: arg_value(args, "--model"),
+            api_key: arg_value(args, "--api-key"),
+            provider: arg_value(args, "--provider"),
+            // A flag, not a default: silence must never downgrade the transport.
+            allow_insecure_local: args.iter().any(|arg| arg == "--allow-insecure-local"),
+            // Also a flag: an edited config cannot grant itself consent.
+            confirm_endpoint: args.iter().any(|arg| arg == "--confirm-endpoint"),
+        },
+        &data_dir,
     ) {
         Ok(pair) => pair,
         Err(err) => return fail(err),

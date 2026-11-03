@@ -132,12 +132,29 @@ impl Assembler {
 impl LlmClient {
     pub fn new(config: ProviderConfig) -> Result<Self, CoreError> {
         let http = reqwest::Client::builder()
+            // Redirects are disabled, not merely limited. An API endpoint has no
+            // reason to redirect, and a `302` to another host is exactly how an
+            // Authorization header leaves the host the user approved.
+            //
+            // Returning an error here would still let the request be re-sent by a
+            // retry loop; refusing to follow at all means the request dies where
+            // it is, and the caller sees a plain "not successful status".
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| CoreError::model(format!("http client: {e}")))?;
         Ok(Self { http, config })
     }
 
-    fn endpoint(&self) -> String {
+    /// The endpoint this client will talk to. Exposed so a caller can confirm the
+    /// key is bound to it before the first request is sent.
+    pub fn endpoint(&self) -> &str {
+        &self.config.base_url
+    }
+
+    /// The URL a request is actually posted to. Named apart from `endpoint` so the
+    /// public accessor cannot be confused with it: one is the base the user approved,
+    /// the other is the base with a path appended.
+    fn request_url(&self) -> String {
         match self.config.wire {
             Wire::OpenAiChat => {
                 format!(
@@ -164,7 +181,7 @@ impl LlmClient {
         sink: &mut (dyn FnMut(ModelDelta) + Send),
         delivered: &mut bool,
     ) -> Result<ModelTurn, Failure> {
-        let mut builder = self.http.post(self.endpoint()).json(&self.body(request));
+        let mut builder = self.http.post(self.request_url()).json(&self.body(request));
         builder = match &self.config.api_key_header {
             Some(header) => builder.header(header, &self.config.api_key),
             None => builder.bearer_auth(&self.config.api_key),
@@ -190,7 +207,11 @@ impl LlmClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(classify_status(status.as_u16(), &body));
+            // A provider error body is untrusted text that may quote the request,
+            // including the header we sent. Redact before it becomes an error the
+            // UI shows or a log line someone pastes into a ticket.
+            let safe = redact_secret(&body, &self.config.api_key);
+            return Err(classify_status(status.as_u16(), &safe));
         }
 
         let mut stream = response.bytes_stream();
@@ -284,6 +305,17 @@ impl Model for LlmClient {
             }
         }
     }
+}
+
+/// Removes the API key from text that may be surfaced.
+///
+/// One place, called from every path that can carry provider text outward: error
+/// classification, event payloads and anything a host logs.
+pub fn redact_secret(text: &str, secret: &str) -> String {
+    if secret.len() < 4 {
+        return text.to_owned();
+    }
+    text.replace(secret, "[redacted]")
 }
 
 fn backoff(policy: &RetryPolicy, attempt: u32) -> Duration {

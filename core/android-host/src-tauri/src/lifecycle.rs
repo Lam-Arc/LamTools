@@ -1,140 +1,108 @@
-//! Lifecycle: what happens when the app leaves the foreground and comes back.
+//! The Android side of the lifecycle: it maps OS callbacks onto
+//! `sunday_host::lifecycle`.
 //!
-//! The rule this encodes: **a running turn is not cancelled because the user
-//! switched apps.** Cancelling there would silently truncate work the user
-//! started and walked away from, and they would see a half-written file with no
-//! explanation.
+//! This file is deliberately thin. Every decision lives in
+//! `sunday_host::lifecycle`, where it can be tested without an emulator. What is
+//! here is the mapping from Android's callbacks, plus the single place that gathers
+//! the two authoritative inputs: the runner's live threads and the journal's
+//! recovery plan.
 //!
-//! What is recorded instead: which threads had a turn in flight. On resume that
-//! note is read and reported, so the UI can say "this turn was interrupted" rather
-//! than pretending nothing happened. The turn itself is not replayed: a
-//! non-idempotent tool whose result is unknown must never be re-run automatically
-//! (invariant I4). The store already marks such calls, and `recover()` is what a
-//! host calls to learn about them.
-//!
-//! A process that is killed is not "paused". Nothing here tries to survive that;
-//! the journal and the recovery plan already do.
+//! Why this is not done in the webview: the OS is the only thing that knows the app
+//! lost visibility. A lifecycle signal that starts in Vue stops arriving exactly
+//! when it matters, because a backgrounded or throttled webview is the first thing
+//! Android slows down.
 
-use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-pub const STATE_FILE: &str = "lifecycle.json";
+use sunday_host::app_server::TurnRunner;
+use sunday_host::lifecycle::{Journal, Tracker};
+use sunday_host::runner::CoreRunner;
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct LifecycleState {
-    /// Threads that had a turn running when the app was backgrounded.
-    pub interrupted_threads: Vec<String>,
-    /// Epoch milliseconds of the last pause.
-    pub paused_at_ms: u64,
-    /// Whether a resume has been reported to the UI yet.
-    pub resumed: bool,
+pub struct Lifecycle {
+    tracker: Mutex<Tracker>,
 }
 
-fn path_in(dir: &Path) -> PathBuf {
-    dir.join(STATE_FILE)
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-pub fn load(dir: &Path) -> LifecycleState {
-    std::fs::read_to_string(path_in(dir))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
-}
-
-fn save(dir: &Path, state: &LifecycleState) {
-    let body = serde_json::to_string_pretty(state).unwrap_or_default();
-    // Best effort: failing to write a note must not break the app.
-    let _ = std::fs::write(path_in(dir), body);
-}
-
-/// Records what was in flight. Deliberately does not stop anything.
-pub fn on_pause(dir: &Path, running_threads: &[String]) -> serde_json::Value {
-    let state = LifecycleState {
-        interrupted_threads: running_threads.to_vec(),
-        paused_at_ms: now_ms(),
-        resumed: false,
-    };
-    save(dir, &state);
-    serde_json::json!({
-        "paused": true,
-        "interrupted_threads": state.interrupted_threads,
-        // Stated explicitly so the UI copy cannot drift into claiming the turn
-        // keeps running in the background.
-        "turn_continues_in_background": false,
-    })
-}
-
-/// Reports what was interrupted, and clears the note.
-pub fn on_resume(dir: &Path) -> serde_json::Value {
-    let mut state = load(dir);
-    let interrupted = std::mem::take(&mut state.interrupted_threads);
-    state.resumed = true;
-    save(dir, &state);
-    serde_json::json!({
-        "resumed": true,
-        "interrupted_threads": interrupted,
-        "paused_for_ms": if state.paused_at_ms == 0 {
-            0
-        } else {
-            now_ms().saturating_sub(state.paused_at_ms)
-        },
-        // Never automatic: a non-idempotent call with an unknown result must not
-        // be replayed, so a host must ask before continuing.
-        "auto_resumed_turns": false,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_pause_records_what_was_running_without_stopping_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let report = on_pause(dir.path(), &["t1".to_owned(), "t2".to_owned()]);
-        assert_eq!(report["paused"], true);
-        assert_eq!(report["interrupted_threads"][0], "t1");
-        assert_eq!(report["turn_continues_in_background"], false);
-
-        let state = load(dir.path());
-        assert_eq!(state.interrupted_threads.len(), 2);
+impl Lifecycle {
+    pub fn new(data_dir: &std::path::Path) -> Self {
+        Self {
+            tracker: Mutex::new(Tracker::new(
+                data_dir,
+                sunday_host::lifecycle::new_instance_id(),
+            )),
+        }
     }
 
-    #[test]
-    fn a_resume_reports_the_interruption_once() {
-        let dir = tempfile::tempdir().unwrap();
-        on_pause(dir.path(), &["t1".to_owned()]);
-        let first = on_resume(dir.path());
-        assert_eq!(first["interrupted_threads"][0], "t1");
-        assert_eq!(first["auto_resumed_turns"], false);
-
-        // A second resume must not repeat the warning: the user has seen it.
-        let second = on_resume(dir.path());
-        assert_eq!(
-            second["interrupted_threads"].as_array().unwrap().len(),
-            0,
-            "the interruption was reported twice"
-        );
+    /// The id of this process lifetime, for `core_info` and for tests.
+    pub fn instance(&self) -> String {
+        self.tracker
+            .lock()
+            .expect("lifecycle lock")
+            .instance()
+            .to_owned()
     }
+}
 
-    #[test]
-    fn a_pause_with_nothing_running_is_still_safe() {
-        let dir = tempfile::tempdir().unwrap();
-        let report = on_pause(dir.path(), &[]);
-        assert_eq!(report["interrupted_threads"].as_array().unwrap().len(), 0);
+fn running(runner: &CoreRunner) -> Vec<String> {
+    TurnRunner::running_threads(runner as &dyn TurnRunner)
+}
+
+fn journal(runner: &CoreRunner) -> Journal {
+    match runner.recovery() {
+        Ok(plan) => Journal::Read(plan),
+        Err(error) => Journal::Unavailable(error.to_string()),
     }
+}
 
-    #[test]
-    fn a_missing_state_file_is_the_empty_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = load(dir.path());
-        assert!(state.interrupted_threads.is_empty());
-        assert_eq!(state.paused_at_ms, 0);
+pub fn pause(lifecycle: &Lifecycle) -> serde_json::Value {
+    lifecycle.tracker.lock().expect("lifecycle lock").on_pause()
+}
+
+pub fn stop(lifecycle: &Lifecycle, runner: &CoreRunner) -> serde_json::Value {
+    // Read before taking the tracker lock, so a slow turn map never serialises
+    // against a concurrent pause.
+    let threads = running(runner);
+    lifecycle
+        .tracker
+        .lock()
+        .expect("lifecycle lock")
+        .on_stop(&threads)
+}
+
+pub fn destroy(lifecycle: &Lifecycle) -> serde_json::Value {
+    lifecycle
+        .tracker
+        .lock()
+        .expect("lifecycle lock")
+        .on_destroy()
+}
+
+pub fn resume(lifecycle: &Lifecycle, runner: &CoreRunner) -> serde_json::Value {
+    // The journal is read before the tracker lock is taken. `recover()` is a small
+    // write transaction, and holding both locks at once would make the resume path
+    // hold the store for longer than it needs to.
+    let threads = running(runner);
+    let journal = journal(runner);
+    lifecycle
+        .tracker
+        .lock()
+        .expect("lifecycle lock")
+        .on_resume(&threads, journal)
+}
+
+/// The single entry point for every lifecycle signal.
+///
+/// Both the IPC command and the JNI bridge go through here, so the two paths cannot
+/// drift into reporting different things about the same event.
+pub fn signal(lifecycle: &Lifecycle, runner: &CoreRunner, event: &str) -> serde_json::Value {
+    match event {
+        "pause" | "focus_lost" => pause(lifecycle),
+        "stop" | "background" => stop(lifecycle, runner),
+        "destroy" => destroy(lifecycle),
+        "resume" | "foreground" => resume(lifecycle, runner),
+        other => serde_json::json!({
+            "signal": other,
+            "ignored": true,
+            "reason": "unknown lifecycle signal",
+        }),
     }
 }

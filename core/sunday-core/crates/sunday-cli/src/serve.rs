@@ -100,33 +100,101 @@ pub fn run(options: Options) -> Result<(), sunday_protocol::CoreError> {
     Ok(())
 }
 
-/// Builds a model from the command line. Kept here so `serve` has no hidden
-/// default: without an explicit choice there is no model at all.
+/// Everything the command line says about which model to use.
+///
+/// A struct rather than seven positional arguments, because `--api-key` next to
+/// `--model-url` in a signature is exactly the pairing this file exists to make
+/// explicit: those two travel together and must be approved together.
+pub struct ModelChoice {
+    pub script: Option<String>,
+    pub base_url: Option<String>,
+    pub model_id: Option<String>,
+    pub api_key: Option<String>,
+    /// `openai`, `anthropic` or `openai-compatible`. Defaults to compatible, which
+    /// is what an unlabelled URL most likely is.
+    pub provider: Option<String>,
+    /// The explicit acknowledgement that lets `http://` to a local host through.
+    pub allow_insecure_local: bool,
+    /// The user is approving the configured endpoint right now, on this run.
+    pub confirm_endpoint: bool,
+}
+
+/// Builds a model, but only after deciding whether its key may be sent there.
+///
+/// The order is: validate the endpoint, check the binding, and only then construct
+/// a client. A client that exists is a client whose key was cleared, so there is no
+/// window in which a request can be made with an unapproved destination.
 pub fn model_from_args(
-    script: Option<String>,
-    model_url: Option<String>,
-    model_id: Option<String>,
-    api_key: Option<String>,
+    choice: ModelChoice,
+    data_dir: &std::path::Path,
 ) -> Result<(Arc<dyn sunday_protocol::Model>, String), sunday_protocol::CoreError> {
+    use sunday_host::provider::{self, Admission, TransportPolicy, Vendor};
     use sunday_protocol::CoreError;
-    if let Some(path) = script {
+
+    if let Some(path) = choice.script {
         let text = std::fs::read_to_string(&path)
             .map_err(|e| CoreError::invalid(format!("cannot read {path}: {e}")))?;
         let model = crate::scripted::ScriptedModel::from_json(&text)?;
         return Ok((Arc::new(model), "scripted".into()));
     }
-    match (model_url, model_id) {
-        (Some(url), Some(id)) => {
-            let client = sunday_llm::LlmClient::new(sunday_llm::ProviderConfig::openai(
-                url,
-                api_key.unwrap_or_default(),
-            ))?;
-            Ok((Arc::new(client), id))
-        }
-        _ => Err(CoreError::invalid(
+    let (Some(raw_url), Some(model_id)) = (choice.base_url, choice.model_id) else {
+        return Err(CoreError::invalid(
             "pass either --script <file>, or --model-url <url> and --model <id>",
-        )),
+        ));
+    };
+
+    let vendor = match choice.provider.as_deref() {
+        Some(raw) => Vendor::parse(raw).ok_or_else(|| {
+            CoreError::invalid(format!(
+                "unknown provider {raw:?}: use openai, anthropic or openai-compatible"
+            ))
+        })?,
+        None => Vendor::Compatible,
+    };
+
+    let key = choice.api_key.unwrap_or_default();
+    let key_present = !key.trim().is_empty();
+    let binding_path = data_dir.join(provider::BINDINGS_FILE);
+    let mut book = provider::ProviderBook::load(&binding_path);
+
+    let transport = TransportPolicy {
+        allow_insecure_local: choice.allow_insecure_local,
+    };
+    let admission = provider::admit(vendor, &raw_url, key_present, transport, &book)
+        .map_err(|error| CoreError::invalid(error.to_string()))?;
+
+    if let Admission::NeedsApproval { endpoint, .. } = &admission {
+        if !choice.confirm_endpoint {
+            // Refused, not warned. A warning is something a scripted start never
+            // reads, and the whole point is that an edited config cannot carry the
+            // key to a new host on its own.
+            let prompt = admission
+                .prompt(vendor)
+                .unwrap_or_else(|| "this endpoint has not been approved".into());
+            return Err(CoreError::Rejected {
+                reason: format!(
+                    "{prompt} Re-run with --confirm-endpoint to approve {} for {}.",
+                    endpoint.label(),
+                    vendor.display_name()
+                ),
+            });
+        }
+        book.approve(vendor, endpoint);
+        book.save(&binding_path)?;
     }
+
+    // The normalised form, never the raw flag: `Endpoint::base_url` cannot carry
+    // credentials, a query string or stray whitespace into the request URL.
+    let base_url = admission.endpoint().base_url();
+    let client = match vendor {
+        Vendor::Anthropic => {
+            sunday_llm::LlmClient::new(sunday_llm::ProviderConfig::anthropic(base_url, key))?
+        }
+        Vendor::OpenAi | Vendor::Compatible => {
+            sunday_llm::LlmClient::new(sunday_llm::ProviderConfig::openai(base_url, key))?
+        }
+    };
+    Ok((Arc::new(client), model_id))
 }
 
 /// Parses the grant policy from flags. Default is reads only.

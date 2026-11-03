@@ -48,38 +48,10 @@ pub fn load_or_create(dir: impl AsRef<Path>) -> Result<String, CoreError> {
 }
 
 fn write_private(path: &Path, token: &str) -> Result<(), CoreError> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| CoreError::storage(format!("token file: {e}")))?;
-        file.write_all(token.as_bytes())
-            .map_err(|e| CoreError::storage(format!("token write: {e}")))?;
-        file.sync_all()
-            .map_err(|e| CoreError::storage(format!("token sync: {e}")))?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-            .map_err(|e| CoreError::storage(format!("token file: {e}")))?;
-        file.write_all(token.as_bytes())
-            .map_err(|e| CoreError::storage(format!("token write: {e}")))?;
-        file.sync_all()
-            .map_err(|e| CoreError::storage(format!("token sync: {e}")))?;
-        Ok(())
-    }
+    // One implementation of "owner-only file" lives in `private_file`, because two
+    // copies of a permission rule drift and the copy that gets fixed is never the
+    // one that is used.
+    crate::private_file::write(path, token, "token file")
 }
 
 pub fn path_in(dir: impl AsRef<Path>) -> PathBuf {

@@ -31,4 +31,18 @@ sunday-platform = { path = "../../sunday-core/crates/sunday-platform" }
 sunday-tools = { path = "../../sunday-core/crates/sunday-tools" }
 sunday-llm = { path = "../../sunday-core/crates/sunday-llm" }
 sunday-host = { path = "../../sunday-core/crates/sunday-host" }
+# Same crate the protocol trait is written with, so the desugared signature matches.
+async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+# The Activity callbacks reach Rust directly. Tauri exposes onPause and onResume as
+# window events, but not onStop, and onStop is the one that means "not visible".
+[target.'cfg(target_os = "android")'.dependencies]
+# 0.21 rather than 0.22: the 0.22 native-method API wraps the raw pointer in
+# `EnvUnowned`, which buys nothing for a function that only reads one string. The
+# JNI ABI is C, so coexisting with the 0.22 copy tauri uses is not a conflict.
+jni = "0.21"
+
+[dev-dependencies]
+# The host's tests use real temporary directories, not mocks.
+tempfile = "3"

@@ -428,6 +428,26 @@ fn c2_two_processes_writing_at_once_do_not_lose_or_duplicate_events() {
     assert_eq!(seqs, expected, "seq must be contiguous with no gaps");
 }
 
+/// Builds a database whose journal says a non-idempotent call was dispatched and
+/// never answered.
+///
+/// Used to put a real "the process died mid-tool" state onto a device, so the resume
+/// path can be checked against a journal it did not write itself. The log is folded
+/// back into the main file so a single `core.db` can be copied into place.
+#[test]
+#[ignore = "helper; run with SUNDAY_FIXTURE_DB set"]
+fn build_a_database_with_a_call_in_flight() {
+    let Ok(path) = std::env::var("SUNDAY_FIXTURE_DB") else {
+        return;
+    };
+    let mut store = Store::open(&path).unwrap();
+    store
+        .prepare_tool_once("t1", &call("call-1", "a.txt"), SideEffect::NonIdempotent)
+        .unwrap();
+    store.mark_dispatched("call-1").unwrap();
+    store.checkpoint().unwrap();
+}
+
 // ---------------------------------------------------------------- crash
 
 #[test]

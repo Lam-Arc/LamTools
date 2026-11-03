@@ -8,6 +8,7 @@ use std::time::Duration;
 use sunday_protocol::{
     CoreError, HostKind, Permission, SideEffect, Tool, ToolCtx, ToolOutput, ToolSpec,
 };
+use url::Url;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_TEXT_CHARS: usize = 30_000;
@@ -80,8 +81,45 @@ fn decode_entities(value: &str) -> String {
     out
 }
 
+/// Checks a URL before it becomes a request.
+///
+/// `first_hop` is false for every redirect: a server does not get to decide that the
+/// client may now reach this machine.
+fn guard_url(raw: &str, allow_local: bool) -> Result<Url, CoreError> {
+    let parsed = Url::parse(raw)
+        .map_err(|e| CoreError::invalid(format!("'url' must be an absolute URL: {e}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(CoreError::invalid(format!(
+            "scheme {:?} is refused: only http and https URLs can be fetched",
+            parsed.scheme()
+        )));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(CoreError::invalid(
+            "credentials in a fetch URL are refused: they would be sent in clear text and logged",
+        ));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| CoreError::invalid("the URL has no host"))?;
+    if !allow_local && sunday_platform::is_local_host(host) {
+        return Err(CoreError::PermissionDenied {
+            resource: format!(
+                "{host} is this machine or a private network; a fetch tool is not a way to read those"
+            ),
+        });
+    }
+    Ok(parsed)
+}
+
 pub struct WebFetch {
     timeout: Duration,
+    /// Whether the *configured* target may be on this machine.
+    ///
+    /// Off by default. On, it lets a deliberately configured local server be fetched;
+    /// it never lets a redirect go there, because that decision belongs to whichever
+    /// server sent the redirect.
+    allow_local: bool,
     spec: ToolSpec,
 }
 
@@ -93,8 +131,19 @@ impl Default for WebFetch {
 
 impl WebFetch {
     pub fn new(timeout: Duration) -> Self {
+        Self::with_local_endpoints(timeout, false)
+    }
+
+    /// Only for a host that has decided to reach a local server, and for the tests
+    /// that need one to talk to.
+    pub fn allowing_local_endpoints(timeout: Duration) -> Self {
+        Self::with_local_endpoints(timeout, true)
+    }
+
+    fn with_local_endpoints(timeout: Duration, allow_local: bool) -> Self {
         Self {
             timeout,
+            allow_local,
             spec: ToolSpec {
                 id: "web_fetch".into(),
                 description: "Fetch one http(s) URL and return its readable text. HTML is reduced \
@@ -121,28 +170,49 @@ impl Tool for WebFetch {
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolCtx) -> Result<ToolOutput, CoreError> {
-        let url = args
+        let raw = args
             .get("url")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .trim()
             .to_owned();
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(CoreError::invalid("'url' must be an absolute http(s) URL"));
-        }
+        let mut current = guard_url(&raw, self.allow_local)?;
         let client = reqwest::Client::builder()
             .timeout(self.timeout)
             .connect_timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            // Redirects are followed by hand so every hop passes `guard_url`. Asking
+            // reqwest to follow them gives us no way to look at the target.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| CoreError::model(format!("fetch client: {e}")))?;
-        let response = client.get(&url).send().await.map_err(|e| {
-            if e.is_timeout() {
-                CoreError::model("fetch timed out")
-            } else {
-                CoreError::model(format!("fetch failed: {e}"))
+
+        let mut response = None;
+        for _ in 0..MAX_REDIRECTS {
+            let reply = client.get(current.as_str()).send().await.map_err(|e| {
+                if e.is_timeout() {
+                    CoreError::model("fetch timed out")
+                } else {
+                    CoreError::model(format!("fetch failed: {e}"))
+                }
+            })?;
+            if !reply.status().is_redirection() {
+                response = Some(reply);
+                break;
             }
-        })?;
+            let location = reply
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| CoreError::model("a redirect with no location"))?;
+            let next = current
+                .join(location)
+                .map_err(|e| CoreError::model(format!("bad redirect target: {e}")))?;
+            // Always strict on a hop, whatever the configured target was allowed.
+            current = guard_url(next.as_str(), false)?;
+        }
+        let response = response
+            .ok_or_else(|| CoreError::model(format!("more than {MAX_REDIRECTS} redirects")))?;
+        let url = current.to_string();
         let status = response.status();
         if !status.is_success() {
             return Err(CoreError::model(format!(
@@ -230,6 +300,30 @@ mod tests {
         format!("http://{address}")
     }
 
+    /// The same fixture server, but counting the connections it accepts.
+    fn serve_counting<F>(hits: std::sync::Arc<std::sync::atomic::AtomicUsize>, handler: F) -> String
+    where
+        F: Fn(&str) -> String + Send + Sync + 'static,
+    {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                let response = handler(&path);
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{address}")
+    }
+
     fn ok_response(content_type: &str, body: &str) -> String {
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -263,7 +357,8 @@ mod tests {
             "/page" => ok_response("text/html", "<html><body><p>hello</p></body></html>"),
             _ => ok_response("application/json", "{\"a\":1}"),
         });
-        let tool = WebFetch::default();
+        // Explicit: this is a fetch to this machine, which is refused by default.
+        let tool = WebFetch::allowing_local_endpoints(DEFAULT_TIMEOUT);
 
         let html = tool
             .execute(json!({"url": format!("{base}/page")}), &ToolCtx::default())
@@ -285,7 +380,7 @@ mod tests {
         let base = serve(|_| {
             "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
         });
-        let tool = WebFetch::default();
+        let tool = WebFetch::allowing_local_endpoints(DEFAULT_TIMEOUT);
         let err = tool
             .execute(
                 json!({"url": format!("{base}/missing")}),
@@ -307,5 +402,122 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::InvalidRequest { .. }));
+    }
+
+    /// The default must refuse this machine. A `Pure` tool pointed at `127.0.0.1` is
+    /// a way to read whatever local service happens to be listening.
+    #[tokio::test]
+    async fn this_machine_is_refused_by_default() {
+        let base = serve(|_| ok_response("text/plain", "local secret"));
+        let tool = WebFetch::default();
+        let err = tool
+            .execute(
+                json!({"url": format!("{base}/secret")}),
+                &ToolCtx::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::PermissionDenied { .. }),
+            "a fetch to loopback was not refused: {err:?}"
+        );
+        assert!(
+            !format!("{err:?}").contains("local secret"),
+            "the refusal leaked the body it refused to read"
+        );
+    }
+
+    /// A cloud metadata endpoint hands out credentials to anything that asks.
+    #[tokio::test]
+    async fn a_metadata_endpoint_is_refused_by_default() {
+        let tool = WebFetch::default();
+        for url in [
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://[fd00:ec2::254]/latest/meta-data/",
+            "http://10.0.0.5/admin",
+        ] {
+            let err = tool
+                .execute(json!({"url": url}), &ToolCtx::default())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, CoreError::PermissionDenied { .. }),
+                "{url} was not refused: {err:?}"
+            );
+        }
+    }
+
+    /// `file://` was already refused by the prefix check; it must stay refused now
+    /// that the URL is parsed properly.
+    #[tokio::test]
+    async fn a_non_http_scheme_is_refused() {
+        let tool = WebFetch::default();
+        for url in [
+            "file:///etc/passwd",
+            "ftp://example.com/x",
+            "data:text/plain,hello",
+        ] {
+            let err = tool
+                .execute(json!({"url": url}), &ToolCtx::default())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, CoreError::InvalidRequest { .. }),
+                "{url} was not refused as a scheme problem: {err:?}"
+            );
+        }
+    }
+
+    /// Credentials in a fetch URL would be sent in clear text and land in every log.
+    #[tokio::test]
+    async fn credentials_in_the_url_are_refused() {
+        let tool = WebFetch::default();
+        let err = tool
+            .execute(
+                json!({"url": "https://user:token@example.com/x"}),
+                &ToolCtx::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest { .. }), "{err:?}");
+    }
+
+    /// The redirect case: the first hop is a local server that the caller allowed,
+    /// and it answers `302` to a *different* local server. The second server must
+    /// receive nothing, because a redirect does not carry the permission with it.
+    #[tokio::test]
+    async fn a_redirect_to_this_machine_is_not_followed() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+        // The target: a second local server that counts what reaches it.
+        let target = serve_counting(counter, |_| ok_response("text/plain", "secret"));
+        let location = format!("{target}/latest/meta-data/");
+        let gateway = serve(move |_| {
+            format!(
+                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+        });
+
+        let tool = WebFetch::allowing_local_endpoints(DEFAULT_TIMEOUT);
+        let err = tool
+            .execute(
+                json!({"url": format!("{gateway}/start")}),
+                &ToolCtx::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::PermissionDenied { .. }),
+            "a redirect to this machine was followed: {err:?}"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "the redirect target was contacted, so the hop was not checked before the request"
+        );
     }
 }

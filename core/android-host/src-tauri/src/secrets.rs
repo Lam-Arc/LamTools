@@ -76,7 +76,7 @@ impl SecretStore for HostSecrets {
         write_to(&self.dir, key, value)
     }
 
-    fn delete(&self, key: &str) -> Result<(), sunday_protocol::CoreError> {
+    fn delete(&self, _key: &str) -> Result<(), sunday_protocol::CoreError> {
         let path = file_path(&self.dir);
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| {
@@ -102,44 +102,15 @@ pub fn has_api_key(dir: &Path) -> bool {
 ///
 /// One key per file. A multi-key file would need its own format and its own
 /// permission story, and there is exactly one provider today.
+///
+/// The permission rule itself lives in `sunday_host::private_file`, because the
+/// connection token and the provider binding file need the same rule and three
+/// copies of it is how a fix ends up applied to the one nobody uses.
 fn write_to(dir: &Path, _key: &str, value: &str) -> Result<(), sunday_protocol::CoreError> {
     std::fs::create_dir_all(dir).map_err(|e| {
         sunday_protocol::CoreError::storage(format!("cannot create {}: {e}", dir.display()))
     })?;
-    let path = file_path(dir);
-
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| sunday_protocol::CoreError::storage(format!("secret file: {e}")))?;
-        file.write_all(value.as_bytes())
-            .map_err(|e| sunday_protocol::CoreError::storage(format!("secret write: {e}")))?;
-        file.sync_all()
-            .map_err(|e| sunday_protocol::CoreError::storage(format!("secret sync: {e}")))?;
-        return Ok(());
-    }
-    #[cfg(not(unix))]
-    {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .map_err(|e| sunday_protocol::CoreError::storage(format!("secret file: {e}")))?;
-        file.write_all(value.as_bytes())
-            .map_err(|e| sunday_protocol::CoreError::storage(format!("secret write: {e}")))?;
-        file.sync_all()
-            .map_err(|e| sunday_protocol::CoreError::storage(format!("secret sync: {e}")))?;
-        Ok(())
-    }
+    sunday_host::private_file::write(&file_path(dir), value, "secret file")
 }
 
 fn read_from(dir: &Path, _key: &str) -> Result<Option<String>, sunday_protocol::CoreError> {
@@ -147,7 +118,11 @@ fn read_from(dir: &Path, _key: &str) -> Result<Option<String>, sunday_protocol::
     match std::fs::read_to_string(&path) {
         Ok(text) => {
             let trimmed = text.trim().to_owned();
-            Ok(if trimmed.is_empty() { None } else { Some(trimmed) })
+            Ok(if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(sunday_protocol::CoreError::storage(format!(
@@ -172,7 +147,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = HostSecrets::new(dir.path());
         store.set(API_KEY_NAME, "sk-test-123").unwrap();
-        assert_eq!(store.get(API_KEY_NAME).unwrap().as_deref(), Some("sk-test-123"));
+        assert_eq!(
+            store.get(API_KEY_NAME).unwrap().as_deref(),
+            Some("sk-test-123")
+        );
         assert!(has_api_key(dir.path()));
     }
 
@@ -211,6 +189,10 @@ mod tests {
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & 0o077, 0, "the key file is readable by others: {mode:o}");
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "the key file is readable by others: {mode:o}"
+        );
     }
 }

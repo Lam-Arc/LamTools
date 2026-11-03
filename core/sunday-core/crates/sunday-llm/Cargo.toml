@@ -14,3 +14,10 @@ async-trait.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 futures-util = "0.3"
+
+[dev-dependencies]
+# A real TLS server for the certificate-rejection test. Both are already in the
+# tree through reqwest's rustls backend; naming them here makes the test's
+# dependency on a second TLS stack explicit instead of incidental.
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"

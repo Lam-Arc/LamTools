@@ -170,6 +170,19 @@ pub trait TurnRunner: Send + Sync {
         Err(format!("unknown command: {name}"))
     }
 
+    /// What the journal says about work that was interrupted.
+    ///
+    /// Read through the runner because the runner owns the store: a second
+    /// connection opened to answer a lifecycle question would be the same
+    /// two-writers mistake the single-writer lock exists to prevent.
+    ///
+    /// The default refuses rather than answering "nothing was interrupted". A stub
+    /// that returns an empty plan tells the user their work is fine when nobody
+    /// looked, which is the one wrong answer that loses data silently.
+    fn recovery(&self) -> Result<sunday_store::RecoveryPlan, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+
     /// Threads with a turn currently running.
     ///
     /// Not part of the wire protocol. A host needs it for lifecycle decisions

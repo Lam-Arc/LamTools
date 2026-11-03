@@ -182,6 +182,17 @@ impl CoreRunner {
     }
 }
 
+impl CoreRunner {
+    /// What the journal says about work that was interrupted.
+    ///
+    /// This is the fact a resume reports on. The lifecycle marker only records what
+    /// a process believed when it lost visibility; this knows which tool calls were
+    /// dispatched and never answered.
+    pub fn recovery(&self) -> Result<sunday_store::RecoveryPlan, sunday_protocol::CoreError> {
+        self.store.lock().expect("store lock").recover()
+    }
+}
+
 impl TurnRunner for CoreRunner {
     fn start_turn(
         &self,
@@ -636,6 +647,10 @@ impl TurnRunner for CoreRunner {
 
     /// Not part of the protocol: the host uses this to answer "is anything
     /// running" for lifecycle decisions such as pausing on background.
+    fn recovery(&self) -> Result<sunday_store::RecoveryPlan, String> {
+        CoreRunner::recovery(self).map_err(|error| error.to_string())
+    }
+
     fn running_threads(&self) -> Vec<String> {
         let map = self.live.lock().unwrap();
         map.iter()

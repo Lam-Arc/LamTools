@@ -69,15 +69,40 @@ pub struct PathPolicy {
 impl Default for PathPolicy {
     fn default() -> Self {
         Self {
-            deny_segments: vec![".ssh".into(), ".aws".into(), ".gnupg".into(), ".git".into()],
+            deny_segments: vec![
+                ".ssh".into(),
+                ".aws".into(),
+                ".gnupg".into(),
+                ".git".into(),
+                // Credential directories that hold cluster and registry logins.
+                ".kube".into(),
+                ".docker".into(),
+                ".azure".into(),
+            ],
             deny_names: vec![
                 "id_rsa".into(),
                 "id_ed25519".into(),
                 "id_ecdsa".into(),
+                "id_dsa".into(),
                 "credentials".into(),
                 ".netrc".into(),
+                // Tokens that a package manager or git writes without asking.
+                ".git-credentials".into(),
+                ".npmrc".into(),
+                ".pypirc".into(),
+                ".htpasswd".into(),
             ],
-            deny_extensions: vec![".env".into(), ".pem".into(), ".key".into(), ".p12".into()],
+            deny_extensions: vec![
+                ".env".into(),
+                ".pem".into(),
+                ".key".into(),
+                ".p12".into(),
+                // The other container formats for the same material.
+                ".pfx".into(),
+                ".jks".into(),
+                ".keystore".into(),
+                ".ppk".into(),
+            ],
             deny_prefixes: vec![".env".into()],
         }
     }
@@ -344,6 +369,196 @@ impl SecretStore for MemorySecrets {
     fn delete(&self, key: &str) -> Result<(), CoreError> {
         self.values.lock().unwrap().remove(key);
         Ok(())
+    }
+}
+
+/// Whether a host names this machine or a network only it can reach.
+///
+/// One predicate, two callers with opposite needs: the provider layer *allows* these
+/// over plain HTTP when the user opts in (a local model server is legitimate), and
+/// the fetch tool *refuses* them outright (a `Pure` tool pointed at `127.0.0.1` or at
+/// a cloud metadata address is a way to read what the process should not read).
+///
+/// Based on the name the caller typed, never on DNS: a public hostname that happens
+/// to resolve to a private address is not local, because the resolution can change
+/// after the decision was made.
+pub fn is_local_host(host: &str) -> bool {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    let lower = host.to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    if matches!(
+        lower.as_str(),
+        "localhost"
+            | "localhost.localdomain"
+            | "127.0.0.1"
+            | "::1"
+            | "0.0.0.0"
+            | "::"
+            // 10.0.2.2 is the Android emulator's route to the host machine.
+            | "10.0.2.2"
+    ) {
+        return true;
+    }
+    // Metadata services live at fixed addresses and hand out credentials to anything
+    // that asks. They are the reason a fetch tool needs this check at all.
+    if matches!(lower.as_str(), "metadata.google.internal" | "metadata") {
+        return true;
+    }
+    if let Some(v4) = parse_v4(&lower) {
+        return is_private_v4(v4);
+    }
+    if let Some(groups) = parse_v6(&lower) {
+        // ::1 and :: are all zero up to the last group.
+        if groups[..7].iter().all(|group| *group == 0) {
+            return true;
+        }
+        // Unique-local fc00::/7 and link-local fe80::/10. `fd00:ec2::254` is the AWS
+        // metadata endpoint and lands here, which is the point.
+        let first = groups[0];
+        if (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80 {
+            return true;
+        }
+        // IPv4-mapped, e.g. ::ffff:127.0.0.1, which would otherwise pass as an address
+        // that merely looks unusual.
+        if groups[..5].iter().all(|group| *group == 0) && groups[5] == 0xffff {
+            let [a, b] = groups[6].to_be_bytes();
+            let [c, d] = groups[7].to_be_bytes();
+            return is_private_v4([a, b, c, d]);
+        }
+    }
+    false
+}
+
+fn is_private_v4(address: [u8; 4]) -> bool {
+    matches!(
+        address,
+        [127, _, _, _]
+            | [10, _, _, _]
+            | [192, 168, _, _]
+            | [172, 16..=31, _, _]
+            | [169, 254, _, _]
+            | [0, _, _, _]
+    )
+}
+
+fn parse_v4(text: &str) -> Option<[u8; 4]> {
+    let parts: Vec<&str> = text.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut out = [0u8; 4];
+    for (index, part) in parts.iter().enumerate() {
+        out[index] = part.parse::<u8>().ok()?;
+    }
+    Some(out)
+}
+
+/// Groups of an IPv6 address, including the dotted-quad tail form.
+fn parse_v6(text: &str) -> Option<[u16; 8]> {
+    if !text.contains(':') {
+        return None;
+    }
+    // `::ffff:127.0.0.1` mixes hex groups with a dotted quad, so the quad becomes two
+    // groups before anything else looks at it.
+    let normalised = match text.rsplit_once(':') {
+        Some((head, tail)) if tail.contains('.') => {
+            let quad = parse_v4(tail)?;
+            let high = u16::from(quad[0]) << 8 | u16::from(quad[1]);
+            let low = u16::from(quad[2]) << 8 | u16::from(quad[3]);
+            format!("{head}:{high:x}:{low:x}")
+        }
+        _ => text.to_owned(),
+    };
+    let (head, tail) = match normalised.split_once("::") {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (normalised.as_str(), None),
+    };
+    let head_groups: Vec<u16> = if head.is_empty() {
+        Vec::new()
+    } else {
+        head.split(':')
+            .map(|group| u16::from_str_radix(group, 16))
+            .collect::<Result<_, _>>()
+            .ok()?
+    };
+    let tail_groups: Vec<u16> = match tail {
+        Some("") => Vec::new(),
+        Some(tail) => tail
+            .split(':')
+            .map(|group| u16::from_str_radix(group, 16))
+            .collect::<Result<_, _>>()
+            .ok()?,
+        None => Vec::new(),
+    };
+    let mut groups = [0u16; 8];
+    if tail.is_none() {
+        if head_groups.len() != 8 {
+            return None;
+        }
+        groups.copy_from_slice(&head_groups);
+        return Some(groups);
+    }
+    if head_groups.len() + tail_groups.len() > 8 {
+        return None;
+    }
+    groups[..head_groups.len()].copy_from_slice(&head_groups);
+    groups[8 - tail_groups.len()..].copy_from_slice(&tail_groups);
+    Some(groups)
+}
+
+#[cfg(test)]
+mod local_host_tests {
+    use super::*;
+
+    #[test]
+    fn loopback_and_private_ranges_are_local() {
+        for host in [
+            "localhost",
+            "127.0.0.1",
+            "127.1.2.3",
+            "::1",
+            "[::1]",
+            "0.0.0.0",
+            "10.0.2.2",
+            "10.1.2.3",
+            "192.168.1.1",
+            "172.16.0.1",
+            "172.31.255.255",
+            // Both cloud metadata endpoints. Reading either hands out credentials.
+            "169.254.169.254",
+            "fd00:ec2::254",
+            "metadata.google.internal",
+        ] {
+            assert!(is_local_host(host), "{host} should count as local");
+        }
+    }
+
+    #[test]
+    fn public_names_are_not_local() {
+        for host in [
+            "api.openai.com",
+            "example.com",
+            "172.32.0.1",
+            "8.8.8.8",
+            "2001:4860:4860::8888",
+        ] {
+            assert!(!is_local_host(host), "{host} should not count as local");
+        }
+    }
+
+    #[test]
+    fn ipv6_private_ranges_are_local() {
+        for host in ["fc00::1", "fd12:3456::1", "fe80::1", "::ffff:127.0.0.1"] {
+            assert!(is_local_host(host), "{host} should count as local");
+        }
+    }
+
+    /// Mapping must not turn every v6 address local.
+    #[test]
+    fn a_mapped_public_address_is_not_local() {
+        assert!(!is_local_host("::ffff:8.8.8.8"));
     }
 }
 

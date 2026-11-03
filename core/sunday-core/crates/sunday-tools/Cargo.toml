@@ -7,6 +7,9 @@ license.workspace = true
 description = "Frozen tool implementations. Each tool declares its hosts and side effect."
 
 [dependencies]
+# Real URL parsing, because a prefix check cannot tell
+# `http://127.0.0.1` from `http://example.com`.
+url = "2"
 sunday-protocol.workspace = true
 sunday-platform.workspace = true
 serde_json.workspace = true

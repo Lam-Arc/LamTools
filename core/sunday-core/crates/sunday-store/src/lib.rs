@@ -72,6 +72,26 @@ pub struct RecoveryPlan {
     pub orphaned_children: Vec<String>,
 }
 
+/// What the write-ahead log looks like right now.
+///
+/// Reported so maintenance can tell "healthy" from "the checkpoint is starved by a
+/// long reader", which are indistinguishable from the outside otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WalHealth {
+    /// A reader held pages back, so the checkpoint could not complete.
+    pub starved: bool,
+    pub log_pages: u64,
+    pub checkpointed_pages: u64,
+    /// Frames in the log times the page size: what has not been folded back yet.
+    pub frames_bytes: u64,
+    /// The `-wal` file on disk. PASSIVE never truncates, so this keeps its
+    /// high-water mark and is strictly the number that matters for disk.
+    pub file_bytes: u64,
+    /// What `PRAGMA wal_checkpoint` reported in its first column. It stays false
+    /// for PASSIVE by definition, so it is diagnostics only, never the verdict.
+    pub reported_busy: bool,
+}
+
 /// One queued message, as the UI shows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueItem {
@@ -646,9 +666,79 @@ impl Store {
     /// steady-state disk cost of an event. Without it, "bytes per event" is
     /// whatever fraction of the WAL happens to be un-checkpointed, which is not
     /// a property of the data.
+    ///
+    /// TRUNCATE blocks writers while it runs, so it is for maintenance windows
+    /// and tests, never for the send path.
     pub fn checkpoint(&self) -> Result<(), CoreError> {
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(CoreError::storage)
+    }
+
+    /// A PASSIVE checkpoint: moves whatever pages no reader needs, never blocks a
+    /// writer, never truncates.
+    ///
+    /// This is what a maintenance thread should call. It is the safe primitive
+    /// precisely because it gives up rather than waiting: a long read transaction
+    /// can starve it, which shows up as WAL growth (`wal_bytes()`) instead of as a
+    /// stalled send.
+    pub fn checkpoint_passive(&self) -> Result<(), CoreError> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
+            .map_err(CoreError::storage)
+    }
+
+    /// Current write-ahead log size in bytes, and whether a checkpoint is able to
+    /// make progress. Used by maintenance to detect starvation.
+    pub fn wal_health(&self) -> Result<WalHealth, CoreError> {
+        let (busy, log_pages, checkpointed): (i64, i64, i64) = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE);", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(CoreError::storage)?;
+        let page_size: i64 = self
+            .conn
+            .query_row("PRAGMA page_size;", [], |row| row.get(0))
+            .unwrap_or(4096);
+        let main_file: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT file FROM pragma_database_list WHERE name = 'main'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(CoreError::storage)?;
+        let file_bytes = main_file
+            .map(|path| std::fs::metadata(format!("{path}-wal")).map(|m| m.len()))
+            .and_then(Result::ok)
+            .unwrap_or(0);
+        Ok(WalHealth {
+            // `busy` is NOT the starvation signal for PASSIVE: SQLite only raises it
+            // for RESTART/FULL/TRUNCATE, because PASSIVE by definition gives up
+            // instead of waiting. The honest signal is the gap between the frames in
+            // the log and the frames the checkpoint managed to backfill: a reader
+            // holding pages back makes PASSIVE stop at the first one it needs.
+            starved: log_pages > 0 && checkpointed < log_pages,
+            log_pages: log_pages as u64,
+            checkpointed_pages: checkpointed as u64,
+            frames_bytes: log_pages as u64 * page_size.max(0) as u64,
+            file_bytes,
+            reported_busy: busy != 0,
+        })
+    }
+
+    /// Raises the page threshold at which SQLite runs its own synchronous
+    /// checkpoint on the committing thread.
+    ///
+    /// The default is 1000 pages (~4 MB). A host that runs its own background
+    /// PASSIVE loop raises this so an auto-checkpoint does not land in the middle
+    /// of a send. It is a mitigation, not a substitute: if the background loop
+    /// dies, the WAL still stops growing at this threshold instead of forever.
+    pub fn raise_autocheckpoint(&self, pages: u32) -> Result<(), CoreError> {
+        self.conn
+            .execute_batch(&format!("PRAGMA wal_autocheckpoint={pages};"))
             .map_err(CoreError::storage)
     }
 

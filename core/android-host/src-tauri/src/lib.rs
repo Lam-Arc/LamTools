@@ -28,6 +28,7 @@ use tauri::{Emitter, Manager};
 
 pub mod config;
 pub mod lifecycle;
+pub mod provider;
 pub mod secrets;
 
 /// Bridges the core's event stream to the webview.
@@ -58,6 +59,8 @@ pub struct CoreState {
     session: Session,
     runner: Arc<CoreRunner>,
     data_dir: std::path::PathBuf,
+    /// What the operating system reported, and what it is allowed to claim.
+    lifecycle: lifecycle::Lifecycle,
     /// Kept alive for the process lifetime: dropping it releases the single-writer
     /// lock and a second instance could then open the same database.
     _lock: sunday_host::lock::SingleWriterLock,
@@ -89,29 +92,92 @@ fn core_info(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
     })
 }
 
-/// Called by the app when it leaves the foreground.
+/// One lifecycle signal, from whichever side reported it.
 ///
-/// Deliberately does not kill a running turn. Cancelling on background would
-/// silently truncate work the user started and walked away from; the state is
-/// persisted so a later resume finds it.
-#[tauri::command]
-fn lifecycle_pause(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
-    let running = sunday_host::app_server::TurnRunner::running_threads(
-        state.runner.as_ref() as &dyn sunday_host::app_server::TurnRunner,
-    );
-    lifecycle::on_pause(&state.data_dir, &running)
+/// Both the JNI bridge and the IPC command come through here, so a signal reported
+/// by the OS and one requested by the UI cannot produce different answers.
+fn apply_lifecycle(state: &CoreState, event: &str) -> serde_json::Value {
+    lifecycle::signal(&state.lifecycle, &state.runner, event)
 }
 
-/// Called by the app when it returns.
+/// Asks the core for a lifecycle report, on behalf of the UI.
+///
+/// Reading it here does not change what happened: the tracker already holds the
+/// answer from the OS. This exists so a resumed screen can render synchronously
+/// without waiting for the event that the JNI path emits.
+#[tauri::command]
+fn lifecycle_signal(state: tauri::State<'_, Arc<CoreState>>, event: String) -> serde_json::Value {
+    apply_lifecycle(&state, &event)
+}
+
+/// Kept as its own command because the old name is what the UI calls.
+#[tauri::command]
+fn lifecycle_pause(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
+    apply_lifecycle(&state, "pause")
+}
+
 #[tauri::command]
 fn lifecycle_resume(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
-    lifecycle::on_resume(&state.data_dir)
+    apply_lifecycle(&state, "resume")
 }
 
 /// Model configuration, without ever returning the key.
 #[tauri::command]
 fn model_config(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
     config::public_view(&state.data_dir)
+}
+
+/// The Android Activity callbacks, arriving over JNI.
+///
+/// `onStop` is the reason this exists: Tauri maps `onPause` and `onResume` to window
+/// events but has no equivalent for `onStop`, and `onStop` is the one that means the
+/// app is no longer visible. `onPause` fires on a rotation and on a permission
+/// dialog, so treating it as "backgrounded" would be wrong most of the time.
+#[cfg(target_os = "android")]
+mod android_bridge {
+    use std::sync::{Arc, OnceLock};
+
+    use super::CoreState;
+    use tauri::{Emitter, Manager};
+
+    static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+    pub fn publish(handle: tauri::AppHandle) {
+        let _ = APP.set(handle);
+    }
+
+    fn state(app: &tauri::AppHandle) -> Option<tauri::State<'_, Arc<CoreState>>> {
+        // Before `setup` completes there is no state, and a signal that arrives then
+        // has nothing to report on: there is no turn and no journal worth reading.
+        app.try_state::<Arc<CoreState>>()
+    }
+
+    pub fn deliver(event: &str) {
+        let Some(app) = APP.get() else {
+            return;
+        };
+        let Some(state) = state(app) else {
+            return;
+        };
+        let report = super::apply_lifecycle(&state, event);
+        // Emitted as well as returned, because the JNI call has no caller waiting:
+        // a resumed UI learns what happened through this event.
+        let _ = app.emit("lifecycle", report);
+    }
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_LifecycleBridge_signal(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    event: jni::objects::JString,
+) {
+    let Ok(text) = env.get_string(&event) else {
+        return;
+    };
+    let event: String = text.into();
+    android_bridge::deliver(&event);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -135,16 +201,11 @@ pub fn run() {
 
             // The API key comes from the platform secret store, not from the JSON
             // config: a key in a JSON file is a key in every backup and log.
-            let api_key = secrets::read_api_key(&data_dir).unwrap_or_default();
             let store = sunday_store::Store::open(data_dir.join("core.db"))?;
-            let model: Arc<dyn sunday_protocol::Model> = if cfg.model_id.starts_with("scripted") {
-                Arc::new(sunday_host::runner::scripted_model(&cfg.model_id)?)
-            } else {
-                Arc::new(sunday_llm::LlmClient::new(sunday_llm::ProviderConfig::openai(
-                    cfg.base_url.clone(),
-                    api_key,
-                ))?)
-            };
+            // The key is only ever handed to an endpoint the user approved. When it
+            // has not been, this returns a model that refuses with the reason instead
+            // of a client that would send the key anyway.
+            let model = provider::build_model(&data_dir, &cfg)?;
 
             let runner = Arc::new(CoreRunner::new(CoreOptions {
                 store,
@@ -160,24 +221,46 @@ pub fn run() {
 
             // A trusted session: IPC has no socket, so there is nothing to
             // authenticate against and no way to reach it from outside the app.
-            let session = Session::trusted(Arc::clone(&runner) as Arc<dyn sunday_host::app_server::TurnRunner>);
+            let session = Session::trusted(
+                Arc::clone(&runner) as Arc<dyn sunday_host::app_server::TurnRunner>
+            );
 
+            let lifecycle = lifecycle::Lifecycle::new(&data_dir);
             println!(
-                "sunday core ready over ipc, data at {}",
-                data_dir.display()
+                "sunday core ready over ipc, data at {}, instance {}",
+                data_dir.display(),
+                lifecycle.instance()
             );
             app.manage(Arc::new(CoreState {
                 session,
                 runner,
                 data_dir,
+                lifecycle,
                 _lock: lock,
             }));
+            // Published so the JNI bridge, which runs on an Android thread with no
+            // access to Tauri's context, can find the state it is reporting to.
+            #[cfg(target_os = "android")]
+            android_bridge::publish(handle.clone());
+            // Android delivers its first `onResume` before `setup` has registered
+            // the state above, so that signal is dropped. The report it would have
+            // produced is the one that matters most: whether the previous process
+            // died with work in flight. Ask for it here, where the state exists.
+            let startup = {
+                let state = app.state::<Arc<CoreState>>();
+                lifecycle::resume(&state.lifecycle, &state.runner)
+            };
+            // Printed as well as emitted: a cold-start report is the only evidence
+            // that a kill was noticed, and a dropped event would erase it.
+            println!("lifecycle at startup: {startup}");
+            handle.emit("lifecycle", &startup).ok();
             handle.emit("core-ready", ()).ok();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             core_rpc,
             core_info,
+            lifecycle_signal,
             lifecycle_pause,
             lifecycle_resume,
             model_config,
