@@ -30,14 +30,16 @@ differential run is deferred until a module is actually ported.
 | error shape | 3 string variants in `RuntimeError` | 11 typed variants with stable exit codes | the UI and the CLI need to branch on cause |
 | result unknown | no such state anywhere | `ToolStage::Unknown` plus `OutcomeUnknown` | a killed process between dispatch and result must not silently re-run a write |
 | event ordering | events and checkpoints written independently | journal append and receipt commit in one transaction | a crash cannot leave a receipt with no event |
+| steering | guidance kept in the task registry, staged/offered/consumed | guidance rows in SQLite, consumed with its own event before the row is marked | a restart cannot lose or double-apply an instruction |
+| compaction | summarises the middle, keeps recent steps | same, and it can never drop the system prompt or the task statement | the agent must not forget what it was asked to do |
 
 ## Known gaps, recorded rather than hidden
 
 | gap | consequence today | where it will be closed |
 |---|---|---|
-| sensitive paths are not blocked | `.env`, `.ssh/`, `id_rsa` are readable/writable by a tool | permission layer, M3. A test currently asserts the gap exists so it cannot be forgotten |
-| no guidance three-stage | steer is not possible | M3 with the turn protocol |
-| no context compaction | long threads will exceed the window | M3 or M4, ported from `context_compaction/` |
+| sensitive paths | **closed**: `.env`, `.env.*`, `.ssh/`, `id_rsa`, `.pem`, `.key`, `.git/` are refused for read and write | `platform/tests/python_parity.rs::sensitive_paths_are_blocked_like_the_python_core` |
+| symlink escape | **closed**: a link pointing outside the workspace is refused | `platform::tests::a_symlink_pointing_outside_is_refused` |
+| absolute paths | **closed**: drive letters, UNC prefixes and leading separators are refused on every platform | `platform::tests::refuses_absolute_paths_in_every_shape` |
 | identical-tool-result guard | a model can repeat the same call until the budget stops it | `max_identical_tool_results: 10` in Python; port with the loop in M3 |
 | no sub-agents, MCP, skills | those capabilities are unavailable | M4 |
 | no protocol compatibility | an existing desktop UI cannot talk to this core | M3 |
