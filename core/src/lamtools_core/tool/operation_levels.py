@@ -21,7 +21,11 @@ OPERATION_LEVELS = {
     "arrange": 3, "arrange.list": 1, "arrange.get": 1,
     "plugin": 3, "plugin.list": 2, "plugin.deps": 2,
     "plugin_list": 2, "plugin_deps": 2, "plugin_install": 3,
-    "sub_agent": 2, "sub_agent_message": 2, "subagent": 2,
+    # user:“互不依赖的任务应委派 sub-agent 并行执行”+(委派本身不是写操作：
+    # 子代理继承同一 approval_policy/preset/active_tier，它真正要做的每一步
+    # 都在自己的闸门里重新判级；在启动处再拦一次只会多一次无保护的点击，
+    # 还会让 access_tools.jsonc 给 read_only 档的 sub_agent 授权变成硬拦截)。
+    "sub_agent": 1, "sub_agent_message": 1, "subagent": 1,
     "web_search": 1, "web_fetch": 2, "web.search": 1, "web.fetch": 2,
     "generate_image": 2, "check_exports": 1,
     # Preserve the existing Study/Workflow domain behavior outside this migration's scope.
