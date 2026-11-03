@@ -109,9 +109,31 @@ async fn ordinary_files_are_still_readable() {
     }
 }
 
-/// A symlink is the obvious way around a name rule. A link inside the workspace that
-/// points at a protected name is refused on the name, and one that points outside is
-/// refused on the boundary.
+/// Creates a symbolic link, or reports that this platform will not.
+///
+/// Windows needs either an elevated process or Developer Mode. When it refuses, the
+/// test says so rather than passing quietly: the Linux job is what caught the symlink
+/// bypass in the first place, and a silent skip on the other platform is how a green
+/// board hides an open hole.
+fn try_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(original, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(original, link).is_ok()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (original, link);
+        false
+    }
+}
+
+/// A symlink is the obvious way around a rule that inspects the name. A link inside
+/// the workspace pointing at a protected name must be refused on what it resolves to,
+/// and a link pointing outside must be refused on the boundary.
 #[tokio::test]
 async fn a_symlink_cannot_smuggle_a_credential_past_the_policy() {
     let dir = tempfile::tempdir().unwrap();
@@ -119,29 +141,29 @@ async fn a_symlink_cannot_smuggle_a_credential_past_the_policy() {
     std::fs::create_dir_all(root.join(".ssh")).unwrap();
     std::fs::write(root.join(".ssh/id_rsa"), SECRET).unwrap();
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(root.join(".ssh/id_rsa"), root.join("innocent.txt")).unwrap();
-        let tool = tool(root);
-        let error = tool
-            .execute(json!({"path": "innocent.txt"}), &ToolCtx::default())
-            .await
-            .unwrap_err();
-        // Either refusal is correct; what matters is that no bytes came back.
-        assert!(
-            !format!("{error:?}").contains(SECRET),
-            "a symlink handed out the key: {error:?}"
+    if !try_symlink(&root.join(".ssh/id_rsa"), &root.join("innocent.txt")) {
+        eprintln!(
+            "skipping the symlink cases: this platform refused to create a link \
+             (Windows needs an elevated process or Developer Mode). The Linux CI job \
+             runs them unconditionally."
         );
+        return;
     }
 
-    // A link pointing outside the workspace, on every platform that can make one.
+    let tool = tool(root);
+    let error = tool
+        .execute(json!({"path": "innocent.txt"}), &ToolCtx::default())
+        .await
+        .unwrap_err();
+    assert!(
+        !format!("{error:?}").contains(SECRET),
+        "a symlink handed out the key: {error:?}"
+    );
+
+    // A link pointing outside the workspace, which the boundary check has to catch.
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(outside.path().join("secret.txt"), SECRET).unwrap();
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(outside.path().join("secret.txt"), root.join("escape.txt"))
-            .unwrap();
-        let tool = tool(root);
+    if try_symlink(&outside.path().join("secret.txt"), &root.join("escape.txt")) {
         let error = tool
             .execute(json!({"path": "escape.txt"}), &ToolCtx::default())
             .await

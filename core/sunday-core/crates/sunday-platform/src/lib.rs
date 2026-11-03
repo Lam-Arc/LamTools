@@ -194,6 +194,22 @@ impl LocalFiles {
                 resource: format!("{rel} resolves outside the workspace through a link"),
             });
         }
+        // The policy has to see what the path actually is. Checking only the name that
+        // was typed means a link called `innocent.txt` pointing at `.ssh/id_rsa` walks
+        // straight past it: both are inside the workspace, so the boundary check above
+        // is satisfied too.
+        //
+        // A path that does not exist yet resolves to its deepest existing ancestor, so
+        // a write to a new file checks the directory it lands in and nothing else, which
+        // is what it should check.
+        if let Ok(relative) = resolved.strip_prefix(&self.root) {
+            let actual = relative.to_string_lossy().replace('\\', "/");
+            if !actual.is_empty() && !self.policy.allows(&actual) {
+                return Err(CoreError::PermissionDenied {
+                    resource: format!("{rel} resolves to a protected path"),
+                });
+            }
+        }
         Ok(candidate)
     }
 }

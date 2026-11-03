@@ -257,6 +257,38 @@ after the reader closed: 1569 frames, 1569 backfilled, starved false
 
 这个判定本身也被测试抓过一次：第一版把 `fd00:ec2::254` 归到公网（它其实是 AWS 元数据地址，落在 fc00::/7 私有段内），而且完全没解析 `::ffff:127.0.0.1` 这种带点分后缀的映射地址。
 
+### CI 抓到一个本地测不出来的漏洞
+
+第一次推送后 Linux 作业失败，`a_symlink_cannot_smuggle_a_credential_past_the_policy` 的日志是：
+
+```
+called `Result::unwrap_err()` on an `Ok` value: ToolOutput { content:
+"{\"content\":\"sk-live-should-never-be-readable-4a7f\",\"path\":\"innocent.txt\",...}" }
+```
+
+也就是说，`read_file` 通过一个叫 `innocent.txt` 的软链接，把 `.ssh/id_rsa` 的内容读出来了。
+
+原因：`LocalFiles::resolve` 把 `PathPolicy` 作用在**用户输入的那串相对路径**上（`innocent.txt`，不在拒绝列表里），之后只校验链接解析后的目标是否还在工作区内——而 `.ssh/id_rsa` 确实在工作区内，两道检查都过了。
+
+这个漏洞在 Windows 上没暴露，因为本地测试里的软链接分支是 `#[cfg(unix)]`，Windows 建软链接需要特权，于是那一段被静默跳过，测试**绿色的同时洞是开着的**。
+
+修法是策略作用在解析后的真实路径上：
+
+```rust
+if let Ok(relative) = resolved.strip_prefix(&self.root) {
+    let actual = relative.to_string_lossy().replace('\\', "/");
+    if !actual.is_empty() && !self.policy.allows(&actual) {
+        return Err(CoreError::PermissionDenied { resource: format!("{rel} resolves to a protected path") });
+    }
+}
+```
+
+对尚不存在的路径，`deepest_existing` 会落到最近的已存在祖先目录，所以新建文件只检查它落在哪个目录里，这正是应该检查的东西。
+
+测试也改成两个平台都跑：能建链接就断言，建不了就**明确打印原因**而不是安静通过。修完之后做了变异验证——把那行判断改成 `false`，测试立刻失败。
+
+这是本轮第二次被平台差异藏住真问题（第一次是 Provider 那条把 401 当成脱敏证据的空测试）。
+
 ### 负向测试
 
 `core/sunday-core/crates/sunday-tools/tests/read_privacy.rs`：
@@ -277,8 +309,9 @@ the_network_tool_cannot_be_pointed_at_this_machine ... ok
 |---|---|
 | 清空 `PathPolicy` 的拒绝列表 | 26 个敏感路径测试失败 ✔ |
 | 去掉 `web_fetch` 的本机判定 | 网络边界测试失败 ✔ |
+| 策略不作用在解析后的路径上 | 软链接测试失败 ✔ |
 
-**2/2 命中。**
+**3/3 命中。**
 
 ---
 
@@ -338,6 +371,7 @@ cargo test --lib (android-host)    11 passed / 0 failed
 - `core/sunday-core/crates/sunday-llm/tests/fixtures/self-signed-cert.der`、`self-signed-key.der`
 - `core/sunday-core/crates/sunday-store/tests/wal_checkpoint.rs`（5 项测量）
 - `core/sunday-core/crates/sunday-tools/tests/read_privacy.rs`（5 项隐私边界）
+- `core/android-host/.gitignore`（`gen/` 里手写的两个 Kotlin 源改为强制跟踪）
 - `core/android-host/src-tauri/src/provider.rs`（Android 侧闸门）
 - `core/android-host/src-tauri/gen/android/app/src/main/java/com/lamtools/sunday/core/LifecycleBridge.kt`
 
