@@ -99,3 +99,32 @@
 - 待定：这是产品顺序问题（依赖检查应早于审批），还是测试缺少审批上下文，需要单独判断，
   不能用改断言掩盖。
 
+
+## 8. 全量基线对照（首次完整跑）
+
+命令（两棵树相同，均从仓库根执行）：
+
+```powershell
+python -m pytest core/tests -p no:cacheprovider -q
+```
+
+前置夹具：`.agents/` 被 gitignore，工作树里没有，需从主工作区复制一次；
+否则 `test_plugin_packaging_boundary.py` 在收集阶段就 FileNotFoundError。
+
+| 树 | passed | failed | skipped | 耗时 |
+|---|---|---|---|---|
+| 原始 HEAD（39dd5c26 工作树） | 4043 | 222 | 9 | 709s |
+| 分支 `sunday/reliable-base` | 4089 | 205 | 9 | 696s |
+
+集合对照：
+
+- **分支修好 19 项**，含本次清理的 8 项基线，以及 `test_core_live_approval_switch_ws`
+  两项、`test_core_live_client_e2e` 一项（都是跨循环问题，被插件 Task 修复带出来的）。
+- **分支新增 2 项失败**，隔离运行均通过，判定为全量负载下的时序抖动，需在冻结提交上复测：
+  - `test_v2_observer_advances_cursor_only_after_host_ack`：全量下 2 秒内只 ACK 了 1 个事件。
+  - `test_search_network_limits.py::test_http_total_deadline_expires_despite_continuous_data`：
+    全量下截止时间先到，第二次读取没发生。
+- 其余 203 项为两棵树共有的既有失败（网络、模型、WSL、打包边界等环境依赖），本轮未动。
+
+**注意**：全量 222 个既有失败说明这个仓库在本地环境的绿灯基线本来就很差，不能把
+"分支 205 failed" 当成可接受状态；它只说明"没有比原始 HEAD 更差"。
