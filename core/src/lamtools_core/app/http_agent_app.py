@@ -225,6 +225,22 @@ def _arrange_max_active_jobs() -> int:
     return max(1, value)
 
 
+def _arrange_job_timeout_seconds() -> float | None:
+    """单次执行的最长时长，超时吊销执行并杀进程树。
+
+    user:“确保取消、超时、租约失效后，旧执行不能继续修改工作区”
+    +(默认 3600 秒；设成 0 表示关闭超时)。
+    """
+    raw = str(os.environ.get("LAMTOOLS_ARRANGE_JOB_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return 3600.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 3600.0
+    return value if value > 0 else None
+
+
 def _runtime_health(app_state: dict[str, Any]) -> dict[str, Any]:
     """把后台循环的真实存活状态暴露到 /api/health。
 
@@ -675,6 +691,7 @@ def create_core_agent_http_app(
             # user:“全局并发限制（单实例运行）”+(同时最多跑几个任务，
             # 与每轮领取批量分开配置；默认 3，可用环境变量覆盖)。
             max_active_jobs=_arrange_max_active_jobs(),
+            job_timeout_seconds=_arrange_job_timeout_seconds(),
             new_thread_factory=lambda _job: f"arrange_thread_{uuid.uuid4().hex}",
         )
         observer_supervisor = ObserverSupervisor(

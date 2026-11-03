@@ -90,6 +90,13 @@ def _decode_timeout_output(value: str | bytes | None) -> str:
     return value
 
 
+from lamtools_core.runtime.execution_guard import (
+    ensure_spawn_allowed as _ensure_spawn_allowed,
+    register_process as _register_process,
+    unregister_process as _unregister_process,
+)
+
+
 def _windows_command_creationflags() -> int:
     if sys.platform != "win32":
         return 0
@@ -194,6 +201,89 @@ def _windows_job_assign(process: subprocess.Popen[Any]) -> int | None:
         return handle
     except Exception:
         return None
+
+
+_HOST_JOB_HANDLE: int | None = None
+
+
+def install_kill_on_close_host_job() -> int | None:
+    """把当前进程放进一个 kill-on-close job。
+
+    user:“强杀、僵尸进程、父子进程残留”+(只给每个子进程单独建 job 仍有竞态：
+    子进程刚 create 出来、还没 Assign 到 job 时宿主被杀，它就活下来了。
+    把宿主自己放进 job 之后，之后 spawn 的子孙自动继承，窗口消失)。
+
+    Windows 8+ 支持 job 嵌套，所以宿主已在别的 job 里也能装。
+    """
+    global _HOST_JOB_HANDLE
+    if _HOST_JOB_HANDLE is not None or _kernel32 is None:
+        return _HOST_JOB_HANDLE
+    try:
+        import struct
+
+        job = _kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        configured = False
+        for size in (168, 144):
+            buffer = _ctypes.create_string_buffer(size)
+            struct.pack_into("<I", buffer, 40, _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+            if _kernel32.SetInformationJobObject(
+                job,
+                _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                _ctypes.c_void_p(_ctypes.addressof(buffer)),
+                size,
+            ):
+                configured = True
+                break
+        if not configured:
+            _kernel32.CloseHandle(job)
+            return None
+        current = _kernel32.GetCurrentProcess()
+        if not _kernel32.AssignProcessToJobObject(job, _wintypes.HANDLE(current)):
+            # 已被不可嵌套的 job 包住：退化成逐子进程登记。
+            _kernel32.CloseHandle(job)
+            return None
+        _HOST_JOB_HANDLE = int(job)
+        _WINDOWS_JOB_HANDLES.add(_HOST_JOB_HANDLE)
+        return _HOST_JOB_HANDLE
+    except Exception:
+        return None
+
+
+def _as_popen(process: Any) -> Any | None:
+    """拿到真实的 subprocess.Popen（asyncio.subprocess.Process 需要穿透 transport）。"""
+    if hasattr(process, "_handle"):
+        return process
+    transport = getattr(process, "_transport", None)
+    if transport is not None:
+        try:
+            inner = transport.get_extra_info("subprocess")
+        except Exception:
+            inner = None
+        if inner is not None and hasattr(inner, "_handle"):
+            return inner
+    return None
+
+
+def assign_kill_on_close_job(process: Any) -> int | None:
+    """把子进程放进 kill-on-close 的 job object。
+
+    user:“特别注意强杀、僵尸进程、父子进程残留”+(宿主被 /F 强杀时，
+    job 句柄随进程关闭，整个子进程树被系统回收，不依赖优雅退出)。
+    """
+    popen = _as_popen(process)
+    if popen is None:
+        return None
+    return _windows_job_assign(popen)
+
+
+def terminate_kill_on_close_job(job_handle: int) -> bool:
+    return _terminate_windows_job(job_handle)
+
+
+def release_kill_on_close_job(job_handle: int | None) -> None:
+    _windows_job_release(job_handle)
 
 
 def _terminate_windows_job(job_handle: int) -> bool:
@@ -330,6 +420,9 @@ def run_subprocess_streaming_blocking(
     cancel_event: threading.Event | None = None,
 ) -> CommandExecution:
     started_at = time.monotonic()
+    # user:“确保取消、超时、租约失效后，旧执行不能继续修改工作区或产生未经授权的副作用”
+    # +(真正开工之前先问一次代际：已吊销的执行连进程都不许起)。
+    _ensure_spawn_allowed()
     creationflags = _windows_command_creationflags()
     process: subprocess.Popen[str] | None = None
     job_handle: int | None = None
@@ -399,6 +492,8 @@ def run_subprocess_streaming_blocking(
         for thread in threads:
             thread.start()
         job_handle = _windows_job_assign(process)
+        # 把进程树登记到本次执行的属主名下：取消/超时/租约失效时整组杀掉。
+        _register_process(process, job_handle=job_handle, label=str(argv)[:200])
         deadline = time.monotonic() + timeout
         while True:
             if cancel_event is not None and cancel_event.is_set():
@@ -471,6 +566,8 @@ def run_subprocess_streaming_blocking(
             error_type=type(exc).__name__,
         )
     finally:
+        if process is not None:
+            _unregister_process(process)
         _windows_job_release(job_handle)
 
 

@@ -15,6 +15,16 @@ from typing import Any, Literal, Protocol, runtime_checkable
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .execution_guard import (
+    ExecutionGuard,
+    REVOKE_CANCELLED,
+    REVOKE_LEASE_LOST,
+    REVOKE_STOPPED,
+    REVOKE_TIMEOUT,
+    bind_guard,
+    reset_guard,
+)
+
 _logger = logging.getLogger(__name__)
 
 
@@ -1147,6 +1157,8 @@ class _RunningExecution:
     fencing_token: int
     occurrence_id: str
     task: asyncio.Task[None] | None = None
+    # user:“引入受管执行进程与进程组”+(每次执行都有属主，吊销后立刻杀掉其进程树)。
+    guard: ExecutionGuard | None = None
 
 
 class ArrangeRunner:
@@ -1165,6 +1177,7 @@ class ArrangeRunner:
         max_active_jobs: int = 4,
         new_thread_factory: Callable[[ArrangeJob], str | Awaitable[str]] | None = None,
         max_backoff: float = 30.0,
+        job_timeout_seconds: float | None = None,
     ) -> None:
         self.store = store
         self.executor = executor
@@ -1177,6 +1190,9 @@ class ArrangeRunner:
         self.claim_limit = max(1, claim_limit)
         self.max_active_jobs = max(1, max_active_jobs)
         self.max_backoff = max(self.poll_interval, max_backoff)
+        # user:“超时后旧执行不能继续跑”+(超时是吊销执行、杀进程树，
+        # 而不是只把协程丢掉让它继续在后台写文件)。
+        self.job_timeout_seconds = job_timeout_seconds
         self.new_thread_factory = new_thread_factory
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
@@ -1206,6 +1222,9 @@ class ArrangeRunner:
         self._task = None
         self._stopping.set()
         self._wake.set()
+        for handle in list(self._active.values()):
+            self._revoke(handle, REVOKE_STOPPED)
+        await self._terminate_all(list(self._active.values()))
         active = [handle.task for handle in self._active.values() if handle.task is not None]
         for active_task in active:
             active_task.cancel()
@@ -1232,6 +1251,17 @@ class ArrangeRunner:
             "last_error": self._last_error,
             "last_error_at": self._last_error_at.isoformat() if self._last_error_at else None,
             "stale_execution_rejected": self._stale_execution_rejected,
+            "job_timeout_seconds": self.job_timeout_seconds,
+            "live_processes": sum(
+                handle.guard.live_processes()
+                for handle in self._active.values()
+                if handle.guard is not None
+            ),
+            "revoked_executions": sum(
+                1
+                for handle in self._active.values()
+                if handle.guard is not None and handle.guard.revoked
+            ),
             "executions": [
                 {
                     "job_id": handle.job_id,
@@ -1286,12 +1316,18 @@ class ArrangeRunner:
         """
         clean_job_id = str(job_id or "")
         handles = [item for item in self._active.values() if item.job_id == clean_job_id]
-        tasks = [item.task for item in handles if item.task is not None]
-        if not tasks:
+        if not handles:
             return False
+        # 先吊销再杀进程树，最后才取消协程：顺序反了会让正在跑的命令
+        # 继续写完工作区才被发现（to_thread 里的代码根本收不到 cancel）。
+        for handle in handles:
+            self._revoke(handle, REVOKE_CANCELLED)
+        await self._terminate_all(handles)
+        tasks = [item.task for item in handles if item.task is not None]
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         return True
 
     def wake(self) -> None:
@@ -1346,6 +1382,12 @@ class ArrangeRunner:
             execution_id=job.execution_id or f"exec_legacy_{job.fencing_token}",
             fencing_token=job.fencing_token,
             occurrence_id=job.occurrence_id,
+            guard=ExecutionGuard(
+                execution_id=job.execution_id or f"exec_legacy_{job.fencing_token}",
+                job_id=job.id,
+                fencing_token=job.fencing_token,
+                worker_id=self.worker_id,
+            ),
         )
         self._active[handle.execution_id] = handle
         task = asyncio.create_task(
@@ -1443,8 +1485,43 @@ class ArrangeRunner:
             except TimeoutError:
                 pass
 
+    @staticmethod
+    def _revoke(handle: _RunningExecution, reason: str) -> None:
+        if handle.guard is not None:
+            handle.guard.revoke(reason)
+
+    @staticmethod
+    async def _terminate_all(handles: list[_RunningExecution]) -> int:
+        guards = [handle.guard for handle in handles if handle.guard is not None]
+        if not guards:
+            return 0
+
+        def _kill() -> int:
+            return sum(guard.terminate_all() for guard in guards)
+
+        # 杀进程树会同步调用 taskkill/killpg，放到线程里做，别卡住调度循环。
+        try:
+            return await asyncio.to_thread(_kill)
+        except Exception:  # noqa: BLE001 — 杀不掉必须是可见的失败
+            _logger.warning("arrange execution terminate failed", exc_info=True)
+            return 0
+
+    async def _invoke_executor(self, job: ArrangeJob) -> Any:
+        async def _call() -> Any:
+            result = await asyncio.to_thread(self.executor, job)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+
+        if not self.job_timeout_seconds:
+            return await _call()
+        # user:“超时后旧执行不能继续跑”+(到点吊销并杀进程树，
+        # 不是丢下 to_thread 里的线程继续跑)。
+        return await asyncio.wait_for(_call(), timeout=self.job_timeout_seconds)
+
     async def _execute(self, job: ArrangeJob, handle: _RunningExecution) -> None:
         context_token = self._current_execution.set(handle)
+        guard_token = bind_guard(handle.guard)
         effective_job = job
         try:
             if job.session_strategy == "new" and self.new_thread_factory is not None:
@@ -1464,9 +1541,7 @@ class ArrangeRunner:
                 # the job would be re-claimed (and re-executed) by this or
                 # another worker (audit 07 S2).  Async executors still work —
                 # their coroutine is awaited here on the loop.
-                result = await asyncio.to_thread(self.executor, effective_job)
-                if inspect.isawaitable(result):
-                    result = await result
+                result = await self._invoke_executor(effective_job)
                 status = (
                     result.get("status", "ok")
                     if isinstance(result, dict)
@@ -1490,6 +1565,28 @@ class ArrangeRunner:
                 )
             except asyncio.CancelledError:
                 raise
+            except TimeoutError as exc:
+                # 超时：先吊销、杀进程树，再按失败记账（可重试）。
+                self._revoke(handle, REVOKE_TIMEOUT)
+                await self._terminate_all([handle])
+                try:
+                    await self.store.fail_run(
+                        job_id=effective_job.id,
+                        worker_id=self.worker_id,
+                        now=self.clock(),
+                        error=(
+                            f"arranged operation timed out after "
+                            f"{self.job_timeout_seconds}s"
+                        ),
+                        fencing_token=handle.fencing_token,
+                        execution_id=handle.execution_id,
+                    )
+                except Exception as failure_exc:
+                    if _is_lease_lost(failure_exc):
+                        self._stale_execution_rejected += 1
+                    else:
+                        raise
+                del exc
             except Exception as exc:
                 # A lease takeover is a normal recovery boundary.  The stale
                 # worker must not turn its rejected completion into a second
@@ -1515,6 +1612,7 @@ class ArrangeRunner:
                 renewer.cancel()
                 await asyncio.gather(renewer, return_exceptions=True)
         finally:
+            reset_guard(guard_token)
             self._current_execution.reset(context_token)
 
     async def _renew(self, handle: _RunningExecution) -> None:
@@ -1529,6 +1627,12 @@ class ArrangeRunner:
                 execution_id=handle.execution_id,
             )
             if not renewed:
+                # user:“租约失效后旧执行不能继续修改工作区”+(续租失败不是静默返回，
+                # 而是立刻吊销这次执行、杀掉它的进程树、并停掉协程)。
+                self._revoke(handle, REVOKE_LEASE_LOST)
+                await self._terminate_all([handle])
+                if handle.task is not None and not handle.task.done():
+                    handle.task.cancel()
                 return
 
 

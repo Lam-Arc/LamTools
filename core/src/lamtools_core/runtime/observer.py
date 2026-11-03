@@ -22,6 +22,11 @@ import sys
 from typing import Any, Protocol, runtime_checkable
 
 from lamtools_core.config.network import subprocess_env
+from lamtools_core.tool.command import (
+    assign_kill_on_close_job,
+    release_kill_on_close_job,
+    terminate_kill_on_close_job,
+)
 
 from .arrange import ArrangeJob, ArrangeManager, ArrangeStore
 
@@ -111,6 +116,8 @@ class _ObserverProcess:
     expected_stop: bool = False
     acks_sent: int = 0
     acks_dropped: int = 0
+    # Windows: kill-on-close job 句柄；宿主被强杀时系统连带回收子进程树。
+    job_handle: int | None = None
 
 
 @dataclass
@@ -336,8 +343,7 @@ class ObserverSupervisor:
         })
         creationflags = 0
         if os.name == "nt":
-            # 独立进程组：停止时要能连带收掉观察器自己起的孙进程，
-            # 否则“关闭后无残留子进程”只能靠运气。
+            # 独立进程组：停止时要能连带收掉观察器自己起的孙进程。
             creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         try:
             process = await asyncio.create_subprocess_exec(
@@ -360,7 +366,15 @@ class ObserverSupervisor:
             name=f"arrange-observer:{job.id}",
         )
         previous = self._states.get(job.id) or _RuntimeState()
-        self._processes[job.id] = _ObserverProcess(job=job, process=process, task=task)
+        # user:“父子进程残留”+(登记到 kill-on-close job：宿主被强杀时
+        # job 句柄随之关闭，子进程树被系统回收)。
+        job_handle = assign_kill_on_close_job(process)
+        self._processes[job.id] = _ObserverProcess(
+            job=job,
+            process=process,
+            task=task,
+            job_handle=job_handle,
+        )
         self._set_state(
             job.id,
             status="running",
@@ -581,13 +595,18 @@ class ObserverSupervisor:
         active.expected_stop = True
         process = active.process
         if process.returncode is None:
-            _terminate_tree(process)
+            # job object 优先：一次调用收掉整棵树，taskkill 只作兜底。
+            if active.job_handle is None or not terminate_kill_on_close_job(
+                active.job_handle
+            ):
+                _terminate_tree(process)
             try:
                 await asyncio.wait_for(process.wait(), timeout=3)
             except TimeoutError:
                 process.kill()
                 await process.wait()
         await asyncio.gather(active.task, return_exceptions=True)
+        release_kill_on_close_job(active.job_handle)
         if self._processes.get(job_id) is active:
             self._processes.pop(job_id, None)
 

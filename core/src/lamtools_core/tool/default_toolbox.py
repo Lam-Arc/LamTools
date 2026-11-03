@@ -1709,6 +1709,24 @@ class CoreToolbox:
         return replace(call, arguments=args)
 
     def prepare_call(self, call: ToolCall) -> ToolCall:
+        # user:“确保取消、超时、租约失效后，旧执行不能继续修改工作区
+        # 或产生未经授权的副作用”+(工具调用是 Agent Loop 唯一的动作出口，
+        # 在这里硬拒比指望模型自己停手可靠得多；不改循环本身)。
+        from lamtools_core.runtime.execution_guard import (
+            execution_revoked_reason as _execution_revoked_reason,
+        )
+
+        revoked = _execution_revoked_reason()
+        if revoked:
+            return replace(call, requires_approval=False, metadata={
+                **dict(call.metadata or {}),
+                "approval": {
+                    "tier": HARD_BLOCK,
+                    "blocked": True,
+                    "requires_approval": False,
+                    "reason": f"Execution revoked: {revoked}",
+                },
+            })
         call = self._pin_execution_arguments(call)
         self._refresh_runtime_permissions()
         self._dynamic_plugin_specs(work_root=self._call_work_root(call, self.work_root))
