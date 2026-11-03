@@ -45,7 +45,7 @@
 |---|---|---|---|---|---|
 | 10 | 10 | 0 | 0 | **0** | 20s |
 | 100 | 100 | 0 | 0 | **0** | 193s |
-| 1000 | 运行中 | — | — | — | — |
+| 1000 | 1000 | 0 | 0 | **0** | 1851s（1.85s/轮，最慢 4.76s） |
 
 100 轮原始数据：`.lam/ki100/kill_injection_report.json` 与 `.lam/ki100/iterations.jsonl`
 （逐轮阶段耗时与 pid）。
@@ -58,9 +58,18 @@
 上一版写“宿主强杀后子进程与孙进程死亡 = PASS”是**错的**：那次用的 `taskkill /T`，
 树是被 taskkill 杀的，不是 job 杀的。这次只用 `/F`，才暴露真相。
 
+## 4.1 基线失败清理进度（7 项）
+
+| # | 用例 | 归类 | 状态 |
+|---|---|---|---|
+| 1 | `test_durable_tools::test_unknown_action_fails_without_calling_operation` | 测试契约过期（产品已支持 `complete`） | **已修**（`6aa20f61`，断言强度不变，14 passed） |
+| 2 | `test_core_http_agent_app::test_core_agent_http_app_owns_attachment_storage` | 落盘布局与断言不符（目录名仍是 `session-{digest}`，待查文件名/时机） | 未修 |
+| 3-5 | `...sessions_survive_app_restart` / `...session_delete_removes_persisted_thread` / `...project_http_round_trip...` | 产品缺陷：`ValueError: future belongs to a different loop`，同一进程内重建 TestClient（新事件循环）时复用了绑定旧循环的对象；`core_db.py` 与 `sqlite_write.py` 里没有全局 engine 缓存，源头未定位 | 未修 |
+| 6-7 | `...websocket_active_turn_steer_and_second_start_matrix` / `...rejects_steer_after_kernel_seal...` | 一个是 `model_started.wait(timeout=2)` 未触发（模型/环境依赖），一个同属循环归属问题 | 未修 |
+
 ## 5. 仍然没做
 
-1. **1000 轮尚未完成**，结果以后台进程为准，不能用 100 轮代替。
+1. ~~1000 轮尚未完成~~ → 已完成：1000/1000 有效、0 孤儿、0 超时。
 2. **7 项历史基线失败没修**，仍在原始 HEAD 上复现。
 3. **取消后副作用专项测试没做**：纯 Python 文件写入、网络请求在取消后的表现，
    以及“哪些能强制终止、哪些只能靠幂等/原子写/补偿”还没有专门用例。
