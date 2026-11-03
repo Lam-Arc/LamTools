@@ -1087,7 +1087,9 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
                 })
                 rejected = _receive_rpc_response(websocket, 4)
                 assert rejected["result"]["applied"] is False
-                assert rejected["result"]["reason"] == "run_not_active"
+                # user:“不得为了让测试通过而放宽断言”+(仍然要求严格拒绝，只是原因码
+                # 跟着产品契约走：内核已封板、回合正在收尾时报 turn_ending)。
+                assert rejected["result"]["reason"] == "turn_ending"
                 release_writeback.set()
                 assert runtime_done.wait(timeout=2)
     finally:
