@@ -483,8 +483,12 @@ def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path, isolated_co
     assert study_uploaded.status_code == 200
     assert [item["id"] for item in study_listed.json()["attachments"]] == [study_uploaded.json()["id"]]
     assert study_uploaded.json()["session_id"] == "study:main"
-    assert list((tmp_path / "core-data" / "attachments").glob("session-*/study.txt"))
-    assert (tmp_path / "core-data" / "attachments" / "thread-attachment" / "notes.md").is_file()
+    # user:“否则把附件创建到 artifact 目录内”+(所有会话共用内容寻址的托管文件，
+    # 不再按 session-* 分目录)。断言升级为校验磁盘上的真实字节，而不是旧目录名。
+    attachment_root = tmp_path / "core-data" / "artifact" / "attachments"
+    stored = [p for p in attachment_root.rglob("*") if p.is_file()]
+    assert any(p.read_bytes() == b"study attachment" for p in stored)
+    assert any(p.read_bytes() == b"line one" + bytes([10]) + b"line two" for p in stored)
 
 
 def test_core_agent_http_accepts_multiple_attachments_in_one_turn(
