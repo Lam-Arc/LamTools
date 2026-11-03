@@ -328,6 +328,15 @@ cargo test --workspace                              240 passed / 0 failed / 38 i
 
 上一轮同口径：181 passed / 32 ignored。本轮新增 59 项。
 
+远端 CI（GitHub Actions，真实执行）：
+
+| 运行 | 提交 | dependency rules | windows | linux | android target check |
+|---|---|---|---|---|---|
+| 41672518148 | 7d251787 | 成功 | 成功 | **失败**（软链接漏洞） | 成功 |
+| 41674834852 | 94190a21 | 成功 | 成功 | 成功 | 成功 |
+
+第一次 Linux 失败是本轮最有价值的产出：它在 Windows 上永远是绿的。
+
 Android 宿主自身的单元测试（此前从未编译通过，本轮修好）：
 
 ```
