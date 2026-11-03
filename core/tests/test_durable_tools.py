@@ -90,7 +90,7 @@ class TestGoalTool:
         handlers = durable_tool_handlers(_executor(calls))
         result = await handlers["goal"](_call("goal", {"action": "explode"}))
         assert result.status == "failed"
-        assert "goal action must be create, list, get, or cancel" in result.error
+        assert "goal action must be create, list, get, complete, or cancel" in result.error
         assert calls == []
 
 
