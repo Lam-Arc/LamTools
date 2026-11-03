@@ -21,7 +21,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use sunday_agent::{Approver, Env, TurnInput};
-use sunday_protocol::{CancelToken, EventKind, HostKind, Model, RunBudget, RunOutcome, Tool};
+use sunday_protocol::{
+    CancelToken, EventKind, HostKind, Model, Permission, RunBudget, RunOutcome, SideEffect, Tool,
+};
 use sunday_store::Store;
 
 use crate::app_server::{
@@ -109,7 +111,8 @@ pub struct CoreRunner {
     model_id: String,
     workspace: String,
     host_kind: HostKind,
-    policy: GrantPolicy,
+    /// Shared so the host can change grants while a turn is running.
+    policy: std::sync::Arc<crate::policy::LivePolicy>,
     system: Option<String>,
     /// Ordering for events this runner synthesises (stop acknowledgements). All
     /// journal-backed events use the journal's own seq.
@@ -130,7 +133,7 @@ impl CoreRunner {
             model_id: options.model_id,
             workspace: options.workspace,
             host_kind: options.host_kind,
-            policy: options.policy,
+            policy: std::sync::Arc::new(crate::policy::LivePolicy::new(options.policy)),
             system: options.system,
             seq: AtomicU64::new(0),
             buffer: EventBuffer::default(),
@@ -193,6 +196,66 @@ impl CoreRunner {
     }
 }
 
+/// One tool, as a settings screen needs to describe it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolDescriptor {
+    pub id: String,
+    pub description: String,
+    pub side_effect: SideEffect,
+    pub permission: Permission,
+}
+
+impl CoreRunner {
+    /// The tools a turn may use.
+    ///
+    /// This is the single list. `tool_catalog` reads it, so a grant can only be offered
+    /// for a tool that actually exists, and adding a tool cannot leave the settings
+    /// screen behind.
+    fn build_tools(&self) -> Result<Vec<Arc<dyn Tool>>, String> {
+        let files = Arc::new(
+            sunday_platform::LocalFiles::new(&self.workspace).map_err(|error| error.to_string())?,
+        );
+        Ok(vec![
+            Arc::new(sunday_tools::file_read::ReadFile::new(files.clone())),
+            Arc::new(sunday_tools::file_write::WriteFile::new(files)),
+        ])
+    }
+
+    /// What the settings screen may show, and what it may grant.
+    pub fn tool_catalog(&self) -> Vec<ToolDescriptor> {
+        let Ok(tools) = self.build_tools() else {
+            // A workspace that cannot be resolved means no tool can run, so an empty
+            // catalogue is the truth rather than an error the screen cannot act on.
+            return Vec::new();
+        };
+        tools
+            .iter()
+            .map(|tool| {
+                let spec = tool.spec();
+                ToolDescriptor {
+                    id: spec.id.clone(),
+                    description: spec.description.clone(),
+                    side_effect: spec.side_effect,
+                    permission: spec.permission,
+                }
+            })
+            .collect()
+    }
+
+    /// Replaces the grant policy for every future tool call.
+    ///
+    /// A call already decided keeps its decision: re-asking halfway through a turn would
+    /// mean a tool could be approved after it had started.
+    pub fn set_policy(&self, policy: GrantPolicy) {
+        self.policy.replace(policy);
+    }
+
+    /// The policy in force, for a screen that must show the truth.
+    pub fn policy_snapshot(&self) -> GrantPolicy {
+        self.policy.snapshot()
+    }
+}
+
 impl TurnRunner for CoreRunner {
     fn start_turn(
         &self,
@@ -247,17 +310,14 @@ impl TurnRunner for CoreRunner {
         cancel.reset();
         self.set_live(thread_id, true);
 
-        let files =
-            Arc::new(sunday_platform::LocalFiles::new(&self.workspace).map_err(|e| e.to_string())?);
-        let read = sunday_tools::file_read::ReadFile::new(files.clone());
-        let write = sunday_tools::file_write::WriteFile::new(files);
-        let tools: Vec<&dyn Tool> = vec![&read, &write];
+        let owned = self.build_tools()?;
+        let tools: Vec<&dyn Tool> = owned.iter().map(|tool| tool.as_ref()).collect();
 
         let env = Env {
             store: &self.store,
             model: self.model.as_ref(),
             tools: &tools,
-            approver: &self.policy as &dyn Approver,
+            approver: self.policy.as_ref() as &dyn Approver,
             cancel: &cancel,
             workspace: "local".into(),
             host: self.host_kind,
@@ -338,16 +398,13 @@ impl TurnRunner for CoreRunner {
         };
         let cancel = self.cancel_token(thread_id);
 
-        let files =
-            Arc::new(sunday_platform::LocalFiles::new(&self.workspace).map_err(|e| e.to_string())?);
-        let read = sunday_tools::file_read::ReadFile::new(files.clone());
-        let write = sunday_tools::file_write::WriteFile::new(files);
-        let tools: Vec<&dyn Tool> = vec![&read, &write];
+        let owned = self.build_tools()?;
+        let tools: Vec<&dyn Tool> = owned.iter().map(|tool| tool.as_ref()).collect();
         let env = Env {
             store: &self.store,
             model: self.model.as_ref(),
             tools: &tools,
-            approver: &self.policy as &dyn Approver,
+            approver: self.policy.as_ref() as &dyn Approver,
             cancel: &cancel,
             workspace: "local".into(),
             host: self.host_kind,

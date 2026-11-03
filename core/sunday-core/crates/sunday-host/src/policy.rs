@@ -86,6 +86,52 @@ impl Approver for GrantPolicy {
     }
 }
 
+/// A grant policy the host can change while turns are running.
+///
+/// The agent asks through `Approver` on every tool call, so swapping the policy under
+/// it takes effect on the next call rather than at the next launch. Writes are rare
+/// and reads are on the hot path, which is what a `RwLock` is for.
+#[derive(Debug)]
+pub struct LivePolicy {
+    inner: std::sync::RwLock<GrantPolicy>,
+}
+
+impl LivePolicy {
+    pub fn new(policy: GrantPolicy) -> Self {
+        Self {
+            inner: std::sync::RwLock::new(policy),
+        }
+    }
+
+    pub fn replace(&self, policy: GrantPolicy) {
+        // A poisoned lock would mean a panic while holding it; the policy is a plain
+        // value, so recovering the last written one is better than failing every
+        // future tool call.
+        match self.inner.write() {
+            Ok(mut guard) => *guard = policy,
+            Err(poisoned) => *poisoned.into_inner() = policy,
+        }
+    }
+
+    pub fn snapshot(&self) -> GrantPolicy {
+        match self.inner.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
+impl Approver for LivePolicy {
+    fn decide(&self, _call: &ToolCall, spec: &ToolSpec) -> Approval {
+        match self.inner.read() {
+            // The inherent method takes only the spec; the call is not consulted.
+            Ok(guard) => GrantPolicy::decide(&guard, spec),
+            // Failing closed: an unreadable policy must not approve anything.
+            Err(_) => Approval::Ask,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

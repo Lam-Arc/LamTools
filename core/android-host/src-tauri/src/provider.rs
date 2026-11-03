@@ -41,7 +41,17 @@ pub fn build_model(
         }
     };
 
-    let api_key = crate::secrets::read_api_key(dir).unwrap_or_default();
+    // A stored key that cannot be decrypted is a failure to report, not an empty key.
+    // Treating it as absent would present the endpoint as keyless and hide the cause
+    // until the provider answered with a 401.
+    let api_key = match crate::secrets::read_api_key(dir) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(Arc::new(Blocked::new(format!(
+                "the stored API key cannot be read: {error}"
+            ))))
+        }
+    };
     let key_present = !api_key.trim().is_empty();
     let path = bindings_path(dir);
     let mut book = ProviderBook::load(&path);

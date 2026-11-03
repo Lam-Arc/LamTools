@@ -374,22 +374,110 @@ def check_single_core(device: Device, check: Check) -> None:
     check.detail = "one process, one core start across repeated launches"
 
 
-def check_keyboard(device: Device, check: Check) -> None:
-    """Reported as blocked while the app has no text field to focus.
+def ime_shown(device: Device) -> bool:
+    """Whether the input method is on screen.
 
-    The onboarding screen has buttons only. The settings screen, which does have text
-    fields, is what makes this check possible; until then claiming anything about the
-    keyboard would be inventing it.
+    `mInputShown` is the window manager's own answer, so it covers a keyboard that was
+    raised by the webview's text field rather than only by a native EditText.
+    """
+    state = device.out("dumpsys input_method")
+    return "mInputShown=true" in state or "mIsInputViewShown=true" in state
+
+
+def tap_fraction(device: Device, x: float, y: float) -> bool:
+    size = device.display_size()
+    if size is None:
+        return False
+    device.shell(f"input tap {int(size[0] * x)} {int(size[1] * y)}")
+    return True
+
+
+def open_settings(device: Device) -> bool:
+    """Opens the settings overlay by tapping its entry point in the app window.
+
+    The button is drawn by the webview, so it has no accessibility node to address. The
+    position is derived from the window the app actually occupies rather than a constant:
+    the same button sits at the right edge, vertically centred.
+    """
+    size = device.display_size()
+    if size is None:
+        return False
+    width, height = size
+    device.shell(f"input tap {int(width * 0.98)} {int(height * 0.5)}")
+    time.sleep(3)
+    return True
+
+
+def check_keyboard_appears(device: Device, check: Check) -> None:
+    """Focusing a text field must raise the input method.
+
+    This is the half the app controls: the settings screen has inputs, and the webview
+    asks for the keyboard when one is focused.
     """
     start_fullscreen(device)
-    fields = device.out("dumpsys window windows")
-    has_input = "InputMethod" in device.out("dumpsys input_method") and "mServedInputConnection" in fields
-    check.evidence.append(f"app has a served input connection: {has_input}")
+    # First paint. Tapping before the webview has drawn lands on whatever happens to be
+    # there, which is how an earlier version navigated somewhere else entirely.
+    time.sleep(10)
+
+    if not tap_fraction(device, 0.98, 0.5):
+        check.status = "unsupported"
+        check.detail = "could not read the display size to reach the settings screen"
+        return
+    time.sleep(4)
+
+    # The endpoint field, then a couple of neighbours if the first tap misses. Retrying
+    # the field rather than the entry point matters: a second tap on the entry point
+    # would close the overlay again.
+    shown = False
+    for y in (0.148, 0.125, 0.175):
+        if not tap_fraction(device, 0.5, y):
+            break
+        time.sleep(3)
+        if ime_shown(device):
+            shown = True
+            break
+    check.evidence.append(f"input method after focusing a field: {shown}")
+    check.evidence.append(f"app pids: {device.pids()}")
+
+    if not device.pids():
+        check.status = "fail"
+        check.detail = "the app died when a text field was focused"
+        return
+    if not shown:
+        check.status = "fail"
+        check.detail = "focusing a text field raised no keyboard"
+        return
+
+    # Leave the screen through its own button so the next check starts clean.
+    for y in (0.5, 0.28, 0.35, 0.2, 0.42):
+        tap_fraction(device, 0.98, y)
+        time.sleep(2)
+        if not ime_shown(device):
+            check.evidence.append(f"left the screen with the button at {int(y * 100)}%")
+            break
+
+    check.status = "pass"
+    check.detail = "focusing a text field raised the keyboard and the app stayed alive"
+
+
+def check_keyboard_dismissal(device: Device, check: Check) -> None:
+    """Not asserted, with the attempts recorded.
+
+    A user closes the keyboard by tapping away or by pressing back. On this image neither
+    is observable from adb: `mInputShown` stays true after the field loses focus, `adb
+    shell ime` offers no hide, and BACK finishes the activity. Closing the settings
+    overlay did clear it once by hand, which is not reproducible enough to assert.
+    """
+    state = device.out("dumpsys input_method")
+    check.evidence.append("dumpsys input_method reports mInputShown=" + str(ime_shown(device)))
+    check.evidence.append("the app's own back button cleared it once by hand, not reliably")
+    check.evidence.append("`adb shell ime` has no hide subcommand; BACK finishes the activity")
     check.status = "unsupported"
     check.detail = (
-        "no text field to focus on the onboarding screen; this check belongs with the "
-        "settings screen, which has one"
+        "keyboard dismissal is the platform IME's behaviour and is not observable from "
+        "adb on this image; keep it for real-device acceptance"
     )
+    _ = state
 
 
 CHECKS = [
@@ -401,7 +489,8 @@ CHECKS = [
     ("covered by a fullscreen app", check_covered_by_another_app),
     ("rotation in freeform", check_rotation_in_freeform),
     ("single core instance", check_single_core),
-    ("keyboard show and hide", check_keyboard),
+    ("keyboard appears for a text field", check_keyboard_appears),
+    ("keyboard dismissal", check_keyboard_dismissal),
 ]
 
 

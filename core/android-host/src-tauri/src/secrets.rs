@@ -29,6 +29,8 @@ const PLAINTEXT_FILE: &str = "core.secret";
 /// Which storage is actually in use right now. Reported to the UI so the claim can be
 /// checked instead of trusted.
 #[derive(Clone, Debug, PartialEq, Eq)]
+// `Sealed` and `Broken` only exist on Android; the host target never builds them.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub enum Backend {
     /// Sealed by the Android keystore.
     Sealed,
@@ -108,12 +110,23 @@ pub fn backend() -> Backend {
 /// What the settings screen needs to tell the truth about the key.
 pub fn storage_view(dir: &Path) -> serde_json::Value {
     let backend = backend();
+    // Reading the sealed value is the only way to know the key is usable. A file that
+    // exists but cannot be opened is not a key, and reporting it as one would send the
+    // user to the provider to find out.
+    let readable = match backend {
+        Backend::Sealed => match read_optional(&sealed_path(dir)) {
+            Ok(Some(blob)) => crate::keystore::open(&blob).is_ok(),
+            _ => false,
+        },
+        _ => false,
+    };
     serde_json::json!({
         "kind": backend.kind(),
         "reason": backend.reason(),
         // A plaintext file still on disk means an upgrade has not happened yet.
         "needs_migration": plaintext_path(dir).exists(),
         "has_key": has_api_key(dir),
+        "readable": readable,
     })
 }
 

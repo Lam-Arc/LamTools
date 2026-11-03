@@ -9,8 +9,6 @@
 //! On a non-Android build every entry point reports that the keystore is unavailable,
 //! which is true. The desktop host keeps its owner-only file and says so.
 
-use sunday_protocol::CoreError;
-
 #[cfg(target_os = "android")]
 mod bridge {
     use std::sync::OnceLock;

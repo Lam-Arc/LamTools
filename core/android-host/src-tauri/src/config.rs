@@ -85,6 +85,17 @@ pub fn load_or_default(dir: &Path) -> Result<CoreConfig, Box<dyn std::error::Err
     Ok(serde_json::from_str(&text).unwrap_or_default())
 }
 
+/// Writes the configuration back.
+///
+/// Owner-only permissions, because the file names the provider and the endpoint even
+/// though it never holds the key.
+pub fn save(dir: &Path, config: &CoreConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let text = serde_json::to_string_pretty(config)?;
+    sunday_host::private_file::write(&path_in(dir), &text, "core config")
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// What the UI may see. Note the absence of any key field.
 ///
 /// `endpoint_approved` is the answer to "why is the model not answering": the

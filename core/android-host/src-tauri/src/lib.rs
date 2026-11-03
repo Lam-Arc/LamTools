@@ -31,6 +31,7 @@ pub mod keystore;
 pub mod lifecycle;
 pub mod provider;
 pub mod secrets;
+pub mod settings;
 
 /// Bridges the core's event stream to the webview.
 ///
@@ -122,11 +123,6 @@ fn lifecycle_resume(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Valu
     apply_lifecycle(&state, "resume")
 }
 
-/// Model configuration, without ever returning the key.
-#[tauri::command]
-fn model_config(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
-    config::public_view(&state.data_dir)
-}
 
 /// The Android Activity callbacks, arriving over JNI.
 ///
@@ -207,8 +203,11 @@ pub fn run() {
             // it cannot answer "is the key sealed or sitting in a file".
             let storage = secrets::storage_view(&data_dir);
             println!(
-                "credential storage: {} (needs migration: {})",
-                storage["kind"], storage["needs_migration"]
+                "credential storage: {} (needs migration: {}, key present: {}, readable: {})",
+                storage["kind"],
+                storage["needs_migration"],
+                storage["has_key"],
+                storage["readable"]
             );
             if let Some(reason) = storage["reason"].as_str() {
                 println!("credential storage unavailable: {reason}");
@@ -273,10 +272,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             core_rpc,
             core_info,
+            settings::model_config,
+            settings::save_model_config,
+            settings::approve_endpoint,
+            settings::set_api_key,
+            settings::clear_api_key,
+            settings::tool_catalog,
+            settings::set_tool_grant,
             lifecycle_signal,
             lifecycle_pause,
             lifecycle_resume,
-            model_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Android host");
