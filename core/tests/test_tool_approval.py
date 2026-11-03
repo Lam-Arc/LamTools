@@ -28,13 +28,25 @@ def test_approval_gate_auto_allows_read_tool(tmp_path: Path):
 
     decision = gate.check("read_file", {"path": "notes.txt"})
 
+    # Assert the decision fields the caller acts on; the human-readable reason
+    # is localization text and must not be the contract.
     assert decision.allowed is True
-    assert "Auto-approved" in decision.reason
+    assert decision.requires_approval is False
+    assert decision.blocked is False
+    assert decision.level == 1
 
 
 def test_approval_gate_allows_path_escape_without_asking(tmp_path: Path):
-    """工作目录之外不再询问（2026-09-27 产品决定），直接放行给执行层。"""
-    gate = ApprovalGate(work_root=tmp_path, tool_permissions={"write_file": AUTO_ALLOW})
+    """工作目录之外不再询问（2026-09-27 产品决定），直接放行给执行层。
+
+    The subject here is the outside-workdir question, not the operation level
+    of a write, so the preset is the one that settles level-2 writes.
+    """
+    gate = ApprovalGate(
+        work_root=tmp_path,
+        tool_permissions={"write_file": AUTO_ALLOW},
+        permission_preset="auto",
+    )
 
     decision = gate.check("write_file", {"path": "../outside.txt"})
 
@@ -49,6 +61,7 @@ def test_approval_gate_opens_path_escape_when_outside_access_is_allowed(tmp_path
         work_root=tmp_path,
         tool_permissions={"write_file": AUTO_ALLOW},
         allow_access_outside_workdir=True,
+        permission_preset="auto",
     )
 
     decision = gate.check("write_file", {"path": "../outside.txt"})
@@ -93,9 +106,11 @@ def test_approval_gate_requires_user_for_write(tmp_path: Path):
 
     decision = gate.check("write_file", {"path": "inside.txt"})
 
+    # "allowed" means "authorized without asking"; a level-2 write is not.
     assert decision.allowed is False
     assert decision.requires_approval is True
-    assert "requires user confirmation" in decision.reason
+    assert decision.permission_tier == ASK_USER
+    assert decision.level == 2
 
 
 def test_approval_gate_applies_command_policy(tmp_path: Path):
@@ -109,9 +124,13 @@ def test_approval_gate_applies_command_policy(tmp_path: Path):
     dangerous = gate.check("run_command", {"command": "git reset --hard"})
 
     assert regular.allowed is True
-    assert regular.reason == "Auto-approved by permission preset"
+    assert regular.requires_approval is False
+    assert regular.auto_approved is True
+    # A destructive command is level 3, which the auto-approve policy settles
+    # only up to the auto preset's threshold, so it still asks.
     assert dangerous.allowed is False
     assert dangerous.requires_approval is True
+    assert dangerous.level == 3
 
 
 def test_shell_structure_bypasses_are_never_auto_allowed():
