@@ -117,6 +117,9 @@ pub fn public_view(dir: &Path) -> serde_json::Value {
         "allow_insecure_local": config.allow_insecure_local,
         "endpoint_approved": endpoint_approved,
         "endpoint_prompt": endpoint_prompt,
+        // Where the key actually lives, and why, so the settings screen never has to
+        // guess whether it may claim system-level storage.
+        "credential_storage": crate::secrets::storage_view(dir),
     })
 }
 

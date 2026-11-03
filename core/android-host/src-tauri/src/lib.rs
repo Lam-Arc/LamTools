@@ -27,6 +27,7 @@ use sunday_host::runner::{CoreOptions, CoreRunner};
 use tauri::{Emitter, Manager};
 
 pub mod config;
+pub mod keystore;
 pub mod lifecycle;
 pub mod provider;
 pub mod secrets;
@@ -201,6 +202,18 @@ pub fn run() {
 
             // The API key comes from the platform secret store, not from the JSON
             // config: a key in a JSON file is a key in every backup and log.
+            // Which credential storage is actually in use, on the record. This is the
+            // only place the keystore probe runs at startup, and a support log without
+            // it cannot answer "is the key sealed or sitting in a file".
+            let storage = secrets::storage_view(&data_dir);
+            println!(
+                "credential storage: {} (needs migration: {})",
+                storage["kind"], storage["needs_migration"]
+            );
+            if let Some(reason) = storage["reason"].as_str() {
+                println!("credential storage unavailable: {reason}");
+            }
+
             let store = sunday_store::Store::open(data_dir.join("core.db"))?;
             // The key is only ever handed to an endpoint the user approved. When it
             // has not been, this returns a model that refuses with the reason instead

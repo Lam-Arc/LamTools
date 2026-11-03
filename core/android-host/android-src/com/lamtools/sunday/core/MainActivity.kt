@@ -6,6 +6,10 @@ import androidx.activity.enableEdgeToEdge
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    // Touch the keystore bridge before Tauri starts. Its initialiser is what hands the
+    // JavaVM to Rust, and Kotlin only initialises an object when something refers to
+    // it: Rust runs its setup inside `super.onCreate`, earlier than any callback.
+    KeystoreBridge.register()
     super.onCreate(savedInstanceState)
   }
 
