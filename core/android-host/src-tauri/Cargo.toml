@@ -1,0 +1,34 @@
+[package]
+name = "sunday-android-host"
+version = "0.1.0"
+description = "Minimal Tauri host that runs the Rust core inside an Android app"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+# This host exists to answer one question: does the same Rust core run inside a
+# real Android app sandbox, with a WebView UI talking to it? It deliberately does
+# not include the desktop shell's tray icon, pet overlay or window management:
+# those are desktop concerns and would not compile or make sense here.
+
+[lib]
+name = "sunday_android_host_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The core, linked in-process rather than spawned as a binary. On Android a
+# separate executable would need its own packaging and would not share the app
+# sandbox path in the way a user's data actually lives.
+sunday-protocol = { path = "../../sunday-core/crates/sunday-protocol" }
+sunday-store = { path = "../../sunday-core/crates/sunday-store" }
+sunday-agent = { path = "../../sunday-core/crates/sunday-agent" }
+sunday-platform = { path = "../../sunday-core/crates/sunday-platform" }
+sunday-tools = { path = "../../sunday-core/crates/sunday-tools" }
+sunday-llm = { path = "../../sunday-core/crates/sunday-llm" }
+sunday-host = { path = "../../sunday-core/crates/sunday-host" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

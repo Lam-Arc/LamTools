@@ -201,6 +201,17 @@ impl LlmClient {
         };
 
         loop {
+            // Cancellation is checked between reads, not only at the end: the
+            // point of stopping is to stop pulling bytes and holding the socket.
+            // A chunk already in flight is discarded rather than delivered.
+            if request.cancel.is_cancelled() {
+                // Dropping the response here closes the connection, which is the
+                // only "stop" this client can honestly offer. Whether the
+                // provider stops generating (or billing) is not ours to decide.
+                return Err(Failure::fatal(CoreError::Rejected {
+                    reason: "cancelled while reading the stream".into(),
+                }));
+            }
             let next = tokio::time::timeout(self.config.idle_timeout, stream.next()).await;
             let chunk = match next {
                 Err(_) => {
@@ -243,6 +254,11 @@ impl Model for LlmClient {
         request: ModelRequest,
         sink: &mut (dyn FnMut(ModelDelta) + Send),
     ) -> Result<ModelTurn, CoreError> {
+        if request.cancel.is_cancelled() {
+            return Err(CoreError::Rejected {
+                reason: "cancelled before the request was sent".into(),
+            });
+        }
         let mut delivered = false;
         let mut attempt = 0u32;
         loop {
@@ -250,6 +266,11 @@ impl Model for LlmClient {
             match self.attempt(&request, sink, &mut delivered).await {
                 Ok(turn) => return Ok(turn),
                 Err(failure) => {
+                    // Cancellation is not a provider fault: retrying it would
+                    // resume the very work the user stopped.
+                    if matches!(failure.error, CoreError::Rejected { .. }) {
+                        return Err(failure.error);
+                    }
                     // A retry after the caller already saw bytes would duplicate
                     // text in the transcript. Refuse, and let the caller decide.
                     let can_retry =

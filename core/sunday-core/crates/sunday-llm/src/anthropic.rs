@@ -322,6 +322,7 @@ mod tests {
             }],
             temperature: None,
             max_output_tokens: None,
+            cancel: Default::default(),
         }
     }
 

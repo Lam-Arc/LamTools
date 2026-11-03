@@ -4,16 +4,16 @@
 //! file, the real loop, the real store. Guidance is injected from inside the
 //! model call, which is exactly when a user would type.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use sunday_agent::{
     resume_turn, run_turn, Approval, Approver, AutoApprove, ContextPort, Env, TurnInput,
 };
 use sunday_context::{Policy, Summarizer};
 use sunday_protocol::{
-    BudgetReason, CoreError, EventKind, HostKind, Message, Model, ModelDelta, ModelRequest,
-    ModelTurn, Permission, RunBudget, RunOutcome, SideEffect, Tool, ToolCall, ToolCtx, ToolOutput,
-    ToolSpec,
+    BudgetReason, CancelToken, CoreError, EventKind, HostKind, Message, Model, ModelDelta,
+    ModelRequest, ModelTurn, Permission, RunBudget, RunOutcome, SideEffect, Tool, ToolCall,
+    ToolCtx, ToolOutput, ToolSpec,
 };
 use sunday_store::Store;
 
@@ -205,7 +205,7 @@ async fn a_steer_written_during_a_model_call_takes_effect_next_round() {
         .with_store(shared.clone())
         .injecting(0, "actually use b.txt");
 
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &shared,
         model: &model,
@@ -275,7 +275,7 @@ async fn a_steer_written_while_an_approval_is_pending_survives_the_resume() {
         turn_calling("c1", "write_file"),
         turn_text("finished"),
     ]);
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &shared,
         model: &model,
@@ -356,7 +356,7 @@ async fn compaction_runs_when_over_budget_and_the_turn_continues() {
         turn_calling("c3", "write_file"),
         turn_text("finally done"),
     ]);
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let policy = Policy {
         trigger_tokens: 20,
         keep_recent: 2,
@@ -417,7 +417,7 @@ async fn compaction_stays_off_when_the_budget_is_not_threatened() {
     let shared = Arc::new(Mutex::new(Store::open(dir.path().join("c.db")).unwrap()));
     let model = Scripted::new(vec![turn_text("short")]);
     let tools: Vec<&dyn Tool> = vec![];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let summarizer = Fixed(String::new());
     let env = Env {
         store: &shared,
@@ -452,7 +452,7 @@ async fn a_slow_model_is_stopped_by_the_wall_clock_budget() {
         turn_calling("c3", "write_file"),
     ])
     .with_delay(20);
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &shared,
         model: &model,

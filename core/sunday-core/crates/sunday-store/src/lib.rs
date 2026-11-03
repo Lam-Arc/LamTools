@@ -26,11 +26,14 @@ use sunday_protocol::{
     SideEffect, ToolCall, ToolStage,
 };
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 /// One entry per version above 1. Applied in order on an existing database, so
 /// an upgrade path is exercised by tests instead of being assumed.
-const MIGRATIONS: &[(u32, &str)] = &[(2, include_str!("schema_v2.sql"))];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (2, include_str!("schema_v2.sql")),
+    (3, include_str!("schema_v3.sql")),
+];
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +70,17 @@ pub struct RecoveryPlan {
     pub abandoned_receipts: Vec<String>,
     /// Sub-agents that were running when the process died.
     pub orphaned_children: Vec<String>,
+}
+
+/// One queued message, as the UI shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueItem {
+    pub queue_item_id: String,
+    pub thread_id: String,
+    pub position: u64,
+    /// The stored input items, as JSON, exactly as the client sent them.
+    pub input: String,
+    pub status: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,6 +529,339 @@ impl Store {
 
         tx.commit().map_err(CoreError::storage)?;
         Ok(seq)
+    }
+
+    /// Appends several events as one atomic transaction.
+    ///
+    /// Why this exists: durability is not negotiable (`synchronous=FULL`), so
+    /// the only honest way to make writes cheaper is to do fewer commits. One
+    /// fsync per logical operation instead of one per event.
+    ///
+    /// It keeps every guarantee `append_event` makes:
+    ///
+    ///   * `seq` stays contiguous and in the order given
+    ///   * a repeated `event_id` is skipped, not duplicated
+    ///   * nothing is visible until the single commit, so a crash mid-batch
+    ///     leaves either all of it or none of it
+    ///
+    /// Returns the seq of each event that was actually appended, in input order.
+    /// An event already present is omitted from the result.
+    pub fn append_events(
+        &mut self,
+        workspace: &str,
+        thread: &str,
+        events: &[(String, EventKind, Value)],
+    ) -> Result<Vec<u64>, CoreError> {
+        if events.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(CoreError::storage)?;
+
+        // One read of the high-water marks for the whole batch, instead of two
+        // per event. A MAX(seq) scan per event is the other half of the cost.
+        let mut seq: u64 = {
+            let max: Option<i64> = tx
+                .query_row(
+                    "SELECT MAX(seq) FROM journal_events WHERE workspace_id = ?1 AND thread_id = ?2",
+                    params![workspace, thread],
+                    |row| row.get(0),
+                )
+                .map_err(CoreError::storage)?;
+            max.map(|v| v as u64).unwrap_or(0)
+        };
+        let mut revision: u64 = {
+            let value: Option<i64> = tx
+                .query_row(
+                    "SELECT revision FROM thread_revisions WHERE thread_id = ?1",
+                    params![thread],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(CoreError::storage)?;
+            value.unwrap_or(0) as u64
+        };
+
+        // The projection is read once and written once, not per event.
+        let mut projection = Self::projection_in_tx(&tx, thread)?;
+        let created = now_ms();
+        let mut appended = Vec::with_capacity(events.len());
+
+        for (event_id, kind, payload) in events {
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT seq FROM journal_events WHERE event_id = ?1",
+                    params![event_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(CoreError::storage)?;
+            if existing.is_some() {
+                // Already durable. Skipping keeps a retry idempotent.
+                continue;
+            }
+            seq += 1;
+            revision += 1;
+            tx.execute(
+                "INSERT INTO journal_events (workspace_id, thread_id, seq, event_id, kind, payload, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    workspace,
+                    thread,
+                    seq as i64,
+                    event_id,
+                    kind.as_str(),
+                    payload.to_string(),
+                    created
+                ],
+            )
+            .map_err(CoreError::storage)?;
+            projection.record(*kind, seq, revision);
+            appended.push(seq);
+        }
+
+        if appended.is_empty() {
+            // Nothing new. Do not bump the revision: a no-op must not look like
+            // a change to a client watching revisions.
+            return Ok(appended);
+        }
+
+        tx.execute(
+            "INSERT INTO thread_revisions (thread_id, revision) VALUES (?1, ?2) \
+             ON CONFLICT(thread_id) DO UPDATE SET revision = ?2",
+            params![thread, revision as i64],
+        )
+        .map_err(CoreError::storage)?;
+        Self::write_projection(&tx, &projection)?;
+
+        tx.commit().map_err(CoreError::storage)?;
+        Ok(appended)
+    }
+
+    /// Folds the write-ahead log back into the main file and truncates it.
+    ///
+    /// Two uses: a maintenance/measurement hook, and an honest way to report the
+    /// steady-state disk cost of an event. Without it, "bytes per event" is
+    /// whatever fraction of the WAL happens to be un-checkpointed, which is not
+    /// a property of the data.
+    pub fn checkpoint(&self) -> Result<(), CoreError> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(CoreError::storage)
+    }
+
+    // ---- queue --------------------------------------------------------
+
+    /// A queued message: what the user typed while a turn was still running.
+    ///
+    /// Stored rather than held in memory so a restart does not silently swallow
+    /// what someone typed, and so `queue/create` has something real to report.
+    pub fn enqueue(&mut self, thread: &str, item_id: &str, input: &str) -> Result<u64, CoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(CoreError::storage)?;
+        let position: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(position), 0) + 1 FROM queue_items WHERE thread_id = ?1",
+                params![thread],
+                |row| row.get(0),
+            )
+            .map_err(CoreError::storage)?;
+        let now = now_ms();
+        // Same identity rule as the journal: a retried create must not duplicate.
+        tx.execute(
+            "INSERT INTO queue_items (queue_item_id, thread_id, position, input_json, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?5) \
+             ON CONFLICT(queue_item_id) DO NOTHING",
+            params![item_id, thread, position, json!({"text": input}).to_string(), now],
+        )
+        .map_err(CoreError::storage)?;
+        tx.commit().map_err(CoreError::storage)?;
+        self.queue_position(thread, item_id)
+    }
+
+    fn queue_position(&self, thread: &str, item_id: &str) -> Result<u64, CoreError> {
+        self.conn
+            .query_row(
+                "SELECT position FROM queue_items WHERE thread_id = ?1 AND queue_item_id = ?2",
+                params![thread, item_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(CoreError::storage)
+            .map(|value| value.unwrap_or(0) as u64)
+    }
+
+    /// The queue in the order the user arranged it.
+    pub fn queue(&self, thread: &str) -> Result<Vec<QueueItem>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT queue_item_id, thread_id, position, input_json, status \
+                 FROM queue_items WHERE thread_id = ?1 ORDER BY position, created_at",
+            )
+            .map_err(CoreError::storage)?;
+        let rows = stmt
+            .query_map(params![thread], |row| {
+                Ok(QueueItem {
+                    queue_item_id: row.get(0)?,
+                    thread_id: row.get(1)?,
+                    position: row.get::<_, i64>(2)? as u64,
+                    input: row.get(3)?,
+                    status: row.get(4)?,
+                })
+            })
+            .map_err(CoreError::storage)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(CoreError::storage)?);
+        }
+        Ok(out)
+    }
+
+    pub fn update_queue_item(
+        &mut self,
+        thread: &str,
+        item_id: &str,
+        input: &str,
+    ) -> Result<bool, CoreError> {
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE queue_items SET input_json = ?3, updated_at = ?4 \
+                 WHERE thread_id = ?1 AND queue_item_id = ?2",
+                params![
+                    thread,
+                    item_id,
+                    json!({"text": input}).to_string(),
+                    now_ms()
+                ],
+            )
+            .map_err(CoreError::storage)?;
+        Ok(changed > 0)
+    }
+
+    pub fn delete_queue_item(&mut self, thread: &str, item_id: &str) -> Result<bool, CoreError> {
+        let changed = self
+            .conn
+            .execute(
+                "DELETE FROM queue_items WHERE thread_id = ?1 AND queue_item_id = ?2",
+                params![thread, item_id],
+            )
+            .map_err(CoreError::storage)?;
+        Ok(changed > 0)
+    }
+
+    /// Rewrites the whole order in one transaction, so a reorder cannot leave
+    /// duplicate positions behind.
+    pub fn reorder_queue(&mut self, thread: &str, order: &[String]) -> Result<(), CoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(CoreError::storage)?;
+        for (index, item_id) in order.iter().enumerate() {
+            tx.execute(
+                "UPDATE queue_items SET position = ?3, updated_at = ?4 \
+                 WHERE thread_id = ?1 AND queue_item_id = ?2",
+                params![thread, item_id, index as i64 + 1, now_ms()],
+            )
+            .map_err(CoreError::storage)?;
+        }
+        tx.commit().map_err(CoreError::storage)?;
+        Ok(())
+    }
+
+    /// Marks one queued item as taken by the loop, so it is not sent twice.
+    pub fn mark_queue_dispatched(
+        &mut self,
+        thread: &str,
+        item_id: &str,
+    ) -> Result<bool, CoreError> {
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE queue_items SET status = 'dispatched', updated_at = ?3 \
+                 WHERE thread_id = ?1 AND queue_item_id = ?2 AND status = 'queued'",
+                params![thread, item_id, now_ms()],
+            )
+            .map_err(CoreError::storage)?;
+        Ok(changed > 0)
+    }
+
+    // ---- history ------------------------------------------------------
+
+    /// One page of a thread's history, newest window first.
+    ///
+    /// Pagination is by whole turns, because half a turn is not something the
+    /// transcript can render. `before_seq` is the cursor: pass the smallest seq
+    /// the client already holds and get the page before it.
+    pub fn history_page(
+        &self,
+        thread: &str,
+        before_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<Event>, bool), CoreError> {
+        let limit = limit.clamp(1, 500);
+        // The ceiling is stored as INTEGER, so it must be built in i64's range.
+        // `u64::MAX as i64` is -1, which would silently return no rows at all for
+        // the newest page: the first page of every thread would look empty.
+        let ceiling: i64 = before_seq
+            .map(|seq| seq.min(i64::MAX as u64) as i64)
+            .unwrap_or(i64::MAX);
+        // Ask for one extra row to learn whether an older page exists without a
+        // second count query.
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT thread_id, seq, event_id, kind, payload FROM journal_events \
+                 WHERE thread_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
+            )
+            .map_err(CoreError::storage)?;
+        let rows = stmt
+            .query_map(params![thread, ceiling, limit as i64 + 1], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(CoreError::storage)?;
+        let mut collected = Vec::new();
+        for row in rows {
+            let (thread_id, seq, event_id, kind, payload) = row.map_err(CoreError::storage)?;
+            collected.push(Event {
+                thread_id,
+                seq,
+                event_id,
+                kind: EventKind::parse(&kind).ok_or_else(|| CoreError::Storage {
+                    reason: format!("unknown event kind {kind}"),
+                })?,
+                payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+            });
+        }
+        let has_more = collected.len() > limit;
+        if has_more {
+            collected.truncate(limit);
+        }
+        // Return them oldest-first, which is the order a transcript renders in.
+        collected.reverse();
+        Ok((collected, has_more))
+    }
+
+    pub fn event_count(&self, thread: &str) -> Result<u64, CoreError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM journal_events WHERE thread_id = ?1",
+                params![thread],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(CoreError::storage)
+            .map(|value| value as u64)
     }
 
     pub fn finish_receipt(

@@ -255,6 +255,7 @@ mod tests {
             }],
             temperature: Some(0.2),
             max_output_tokens: Some(512),
+            cancel: Default::default(),
         }
     }
 

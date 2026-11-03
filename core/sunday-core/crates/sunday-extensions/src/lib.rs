@@ -11,10 +11,12 @@
 //! cancel flag per child, which is runtime state and cannot outlive the process.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use sunday_agent::{run_turn, Approver, Env, TurnInput};
-use sunday_protocol::{CoreError, HostKind, Model, Permission, RunBudget, RunOutcome, Tool};
+use sunday_protocol::{
+    CancelToken, CoreError, HostKind, Model, Permission, RunBudget, RunOutcome, Tool,
+};
 use sunday_store::{ChildRecord, ChildStatus, Store};
 
 /// Children never choose a provider. The host supplies this.
@@ -35,7 +37,7 @@ pub struct SubAgentHub {
     factory: Arc<dyn ModelFactory>,
     max_concurrent: usize,
     running: AtomicUsize,
-    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    cancels: Mutex<HashMap<String, CancelToken>>,
     /// Built once per child at spawn time. Building it twice would ask a host
     /// for two clients and two sets of credentials for one sub-agent.
     models: Mutex<HashMap<String, Arc<dyn Model>>>,
@@ -106,7 +108,7 @@ impl SubAgentHub {
         self.cancels
             .lock()
             .unwrap()
-            .insert(child_id.clone(), Arc::new(AtomicBool::new(false)));
+            .insert(child_id.clone(), CancelToken::new());
         self.models.lock().unwrap().insert(child_id, model);
         Ok(record)
     }
@@ -140,7 +142,7 @@ impl SubAgentHub {
             .unwrap()
             .get(child_id)
             .cloned()
-            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+            .unwrap_or_default();
 
         // Permission narrowing happens here and nowhere else.
         let tools: Vec<&dyn Tool> = all_tools
@@ -207,7 +209,7 @@ impl SubAgentHub {
         let flag = self.cancels.lock().unwrap().get(child_id).cloned();
         match flag {
             Some(flag) => {
-                flag.store(true, Ordering::SeqCst);
+                flag.cancel();
                 Ok(true)
             }
             None => {

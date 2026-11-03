@@ -164,7 +164,7 @@ async fn run_once(
     let read = ReadFile::new(files.clone());
     let write = WriteFile::new(files);
     let tools: Vec<&dyn sunday_protocol::Tool> = vec![&read, &write];
-    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let cancel = sunday_protocol::CancelToken::new();
 
     let auto = AutoApprove;
     let policy = PolicyApprover;
@@ -357,7 +357,7 @@ async fn approve(args: &[String]) -> ExitCode {
     let read = ReadFile::new(files.clone());
     let write = WriteFile::new(files);
     let tools: Vec<&dyn sunday_protocol::Tool> = vec![&read, &write];
-    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let cancel = sunday_protocol::CancelToken::new();
     let auto = AutoApprove;
     let policy = PolicyApprover;
     let approver_ref: &dyn Approver = if has_flag(args, "--auto-approve") {

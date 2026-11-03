@@ -1,13 +1,14 @@
 //! Behaviour tests for the turn loop, against the real store.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use sunday_agent::{
     resume_turn, run_turn, Approval, Approver, AutoApprove, Env, ThreadQueue, TurnInput,
 };
 use sunday_protocol::{
-    BudgetReason, CoreError, EventKind, HostKind, Model, ModelDelta, ModelRequest, ModelTurn,
-    Permission, RunBudget, RunOutcome, SideEffect, Tool, ToolCall, ToolCtx, ToolOutput, ToolSpec,
+    BudgetReason, CancelToken, CoreError, EventKind, HostKind, Model, ModelDelta, ModelRequest,
+    ModelTurn, Permission, RunBudget, RunOutcome, SideEffect, Tool, ToolCall, ToolCtx, ToolOutput,
+    ToolSpec,
 };
 use sunday_store::Store;
 
@@ -147,7 +148,7 @@ async fn a_complete_turn_writes_an_ordered_journal() {
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("write_file", SideEffect::NonIdempotent, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
 
     let env = Env {
         store: &store,
@@ -216,7 +217,7 @@ async fn a1_the_round_budget_stops_a_model_that_never_finishes() {
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("ping", SideEffect::Pure, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &store,
         model: &model,
@@ -252,7 +253,7 @@ async fn a1b_the_tool_call_budget_is_enforced_separately() {
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("ping", SideEffect::Pure, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &store,
         model: &model,
@@ -284,7 +285,11 @@ async fn a2_a_cancelled_turn_runs_no_tool_at_all() {
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("write_file", SideEffect::NonIdempotent, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(true);
+    let cancel = {
+        let t = CancelToken::new();
+        t.cancel();
+        t
+    };
     let env = Env {
         store: &store,
         model: &model,
@@ -324,7 +329,7 @@ async fn a3_an_approval_stops_the_turn_and_resuming_finishes_it_without_replayin
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("write_file", SideEffect::NonIdempotent, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &store,
         model: &model,
@@ -388,7 +393,7 @@ async fn a3b_resuming_with_a_tampered_digest_is_refused() {
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("write_file", SideEffect::NonIdempotent, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &store,
         model: &model,
@@ -438,7 +443,7 @@ async fn a4_an_unknown_outcome_stops_the_turn_and_never_retries() {
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("write_file", SideEffect::NonIdempotent, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &store,
         model: &model,
@@ -500,7 +505,7 @@ async fn a_failing_tool_is_recorded_as_failed_and_the_turn_continues() {
     let mut tool = CountingTool::new("boom", SideEffect::Pure, runs.clone());
     tool.fail = true;
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &store,
         model: &model,
@@ -532,7 +537,7 @@ async fn an_unknown_tool_name_is_refused_before_anything_runs() {
     let runs = Arc::new(AtomicUsize::new(0));
     let tool = CountingTool::new("real_tool", SideEffect::Pure, runs.clone());
     let tools: Vec<&dyn Tool> = vec![&tool];
-    let cancel = AtomicBool::new(false);
+    let cancel = CancelToken::new();
     let env = Env {
         store: &store,
         model: &model,

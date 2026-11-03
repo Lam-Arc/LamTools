@@ -6,12 +6,11 @@
 //! HTTP or touches a file.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use sunday_context::{Policy, Summarizer};
 use sunday_protocol::{
-    BudgetReason, CoreError, EventKind, HostKind, Message, Model, ModelDelta, ModelRequest,
-    RunBudget, RunOutcome, Tool, ToolCall, ToolCtx, ToolSpec, WorkspaceId,
+    BudgetReason, CancelToken, CoreError, EventKind, HostKind, Message, Model, ModelDelta,
+    ModelRequest, RunBudget, RunOutcome, Tool, ToolCall, ToolCtx, ToolSpec, WorkspaceId,
 };
 use sunday_store::{Continuation, Guidance, Store};
 
@@ -47,7 +46,10 @@ pub struct Env<'a> {
     pub model: &'a dyn Model,
     pub tools: &'a [&'a dyn Tool],
     pub approver: &'a dyn Approver,
-    pub cancel: &'a AtomicBool,
+    /// The same token the host and the model client hold, so a Stop reaches all
+    /// three. It replaces a bare `AtomicBool` because a token can be handed to
+    /// an async HTTP request without the request having to know about the loop.
+    pub cancel: &'a CancelToken,
     pub workspace: WorkspaceId,
     pub host: HostKind,
     /// `None` disables compaction entirely, which is what most tests want.
@@ -396,7 +398,7 @@ async fn drive(
     let started = std::time::Instant::now();
 
     for round in 0..budget.max_rounds {
-        if env.cancel.load(Ordering::SeqCst) {
+        if env.cancel.is_cancelled() {
             env.emit(
                 thread,
                 &format!("{thread}:{turn_id}:{phase}:{round}:cancelled"),
@@ -451,7 +453,7 @@ async fn drive(
                 streamed.push_str(&text);
             }
         };
-        let turn = env
+        let turn = match env
             .model
             .stream(
                 ModelRequest {
@@ -460,10 +462,31 @@ async fn drive(
                     tools: visible.clone(),
                     temperature: None,
                     max_output_tokens: None,
+                    // The same token the loop checks, so a Stop during the model
+                    // call reaches the HTTP stream instead of waiting for the
+                    // next round boundary.
+                    cancel: env.cancel.clone(),
                 },
                 &mut sink,
             )
-            .await?;
+            .await
+        {
+            Ok(turn) => turn,
+            Err(error) => {
+                // A cancel is a normal outcome, not a failure the user should be
+                // shown as an error. The turn stops where it is.
+                if env.cancel.is_cancelled() {
+                    env.emit(
+                        thread,
+                        &format!("{thread}:{turn_id}:{phase}:{round}:cancelled"),
+                        EventKind::RunCancelled,
+                        serde_json::json!({"reason": "model call cancelled"}),
+                    );
+                    return Ok(RunOutcome::Cancelled);
+                }
+                return Err(error);
+            }
+        };
 
         env.emit(
             thread,
@@ -491,6 +514,20 @@ async fn drive(
         });
 
         for call in turn.tool_calls {
+            // Invariant I8: after cancel no new tool call starts. Checked per
+            // call, not once per round, because the model may return several and
+            // the user may press Stop between them.
+            if env.cancel.is_cancelled() {
+                env.emit(
+                    thread,
+                    &format!("{thread}:{turn_id}:{phase}:{round}:cancelled"),
+                    EventKind::RunCancelled,
+                    serde_json::json!({"reason": "cancel before tool dispatch"}),
+                );
+                let mut store = env.store.lock().unwrap();
+                store.clear_continuation(thread)?;
+                return Ok(RunOutcome::Cancelled);
+            }
             if tool_calls_used >= budget.max_tool_calls {
                 return Ok(RunOutcome::BudgetExhausted {
                     reason: BudgetReason::ToolCalls,

@@ -41,7 +41,38 @@ const READ_TICK: Duration = Duration::from_millis(25);
 /// only decides what happened.
 pub type EventSink<'a> = &'a (dyn Fn(BridgeEvent) + Send + Sync);
 
+/// One queued message as the workbench renders it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueueView {
+    pub queue_item_id: String,
+    pub position: u64,
+    pub input: String,
+    pub status: String,
+}
+
+/// What a steer attempt did. The client distinguishes "applied" from "queued"
+/// from "failed", and shows different text for each, so this cannot be a bool.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SteerOutcome {
+    pub applied: bool,
+    pub queued: bool,
+    pub reason: String,
+}
+
+/// A page of transcript.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryPage {
+    pub events: Vec<BridgeEvent>,
+    pub has_more: bool,
+    pub total_items: u64,
+}
+
 /// What the adapter needs from whoever assembles the core.
+///
+/// Every method here has a caller in `core/ui/src/appServer/store.ts`. Methods
+/// the workbench does not call are deliberately absent: an unimplemented method
+/// answering `METHOD_NOT_FOUND` is honest, but a method that exists and returns
+/// an empty object is not.
 pub trait TurnRunner: Send + Sync {
     /// Starts a turn. Emit `turn/accepted` first: the client treats that event
     /// as the authoritative acceptance and stops waiting on the RPC reply.
@@ -64,6 +95,91 @@ pub trait TurnRunner: Send + Sync {
     ) -> Result<(), String>;
     fn cancel(&self, thread_id: &str) -> Result<Vec<BridgeEvent>, String>;
     fn events(&self, thread_id: &str, after: u64) -> Result<Vec<BridgeEvent>, String>;
+
+    /// Opens a thread. Creating one is idempotent, so a retried press is safe.
+    ///
+    /// Defaults below answer with an explicit "not implemented by this runner"
+    /// rather than an empty success. A stub that silently reports "no queue" is
+    /// worse than one that says so: the UI would show an empty queue while the
+    /// user's text went nowhere. The real host overrides every one of these.
+    fn open_thread(&self, _thread_id: &str) -> Result<Vec<BridgeEvent>, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+
+    /// A page of transcript, oldest first within the page.
+    fn history(
+        &self,
+        _thread_id: &str,
+        _before_seq: Option<u64>,
+        _limit: usize,
+    ) -> Result<HistoryPage, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+
+    /// The queue in the user's order.
+    fn queue(&self, _thread_id: &str) -> Result<Vec<QueueView>, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+    fn queue_create(
+        &self,
+        _thread_id: &str,
+        _queue_item_id: &str,
+        _text: &str,
+    ) -> Result<Vec<QueueView>, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+    fn queue_update(
+        &self,
+        _thread_id: &str,
+        _queue_item_id: &str,
+        _text: &str,
+    ) -> Result<Vec<QueueView>, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+    fn queue_delete(
+        &self,
+        _thread_id: &str,
+        _queue_item_id: &str,
+    ) -> Result<Vec<QueueView>, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+    fn queue_reorder(&self, _thread_id: &str, _order: &[String]) -> Result<Vec<QueueView>, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+
+    /// A message typed while a turn is running. Applied if the turn is still
+    /// live, otherwise reported as not applied so the client can queue it.
+    fn steer(&self, _thread_id: &str, _turn_id: &str, _text: &str) -> Result<SteerOutcome, String> {
+        Err(NOT_IMPLEMENTED.to_owned())
+    }
+
+    /// Stop the live turn. The difference between pause, interrupt, terminate
+    /// and force_reset is how much cleanup the caller wants, not whether it
+    /// stops, so they share one implementation with a policy argument.
+    fn stop_turn(
+        &self,
+        thread_id: &str,
+        _mode: StopMode,
+        _sink: EventSink<'_>,
+    ) -> Result<(), String> {
+        self.cancel(thread_id).map(|_| ())
+    }
+}
+
+/// The message a runner that does not implement an optional capability returns.
+pub const NOT_IMPLEMENTED: &str = "this runner does not implement that method";
+
+/// What kind of stop the user asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopMode {
+    /// Single click: finish what is dispatched, start nothing new.
+    Pause,
+    /// Abandon the current model call and start nothing new.
+    Interrupt,
+    /// Stop and discard the turn.
+    Terminate,
+    /// Stop even if the journal disagrees about what is running.
+    ForceReset,
 }
 
 /// One event, already shaped like `CoreAppEvent`.
@@ -253,6 +369,39 @@ fn render(item: Outbound) -> String {
     }
 }
 
+/// Which methods this adapter actually answers.
+///
+/// Exposed so a test can compare it against the list the workbench calls. A
+/// method that exists on the trait but is missing here is indistinguishable from
+/// an unimplemented one, and that is the exact gap this guards.
+pub const DISPATCHED: &[&str] = &[
+    "initialize",
+    "initialized",
+    "thread/start",
+    "thread/resume",
+    "thread/read",
+    "thread/snapshot",
+    "turn/start",
+    "turn/resume",
+    "turn/cancel",
+    "turn/steer",
+    "turn/pause",
+    "turn/interrupt",
+    "turn/terminate",
+    "turn/force_reset",
+    "queue/list",
+    "queue/create",
+    "queue/update",
+    "queue/delete",
+    "queue/guide",
+    "queue/reorder",
+    "approval/respond",
+];
+
+pub fn is_dispatched(method: &str) -> bool {
+    DISPATCHED.contains(&method)
+}
+
 type Reply = Result<serde_json::Value, (i32, String, Option<serde_json::Value>)>;
 
 /// The client sends `threadId` for `initialize` and `thread_id` everywhere else.
@@ -308,6 +457,220 @@ fn dispatch(
             Ok(serde_json::json!({ "capabilities": capabilities() }))
         }
         "initialized" => Ok(serde_json::json!({})),
+        "thread/start" | "thread/resume" => {
+            // `thread/start` and `thread/resume` are the same operation from the
+            // journal's point of view: make sure the conversation exists and hand
+            // back its tail. A retried press therefore cannot fork a thread.
+            let thread = if thread.is_empty() {
+                state.thread_id.clone()
+            } else {
+                thread
+            };
+            if thread.is_empty() {
+                return Err((-32602, "thread_id is required".into(), None));
+            }
+            state.thread_id = thread.clone();
+            let events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
+            Ok(serde_json::json!({
+                "thread_id": thread,
+                "_events": events.iter().map(|e| event_json(&thread, e)).collect::<Vec<_>>(),
+            }))
+        }
+        "thread/read" => {
+            let thread = if thread.is_empty() {
+                state.thread_id.clone()
+            } else {
+                thread
+            };
+            if thread.is_empty() {
+                return Err((-32602, "thread_id is required".into(), None));
+            }
+            state.thread_id = thread.clone();
+            let before_seq = params
+                .get("before_seq")
+                .or_else(|| params.get("next_before_seq"))
+                .and_then(|v| v.as_u64());
+            let limit = params
+                .get("limit")
+                .or_else(|| params.get("turn_limit"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(100) as usize;
+            let page = runner
+                .history(&thread, before_seq, limit)
+                .map_err(|e| (-32000, e, None))?;
+            let next_before = page.events.first().map(|e| e.seq);
+            Ok(serde_json::json!({
+                "thread_id": thread,
+                "snapshot_seq": page.events.last().map(|e| e.seq).unwrap_or(0),
+                "history_page": {
+                    "char_limit": 0,
+                    "character_count": 0,
+                    "turn_limit": limit,
+                    "turn_count": page.events.len(),
+                    "item_count": page.events.len(),
+                    "total_items": page.total_items,
+                    "has_more": page.has_more,
+                    "next_before_seq": next_before,
+                },
+                "status": "idle",
+                "turns": {},
+                "items": {},
+                "item_order": [],
+                "_events": page.events.iter().map(|e| event_json(&thread, e)).collect::<Vec<_>>(),
+            }))
+        }
+        "queue/list" => {
+            let thread = if thread.is_empty() {
+                state.thread_id.clone()
+            } else {
+                thread
+            };
+            let items = runner.queue(&thread).map_err(|e| (-32000, e, None))?;
+            Ok(serde_json::json!({
+                "thread_id": thread,
+                "queue": items.iter().map(queue_json).collect::<Vec<_>>(),
+            }))
+        }
+        "queue/create" | "queue/update" | "queue/delete" | "queue/reorder" | "queue/guide" => {
+            let thread = if thread.is_empty() {
+                state.thread_id.clone()
+            } else {
+                thread
+            };
+            if thread.is_empty() {
+                return Err((-32602, "thread_id is required".into(), None));
+            }
+            state.thread_id = thread.clone();
+            let item_id = params
+                .get("queue_item_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let text = prompt_param(params);
+            let items = match method {
+                "queue/create" => {
+                    let id = if item_id.is_empty() {
+                        // The client normally supplies its own idempotency key.
+                        // Without one, derive a stable id from the content so a
+                        // retried create still cannot duplicate.
+                        format!("queue-{}", app_server_fnv(&format!("{thread}:{text}")))
+                    } else {
+                        item_id
+                    };
+                    runner.queue_create(&thread, &id, &text)
+                }
+                "queue/update" => {
+                    if item_id.is_empty() {
+                        return Err((-32602, "queue_item_id is required".into(), None));
+                    }
+                    runner.queue_update(&thread, &item_id, &text)
+                }
+                "queue/delete" => {
+                    if item_id.is_empty() {
+                        return Err((-32602, "queue_item_id is required".into(), None));
+                    }
+                    runner.queue_delete(&thread, &item_id)
+                }
+                "queue/reorder" => {
+                    let order: Vec<String> = params
+                        .get("order")
+                        .or_else(|| params.get("queue_item_ids"))
+                        .and_then(|v| v.as_array())
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|v| v.as_str().map(str::to_owned))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if order.is_empty() {
+                        return Err((-32602, "order is required".into(), None));
+                    }
+                    runner.queue_reorder(&thread, &order)
+                }
+                // `queue/guide` edits the text of an existing item, which is what
+                // the UI's inline edit actually does.
+                _ => {
+                    if item_id.is_empty() {
+                        return Err((-32602, "queue_item_id is required".into(), None));
+                    }
+                    runner.queue_update(&thread, &item_id, &text)
+                }
+            }
+            .map_err(|e| (-32000, e, None))?;
+            Ok(serde_json::json!({
+                "thread_id": thread,
+                "queue": items.iter().map(queue_json).collect::<Vec<_>>(),
+            }))
+        }
+        "turn/steer" => {
+            let thread = if thread.is_empty() {
+                state.thread_id.clone()
+            } else {
+                thread
+            };
+            if thread.is_empty() {
+                return Err((-32602, "thread_id is required".into(), None));
+            }
+            let turn = params
+                .get("turn_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let text = prompt_param(params);
+            if text.is_empty() {
+                return Err((-32602, "input carries no text".into(), None));
+            }
+            let outcome = runner
+                .steer(&thread, &turn, &text)
+                .map_err(|e| (-32000, e, None))?;
+            // The client reads `applied` to decide what to show, and does not
+            // treat a refusal as an error. Answering with an error here would make
+            // it show a failure toast instead of queueing the text.
+            Ok(serde_json::json!({
+                "thread_id": thread,
+                "applied": outcome.applied,
+                "queued": outcome.queued,
+                "reason": outcome.reason,
+            }))
+        }
+        "turn/pause" | "turn/interrupt" | "turn/terminate" | "turn/force_reset" => {
+            let thread = if thread.is_empty() {
+                state.thread_id.clone()
+            } else {
+                thread
+            };
+            if thread.is_empty() {
+                return Err((-32602, "thread_id is required".into(), None));
+            }
+            state.thread_id = thread.clone();
+            let mode = match method {
+                "turn/pause" => StopMode::Pause,
+                "turn/interrupt" => StopMode::Interrupt,
+                "turn/terminate" => StopMode::Terminate,
+                _ => StopMode::ForceReset,
+            };
+            let worker = runner.clone();
+            let sink_sender = tx.clone();
+            let error_sender = tx.clone();
+            let thread_for_run = thread.clone();
+            std::thread::spawn(move || {
+                let sink = move |event: BridgeEvent| {
+                    let _ = sink_sender.send(Outbound::Event {
+                        body: event_json(&thread_for_run, &event),
+                    });
+                };
+                if let Err(error) = worker.stop_turn(&thread, mode, &sink) {
+                    let _ = error_sender.send(Outbound::Error {
+                        id: serde_json::Value::Null,
+                        code: -32000,
+                        message: error,
+                        data: None,
+                    });
+                }
+            });
+            Ok(serde_json::json!({}))
+        }
         "thread/snapshot" => {
             let thread = if thread.is_empty() {
                 state.thread_id.clone()
@@ -367,7 +730,7 @@ fn dispatch(
             });
             Ok(serde_json::json!({}))
         }
-        "turn/cancel" | "turn/terminate" => {
+        "turn/cancel" => {
             let thread = if thread.is_empty() {
                 state.thread_id.clone()
             } else {
@@ -443,6 +806,27 @@ fn dispatch(
         }
         other => Err((-32601, format!("method not found: {other}"), None)),
     }
+}
+
+/// Stable id derivation for a queue item the client did not name. Not a hash in
+/// any security sense: it exists so a retried create with identical text maps to
+/// the same row instead of appending a duplicate.
+pub fn app_server_fnv(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in text.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn queue_json(item: &QueueView) -> serde_json::Value {
+    serde_json::json!({
+        "queue_item_id": item.queue_item_id,
+        "position": item.position,
+        "input": item.input,
+        "status": item.status,
+    })
 }
 
 /// What this adapter can do, so the UI can enable a feature only when the

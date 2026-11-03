@@ -467,6 +467,73 @@ fn abort_mid_transaction() {
 
 #[test]
 #[ignore = "helper process; runs only when spawned by the crash test"]
+fn batch_abort_worker() {
+    if std::env::var("SUNDAY_CHILD").as_deref() != Ok("batch-abort") {
+        return;
+    }
+    let db = std::env::var("SUNDAY_CHILD_DB").unwrap();
+    let mut store = Store::open(&db).unwrap();
+    let events: Vec<(String, EventKind, serde_json::Value)> = (1..=20)
+        .map(|index| {
+            (
+                format!("batch:{index}"),
+                EventKind::ToolSucceeded,
+                serde_json::json!({"index": index}),
+            )
+        })
+        .collect();
+    store.append_events("local", "t1", &events).unwrap();
+    // Now start a second batch and die inside it, before it can commit.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    for index in 21..=40 {
+        conn.execute(
+            "INSERT INTO journal_events (workspace_id, thread_id, seq, event_id, kind, payload, created_at) \
+             VALUES ('local', 't1', ?1, ?2, 'tool_succeeded', '{}', 0)",
+            rusqlite::params![index as i64, format!("batch:{index}")],
+        )
+        .unwrap();
+    }
+    std::process::abort();
+}
+
+/// A batch that is killed mid-way must leave nothing at all: either the whole
+/// logical operation is durable or none of it is. This is the guarantee batching
+/// could have quietly broken.
+#[test]
+fn c3_a_batch_interrupted_by_a_crash_leaves_no_partial_events() {
+    let (_dir, path) = temp_db();
+    Store::open(&path).unwrap();
+
+    let mut child = ProcessCommand::new(std::env::current_exe().unwrap())
+        .args(["--exact", "batch_abort_worker", "--ignored", "--nocapture"])
+        .env("SUNDAY_CHILD", "batch-abort")
+        .env("SUNDAY_CHILD_DB", &path)
+        .spawn()
+        .expect("spawn");
+    let status = child.wait().unwrap();
+    assert!(!status.success(), "the helper was supposed to die");
+
+    let store = Store::open(&path).unwrap();
+    let events = store.events("t1", 0).unwrap();
+    assert_eq!(
+        events.len(),
+        20,
+        "the committed batch should be fully present"
+    );
+    let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
+    assert_eq!(
+        seqs,
+        (1..=20).collect::<Vec<u64>>(),
+        "seq must stay contiguous after an interrupted batch"
+    );
+    // And the projection must not claim more than the journal holds.
+    let projection = store.projection("t1").unwrap();
+    assert_eq!(projection.last_seq, 20);
+}
+
+#[test]
+#[ignore = "helper process; runs only when spawned by the crash test"]
 fn append_worker() {
     if std::env::var("SUNDAY_CHILD").as_deref() != Ok("append") {
         return;
@@ -621,7 +688,13 @@ fn k5_inspection_never_writes_not_even_wal_or_shm() {
     let before = std::fs::read(&path).unwrap();
     {
         let store = Store::open_read_only(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 2);
+        // Read from the constant, not a literal: a schema bump is a deliberate
+        // change, and a hard-coded number here just breaks on every upgrade
+        // without saying anything about inspection.
+        assert_eq!(
+            store.schema_version().unwrap(),
+            sunday_store::SCHEMA_VERSION
+        );
         assert_eq!(store.table_counts().unwrap()["journal_events"], 1);
     }
     let after = std::fs::read(&path).unwrap();

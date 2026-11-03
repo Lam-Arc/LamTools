@@ -11,14 +11,18 @@
 //!   * `--model-url <url> --model <id>` calls a real OpenAI-compatible provider.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use sunday_agent::{Approval, Approver, AutoApprove, Env, TurnInput};
-use sunday_host::app_server::{AppServer, BridgeEvent, EventBuffer, EventSink, TurnRunner};
+use sunday_host::app_server::{
+    AppServer, BridgeEvent, EventBuffer, EventSink, HistoryPage, QueueView, SteerOutcome, StopMode,
+    TurnRunner,
+};
 use sunday_host::lock::{LockError, SingleWriterLock};
 use sunday_llm::{LlmClient, ProviderConfig};
 use sunday_protocol::{
-    CoreError, EventKind, HostKind, Model, Permission, RunBudget, RunOutcome, ToolCall, ToolSpec,
+    CancelToken, CoreError, EventKind, HostKind, Model, Permission, RunBudget, RunOutcome,
+    ToolCall, ToolSpec,
 };
 use sunday_store::Store;
 use sunday_tools::file_read::ReadFile;
@@ -59,17 +63,18 @@ struct Runner {
     auto_approve: bool,
     seq: AtomicU64,
     buffer: EventBuffer,
-    /// One cancel flag per thread, so stopping one conversation does not stop
+    /// One cancel token per thread, so stopping one conversation does not stop
     /// another.
-    cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    cancel: Mutex<HashMap<String, CancelToken>>,
+    /// Threads with a turn currently running. Used to answer `turn/steer`
+    /// honestly: guidance only applies to a live turn.
+    live: Mutex<HashMap<String, bool>>,
 }
 
 impl Runner {
-    fn cancel_flag(&self, thread: &str) -> Arc<AtomicBool> {
+    fn cancel_flag(&self, thread: &str) -> CancelToken {
         let mut map = self.cancel.lock().unwrap();
-        map.entry(thread.to_owned())
-            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-            .clone()
+        map.entry(thread.to_owned()).or_default().clone()
     }
 
     /// Turns the agent's journal into protocol events. The journal is the source
@@ -94,10 +99,8 @@ impl Runner {
 
     fn mark_cancel(&self, thread: &str) {
         let mut map = self.cancel.lock().unwrap();
-        let flag = map
-            .entry(thread.to_owned())
-            .or_insert_with(|| Arc::new(AtomicBool::new(false)));
-        flag.store(true, Ordering::SeqCst);
+        let flag = map.entry(thread.to_owned()).or_default();
+        flag.cancel();
     }
 }
 
@@ -200,7 +203,10 @@ impl TurnRunner for Runner {
         }
 
         let cancel = self.cancel_flag(thread_id);
-        cancel.store(false, Ordering::SeqCst);
+        cancel.reset();
+        // Marked live before the model is called, so a steer that arrives during
+        // the first round is applied instead of being told nothing is running.
+        self.live.lock().unwrap().insert(thread_id.to_owned(), true);
 
         let files = sunday_platform::LocalFiles::new(&self.workspace).map_err(|e| e.to_string())?;
         let files = Arc::new(files);
@@ -240,6 +246,12 @@ impl TurnRunner for Runner {
         // Report whatever the run produced, whether it succeeded or not. Start
         // after the acceptance event so the client does not see it twice.
         self.emit_journal(thread_id, sink, accept_seq);
+
+        // The turn is no longer live as soon as it stops producing.
+        self.live
+            .lock()
+            .unwrap()
+            .insert(thread_id.to_owned(), false);
 
         match run {
             Ok(RunOutcome::Completed { .. })
@@ -347,6 +359,174 @@ impl TurnRunner for Runner {
         Ok(Vec::new())
     }
 
+    fn open_thread(&self, thread_id: &str) -> Result<Vec<BridgeEvent>, String> {
+        // Opening is reading: a thread exists once its journal has events, and
+        // that is created by the first accepted command. Nothing is written here,
+        // so a retried press cannot fork a thread or bump a revision.
+        let events = {
+            let store = self.store.lock().unwrap();
+            store.events(thread_id, 0).unwrap_or_default()
+        };
+        Ok(events
+            .into_iter()
+            .map(|event| {
+                let (method, payload) = translate(&event.kind, &event.payload);
+                BridgeEvent {
+                    method,
+                    seq: event.seq,
+                    payload,
+                    client_message_id: None,
+                }
+            })
+            .collect())
+    }
+
+    fn history(
+        &self,
+        thread_id: &str,
+        before_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<HistoryPage, String> {
+        let store = self.store.lock().unwrap();
+        let (events, has_more) = store
+            .history_page(thread_id, before_seq, limit)
+            .map_err(|e| e.to_string())?;
+        let total = store.event_count(thread_id).map_err(|e| e.to_string())?;
+        Ok(HistoryPage {
+            events: events
+                .into_iter()
+                .map(|event| {
+                    let (method, payload) = translate(&event.kind, &event.payload);
+                    BridgeEvent {
+                        method,
+                        seq: event.seq,
+                        payload,
+                        client_message_id: None,
+                    }
+                })
+                .collect(),
+            has_more,
+            total_items: total,
+        })
+    }
+
+    fn queue(&self, thread_id: &str) -> Result<Vec<QueueView>, String> {
+        let store = self.store.lock().unwrap();
+        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
+        Ok(items.into_iter().map(queue_view).collect())
+    }
+
+    fn queue_create(
+        &self,
+        thread_id: &str,
+        queue_item_id: &str,
+        text: &str,
+    ) -> Result<Vec<QueueView>, String> {
+        let mut store = self.store.lock().unwrap();
+        store
+            .enqueue(thread_id, queue_item_id, text)
+            .map_err(|e| e.to_string())?;
+        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
+        Ok(items.into_iter().map(queue_view).collect())
+    }
+
+    fn queue_update(
+        &self,
+        thread_id: &str,
+        queue_item_id: &str,
+        text: &str,
+    ) -> Result<Vec<QueueView>, String> {
+        let mut store = self.store.lock().unwrap();
+        let changed = store
+            .update_queue_item(thread_id, queue_item_id, text)
+            .map_err(|e| e.to_string())?;
+        if !changed {
+            return Err(format!("no queue item {queue_item_id} in {thread_id}"));
+        }
+        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
+        Ok(items.into_iter().map(queue_view).collect())
+    }
+
+    fn queue_delete(&self, thread_id: &str, queue_item_id: &str) -> Result<Vec<QueueView>, String> {
+        let mut store = self.store.lock().unwrap();
+        // Deleting something already gone is the state the caller wanted, so a
+        // double click must not surface as a failure.
+        store
+            .delete_queue_item(thread_id, queue_item_id)
+            .map_err(|e| e.to_string())?;
+        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
+        Ok(items.into_iter().map(queue_view).collect())
+    }
+
+    fn queue_reorder(&self, thread_id: &str, order: &[String]) -> Result<Vec<QueueView>, String> {
+        let mut store = self.store.lock().unwrap();
+        store
+            .reorder_queue(thread_id, order)
+            .map_err(|e| e.to_string())?;
+        let items = store.queue(thread_id).map_err(|e| e.to_string())?;
+        Ok(items.into_iter().map(queue_view).collect())
+    }
+
+    fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<SteerOutcome, String> {
+        // A steer only applies while a turn is actually live on this thread.
+        // Answering "applied" with nothing running would make the UI show the
+        // text as delivered while the user never sees it again.
+        let live = {
+            let map = self.live.lock().unwrap();
+            map.get(thread_id).copied().unwrap_or(false)
+        };
+        if !live {
+            return Ok(SteerOutcome {
+                applied: false,
+                queued: false,
+                reason: if turn_id.is_empty() {
+                    "run_not_active".into()
+                } else {
+                    "active_turn_mismatch".into()
+                },
+            });
+        }
+        let mut store = self.store.lock().unwrap();
+        let guidance_id = format!("{thread_id}:steer:{}", now_ms());
+        store
+            .append_guidance(thread_id, &guidance_id, text)
+            .map_err(|e| e.to_string())?;
+        Ok(SteerOutcome {
+            applied: true,
+            queued: false,
+            reason: String::new(),
+        })
+    }
+
+    fn stop_turn(
+        &self,
+        thread_id: &str,
+        mode: StopMode,
+        sink: EventSink<'_>,
+    ) -> Result<(), String> {
+        // Every mode stops the loop. What differs is how much state is cleared,
+        // not whether the work stops.
+        self.mark_cancel(thread_id);
+        if matches!(mode, StopMode::Terminate | StopMode::ForceReset) {
+            // A terminated turn must not be resumable, so drop the continuation
+            // that would otherwise continue it on the next press.
+            let mut store = self.store.lock().unwrap();
+            store
+                .clear_continuation(thread_id)
+                .map_err(|e| e.to_string())?;
+        }
+        sink(BridgeEvent {
+            method: "turn/completed".into(),
+            seq: self.seq.fetch_add(1, Ordering::SeqCst) + 1,
+            payload: serde_json::json!({
+                "status": "cancelled",
+                "mode": format!("{mode:?}"),
+            }),
+            client_message_id: None,
+        });
+        Ok(())
+    }
+
     fn events(&self, thread_id: &str, after: u64) -> Result<Vec<BridgeEvent>, String> {
         // Prefer the journal: it survives a restart, which the in-memory buffer
         // deliberately does not.
@@ -371,6 +551,16 @@ impl TurnRunner for Runner {
         }
         out.sort_by_key(|e| e.seq);
         Ok(out)
+    }
+}
+
+/// One stored queue row, as the workbench renders it.
+fn queue_view(item: sunday_store::QueueItem) -> QueueView {
+    QueueView {
+        queue_item_id: item.queue_item_id,
+        position: item.position,
+        input: item.input,
+        status: item.status,
     }
 }
 
@@ -408,6 +598,7 @@ pub fn run(options: Options) -> Result<(), CoreError> {
         seq: AtomicU64::new(0),
         buffer: EventBuffer::default(),
         cancel: Mutex::new(HashMap::new()),
+        live: Mutex::new(HashMap::new()),
     });
 
     let server = AppServer::bind(&options.listen, runner)

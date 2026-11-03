@@ -41,6 +41,7 @@ impl Summarizer for ModelSummarizer {
             tools: Vec::new(),
             temperature: Some(0.0),
             max_output_tokens: Some(500),
+            cancel: Default::default(),
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

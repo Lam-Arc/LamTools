@@ -11,6 +11,8 @@
 //! * pending user guidance lives in the store, never in the message list
 //! * a tool result is never separated from the assistant call that produced it
 
+pub mod summary_prompt;
+
 use sunday_protocol::{CoreError, Message};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

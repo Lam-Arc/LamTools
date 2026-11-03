@@ -193,6 +193,7 @@ fn openai_request() -> ModelRequest {
         }],
         temperature: Some(0.2),
         max_output_tokens: Some(64),
+        cancel: Default::default(),
     }
 }
 

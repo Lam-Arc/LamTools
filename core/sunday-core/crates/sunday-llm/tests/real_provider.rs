@@ -13,7 +13,7 @@
 //!   cargo test -p sunday-llm --test real_provider -- --ignored --nocapture
 //! ```
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sunday_llm::{LlmClient, ProviderConfig, RetryPolicy};
@@ -44,6 +44,7 @@ fn request(prompt: &str) -> ModelRequest {
         tools: Vec::new(),
         temperature: Some(0.0),
         max_output_tokens: Some(64),
+        cancel: Default::default(),
     }
 }
 
@@ -187,6 +188,7 @@ async fn a_multi_step_tool_conversation_round_trips() {
                 tools: tools.clone(),
                 temperature: Some(0.0),
                 max_output_tokens: Some(128),
+                cancel: Default::default(),
             },
             &mut sink,
         )
@@ -221,6 +223,7 @@ async fn a_multi_step_tool_conversation_round_trips() {
                 tools,
                 temperature: Some(0.0),
                 max_output_tokens: Some(128),
+                cancel: Default::default(),
             },
             &mut sink,
         )
@@ -277,6 +280,7 @@ async fn a_bad_model_name_fails_fast_instead_of_retrying_forever() {
                 tools: Vec::new(),
                 temperature: None,
                 max_output_tokens: Some(8),
+                cancel: Default::default(),
             },
             &mut sink,
         )
@@ -299,35 +303,84 @@ async fn a_bad_model_name_fails_fast_instead_of_retrying_forever() {
 async fn a_cancelled_turn_stops_consuming_the_stream() {
     require_server().await;
     let client = client();
-    let cancelled = Arc::new(AtomicBool::new(false));
+
+    // Press Stop from inside the sink, on the first visible token: exactly what
+    // the loop does when a user hits stop while the answer streams.
+    let cancel = sunday_protocol::CancelToken::new();
+    let deltas = Arc::new(AtomicUsize::new(0));
+    let started = Instant::now();
 
     let turn = {
-        let flag = cancelled.clone();
+        let in_sink = cancel.clone();
+        let deltas = deltas.clone();
         let mut sink = move |delta: ModelDelta| {
             if let ModelDelta::Text(_) = delta {
-                // The loop cancels on the first visible token, exactly like a
-                // user pressing stop while the answer streams.
-                flag.store(true, Ordering::SeqCst);
+                deltas.fetch_add(1, Ordering::SeqCst);
+                in_sink.cancel();
             }
         };
-        client
-            .stream(request("Write a 300 word essay about rivers."), &mut sink)
-            .await
+        let mut req = request("Write a 600 word essay about the history of rivers.");
+        req.max_output_tokens = Some(400);
+        req.cancel = cancel.clone();
+        client.stream(req, &mut sink).await
     };
+    let elapsed = started.elapsed();
+
     assert!(
-        cancelled.load(Ordering::SeqCst),
-        "no delta arrived to cancel on"
+        deltas.load(Ordering::SeqCst) > 0,
+        "no delta arrived, so there was nothing to cancel"
     );
-    // The client itself has no cancel token: it always runs to the end of the
-    // stream. This test records that limitation instead of pretending the
-    // model call is interruptible today.
     match turn {
-        Ok(turn) => println!(
-            "the model call completed anyway ({} chars), so cancellation is at the loop level only",
-            turn.text.unwrap_or_default().len()
+        Ok(turn) => panic!(
+            "the stream ran to completion despite the cancel ({} chars in {:?});              a cancelled read must stop, not quietly finish",
+            turn.text.unwrap_or_default().len(),
+            elapsed
         ),
-        Err(error) => println!("stream ended with {error}"),
+        Err(error) => {
+            // A cancel must surface as Rejected, not as a provider fault: a fault
+            // would be retried and would resume the work the user stopped.
+            assert!(
+                matches!(error, sunday_protocol::CoreError::Rejected { .. }),
+                "a cancel surfaced as {error:?}, which a caller would treat as a provider fault"
+            );
+            println!(
+                "stopped after {} deltas in {:?}: {error}",
+                deltas.load(Ordering::SeqCst),
+                elapsed
+            );
+        }
     }
+}
+
+/// Cancelling before the request is sent must not open a connection at all.
+#[tokio::test]
+#[ignore = "needs a real OpenAI-compatible endpoint"]
+async fn a_pre_cancelled_request_never_reaches_the_provider() {
+    // No require_server() on purpose: if this opened a connection it would fail
+    // with a transport error instead of Rejected, which is the distinction under
+    // test. A port nothing listens on makes that obvious.
+    let client =
+        LlmClient::new(ProviderConfig::openai("http://127.0.0.1:9/v1", "x")).expect("client");
+    let cancel = sunday_protocol::CancelToken::new();
+    cancel.cancel();
+    let mut req = request("this must never be sent");
+    req.cancel = cancel;
+    let mut sink = |_: ModelDelta| {};
+    let started = Instant::now();
+    let error = client
+        .stream(req, &mut sink)
+        .await
+        .expect_err("must not send");
+    assert!(
+        matches!(error, sunday_protocol::CoreError::Rejected { .. }),
+        "a pre-cancelled request produced {error:?} instead of a clean rejection"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "a pre-cancelled request took {:?}, which suggests it went to the network",
+        started.elapsed()
+    );
+    println!("pre-cancelled rejected in {:?}: {error}", started.elapsed());
 }
 
 /// A direct comparison so the report can quote a number instead of an opinion.

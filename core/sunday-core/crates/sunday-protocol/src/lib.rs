@@ -167,7 +167,55 @@ pub struct ModelRequest {
     /// 0.20000000298023224 and providers reject it as out of range.
     pub temperature: Option<f64>,
     pub max_output_tokens: Option<u32>,
+    /// Cancelling this stops the call as soon as the implementation notices.
+    ///
+    /// It is carried on the request rather than added as a `stream` parameter so
+    /// that every existing implementation keeps its signature and a new one
+    /// cannot forget to accept it.
+    ///
+    /// Cancelling is not a promise that the provider stops billing: it stops
+    /// *this* client reading the stream. Say "stop receiving", never "free".
+    pub cancel: CancelToken,
 }
+
+/// A cancellation signal shared by the loop, the model client and any future
+/// host. Cloneable and cheap: every clone observes the same flag.
+#[derive(Clone, Debug, Default)]
+pub struct CancelToken {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Raises the flag. Idempotent: cancelling twice is not an error.
+    pub fn cancel(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Clears the flag for reuse. A turn that ended should not leave the next
+    /// one already cancelled, which is the mistake a shared flag invites.
+    pub fn reset(&self) {
+        self.flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Two tokens are equal when they are the same signal, not when they happen to
+/// hold the same value: a cancelled token and a token that was cancelled are
+/// different things to whoever holds them.
+impl PartialEq for CancelToken {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.flag, &other.flag)
+    }
+}
+
+impl Eq for CancelToken {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ModelDelta {
