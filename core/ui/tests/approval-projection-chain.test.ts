@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import type { CoreAppEvent, CoreAppSnapshot } from '@/appServer/protocol.ts'
 import { applyCoreAppEvent } from '@/appServer/store.ts'
 import { selectCoreWorkbenchMessages } from '@/appServer/workbenchProjection.ts'
+import { selectLatestTurnStatus } from '@/appServer/selectors.ts'
+import { isCoreActiveTurnStatus } from '@/appServer/workbenchActions.ts'
 import { coreDecisionSelectionPlan } from '@/appServer/workbenchActions.ts'
 import { useCoreApprovalController } from '@/composables/useCoreApprovalController.ts'
 
@@ -259,5 +261,23 @@ describe('expired approvals', () => {
       .find((part) => part.partType === 'decision')
     expect(after, 'the closed card should still be visible, just not pending').toBeTruthy()
     expect(after?.status).not.toBe('pending')
+  })
+})
+
+describe('turn status', () => {
+  /**
+   * The composer decides between Send and Stop from this value. A thread that never
+   * converges to completed keeps offering Stop, and every send is refused — which is
+   * exactly what the device showed after resume.
+   */
+  it('converges to idle after a turn opens and closes', () => {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(snapshot, runItem(2, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'running' }, 'running'))
+    expect(selectLatestTurnStatus(snapshot)).toBe('running')
+    snapshot = applyCoreAppEvent(snapshot, runItem(8, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'completed' }, 'completed'))
+    // The composer decides between Send and Stop on exactly this predicate, not on
+    // the raw status word: 'completed' is a valid resting value as long as it is not
+    // active.
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
   })
 })
