@@ -178,11 +178,19 @@ async def test_resume_attachment_is_part_of_one_visible_guidance(tmp_path, monke
             await asyncio.wait_for(task, 15)
         assert len(model.requests) == 3
         for request in model.requests:
-            attachment_messages = [m for m in request.messages if "ATTACHMENT_EVIDENCE" in str(m.content)]
+            # Attachments travel as absolute path references, never as embedded
+            # content: the tools read the file on demand.
+            attachment_messages = [
+                m for m in request.messages if record.id in str(m.content)
+            ]
             assert len(attachment_messages) == 1
             assert attachment_messages[0].role == "user"
+            reference = str(attachment_messages[0].content)
+            assert "note.txt" in reference
+            assert record.storage_path.replace("\\", "/") in reference
+            assert "ATTACHMENT_EVIDENCE" not in reference
             if with_text:
-                assert "SEE_ATTACHMENT" in str(attachment_messages[0].content)
+                assert "SEE_ATTACHMENT" in reference
         async with db.session_factory() as session:
             events = await db.persistence.list_after(session, thread_id="thread", after_seq=0)
         visible = [e for e in events if ":user:guide:" in str(e.item_id) and e.payload.get("kind") == "message"]
