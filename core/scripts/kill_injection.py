@@ -298,6 +298,7 @@ def _report_source() -> None:
 
 
 def main() -> int:
+    _ensure_path()
     parser = argparse.ArgumentParser(description="Hard-kill injection for observer orphans")
     parser.add_argument("--root", default=".lam/killinject")
     parser.add_argument("--db", default="")

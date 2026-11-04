@@ -559,6 +559,7 @@ def _report_source() -> None:
 
 
 def main() -> int:
+    _ensure_path()
     parser = argparse.ArgumentParser(description="Arrange/Observer reliability soak")
     parser.add_argument("--root", default=".lam/soak")
     parser.add_argument("--db", default="")
