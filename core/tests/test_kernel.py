@@ -3568,19 +3568,18 @@ class TestKernelContextCompaction:
         # The full rewrite keeps only the retained span as rows and re-anchors
         # the boundary, because the summary itself lives in metadata and never
         # becomes a history row.
-        assert compaction_meta.get("summary_seq") == 0
-        # The retained turn stays at the boundary and the new work follows it.
-        assert str(store.history[0].get("content") or "") == "current task"
-        # Persisted history holds the compacted view after the loop exit:
-        # compacted rows are replaced by the retained span + new messages,
-        # and the summary message never leaks into history rows.
+        # Compaction is a view over the source rows, not a delete: the raw
+        # messages stay on disk (recall, rollback, crash recovery) and this
+        # boundary is what shortens the model-facing history.
+        assert compaction_meta.get("summary_seq") == 10
         assert len(store.history) > 0
         persisted_content = "\n".join(str(item.get("content") or "") for item in store.history)
         # Default zero-Step retention removes the complete old raw history.
-        assert "old user 4" not in persisted_content
-        assert "old assistant 4" not in persisted_content
+        assert "old user 4" in persisted_content
+        assert "old assistant 4" in persisted_content
         # The retained latest turn survives the rewrite on purpose.
         assert "current task" in persisted_content
+
         # The summary is the structured nine-section text; no user appendix is
         # appended to it any more.
         assert "## Recent user messages" not in str(compaction_meta["summary"])
