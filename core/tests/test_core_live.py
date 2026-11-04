@@ -122,6 +122,25 @@ async def _context(tmp_path) -> tuple[object, CoreLiveContext]:
     )
 
 
+async def _wait_job_terminal(context, thread_id: str, *, timeout: float = 5.0) -> list[dict]:
+    """Wait until every job of *thread_id* reached a terminal status.
+
+    The approval handler enqueues the continuation job and runs it in the
+    background, so listing immediately observes `running` and would report a
+    stuck job that is merely in flight.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        jobs = await context.turn_store.list_jobs(thread_id)
+        statuses = {str(job.get("status") or "") for job in jobs}
+        if jobs and statuses <= {"completed", "failed", "cancelled"}:
+            return jobs
+        if loop.time() > deadline:
+            raise AssertionError(f"jobs for {thread_id} stayed {sorted(statuses)}")
+        await asyncio.sleep(0.01)
+
+
 async def _wait_turn_terminal(context, thread_id: str, turn_id: str, *, timeout: float = 5.0) -> dict:
     """Wait until the turn reaches a terminal status, then return the snapshot.
 
@@ -4158,7 +4177,7 @@ async def test_child_approval_routes_to_the_child_session_not_the_completed_pare
         assert "result" in outcome.response, outcome.response
         assert calls and calls[0].payload["request_id"] == request_id
 
-        child_jobs = await context.turn_store.list_jobs("parent:sub:reader")
+        child_jobs = await _wait_job_terminal(context, "parent:sub:reader")
         parent_jobs = await context.turn_store.list_jobs("parent")
         assert len(child_jobs) == 1
         assert child_jobs[0]["status"] == "completed"
