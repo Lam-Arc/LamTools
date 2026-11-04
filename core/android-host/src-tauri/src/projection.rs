@@ -212,7 +212,15 @@ impl Projector {
                         // top-level field: a card that carried the id only at the top
                         // rendered its buttons and then sent an empty request id, so
                         // approving did nothing at all.
-                        "metadata": { "request_id": request, "tool_call_id": call },
+                        // `coreDecisionSelectionPlan` reads `metadata.waitingRequest.request_id`
+                        // and nothing else; when that misses it degrades to "send this as a
+                        // normal message", so the click looks answered and the approval is
+                        // never sent. Both shapes are provided so neither reader can miss it.
+                        "metadata": {
+                            "request_id": request,
+                            "tool_call_id": call,
+                            "waitingRequest": { "request_id": request, "kind": "approval" },
+                        },
                     }),
                 )
             }
@@ -344,6 +352,15 @@ impl Projector {
         // `turn/completed` ends the turn's speaking window.
         if matches!(method.as_str(), "turn/completed" | "turn/cancelled") {
             self.spoke.remove(&thread);
+        }
+
+        #[cfg(debug_assertions)]
+        if kind == "approval_request" {
+            println!(
+                "projection approval_request request_id={} tool_call_id={}",
+                body.get("request_id").and_then(Value::as_str).unwrap_or("?"),
+                body.get("tool_call_id").and_then(Value::as_str).unwrap_or("?"),
+            );
         }
 
         Some(json!({
