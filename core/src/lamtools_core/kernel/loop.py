@@ -4331,11 +4331,15 @@ class CoreLoopKernel:
             # user:“去重构吧”+(历史只接收保留的原始消息；系统前缀不落入历史，完整快照单独追加一次)。
             retained = _retained_history_messages(history, result.retained_messages, request_only_ids)
             history[:] = [*([result.summary_message] if result.summary_message is not None else []), *retained]
-            # The view changed, but every source row was flushed before the
-            # signal. New work continues as ordinary append-only checkpoints.
+            # The in-memory list was rewritten but storage still holds the
+            # compacted rows, so the alignment counter no longer describes the
+            # row table. Leaving it None makes ``_persist_history_tail`` do the
+            # full replace at loop exit (see _flush_history_delta's contract);
+            # setting it to len(history) here silently kept the old rows, which
+            # is how a resumed session reloaded history that had been compacted.
             if snapshot_row is not None:
                 history.append(snapshot_row)
-            self._persisted_len = len(history)
+            self._persisted_len = None
         reset_session_tool_freeze(state.session_id)
         request.metadata.update(
             estimated_prompt_tokens=final_tokens, context_compacted=True,

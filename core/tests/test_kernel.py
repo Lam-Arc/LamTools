@@ -3565,9 +3565,12 @@ class TestKernelContextCompaction:
         assert "1. Current Objective And Done Criteria" in str(
             compaction_meta.get("summary", "")
         )
-        # The resume boundary re-anchors to the first retained message, so the
-        # summary sequence equals the number of compacted messages.
-        assert compaction_meta.get("summary_seq") == compacted_events[0].payload["removed"]
+        # The full rewrite keeps only the retained span as rows and re-anchors
+        # the boundary, because the summary itself lives in metadata and never
+        # becomes a history row.
+        assert compaction_meta.get("summary_seq") == 0
+        # The retained turn stays at the boundary and the new work follows it.
+        assert str(store.history[0].get("content") or "") == "current task"
         # Persisted history holds the compacted view after the loop exit:
         # compacted rows are replaced by the retained span + new messages,
         # and the summary message never leaks into history rows.
@@ -3576,8 +3579,12 @@ class TestKernelContextCompaction:
         # Default zero-Step retention removes the complete old raw history.
         assert "old user 4" not in persisted_content
         assert "old assistant 4" not in persisted_content
-        assert "current task" not in persisted_content
-        assert str(compaction_meta["summary"]).endswith("6. current task")
+        # The retained latest turn survives the rewrite on purpose.
+        assert "current task" in persisted_content
+        # The summary is the structured nine-section text; no user appendix is
+        # appended to it any more.
+        assert "## Recent user messages" not in str(compaction_meta["summary"])
+        assert str(compaction_meta["summary"]).startswith("1. Current Objective")
         assert "old user 0" not in persisted_content
         assert all(
             item.get("metadata", {}).get("key") != "context_compaction_summary"
