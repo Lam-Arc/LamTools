@@ -67,11 +67,25 @@ impl Projector {
         let thread = envelope.get("thread_id").and_then(Value::as_str)?.to_owned();
         let method = envelope.get("method").and_then(Value::as_str)?.to_owned();
         let seq = envelope.get("seq").and_then(Value::as_u64).unwrap_or(0);
-        let event_id = envelope
+        let mut event_id = envelope
             .get("event_id")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        // A closure reported outside the journal (an expiry sweep) has no seq, so its
+        // envelope id carries no anchor of its own. Several closures in one reply
+        // would then share one identity and the client, which dedupes on it, would
+        // keep only the first — leaving every other card looking answerable.
+        if seq == 0 {
+            let discriminant = envelope
+                .get("payload")
+                .and_then(|value| value.get("request_id").or_else(|| value.get("approval_id")))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !discriminant.is_empty() {
+                event_id = format!("{}:{}", event_id, discriminant);
+            }
+        }
         let payload = envelope
             .get("payload")
             .cloned()
@@ -512,6 +526,30 @@ mod tests {
             closing["payload"]["kind"], "status",
             "the closing event repeated the reply as a second message"
         );
+    }
+
+    /// Two closures in one reply must not share an identity.
+    ///
+    /// An expiry sweep reports events that never went through the journal, so they
+    /// have no seq and the same envelope id. The client dedupes on `event_id`, and
+    /// with a shared one it kept the first closure and silently ignored the rest.
+    #[test]
+    fn closures_without_a_journal_seq_stay_distinguishable() {
+        let mut projector = Projector::new();
+        let closure = |request: &str| {
+            json!({
+                "thread_id": "th",
+                "seq": 0,
+                "method": "item/approval_resolved",
+                "event_id": "th:0",
+                "created_at": "",
+                "payload": {"request_id": request, "decision": "expired", "state": "ending"},
+            })
+        };
+        let first = projector.project(&closure("r1")).expect("first closure");
+        let second = projector.project(&closure("r2")).expect("second closure");
+        assert_ne!(first["event_id"], second["event_id"]);
+        assert_eq!(first["payload"]["payload"]["state"], "ending");
     }
 
     /// Internal bookkeeping never reaches the webview.
