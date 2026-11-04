@@ -31,6 +31,7 @@ import random
 import signal
 import subprocess
 import sys
+import uuid
 import time
 
 
@@ -142,9 +143,11 @@ async def _child(args: argparse.Namespace) -> int:
 
     adapter = _FileAdapter()
 
+    host_id = uuid.uuid4().hex
+
     async def executor(job):
         marker = str(job.payload.get("marker") or job.id)
-        _metric(metrics, kind="job_start", marker=marker, pid=os.getpid())
+        _metric(metrics, kind="job_start", marker=marker, pid=os.getpid(), host=host_id)
         pid_file = pids_dir / f"{marker}.{os.getpid()}.pid"
         code = (
             "import os,time;"
@@ -169,7 +172,7 @@ async def _child(args: argparse.Namespace) -> int:
                 pid_file.unlink(missing_ok=True)
             except OSError:
                 pass
-            _metric(metrics, kind="job_end", marker=marker, pid=os.getpid())
+            _metric(metrics, kind="job_end", marker=marker, pid=os.getpid(), host=host_id)
         return {"status": "ok"}
 
     runner = ArrangeRunner(
@@ -385,19 +388,20 @@ async def _verify(args: argparse.Namespace) -> tuple[bool, dict]:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    # 峰值必须按进程分别统计：被强杀的进程永远写不出 job_end，
-    # 全局累计会把"死掉那批的 start"算成一直在跑（第一次跑就是被这个坑到 19）。
+    # 峰值必须按宿主分别统计：被强杀的进程永远写不出 job_end，全局累计会把
+    # "死掉那批的 start"算成一直在跑（第一次跑就是被这个坑到 19）。同时不能用
+    # pid 当宿主身份：Windows 会复用 pid，两代宿主会被并成同一个峰值。
     starts = [item for item in events if item.get("kind") == "job_start"]
-    per_pid_current: dict[int, int] = defaultdict(int)
-    per_pid_peak: dict[int, int] = defaultdict(int)
+    per_host_current: dict[str, int] = defaultdict(int)
+    per_host_peak: dict[str, int] = defaultdict(int)
     for item in sorted(events, key=lambda entry: entry.get("t", 0)):
-        pid = int(item.get("pid") or 0)
+        host = str(item.get("host") or f"pid:{int(item.get('pid') or 0)}")
         if item.get("kind") == "job_start":
-            per_pid_current[pid] += 1
-            per_pid_peak[pid] = max(per_pid_peak[pid], per_pid_current[pid])
+            per_host_current[host] += 1
+            per_host_peak[host] = max(per_host_peak[host], per_host_current[host])
         elif item.get("kind") == "job_end":
-            per_pid_current[pid] = max(0, per_pid_current[pid] - 1)
-    peak = max(per_pid_peak.values()) if per_pid_peak else 0
+            per_host_current[host] = max(0, per_host_current[host] - 1)
+    peak = max(per_host_peak.values()) if per_host_peak else 0
     beats = [item for item in events if item.get("kind") == "heartbeat"]
     rss_values = [float(item["rss_mb"]) for item in beats if item.get("rss_mb")]
     effect_dups = sum(1 for item in events if item.get("kind") == "effect_dup")
