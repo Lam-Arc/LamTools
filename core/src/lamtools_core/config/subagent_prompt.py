@@ -35,7 +35,7 @@ SUBAGENT_DIR = "subagent"
 #: the model learns it from the tool definition, not the system prompt.
 DEFAULT_SUBAGENT_GUIDE = """\
 ## Sub-agent Delegation Guide
-Delegate independent tasks to sub-agents so they can run in parallel. When delegating, the prompt must specify at least the scope of work, task goal, and output format. Tasks should be self-contained and clearly bounded, without overlapping the main agent's responsibilities."""
+Delegate independent tasks to sub-agents so they can run in parallel. When delegating, the prompt must specify at least the scope of work, task goal, and output format. Tasks should be self-contained and clearly bounded, without overlapping the main agent's responsibilities. When a delegated task returns, report confirmed facts, remaining uncertainties, and the next step."""
 
 #: Default sub-agent settings. ``default_multimodal_model`` is the model_id or
 #: display_name used in the capability prompt to tell text models which multimodal
