@@ -250,6 +250,31 @@ fn s4c_a_finished_call_replays_its_stored_answer_instead_of_running() {
     assert_eq!(store.tool_result("c3").unwrap().unwrap()["ok"], true);
 }
 
+/// A denial inside the window must be recorded, not reported as expired.
+///
+/// The caller used to pass milliseconds where this comparison expects seconds, which
+/// made every denial look a thousand times past its deadline: the user pressed Deny
+/// and was told the request had aged out, and the row stayed pending.
+#[test]
+fn denying_inside_the_window_succeeds() {
+    let (_dir, path) = temp_db();
+    let mut store = Store::open(&path).unwrap();
+    let approval = store
+        .request_approval("t1", &call("c1", "a.txt"), 300, 1_000)
+        .unwrap();
+
+    store
+        .respond_approval(&approval.approval_id, &approval.args_digest, 1_010, false)
+        .expect("a denial inside the window must be accepted");
+    assert_eq!(
+        store
+            .approval_status(&approval.approval_id)
+            .unwrap()
+            .as_deref(),
+        Some("denied"),
+    );
+}
+
 /// The gate the RPC layer asks before it claims a decision was accepted.
 ///
 /// `pending_call` cannot answer this: it looks up the call's arguments and ignores

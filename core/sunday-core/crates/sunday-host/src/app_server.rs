@@ -1006,6 +1006,14 @@ fn dispatch(
             }))
         }
         "approval/respond" => {
+            // Print before any validation: "the button did nothing" and "the request
+            // was refused" look identical from the screen, and the difference decides
+            // which layer to fix.
+            #[cfg(debug_assertions)]
+            println!(
+                "approval/respond entry params={}",
+                params.to_string().chars().take(240).collect::<String>()
+            );
             let request_id = params
                 .get("request_id")
                 .or_else(|| params.get("requestId"))

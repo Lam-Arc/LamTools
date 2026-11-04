@@ -341,7 +341,15 @@ impl TurnRunner for CoreRunner {
         };
         let input = TurnInput {
             thread_id: thread_id.to_owned(),
-            turn_id: format!("turn-{}", self.turn_seq.fetch_add(1, Ordering::SeqCst) + 1),
+            // Unique across restarts, not just within this process. A counter that
+            // resets to zero hands the first turn after a relaunch the same name as a
+            // finished turn from the previous run; the client then treats the new
+            // turn's items as belonging to the closed one and drops their cards.
+            turn_id: format!(
+                "turn-{}-{}",
+                now_ms(),
+                self.turn_seq.fetch_add(1, Ordering::SeqCst) + 1
+            ),
             model_id: self.model_id.clone(),
             system: self.system.clone(),
             prompt: prompt.to_owned(),
@@ -416,8 +424,20 @@ impl TurnRunner for CoreRunner {
             "approve" | "trust" => {}
             "deny" | "skip" => {
                 let mut store = self.store.lock().unwrap();
+                // The digest is what binds the decision to the arguments the user was
+                // shown. Sending an empty one made every denial fail as "arguments
+                // changed", so the row stayed pending and the card could not close.
+                let digest = match store.pending_call(request_id) {
+                    Ok(Some((_, digest))) => digest,
+                    Ok(None) => return Err("that approval has no pending call".into()),
+                    Err(error) => return Err(error.to_string()),
+                };
                 store
-                    .respond_approval(request_id, "", now_ms(), false)
+                    // `respond_approval` compares against `expires_at`, which is in
+                    // seconds. Passing milliseconds made every denial instantly
+                    // "expired": the timestamp was a thousand times past the deadline,
+                    // so a user who pressed Deny was told the request had aged out.
+                    .respond_approval(request_id, &digest, now_epoch(), false)
                     .map_err(|e| e.to_string())?;
                 drop(store);
                 self.emit_journal(thread_id, sink, 0);
