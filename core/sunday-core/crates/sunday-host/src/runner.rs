@@ -427,8 +427,8 @@ impl TurnRunner for CoreRunner {
                 // The digest is what binds the decision to the arguments the user was
                 // shown. Sending an empty one made every denial fail as "arguments
                 // changed", so the row stayed pending and the card could not close.
-                let digest = match store.pending_call(request_id) {
-                    Ok(Some((_, digest))) => digest,
+                let (call, digest) = match store.pending_call(request_id) {
+                    Ok(Some(found)) => found,
                     Ok(None) => return Err("that approval has no pending call".into()),
                     Err(error) => return Err(error.to_string()),
                 };
@@ -438,6 +438,23 @@ impl TurnRunner for CoreRunner {
                     // "expired": the timestamp was a thousand times past the deadline,
                     // so a user who pressed Deny was told the request had aged out.
                     .respond_approval(request_id, &digest, now_epoch(), false)
+                    .map_err(|e| e.to_string())?;
+                // The journal is what a resumed screen replays. A decision recorded
+                // only in the approvals table vanished on restart: the transcript
+                // brought the card back as if nobody had answered it, and the turn
+                // stayed open forever.
+                store
+                    .append_event(
+                        "local",
+                        thread_id,
+                        &format!("{thread_id}:{request_id}:resolved"),
+                        sunday_protocol::EventKind::ApprovalResolved,
+                        serde_json::json!({
+                            "approval_id": request_id,
+                            "tool_call_id": call.id,
+                            "decision": "deny",
+                        }),
+                    )
                     .map_err(|e| e.to_string())?;
                 drop(store);
                 self.emit_journal(thread_id, sink, 0);
@@ -491,6 +508,23 @@ impl TurnRunner for CoreRunner {
             &digest,
             RunBudget::default(),
         ));
+        // Record the approval itself, not only its consequences: a resumed screen
+        // needs to know the card was answered even if the tool produced nothing.
+        if run.is_ok() {
+            let mut store = self.store.lock().unwrap();
+            store
+                .append_event(
+                    "local",
+                    thread_id,
+                    &format!("{thread_id}:{request_id}:resolved"),
+                    sunday_protocol::EventKind::ApprovalResolved,
+                    serde_json::json!({
+                        "approval_id": request_id,
+                        "decision": "approve",
+                    }),
+                )
+                .map_err(|error| error.to_string())?;
+        }
         self.emit_journal(thread_id, sink, 0);
         match run {
             Ok(_) => Ok(()),
