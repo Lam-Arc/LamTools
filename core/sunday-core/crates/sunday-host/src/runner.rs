@@ -354,6 +354,17 @@ impl TurnRunner for CoreRunner {
         }
     }
 
+    fn check_approval(&self, request_id: &str) -> Result<(), String> {
+        let store = self.store.lock().unwrap();
+        match store.pending_call(request_id) {
+            Ok(Some(_)) => Ok(()),
+            // Expired and already-answered are indistinguishable to the caller and
+            // both mean the same thing to the user: this card can no longer act.
+            Ok(None) => Err(format!("该审批已失效或已处理：{request_id}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
     fn respond(
         &self,
         thread_id: &str,

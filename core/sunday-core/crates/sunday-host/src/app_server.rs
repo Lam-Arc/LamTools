@@ -83,6 +83,17 @@ pub trait TurnRunner: Send + Sync {
         client_message_id: &str,
         sink: EventSink<'_>,
     ) -> Result<(), String>;
+    /// Refuses an approval the runner cannot honour, before the caller reports
+    /// success.
+    ///
+    /// Without this gate a resolved or expired request still answered `{}`, the
+    /// screen marked the card as submitted, and the real failure only surfaced as
+    /// an orphan event nobody was waiting for. The user saw a spinner that never
+    /// ended and a tool that never ran.
+    fn check_approval(&self, _request_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Resolves a pending approval. `decision` is already normalised to
     /// approve|deny|guide|skip|trust.
     fn respond(
@@ -992,6 +1003,11 @@ fn dispatch(
             let sink_sender = Arc::clone(tx);
             let error_sender = Arc::clone(tx);
             let thread_for_run = thread.clone();
+            // Answer the truth synchronously: an approval that can no longer be
+            // honoured must fail here, where the RPC reply still reaches the screen.
+            if let Err(reason) = runner.check_approval(&request_id) {
+                return Err((-32000, reason, None));
+            }
             let decision_owned = decision.to_owned();
             // Debug-only: an approval that never resumes the agent looks identical
             // from the screen whether the call never arrived, was refused, or failed
