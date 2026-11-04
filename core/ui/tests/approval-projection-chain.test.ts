@@ -26,6 +26,7 @@ function runItem(
   itemId: string,
   body: Record<string, unknown>,
   status = 'waiting',
+  turnId = 'turn-1',
 ): CoreAppEvent {
   return {
     event_id: `${THREAD}:${seq}`,
@@ -38,7 +39,7 @@ function runItem(
       thread_id: THREAD,
       event_id: `${THREAD}:${seq}`,
       seq,
-      turn_id: 'turn-1',
+      turn_id: turnId,
       item_id: itemId,
       status,
       payload: body,
@@ -311,5 +312,35 @@ describe('settling a stale card', () => {
     snapshot = applyCoreAppEvent(snapshot, closure)
 
     expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
+  })
+})
+
+describe('a second turn in the same thread', () => {
+  /**
+   * The device case: one turn finishes, then a new turn starts on the same thread and
+   * asks for approval. Its card rendered nothing, while a first-turn card renders fine
+   * in the other tests here. The difference has to be the turn, not the card.
+   */
+  it('renders the second turn approval card', () => {
+    let snapshot = emptySnapshot()
+    // turn-1: opens, closes.
+    snapshot = applyCoreAppEvent(snapshot, runItem(2, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'running' }, 'running'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(8, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'completed' }, 'completed'))
+    // turn-2: opens, prepares a call, asks for approval.
+    snapshot = applyCoreAppEvent(snapshot, runItem(10, 'status', `${THREAD}:turn-2:status`, { type: 'status', status: 'running' }, 'running', 'turn-2'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(11, 'tool_call', `${THREAD}:turn-2:call9:tool`, { type: 'dynamicToolCall', tool_call_id: 'call9', tool_name: 'write_file' }, 'waiting', 'turn-2'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(12, 'approval_request', `${THREAD}:turn-2:call9:tool`, {
+      type: 'serverRequest',
+      request_id: 'appr-new',
+      tool_call_id: 'call9',
+      options: [{ id: 'approve', label: '批准执行', response: 'approve' }],
+      metadata: { request_id: 'appr-new', waitingRequest: { request_id: 'appr-new' } },
+    }, 'waiting', 'turn-2'))
+
+    const parts = selectCoreWorkbenchMessages(snapshot).flatMap((message) => message.parts ?? [])
+    const decision = parts.find((part) => part.partType === 'decision')
+    expect(decision, `no decision part; parts=${parts.map((p) => p.partType).join(',')}`).toBeTruthy()
+    expect(decision?.status).toBe('pending')
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(true)
   })
 })

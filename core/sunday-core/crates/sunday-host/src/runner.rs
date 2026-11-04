@@ -127,6 +127,11 @@ pub struct CoreRunner {
     /// Ordering for events this runner synthesises (stop acknowledgements). All
     /// journal-backed events use the journal's own seq.
     seq: AtomicU64,
+    /// Names each turn once. Using `seq` for this made every turn `turn-0`,
+    /// because that counter is advanced elsewhere and the id was read, not
+    /// claimed — so a second turn inherited the finished one's identity and its
+    /// approval card arrived already looking closed.
+    turn_seq: AtomicU64,
     buffer: EventBuffer,
     /// One token per thread, so stopping one conversation cannot stop another.
     cancel: Mutex<HashMap<String, CancelToken>>,
@@ -146,6 +151,7 @@ impl CoreRunner {
             policy: std::sync::Arc::new(crate::policy::LivePolicy::new(options.policy)),
             system: options.system,
             seq: AtomicU64::new(0),
+            turn_seq: AtomicU64::new(0),
             buffer: EventBuffer::default(),
             cancel: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
@@ -335,7 +341,7 @@ impl TurnRunner for CoreRunner {
         };
         let input = TurnInput {
             thread_id: thread_id.to_owned(),
-            turn_id: format!("turn-{}", self.seq.load(Ordering::SeqCst)),
+            turn_id: format!("turn-{}", self.turn_seq.fetch_add(1, Ordering::SeqCst) + 1),
             model_id: self.model_id.clone(),
             system: self.system.clone(),
             prompt: prompt.to_owned(),
