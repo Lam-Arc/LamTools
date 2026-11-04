@@ -1760,9 +1760,19 @@ class CoreToolbox:
                 call.name,
                 call.arguments if isinstance(call.arguments, dict) else {},
             )
+            # user:“策略设为禁止委派时，直接执行要报禁用，不能报放行”
+            # +(这个分支是禁用/硬拦截的兜底，它强制 blocked；若沿用网关的理由，
+            # 一个本该放行的等级判定（“操作等级 1，自动放行”）就会被贴到阻断结果
+            # 上，模型和日志都会误以为这是许可。禁用类阻断给出自己的原因，硬拦截
+            # 才使用网关的理由)。
+            reason = (
+                f"Tool disabled: {call.name}"
+                if call.name in self.disabled_tools
+                else (decision.reason or f"Tool '{call.name}' is hard-blocked")
+            )
             approval = {
                 "tier": decision.permission_tier,
-                "reason": decision.reason,
+                "reason": reason,
                 "blocked": True,
                 "requires_approval": False,
             }
