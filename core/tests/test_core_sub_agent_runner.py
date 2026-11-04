@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -35,6 +36,21 @@ def _write_project_model(tmp_path, model_id: str, capability: str, display_name:
         "}\n"
     )
     (models_dir / f"{model_id}.jsonc").write_text(content, encoding="utf-8")
+
+
+async def _wait_until(predicate, *, label: str, timeout: float = 15.0) -> None:
+    """Wait for a real precondition instead of a fixed sleep.
+
+    A member runs a whole kernel turn, so a fixed one second budget measured
+    machine load rather than the handoff actually working. The predicate, not a
+    bare "is idle" check, decides when the handoff really happened.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if await predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"timed out after {timeout}s waiting for {label}")
 
 
 class ScriptedSubAgentOnlyLLM:
@@ -720,12 +736,19 @@ async def test_core_agent_operation_forwards_sub_agent_file_tool_and_handoff(tmp
         {"thread_id": "thread-writing-sub", "type": "execute", "name": "writer", "prompt": "write a story"},
     )
     assert accepted.status == "ok"
-    for _ in range(100):
-        if (work_root / "story.txt").exists():
-            listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-writing-sub"})
-            if listed.payload["items"][0]["status"] == "idle":
-                break
-        await asyncio.sleep(0.01)
+    async def _story_written() -> bool:
+        if not (work_root / "story.txt").exists():
+            return False
+        current = await catalog.execute(
+            "sub_agent.list", {"thread_id": "thread-writing-sub"}
+        )
+        items = current.payload.get("items") or []
+        return bool(items) and items[0].get("status") == "idle"
+
+    await _wait_until(_story_written, label="the delegated story write")
+    listed = await catalog.execute(
+        "sub_agent.list", {"thread_id": "thread-writing-sub"}
+    )
     assert (work_root / "story.txt").read_text(encoding="utf-8") == "A complete delegated story."
     assert listed.payload["items"][0]["summary"] == "I wrote story.txt with the requested story."
     assert listed.payload["items"][0]["source_message_id"] == f"assistant:{result.payload['turn_id']}"
@@ -762,11 +785,17 @@ async def test_child_approval_pauses_only_sub_agent_not_parent(tmp_path):
         {"thread_id": "thread-child-approval", "type": "execute", "name": "writer", "prompt": "write approved.txt"},
     )
     assert accepted.status == "ok"
-    for _ in range(100):
-        listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-child-approval"})
-        if listed.payload["items"][0]["status"] == "paused":
-            break
-        await asyncio.sleep(0.01)
+    async def _paused() -> bool:
+        current = await catalog.execute(
+            "sub_agent.list", {"thread_id": "thread-child-approval"}
+        )
+        items = current.payload.get("items") or []
+        return bool(items) and items[0].get("status") == "paused"
+
+    await _wait_until(_paused, label="the member to pause on approval")
+    listed = await catalog.execute(
+        "sub_agent.list", {"thread_id": "thread-child-approval"}
+    )
     assert listed.payload["items"][0]["status"] == "paused"
     assert not (work_root / "approved.txt").exists()
 

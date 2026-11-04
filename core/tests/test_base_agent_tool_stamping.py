@@ -16,11 +16,27 @@ from lamtools_core.tool import ToolCall, ToolResult
 
 
 class RecordingToolbox:
+    """Double that advertises the two delegation tools it expects to receive.
+
+    The kit refuses to execute a tool that the session does not advertise, so an
+    empty catalogue would test the "unavailable" branch instead of stamping.
+    """
+
     def __init__(self) -> None:
         self.calls: list[ToolCall] = []
 
     def model_tools(self, active_mode=None):  # noqa: ANN001, ANN202
-        return []
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": "",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+            for name in ("sub_agent", "sub_agent_message")
+        ]
 
     async def execute(self, call: ToolCall, context) -> ToolResult:  # noqa: ANN001
         self.calls.append(call)
