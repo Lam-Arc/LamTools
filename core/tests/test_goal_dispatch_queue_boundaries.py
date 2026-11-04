@@ -7,6 +7,7 @@ import pytest
 from core.tests.test_core_live import _context
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.app import live_operations as live
+from lamtools_core.app.live import runtime_tasks as live_runtime_tasks
 from lamtools_core.app.event_store import AppEventInput
 from lamtools_core.runtime.goal import GoalManager, InMemoryGoalStore
 
@@ -17,8 +18,8 @@ async def test_goal_dispatch_never_creates_a_queue_item(tmp_path, monkeypatch, u
     engine, context = await _context(tmp_path)
     context.host.runtime_task_registry = RuntimeTaskRegistry()
     started = AsyncMock()
-    monkeypatch.setattr(live, "_start_runtime_task", started)
-    monkeypatch.setattr(live, "_mirror_turn_started", AsyncMock())
+    monkeypatch.setattr(live_runtime_tasks, "_start_runtime_task", started)
+    monkeypatch.setattr(live_runtime_tasks, "_mirror_turn_started", AsyncMock())
     try:
         if user_queued:
             await live.handle_queue_create_operation(request_id=1, context=context, params={
@@ -46,7 +47,7 @@ async def test_noncompleted_turn_never_leaves_a_goal_reminder_queued(tmp_path, m
     engine, context = await _context(tmp_path)
     context.host.runtime_task_registry = RuntimeTaskRegistry()
     started = AsyncMock()
-    monkeypatch.setattr(live, "_start_runtime_task", started)
+    monkeypatch.setattr(live_runtime_tasks, "_start_runtime_task", started)
     try:
         await context.persistence.write(lambda db: context.persistence.append(
             db, AppEventInput(thread_id="t", turn_id="old", method="turn/accepted",
@@ -68,7 +69,7 @@ async def test_turn_write_failure_leaves_no_goal_reminder_or_claim(tmp_path, mon
     context.host.runtime_task_registry = RuntimeTaskRegistry()
     monkeypatch.setattr(context.persistence, "append_batch", AsyncMock(side_effect=RuntimeError("write failed")))
     started = AsyncMock()
-    monkeypatch.setattr(live, "_start_runtime_task", started)
+    monkeypatch.setattr(live_runtime_tasks, "_start_runtime_task", started)
     try:
         with pytest.raises(RuntimeError, match="write failed"):
             await live._dispatch_next_queue_item(context=context, thread_id="t", work_root=str(tmp_path),
@@ -88,8 +89,8 @@ async def test_legacy_reminder_is_discarded_and_only_current_goal_can_continue(t
     engine, context = await _context(tmp_path)
     context.host.runtime_task_registry = RuntimeTaskRegistry()
     started = AsyncMock()
-    monkeypatch.setattr(live, "_start_runtime_task", started)
-    monkeypatch.setattr(live, "_mirror_turn_started", AsyncMock())
+    monkeypatch.setattr(live_runtime_tasks, "_start_runtime_task", started)
+    monkeypatch.setattr(live_runtime_tasks, "_mirror_turn_started", AsyncMock())
     try:
         await live.handle_queue_create_operation(request_id=1, context=context, params={
             "thread_id": "t", "goal_continuation": True,
@@ -113,7 +114,7 @@ async def test_stale_active_goal_does_not_start_a_turn(tmp_path, monkeypatch, st
     engine, context = await _context(tmp_path)
     context.host.runtime_task_registry = RuntimeTaskRegistry()
     started = AsyncMock()
-    monkeypatch.setattr(live, "_start_runtime_task", started)
+    monkeypatch.setattr(live_runtime_tasks, "_start_runtime_task", started)
     manager = GoalManager(InMemoryGoalStore())
     context.host.goal_manager = manager
     goal = await manager.create(thread_id="t", objective="finish")
