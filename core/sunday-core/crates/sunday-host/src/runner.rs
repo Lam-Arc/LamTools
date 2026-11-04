@@ -456,6 +456,18 @@ impl TurnRunner for CoreRunner {
                         }),
                     )
                     .map_err(|e| e.to_string())?;
+                // A denial ends the turn. Without this the thread kept its last status
+                // at "running", so after a restart the composer still offered Stop on
+                // a conversation with nothing left to do.
+                store
+                    .append_event(
+                        "local",
+                        thread_id,
+                        &format!("{thread_id}:{request_id}:closed"),
+                        sunday_protocol::EventKind::RunCompleted,
+                        serde_json::json!({"text": "", "denied": true}),
+                    )
+                    .map_err(|e| e.to_string())?;
                 drop(store);
                 self.emit_journal(thread_id, sink, 0);
                 return Ok(());
