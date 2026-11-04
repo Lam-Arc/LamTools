@@ -25,6 +25,43 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
+/// File artifacts a tool reported, in the shape the client renders.
+///
+/// The write tool answers with `{"ok": true, "path": ..., "bytes": ...}`; anything
+/// that does not name a path produces nothing rather than an empty card.
+fn artifacts_from_output(
+    thread: &str,
+    turn: &str,
+    item_id: &str,
+    output: &str,
+) -> Vec<Value> {
+    let Ok(parsed) = serde_json::from_str::<Value>(output) else {
+        return Vec::new();
+    };
+    if parsed.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Vec::new();
+    }
+    let Some(path) = parsed.get("path").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    if path.trim().is_empty() {
+        return Vec::new();
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    vec![json!({
+        "artifact_id": format!("{thread}:{turn}:{item_id}:{path}"),
+        "thread_id": thread,
+        "turn_id": turn,
+        "item_id": item_id,
+        "kind": "file",
+        "name": name,
+        "path": path,
+        "uri": path,
+        "size_bytes": parsed.get("bytes").cloned().unwrap_or(Value::Null),
+        "metadata": { "description": "" },
+    })]
+}
+
 /// What the desktop core offers on an approval card. Copied rather than invented so a
 /// phone and a desktop show the same two buttons with the same wire responses.
 fn approval_options() -> Value {
@@ -331,17 +368,29 @@ impl Projector {
                         .get("is_error")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
+                // A tool that produced a file says so in its own output JSON. Turning
+                // that into an artifact here is what lets the transcript show the file
+                // card; the desktop core does the same from `_artifact_sources`
+                // (`event/runtime_projection.py`), and the client already renders the
+                // shape it produces.
+                let artifacts = artifacts_from_output(&thread, &turn, &tool_item(&call), &content);
+                let mut body = json!({
+                    "type": "dynamicToolCall",
+                    "tool_call_id": call,
+                    "tool_name": known.get("name").cloned().unwrap_or(Value::Null),
+                    "content": content,
+                    "is_error": failed,
+                });
+                if !artifacts.is_empty() {
+                    if let Some(object) = body.as_object_mut() {
+                        object.insert("artifacts".into(), json!(artifacts));
+                    }
+                }
                 (
                     "tool_result",
                     tool_item(&call),
                     if failed { "failed" } else { "completed" },
-                    json!({
-                        "type": "dynamicToolCall",
-                        "tool_call_id": call,
-                        "tool_name": known.get("name").cloned().unwrap_or(Value::Null),
-                        "content": content,
-                        "is_error": failed,
-                    }),
+                    body,
                 )
             }
             "item/guidance" => {
@@ -620,6 +669,26 @@ mod tests {
         assert_ne!(first["event_id"], second["event_id"]);
         assert_eq!(first["payload"]["turn_id"], "turn-a");
         assert_eq!(first["payload"]["payload"]["status"], "completed");
+    }
+
+    /// A write that succeeded must surface its file, not only a line of text.
+    #[test]
+    fn a_written_file_becomes_an_artifact() {
+        let mut projector = Projector::new();
+        run_item(&mut projector, "turn/started", 1, json!({"turn_id": "t"}));
+        let done = run_item(
+            &mut projector,
+            "item/completed",
+            2,
+            json!({
+                "tool_call_id": "c1",
+                "content": r#"{"ok":true,"path":"notes.md","etag":"x","bytes":22}"#,
+            }),
+        );
+        let artifacts = &done["payload"]["payload"]["artifacts"];
+        assert_eq!(artifacts[0]["name"], "notes.md");
+        assert_eq!(artifacts[0]["size_bytes"], 22);
+        assert_eq!(artifacts[0]["item_id"], "th:t:c1:tool");
     }
 
     /// Internal bookkeeping never reaches the webview.
