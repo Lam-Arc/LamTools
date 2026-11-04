@@ -1307,6 +1307,17 @@ class CoreToolbox:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for spec in self.plugin_tool_specs:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+            # user:“插件后端被错误阻断”+(清单声明 auto_allow 却没写操作等级时，
+            # 不能落进“未注册操作=3 级破坏性”的默认：那会让只读类插件工具在只读档
+            # 被能力上限直接拦掉、在其它档每次都要用户点确认，声明形同废纸。
+            # 只有「声明 auto_allow 且未显式声明等级」的插件工具按 1 级登记；
+            # 显式等级优先（含更严格值），ask_user 与 hard_block 仍走原默认)。
+            if (
+                spec.permission == "auto_allow"
+                and "operation_level" not in (spec.metadata or {})
+                and spec.name not in self._native_operation_levels
+            ):
+                self._native_operation_levels[spec.name] = 1
         from lamtools_core.plugin_system.manager_tools import plugin_manager_tool_specs
 
         plugin_manager_specs = (
