@@ -1204,6 +1204,22 @@ impl Store {
         })
     }
 
+    /// Whether this thread is still waiting on a human decision.
+    ///
+    /// A turn may only be closed on recovery when nothing is pending: closing one
+    /// that is genuinely waiting would hide a card the user still has to answer.
+    pub fn has_pending_approval(&self, thread: &str) -> Result<bool, CoreError> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM approvals WHERE thread_id = ?1 AND status = 'pending'",
+                params![thread],
+                |row| row.get(0),
+            )
+            .map_err(CoreError::storage)?;
+        Ok(count > 0)
+    }
+
     /// Every approval on this thread that is no longer pending, with its status.
     ///
     /// A resumed transcript replays the original `approval_request` events, so a card

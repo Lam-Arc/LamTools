@@ -257,7 +257,19 @@ impl Projector {
                     return None;
                 }
                 let decision = text("decision");
-                let state = text("state");
+                // Field for field with the desktop core's decision lifecycle event
+                // (`app/live/interactions.py`): the card vocabulary is
+                // appearing/processing/ending, `turn_id` stays empty so a card can
+                // never revive or close a turn, and the payload carries the request
+                // lifecycle as `status` beside the bare `state`.
+                let state = {
+                    let declared = text("state");
+                    if declared.is_empty() {
+                        "ending".to_owned()
+                    } else {
+                        declared
+                    }
+                };
                 (
                     "approval_response",
                     tool_item(&call),
@@ -265,11 +277,13 @@ impl Projector {
                     json!({
                         "type": "serverRequest",
                         "request_id": request,
+                        "interaction_id": request,
                         "tool_call_id": call,
                         "decision": decision,
-                        // The client closes the card on `state: "ending"`; dropping
-                        // it here left an expired card looking answerable forever.
+                        "action": decision,
                         "state": state,
+                        "lifecycle": state,
+                        "status": "resolved",
                         "metadata": { "request_id": request },
                     }),
                 )
@@ -550,6 +564,33 @@ mod tests {
         let second = projector.project(&closure("r2")).expect("second closure");
         assert_ne!(first["event_id"], second["event_id"]);
         assert_eq!(first["payload"]["payload"]["state"], "ending");
+    }
+
+    /// The closure payload must match the desktop core's decision lifecycle event.
+    ///
+    /// `core/ui/src/appServer/store.ts` closes a card on `state: "ending"` and reads
+    /// the request lifecycle from `status`; the desktop core writes both, plus an
+    /// empty `turn_id` so a card transition cannot touch a turn. Anything missing
+    /// here shows up as a card that stays open, or a turn that reopens.
+    #[test]
+    fn a_closure_carries_the_decision_lifecycle_fields() {
+        let mut projector = Projector::new();
+        let closure = json!({
+            "thread_id": "th",
+            "seq": 9,
+            "method": "item/approval_resolved",
+            "event_id": "th:9",
+            "created_at": "",
+            "payload": {"request_id": "r1", "decision": "deny"},
+        });
+        let item = projector.project(&closure).expect("closure");
+        assert_eq!(item["payload"]["kind"], "approval_response");
+        let body = &item["payload"]["payload"];
+        assert_eq!(body["state"], "ending", "the card only closes on 'ending'");
+        assert_eq!(body["lifecycle"], "ending");
+        assert_eq!(body["status"], "resolved");
+        assert_eq!(body["action"], "deny");
+        assert_eq!(body["interaction_id"], "r1");
     }
 
     /// Internal bookkeeping never reaches the webview.

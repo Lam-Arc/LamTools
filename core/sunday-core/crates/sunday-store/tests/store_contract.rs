@@ -275,6 +275,25 @@ fn denying_inside_the_window_succeeds() {
     );
 }
 
+/// Recovery asks this before closing a thread: closing one that still waits would
+/// hide a card the user has to answer.
+#[test]
+fn a_thread_reports_whether_it_still_waits_on_a_human() {
+    let (_dir, path) = temp_db();
+    let mut store = Store::open(&path).unwrap();
+    assert!(!store.has_pending_approval("t1").unwrap());
+
+    let approval = store
+        .request_approval("t1", &call("c1", "a.txt"), 300, 1_000)
+        .unwrap();
+    assert!(store.has_pending_approval("t1").unwrap());
+
+    store
+        .respond_approval(&approval.approval_id, &approval.args_digest, 1_010, false)
+        .unwrap();
+    assert!(!store.has_pending_approval("t1").unwrap());
+}
+
 /// The gate the RPC layer asks before it claims a decision was accepted.
 ///
 /// `pending_call` cannot answer this: it looks up the call's arguments and ignores

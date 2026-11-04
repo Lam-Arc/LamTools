@@ -396,6 +396,13 @@ impl TurnRunner for CoreRunner {
         }
     }
 
+    fn has_pending_approval(&self, thread_id: &str) -> Result<bool, String> {
+        let store = self.store.lock().unwrap();
+        store
+            .has_pending_approval(thread_id)
+            .map_err(|error| error.to_string())
+    }
+
     fn settled_approvals(
         &self,
         thread_id: &str,

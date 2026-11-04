@@ -108,6 +108,11 @@ pub trait TurnRunner: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Whether the thread still waits on a human decision.
+    fn has_pending_approval(&self, _thread_id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// Resolves a pending approval. `decision` is already normalised to
     /// approve|deny|guide|skip|trust.
     fn respond(
@@ -637,6 +642,20 @@ fn dispatch(
                 .settled_approvals(&thread, crate::runner::now_epoch())
                 .unwrap_or_default();
             let mut events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
+            // Recovery: a thread whose approvals are all settled has nothing left to
+            // wait for. Older runs recorded the decision without closing the turn, so
+            // the replayed transcript ended on "waiting" and the composer offered Stop
+            // forever. The id is derived from the thread, so repeating a resume does
+            // not add a second closure.
+            let still_waiting = runner.has_pending_approval(&thread).unwrap_or(true);
+            if !still_waiting && !settled.is_empty() {
+                events.push(BridgeEvent {
+                    method: "turn/completed".into(),
+                    seq: 0,
+                    client_message_id: None,
+                    payload: serde_json::json!({"text": "", "recovered": true}),
+                });
+            }
             for (approval_id, status) in settled {
                 events.push(BridgeEvent {
                     // Derived from the approval id, so a second resume reports the
