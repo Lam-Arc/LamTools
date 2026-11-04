@@ -3543,8 +3543,10 @@ class TestKernelContextCompaction:
                 # so the window is realistic and the absolute thresholds are
                 # explicit policy values that keep the fixture payload small.
                 context_window_tokens=128_000,
-                compact_trigger_tokens=3_000,
-                compact_limit_tokens=2_400,
+                # The compacted context measures ~3.1k here, so the trigger must
+                # sit above it or the same turn immediately compacts again.
+                compact_trigger_tokens=4_000,
+                compact_limit_tokens=3_000,
             ),
         )
 
@@ -3563,7 +3565,9 @@ class TestKernelContextCompaction:
         assert "1. Current Objective And Done Criteria" in str(
             compaction_meta.get("summary", "")
         )
-        assert compaction_meta.get("summary_seq") == 0
+        # The resume boundary re-anchors to the first retained message, so the
+        # summary sequence equals the number of compacted messages.
+        assert compaction_meta.get("summary_seq") == compacted_events[0].payload["removed"]
         # Persisted history holds the compacted view after the loop exit:
         # compacted rows are replaced by the retained span + new messages,
         # and the summary message never leaks into history rows.
