@@ -1,0 +1,541 @@
+{
+  "contract": "android-host.core-run-item/v1",
+  "derivedFrom": [
+    "core/src/lamtools_core/event/run_item.py (RunItemEvent.to_dict: required vs omitted-when-empty fields)",
+    "core/src/lamtools_core/event/runtime_projection.py (kind/status/item_id per fact, approval options, artifact shape)",
+    "core/src/lamtools_core/app/event_store.py (envelope, seq=0 omitted)",
+    "core/src/lamtools_core/app/live/interactions.py (decision lifecycle: ending/resolved, empty turn_id)",
+    "core/ui/src/appServer/store.ts (applyCoreRunItemEvent: which fields the client reads)",
+    "core/ui/src/appServer/selectors.ts (userMessage content is typed parts)"
+  ],
+  "matching": {
+    "$any": "key must exist, any value",
+    "$iso": "non-empty ISO-8601 UTC string, e.g. 2026-11-04T04:46:36.123Z",
+    "$epoch_ms": "number greater than 1600000000000",
+    "$absent": "key must not exist",
+    "unlisted": "not constrained; extra keys are allowed because the event vocabulary is append-only"
+  },
+  "scenarios": [
+    {
+      "name": "the user's instruction becomes a visible user message",
+      "why": "contract 3.1: userMessage content is an array of typed input parts, and the item id keys on the client message id so a resend is the same message",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/accepted",
+          "seq": 1,
+          "event_id": "ev-user",
+          "client_message_id": "cm-1",
+          "payload": { "text": "Create notes.md with three lines" }
+        }
+      ],
+      "expect": [
+        {
+          "method": "core/runItem",
+          "thread_id": "th",
+          "seq": 1,
+          "event_id": "ev-user",
+          "created_at": "$iso",
+          "payload": {
+            "kind": "message",
+            "thread_id": "th",
+            "event_id": "ev-user",
+            "status": "completed",
+            "item_id": "th:user:cm-1",
+            "created_at_ms": "$epoch_ms",
+            "payload": {
+              "type": "userMessage",
+              "content": [
+                { "type": "text", "text": "Create notes.md with three lines" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a started turn is a status row, and the reply is one message per round",
+      "why": "contract 3.2: no status row means the thread reads running forever; two rounds must not merge into one item",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 2,
+          "event_id": "ev-start",
+          "payload": { "turn_id": "turn-1" }
+        },
+        {
+          "thread_id": "th",
+          "method": "turn/model_completed",
+          "seq": 3,
+          "event_id": "ev-reply",
+          "payload": { "turn_id": "turn-1", "text": "Done.", "round": 0 }
+        }
+      ],
+      "expect": [
+        {
+          "method": "core/runItem",
+          "seq": 2,
+          "payload": {
+            "kind": "status",
+            "turn_id": "turn-1",
+            "status": "running",
+            "item_id": "th:turn-1:status",
+            "payload": { "type": "status", "status": "running" }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 3,
+          "payload": {
+            "kind": "message",
+            "turn_id": "turn-1",
+            "status": "completed",
+            "item_id": "th:turn-1:assistant:0",
+            "payload": { "type": "agentMessage", "content": "Done." }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a reply with no text produces no bubble",
+      "why": "contract 3.2: an empty message is the shape of a rendering bug; nothing is better than an empty bubble",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/model_completed",
+          "seq": 4,
+          "event_id": "ev-empty",
+          "payload": { "turn_id": "turn-1", "text": "   ", "round": 1 }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "name": "a prepared tool and its approval card share one row",
+      "why": "contract 3.3/3.5: the card must hang on the tool call's item id, carry the tool name, and expose both request-id readers",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 5,
+          "event_id": "ev-start",
+          "payload": { "turn_id": "turn-1" }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 6,
+          "event_id": "ev-prepare",
+          "payload": {
+            "turn_id": "turn-1",
+            "tool_call_id": "call-1",
+            "name": "write_file",
+            "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_request",
+          "seq": 7,
+          "event_id": "ev-ask",
+          "payload": {
+            "turn_id": "turn-1",
+            "request_id": "req-1",
+            "tool_call_id": "call-1"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "seq": 5,
+          "payload": {
+            "kind": "status",
+            "turn_id": "turn-1",
+            "status": "running",
+            "item_id": "th:turn-1:status",
+            "payload": { "type": "status", "status": "running" }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 6,
+          "payload": {
+            "kind": "tool_call",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-1:tool",
+            "payload": {
+              "type": "dynamicToolCall",
+              "tool_name": "write_file",
+              "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+            }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 7,
+          "payload": {
+            "kind": "approval_request",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-1:tool",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-1",
+              "kind": "approval",
+              "tool_name": "write_file",
+              "message": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve",
+                  "label": "批准执行",
+                  "description": "允许后端继续执行这个工具调用。",
+                  "response": "approve"
+                },
+                {
+                  "id": "deny",
+                  "label": "拒绝执行",
+                  "description": "不执行这个工具调用，本轮停在等待点。",
+                  "response": "deny"
+                }
+              ],
+              "metadata": {
+                "request_id": "req-1",
+                "waitingRequest": { "request_id": "req-1", "kind": "approval" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "an answered approval ends the card without touching its turn",
+      "why": "contract 3.5/3.6: the answer must close the row the user was looking at, and its turn_id must be explicitly empty so it cannot revive a finished turn",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 5,
+          "event_id": "ev-answer-start",
+          "payload": { "turn_id": "turn-1" }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 6,
+          "event_id": "ev-answer-prepare",
+          "payload": {
+            "turn_id": "turn-1",
+            "tool_call_id": "call-1",
+            "name": "write_file",
+            "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_request",
+          "seq": 7,
+          "event_id": "ev-answer-ask",
+          "payload": {
+            "turn_id": "turn-1",
+            "request_id": "req-1",
+            "tool_call_id": "call-1"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_resolved",
+          "seq": 8,
+          "event_id": "ev-answer",
+          "payload": {
+            "turn_id": "",
+            "request_id": "req-1",
+            "tool_call_id": "call-1",
+            "decision": "approve"
+          }
+        }
+      ],
+      "expect": [
+        { "seq": 5, "payload": { "kind": "status" } },
+        { "seq": 6, "payload": { "kind": "tool_call" } },
+        {
+          "seq": 7,
+          "payload": {
+            "kind": "approval_request",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-1:tool"
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 8,
+          "payload": {
+            "kind": "approval_response",
+            "turn_id": "",
+            "status": "completed",
+            "item_id": "th:turn-1:call-1:tool",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-1",
+              "interaction_id": "req-1",
+              "action": "approve",
+              "state": "ending",
+              "lifecycle": "ending",
+              "status": "resolved"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a completed tool carries its result and files it produced",
+      "why": "contract 3.4/3.7: artifacts belong on the item, not inside payload.payload; the tool result replaces the delta instead of appending it",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 9,
+          "event_id": "ev-start",
+          "payload": { "turn_id": "turn-1" }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 10,
+          "event_id": "ev-prepare",
+          "payload": {
+            "turn_id": "turn-1",
+            "tool_call_id": "call-1",
+            "name": "write_file",
+            "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/completed",
+          "seq": 11,
+          "event_id": "ev-done",
+          "payload": {
+            "turn_id": "turn-1",
+            "tool_call_id": "call-1",
+            "content": "{\"ok\":true,\"path\":\"notes.md\",\"bytes\":25}"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "seq": 9,
+          "payload": {
+            "kind": "status",
+            "turn_id": "turn-1",
+            "status": "running",
+            "item_id": "th:turn-1:status",
+            "payload": { "type": "status", "status": "running" }
+          }
+        },
+        {
+          "seq": 10,
+          "payload": {
+            "kind": "tool_call",
+            "turn_id": "turn-1",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-1:tool",
+            "payload": {
+              "type": "dynamicToolCall",
+              "tool_name": "write_file",
+              "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+            }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 11,
+          "payload": {
+            "kind": "tool_result",
+            "status": "completed",
+            "item_id": "th:turn-1:call-1:tool",
+            "payload": {
+              "type": "dynamicToolCall",
+              "tool_name": "write_file",
+              "delta": "$any",
+              "tool_result": "{\"ok\":true,\"path\":\"notes.md\",\"bytes\":25}",
+              "replace": true,
+              "status": "completed",
+              "error": null,
+              "artifacts": "$absent"
+            },
+            "artifacts": [
+              {
+                "artifact_id": "th:turn-1:call-1:tool:artifact:notes.md",
+                "thread_id": "th",
+                "turn_id": "turn-1",
+                "item_id": "th:turn-1:call-1:tool",
+                "kind": "file",
+                "name": "notes.md",
+                "path": "notes.md",
+                "uri": "notes.md",
+                "metadata": { "description": "" }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "a failed tool says so instead of looking finished",
+      "why": "contract 3.4: a denial or an error must read as failed; reporting completed would tell the user the task landed",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 12,
+          "event_id": "ev-start",
+          "payload": { "turn_id": "turn-2" }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 13,
+          "event_id": "ev-prepare",
+          "payload": {
+            "turn_id": "turn-2",
+            "tool_call_id": "call-2",
+            "name": "write_file",
+            "arguments": { "path": "refuse.txt", "content": "x" }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/failed",
+          "seq": 14,
+          "event_id": "ev-fail",
+          "payload": {
+            "turn_id": "turn-2",
+            "tool_call_id": "call-2",
+            "error": "the user denied this call"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "seq": 12,
+          "payload": {
+            "kind": "status",
+            "turn_id": "turn-2",
+            "status": "running",
+            "item_id": "th:turn-2:status",
+            "payload": { "type": "status", "status": "running" }
+          }
+        },
+        {
+          "seq": 13,
+          "payload": {
+            "kind": "tool_call",
+            "turn_id": "turn-2",
+            "status": "waiting",
+            "item_id": "th:turn-2:call-2:tool",
+            "payload": {
+              "type": "dynamicToolCall",
+              "tool_name": "write_file",
+              "arguments": { "path": "refuse.txt", "content": "x" }
+            }
+          }
+        },
+        {
+          "seq": 14,
+          "payload": {
+            "kind": "tool_result",
+            "status": "failed",
+            "item_id": "th:turn-2:call-2:tool",
+            "payload": {
+              "type": "dynamicToolCall",
+              "tool_name": "write_file",
+              "replace": true,
+              "status": "failed",
+              "error": "the user denied this call"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "the same fact replayed keeps one identity",
+      "why": "the client dedupes on event_id; a random id per replay shows the same message twice after a resume",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/model_completed",
+          "seq": 15,
+          "event_id": "ev-replay",
+          "payload": { "turn_id": "turn-1", "text": "Same text.", "round": 0 }
+        },
+        {
+          "thread_id": "th",
+          "method": "turn/model_completed",
+          "seq": 15,
+          "event_id": "ev-replay",
+          "payload": { "turn_id": "turn-1", "text": "Same text.", "round": 0 }
+        }
+      ],
+      "expect": [
+        { "seq": 15, "event_id": "ev-replay", "payload": { "kind": "message", "item_id": "th:turn-1:assistant:0" } },
+        { "seq": 15, "event_id": "ev-replay", "payload": { "kind": "message", "item_id": "th:turn-1:assistant:0" } }
+      ]
+    },
+    {
+      "name": "two unanchored closures stay distinguishable",
+      "why": "an expiry sweep reports closures with no journal seq; one shared id made the client keep only the first, leaving later cards looking answerable",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "item/approval_resolved",
+          "seq": 0,
+          "event_id": "ev-sweep",
+          "payload": { "request_id": "req-a", "tool_call_id": "call-a", "decision": "expired" }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_resolved",
+          "seq": 0,
+          "event_id": "ev-sweep",
+          "payload": { "request_id": "req-b", "tool_call_id": "call-b", "decision": "expired" }
+        }
+      ],
+      "expect": [
+        {
+          "seq": "$absent",
+          "event_id": "ev-sweep:req-a",
+          "payload": {
+            "kind": "approval_response",
+            "turn_id": "",
+            "item_id": "th::call-a:tool",
+            "payload": { "request_id": "req-a" }
+          }
+        },
+        {
+          "seq": "$absent",
+          "event_id": "ev-sweep:req-b",
+          "payload": {
+            "kind": "approval_response",
+            "turn_id": "",
+            "item_id": "th::call-b:tool",
+            "payload": { "request_id": "req-b" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "an event with no rendered meaning produces nothing",
+      "why": "the journal vocabulary is append-only; a host that invents a card for an unknown method will break on the next core release",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/model_started",
+          "seq": 16,
+          "event_id": "ev-model-start",
+          "payload": { "turn_id": "turn-1" }
+        }
+      ],
+      "expect": []
+    }
+  ]
+}

@@ -25,16 +25,14 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
+#[cfg(test)]
+mod contract;
+
 /// File artifacts a tool reported, in the shape the client renders.
 ///
 /// The write tool answers with `{"ok": true, "path": ..., "bytes": ...}`; anything
 /// that does not name a path produces nothing rather than an empty card.
-fn artifacts_from_output(
-    thread: &str,
-    turn: &str,
-    item_id: &str,
-    output: &str,
-) -> Vec<Value> {
+fn artifacts_from_output(thread: &str, turn: &str, item_id: &str, output: &str) -> Vec<Value> {
     let Ok(parsed) = serde_json::from_str::<Value>(output) else {
         return Vec::new();
     };
@@ -49,7 +47,9 @@ fn artifacts_from_output(
     }
     let name = path.rsplit('/').next().unwrap_or(path);
     vec![json!({
-        "artifact_id": format!("{thread}:{turn}:{item_id}:{path}"),
+        // Stable and readable: the same file written again by the same call is the
+        // same artifact, so a resumed screen shows one card instead of two.
+        "artifact_id": format!("{item_id}:artifact:{path}"),
         "thread_id": thread,
         "turn_id": turn,
         "item_id": item_id,
@@ -60,6 +60,51 @@ fn artifacts_from_output(
         "size_bytes": parsed.get("bytes").cloned().unwrap_or(Value::Null),
         "metadata": { "description": "" },
     })]
+}
+
+/// Wall clock, in the unit `RunItemEvent.created_at_ms` is written in.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// RFC-3339 in UTC, millisecond precision.
+///
+/// The client stores `created_at` verbatim and formats it (`store.ts`), so an empty
+/// string is not "no timestamp" to it: `typeof '' === 'string'` holds, and the item
+/// ends up with an invalid date. That is why this host has to produce a real one.
+///
+/// Written by hand because the host carries no date crate for one field. The
+/// conversion is Howard Hinnant's days-from-civil, exact for every date this can see.
+///
+/// Known gap: the Rust journal stores `journal_events.created_at`, but the read path
+/// (`sunday_store::history_page`) does not return it, so a replayed event is stamped
+/// with the moment it was projected rather than the moment it happened. Ordering is
+/// unaffected (it comes from `seq`); only the displayed time of an old message is.
+fn iso_utc_from_ms(ms: u64) -> String {
+    let seconds = (ms / 1000) as i64;
+    let millis = ms % 1000;
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = if month_part < 10 {
+        month_part + 3
+    } else {
+        month_part - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 /// What the desktop core offers on an approval card. Copied rather than invented so a
@@ -99,9 +144,24 @@ impl Projector {
         Self::default()
     }
 
+    /// The row a tool call was given when it was prepared.
+    ///
+    /// Every later fact about that call belongs to the same row. Falling back to a
+    /// freshly computed id is only correct for a call the host never saw prepared.
+    fn row_of(&self, call: &str) -> Option<String> {
+        self.calls
+            .get(call)
+            .and_then(|known| known.get("item_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    }
+
     /// Projects one journal envelope, or `None` when it has no rendered meaning.
     pub fn project(&mut self, envelope: &Value) -> Option<Value> {
-        let thread = envelope.get("thread_id").and_then(Value::as_str)?.to_owned();
+        let thread = envelope
+            .get("thread_id")
+            .and_then(Value::as_str)?
+            .to_owned();
         let method = envelope.get("method").and_then(Value::as_str)?.to_owned();
         let seq = envelope.get("seq").and_then(Value::as_u64).unwrap_or(0);
         let mut event_id = envelope
@@ -190,7 +250,15 @@ impl Projector {
                     "message",
                     id,
                     "completed",
-                    json!({ "type": "userMessage", "role": "user", "content": content }),
+                    // A `userMessage` carries typed input parts, not a bare string
+                    // (`selectors.ts`: "content is an array of typed input parts").
+                    // The reader also accepts a string, but relying on that put the
+                    // producer outside the contract the desktop core writes to.
+                    json!({
+                        "type": "userMessage",
+                        "role": "user",
+                        "content": [{ "type": "text", "text": content }],
+                    }),
                 )
             }
             "turn/started" => (
@@ -220,18 +288,29 @@ impl Projector {
                 }
                 let name = text("name");
                 let args = payload.get("arguments").cloned().unwrap_or(Value::Null);
+                // The row id is decided once, here, and reused by the approval card,
+                // the dispatch and the result. Recomputing it later from that event's
+                // own turn fails for a closure, which carries an empty turn on purpose
+                // so it cannot revive one: the answer then landed on a second row and
+                // the card the user had just answered stayed answerable.
+                let row = tool_item(&call);
                 self.calls.insert(
                     call.clone(),
-                    json!({ "name": name, "arguments": args }),
+                    json!({ "name": name, "arguments": args, "item_id": row }),
                 );
                 (
                     "tool_call",
-                    tool_item(&call),
+                    row,
                     "waiting",
                     json!({
                         "type": "dynamicToolCall",
                         "tool_call_id": call,
                         "tool_name": name,
+                        // `arguments` is what the client reads
+                        // (`messageParts.ts`, `selectors.ts`, `workbenchProjection.ts`
+                        // all check `item.arguments` first). `tool_args` stays as an
+                        // alias for the one place that looks for it.
+                        "arguments": args,
                         "tool_args": args,
                     }),
                 )
@@ -263,7 +342,7 @@ impl Projector {
                 };
                 (
                     "approval_request",
-                    tool_item(&call),
+                    self.row_of(&call).unwrap_or_else(|| tool_item(&call)),
                     "waiting",
                     json!({
                         "type": "serverRequest",
@@ -272,6 +351,7 @@ impl Projector {
                         "kind": "approval",
                         "message": message,
                         "tool_name": tool_name,
+                        "arguments": tool_args,
                         "tool_args": tool_args,
                         "options": approval_options(),
                         // `coreDecisionRequestId` reads `metadata.request_id`, not the
@@ -317,7 +397,7 @@ impl Projector {
                 };
                 (
                     "approval_response",
-                    tool_item(&call),
+                    self.row_of(&call).unwrap_or_else(|| tool_item(&call)),
                     "completed",
                     json!({
                         "type": "serverRequest",
@@ -341,12 +421,13 @@ impl Projector {
                 let known = self.calls.get(&call).cloned().unwrap_or(Value::Null);
                 (
                     "tool_call",
-                    tool_item(&call),
+                    self.row_of(&call).unwrap_or_else(|| tool_item(&call)),
                     "running",
                     json!({
                         "type": "dynamicToolCall",
                         "tool_call_id": call,
                         "tool_name": known.get("name").cloned().unwrap_or(Value::Null),
+                        "arguments": known.get("arguments").cloned().unwrap_or(Value::Null),
                         "tool_args": known.get("arguments").cloned().unwrap_or(Value::Null),
                     }),
                 )
@@ -361,7 +442,12 @@ impl Projector {
                     .get("content")
                     .and_then(Value::as_str)
                     .map(str::to_owned)
-                    .or_else(|| payload.get("error").and_then(Value::as_str).map(str::to_owned))
+                    .or_else(|| {
+                        payload
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
                     .unwrap_or_default();
                 let failed = method == "item/failed"
                     || payload
@@ -373,25 +459,38 @@ impl Projector {
                 // card; the desktop core does the same from `_artifact_sources`
                 // (`event/runtime_projection.py`), and the client already renders the
                 // shape it produces.
-                let artifacts = artifacts_from_output(&thread, &turn, &tool_item(&call), &content);
+                let row = self.row_of(&call).unwrap_or_else(|| tool_item(&call));
+                let artifacts = artifacts_from_output(&thread, &turn, &row, &content);
+                let result_status = if failed { "failed" } else { "completed" };
                 let mut body = json!({
                     "type": "dynamicToolCall",
                     "tool_call_id": call,
                     "tool_name": known.get("name").cloned().unwrap_or(Value::Null),
+                    // `content` is what this host has always sent and the tool row
+                    // reads it first. `delta` / `tool_result` / `replace` are the
+                    // desktop core's names (`runtime_projection.py:326`); sending
+                    // both means neither reader has to know which core spoke.
                     "content": content,
+                    "delta": content,
+                    "tool_result": content,
                     "is_error": failed,
+                    "replace": true,
+                    "status": result_status,
+                    "error": if failed {
+                        json!(payload
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the tool failed"))
+                    } else {
+                        Value::Null
+                    },
                 });
                 if !artifacts.is_empty() {
                     if let Some(object) = body.as_object_mut() {
                         object.insert("artifacts".into(), json!(artifacts));
                     }
                 }
-                (
-                    "tool_result",
-                    tool_item(&call),
-                    if failed { "failed" } else { "completed" },
-                    body,
-                )
+                ("tool_result", row, result_status, body)
             }
             "item/guidance" => {
                 let content = text("text");
@@ -402,7 +501,13 @@ impl Projector {
                     "message",
                     format!("{thread}:guidance:{seq}"),
                     "completed",
-                    json!({ "type": "userMessage", "role": "user", "content": content }),
+                    // Mid-turn guidance is a user message too: same typed-part shape
+                    // as `turn/accepted`, or the two producers disagree in one file.
+                    json!({
+                        "type": "userMessage",
+                        "role": "user",
+                        "content": [{ "type": "text", "text": content }],
+                    }),
                 )
             }
             // A turn closing is a status change, not a message — unless the run
@@ -445,29 +550,65 @@ impl Projector {
         if kind == "approval_request" {
             println!(
                 "projection approval_request request_id={} tool_call_id={}",
-                body.get("request_id").and_then(Value::as_str).unwrap_or("?"),
-                body.get("tool_call_id").and_then(Value::as_str).unwrap_or("?"),
+                body.get("request_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?"),
+                body.get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?"),
             );
         }
 
-        Some(json!({
-            "thread_id": thread,
-            "seq": seq,
-            "method": "core/runItem",
-            "event_id": event_id,
-            "created_at": "",
-            "payload": {
-                "kind": kind,
-                "thread_id": thread,
-                "event_id": event_id,
-                "seq": seq,
-                "turn_id": turn,
-                "item_id": item_id,
-                "status": status,
-                "payload": body,
-                "created_at_ms": 0,
-            },
-        }))
+        // Artifacts belong on the item, not inside its payload: `RunItemEvent.to_dict`
+        // serializes them outside `payload`, and the client reads them there
+        // (`store.ts`: "artifacts on the runItem event TOP level"). They are built in
+        // the tool arm because only it knows what the tool said it wrote.
+        let mut body = body;
+        let artifacts = match body
+            .as_object_mut()
+            .and_then(|object| object.remove("artifacts"))
+        {
+            Some(Value::Array(items)) if !items.is_empty() => items,
+            _ => Vec::new(),
+        };
+
+        let created_at_ms = now_ms();
+        let mut item = serde_json::Map::new();
+        item.insert("kind".into(), json!(kind));
+        item.insert("thread_id".into(), json!(thread));
+        item.insert("event_id".into(), json!(event_id));
+        item.insert("status".into(), json!(status));
+        item.insert("payload".into(), body);
+        item.insert("created_at_ms".into(), json!(created_at_ms));
+        // `to_dict` omits a field that carries nothing. Identity and ownership are
+        // facts, so they stay even when the turn id is the explicit empty string that
+        // keeps a closure off its finished turn.
+        item.insert("turn_id".into(), json!(turn));
+        item.insert("item_id".into(), json!(item_id));
+        if !artifacts.is_empty() {
+            item.insert("artifacts".into(), Value::Array(artifacts));
+        }
+        if seq > 0 {
+            item.insert("seq".into(), json!(seq));
+        }
+
+        let mut envelope = serde_json::Map::new();
+        envelope.insert("method".into(), json!("core/runItem"));
+        envelope.insert("thread_id".into(), json!(thread));
+        envelope.insert("event_id".into(), json!(event_id));
+        // A real timestamp, never "". The client stores this string verbatim and
+        // formats it; an empty one is a valid string holding an invalid date.
+        envelope.insert("created_at".into(), json!(iso_utc_from_ms(created_at_ms)));
+        envelope.insert("turn_id".into(), json!(turn));
+        envelope.insert("item_id".into(), json!(item_id));
+        // seq = 0 means "no persisted anchor". Writing the 0 makes the client treat
+        // it as a real position and sort the item before every journal event
+        // (`event_store.py::AppEventEnvelope.to_dict` omits it for the same reason).
+        if seq > 0 {
+            envelope.insert("seq".into(), json!(seq));
+        }
+        envelope.insert("payload".into(), Value::Object(item));
+        Some(Value::Object(envelope))
     }
 }
 
@@ -496,11 +637,20 @@ mod tests {
     #[test]
     fn an_accepted_command_becomes_a_user_message() {
         let mut projector = Projector::new();
-        let item = run_item(&mut projector, "turn/accepted", 1, json!({"kind": "turn_start", "text": "make notes.md"}));
+        let item = run_item(
+            &mut projector,
+            "turn/accepted",
+            1,
+            json!({"kind": "turn_start", "text": "make notes.md"}),
+        );
         assert_eq!(item["method"], "core/runItem");
         assert_eq!(item["payload"]["kind"], "message");
         assert_eq!(item["payload"]["payload"]["role"], "user");
-        assert_eq!(item["payload"]["payload"]["content"], "make notes.md");
+        assert_eq!(
+            item["payload"]["payload"]["content"],
+            json!([{ "type": "text", "text": "make notes.md" }]),
+            "a userMessage carries typed input parts, not a bare string"
+        );
         assert_eq!(item["payload"]["event_id"], "th:1");
     }
 
@@ -519,7 +669,12 @@ mod tests {
     #[test]
     fn an_approval_names_the_tool_and_reuses_the_call_row() {
         let mut projector = Projector::new();
-        run_item(&mut projector, "turn/started", 2, json!({"turn_id": "turn-1"}));
+        run_item(
+            &mut projector,
+            "turn/started",
+            2,
+            json!({"turn_id": "turn-1"}),
+        );
         let prepared = run_item(
             &mut projector,
             "item/tool_prepared",
@@ -549,14 +704,29 @@ mod tests {
     fn a_tool_result_closes_its_own_row() {
         let mut projector = Projector::new();
         run_item(&mut projector, "turn/started", 1, json!({"turn_id": "t"}));
-        let call = run_item(&mut projector, "item/tool_prepared", 2, json!({"tool_call_id": "c1", "name": "write_file", "arguments": {}}));
-        let done = run_item(&mut projector, "item/completed", 3, json!({"tool_call_id": "c1", "content": "wrote 3 lines"}));
+        let call = run_item(
+            &mut projector,
+            "item/tool_prepared",
+            2,
+            json!({"tool_call_id": "c1", "name": "write_file", "arguments": {}}),
+        );
+        let done = run_item(
+            &mut projector,
+            "item/completed",
+            3,
+            json!({"tool_call_id": "c1", "content": "wrote 3 lines"}),
+        );
         assert_eq!(done["payload"]["item_id"], call["payload"]["item_id"]);
         assert_eq!(done["payload"]["kind"], "tool_result");
         assert_eq!(done["payload"]["status"], "completed");
         assert_eq!(done["payload"]["payload"]["content"], "wrote 3 lines");
 
-        let failed = run_item(&mut projector, "item/failed", 4, json!({"tool_call_id": "c1", "error": "permission denied"}));
+        let failed = run_item(
+            &mut projector,
+            "item/failed",
+            4,
+            json!({"tool_call_id": "c1", "error": "permission denied"}),
+        );
         assert_eq!(failed["payload"]["status"], "failed");
     }
 
@@ -566,7 +736,12 @@ mod tests {
     fn waiting_for_reconciliation_is_not_a_completion() {
         let mut projector = Projector::new();
         run_item(&mut projector, "turn/started", 1, json!({"turn_id": "t"}));
-        let item = run_item(&mut projector, "turn/waiting_for_reconciliation", 2, json!({}));
+        let item = run_item(
+            &mut projector,
+            "turn/waiting_for_reconciliation",
+            2,
+            json!({}),
+        );
         assert_eq!(item["payload"]["kind"], "status");
         assert_eq!(item["payload"]["payload"]["status"], "waiting");
         assert_eq!(item["payload"]["status"], "waiting");
@@ -592,9 +767,19 @@ mod tests {
     fn closing_a_turn_always_reports_completion() {
         let mut projector = Projector::new();
         run_item(&mut projector, "turn/started", 1, json!({"turn_id": "t"}));
-        let spoken = run_item(&mut projector, "turn/model_completed", 2, json!({"round": 0, "text": "hello"}));
+        let spoken = run_item(
+            &mut projector,
+            "turn/model_completed",
+            2,
+            json!({"round": 0, "text": "hello"}),
+        );
         assert_eq!(spoken["payload"]["kind"], "message");
-        let closing = run_item(&mut projector, "turn/completed", 3, json!({"text": "hello"}));
+        let closing = run_item(
+            &mut projector,
+            "turn/completed",
+            3,
+            json!({"text": "hello"}),
+        );
         assert_eq!(closing["payload"]["kind"], "status");
         assert_eq!(closing["payload"]["payload"]["status"], "completed");
     }
@@ -685,17 +870,26 @@ mod tests {
                 "content": r#"{"ok":true,"path":"notes.md","etag":"x","bytes":22}"#,
             }),
         );
-        let artifacts = &done["payload"]["payload"]["artifacts"];
+        // Top level, where the core puts them and the client looks for them.
+        let artifacts = &done["payload"]["artifacts"];
         assert_eq!(artifacts[0]["name"], "notes.md");
         assert_eq!(artifacts[0]["size_bytes"], 22);
         assert_eq!(artifacts[0]["item_id"], "th:t:c1:tool");
+        assert!(
+            done["payload"]["payload"]["artifacts"].is_null(),
+            "an artifact inside the payload is a second copy the client ignores"
+        );
     }
 
     /// Internal bookkeeping never reaches the webview.
     #[test]
     fn internal_events_project_to_nothing() {
         let mut projector = Projector::new();
-        assert!(projector.project(&envelope("turn/model_started", 1, json!({"round": 0}))).is_none());
-        assert!(projector.project(&envelope("item/tool_replayed", 2, json!({}))).is_none());
+        assert!(projector
+            .project(&envelope("turn/model_started", 1, json!({"round": 0})))
+            .is_none());
+        assert!(projector
+            .project(&envelope("item/tool_replayed", 2, json!({})))
+            .is_none());
     }
 }
