@@ -307,22 +307,38 @@ impl Model for LlmClient {
     }
 }
 
-/// Asks an OpenAI-compatible endpoint which models it actually serves.
+/// What an endpoint said when asked what it serves.
 ///
-/// The settings screen's "test connection" must answer with the endpoint's own
-/// reply. A stored boolean would let the app claim a connection it never made, and
-/// the user would only find out when the first real turn failed.
+/// Three outcomes, because "reachable" and "authorised" are different facts and the
+/// caller has to tell them apart: a `401` proves a server is listening at that
+/// address, while a connection failure proves nothing. Collapsing both into `Err`
+/// is what let an earlier version post the user's key to an address that had never
+/// been approved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    /// The endpoint answered with its model list.
+    Models(Vec<String>),
+    /// The endpoint answered but refused the credentials it was given.
+    Unauthorized,
+    /// The endpoint answered with some other status code.
+    Status(u16),
+}
+
+/// Asks an OpenAI-compatible endpoint what it serves, optionally with a key.
 ///
 /// The client is separate from the streaming one on purpose: a probe fails fast
 /// instead of sitting on a long read timeout, refuses redirects because a `302`
-/// would carry the `Authorization` header to a host the user never approved, and is
+/// would carry an `Authorization` header to a host the user never approved, and is
 /// never retried — a retried probe would keep knocking on an endpoint the user was
 /// just told is unreachable.
-pub async fn list_models(
+///
+/// Passing an empty `api_key` sends no `Authorization` header at all. That is what
+/// makes a credential-free probe safe to run against an unapproved address.
+pub async fn probe_endpoint(
     base_url: &str,
     api_key: &str,
     timeout: Duration,
-) -> Result<Vec<String>, CoreError> {
+) -> Result<ProbeOutcome, CoreError> {
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)
@@ -331,7 +347,7 @@ pub async fn list_models(
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let mut request = http.get(&url);
     if !api_key.trim().is_empty() {
-        request = request.bearer_auth(api_key);
+        request = request.bearer_auth(api_key.trim());
     }
     let response = request
         .send()
@@ -339,14 +355,11 @@ pub async fn list_models(
         .map_err(|e| CoreError::model(format!("cannot reach {url}: {e}")))?;
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
+    if status == 401 || status == 403 {
+        return Ok(ProbeOutcome::Unauthorized);
+    }
     if !(200..300).contains(&status) {
-        let snippet: String = body.chars().take(200).collect();
-        return Err(match status {
-            401 | 403 => CoreError::PermissionDenied {
-                resource: format!("provider api key ({url} rejected it)"),
-            },
-            _ => CoreError::model(format!("http {status} from {url}: {snippet}")),
-        });
+        return Ok(ProbeOutcome::Status(status));
     }
     let parsed: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| CoreError::model(format!("{url} did not answer JSON: {e}")))?;
@@ -362,7 +375,7 @@ pub async fn list_models(
         })
         .unwrap_or_default();
     names.sort();
-    Ok(names)
+    Ok(ProbeOutcome::Models(names))
 }
 
 /// Removes the API key from text that may be surfaced.

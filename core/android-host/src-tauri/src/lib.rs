@@ -29,6 +29,7 @@ use tauri::{Emitter, Manager};
 pub mod config;
 pub mod config_rpc;
 pub mod keystore;
+pub mod projection;
 pub mod http_surface;
 pub mod lifecycle;
 pub mod provider;
@@ -41,20 +42,40 @@ pub mod settings;
 /// would have written, so the frontend does not need two code paths.
 struct IpcSink {
     app: tauri::AppHandle,
+    /// Shared with the resume path so history and realtime agree on which turn an
+    /// item belongs to and on what a tool call is called.
+    projector: Arc<std::sync::Mutex<projection::Projector>>,
 }
 
 impl FrameSink for IpcSink {
     fn event(&self, body: serde_json::Value) {
-        // Debug builds only: when the model answers and the screen stays empty, the
-        // first question is whether the event ever crossed the IPC boundary, and
-        // without this line there is nothing to look at on either side.
+        // The webview renders `core/runItem`, not the runner's own words. Projecting
+        // here — at the boundary, not in the UI — keeps one code path for both cores.
+        let projected = {
+            let mut projector = self.projector.lock().unwrap();
+            projector.project(&body)
+        };
+        let Some(projected) = projected else {
+            #[cfg(debug_assertions)]
+            println!(
+                "core_event (not rendered) -> {} seq={}",
+                body.get("method").and_then(|value| value.as_str()).unwrap_or("?"),
+                body.get("seq").and_then(|value| value.as_u64()).unwrap_or(0),
+            );
+            return;
+        };
         #[cfg(debug_assertions)]
         println!(
-            "core_event -> {} seq={}",
-            body.get("method").and_then(|value| value.as_str()).unwrap_or("?"),
-            body.get("seq").and_then(|value| value.as_u64()).unwrap_or(0),
+            "core_event -> {} kind={} seq={}",
+            projected.get("method").and_then(|value| value.as_str()).unwrap_or("?"),
+            projected
+                .get("payload")
+                .and_then(|payload| payload.get("kind"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("?"),
+            projected.get("seq").and_then(|value| value.as_u64()).unwrap_or(0),
         );
-        let _ = self.app.emit("core-event", body);
+        let _ = self.app.emit("core-event", projected);
     }
     fn orphan_error(&self, code: i32, message: String) {
         let _ = self.app.emit(
@@ -76,6 +97,8 @@ pub struct CoreState {
     projects: sunday_host::projects::Projects,
     /// What the operating system reported, and what it is allowed to claim.
     lifecycle: lifecycle::Lifecycle,
+    /// Turns the runner's events into the projection the shared UI renders.
+    projector: Arc<std::sync::Mutex<projection::Projector>>,
     /// Kept alive for the process lifetime: dropping it releases the single-writer
     /// lock and a second instance could then open the same database.
     _lock: sunday_host::lock::SingleWriterLock,
@@ -99,11 +122,39 @@ async fn core_rpc(
         return answer;
     }
 
-    let sink: Arc<dyn FrameSink> = Arc::new(IpcSink { app });
+    let sink: Arc<dyn FrameSink> = Arc::new(IpcSink {
+        app,
+        projector: Arc::clone(&core.projector),
+    });
     match state.session.handle(&method, &params, sink) {
-        Ok(result) => Ok(result),
+        Ok(mut result) => {
+            // A resumed conversation arrives as journal events. They have to be
+            // projected by the same rules as the live stream, or the restored
+            // transcript would be a second dialect of the same facts.
+            project_events(&mut result, &core.projector);
+            Ok(result)
+        }
         Err((code, message, _data)) => Err(format!("{code}: {message}")),
     }
+}
+
+/// Rewrites a reply's `events` array into the shared UI's projection.
+///
+/// Only replies that carry history are affected; everything else passes through
+/// untouched, so a method that never had events cannot be changed by this.
+fn project_events(
+    result: &mut serde_json::Value,
+    projector: &Arc<std::sync::Mutex<projection::Projector>>,
+) {
+    let Some(events) = result.get_mut("events").and_then(|value| value.as_array_mut()) else {
+        return;
+    };
+    let mut guard = projector.lock().unwrap();
+    let projected: Vec<serde_json::Value> = events
+        .iter()
+        .filter_map(|event| guard.project(event))
+        .collect();
+    *events = projected;
 }
 
 /// Where the data actually lives, for Settings and for tests.
@@ -275,6 +326,7 @@ pub fn run() {
                 data_dir,
                 projects,
                 lifecycle,
+                projector: Arc::new(std::sync::Mutex::new(projection::Projector::new())),
                 _lock: lock,
             }));
             // Published so the JNI bridge, which runs on an Android thread with no

@@ -200,6 +200,41 @@ def sync_sources() -> int:
 # --------------------------------------------------------------------- ensure
 
 
+def fix_generated_node_path() -> None:
+    """Repairs the node path `tauri android init` bakes into the generated buildSrc.
+
+    The template writes the absolute node binary it detected, extension included and
+    in whatever case it happened to be spelled. Gradle then treats `node.EXE` as an
+    unknown executable, appends `.bat`, and fails with
+
+        A problem occurred starting process 'command '...\node.EXE.bat''
+
+    which is a build that cannot start for a reason that has nothing to do with the
+    code being built. Every other machine that spells it `node.exe` builds fine, so
+    this looks like an environment problem until it is read closely.
+
+    Rewriting it to the bare command name lets the OS resolve `node` through PATH,
+    which is what the generated fallbacks already assume.
+    """
+    build_task = PROJECT / "buildSrc/src/main/java/com/lamtools/sunday/core/kotlin/BuildTask.kt"
+    if not build_task.exists():
+        return
+    text = build_task.read_text(encoding="utf-8")
+    marker = 'val executable = """'
+    start = text.find(marker)
+    if start < 0:
+        return
+    end = text.find('"""', start + len(marker))
+    if end < 0:
+        return
+    current = text[start + len(marker):end]
+    if current.strip() == "node":
+        return
+    fixed = text[:start] + marker + "node" + text[end:]
+    build_task.write_text(fixed, encoding="utf-8")
+    say(f"fixed generated node path ({current} -> node)")
+
+
 def ensure_project(env: dict[str, str], timeout: int) -> int:
     if PROJECT.exists():
         say("generated project already present")
@@ -261,11 +296,19 @@ def apk_path(debug: bool) -> Path:
 
 
 def build(env: dict[str, str], debug: bool, target: str, timeout: int) -> int:
+    fix_generated_node_path()
     cli = tauri_cli()
     assert cli is not None
     command = cli + ["android", "build", "--apk", "--target", target]
     if debug:
         command.append("--debug")
+    # The CLI refuses to build when the npm `@tauri-apps/api` minor differs from the
+    # Rust `tauri` crate's. A fresh worktree inherits the npm tree from another
+    # checkout, so that comparison can fail for reasons that have nothing to do with
+    # this build. The escape hatch is explicit and off by default: turning it on
+    # silently would hide a real mismatch.
+    if env.get("ANDROID_IGNORE_TAURI_VERSION_MISMATCH") == "1":
+        command.append("--ignore-version-mismatches")
     code = run(command, APP_DIR, env, timeout)
     if code != EXIT_OK:
         return code

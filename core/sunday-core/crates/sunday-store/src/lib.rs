@@ -427,7 +427,18 @@ impl Store {
                 seq as i64,
                 format!("{}:accepted", env.request_id),
                 EventKind::CommandAccepted.as_str(),
-                json!({"kind": env.payload.kind()}).to_string(),
+                {
+                    // The instruction's text belongs in the journal: it is what the
+                    // user asked, and a resumed screen must be able to show it
+                    // without a second lookup that does not survive a restart.
+                    let mut payload = json!({"kind": env.payload.kind()});
+                    if let sunday_protocol::Command::TurnStart { text } = &env.payload {
+                        if let Some(object) = payload.as_object_mut() {
+                            object.insert("text".into(), json!(text));
+                        }
+                    }
+                    payload.to_string()
+                },
                 now
             ],
         )
