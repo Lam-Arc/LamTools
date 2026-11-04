@@ -77,8 +77,14 @@ async def test_uninstall_keeps_data(tmp_path: Path) -> None:
     )
 
     assert result.status == "ok"
-    assert not (tmp_path / "plugins" / "hello" / "plugin.json").exists()
-    assert (tmp_path / "plugins" / "hello" / "data" / "kept.txt").is_file()
+    # Plugin data does not belong to the code directory: it is migrated to the
+    # durable per-plugin location and the code tree is removed without it.
+    plugin_root = tmp_path / "plugins" / "hello"
+    assert not (plugin_root / "plugin.json").exists()
+    assert not plugin_root.exists()
+    assert (tmp_path / "plugin-data" / "hello" / "kept.txt").read_text(
+        encoding="utf-8"
+    ) == "kept"
     assert (await catalog.execute("plugin.system.list", {})).payload["plugins"] == []
 
 
