@@ -122,11 +122,12 @@ async def test_member_wake_is_one_marked_system_history_entry_without_user_dupli
     )
 
     assert [message.role for message in appended] == ["system"]
-    assert appended[0].metadata == {
-        "origin": "member_wake",
-        TAIL_SYSTEM_MESSAGE_MARKER: True,
-        "turn_id": "turn-wake",
-    }
+    # The required marking is what matters. Neutral bookkeeping the kernel
+    # stamps on every appended message (the arrival step) rides along.
+    metadata = appended[0].metadata
+    assert metadata["origin"] == "member_wake"
+    assert metadata[TAIL_SYSTEM_MESSAGE_MARKER] is True
+    assert metadata["turn_id"] == "turn-wake"
     assert [message.role for message in history] == ["user", "system"]
     assert [message.content for message in history].count("子代理 worker 已完成。") == 1
 

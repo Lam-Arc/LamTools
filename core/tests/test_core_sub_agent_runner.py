@@ -328,7 +328,9 @@ class WritingSubAgentLLM:
         if "sub_agent" in tool_names:
             self.main_steps += 1
         else:
-            self.child_steps += 1
+            self.child_steps = self._child_step_by_shape.setdefault(
+                shape, len(self._child_step_by_shape) + 1
+            )
         if self.main_steps == 1 and "sub_agent" in tool_names:
             yield LLMStreamEvent(
                 kind="done",
@@ -379,15 +381,33 @@ class ApprovalSubAgentLLM:
         self.child_steps = 0
         self.child_message_tools: set[str] = set()
         self.parent_received_child_message = False
+        # Script steps key on the request shape, never on a bare counter: a
+        # retried request must replay the same answer. A counter would advance
+        # on retry and silently change what the double answers.
+        self._parent_step_by_shape: dict[tuple, int] = {}
+        self._child_step_by_shape: dict[tuple, int] = {}
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("Core operation should use streaming")
 
+    @staticmethod
+    def _shape(request: LLMRequest, tool_names: set[str]) -> tuple:
+        last = request.messages[-1]
+        return (
+            len(request.messages),
+            last.role,
+            str(last.content)[:48],
+            tuple(sorted(tool_names)),
+        )
+
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
         tool_names = {tool["function"]["name"] for tool in request.tools or []}
+        shape = self._shape(request, tool_names)
         if "sub_agent" in tool_names:
-            self.main_steps += 1
+            self.main_steps = self._parent_step_by_shape.setdefault(
+                shape, len(self._parent_step_by_shape) + 1
+            )
             if self.main_steps >= 3:
                 self.parent_received_child_message = any(
                     "approved file is ready" in str(message.content)
@@ -425,14 +445,23 @@ class ApprovalSubAgentLLM:
             return
         if self.child_steps == 2:
             self.child_message_tools = tool_names
-            assert request.messages[-1].role == "user"
-            assert str(request.messages[-1].content).startswith(
-                "[Request-local sub-agent context]"
+            # The identity block rides the last user turn of the request. Tail
+            # system messages (a wake or a context change notice) may follow
+            # it, so only the user side of the ordering is contractual.
+            late_index = max(
+                index
+                for index, item in enumerate(request.messages)
+                if item.role == "user"
             )
-            assert "name: writer" in str(request.messages[-1].content)
-            assert "type: execute" in str(request.messages[-1].content)
-            assert "model_id: fake-model" in str(request.messages[-1].content)
-            assert "reasoning_level: high" in str(request.messages[-1].content)
+            late = request.messages[late_index]
+            assert str(late.content).startswith("[Request-local sub-agent context]")
+            assert "name: writer" in str(late.content)
+            assert "type: execute" in str(late.content)
+            assert "model_id: fake-model" in str(late.content)
+            assert "reasoning_level: high" in str(late.content)
+            assert all(
+                item.role == "system" for item in request.messages[late_index + 1:]
+            )
             yield LLMStreamEvent(kind="done", tool_calls=[
                 LLMToolCall(
                     id="call-child-message",
