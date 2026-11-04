@@ -144,6 +144,27 @@ async def _append_production_turn(db: Any, session_id: str, turn_id: str, text: 
         await session.commit()
 
 
+def _no_seq(rows):
+    """Return restored rows without the internal history_seq marker.
+
+    The kernel stamps that marker to anchor compaction boundaries and strips it
+    before a request is dispatched, so it is storage bookkeeping rather than
+    transcript content; comparing raw rows with it would over-specify the
+    internal layout of the checkpoint table.
+    """
+    cleaned = []
+    for row in rows:
+        row = dict(row)
+        metadata = dict(row.get("metadata") or {})
+        metadata.pop("history_seq", None)
+        if metadata:
+            row["metadata"] = metadata
+        else:
+            row.pop("metadata", None)
+        cleaned.append(row)
+    return cleaned
+
+
 def _tool_call_history(text: str) -> list[dict[str, Any]]:
     """A transcript in the real stored shape, tool call and result included."""
     return [
@@ -213,7 +234,7 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_truncates_the_history(
         assert fork_session.metadata["work_root"] == str(work_root)
         # The fork must hand the model the transcript through turn-1 — tool
         # call and result included — not an empty conversation.
-        assert await db.runtime_state_store.get_history("turn-fork") == first_history
+        assert _no_seq(await db.runtime_state_store.get_history("turn-fork")) == first_history
 
         second_fork = await catalog.execute("session.fork", {
             "session_id": "turn-source", "turn_id": "turn-1", "new_session_id": "turn-fork-2",
@@ -245,7 +266,7 @@ async def test_turn_fork_keeps_selected_turn_and_rollback_truncates_the_history(
         assert "turn-1" not in str(snapshot)
         assert "turn-2" not in str(snapshot)
         # 第一轮之前没有任何对话，撤回后模型看到的必须是空历史。
-        assert await db.runtime_state_store.get_history("turn-source") == []
+        assert _no_seq(await db.runtime_state_store.get_history("turn-source")) == []
         # 会话档案跟着对话一起留下：撤回不得把标题/项目归属一起清掉。
         survived = await sessions.get("turn-source")
         assert survived is not None
@@ -301,7 +322,7 @@ async def test_rollback_and_fork_keep_the_stored_transcript_not_the_events(tmp_p
         })
         assert forked.status == "ok", forked.payload
         # 分叉到最新一轮：整段对话（含工具调用）都在。
-        assert await db.runtime_state_store.get_history("shape-fork") == [
+        assert _no_seq(await db.runtime_state_store.get_history("shape-fork")) == [
             *transcript, *_tool_call_history("two")
         ]
 
@@ -310,7 +331,7 @@ async def test_rollback_and_fork_keep_the_stored_transcript_not_the_events(tmp_p
         })
         assert rolled_back.status == "ok", rolled_back.payload
         # 撤回第二轮：回到第一轮留下的对话，一条工具调用都不少。
-        assert await db.runtime_state_store.get_history(session_id) == transcript
+        assert _no_seq(await db.runtime_state_store.get_history(session_id)) == transcript
     finally:
         await db.close()
 
@@ -356,7 +377,7 @@ async def test_turn_operations_refuse_when_the_boundary_is_gone_instead_of_empty
         assert rolled_back.status == "error"
         assert "边界记录" in str(rolled_back.payload)
         # 中止后什么都没变：对话、轮次都原样保留。
-        assert await db.runtime_state_store.get_history(session_id) == [
+        assert _no_seq(await db.runtime_state_store.get_history(session_id)) == [
             *transcript, *_tool_call_history("two")
         ]
         async with db.session_factory() as session:
@@ -647,7 +668,7 @@ async def test_restore_only_touches_the_conversation(tmp_path: Path) -> None:
 
         assert restored.scope == "conversation"
         assert restored.restored_paths == ()
-        assert await db.runtime_state_store.get_history("session-scope") == [
+        assert _no_seq(await db.runtime_state_store.get_history("session-scope")) == [
             {"role": "user", "content": "before"}
         ]
         assert state_file.read_text(encoding="utf-8") == "after"
@@ -731,10 +752,10 @@ async def test_sub_agent_checkpoint_branches_from_main_and_restores_only_child_c
 
         assert child.parent_checkpoint_id == main.id
         assert child.graph_id == main.graph_id
-        assert await db.runtime_state_store.get_history(child_id) == [
+        assert _no_seq(await db.runtime_state_store.get_history(child_id)) == [
             {"role": "user", "content": "child-before"}
         ]
-        assert await db.runtime_state_store.get_history("session-parent") == [
+        assert _no_seq(await db.runtime_state_store.get_history("session-parent")) == [
             {"role": "user", "content": "main-after"}
         ]
         assert (work_root / "state.txt").read_text(encoding="utf-8") == "after-child"
@@ -784,7 +805,7 @@ async def test_fork_creates_a_new_session_and_marks_the_graph_edge(tmp_path: Pat
         assert forked.label == "分叉到新会话"
         assert forked.graph_id == source.graph_id
         assert graph.heads["session-forked"] == forked.id
-        assert await db.runtime_state_store.get_history("session-forked") == [
+        assert _no_seq(await db.runtime_state_store.get_history("session-forked")) == [
             {"role": "user", "content": "source history"}
         ]
         assert fork_session is not None
@@ -1003,7 +1024,7 @@ async def test_checkpoint_tools_share_the_coordinator_for_save_load_and_graph(tm
         # Lazy capture: the file was edited without backup_file(), so the
         # workspace is intentionally NOT rolled back (only tool-backed edits are).
         assert state_file.read_text(encoding="utf-8") == "after"
-        assert await db.runtime_state_store.get_history("session-tools") == [
+        assert _no_seq(await db.runtime_state_store.get_history("session-tools")) == [
             {"role": "user", "content": "after"}
         ]
     finally:

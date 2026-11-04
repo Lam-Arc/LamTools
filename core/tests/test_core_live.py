@@ -2513,6 +2513,9 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live-operation-host.db'}", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # The cancel path records a control row; without this table the turn
+        # never reaches the registry cancel this test asserts.
+        await conn.run_sync(CoreDbBase.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
     snapshot_store = SqlAlchemyThreadSnapshotStore(
@@ -2549,10 +2552,10 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
             self.task_handle = task
             return True
 
-        def task(self, thread_id):
+        def task(self, thread_id, *, run_id=None, turn_id=""):
             # The host and the tests both ask the registry for the live task so
             # they can await it instead of sleeping.
-            _ = thread_id
+            _ = thread_id, run_id, turn_id
             return getattr(self, "task_handle", None)
 
         def cancel(self, thread_id, *, run_id=None, force=False) -> None:
@@ -2568,7 +2571,14 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
     )
     context = CoreLiveContext(host=host, operations=OperationCatalog())
 
+    turn_running = asyncio.Event()
+    hold = asyncio.Event()
+
     async def turn_start(_request):
+        # A finished turn is a legitimate cancel no-op, so keep this one alive
+        # until the cancel arrives; otherwise the registry never sees it.
+        turn_running.set()
+        await hold.wait()
         return OperationResult(name="turn.start")
 
     context.operations.register("turn.start", turn_start)
@@ -2576,7 +2586,7 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
         assert context.persistence is persistence
         assert set(host.operation_handlers()) == set(CORE_WORKBENCH_OPERATION_NAMES)
 
-        started = await handle_turn_start_operation(
+        started_outcome = await handle_turn_start_operation(
             request_id=1,
             params={
                 "thread_id": "thread-host",
@@ -2585,7 +2595,8 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
             },
             context=context,
         )
-        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        turn_id = started_outcome.response["result"]["runtime_start"]["turn_id"]
+        await asyncio.wait_for(turn_running.wait(), 5)
         await handle_turn_cancel_operation(
             request_id=2,
             params={"thread_id": "thread-host", "turn_id": turn_id},

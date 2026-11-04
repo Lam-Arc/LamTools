@@ -19,6 +19,27 @@ from lamtools_core.session import MessageRecord, SessionRecord
 from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
 
+def _no_seq(rows):
+    """Return restored rows without the internal history_seq marker.
+
+    The kernel stamps that marker to anchor compaction boundaries and strips it
+    before a request is dispatched, so it is storage bookkeeping rather than
+    transcript content; comparing raw rows with it would over-specify the
+    internal layout of the checkpoint table.
+    """
+    cleaned = []
+    for row in rows:
+        row = dict(row)
+        metadata = dict(row.get("metadata") or {})
+        metadata.pop("history_seq", None)
+        if metadata:
+            row["metadata"] = metadata
+        else:
+            row.pop("metadata", None)
+        cleaned.append(row)
+    return cleaned
+
+
 def _checkpoint_coordinator_type():
     module = importlib.import_module("lamtools_core.checkpoint")
     return module.CoreCheckpointCoordinator
@@ -209,7 +230,7 @@ async def test_checkpoint_restore_leans_on_the_conversation_only(
 
         assert restored.status == "committed"
         assert [message.content for message in await sessions.list_messages("session-rollback")] == ["first turn"]
-        assert await db.runtime_state_store.get_history("session-rollback") == [
+        assert _no_seq(await db.runtime_state_store.get_history("session-rollback")) == [
             {"role": "user", "content": "first turn"}
         ]
         # 恢复只作用于对话：工作区保持改动后的当前状态。
@@ -274,7 +295,7 @@ async def test_checkpoint_restore_keeps_runtime_projection_and_events_consistent
             if event["method"] == "session/rollback"
         )
         assert rollback_event["payload"]["snapshot_required"] is True
-        assert await db.runtime_state_store.get_history(session_id) == [
+        assert _no_seq(await db.runtime_state_store.get_history(session_id)) == [
             {"role": "user", "content": "first"},
             {"role": "assistant", "content": "FIRST_OK"},
         ]
