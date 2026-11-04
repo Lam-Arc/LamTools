@@ -32,8 +32,6 @@ from lamtools_core.context_compaction import (
     ContextCompactionController,
     ContextCompactionError,
     ContextCompactionResult,
-    RECENT_USER_MESSAGES_METADATA_KEY,
-    extract_recent_user_messages,
 )
 from lamtools_core.context_compaction.state import load_compaction_history, persist_compaction
 from lamtools_core.context_compaction_budget import (
@@ -298,15 +296,6 @@ def _history_seq_set(value: Any) -> set[int]:
         if parsed > 0:
             result.add(parsed)
     return result
-
-
-def _summary_recent_user_messages(
-    compaction: dict[str, Any], summary_text: str
-) -> list[str]:
-    raw = compaction.get(RECENT_USER_MESSAGES_METADATA_KEY)
-    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
-        return list(raw)
-    return extract_recent_user_messages(summary_text)
 
 
 _INTERNAL_MESSAGE_METADATA_KEYS = ("history_seq", "lam_compaction_resume")

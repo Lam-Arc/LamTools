@@ -13,7 +13,8 @@ from lamtools_core.context_compaction import (
     select_context_compaction_layout,
 )
 from lamtools_core.context_compaction.formatting import (
-    append_recent_user_messages,
+    extract_recent_user_messages,
+    strip_recent_user_messages,
     extract_recent_user_messages,
     strip_recent_user_messages,
     user_message_text,
@@ -61,14 +62,18 @@ def test_layout_summarizes_users_and_retains_only_explicit_step_override() -> No
     )
 
     assert layout is not None
+    # The latest user turn is always retained in its own role; the explicit
+    # step override only adds the two most recent assistant steps.
     assert [message.content for message in layout.retained_messages] == [
+        "user-24",
         "answer-2",
         "result-2",
         "answer-3",
         "result-3",
     ]
-    assert [message.content for message in layout.compacted_messages[:25]] == [
-        f"user-{index}" for index in range(25)
+    # user-24 is the retained latest turn, so only user-0..user-23 are summarized.
+    assert [message.content for message in layout.compacted_messages[:24]] == [
+        f"user-{index}" for index in range(24)
     ]
     assert [messages.index(message) for message in layout.retained_messages] == sorted(
         messages.index(message) for message in layout.retained_messages
@@ -90,8 +95,10 @@ def test_layout_enters_compaction_when_preferred_union_covers_oversized_history(
     )
 
     assert layout is not None
-    assert layout.compacted_messages == messages
-    assert layout.retained_messages == []
+    # Everything else is summarized; the latest user instruction stays a user
+    # message so the controller can refuse when it alone exceeds the limit.
+    assert layout.retained_messages == [messages[-1]]
+    assert layout.compacted_messages == messages[:-1]
 
 
 def test_layout_returns_oversized_latest_user_for_controller_failure() -> None:
@@ -104,8 +111,10 @@ def test_layout_returns_oversized_latest_user_for_controller_failure() -> None:
     )
 
     assert layout is not None
-    assert layout.compacted_messages == [latest]
-    assert layout.retained_messages == []
+    # Nothing can be summarized here; keeping the latest user in its own role is
+    # what lets the controller report the over-limit turn instead of dropping it.
+    assert layout.retained_messages == [latest]
+    assert layout.compacted_messages == []
 
 
 def test_fitter_drops_oldest_selected_units_but_keeps_newest_user() -> None:
@@ -152,117 +161,6 @@ def test_fitter_fails_when_newest_user_alone_cannot_fit() -> None:
         )
 
 
-def test_fitter_appends_numbered_recent_users_verbatim() -> None:
-    original = ["first line\nsecond line", " keep surrounding spaces "]
-    result = CompactionFitter(_count_tokens).fit(
-        CompactionFitInput(
-            system_prefix=[],
-            summary_message=ChatMessage(role="system", content="model summary"),
-            recent_messages=[],
-            recent_user_messages=original,
-            target_tokens=1_000,
-        )
-    )
-
-    assert result.messages[0].content == (
-        "model summary\n\n## Recent user messages\n"
-        "1. first line\nsecond line\n\n2.  keep surrounding spaces "
-    )
-
-
-def test_fitter_silently_drops_oldest_recent_user_when_suffix_is_over_budget() -> None:
-    users = ["old" * 20, "middle", "latest"]
-    target = _count_tokens(
-        [ChatMessage(role="system", content=append_recent_user_messages("", users[1:]))]
-    )
-    result = CompactionFitter(_count_tokens).fit(
-        CompactionFitInput(
-            system_prefix=[],
-            summary_message=ChatMessage(role="system", content="model summary"),
-            recent_messages=[],
-            recent_user_messages=users,
-            target_tokens=target,
-        )
-    )
-
-    content = str(result.messages[0].content)
-    assert "oldold" not in content
-    assert content.endswith("1. middle\n\n2. latest")
-    assert result.estimated_tokens <= target
-
-
-def test_prior_program_owned_recent_user_suffix_is_replaced() -> None:
-    previous = append_recent_user_messages("model summary", ["old instruction"])
-
-    assert strip_recent_user_messages(previous) == "model summary"
-    assert append_recent_user_messages(previous, ["new instruction"]).count(
-        "## Recent user messages"
-    ) == 1
-
-
-def test_recent_user_marker_collision_keeps_visible_numbered_text_and_round_trips() -> None:
-    # A user message can contain the legacy heading plus a numbered line.  The
-    # new collision-safe framing must keep that content intact when a later
-    # recursive compaction strips and appends the suffix again.
-    user_content = "prefix\n\n## Recent user messages\n1. quoted"
-    summary = append_recent_user_messages("summary", [user_content])
-
-    assert extract_recent_user_messages(summary) == [user_content]
-    assert strip_recent_user_messages(summary) == "summary"
-    assert (
-        "## Recent user messages\n"
-        "1. prefix\n\n"
-        "## Recent user messages\n"
-        "1. quoted"
-    ) in summary
-    assert "<!-- lamtools:recent-user-messages:v1;" in summary
-    assert "(framed)" not in summary
-
-
-@pytest.mark.parametrize(
-    "user_content",
-    [
-        "a\r\nb",
-        "a\r\n\r\n1. b",
-        "a\n",
-        "a\n   ",
-        "a\vb",
-        "a\fb",
-        "a\x1cb",
-        "a\x1db",
-        "a\x1eb",
-        "a\x85b",
-        "a\u2028b",
-        "a\u2029b",
-    ],
-)
-def test_recent_user_splitlines_sensitive_content_round_trips_verbatim(
-    user_content: str,
-) -> None:
-    summary = append_recent_user_messages("summary", [user_content])
-
-    assert extract_recent_user_messages(summary) == [user_content]
-    assert strip_recent_user_messages(summary) == "summary"
-    assert "<!-- lamtools:recent-user-messages:v1;" in summary
-
-
-def test_legacy_recent_user_marker_collision_without_numbered_tail_is_preserved() -> None:
-    # Model prose may quote the program-owned heading.  Without a contiguous
-    # one-based numbered tail, the compatibility parser must leave that prose
-    # untouched so a later suffix append cannot erase it.
-    summary = (
-        "The model quoted this heading as an example:\n\n"
-        "## Recent user messages\n"
-        "(not a numbered suffix; keep this text verbatim)"
-    )
-
-    assert extract_recent_user_messages(summary) == []
-    assert strip_recent_user_messages(summary) == summary
-    appended = append_recent_user_messages(summary, ["new instruction"])
-    assert "(not a numbered suffix; keep this text verbatim)" in appended
-    assert appended.endswith("## Recent user messages\n1. new instruction")
-
-
 def test_multimodal_user_message_keeps_only_original_text_blocks() -> None:
     content = [
         {"type": "text", "text": "first\n"},
@@ -271,23 +169,6 @@ def test_multimodal_user_message_keeps_only_original_text_blocks() -> None:
     ]
 
     assert user_message_text(content) == "first\nsecond"
-
-
-def test_fitter_drops_retained_step_before_recent_user_original() -> None:
-    latest_only = append_recent_user_messages("", ["latest instruction"])
-    target = _count_tokens([ChatMessage(role="system", content=latest_only)])
-    result = CompactionFitter(_count_tokens).fit(
-        CompactionFitInput(
-            system_prefix=[],
-            summary_message=ChatMessage(role="system", content="model summary"),
-            recent_messages=[ChatMessage(role="assistant", content="x" * 100)],
-            recent_user_messages=["latest instruction"],
-            target_tokens=target,
-        )
-    )
-
-    assert len(result.messages) == 1
-    assert result.messages[0].content == latest_only
 
 
 def test_retained_steps_setting_validation_and_cli(isolated_config_root, capsys) -> None:
@@ -313,3 +194,17 @@ async def test_settings_rpc_accepts_zero_retained_steps(isolated_config_root) ->
 
     assert result.status == "ok"
     assert load_retained_steps() == 0
+
+
+def test_legacy_recent_user_appendix_is_read_and_stripped() -> None:
+    """Old databases still carry the removed appendix.
+
+    The writer is gone, but summaries persisted before the change keep the
+    section. Reading must ignore it instead of feeding stale raw user text back
+    into the next summary.
+    """
+    legacy = "model summary\n\n## Recent user messages\n1. 旧指令\n\n2. 又一条"
+
+    assert extract_recent_user_messages(legacy) == ["旧指令", "又一条"]
+    assert "## Recent user messages" not in strip_recent_user_messages(legacy)
+    assert strip_recent_user_messages(legacy).strip() == "model summary"

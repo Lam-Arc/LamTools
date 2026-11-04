@@ -482,15 +482,6 @@ def strip_recent_user_messages(
     return value
 
 
-def append_recent_user_messages(summary: str, messages: list[str]) -> str:
-    """Append verbatim user messages as a deterministic numbered suffix."""
-    body = strip_recent_user_messages(summary).rstrip()
-    if not messages:
-        return body
-    section = _suffix_for_recent_user_messages(list(messages))
-    return f"{body}\n\n{section}" if body else section
-
-
 def user_message_text(content: object) -> str:
     """Return user-authored text without serializing non-text media blocks."""
     if isinstance(content, str):
@@ -534,7 +525,6 @@ __all__ = [
     "RECENT_USER_MESSAGES_HEADING",
     "RECENT_USER_MESSAGES_METADATA_KEY",
     "NON_TEXT_USER_MESSAGE_PLACEHOLDER",
-    "append_recent_user_messages",
     "extract_recent_user_messages",
     "format_messages_for_compaction",
     "has_structured_sections",

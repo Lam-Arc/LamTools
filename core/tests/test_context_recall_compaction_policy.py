@@ -5,7 +5,6 @@ from copy import deepcopy
 import pytest
 
 from lamtools_core.context_compaction import ContextCompactionRequest, compact_context
-from lamtools_core.context_compaction.formatting import append_recent_user_messages
 from lamtools_core.context_compaction.models import CompactionSummary
 from lamtools_core.llm import ChatMessage, LLMResponse
 
@@ -21,7 +20,11 @@ class SummaryClient:
 
 @pytest.mark.asyncio
 async def test_compaction_drops_recent_user_appendix_but_keeps_current_request():
-    old = append_recent_user_messages(CompactionSummary(goals="旧任务", active_user_instructions="保留 UTF-8").render(), ["过去的用户原文"])
+    # Legacy summary written before the appendix was removed.
+    old = (
+        CompactionSummary(goals="旧任务", active_user_instructions="保留 UTF-8").render()
+        + "\n\n## Recent user messages\n1. 过去的用户原文"
+    )
     history = [ChatMessage(role="system", content="SYSTEM"), ChatMessage(role="system", content=old, metadata={"key": "context_compaction_summary", "recent_user_messages": ["过去的用户原文"]})]
     for i in range(55):
         history += [ChatMessage(role="user", content=f"old-{i}"), ChatMessage(role="assistant", content="大量历史工具说明 " * 80)]
