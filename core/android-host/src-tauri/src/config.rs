@@ -27,6 +27,13 @@ pub struct CoreConfig {
     /// `openai`, `anthropic` or `openai-compatible`. Part of the provider binding.
     #[serde(default = "default_provider")]
     pub provider: String,
+    /// What the user called this provider in the settings screen.
+    ///
+    /// Kept because the shared model screen lists providers by name, and deriving one
+    /// from the host would silently rename the user's entry whenever they edited the
+    /// address.
+    #[serde(default = "default_provider_name")]
+    pub provider_name: String,
     /// The acknowledgement that lets plain `http://` to a local model through.
     /// Off by default: a downgrade to clear text must be a decision.
     #[serde(default)]
@@ -50,6 +57,10 @@ fn default_provider() -> String {
     "openai-compatible".into()
 }
 
+fn default_provider_name() -> String {
+    "自定义接口".into()
+}
+
 impl Default for CoreConfig {
     fn default() -> Self {
         Self {
@@ -57,6 +68,7 @@ impl Default for CoreConfig {
             model_id: default_model(),
             granted_tools: Vec::new(),
             provider: default_provider(),
+            provider_name: default_provider_name(),
             // The emulator's default endpoint is plain http to the host machine, so
             // the default config has to say so out loud rather than rely on a silent
             // exception for 10.0.2.2.
@@ -123,6 +135,7 @@ pub fn public_view(dir: &Path) -> serde_json::Value {
         "base_url": config.base_url,
         "model_id": config.model_id,
         "provider": config.provider,
+        "provider_name": config.provider_name,
         "granted_tools": config.granted_tools,
         "has_api_key": has_api_key,
         "allow_insecure_local": config.allow_insecure_local,

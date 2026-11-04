@@ -817,6 +817,8 @@ import { absoluteArtifactPath } from '@/artifacts/model.ts'
 type RawSession = {
   id: string
   title: string
+  project_id?: string
+  groupId?: string
   status?: string
   created_at?: string
   createdAt?: string
@@ -840,6 +842,9 @@ type RawModel = {
   temperature?: number
   capability?: string
   notes?: string
+  is_default?: boolean
+  enabled?: boolean
+  pricing?: Record<string, number | string>
   extra?: Record<string, unknown> | null
 }
 
@@ -4344,6 +4349,9 @@ function toSession(raw: RawSession): CoreSessionListItem {
     title: raw.title || raw.id,
     createdAt: raw.created_at || raw.createdAt || '',
     updatedAt: raw.updated_at || raw.updatedAt,
+    // Without this the sidebar has no project to file the session under, and every
+    // project looks empty however many sessions the core returns.
+    project_id: raw.project_id || raw.groupId || undefined,
     status: raw.status,
     metadata: raw.metadata,
   }

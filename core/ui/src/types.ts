@@ -94,6 +94,8 @@ export interface CoreSessionListItem {
   title: string;
   createdAt: string;
   updatedAt?: string;
+  /** The project this session belongs to; the sidebar groups by it. */
+  project_id?: string;
   groupId?: string;
   status?: string;
   metadata?: Record<string, unknown>;
@@ -484,6 +486,8 @@ export interface SessionItem {
   title: string;
   createdAt?: string;
   updatedAt?: string;
+  /** The project that owns this session; the sidebar files sessions by it. */
+  project_id?: string;
   status?: string;
   /** Optional secondary line rendered by the shared sidebar. */
   meta?: string;

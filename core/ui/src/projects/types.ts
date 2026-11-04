@@ -101,11 +101,18 @@ export function buildCoreProjectGroups(
     canManage: true,
   }))
   const groupsByWorkRoot = new Map(groups.map((group) => [group.workRoot, group]))
+  const groupsById = new Map(groups.map((group) => [group.id, group]))
   for (const session of sessions) {
+    // A session's owning project is a fact the core already states as `project_id`.
+    // Filing by work_root instead used to leave every project empty on any core
+    // that reports the id but no metadata, and the sidebar then claimed the project
+    // had no sessions while the list endpoint was returning them. The directory is
+    // kept as a fallback for cores that only report where the session ran.
+    const byId = session.project_id ? groupsById.get(session.project_id) : undefined
     const workRoot = typeof session.metadata?.work_root === 'string'
       ? session.metadata.work_root
       : ''
-    const group = workRoot ? groupsByWorkRoot.get(workRoot) : undefined
+    const group = byId ?? (workRoot ? groupsByWorkRoot.get(workRoot) : undefined)
     if (group) {
       group.sessions.push(session)
     }

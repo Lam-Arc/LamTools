@@ -8,6 +8,8 @@ pub mod app_server;
 pub mod lifecycle;
 pub mod lock;
 pub mod policy;
+pub mod projects;
+pub mod projects_http;
 // Shared with the hosts: a permission rule that each host reimplements is a rule
 // that will be right in one place and wrong in the others.
 pub mod private_file;

@@ -307,6 +307,64 @@ impl Model for LlmClient {
     }
 }
 
+/// Asks an OpenAI-compatible endpoint which models it actually serves.
+///
+/// The settings screen's "test connection" must answer with the endpoint's own
+/// reply. A stored boolean would let the app claim a connection it never made, and
+/// the user would only find out when the first real turn failed.
+///
+/// The client is separate from the streaming one on purpose: a probe fails fast
+/// instead of sitting on a long read timeout, refuses redirects because a `302`
+/// would carry the `Authorization` header to a host the user never approved, and is
+/// never retried — a retried probe would keep knocking on an endpoint the user was
+/// just told is unreachable.
+pub async fn list_models(
+    base_url: &str,
+    api_key: &str,
+    timeout: Duration,
+) -> Result<Vec<String>, CoreError> {
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()
+        .map_err(|e| CoreError::model(format!("http client: {e}")))?;
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let mut request = http.get(&url);
+    if !api_key.trim().is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| CoreError::model(format!("cannot reach {url}: {e}")))?;
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+    if !(200..300).contains(&status) {
+        let snippet: String = body.chars().take(200).collect();
+        return Err(match status {
+            401 | 403 => CoreError::PermissionDenied {
+                resource: format!("provider api key ({url} rejected it)"),
+            },
+            _ => CoreError::model(format!("http {status} from {url}: {snippet}")),
+        });
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| CoreError::model(format!("{url} did not answer JSON: {e}")))?;
+    let mut names: Vec<String> = parsed
+        .get("data")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    Ok(names)
+}
+
 /// Removes the API key from text that may be surfaced.
 ///
 /// One place, called from every path that can carry provider text outward: error

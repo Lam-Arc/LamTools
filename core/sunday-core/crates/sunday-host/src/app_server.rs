@@ -607,9 +607,35 @@ fn dispatch(
             }
             state.thread_id = thread.clone();
             let events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
+            let history: Vec<serde_json::Value> =
+                events.iter().map(|e| event_json(&thread, e)).collect();
+            // The client rebuilds a conversation from `snapshot` plus `events`: it
+            // hydrates the snapshot and then replays everything the snapshot does not
+            // cover. Shipping only `_events` — which `Session::handle` strips before
+            // the reply leaves the host — left a resumed session with no state at all,
+            // so the thread rendered empty and every live event that followed was
+            // dropped for want of a state to apply it to.
+            //
+            // `snapshot_seq` is deliberately 0: any higher value tells the client to
+            // skip exactly the events this same reply is delivering, and the
+            // conversation would come back blank again.
             Ok(serde_json::json!({
                 "thread_id": thread,
-                "_events": events.iter().map(|e| event_json(&thread, e)).collect::<Vec<_>>(),
+                "snapshot": {
+                    "thread_id": thread,
+                    "snapshot_seq": 0,
+                    "revision": 0,
+                    "status": "idle",
+                    "turns": {},
+                    "items": {},
+                    "item_order": [],
+                    "requests": {},
+                    "artifacts": {},
+                    "queue": [],
+                    "seen_event_ids": [],
+                },
+                "events": history.clone(),
+                "_events": history,
             }))
         }
         "thread/read" => {
@@ -635,8 +661,11 @@ fn dispatch(
                 .history(&thread, before_seq, limit)
                 .map_err(|e| (-32000, e, None))?;
             let next_before = page.events.first().map(|e| e.seq);
+            let page_events: Vec<serde_json::Value> =
+                page.events.iter().map(|e| event_json(&thread, e)).collect();
             Ok(serde_json::json!({
                 "thread_id": thread,
+                "events": page_events.clone(),
                 "snapshot_seq": page.events.last().map(|e| e.seq).unwrap_or(0),
                 "history_page": {
                     "char_limit": 0,
@@ -652,7 +681,7 @@ fn dispatch(
                 "turns": {},
                 "items": {},
                 "item_order": [],
-                "_events": page.events.iter().map(|e| event_json(&thread, e)).collect::<Vec<_>>(),
+                "_events": page_events,
             }))
         }
         "queue/list" => {

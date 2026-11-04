@@ -128,6 +128,7 @@ mod tests {
             model_id: "qwen2.5:3b".into(),
             granted_tools: Vec::new(),
             provider: provider.into(),
+            provider_name: "test".into(),
             allow_insecure_local: true,
             confirm_endpoint: confirm,
         }

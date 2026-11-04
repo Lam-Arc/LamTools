@@ -1,7 +1,6 @@
 import type {
   LamToolsTransport,
   TransportConnectionState,
-  TransportHttpRequest,
   TransportHttpResponse,
   TransportMessage,
   TransportRequest,
@@ -108,9 +107,28 @@ export class IpcTransport implements LamToolsTransport {
 
   async request<TResponse = unknown>(request: TransportRequest): Promise<TResponse> {
     if (request.kind === 'http') {
-      // IPC has no HTTP surface. Saying so is better than a silent empty response
-      // that makes the caller think a file was written.
-      throw httpUnsupported(request)
+      // The shared UI asks for projects and files over HTTP because that is what the
+      // desktop core serves. The in-app core answers the same paths through a command,
+      // so the UI does not need a second code path and cannot drift from desktop.
+      await this.connect()
+      const reply = (await this.invoke('core_http', {
+        method: request.method,
+        path: request.path,
+        body: request.body ? new TextDecoder().decode(request.body) : null,
+      })) as {
+        status: number
+        content_type: string
+        body: string | null
+        body_base64: string | null
+      }
+      const bytes = reply.body_base64
+        ? decodeBase64(reply.body_base64)
+        : new TextEncoder().encode(reply.body ?? '')
+      return {
+        status: reply.status,
+        headers: { 'content-type': reply.content_type },
+        body: bytes,
+      } as TResponse
     }
     await this.connect()
 
@@ -175,10 +193,14 @@ export class IpcTransport implements LamToolsTransport {
   }
 }
 
-function httpUnsupported(request: TransportHttpRequest): Error {
-  return new Error(
-    `the in-app core has no HTTP transport, so ${request.method} ${request.path} cannot be served`,
-  )
+/** Bytes from base64, for the one endpoint that answers with a file. */
+function decodeBase64(text: string): Uint8Array {
+  const binary = atob(text)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
 }
 
 /**

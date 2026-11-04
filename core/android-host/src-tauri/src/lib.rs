@@ -27,7 +27,9 @@ use sunday_host::runner::{CoreOptions, CoreRunner};
 use tauri::{Emitter, Manager};
 
 pub mod config;
+pub mod config_rpc;
 pub mod keystore;
+pub mod http_surface;
 pub mod lifecycle;
 pub mod provider;
 pub mod secrets;
@@ -43,6 +45,15 @@ struct IpcSink {
 
 impl FrameSink for IpcSink {
     fn event(&self, body: serde_json::Value) {
+        // Debug builds only: when the model answers and the screen stays empty, the
+        // first question is whether the event ever crossed the IPC boundary, and
+        // without this line there is nothing to look at on either side.
+        #[cfg(debug_assertions)]
+        println!(
+            "core_event -> {} seq={}",
+            body.get("method").and_then(|value| value.as_str()).unwrap_or("?"),
+            body.get("seq").and_then(|value| value.as_u64()).unwrap_or(0),
+        );
         let _ = self.app.emit("core-event", body);
     }
     fn orphan_error(&self, code: i32, message: String) {
@@ -61,6 +72,8 @@ pub struct CoreState {
     session: Session,
     runner: Arc<CoreRunner>,
     data_dir: std::path::PathBuf,
+    /// Projects, sessions and their files, served to the shared UI over `core_http`.
+    projects: sunday_host::projects::Projects,
     /// What the operating system reported, and what it is allowed to claim.
     lifecycle: lifecycle::Lifecycle,
     /// Kept alive for the process lifetime: dropping it releases the single-writer
@@ -77,6 +90,15 @@ async fn core_rpc(
     method: String,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    // The settings screen speaks a `config.*` catalog that the desktop core owns.
+    // This host has a single provider binding instead, so those methods are answered
+    // by the adapter rather than handed to the runner, which would answer "method
+    // not found" and leave the model screen permanently unusable.
+    let core = Arc::clone(state.inner());
+    if let Some(answer) = config_rpc::handle(&core, &method, &params).await {
+        return answer;
+    }
+
     let sink: Arc<dyn FrameSink> = Arc::new(IpcSink { app });
     match state.session.handle(&method, &params, sink) {
         Ok(result) => Ok(result),
@@ -194,6 +216,7 @@ pub fn run() {
 
             let cfg = config::load_or_default(&data_dir)?;
             let workspace = data_dir.join("workspace");
+            let workspace_path = workspace.clone();
             std::fs::create_dir_all(&workspace)?;
 
             // The API key comes from the platform secret store, not from the JSON
@@ -243,10 +266,14 @@ pub fn run() {
                 data_dir.display(),
                 lifecycle.instance()
             );
+            // Projects live under the same workspace the runner uses, so a file the agent
+            // writes is a file the user can open, and the boundary is one directory.
+            let projects = sunday_host::projects::Projects::new(&data_dir, &workspace_path);
             app.manage(Arc::new(CoreState {
                 session,
                 runner,
                 data_dir,
+                projects,
                 lifecycle,
                 _lock: lock,
             }));
@@ -272,6 +299,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             core_rpc,
             core_info,
+            http_surface::core_http,
             settings::model_config,
             settings::save_model_config,
             settings::approve_endpoint,

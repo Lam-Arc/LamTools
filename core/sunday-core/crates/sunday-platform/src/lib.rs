@@ -161,6 +161,26 @@ impl LocalFiles {
         &self.policy
     }
 
+    /// Resolves a workspace-relative path for reading.
+    ///
+    /// Exposed so a host can list and preview files without going through the async
+    /// `FileAccess` port, and without reimplementing the three checks in `resolve`.
+    pub fn resolve_read(&self, rel: &str) -> Result<PathBuf, CoreError> {
+        self.resolve(&FileHandle::Workspace {
+            rel: rel.to_owned(),
+        })
+    }
+
+    /// Resolves a path for writing.
+    ///
+    /// The same rules as a read on purpose: a write is not more trusted than a read, and
+    /// two entry points with different rules is how a boundary gets a hole.
+    pub fn resolve_write(&self, rel: &str) -> Result<PathBuf, CoreError> {
+        self.resolve(&FileHandle::Workspace {
+            rel: rel.to_owned(),
+        })
+    }
+
     /// Resolves a handle to a real path, refusing three things: traversal,
     /// denied names, and symlinks that point outside the root.
     fn resolve(&self, handle: &FileHandle) -> Result<PathBuf, CoreError> {
