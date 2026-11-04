@@ -74,7 +74,10 @@ async def test_provider_count_is_reported_even_when_the_anchor_is_stale():
     # The anchor is stale (the prompt changed), so the trigger fell back to the
     # estimate and used the provider count as its floor.  The panel gets the
     # provider's number either way.
-    assert metrics.get("context_measurement_source") == "provider_count_floor"
+    # The provider count is preferred outright, not merged with the estimate
+    # ("不与估算取最大值"), so the reported source is the provider's usage even
+    # when the prompt changed between steps.
+    assert metrics.get("context_measurement_source") == "usage"
     assert metrics.get("context_usage_prompt_tokens") == 1234
 
 
@@ -152,11 +155,13 @@ async def test_compaction_triggers_on_the_provider_count_when_the_estimate_is_lo
             MockKitStep(reply="done", decision="done"),
         ]
     )
+    # The trigger sits above the local estimate (505) and below what the
+    # provider reported (1234), so only the provider count can fire it.
     kernel: CoreLoopKernel = _make_kernel(
         kit,
         llm_client=_ProviderCountLLM(),
         event_sink=sink,
-        policy=LoopPolicy(context_window_tokens=100_000, compact_trigger_tokens=500),
+        policy=LoopPolicy(context_window_tokens=100_000, compact_trigger_tokens=800),
     )
 
     result = await kernel.run(_make_turn_input())
@@ -165,9 +170,13 @@ async def test_compaction_triggers_on_the_provider_count_when_the_estimate_is_lo
         event for event in sink.events
         if event.name == "runtime.metrics"
         and (event.payload.get("runtime_metrics") or {}).get("context_measurement_source")
-        == "provider_count_floor"
+        == "usage"
     ]
-    assert metric_events, "the provider count never drove the trigger"
+    assert metric_events, "the provider count never drove the measurement"
+    assert max(
+        int((event.payload.get("runtime_metrics") or {}).get("context_tokens") or 0)
+        for event in metric_events
+    ) >= 1234
     compaction_started = any(
         event.name == "runtime.part" and (event.payload or {}).get("part_type") == "compaction"
         for event in sink.events
