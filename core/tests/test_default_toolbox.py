@@ -1058,6 +1058,35 @@ async def test_core_toolbox_mode_blocked_call_returns_error_to_model(tmp_path):
     assert "consider mode" in result.error
 
 
+def test_core_toolbox_consider_command_grading_blocks_dangerous_and_wrapping(tmp_path):
+    """consider keeps run_command, so the per-command level is the whole boundary.
+
+    Visibility hides the write tools, and this guards the other half: read-only
+    commands still work, while a destructive command or one that hides behind a
+    shell wrapper is refused by the level cap.  A wrapper must not become a
+    permission bypass.
+    """
+    toolbox = _consider_toolbox(tmp_path)
+
+    for command in ("git status", "ls -la", "cat notes.txt"):
+        call = toolbox.prepare_call(
+            ToolCall(id=f"ok-{command}", name="run_command", arguments={"command": command})
+        )
+        assert call.metadata["approval"]["blocked"] is False, command
+
+    for command in (
+        "rm -rf build",
+        "git reset --hard",
+        "bash -c \"rm -rf build\"",
+        "echo ok > out.txt",
+        "cat notes.txt && rm notes.txt",
+    ):
+        call = toolbox.prepare_call(
+            ToolCall(id=f"no-{command}", name="run_command", arguments={"command": command})
+        )
+        assert call.metadata["approval"]["blocked"] is True, command
+
+
 def test_core_toolbox_mode_execute_mode_is_full_access(tmp_path):
     from lamtools_core.tool.loadtools import default_load_tools
 
