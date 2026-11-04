@@ -330,25 +330,16 @@ impl Projector {
             // A turn closing is a status change, not a message — unless the run
             // produced text that never went out through `model_completed`, which is
             // the case for a run with no tool calls on some providers.
-            "turn/completed" => {
-                let content = text("text");
-                if !content.trim().is_empty() && !self.spoke.contains(&thread) {
-                    self.spoke.insert(thread.clone());
-                    (
-                        "message",
-                        format!("{thread}:{turn}:assistant:final"),
-                        "completed",
-                        json!({ "type": "agentMessage", "role": "assistant", "content": content }),
-                    )
-                } else {
-                    (
-                        "status",
-                        format!("{thread}:{turn}:status"),
-                        "completed",
-                        json!({ "type": "status", "status": "completed" }),
-                    )
-                }
-            }
+            // A turn that closes is first of all a status change. Emitting the reply
+            // instead — which is what an either/or did — left the thread reading
+            // "running" forever, so the composer showed Stop and the next send was
+            // refused. The reply itself arrives on `model_completed`.
+            "turn/completed" => (
+                "status",
+                format!("{thread}:{turn}:status"),
+                "completed",
+                json!({ "type": "status", "status": "completed" }),
+            ),
             "turn/cancelled" => (
                 "status",
                 format!("{thread}:{turn}:status"),
@@ -514,18 +505,20 @@ mod tests {
         assert_eq!(first["payload"]["item_id"], again["payload"]["item_id"]);
     }
 
-    /// A run that reports its text only at completion still produces one message.
+    /// Closing a turn must always be reported as a status change.
+    ///
+    /// An either/or that emitted the reply instead left the thread reading "running"
+    /// after the run finished, so the composer offered Stop and refused the next
+    /// send. The reply arrives on `model_completed`; this event is about the turn.
     #[test]
-    fn a_final_text_is_not_spoken_twice() {
+    fn closing_a_turn_always_reports_completion() {
         let mut projector = Projector::new();
         run_item(&mut projector, "turn/started", 1, json!({"turn_id": "t"}));
         let spoken = run_item(&mut projector, "turn/model_completed", 2, json!({"round": 0, "text": "hello"}));
         assert_eq!(spoken["payload"]["kind"], "message");
         let closing = run_item(&mut projector, "turn/completed", 3, json!({"text": "hello"}));
-        assert_eq!(
-            closing["payload"]["kind"], "status",
-            "the closing event repeated the reply as a second message"
-        );
+        assert_eq!(closing["payload"]["kind"], "status");
+        assert_eq!(closing["payload"]["payload"]["status"], "completed");
     }
 
     /// Two closures in one reply must not share an identity.

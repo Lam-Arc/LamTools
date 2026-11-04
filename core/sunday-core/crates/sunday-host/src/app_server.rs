@@ -100,7 +100,11 @@ pub trait TurnRunner: Send + Sync {
     /// two live buttons, the composer stayed taken over by a decision nobody could
     /// answer, and no new turn could start. Reporting the closure lets the caller
     /// tell the screen that the card is dead.
-    fn expire_approvals(&self, _now_epoch: u64) -> Result<Vec<String>, String> {
+    fn settled_approvals(
+        &self,
+        _thread_id: &str,
+        _now_epoch: u64,
+    ) -> Result<Vec<(String, String)>, String> {
         Ok(Vec::new())
     }
 
@@ -629,11 +633,11 @@ fn dispatch(
             state.thread_id = thread.clone();
             // Close anything that aged out before replaying the thread, so a dead
             // card cannot keep the composer taken over for another session.
-            let expired = runner
-                .expire_approvals(crate::runner::now_epoch())
+            let settled = runner
+                .settled_approvals(&thread, crate::runner::now_epoch())
                 .unwrap_or_default();
             let mut events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
-            for approval_id in expired {
+            for (approval_id, status) in settled {
                 events.push(BridgeEvent {
                     // Derived from the approval id, so a second resume reports the
                     // same closure once and the client's seen-set drops the repeat.
@@ -643,7 +647,9 @@ fn dispatch(
                     payload: serde_json::json!({
                         "approval_id": approval_id,
                         "request_id": approval_id,
-                        "decision": "expired",
+                        // The status the row actually carries, so a denied or
+                        // approved card is reported as what it was, not as expired.
+                        "decision": status,
                         // `applyDecisionLifecycle` closes a card on `ending`; any
                         // other word leaves it open, which is the bug this line
                         // exists to avoid.

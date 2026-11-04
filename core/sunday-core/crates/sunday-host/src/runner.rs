@@ -382,10 +382,19 @@ impl TurnRunner for CoreRunner {
         }
     }
 
-    fn expire_approvals(&self, now_epoch: u64) -> Result<Vec<String>, String> {
+    fn settled_approvals(
+        &self,
+        thread_id: &str,
+        now_epoch: u64,
+    ) -> Result<Vec<(String, String)>, String> {
         let mut store = self.store.lock().unwrap();
+        // Close what just aged out, then report everything that is already settled so
+        // a card from an earlier run cannot come back as answerable.
         store
             .expire_stale_approvals(now_epoch)
+            .map_err(|error| error.to_string())?;
+        store
+            .settled_approvals(thread_id)
             .map_err(|error| error.to_string())
     }
 

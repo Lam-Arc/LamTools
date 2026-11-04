@@ -1204,6 +1204,28 @@ impl Store {
         })
     }
 
+    /// Every approval on this thread that is no longer pending, with its status.
+    ///
+    /// A resumed transcript replays the original `approval_request` events, so a card
+    /// whose approval ended on an earlier run comes back looking answerable and holds
+    /// the conversation hostage. Reporting every settled approval — not only the ones
+    /// this call closed — is what lets the screen retire those cards.
+    pub fn settled_approvals(&self, thread: &str) -> Result<Vec<(String, String)>, CoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT approval_id, status FROM approvals \
+                 WHERE thread_id = ?1 AND status != 'pending' ORDER BY rowid",
+            )
+            .map_err(CoreError::storage)?;
+        let rows: Vec<(String, String)> = statement
+            .query_map(params![thread], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(CoreError::storage)?
+            .collect::<Result<Vec<(String, String)>, _>>()
+            .map_err(CoreError::storage)?;
+        Ok(rows)
+    }
+
     /// What an approval id currently means, without consuming it.
     ///
     /// `pending_call` answers "which call is this", not "may it still run": it joins
