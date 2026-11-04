@@ -329,11 +329,45 @@ class EmptySubAgentResultLLM:
         yield LLMStreamEvent(kind="done")
 
 
-class WritingSubAgentLLM:
+class _ShapeDrivenScript:
+    """Script steps key on the request shape, never on a bare counter.
+
+    A retried request must replay the same answer. A counter would advance on
+    retry and silently change what the double answers, so the handoff under test
+    would never be exercised.
+    """
+
+    def _reset_shape_state(self) -> None:
+        self._parent_step_by_shape: dict[tuple, int] = {}
+        self._child_step_by_shape: dict[tuple, int] = {}
+
+    @staticmethod
+    def _shape(request: LLMRequest, tool_names: set[str]) -> tuple:
+        last = request.messages[-1]
+        return (
+            len(request.messages),
+            last.role,
+            str(last.content)[:48],
+            tuple(sorted(tool_names)),
+        )
+
+    def _parent_step(self, shape: tuple) -> int:
+        return self._parent_step_by_shape.setdefault(
+            shape, len(self._parent_step_by_shape) + 1
+        )
+
+    def _child_step(self, shape: tuple) -> int:
+        return self._child_step_by_shape.setdefault(
+            shape, len(self._child_step_by_shape) + 1
+        )
+
+
+class WritingSubAgentLLM(_ShapeDrivenScript):
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
         self.main_steps = 0
         self.child_steps = 0
+        self._reset_shape_state()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("Core operation should use streaming")
@@ -341,12 +375,11 @@ class WritingSubAgentLLM:
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
         tool_names = {tool["function"]["name"] for tool in request.tools or []}
+        shape = self._shape(request, tool_names)
         if "sub_agent" in tool_names:
-            self.main_steps += 1
+            self.main_steps = self._parent_step(shape)
         else:
-            self.child_steps = self._child_step_by_shape.setdefault(
-                shape, len(self._child_step_by_shape) + 1
-            )
+            self.child_steps = self._child_step(shape)
         if self.main_steps == 1 and "sub_agent" in tool_names:
             yield LLMStreamEvent(
                 kind="done",
@@ -390,40 +423,24 @@ class WritingSubAgentLLM:
         raise AssertionError("unexpected writing sub-agent request")
 
 
-class ApprovalSubAgentLLM:
+class ApprovalSubAgentLLM(_ShapeDrivenScript):
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
         self.main_steps = 0
         self.child_steps = 0
         self.child_message_tools: set[str] = set()
         self.parent_received_child_message = False
-        # Script steps key on the request shape, never on a bare counter: a
-        # retried request must replay the same answer. A counter would advance
-        # on retry and silently change what the double answers.
-        self._parent_step_by_shape: dict[tuple, int] = {}
-        self._child_step_by_shape: dict[tuple, int] = {}
+        self._reset_shape_state()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("Core operation should use streaming")
-
-    @staticmethod
-    def _shape(request: LLMRequest, tool_names: set[str]) -> tuple:
-        last = request.messages[-1]
-        return (
-            len(request.messages),
-            last.role,
-            str(last.content)[:48],
-            tuple(sorted(tool_names)),
-        )
 
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
         tool_names = {tool["function"]["name"] for tool in request.tools or []}
         shape = self._shape(request, tool_names)
         if "sub_agent" in tool_names:
-            self.main_steps = self._parent_step_by_shape.setdefault(
-                shape, len(self._parent_step_by_shape) + 1
-            )
+            self.main_steps = self._parent_step(shape)
             if self.main_steps >= 3:
                 self.parent_received_child_message = any(
                     "approved file is ready" in str(message.content)
@@ -433,7 +450,7 @@ class ApprovalSubAgentLLM:
                 yield LLMStreamEvent(kind="done")
                 return
         else:
-            self.child_steps += 1
+            self.child_steps = self._child_step(shape)
         if self.main_steps == 1 and "sub_agent" in tool_names:
             yield LLMStreamEvent(kind="done", tool_calls=[
                 LLMToolCall(
