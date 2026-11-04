@@ -1114,13 +1114,14 @@ async def test_sub_agent_runner_forwards_image_attachment_to_multimodal_sub_agen
     )
 
     assert result.succeeded is True
-    # The user message should be a multimodal content list with a text + image block.
+    # Pointer-only contract: even a multimodal child receives the absolute path
+    # and reads the image through read_file, so no image block is uploaded.
     user_msg = llm.requests[0].messages[-1]
     assert user_msg.role == "user"
-    assert isinstance(user_msg.content, list)
-    block_types = [b.get("type") for b in user_msg.content if isinstance(b, dict)]
-    assert "text" in block_types
-    assert "image_url" in block_types
+    assert isinstance(user_msg.content, str)
+    assert "att-img.png" in user_msg.content
+    assert (tmp_path / "test.png").resolve().as_posix() in user_msg.content
+    assert "image_url" not in user_msg.content
 
 
 @pytest.mark.asyncio
@@ -1251,9 +1252,9 @@ async def test_sub_agent_runner_resolves_display_name_for_multimodal(tmp_path, m
 
     assert result.succeeded is True
     user_msg = llm.requests[0].messages[-1]
-    assert isinstance(user_msg.content, list)
-    block_types = [b.get("type") for b in user_msg.content if isinstance(b, dict)]
-    assert "image_url" in block_types
+    assert isinstance(user_msg.content, str)
+    assert "att-img.png" in user_msg.content
+    assert "image_url" not in user_msg.content
 
 
 @pytest.mark.asyncio

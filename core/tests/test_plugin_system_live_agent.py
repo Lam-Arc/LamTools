@@ -30,6 +30,9 @@ def make_kit(
     )
     kit.plugin_agents = list(agents or [])
     kit.plugin_context_files = list(context_files or [])
+    # __init__ always sets this; a hand-built double must mirror it or prompt
+    # composition crashes on the waterfall hook.
+    kit.prompt_waterfall = None
     kit._subagent_guide_cache = ""
     kit._subagent_roles_cache = ""
     kit._subagent_strategy_cache = ""
