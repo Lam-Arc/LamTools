@@ -3538,9 +3538,13 @@ class TestKernelContextCompaction:
             state_store=store,  # type: ignore[arg-type]
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -3805,9 +3809,13 @@ class TestKernelContextCompaction:
             SwitchedModelKit(steps=[MockKitStep(decision="done")]),
             llm_client=llm,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -3915,9 +3923,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -3929,7 +3941,7 @@ class TestKernelContextCompaction:
         assert llm.last_request.metadata["context_compacted"] is True
         assert llm.last_request.metadata["context_compaction_mode"] == "structured_summary"
         assert llm.last_request.metadata["context_tokens_before_compaction"] >= 1_600
-        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 1_200
+        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 2_400
         assert llm.last_request.messages[0].role == "system"
         summary_messages = [
             message
@@ -3954,13 +3966,15 @@ class TestKernelContextCompaction:
             if m.metadata.get("key") != "context_compaction_summary"
         ]
         assert "old user 0" not in "\n".join(raw_messages)
-        assert llm.last_request.messages[-1].role == "system"
-        assert llm.last_request.messages[-1].content.endswith("6. current task")
+        # The latest user turn keeps its own role instead of trailing the
+        # summary as a numbered appendix entry.
+        assert llm.last_request.messages[-1].role == "user"
+        assert llm.last_request.messages[-1].content == "current task"
 
         events = [event for event in sink.events if event.name == "runtime.context_compacted"]
         assert len(events) == 1
-        assert events[0].payload["trigger_tokens"] == 1_600
-        assert events[0].payload["limit_tokens"] == 1_200
+        assert events[0].payload["trigger_tokens"] == 3_000
+        assert events[0].payload["limit_tokens"] == 2_400
         assert events[0].payload["removed"] > 0
         assert events[0].payload["compacted_message_ids"][:2] == ["user-0", "assistant-0"]
         assert len(events[0].payload["compacted_message_ids"]) >= 2
@@ -3999,9 +4013,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4011,7 +4029,7 @@ class TestKernelContextCompaction:
         assert llm.last_request is not None
         assert llm.last_request.metadata["context_compacted"] is True
         assert any(
-            event.payload["runtime_metrics"]["estimated_prompt_tokens"] >= 1_600
+            event.payload["runtime_metrics"]["estimated_prompt_tokens"] >= 3_000
             for event in sink.events
             if event.name == "runtime.metrics"
             and "runtime_metrics" in event.payload
@@ -4036,9 +4054,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4046,7 +4068,7 @@ class TestKernelContextCompaction:
 
         assert result.decision == "done"
         assert llm.last_request is not None
-        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 1_200
+        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 2_400
         summary_messages = [
             message
             for message in llm.last_request.messages
@@ -4199,9 +4221,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4239,9 +4265,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4250,7 +4280,7 @@ class TestKernelContextCompaction:
         assert result.decision == "done"
         assert llm.last_request is not None
         assert llm.last_request.metadata["context_compacted"] is True
-        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 1_200
+        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 2_400
         summary_context = "\n".join(str(message.content) for message in llm.requests[0].messages)
         assert "CURRENT_TOOL_RESULT_SENTINEL" in summary_context
         raw_messages = [
