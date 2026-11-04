@@ -953,7 +953,9 @@ def test_core_cli_returns_nonzero_for_live_command_errors(monkeypatch, capsys) -
         raise RuntimeError("live connection failed")
 
     parser = SimpleNamespace(parse_args=lambda _argv: SimpleNamespace(func=fail))
-    monkeypatch.setattr(core_cli, "build_parser", lambda: parser)
+    # main() imports build_parser from cli_commands.parser at call time; the
+    # alias re-exported by lamtools_core.cli is a different binding.
+    monkeypatch.setattr("lamtools_core.cli_commands.parser.build_parser", lambda: parser)
 
     assert core_cli.main(["cancel", "thread-1"]) == 1
     assert "error: live connection failed" in capsys.readouterr().err
