@@ -993,6 +993,15 @@ fn dispatch(
             let error_sender = Arc::clone(tx);
             let thread_for_run = thread.clone();
             let decision_owned = decision.to_owned();
+            // Debug-only: an approval that never resumes the agent looks identical
+            // from the screen whether the call never arrived, was refused, or failed
+            // inside the runner. One line at the entry and one at the failure makes
+            // the difference visible without a debugger.
+            #[cfg(debug_assertions)]
+            println!(
+                "approval/respond request_id={request_id} decision={decision_owned} thread={thread} guidance_len={}",
+                guidance.len()
+            );
             std::thread::spawn(move || {
                 let sink = move |event: BridgeEvent| {
                     sink_sender.event(event_json(&thread_for_run, &event));
@@ -1000,6 +1009,8 @@ fn dispatch(
                 if let Err(error) =
                     worker.respond(&thread, &request_id, &decision_owned, &guidance, &sink)
                 {
+                    #[cfg(debug_assertions)]
+                    println!("approval/respond failed request_id={request_id} error={error}");
                     error_sender.orphan_error(-32000, error);
                 }
             });
