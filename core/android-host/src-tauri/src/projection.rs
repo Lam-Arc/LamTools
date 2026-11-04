@@ -236,6 +236,7 @@ impl Projector {
                     return None;
                 }
                 let decision = text("decision");
+                let state = text("state");
                 (
                     "approval_response",
                     tool_item(&call),
@@ -245,6 +246,9 @@ impl Projector {
                         "request_id": request,
                         "tool_call_id": call,
                         "decision": decision,
+                        // The client closes the card on `state: "ending"`; dropping
+                        // it here left an expired card looking answerable forever.
+                        "state": state,
                         "metadata": { "request_id": request },
                     }),
                 )

@@ -31,6 +31,16 @@ use crate::app_server::{
 };
 use crate::policy::GrantPolicy;
 
+/// Seconds since the epoch. Approvals store `expires_at` in seconds while event
+/// timestamps are milliseconds; keeping the two named apart is the only thing that
+/// stops one being compared against the other.
+pub(crate) fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -356,13 +366,27 @@ impl TurnRunner for CoreRunner {
 
     fn check_approval(&self, request_id: &str) -> Result<(), String> {
         let store = self.store.lock().unwrap();
-        match store.pending_call(request_id) {
-            Ok(Some(_)) => Ok(()),
-            // Expired and already-answered are indistinguishable to the caller and
-            // both mean the same thing to the user: this card can no longer act.
-            Ok(None) => Err(format!("该审批已失效或已处理：{request_id}")),
+        // `pending_call` answers "which call is this", not "may it still run", so the
+        // gate has to ask for the lifecycle explicitly. Without this an approval an
+        // hour past its deadline still looked answerable and the click was accepted.
+        match store.approval_gate(request_id, now_epoch()) {
+            Ok(Some(sunday_store::ApprovalStatus::Pending)) => Ok(()),
+            Ok(Some(sunday_store::ApprovalStatus::Expired)) => {
+                Err(format!("该审批已过期，不能再授权执行：{request_id}"))
+            }
+            Ok(Some(sunday_store::ApprovalStatus::Answered)) => {
+                Err(format!("该审批已被处理过：{request_id}"))
+            }
+            Ok(None) => Err(format!("找不到这个审批：{request_id}")),
             Err(error) => Err(error.to_string()),
         }
+    }
+
+    fn expire_approvals(&self, now_epoch: u64) -> Result<Vec<String>, String> {
+        let mut store = self.store.lock().unwrap();
+        store
+            .expire_stale_approvals(now_epoch)
+            .map_err(|error| error.to_string())
     }
 
     fn respond(

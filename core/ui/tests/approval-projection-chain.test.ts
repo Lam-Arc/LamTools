@@ -208,3 +208,56 @@ describe('approval controller', () => {
     expect(controller.lastError.value).toContain('unavailable')
   })
 })
+
+describe('expired approvals', () => {
+  /** What the host emits when a sweep closes an overdue approval. */
+  function closureEvent(seq: number, callId: string, requestId: string): CoreAppEvent {
+    return runItem(
+      seq,
+      'approval_response',
+      `${THREAD}:turn-1:${callId}:tool`,
+      {
+        type: 'serverRequest',
+        request_id: requestId,
+        tool_call_id: callId,
+        decision: 'expired',
+        state: 'ending',
+        metadata: { request_id: requestId },
+      },
+      'completed',
+    )
+  }
+
+  /**
+   * An approval that aged out must stop being answerable.
+   *
+   * The session this test protects was unusable: the card kept two live buttons and
+   * the composer stayed taken over by a decision nobody could answer, so no new turn
+   * could start. Closing it is what lets the conversation move again.
+   */
+  it('closes the card instead of leaving it answerable forever', () => {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(
+      snapshot,
+      runItem(5, 'tool_call', `${THREAD}:turn-1:call1:tool`, {
+        type: 'dynamicToolCall',
+        tool_call_id: 'call1',
+        tool_name: 'write_file',
+      }),
+    )
+    snapshot = applyCoreAppEvent(snapshot, approvalEvent(6, 'call1', 'appr-old'))
+
+    const before = selectCoreWorkbenchMessages(snapshot)
+      .flatMap((message) => message.parts ?? [])
+      .find((part) => part.partType === 'decision')
+    expect(before?.status, 'the card should start pending').toBe('pending')
+
+    snapshot = applyCoreAppEvent(snapshot, closureEvent(7, 'call1', 'appr-old'))
+
+    const after = selectCoreWorkbenchMessages(snapshot)
+      .flatMap((message) => message.parts ?? [])
+      .find((part) => part.partType === 'decision')
+    expect(after, 'the closed card should still be visible, just not pending').toBeTruthy()
+    expect(after?.status).not.toBe('pending')
+  })
+})

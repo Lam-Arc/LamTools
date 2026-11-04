@@ -175,6 +175,17 @@ pub struct Continuation {
     pub pending_call_id: Option<String>,
 }
 
+/// The three things an approval id can mean to a caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalStatus {
+    /// Still answerable.
+    Pending,
+    /// Its deadline passed; it may never authorise anything again.
+    Expired,
+    /// A human already answered it, one way or the other.
+    Answered,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -1191,6 +1202,79 @@ impl Store {
             args_digest,
             expires_at_epoch: expires_at,
         })
+    }
+
+    /// What an approval id currently means, without consuming it.
+    ///
+    /// `pending_call` answers "which call is this", not "may it still run": it joins
+    /// the stage table and ignores both `status` and `expires_at`. Any caller that
+    /// treated it as a permission check would happily approve an hour-old request.
+    ///
+    /// `expires_at` is seconds since the epoch while `created_at` is milliseconds, so
+    /// this comparison is in seconds. Mixing the two makes a request look eternally
+    /// fresh or eternally stale depending on which side is used.
+    pub fn approval_gate(
+        &self,
+        approval_id: &str,
+        now_epoch: u64,
+    ) -> Result<Option<ApprovalStatus>, CoreError> {
+        let row: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT status, expires_at FROM approvals WHERE approval_id = ?1",
+                params![approval_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(CoreError::storage)?;
+        let Some((status, expires_at)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(match status.as_str() {
+            "pending" if now_epoch as i64 >= expires_at => ApprovalStatus::Expired,
+            "pending" => ApprovalStatus::Pending,
+            "expired" => ApprovalStatus::Expired,
+            _ => ApprovalStatus::Answered,
+        }))
+    }
+
+    /// Closes every pending approval past its deadline, and reports which ones closed.
+    ///
+    /// Without this a session whose approval aged out stayed unusable forever: the
+    /// card kept its two buttons, the composer stayed taken over by a decision nobody
+    /// could answer, and no new turn could start in that conversation.
+    ///
+    /// The update is conditional on `status = 'pending'` so a concurrent answer wins
+    /// instead of being overwritten by an expiry sweep.
+    pub fn expire_stale_approvals(&mut self, now_epoch: u64) -> Result<Vec<String>, CoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT approval_id FROM approvals WHERE status = 'pending' AND expires_at <= ?1",
+            )
+            .map_err(CoreError::storage)?;
+        let ids: Vec<String> = statement
+            .query_map(params![now_epoch as i64], |row| row.get(0))
+            .map_err(CoreError::storage)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(CoreError::storage)?;
+        drop(statement);
+        if ids.is_empty() {
+            return Ok(ids);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(CoreError::storage)?;
+        for id in &ids {
+            tx.execute(
+                "UPDATE approvals SET status = 'expired' WHERE approval_id = ?1 AND status = 'pending'",
+                params![id],
+            )
+            .map_err(CoreError::storage)?;
+        }
+        tx.commit().map_err(CoreError::storage)?;
+        Ok(ids)
     }
 
     /// Consumes an approval. The caller must pass the digest of the arguments it

@@ -94,6 +94,16 @@ pub trait TurnRunner: Send + Sync {
         Ok(())
     }
 
+    /// Closes approvals whose deadline passed, returning the ids that closed.
+    ///
+    /// A conversation whose approval aged out used to stay unusable: its card kept
+    /// two live buttons, the composer stayed taken over by a decision nobody could
+    /// answer, and no new turn could start. Reporting the closure lets the caller
+    /// tell the screen that the card is dead.
+    fn expire_approvals(&self, _now_epoch: u64) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+
     /// Resolves a pending approval. `decision` is already normalised to
     /// approve|deny|guide|skip|trust.
     fn respond(
@@ -617,7 +627,30 @@ fn dispatch(
                 return Err((-32602, "thread_id is required".into(), None));
             }
             state.thread_id = thread.clone();
-            let events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
+            // Close anything that aged out before replaying the thread, so a dead
+            // card cannot keep the composer taken over for another session.
+            let expired = runner
+                .expire_approvals(crate::runner::now_epoch())
+                .unwrap_or_default();
+            let mut events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
+            for approval_id in expired {
+                events.push(BridgeEvent {
+                    // Derived from the approval id, so a second resume reports the
+                    // same closure once and the client's seen-set drops the repeat.
+                    method: "item/approval_resolved".into(),
+                    seq: 0,
+                    client_message_id: None,
+                    payload: serde_json::json!({
+                        "approval_id": approval_id,
+                        "request_id": approval_id,
+                        "decision": "expired",
+                        // `applyDecisionLifecycle` closes a card on `ending`; any
+                        // other word leaves it open, which is the bug this line
+                        // exists to avoid.
+                        "state": "ending",
+                    }),
+                });
+            }
             let history: Vec<serde_json::Value> =
                 events.iter().map(|e| event_json(&thread, e)).collect();
             // The client rebuilds a conversation from `snapshot` plus `events`: it
