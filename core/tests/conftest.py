@@ -10,6 +10,98 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+# ---------------------------------------------------------------------------
+# 源码绑定守卫
+# ---------------------------------------------------------------------------
+#
+# user:“所有测试统一绑定当前工作树源码，执行前自动核验模块路径与提交 SHA，
+# 不一致直接失败”+(一次会话只能测本检出 core/src 的代码。加载到别的检出、
+# 或让一个与 HEAD 不符的脏工作树冒充同一个提交，都必须在收集阶段终止，
+# 而不是给出一份看起来通过、其实测的是别处代码的结果)。
+#
+# 背景：可编辑安装把主工作区的 core/src 放进了 sys.path，于是从工作树直接跑
+# pytest 时，测试文件来自本分支、被测代码来自另一条分支。
+
+_EXPECTED_SRC = (Path(__file__).resolve().parents[1] / "src").resolve()
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SOURCE_GUARD_KEY = pytest.StashKey[tuple[Path, str, str]]()
+
+
+def _git_output(*args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _bound_source_root() -> Path | None:
+    import lamtools_core
+
+    location = getattr(lamtools_core, "__file__", None)
+    return Path(location).resolve().parent if location else None
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("lamtools")
+    group.addoption(
+        "--expect-sha",
+        action="store",
+        default="",
+        help="Fail unless HEAD starts with this commit SHA (acceptance runs).",
+    )
+    group.addoption(
+        "--allow-dirty",
+        action="store_true",
+        default=False,
+        help="Allow uncommitted changes under core/src (development runs).",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    loaded = _bound_source_root()
+    if loaded is None or not loaded.is_relative_to(_EXPECTED_SRC):
+        pytest.exit(
+            "测试源码未绑定本检出：\n"
+            f"  期望：{_EXPECTED_SRC}\n"
+            f"  实际：{loaded}\n"
+            "可编辑安装指向了别的检出（通常是主工作区）。显式绑定源码后重跑：\n"
+            f'  PYTHONPATH="{_EXPECTED_SRC}" python -m pytest <paths>',
+            returncode=2,
+        )
+    head = _git_output("rev-parse", "HEAD") or "unknown"
+    dirty = _git_output("status", "--porcelain", "--", str(_EXPECTED_SRC)) or ""
+    expected = str(config.getoption("--expect-sha") or "").strip()
+    if expected and not head.startswith(expected):
+        pytest.exit(
+            f"提交 SHA 不匹配：期望 {expected}，当前 {head}。",
+            returncode=2,
+        )
+    if dirty and not config.getoption("--allow-dirty"):
+        pytest.exit(
+            "core/src 有未提交改动，当前 HEAD 不代表被测代码：\n"
+            f"{dirty}\n"
+            "提交后重跑；开发中确需如此时加 --allow-dirty。",
+            returncode=2,
+        )
+    config.stash[_SOURCE_GUARD_KEY] = (loaded, head, dirty)
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    stashed = config.stash.get(_SOURCE_GUARD_KEY, None)
+    if stashed is None:
+        return []
+    loaded, head, dirty = stashed
+    return [f"lamtools source: {loaded} @ {head[:12]} ({'dirty' if dirty else 'clean'})"]
+
+
 
 @pytest.fixture(autouse=True)
 def loopback_test_client(monkeypatch: pytest.MonkeyPatch) -> None:
