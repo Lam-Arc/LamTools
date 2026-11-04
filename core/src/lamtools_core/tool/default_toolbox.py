@@ -1313,11 +1313,16 @@ class CoreToolbox:
             # 只有「声明 auto_allow 且未显式声明等级」的插件工具按 1 级登记；
             # 显式等级优先（含更严格值），ask_user 与 hard_block 仍走原默认)。
             if (
-                spec.permission == "auto_allow"
+                spec.permission in {"auto_allow", "ask_user"}
                 and "operation_level" not in (spec.metadata or {})
                 and spec.name not in self._native_operation_levels
             ):
-                self._native_operation_levels[spec.name] = 1
+                # ask_user maps to 2: it keeps asking under the default preset,
+                # and only the user's explicit auto mode stops asking. Level 3
+                # stays reserved for genuinely destructive operations.
+                self._native_operation_levels[spec.name] = (
+                    1 if spec.permission == "auto_allow" else 2
+                )
         from lamtools_core.plugin_system.manager_tools import plugin_manager_tool_specs
 
         plugin_manager_specs = (

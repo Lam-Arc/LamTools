@@ -85,7 +85,7 @@ async def test_sub_agent_workflow_tool_preserves_execution_context(tmp_path: Pat
 
     # KernelSubAgentRunner intentionally owns the normal toolbox assembly. A
     # plugin host can inject its enrolled workflow tools at that seam.
-    def build_toolbox(disabled_tools: set[str], *, active_mode: str | None):
+    def build_toolbox(disabled_tools: set[str], *, active_mode: str | None, mcp_service=None):
         return build_core_toolbox(
             work_root=tmp_path,
             approval_policy="auto_approve",
