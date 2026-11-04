@@ -4285,9 +4285,43 @@ class CoreLoopKernel:
         if result is None:
             return
         if result.status == "failed":
-            raise ContextCompactionError(
-                str(result.display_payload.get("message") or "Context compaction failed")
+            # user:“优先安全降级，无法安全继续时明确失败”+(摘要装不进目标预算时，
+            # 先看这次请求本身是否仍在窗口内：在窗口内就跳过压缩、原样继续，
+            # 不丢任何上下文；只有请求本身超窗才停止本次调用并报明原因)。
+            current_tokens = calibrated_tokens(
+                self._estimate_request_tokens(request, fast=False)
             )
+            # Only continue when both the authoritative measurement that
+            # triggered compaction and the fresh estimate agree the request
+            # fits: an undercounting estimate must never excuse an oversized
+            # request.
+            planned_tokens = max(before_tokens, current_tokens)
+            if planned_tokens <= limit_tokens:
+                request.metadata["context_compaction_status"] = "skipped_over_budget"
+                state.metadata["runtime_context_metrics"] = {
+                    **dict(state.metadata["runtime_context_metrics"]),
+                    "context_compaction_status": "skipped_over_budget",
+                }
+                await self._persist_runtime_context_metrics(state, history=history)
+                _logger.warning(
+                    "[kernel:_run] compaction skipped, request still fits sid=%s "
+                    "planned=%d limit=%d",
+                    state.session_id,
+                    planned_tokens,
+                    limit_tokens,
+                )
+                return
+            message = str(
+                result.display_payload.get("message") or "Context compaction failed"
+            )
+            if str(result.display_payload.get("reason") or "") == "over_limit":
+                # Only the budget outcome gets the retry note; a model failure
+                # keeps its own message so callers can tell them apart.
+                message = (
+                    f"{message} The turn stopped without sending an oversized request; "
+                    "history and task state are preserved for a retry."
+                )
+            raise ContextCompactionError(message)
         if result.status != "compacted":
             request.metadata["context_compaction_status"] = result.status
             state.metadata["runtime_context_metrics"] = {

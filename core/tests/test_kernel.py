@@ -3584,7 +3584,15 @@ class TestKernelContextCompaction:
         # appended to it any more.
         assert "## Recent user messages" not in str(compaction_meta["summary"])
         assert str(compaction_meta["summary"]).startswith("1. Current Objective")
-        assert "old user 0" not in persisted_content
+        raw_old_body = "x" * 500
+        assert raw_old_body in persisted_content
+        model_facing = "\n".join(
+            str(message.content) for message in history_kit.context_histories[-1]
+        )
+        # The summary may name the old message, but its raw row must not be part
+        # of the model-facing history any more.
+        assert raw_old_body not in model_facing
+        assert "current task" in model_facing
         assert all(
             item.get("metadata", {}).get("key") != "context_compaction_summary"
             for item in store.history
@@ -3620,32 +3628,32 @@ class TestKernelContextCompaction:
             [
                 {
                     "role": "user",
-                    "content": "old user 0",
+                    "content": "old user 0 " + ("x" * 2000),
                     "metadata": {"history_seq": 1},
                 },
                 {
                     "role": "assistant",
-                    "content": "dropped assistant step",
+                    "content": "dropped assistant step " + ("y" * 2000),
                     "metadata": {"history_seq": 2},
                 },
                 {
                     "role": "tool",
-                    "content": "dropped tool result",
+                    "content": "dropped tool result " + ("z" * 2000),
                     "metadata": {"history_seq": 3},
                 },
                 {
                     "role": "user",
-                    "content": "old user 1",
+                    "content": "old user 1 " + ("x" * 2000),
                     "metadata": {"history_seq": 4},
                 },
                 {
                     "role": "assistant",
-                    "content": "retained assistant step",
+                    "content": "retained assistant step " + ("y" * 2000),
                     "metadata": {"history_seq": 5},
                 },
                 {
                     "role": "tool",
-                    "content": "retained tool result",
+                    "content": "retained tool result " + ("z" * 2000),
                     "metadata": {"history_seq": 6},
                 },
             ],
@@ -3732,9 +3740,12 @@ class TestKernelContextCompaction:
         )
         llm = CapturingLLMClient()
         policy = LoopPolicy(
-            context_window_tokens=100,
-            compact_trigger_tokens=1,
-            compact_limit_tokens=1,
+            # The seeded transcript clears the trigger, and the target sits
+            # above the request overhead floor: the kernel re-checks the final
+            # assembly, so a target below that floor can never be met.
+            context_window_tokens=128_000,
+            compact_trigger_tokens=4_000,
+            compact_limit_tokens=3_000,
             compact_retained_steps=2,
             model_retries=1,
         )
@@ -3883,9 +3894,11 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real-sized window with absolute thresholds: the old pairs fit
+                # above the trigger and the compacted view fits under 2_400.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=2_000,
+                compact_limit_tokens=2_400,
                 model_retries=1,
             ),
         )
@@ -4106,9 +4119,12 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # A 2k window cannot hold the request overhead plus a summary,
+                # so the fixture uses real-sized windows with absolute
+                # thresholds: it triggers at 1800 and targets 1700.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=1_800,
+                compact_limit_tokens=1_700,
                 model_retries=3,
             ),
             retry_policy=RetryPolicy(
