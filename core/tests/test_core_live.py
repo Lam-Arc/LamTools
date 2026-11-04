@@ -54,6 +54,7 @@ from lamtools_core.app.live_member import DefaultCoreLiveMemberHooks
 from lamtools_core.event import RunItemEvent
 from lamtools_core.app.snapshot_store import SqlAlchemyThreadSnapshotStore
 import lamtools_core.app.live_operations as live_operations_module
+import lamtools_core.app.live.queue_dispatch as queue_dispatch_module
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeTaskRegistry
 from lamtools_core.runtime import RuntimeState
@@ -119,6 +120,36 @@ async def _context(tmp_path) -> tuple[object, CoreLiveContext]:
         operations=OperationCatalog(),
         hub=CoreAppEventHub(),
     )
+
+
+async def _wait_turn_terminal(context, thread_id: str, turn_id: str, *, timeout: float = 5.0) -> dict:
+    """Wait until the turn reaches a terminal status, then return the snapshot.
+
+    The background task may already be gone from the registry by the time the
+    caller looks, so awaiting ``registry.task()`` is not reliable; polling the
+    persisted snapshot is.  A bounded wait keeps a genuine hang a failure
+    instead of a hang.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last = ""
+    while True:
+        async with context.session_factory() as session:
+            snapshot = await context.persistence.load(session, thread_id)
+        turns = snapshot.get("turns") or {}
+        last = str((turns.get(turn_id) or {}).get("status") or "")
+        if last in {"failed", "completed", "cancelled", "paused"}:
+            return snapshot
+        if loop.time() > deadline:
+            raise AssertionError(f"turn {turn_id} did not reach a terminal state, last={last!r}")
+        await asyncio.sleep(0.01)
+
+
+async def _wait_for_event(event: asyncio.Event, *, label: str, timeout: float = 5.0) -> None:
+    try:
+        await asyncio.wait_for(event.wait(), timeout)
+    except asyncio.TimeoutError:
+        raise AssertionError(f"timed out waiting for {label}") from None
 
 
 @pytest.mark.asyncio
@@ -2499,8 +2530,10 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
             _ = thread_id
             return self.run_id
 
-        def accept_run(self, thread_id, run_id):
-            _ = thread_id
+        def accept_run(self, thread_id, run_id, *, turn_id=""):
+            # The real registry records the turn alongside the run; the fake must
+            # accept the same keyword or the host cannot start a turn at all.
+            _ = thread_id, turn_id
             if self.run_id not in {None, run_id}:
                 return False
             self.run_id = run_id
@@ -2511,9 +2544,16 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
             if self.run_id == run_id:
                 self.run_id = None
 
-        def register(self, thread_id, task, *, run_id=None) -> bool:
-            _ = (thread_id, task, run_id)
+        def register(self, thread_id, task, *, run_id=None, turn_id="") -> bool:
+            _ = (thread_id, task, run_id, turn_id)
+            self.task_handle = task
             return True
+
+        def task(self, thread_id):
+            # The host and the tests both ask the registry for the live task so
+            # they can await it instead of sleeping.
+            _ = thread_id
+            return getattr(self, "task_handle", None)
 
         def cancel(self, thread_id, *, run_id=None, force=False) -> None:
             self.cancel_calls.append((thread_id, run_id, force))
@@ -2577,14 +2617,14 @@ async def test_core_live_runtime_start_failure_releases_run_and_persists_failed_
     input_items = [] if failure_mode == "empty_message" else [{"type": "text", "text": "start"}]
 
     if failure_mode == "no_running_loop":
-        monkeypatch.setattr(live_operations_module, "_get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError("no loop")))
+        monkeypatch.setattr("lamtools_core.app.live.events._get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError("no loop")))
     elif failure_mode == "create_task_error":
         class RaisingLoop:
             def create_task(self, coroutine):
                 coroutine.close()
                 raise RuntimeError("create task failed")
 
-        monkeypatch.setattr(live_operations_module, "_get_running_loop", lambda: RaisingLoop())
+        monkeypatch.setattr("lamtools_core.app.live.events._get_running_loop", lambda: RaisingLoop())
     elif failure_mode == "register_rejected":
         monkeypatch.setattr(context.runtime_task_registry, "register", lambda *_args, **_kwargs: False)
     elif failure_mode == "task_done":
@@ -2595,7 +2635,7 @@ async def test_core_live_runtime_start_failure_releases_run_and_persists_failed_
                 task.set_result(None)
                 return task
 
-        monkeypatch.setattr(live_operations_module, "_get_running_loop", lambda: CompletedTaskLoop())
+        monkeypatch.setattr("lamtools_core.app.live.events._get_running_loop", lambda: CompletedTaskLoop())
 
     thread_id = f"core-start-failure-{failure_mode}"
     try:
@@ -2660,7 +2700,13 @@ async def test_core_live_queue_operations_project_snapshot(tmp_path):
             },
             context=context,
         )
-        assert updated.response["result"]["snapshot"]["queue"][0]["input"] == [{"type": "text", "text": "改成这个"}]
+        updated_input = updated.response["result"]["snapshot"]["queue"][0]["input"]
+        assert updated_input[0] == {"type": "text", "text": "改成这个"}
+        # Editing the queued text must not silently drop the attachment the user
+        # already queued with it.
+        assert updated_input[1] == {
+            "type": "attachment", "attachment_id": "att-queue", "name": "draft.md",
+        }
 
         deleted = await handle_queue_delete_operation(
             request_id=3,
@@ -2957,15 +3003,16 @@ async def test_turn_start_releases_registry_claim_before_trailing_cleanup(tmp_pa
     context.operations.register("turn.start", turn_start)
 
     # Wrap _dispatch_next_queue_item to signal that trailing cleanup has begun.
-    original_dispatch = live_operations_module._dispatch_next_queue_item
+    # runtime_tasks imports the dispatcher from queue_dispatch at call time.
+    original_dispatch = queue_dispatch_module._dispatch_next_queue_item
 
     async def tracking_dispatch(*args, **kwargs):
         cleanup_started.set()
-        if context.runtime_task_registry.active_run_id(kwargs.get("completed_turn_id", "")) is None:
+        if context.runtime_task_registry.active_run_id("thread-race") is None:
             registry_released_before_cleanup.set()
         return await original_dispatch(*args, **kwargs)
 
-    live_operations_module._dispatch_next_queue_item = tracking_dispatch
+    queue_dispatch_module._dispatch_next_queue_item = tracking_dispatch
     try:
         outcome = await handle_turn_start_operation(
             request_id=1,
@@ -2978,21 +3025,14 @@ async def test_turn_start_releases_registry_claim_before_trailing_cleanup(tmp_pa
         )
         turn_id = outcome.response["result"]["runtime_start"]["turn_id"]
 
-        # Wait for the background task to complete.
-        task = context.runtime_task_registry.task("thread-race")
-        if task is not None:
-            await task
+        # trailing cleanup runs in the background; wait for the marker it sets
+        # instead of guessing how long it takes.
+        await _wait_for_event(registry_released_before_cleanup, label="cleanup after release")
 
         # The registry claim must be released by now.
         assert context.runtime_task_registry.active_run_id("thread-race") is None
-
-        # And it must have been released *before* trailing cleanup began.
-        assert registry_released_before_cleanup.is_set(), (
-            "release_run did not run before trailing cleanup — "
-            "the race window that causes 'active turn already exists' is still open"
-        )
     finally:
-        live_operations_module._dispatch_next_queue_item = original_dispatch
+        queue_dispatch_module._dispatch_next_queue_item = original_dispatch
         context.runtime_task_registry.clear()
         await engine.dispose()
 
@@ -3010,11 +3050,8 @@ async def test_runtime_setup_error_is_terminal_and_does_not_block_next_turn(tmp_
             )
             assert "result" in accepted.response, accepted.response
             turn_id = accepted.runtime_start["turn_id"]
-            task = context.runtime_task_registry.task("setup-error")
-            if task is not None:
-                await task
+            snapshot = await _wait_turn_terminal(context, "setup-error", turn_id)
             async with context.session_factory() as session:
-                snapshot = await context.persistence.load(session, "setup-error")
                 events = await context.persistence.list_after(session, thread_id="setup-error", after_seq=0)
             assert snapshot["turns"][turn_id]["status"] == "failed"
             assert any(e.turn_id == turn_id and e.payload.get("payload", {}).get("message") == "model not found: missing" for e in events)
