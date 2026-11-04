@@ -1183,7 +1183,9 @@ async def test_sub_agent_runner_keeps_text_only_attachment_context(tmp_path):
     assert result.succeeded is True
     user_msg = llm.requests[0].messages[-1]
     assert isinstance(user_msg.content, str)
-    assert "attachment evidence survives" in user_msg.content
+    # Pointer-only contract: the child sees the path and reads it with read_file.
+    assert text_path.resolve().as_posix() in user_msg.content
+    assert "attachment evidence survives" not in user_msg.content
 
 
 @pytest.mark.asyncio

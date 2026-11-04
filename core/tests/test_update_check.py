@@ -215,81 +215,85 @@ def _site_manifest(*, version="9.9.9", **extra) -> dict:
             "release_url": "https://site/#download", "release_notes": f"Sunday {version}", **extra}
 
 
-def test_site_manifest_is_the_primary_source(monkeypatch) -> None:
-    calls = _stub_by_url(monkeypatch, **{DEFAULT_SITE_UPDATE_URL: _site_manifest()})
-    result = check_update()
-    assert result["status"] == "update_available"
-    assert result["source"] == SOURCE_SITE
-    assert result["latest_version"] == "9.9.9"
-    assert result["download_url"].startswith("https://site/downloads/")
-    assert result["release_url"] == "https://site/#download"
-    assert calls == [DEFAULT_SITE_UPDATE_URL]
-    assert DEFAULT_SITE_UPDATE_URL == "https://ainarit.com/downloads/desktop-update.json"
-
-
-def test_site_version_wins_over_a_newer_github_release(monkeypatch) -> None:
-    """The official publication channel controls which release is offered."""
-    calls = _stub_by_url(
-        monkeypatch,
-        **{DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9"),
-           RELEASES_LATEST_URL: _release(tag="v10.0.0")},
-    )
-    result = check_update()
-
-    assert result["status"] == "update_available"
-    assert result["latest_version"] == "9.9.9"
-    assert result["source"] == SOURCE_SITE
-    assert calls == [DEFAULT_SITE_UPDATE_URL]
-
-
-def test_site_supplies_download_and_notes_without_github(monkeypatch) -> None:
-    calls = _stub_by_url(
-        monkeypatch,
-        **{DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9"),
-           RELEASES_LATEST_URL: _release(tag="v9.9.9", body="## 更新内容\n- 真正文")},
-    )
-    result = check_update()
-
-    assert result["status"] == "update_available"
-    assert result["latest_version"] == "9.9.9"
-    assert result["source"] == SOURCE_SITE
-    assert result["notes_source"] == SOURCE_SITE
-    assert result["download_url"].startswith("https://site/downloads/")
-    assert result["release_notes"] == "Sunday 9.9.9"
-    assert calls == [DEFAULT_SITE_UPDATE_URL]
-
-
-def test_notes_come_from_the_winner_when_github_is_older(monkeypatch) -> None:
-    _stub_by_url(
-        monkeypatch,
-        **{DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9"),
-           RELEASES_LATEST_URL: _release(tag="v9.0.0", body="旧正文")},
-    )
-    result = check_update()
-
-    assert result["source"] == SOURCE_SITE
-    assert result["notes_source"] == SOURCE_SITE
-    assert result["release_notes"] == "Sunday 9.9.9"
-
-
-def test_site_failure_falls_back_to_github(monkeypatch) -> None:
+def test_github_release_is_the_primary_source(monkeypatch) -> None:
     calls = _stub_by_url(monkeypatch, **{RELEASES_LATEST_URL: _release(tag="v9.9.9")})
     result = check_update()
     assert result["status"] == "update_available"
     assert result["source"] == SOURCE_GITHUB
     assert result["latest_version"] == "9.9.9"
-    assert calls == [DEFAULT_SITE_UPDATE_URL, RELEASES_LATEST_URL]
+    assert result["download_url"].startswith("https://github.com/")
+    assert result["release_url"] == RELEASES_PAGE_URL
+    assert calls == [RELEASES_LATEST_URL]
+    assert DEFAULT_SITE_UPDATE_URL == "https://ainarit.com/downloads/desktop-update.json"
 
 
-def test_current_site_release_does_not_contact_github(monkeypatch) -> None:
+def test_github_release_wins_and_the_site_is_not_contacted(monkeypatch) -> None:
+    """GitHub is the publication channel; the site is only a fallback."""
+    calls = _stub_by_url(
+        monkeypatch,
+        **{RELEASES_LATEST_URL: _release(tag="v10.0.0"),
+           DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9")},
+    )
+    result = check_update()
+
+    assert result["status"] == "update_available"
+    assert result["latest_version"] == "10.0.0"
+    assert result["source"] == SOURCE_GITHUB
+    assert calls == [RELEASES_LATEST_URL]
+
+
+def test_site_supplies_download_and_notes_when_github_fails(monkeypatch) -> None:
+    calls = _stub_by_url(
+        monkeypatch,
+        **{RELEASES_LATEST_URL: OSError("github down"),
+           DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9")},
+    )
+    result = check_update()
+
+    assert result["status"] == "update_available"
+    assert result["latest_version"] == "9.9.9"
+    assert result["source"] == SOURCE_SITE
+    assert result["notes_source"] == SOURCE_SITE
+    assert result["download_url"].startswith("https://site/downloads/")
+    assert result["release_notes"] == "Sunday 9.9.9"
+    assert calls == [RELEASES_LATEST_URL, DEFAULT_SITE_UPDATE_URL]
+
+
+def test_notes_come_from_the_serving_source(monkeypatch) -> None:
+    _stub_by_url(
+        monkeypatch,
+        **{RELEASES_LATEST_URL: _release(tag="v9.9.9", body="## 更新内容\n- 真正文"),
+           DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9")},
+    )
+    result = check_update()
+
+    assert result["source"] == SOURCE_GITHUB
+    assert result["notes_source"] == SOURCE_GITHUB
+    assert "真正文" in result["release_notes"]
+
+
+def test_github_failure_falls_back_to_the_site(monkeypatch) -> None:
+    calls = _stub_by_url(
+        monkeypatch,
+        **{RELEASES_LATEST_URL: OSError("github down"),
+           DEFAULT_SITE_UPDATE_URL: _site_manifest()},
+    )
+    result = check_update()
+    assert result["status"] == "update_available"
+    assert result["source"] == SOURCE_SITE
+    assert result["latest_version"] == "9.9.9"
+    assert calls == [RELEASES_LATEST_URL, DEFAULT_SITE_UPDATE_URL]
+
+
+def test_current_github_release_does_not_contact_the_site(monkeypatch) -> None:
     calls = _stub_by_url(monkeypatch, **{
-        DEFAULT_SITE_UPDATE_URL: _site_manifest(version=lamtools_core.__version__),
-        RELEASES_LATEST_URL: _release(tag="v9.9.9"),
+        RELEASES_LATEST_URL: _release(tag=f"v{lamtools_core.__version__}"),
+        DEFAULT_SITE_UPDATE_URL: _site_manifest(version="9.9.9"),
     })
     result = check_update()
     assert result["status"] == "up_to_date"
-    assert result["source"] == SOURCE_SITE
-    assert calls == [DEFAULT_SITE_UPDATE_URL]
+    assert result["source"] == SOURCE_GITHUB
+    assert calls == [RELEASES_LATEST_URL]
 
 
 def test_github_fallback_preserves_installer_digest(monkeypatch) -> None:
@@ -396,21 +400,15 @@ def test_dns_failure_logs_original_error_and_safe_route(monkeypatch, caplog, pro
     routing = {"trust_env": False, **({"proxy": proxy} if proxy else {})}
     monkeypatch.setattr("lamtools_core.update.checker.httpx_client_kwargs", lambda url: routing)
 
-    class FailingClient:
-        def __init__(self, **kwargs):
-            assert kwargs["trust_env"] is False
-            assert kwargs.get("proxy", "") == proxy
+    # The request itself goes through lamtools_core.distribution (proxy/route
+    # handling is covered by test_github_market_distribution); this test only
+    # cares that the failure surfaces unchanged and is logged safely.
+    import lamtools_core.distribution as distribution
 
-        def __enter__(self):
-            return self
+    def failing_get_json(*args, **kwargs):
+        raise failure
 
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url):
-            raise failure
-
-    monkeypatch.setattr(httpx, "Client", FailingClient)
+    monkeypatch.setattr(distribution, "get_json", failing_get_json)
     # Logging must not retry DNS: preserve the error from the actual request.
     def unexpected_lookup(*args, **kwargs):
         pytest.fail("diagnostic logging performed another DNS lookup")

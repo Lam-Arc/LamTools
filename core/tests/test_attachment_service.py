@@ -111,77 +111,37 @@ def _pdf_record(tmp_path: Path, att_id: str = "pdf-1") -> AttachmentRecord:
     )
 
 
-def test_capability_split_multimodal_receives_image_text_defers_video(tmp_path):
+def test_attachment_input_is_pointer_only(tmp_path):
+    """Every model receives absolute paths, never file content or media blocks.
+
+    controller.py records the decision: attachments are no longer uploaded into
+    the request, the user message carries an absolute path instead, and reading
+    the image or parsing the document happens through read_file on demand.  The
+    model capability therefore no longer changes the payload at all, which is
+    why the former four capability-split tests are one test now.
+    """
     img = _image_record(tmp_path, "img-1")
     txt = _text_record(tmp_path, "txt-1")
     vid = _video_record("vid-1")
     records = [img, txt, vid]
     current = ["img-1", "txt-1", "vid-1"]
 
-    index_text, blocks, deferred = build_capability_aware_attachment_input(records, current, "multimodal")
+    for capability in ("multimodal", "text"):
+        index_text, blocks, deferred = build_capability_aware_attachment_input(
+            records, current, capability
+        )
+        assert blocks == []
+        assert deferred == []
+        assert "[本条消息]" in index_text
+        for record in (img, txt, vid):
+            assert Path(record.storage_path).resolve().as_posix() in index_text
+        # File content stays on disk for the tool to read.
+        assert "hello world" not in index_text
 
-    # Image → content block; text → inlined in index; video → deferred (no inline block).
-    assert any(b.get("type") == "image_url" for b in blocks)
-    assert "hello world" in index_text
-    assert "vid-1" in deferred
-    assert "需委派" in index_text and "vid-1" in index_text
-
-
-def test_capability_split_text_model_defers_image_and_video(tmp_path):
-    img = _image_record(tmp_path, "img-1")
-    vid = _video_record("vid-1")
-    records = [img, vid]
-    current = ["img-1", "vid-1"]
-
-    index_text, blocks, deferred = build_capability_aware_attachment_input(records, current, "text")
-
-    # Text model cannot process images or videos — all deferred, no content blocks.
-    assert blocks == []
-    assert "img-1" in deferred
-    assert "vid-1" in deferred
-    assert "需委派" in index_text
-    assert "img-1" in index_text
-
-
-def test_capability_split_text_model_still_inlines_text(tmp_path):
-    txt = _text_record(tmp_path, "txt-1")
-    records = [txt]
-    current = ["txt-1"]
-
-    index_text, _blocks, deferred = build_capability_aware_attachment_input(records, current, "text")
-
-    # Text attachments are always inlined regardless of model capability.
-    assert "hello world" in index_text
-    assert deferred == []
-
-
-def test_capability_split_parses_pdf_as_untrusted_text_without_deferring(tmp_path):
-    pdf = _pdf_record(tmp_path)
-
-    index_text, blocks, deferred = build_capability_aware_attachment_input(
-        [pdf], [pdf.id], "text"
-    )
-
-    assert blocks == []
-    assert deferred == []
-    assert "PDF 已解析" in index_text
-    assert "[UNTRUSTED DOCUMENT CONTENT]" in index_text
-    assert "Uploaded PDF evidence" in index_text
-    assert "需委派" not in index_text
-
-
-def test_capability_split_empty_when_no_current_attachments(tmp_path):
-    img = _image_record(tmp_path, "img-1")
-    records = [img]
-    current: list[str] = []  # historical only
-
-    index_text, blocks, deferred = build_capability_aware_attachment_input(records, current, "multimodal")
-
-    # Historical attachments are never sent as content blocks.
-    assert blocks == []
-    assert deferred == []
-
-
+    # A historical attachment stays addressable but is marked as not current.
+    historical_text, _, _ = build_capability_aware_attachment_input([img], [], "multimodal")
+    assert "[历史附件]" in historical_text
+    assert Path(img.storage_path).resolve().as_posix() in historical_text
 
 
 @pytest.mark.asyncio
@@ -195,14 +155,15 @@ async def test_repository_rejects_path_traversal_session_id(tmp_path):
         with pytest.raises(LookupError):
             await repo.session(bad)
     ok = await repo.session("session-abc_1.2")
-    assert ok.storage_root == tmp_path / "data" / "attachments" / "session-abc_1.2"
+    assert ok.storage_root == tmp_path / "data" / "artifact" / "attachments"
     study = await repo.session("study:node:vector")
     repeated = await repo.session("study:node:vector")
     assert study.id == "study:node:vector"
     assert study.storage_root == repeated.storage_root
-    assert study.storage_root.parent == tmp_path / "data" / "attachments"
-    assert study.storage_root.name.startswith("session-")
-    assert ":" not in study.storage_root.name
+    # Every session shares one content-addressed store; the session id never
+    # becomes a directory name, so a colon or dot cannot escape it.
+    assert study.storage_root == ok.storage_root
+    assert "study:node:vector" not in study.storage_root.as_posix()
 
 
 @pytest.mark.asyncio
@@ -229,20 +190,3 @@ async def test_open_refuses_executable_types(tmp_path, monkeypatch):
     record = await service.create("session-ok", "notes.txt", b"hello")
     result = await service.open(record["id"])
     assert result["status"] == "opened"
-
-
-def test_attachment_index_gives_the_model_a_path_back_to_the_file(tmp_path):
-    """The index must carry a real path, not just a file name.
-
-    An image stops being sent at full resolution after its first request, so
-    reading the file again is the only way to inspect detail — and a directly
-    sent image carries no delegation id, so without a path it is unreachable.
-    """
-    img = _image_record(tmp_path, "img-1")
-
-    index_text, blocks, _ = build_capability_aware_attachment_input([img], ["img-1"], "multimodal")
-
-    assert any(block.get("type") == "image_url" for block in blocks)
-    assert "本地存储路径不会提供给模型" not in index_text
-    stored = Path(img.storage_path).resolve().as_posix()
-    assert f"路径: {stored}" in index_text
