@@ -26,6 +26,8 @@ OPERATION_LEVELS = {
     # 都在自己的闸门里重新判级；在启动处再拦一次只会多一次无保护的点击，
     # 还会让 access_tools.jsonc 给 read_only 档的 sub_agent 授权变成硬拦截)。
     "sub_agent": 1, "sub_agent_message": 1, "subagent": 1,
+    # 子代理向父级回报用的 message 工具：纯交互，不触碰工作区。
+    "message": 1,
     "web_search": 1, "web_fetch": 2, "web.search": 1, "web.fetch": 2,
     "generate_image": 2, "check_exports": 1,
     # Preserve the existing Study/Workflow domain behavior outside this migration's scope.

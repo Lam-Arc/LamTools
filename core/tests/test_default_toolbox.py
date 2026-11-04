@@ -1002,19 +1002,30 @@ def _consider_toolbox(tmp_path):
 
 
 def test_core_toolbox_mode_enforcement_blocks_write_in_consider(tmp_path):
-    """consider mode keeps its read-only boundary through the level-1
-    capability cap, not a tool-name whitelist: a level-2 write is blocked while
-    a read-only command stays usable in the same mode."""
+    """Visibility and enforcement must agree.
+
+    The consider whitelist hides write tools from the model, and a write that
+    still arrives (stale context, direct execute) is refused with the mode
+    reason.  ``run_command`` stays advertised on purpose: one tool, graded per
+    command, so read-only commands remain usable while dangerous ones are
+    refused by the operation level.
+    """
     toolbox = _consider_toolbox(tmp_path)
 
-    for name in ("write_file", "edit_file", "run_command"):
+    for name in ("write_file", "edit_file"):
         call = toolbox.prepare_call(ToolCall(id=f"mode-{name}", name=name, arguments={}))
 
         approval = call.metadata["approval"]
         assert approval["blocked"] is True
         assert call.requires_approval is False
-        assert approval["available_level"] == 1
-        assert "超过当前能力上限" in approval["reason"]
+        assert "consider mode" in approval["reason"]
+
+    # An empty command cannot be graded and is refused by the level cap.
+    empty_command = toolbox.prepare_call(
+        ToolCall(id="mode-cmd-empty", name="run_command", arguments={})
+    )
+    assert empty_command.metadata["approval"]["blocked"] is True
+    assert empty_command.metadata["approval"]["available_level"] == 1
 
     read_only_command = toolbox.prepare_call(
         ToolCall(id="mode-cmd", name="run_command", arguments={"command": "git status"})
@@ -1042,9 +1053,9 @@ async def test_core_toolbox_mode_blocked_call_returns_error_to_model(tmp_path):
     result = await toolbox.execute(call)
 
     assert result.status == "blocked"
-    # The model sees the operation cap that refused the write, so it knows the
-    # refusal is a capability limit rather than a tool defect.
-    assert "超过当前能力上限" in result.error
+    # The model is told the mode refuses the write, which matches what the mode
+    # failed to advertise.
+    assert "consider mode" in result.error
 
 
 def test_core_toolbox_mode_execute_mode_is_full_access(tmp_path):

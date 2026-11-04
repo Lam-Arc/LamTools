@@ -87,8 +87,13 @@ def mode_tool_set(
         ``set[str]`` – the whitelist of tool names.
         ``None`` – mode not recognised or full-access mode → no filtering needed.
     """
-    # user:“不一棒子按工具类型打死了”+(consider 的只读边界改由操作一级上限控制，不再按工具名称删 command)。
-    if not active_mode or active_mode == "consider":
+    # The mode whitelist is the single source of what the model may see, so a
+    # planning mode must not advertise tools it can never run.  ``run_command``
+    # stays in the consider list on purpose: it is one tool whose per-command
+    # level decides whether a specific command is allowed, which is why the
+    # former "never filter by name in consider" shortcut was wrong — it also
+    # advertised every write tool.
+    if not active_mode:
         return None
     mode = load_tools.get(active_mode)
     if mode is None:
@@ -151,6 +156,8 @@ def default_load_tools() -> LoadTools:
                 "load_skill", "memory", "message",
                 # user:“ok，那就这么做”+(分析模式也可查阅当前会话的历史原文)。
                 "search_context", "recall_context",
+                # 只读命令仍可用；危险命令由操作等级在闸门里拦下。
+                "run_command",
             ],
         ),
         "execute": LoadToolMode(
