@@ -306,7 +306,10 @@ async def _dependency_toolbox(tmp_path):
     spec = _tool_spec(
         PluginToolSpec(
             name="dep_tool",
-            permission="auto_allow",
+            # ask_user: this fixture is about a tool that needs approval, since
+            # the two cases below are "approved" and "never approved". An
+            # auto_allow tool legitimately runs without asking.
+            permission="ask_user",
             handler="x:y",
             plugin="needy",
             plugin_root=str(tmp_path),
