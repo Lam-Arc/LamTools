@@ -138,8 +138,8 @@ core/ui/dist-core-app/
 core/ui/demo-*.html
 core/desktop/public/
 
-# Dev-injection / debug script (local-only tooling)
-core/scripts/
+# Local-only scratch scripts (reliability tooling under core/scripts is tracked)
+core/scripts/__pycache__/
 
 # Root-level verify scripts & screenshots (one-off artifacts)
 /probe-api.mjs
