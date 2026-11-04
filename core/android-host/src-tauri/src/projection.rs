@@ -77,9 +77,17 @@ impl Projector {
         // would then share one identity and the client, which dedupes on it, would
         // keep only the first — leaving every other card looking answerable.
         if seq == 0 {
+            // A closure is identified by whatever it is about: the approval it settles,
+            // or the turn it closes. Without this, every recovery event in one reply
+            // shared one id and the client kept only the first.
             let discriminant = envelope
                 .get("payload")
-                .and_then(|value| value.get("request_id").or_else(|| value.get("approval_id")))
+                .and_then(|value| {
+                    value
+                        .get("request_id")
+                        .or_else(|| value.get("approval_id"))
+                        .or_else(|| value.get("turn_id"))
+                })
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if !discriminant.is_empty() {
@@ -591,6 +599,27 @@ mod tests {
         assert_eq!(body["status"], "resolved");
         assert_eq!(body["action"], "deny");
         assert_eq!(body["interaction_id"], "r1");
+    }
+
+    /// Recovery closes several turns in one reply; each must be distinguishable.
+    #[test]
+    fn recovery_closures_are_identified_by_their_turn() {
+        let mut projector = Projector::new();
+        let closure = |turn: &str| {
+            json!({
+                "thread_id": "th",
+                "seq": 0,
+                "method": "turn/completed",
+                "event_id": "th:0",
+                "created_at": "",
+                "payload": {"text": "", "recovered": true, "turn_id": turn},
+            })
+        };
+        let first = projector.project(&closure("turn-a")).expect("a");
+        let second = projector.project(&closure("turn-b")).expect("b");
+        assert_ne!(first["event_id"], second["event_id"]);
+        assert_eq!(first["payload"]["turn_id"], "turn-a");
+        assert_eq!(first["payload"]["payload"]["status"], "completed");
     }
 
     /// Internal bookkeeping never reaches the webview.

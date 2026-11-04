@@ -642,19 +642,53 @@ fn dispatch(
                 .settled_approvals(&thread, crate::runner::now_epoch())
                 .unwrap_or_default();
             let mut events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
-            // Recovery: a thread whose approvals are all settled has nothing left to
-            // wait for. Older runs recorded the decision without closing the turn, so
-            // the replayed transcript ended on "waiting" and the composer offered Stop
-            // forever. The id is derived from the thread, so repeating a resume does
-            // not add a second closure.
+            // Recovery: close every turn that opened and never closed.
+            //
+            // Older runs recorded an approval decision without ending its turn, and
+            // nothing else ever closed it, so the replayed transcript carried turns
+            // that read "running" forever — the composer offered Stop on a
+            // conversation with nothing left to do. Closing only the newest turn was
+            // not enough: a thread accumulates several.
+            //
+            // This is skipped entirely while something is still pending, because a
+            // genuine wait must keep its card answerable.
             let still_waiting = runner.has_pending_approval(&thread).unwrap_or(true);
-            if !still_waiting && !settled.is_empty() {
-                events.push(BridgeEvent {
-                    method: "turn/completed".into(),
-                    seq: 0,
-                    client_message_id: None,
-                    payload: serde_json::json!({"text": "", "recovered": true}),
-                });
+            if !still_waiting {
+                let mut opened: Vec<String> = Vec::new();
+                let mut closed: Vec<String> = Vec::new();
+                for event in &events {
+                    let turn = event
+                        .payload
+                        .get("turn_id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    if turn.is_empty() {
+                        continue;
+                    }
+                    match event.method.as_str() {
+                        "turn/started" => opened.push(turn),
+                        "turn/completed" | "turn/cancelled" => closed.push(turn),
+                        _ => {}
+                    }
+                }
+                for turn in opened {
+                    if closed.contains(&turn) {
+                        continue;
+                    }
+                    events.push(BridgeEvent {
+                        method: "turn/completed".into(),
+                        seq: 0,
+                        client_message_id: None,
+                        payload: serde_json::json!({
+                            "text": "",
+                            "recovered": true,
+                            // Names the turn this closes, so the client updates that
+                            // turn rather than inventing another.
+                            "turn_id": turn,
+                        }),
+                    });
+                }
             }
             for (approval_id, status) in settled {
                 events.push(BridgeEvent {
