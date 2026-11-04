@@ -62,3 +62,46 @@ tier=ask_user level=3 auto_approve_level=1 reason=操作等级 3 超过免问线
 ## 五、全量
 
 见第六节（源码绑定 + SHA 头）。
+## 六、本轮全量与验收起点
+
+冻结 SHA：`9342c86c`（源码绑定 + `--expect-sha` 校验，`round3b_full.log`）
+
+```
+57 failed, 4225 passed, 9 skipped
+```
+
+起点是 79 failed / 4203 passed，本轮净修好 22 条，其中真实产品缺陷 3 类：
+
+1. 插件工具声明与操作等级脱节（`auto_allow` / `ask_user` 都落到 3 级）；
+2. 禁用/硬拦截分支借用“自动放行”的理由；
+3. 委派汇总纪律在文案改写中丢失。
+
+新增失败 0 条。`test_plugin_system_singleton` 在两次全量里一次失败一次通过，单文件重复运行 6 次全过，属缓存隔离的抖动，记为不稳定用例而非产品缺陷。
+
+## 七、权限到等级的完整映射（本轮收口）
+
+原来只有 `hard_block` 在等级路径上有效，其余声明全部落到“未注册操作=3 级”：
+
+| 声明 | 等级 | 行为 |
+| --- | --- | --- |
+| `hard_block` | 0 | 直接阻断 |
+| `auto_allow` | 1 | 不问，受能力档位约束 |
+| `ask_user` | 2 | 默认问；用户显式选 auto 才不问 |
+| 显式 `operation_level` | 按声明 | 优先于上表 |
+| 3 级 | 保留 | 只给真正破坏性操作 |
+
+收益：只读档里，声明为只读用途的插件工具不再被“超过能力上限”拦掉；auto 模式下，委派出去的 workflow 工具不再把子代理停在一次用户已经放弃的确认上。没有放宽硬拦截与能力档位。
+
+## 八、仍未关闭（下一轮入口）
+
+- Kernel 压缩拟合失败即整轮失败（3 条 `failed` vs `done`），需要产品判定是否降级为 best-effort。
+- 恢复+附件时 UI 事件为 0（模型侧断言全过）。
+- `channel_runner_services`（该失败时压缩未失败）、`turn_steer_revision`（stale 未回 idle）、`system_prompt_english`（混入非英文）。
+- 环境前置：Office 4 条（缺 manifest / LibreOffice 超时）、Network 4+3 条（缺 Rust 控制器 / 本地 5172 未起）、workflow WSL 超时 1 条。
+- 契约漂移余项：`review_*` 4、`core_cli` 3、`update_installer` 2、`artifact_store` 2、`core_runtime_persistence` 2、`plugin_system_skills` 2、`tool_result_model_evidence` 2、`backend_deep_split` 1、其余各 1。
+
+## 九、验收状态
+
+- 全量：已完成，57 条全部归类（真实缺陷 / 契约漂移 / 环境前置）。
+- 强杀注入：20 轮 PASS（0 孤儿），1000 轮已启动，结果下一轮读取。
+- 崩溃恢复 ×100、24h Soak：未在本次执行，需在冻结 SHA 上重跑（Soak 口径已改为只统计本轮）。
