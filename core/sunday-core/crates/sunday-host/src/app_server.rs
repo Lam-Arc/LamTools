@@ -647,6 +647,9 @@ fn dispatch(
                     payload: serde_json::json!({
                         "approval_id": approval_id,
                         "request_id": approval_id,
+                        // Settling an aged-out card is not resuming its turn. Naming
+                        // the finished turn here made the client revive it.
+                        "turn_id": "",
                         // The status the row actually carries, so a denied or
                         // approved card is reported as what it was, not as expired.
                         "decision": status,

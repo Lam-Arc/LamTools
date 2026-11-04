@@ -113,7 +113,14 @@ impl Projector {
                 }
             }
         }
-        let turn = self.turn_of.get(&thread).cloned().unwrap_or_default();
+        // An explicit `turn_id` wins, including an empty one. A closure reported long
+        // after its turn ended must not be attributed to it: the client treats an
+        // `approval_response` as resuming the turn it names, so pointing one at a
+        // finished turn revived it and the composer went back to offering Stop.
+        let turn = match payload.get("turn_id").and_then(Value::as_str) {
+            Some(explicit) => explicit.to_owned(),
+            None => self.turn_of.get(&thread).cloned().unwrap_or_default(),
+        };
         let tool_item = |call: &str| format!("{thread}:{turn}:{call}:tool");
 
         let (kind, item_id, status, body): (&str, String, &str, Value) = match method.as_str() {

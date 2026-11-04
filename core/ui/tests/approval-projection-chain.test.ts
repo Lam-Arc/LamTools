@@ -281,3 +281,35 @@ describe('turn status', () => {
     expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
   })
 })
+
+describe('settling a stale card', () => {
+  /**
+   * Settling an aged-out approval must not put its finished turn back in motion.
+   *
+   * The client reads any `approval_response` as "this turn continues", so a closure
+   * that named the finished turn revived it and the composer went back to Stop. The
+   * host now reports closures with an empty turn id, which is what this replays.
+   */
+  it('does not revive a finished turn', () => {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(snapshot, runItem(2, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'running' }, 'running'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(8, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'completed' }, 'completed'))
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
+
+    // A closure from the host, detached from any turn.
+    const closure = {
+      ...runItem(9, 'approval_response', `${THREAD}::call1:tool`, {
+        type: 'serverRequest',
+        request_id: 'appr-old',
+        tool_call_id: 'call1',
+        decision: 'expired',
+        state: 'ending',
+        metadata: { request_id: 'appr-old' },
+      }, 'completed'),
+    } as unknown as CoreAppEvent
+    ;(closure.payload as Record<string, unknown>).turn_id = ''
+    snapshot = applyCoreAppEvent(snapshot, closure)
+
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
+  })
+})

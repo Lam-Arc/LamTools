@@ -154,6 +154,24 @@ fn project_events(
         .iter()
         .filter_map(|event| guard.project(event))
         .collect();
+    // One line that answers "why does the composer still say Stop": the exact
+    // kind/item/status triple the client is about to receive, in order.
+    #[cfg(debug_assertions)]
+    {
+        let summary: Vec<String> = projected
+            .iter()
+            .map(|item| {
+                let payload = item.get("payload").cloned().unwrap_or_default();
+                format!(
+                    "{}|{}|{}",
+                    payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?"),
+                    payload.get("item_id").and_then(|v| v.as_str()).unwrap_or("?"),
+                    payload.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
+                )
+            })
+            .collect();
+        println!("resume projection: {} events :: {}", summary.len(), summary.join(", "));
+    }
     *events = projected;
 }
 
