@@ -124,6 +124,13 @@ class Ticket:
     revision: int = 1
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime = field(default_factory=utcnow)
+    # user:“让用户能够直接交付复杂目标，由 Super-agent 自主规划、拆解、委派、执行、
+    # 监控、处理异常、恢复任务、验证成果并完成交付”+(工单必须自己记住标题、排期任务、
+    # 执行现场和最终成果，否则界面和用户都无从知道这件事做到哪一步、结果是什么)。
+    title: str = ""
+    job_id: str = ""
+    assignment_id: str = ""
+    result: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -139,6 +146,10 @@ class Ticket:
             "revision": self.revision,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
+            "title": self.title,
+            "job_id": self.job_id,
+            "assignment_id": self.assignment_id,
+            "result": dict(self.result),
         }
 
     @classmethod
@@ -156,6 +167,10 @@ class Ticket:
             revision=int(raw.get("revision") or 1),
             created_at=_parse_dt(raw.get("created_at")),
             updated_at=_parse_dt(raw.get("updated_at")),
+            title=str(raw.get("title") or ""),
+            job_id=str(raw.get("job_id") or ""),
+            assignment_id=str(raw.get("assignment_id") or ""),
+            result=dict(raw.get("result") or {}),
         )
 
 

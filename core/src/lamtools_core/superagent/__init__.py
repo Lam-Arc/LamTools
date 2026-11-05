@@ -14,7 +14,14 @@ from .models import (
     TicketStage,
 )
 from .policy import PolicyConfig, PolicyGate, PolicyVerdict
-from .service import DefaultEvalEngine, EvalEngine, HandleResult, SuperagentService
+from .prompt import REPORT_CONTRACT, build_ticket_prompt
+from .service import (
+    DefaultEvalEngine,
+    EvalEngine,
+    ExecutionPlan,
+    HandleResult,
+    SuperagentService,
+)
 from .store import (
     ConcurrentUpdate,
     InMemorySuperagentStore,
@@ -33,7 +40,10 @@ __all__ = [
     "EffectAdapter",
     "EffectOutbox",
     "EvalEngine",
+    "ExecutionPlan",
     "HandleResult",
+    "REPORT_CONTRACT",
+    "build_ticket_prompt",
     "InMemorySuperagentStore",
     "Mandate",
     "PolicyConfig",

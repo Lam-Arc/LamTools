@@ -595,6 +595,38 @@ def create_core_agent_http_app(
         _register_missing_operations(agent_operations, build_config_operation_catalog(work_root=resolved_work_root, data_dir=resolved_data_dir))
         _register_missing_operations(agent_operations, build_update_operation_catalog())
 
+        async def _record_superagent_result(job: Any, payload: dict[str, Any], result: Any) -> None:
+            """把一次工单执行的结果写回工单。
+
+            user:“监控、处理异常、恢复任务、验证成果并完成交付”+(执行完必须把结果落到工单上，
+            否则用户看到的永远是一个停在 running 的工单；这里只做回写，不改执行本身)。
+            """
+            ticket_id = str(payload.get("superagent_ticket_id") or "").strip()
+            if not ticket_id:
+                return
+            service = app_state.get("superagent_service")
+            if service is None:
+                return
+            try:
+                status = str(getattr(result, "status", "") or "")
+                body = dict(getattr(result, "payload", {}) or {})
+                error = str(body.get("error") or "")
+                completed = status == "ok" and not error
+                await service.record_execution_result(
+                    ticket_id,
+                    status="completed" if completed else "failed",
+                    summary=str(body.get("message") or ""),
+                    error=error,
+                    report={
+                        "decision": body.get("decision"),
+                        "thread_id": body.get("thread_id"),
+                        "turn_id": body.get("turn_id"),
+                        "job_id": job.id,
+                    },
+                )
+            except Exception:
+                _logger.exception("[superagent] failed to record result for %s", ticket_id)
+
         async def execute_arranged_job(job: Any) -> OperationResult:
             payload = arranged_operation_payload(job)
             if job.operation == "turn.start":
@@ -674,7 +706,7 @@ def create_core_agent_http_app(
                         await live_hub.publish(user_envelope)
                     except Exception:
                         pass  # best-effort; never block arrange execution
-            return await agent_operations.execute(
+            result = await agent_operations.execute(
                 job.operation,
                 payload,
                 metadata={
@@ -684,6 +716,8 @@ def create_core_agent_http_app(
                     **({"arrange_signal": job.signal} if job.signal else {}),
                 },
             )
+            await _record_superagent_result(job, payload, result)
+            return result
 
         arrange_runner = ArrangeRunner(
             core_db_handle.arrange_store,
@@ -730,15 +764,40 @@ def create_core_agent_http_app(
             raw = str(os.environ.get(name) or "")
             return frozenset(item.strip() for item in raw.split(",") if item.strip())
 
+        async def _superagent_model_id() -> str:
+            # 工单必须跑在一个确定的模型上：委派时模型要能把这个 id 直接交给 sub_agent，
+            # 不能让模型自己猜一个不存在的名字。
+            try:
+                from lamtools_core.config.model_store import ModelStore
+
+                return str(
+                    await ModelStore().default_model_id(work_root=str(resolved_work_root)) or ""
+                )
+            except Exception:
+                return ""
+
         async def _schedule_superagent_ticket(ticket):
+            # user:“让用户能够直接交付复杂目标，由 Super-agent 自主规划、拆解、委派、执行、
+            # 监控、处理异常、恢复任务、验证成果并完成交付”+(排期前先把执行现场备好：
+            # 独立工作树、分支、指令；排期本身仍然交给 Arrange，不另造调度器)。
+            model_id = await _superagent_model_id()
+            plan = await superagent_service.begin_execution(
+                ticket.ticket_id, model_id=model_id
+            )
             job = await arrange_manager.create(
-                thread_id=f"ticket:{ticket.ticket_id}",
-                work_root=ticket.mandate.repo_root,
+                thread_id=plan.thread_id,
+                work_root=plan.work_root,
                 kind="focus",
                 operation="turn.start",
-                payload={"message": ticket.instructions},
+                payload={
+                    "message": plan.prompt,
+                    "superagent_ticket_id": ticket.ticket_id,
+                    "superagent_assignment_id": plan.assignment_id,
+                },
                 trigger={"type": "once"},
-                title=f"ticket {ticket.ticket_id}",
+                title=ticket.title or f"ticket {ticket.ticket_id}",
+                session_strategy="new",
+                model_id=model_id,
             )
             arrange_runner.wake()
             return job.id
