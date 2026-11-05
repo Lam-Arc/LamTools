@@ -22,14 +22,22 @@ class MainActivity : TauriActivity() {
   /** Hands `applicationInfo.nativeLibraryDir` to the host before anything starts. */
   private external fun nativeSetLibraryDir(path: String)
 
+  /** Hands `filesDir` over: the host keeps its runtime and its database there. */
+  private external fun nativeSetFilesDir(path: String)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     alive = java.lang.ref.WeakReference(this)
     enableEdgeToEdge()
     nativeSetLibraryDir(applicationInfo.nativeLibraryDir)
+    nativeSetFilesDir(filesDir.absolutePath)
     // Touch the keystore bridge before Tauri starts. Its initialiser is what hands the
     // JavaVM to Rust, and Kotlin only initialises an object when something refers to
     // it: Rust runs its setup inside `super.onCreate`, earlier than any callback.
     KeystoreBridge.register()
+    // Staging the packaged runtime takes seconds the first time and does no work after
+    // that; it must not delay the first frame, and the host waits for its marker before
+    // it tries to install.
+    Thread({ RuntimeAssets.ensure(applicationContext) }, "sunday-runtime-assets").start()
     super.onCreate(savedInstanceState)
     // The file picker registers its result contract here, which has to happen before the
     // activity is started. Touching the object also runs its initialiser, which is what

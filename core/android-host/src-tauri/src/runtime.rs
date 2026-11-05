@@ -31,9 +31,23 @@ use tauri::{AppHandle, Emitter, Manager};
 /// `/data/user/0/<package>/files`, which is the only place a packaged runtime may run
 /// from: the system mounts it executable and no other app can read it.
 pub fn data_dir(app: &AppHandle) -> PathBuf {
+    // Kotlin hands us `filesDir` before Tauri starts. It is the only path that is
+    // certainly this app's own storage: Tauri's `app_data_dir()` resolves through the
+    // same directory, but it can come back unresolved early in startup, and a relative
+    // fallback would make the host look for its runtime in a directory nobody wrote to.
+    if let Some(dir) = FILES_DIR.get() {
+        return PathBuf::from(dir);
+    }
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+static FILES_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Called from Kotlin with `context.filesDir.absolutePath`.
+pub fn set_files_dir(path: &str) {
+    let _ = FILES_DIR.set(path.to_owned());
 }
 
 /// The directory the packaged `.so` files were extracted to. Android gives proot no
@@ -124,6 +138,11 @@ fn installed_version(app: &AppHandle) -> Option<String> {
 /// blocking command and the UI shows its installing state. Nothing else may read the
 /// rootfs while this runs, which is why it takes the same lock the starter does.
 pub fn install(app: &AppHandle) -> Result<InstallState, String> {
+    // The archive lives in the APK's assets, which Rust cannot read as a file. Kotlin
+    // stages it into filesDir/runtime and writes the manifest last; that manifest is the
+    // only dependable "the bytes are here" signal, so this waits for it rather than
+    // guessing at a delay.
+    wait_for_stage(app)?;
     let manifest = read_manifest(app)?;
     let _guard = INSTALL_LOCK.lock().expect("install lock");
 
@@ -139,16 +158,20 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     }
 
     let archive = path_of(app).join(&manifest.rootfs);
-    let bytes = std::fs::read(&archive)
+    let file = std::fs::File::open(&archive)
         .map_err(|error| format!("cannot read the packaged runtime {}: {error}", archive.display()))?;
-    if manifest.rootfs_bytes > 0 && bytes.len() as u64 != manifest.rootfs_bytes {
+    let archived = file
+        .metadata()
+        .map_err(|error| format!("cannot stat {}: {error}", archive.display()))?
+        .len();
+    if manifest.rootfs_bytes > 0 && archived != manifest.rootfs_bytes {
         return Err(format!(
-            "packaged runtime is {} bytes, manifest says {}",
-            bytes.len(),
+            "packaged runtime is {archived} bytes, manifest says {}",
             manifest.rootfs_bytes
         ));
     }
 
+    println!("[sunday] unpacking runtime from {}", archive.display());
     let rootfs = rootfs_dir(app);
     if rootfs.exists() {
         std::fs::remove_dir_all(&rootfs)
@@ -156,7 +179,10 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     }
     std::fs::create_dir_all(&rootfs).map_err(|error| format!("cannot create the runtime dir: {error}"))?;
 
-    let decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
+    // Streamed, not read into memory: the archive is ~200 MB and the extraction writes
+    // ~600 MB, so holding the compressed bytes as well is how an Android process gets
+    // killed halfway through an install that looked fine on a desktop.
+    let decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
     let mut tar = tar::Archive::new(decoder);
     tar.set_preserve_permissions(true);
     tar.set_preserve_mtime(true);
@@ -164,8 +190,33 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     // `tar` aborts the unpack halfway. Ownership is irrelevant here: everything is
     // already owned by this app's uid.
     tar.set_unpack_xattrs(false);
-    tar.unpack(&rootfs)
-        .map_err(|error| format!("cannot unpack the runtime: {error}"))?;
+    // Unpacked entry by entry on purpose. A single file that Android refuses (an odd
+    // permission bit, a name the filesystem dislikes) used to abort the whole install and
+    // leave a half-written tree behind; the runtime does not need that file, and a
+    // reported count is more honest than a failed install nobody can act on.
+    let mut skipped = 0usize;
+    let mut entries = tar
+        .entries()
+        .map_err(|error| format!("cannot read the runtime archive: {error}"))?;
+    while let Some(next) = entries.next() {
+        let mut entry = match next {
+            Ok(entry) => entry,
+            Err(error) => {
+                skipped += 1;
+                eprintln!("[sunday] archive entry unreadable: {error}");
+                continue;
+            }
+        };
+        if let Err(error) = entry.unpack_in(&rootfs) {
+            skipped += 1;
+            if skipped <= 5 {
+                eprintln!("[sunday] skipped {}: {error}", entry.path().map(|p| p.display().to_string()).unwrap_or_default());
+            }
+        }
+    }
+    if skipped > 0 {
+        println!("[sunday] unpacked the runtime with {skipped} skipped entries");
+    }
 
     if !rootfs.join("opt/sunday/start_core.py").exists() {
         return Err("the runtime unpacked without its start script".into());
@@ -178,6 +229,9 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     });
     std::fs::write(marker_path(app), serde_json::to_vec_pretty(&marker).unwrap())
         .map_err(|error| format!("cannot record the install: {error}"))?;
+    // The archive has done its job. Keeping it would cost the user another 200 MB for a
+    // file that is never read again unless the runtime version changes.
+    let _ = std::fs::remove_file(&archive);
 
     Ok(InstallState {
         installed: true,
@@ -188,6 +242,24 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
 }
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
+
+/// Blocks until the packaged archive has been copied out of assets.
+///
+/// First launch copies a few hundred megabytes; after that the manifest already exists and
+/// this returns immediately. The upper bound is generous because extraction on a slow
+/// device is the difference between "slow" and "broken", and a false failure would send
+/// the user to a retry loop that cannot succeed any faster.
+fn wait_for_stage(app: &AppHandle) -> Result<(), String> {
+    let manifest = path_of(app).join("runtime-manifest.json");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    while std::time::Instant::now() < deadline {
+        if manifest.exists() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    Err("the packaged runtime was not staged within 300s".to_owned())
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -289,6 +361,24 @@ impl Runtime {
         // proot writes its fake-hardlink records here; a stale directory from a killed
         // run makes the next start resolve deleted inodes.
         let l2s = rootfs.join("root/.l2s");
+
+        // proot's DT_NEEDED asks for `libtalloc.so.2`, and Gradle only packages
+        // `*.so` into an APK. A copy under the name the binary asks for, in a
+        // directory on LD_LIBRARY_PATH, is the loader's own mechanism for this and
+        // avoids patching a maintained third-party binary.
+        let shim = self
+            .app
+            .path()
+            .app_cache_dir()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("proot-libs");
+        if std::fs::create_dir_all(&shim).is_ok() {
+            let source = native.join("libtalloc.so");
+            let target = shim.join("libtalloc.so.2");
+            if source.exists() && !target.exists() {
+                let _ = std::fs::copy(&source, &target);
+            }
+        }
         std::fs::create_dir_all(&l2s).ok();
 
         let mut argv: Vec<String> = manifest
@@ -325,7 +415,8 @@ impl Runtime {
                 value
                     .replace("{NATIVE_LIB_DIR}", &native.to_string_lossy())
                     .replace("{ROOTFS}", &rootfs.to_string_lossy())
-                    .replace("{TMP}", &tmp.to_string_lossy()),
+                    .replace("{TMP}", &tmp.to_string_lossy())
+                    .replace("{SHIM}", &shim.to_string_lossy()),
             );
         }
         // proot's own stderr is the only place a guest-side import error appears in a
@@ -338,6 +429,7 @@ impl Runtime {
             .map_err(|error| format!("cannot open {}: {error}", log_path.display()))?;
         let log_err = log.try_clone().map_err(|error| error.to_string())?;
 
+        println!("[sunday] starting guest on port {port} rootfs={}", rootfs.display());
         let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))

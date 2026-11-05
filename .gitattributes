@@ -1,3 +1,9 @@
-# Shell scripts are executed on Linux (the release step runs on the server via
-# Cloud Assistant), so they must never pick up CRLF from core.autocrlf.
+# Line endings are part of the build here.
+#
+# The runtime build is a bash script that runs inside WSL, and a CRLF there fails with
+# `$'\r': command not found` in a way that reads like a missing tool. Pin the shell and
+# Python pieces to LF and leave everything else to the repository default.
 *.sh text eol=lf
+*.py text eol=lf
+*.kts text eol=lf
+core/android-runtime/tools/* text eol=lf

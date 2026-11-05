@@ -245,6 +245,11 @@ def sync_runtime_gradle() -> int:
         '    val sundayRuntimeAssets = System.getenv("SUNDAY_RT_ASSETS")',
         '        ?: file("../../../../../android-runtime/tools/out/x86_64/assets").absolutePath',
         '    sourceSets.getByName("main").assets.srcDir(sundayRuntimeAssets)',
+        '    // proot, its loader and the two libraries it needs are packaged as lib*.so so',
+        '    // Gradle extracts them into nativeLibraryDir: the only directory Android still',
+        '    // executes a binary from, and a runtime without them cannot start.',
+        '    val sundayRuntimeJni = File(file(sundayRuntimeAssets).parentFile, "jniLibs")',
+        '    sourceSets.getByName("main").jniLibs.srcDir(sundayRuntimeJni)',
         "    // <<< Sunday runtime",
         "",
     ])

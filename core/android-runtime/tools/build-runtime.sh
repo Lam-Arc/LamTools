@@ -22,6 +22,12 @@
 set -euo pipefail
 
 ABI="${1:-x86_64}"
+# Android's jniLibs directory is named by ABI, and the names are not the build
+# architecture strings: arm64-v8a, not aarch64.
+case "$ABI" in
+  x86_64)  ANDROID_ABI=x86_64 ;;
+  aarch64) ANDROID_ABI=arm64-v8a ;;
+esac
 case "$ABI" in
   x86_64)  UBUNTU_ARCH=amd64;  TERMUX_ARCH=x86_64;  PBS_ARCH=x86_64;  PY_TAG=manylinux_2_28_x86_64 ;;
   aarch64) UBUNTU_ARCH=arm64;  TERMUX_ARCH=aarch64; PBS_ARCH=aarch64; PY_TAG=manylinux_2_28_aarch64 ;;
@@ -216,7 +222,7 @@ PY
 sed -i 's/\r$//' "$ROOTFS/opt/sunday/start_core.py"
 
 # ---------------------------------------------------------------- proot binaries
-JNI="$OUT/$ABI/jniLibs/$ABI"
+JNI="$OUT/$ABI/jniLibs/$ANDROID_ABI"
 rm -rf "$OUT/$ABI"
 mkdir -p "$JNI" "$OUT/$ABI/assets/runtime"
 
@@ -237,7 +243,11 @@ extract_deb "$SHMEM_DEB"  "$JNI/libandroid-shmem.so"       lib/libandroid-shmem.
 
 # ---------------------------------------------------------------- archive
 log "compressing rootfs"
-ROOTFS_NAME="rootfs-$ABI.tar.gz"
+# `.targz`, not `.tar.gz`: aapt2 unpacks a `.gz` asset inside the APK and the file
+# arrives on the device as a 550 MB `.tar` under a different name, which no reader can
+# find and every install pays for twice. An extension it does not recognise is stored
+# verbatim. The bytes are still gzip.
+ROOTFS_NAME="rootfs-$ABI.targz"
 UNCOMPRESSED="$(du -sb "$ROOTFS" | cut -f1)"
 tar -C "$ROOTFS" -czf "$OUT/$ABI/assets/runtime/$ROOTFS_NAME" --numeric-owner .
 ROOTFS_BYTES="$(stat -c %s "$OUT/$ABI/assets/runtime/$ROOTFS_NAME")"
@@ -287,7 +297,7 @@ cat > "$OUT/$ABI/assets/runtime/manifest.json" <<JSON
       "PROOT_LOADER": "{NATIVE_LIB_DIR}/libproot-loader.so",
       "PROOT_TMP_DIR": "{TMP}",
       "PROOT_L2S_DIR": "{ROOTFS}/root/.l2s",
-      "LD_LIBRARY_PATH": "{NATIVE_LIB_DIR}"
+      "LD_LIBRARY_PATH": "{NATIVE_LIB_DIR}:{SHIM}"
     },
     "placeholders": {
       "{NATIVE_LIB_DIR}": "applicationInfo.nativeLibraryDir (libs extracted: useLegacyPackaging=true)",

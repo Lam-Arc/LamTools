@@ -20,6 +20,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tauri::{Manager, State};
 
+mod android_jni;
 mod client;
 mod runtime;
 mod settings_cmd;
@@ -264,21 +265,37 @@ pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeSetLibra
     }
 }
 
+/// Called from the Activity: the app's own files directory, before Tauri starts.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeSetFilesDir(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    dir: jni::objects::JString,
+) {
+    if let Ok(text) = env.get_string(&dir) {
+        let value: String = text.into();
+        runtime::set_files_dir(&value);
+        println!("[sunday] files dir: {value}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
             let data_dir = runtime::data_dir(&handle);
+            println!("[sunday] host data dir {}", data_dir.display());
             std::fs::create_dir_all(&data_dir).ok();
             // The runtime directory carries the manifest that ships in assets; copy it
             // out once so every later read is a plain file read.
-            let runtime_dir = runtime::path_of(&handle);
-            std::fs::create_dir_all(&runtime_dir).ok();
-            copy_manifest(app, &runtime_dir);
 
             let link = CoreLink::new(handle.clone());
             let runtime = Runtime::new(handle.clone());
+            // Nothing is copied here: staging the packaged archive is Kotlin's job (it
+            // streams assets without holding the archive in memory), and the runtime
+            // install waits for the manifest that staging writes last.
             app.manage(HostState {
                 inner: Arc::new(Inner {
                     app: handle.clone(),
@@ -305,21 +322,6 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Android host");
-}
-
-/// Copies `assets/runtime/manifest.json` next to the installed rootfs.
-fn copy_manifest(app: &tauri::App, target: &std::path::Path) {
-    let Ok(resource) = app
-        .path()
-        .resource_dir()
-        .map(|dir| dir.join("runtime").join("manifest.json"))
-    else {
-        return;
-    };
-    if target.join("runtime-manifest.json").exists() {
-        return;
-    }
-    let _ = std::fs::copy(&resource, target.join("runtime-manifest.json"));
 }
 
 trait EmitCoreInfo {
