@@ -123,6 +123,11 @@
   界面有两个读取点（`coreDecisionRequestId` 与 `coreDecisionSelectionPlan`），
   少一个就会「点得动但请求发不出去」，或者退化成把审批当普通消息发出去
 - `item_id` 与 3.3 相同（审批卡挂在工具那一行上）
+- **同一时刻还要发一条交互池更新**（`kind: interaction_update`，`state/lifecycle: appearing`，
+  `status: pending`，`turn_id` 为空，`item_id` 用请求 id）。依据：
+  `pendingDecisions.ts::selectVisiblePendingDecisions` 一旦发现池是数组就只认池、
+  不再看会话里的卡片。只发卡片不发池，第一张卡之后的所有卡都会「画得出来但点不动」，
+  因为接管输入区的面板是空的。这是设备上「多工具后卡住」的真正原因。
 
 ### 3.6 审批终结（`item/approval_resolved`）
 
@@ -194,6 +199,7 @@
 | 工具参数键 | `tool_args` | `arguments`（保留别名） | 界面读的是 `arguments` |
 | 产物位置 | `payload.payload.artifacts` | 条目顶层 `artifacts` | `run_item.py::to_dict` 就在顶层；放在 payload 里靠兼容分支才显示 |
 | 工具结果键 | `content` / `is_error` | 另补 `delta` / `tool_result` / `replace` / `status` / `error` | 桌面核用这套名字，两套并存谁都不用猜来源 |
+| 审批卡是否附带交互池行 | 只有卡片 | 卡片 + `interaction_update` | 界面有池之后不再看会话卡片，缺这条就接管不了输入区 |
 
 ## 八、已知缺口
 

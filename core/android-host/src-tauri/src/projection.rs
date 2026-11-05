@@ -71,6 +71,69 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// The interaction-pool row for a card, in the shape the client's decision pool reads
+/// (`applyDecisionLifecycle`: `state`/`lifecycle`, `request_id`, `options`, `sequence`).
+///
+/// `turn_id` is empty on purpose: a pool row is a decision, not a turn fact, and naming
+/// a turn there lets the client revive one.
+fn pool_update(card: &Value) -> Option<Value> {
+    if card.get("payload")?.get("kind")?.as_str()? != "approval_request" {
+        return None;
+    }
+    let body = card.get("payload")?.get("payload")?;
+    let request = body.get("request_id")?.as_str()?;
+    if request.is_empty() {
+        return None;
+    }
+    let thread = card.get("thread_id")?.as_str()?;
+    let event_id = card.get("event_id")?.as_str()?;
+    let seq = card.get("seq").and_then(Value::as_u64).unwrap_or(0);
+    let created_at_ms = card
+        .get("payload")
+        .and_then(|payload| payload.get("created_at_ms"))
+        .cloned()
+        .unwrap_or_else(|| json!(0));
+    let pool = json!({
+        "type": "serverRequest",
+        "request_id": request,
+        "interaction_id": request,
+        "tool_call_id": body.get("tool_call_id").cloned().unwrap_or_else(|| json!("")),
+        "kind": "approval",
+        "state": "appearing",
+        "lifecycle": "appearing",
+        "status": "open",
+        "sequence": seq,
+        "title": body.get("message").cloned().unwrap_or_else(|| json!("")),
+        "options": body.get("options").cloned().unwrap_or_else(|| json!([])),
+    });
+    let mut item = serde_json::Map::new();
+    item.insert("kind".into(), json!("interaction_update"));
+    item.insert("thread_id".into(), json!(thread));
+    item.insert("event_id".into(), json!(format!("{event_id}:pool")));
+    item.insert("status".into(), json!("pending"));
+    item.insert("payload".into(), pool);
+    item.insert("created_at_ms".into(), created_at_ms);
+    item.insert("turn_id".into(), json!(""));
+    item.insert("item_id".into(), json!(request));
+    if seq > 0 {
+        item.insert("seq".into(), json!(seq));
+    }
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("method".into(), json!("core/runItem"));
+    envelope.insert("thread_id".into(), json!(thread));
+    envelope.insert("event_id".into(), json!(format!("{event_id}:pool")));
+    if let Some(created) = card.get("created_at") {
+        envelope.insert("created_at".into(), created.clone());
+    }
+    envelope.insert("turn_id".into(), json!(""));
+    envelope.insert("item_id".into(), json!(request));
+    if seq > 0 {
+        envelope.insert("seq".into(), json!(seq));
+    }
+    envelope.insert("payload".into(), Value::Object(item));
+    Some(Value::Object(envelope))
+}
+
 /// What the desktop core offers on an approval card. Copied rather than invented so a
 /// phone and a desktop show the same two buttons with the same wire responses.
 fn approval_options() -> Value {
@@ -118,6 +181,23 @@ impl Projector {
             .and_then(|known| known.get("item_id"))
             .and_then(Value::as_str)
             .map(str::to_owned)
+    }
+
+    /// Every frame one journal envelope produces.
+    ///
+    /// A card is two facts at once. The transcript row is what the user reads; the
+    /// interaction pool is what the composer panel reads, and the interface stops
+    /// consulting transcript rows the moment a pool exists. Sending only the row left
+    /// every card after the first answer invisible to the panel, so the card was drawn
+    /// and its buttons did nothing.
+    pub fn project_all(&mut self, envelope: &Value) -> Vec<Value> {
+        let Some(card) = self.project(envelope) else {
+            return Vec::new();
+        };
+        let pool = pool_update(&card);
+        let mut frames = vec![card];
+        frames.extend(pool);
+        frames
     }
 
     /// Projects one journal envelope, or `None` when it has no rendered meaning.

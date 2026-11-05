@@ -56,9 +56,9 @@ impl FrameSink for IpcSink {
         // here — at the boundary, not in the UI — keeps one code path for both cores.
         let projected = {
             let mut projector = self.projector.lock().unwrap();
-            projector.project(&body)
+            projector.project_all(&body)
         };
-        let Some(projected) = projected else {
+        if projected.is_empty() {
             #[cfg(debug_assertions)]
             println!(
                 "core_event (not rendered) -> {} seq={}",
@@ -71,24 +71,26 @@ impl FrameSink for IpcSink {
             );
             return;
         };
-        #[cfg(debug_assertions)]
-        println!(
-            "core_event -> {} kind={} seq={}",
-            projected
-                .get("method")
-                .and_then(|value| value.as_str())
-                .unwrap_or("?"),
-            projected
-                .get("payload")
-                .and_then(|payload| payload.get("kind"))
-                .and_then(|value| value.as_str())
-                .unwrap_or("?"),
-            projected
-                .get("seq")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0),
-        );
-        let _ = self.app.emit("core-event", projected);
+        for projected in projected {
+            #[cfg(debug_assertions)]
+            println!(
+                "core_event -> {} kind={} seq={}",
+                projected
+                    .get("method")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("?"),
+                projected
+                    .get("payload")
+                    .and_then(|payload| payload.get("kind"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("?"),
+                projected
+                    .get("seq")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0),
+            );
+            let _ = self.app.emit("core-event", projected);
+        }
     }
     fn orphan_error(&self, code: i32, message: String) {
         let _ = self.app.emit(
@@ -170,7 +172,7 @@ fn project_events(
     let mut guard = projector.lock().unwrap();
     let projected: Vec<serde_json::Value> = events
         .iter()
-        .filter_map(|event| guard.project(event))
+        .flat_map(|event| guard.project_all(event))
         .collect();
     // One line that answers "why does the composer still say Stop": the exact
     // kind/item/status triple the client is about to receive, in order.

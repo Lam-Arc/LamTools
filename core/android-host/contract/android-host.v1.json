@@ -26,7 +26,9 @@
           "seq": 1,
           "event_id": "ev-user",
           "client_message_id": "cm-1",
-          "payload": { "text": "Create notes.md with three lines" }
+          "payload": {
+            "text": "Create notes.md with three lines"
+          }
         }
       ],
       "expect": [
@@ -46,7 +48,10 @@
             "payload": {
               "type": "userMessage",
               "content": [
-                { "type": "text", "text": "Create notes.md with three lines" }
+                {
+                  "type": "text",
+                  "text": "Create notes.md with three lines"
+                }
               ]
             }
           }
@@ -62,14 +67,20 @@
           "method": "turn/started",
           "seq": 2,
           "event_id": "ev-start",
-          "payload": { "turn_id": "turn-1" }
+          "payload": {
+            "turn_id": "turn-1"
+          }
         },
         {
           "thread_id": "th",
           "method": "turn/model_completed",
           "seq": 3,
           "event_id": "ev-reply",
-          "payload": { "turn_id": "turn-1", "text": "Done.", "round": 0 }
+          "payload": {
+            "turn_id": "turn-1",
+            "text": "Done.",
+            "round": 0
+          }
         }
       ],
       "expect": [
@@ -81,7 +92,10 @@
             "turn_id": "turn-1",
             "status": "running",
             "item_id": "th:turn-1:status",
-            "payload": { "type": "status", "status": "running" }
+            "payload": {
+              "type": "status",
+              "status": "running"
+            }
           }
         },
         {
@@ -92,7 +106,10 @@
             "turn_id": "turn-1",
             "status": "completed",
             "item_id": "th:turn-1:assistant:0",
-            "payload": { "type": "agentMessage", "content": "Done." }
+            "payload": {
+              "type": "agentMessage",
+              "content": "Done."
+            }
           }
         }
       ]
@@ -106,7 +123,11 @@
           "method": "turn/model_completed",
           "seq": 4,
           "event_id": "ev-empty",
-          "payload": { "turn_id": "turn-1", "text": "   ", "round": 1 }
+          "payload": {
+            "turn_id": "turn-1",
+            "text": "   ",
+            "round": 1
+          }
         }
       ],
       "expect": []
@@ -120,7 +141,9 @@
           "method": "turn/started",
           "seq": 5,
           "event_id": "ev-start",
-          "payload": { "turn_id": "turn-1" }
+          "payload": {
+            "turn_id": "turn-1"
+          }
         },
         {
           "thread_id": "th",
@@ -131,7 +154,10 @@
             "turn_id": "turn-1",
             "tool_call_id": "call-1",
             "name": "write_file",
-            "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+            "arguments": {
+              "path": "notes.md",
+              "content": "goal\nprogress\ntomorrow"
+            }
           }
         },
         {
@@ -154,7 +180,10 @@
             "turn_id": "turn-1",
             "status": "running",
             "item_id": "th:turn-1:status",
-            "payload": { "type": "status", "status": "running" }
+            "payload": {
+              "type": "status",
+              "status": "running"
+            }
           }
         },
         {
@@ -167,7 +196,10 @@
             "payload": {
               "type": "dynamicToolCall",
               "tool_name": "write_file",
-              "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+              "arguments": {
+                "path": "notes.md",
+                "content": "goal\nprogress\ntomorrow"
+              }
             }
           }
         },
@@ -200,10 +232,44 @@
               ],
               "metadata": {
                 "request_id": "req-1",
-                "waitingRequest": { "request_id": "req-1", "kind": "approval" }
+                "waitingRequest": {
+                  "request_id": "req-1",
+                  "kind": "approval"
+                }
               }
             }
           }
+        },
+        {
+          "method": "core/runItem",
+          "event_id": "ev-ask:pool",
+          "payload": {
+            "kind": "interaction_update",
+            "turn_id": "",
+            "item_id": "req-1",
+            "status": "pending",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-1",
+              "interaction_id": "req-1",
+              "tool_call_id": "call-1",
+              "kind": "approval",
+              "state": "appearing",
+              "lifecycle": "appearing",
+              "status": "open",
+              "sequence": 7,
+              "title": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ]
+            }
+          },
+          "seq": 7
         }
       ]
     },
@@ -216,7 +282,9 @@
           "method": "turn/started",
           "seq": 5,
           "event_id": "ev-answer-start",
-          "payload": { "turn_id": "turn-1" }
+          "payload": {
+            "turn_id": "turn-1"
+          }
         },
         {
           "thread_id": "th",
@@ -227,7 +295,10 @@
             "turn_id": "turn-1",
             "tool_call_id": "call-1",
             "name": "write_file",
-            "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+            "arguments": {
+              "path": "notes.md",
+              "content": "goal\nprogress\ntomorrow"
+            }
           }
         },
         {
@@ -254,8 +325,18 @@
         }
       ],
       "expect": [
-        { "seq": 5, "payload": { "kind": "status" } },
-        { "seq": 6, "payload": { "kind": "tool_call" } },
+        {
+          "seq": 5,
+          "payload": {
+            "kind": "status"
+          }
+        },
+        {
+          "seq": 6,
+          "payload": {
+            "kind": "tool_call"
+          }
+        },
         {
           "seq": 7,
           "payload": {
@@ -263,6 +344,37 @@
             "status": "waiting",
             "item_id": "th:turn-1:call-1:tool"
           }
+        },
+        {
+          "method": "core/runItem",
+          "event_id": "ev-answer-ask:pool",
+          "payload": {
+            "kind": "interaction_update",
+            "turn_id": "",
+            "item_id": "req-1",
+            "status": "pending",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-1",
+              "interaction_id": "req-1",
+              "tool_call_id": "call-1",
+              "kind": "approval",
+              "state": "appearing",
+              "lifecycle": "appearing",
+              "status": "open",
+              "sequence": 7,
+              "title": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ]
+            }
+          },
+          "seq": 7
         },
         {
           "method": "core/runItem",
@@ -294,7 +406,9 @@
           "method": "turn/started",
           "seq": 9,
           "event_id": "ev-start",
-          "payload": { "turn_id": "turn-1" }
+          "payload": {
+            "turn_id": "turn-1"
+          }
         },
         {
           "thread_id": "th",
@@ -305,7 +419,10 @@
             "turn_id": "turn-1",
             "tool_call_id": "call-1",
             "name": "write_file",
-            "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+            "arguments": {
+              "path": "notes.md",
+              "content": "goal\nprogress\ntomorrow"
+            }
           }
         },
         {
@@ -328,7 +445,10 @@
             "turn_id": "turn-1",
             "status": "running",
             "item_id": "th:turn-1:status",
-            "payload": { "type": "status", "status": "running" }
+            "payload": {
+              "type": "status",
+              "status": "running"
+            }
           }
         },
         {
@@ -341,7 +461,10 @@
             "payload": {
               "type": "dynamicToolCall",
               "tool_name": "write_file",
-              "arguments": { "path": "notes.md", "content": "goal\nprogress\ntomorrow" }
+              "arguments": {
+                "path": "notes.md",
+                "content": "goal\nprogress\ntomorrow"
+              }
             }
           }
         },
@@ -372,7 +495,9 @@
                 "name": "notes.md",
                 "path": "notes.md",
                 "uri": "notes.md",
-                "metadata": { "description": "" }
+                "metadata": {
+                  "description": ""
+                }
               }
             ]
           }
@@ -388,7 +513,9 @@
           "method": "turn/started",
           "seq": 12,
           "event_id": "ev-start",
-          "payload": { "turn_id": "turn-2" }
+          "payload": {
+            "turn_id": "turn-2"
+          }
         },
         {
           "thread_id": "th",
@@ -399,7 +526,10 @@
             "turn_id": "turn-2",
             "tool_call_id": "call-2",
             "name": "write_file",
-            "arguments": { "path": "refuse.txt", "content": "x" }
+            "arguments": {
+              "path": "refuse.txt",
+              "content": "x"
+            }
           }
         },
         {
@@ -422,7 +552,10 @@
             "turn_id": "turn-2",
             "status": "running",
             "item_id": "th:turn-2:status",
-            "payload": { "type": "status", "status": "running" }
+            "payload": {
+              "type": "status",
+              "status": "running"
+            }
           }
         },
         {
@@ -435,7 +568,10 @@
             "payload": {
               "type": "dynamicToolCall",
               "tool_name": "write_file",
-              "arguments": { "path": "refuse.txt", "content": "x" }
+              "arguments": {
+                "path": "refuse.txt",
+                "content": "x"
+              }
             }
           }
         },
@@ -465,19 +601,41 @@
           "method": "turn/model_completed",
           "seq": 15,
           "event_id": "ev-replay",
-          "payload": { "turn_id": "turn-1", "text": "Same text.", "round": 0 }
+          "payload": {
+            "turn_id": "turn-1",
+            "text": "Same text.",
+            "round": 0
+          }
         },
         {
           "thread_id": "th",
           "method": "turn/model_completed",
           "seq": 15,
           "event_id": "ev-replay",
-          "payload": { "turn_id": "turn-1", "text": "Same text.", "round": 0 }
+          "payload": {
+            "turn_id": "turn-1",
+            "text": "Same text.",
+            "round": 0
+          }
         }
       ],
       "expect": [
-        { "seq": 15, "event_id": "ev-replay", "payload": { "kind": "message", "item_id": "th:turn-1:assistant:0" } },
-        { "seq": 15, "event_id": "ev-replay", "payload": { "kind": "message", "item_id": "th:turn-1:assistant:0" } }
+        {
+          "seq": 15,
+          "event_id": "ev-replay",
+          "payload": {
+            "kind": "message",
+            "item_id": "th:turn-1:assistant:0"
+          }
+        },
+        {
+          "seq": 15,
+          "event_id": "ev-replay",
+          "payload": {
+            "kind": "message",
+            "item_id": "th:turn-1:assistant:0"
+          }
+        }
       ]
     },
     {
@@ -489,14 +647,22 @@
           "method": "item/approval_resolved",
           "seq": 0,
           "event_id": "ev-sweep",
-          "payload": { "request_id": "req-a", "tool_call_id": "call-a", "decision": "expired" }
+          "payload": {
+            "request_id": "req-a",
+            "tool_call_id": "call-a",
+            "decision": "expired"
+          }
         },
         {
           "thread_id": "th",
           "method": "item/approval_resolved",
           "seq": 0,
           "event_id": "ev-sweep",
-          "payload": { "request_id": "req-b", "tool_call_id": "call-b", "decision": "expired" }
+          "payload": {
+            "request_id": "req-b",
+            "tool_call_id": "call-b",
+            "decision": "expired"
+          }
         }
       ],
       "expect": [
@@ -507,7 +673,9 @@
             "kind": "approval_response",
             "turn_id": "",
             "item_id": "th::call-a:tool",
-            "payload": { "request_id": "req-a" }
+            "payload": {
+              "request_id": "req-a"
+            }
           }
         },
         {
@@ -517,7 +685,9 @@
             "kind": "approval_response",
             "turn_id": "",
             "item_id": "th::call-b:tool",
-            "payload": { "request_id": "req-b" }
+            "payload": {
+              "request_id": "req-b"
+            }
           }
         }
       ]
@@ -531,7 +701,9 @@
           "method": "turn/model_started",
           "seq": 16,
           "event_id": "ev-model-start",
-          "payload": { "turn_id": "turn-1" }
+          "payload": {
+            "turn_id": "turn-1"
+          }
         }
       ],
       "expect": []
@@ -545,7 +717,10 @@
           "method": "item/approval_resolved",
           "seq": 0,
           "event_id": "ev-sweep-nocall",
-          "payload": { "request_id": "req-only", "decision": "expired" }
+          "payload": {
+            "request_id": "req-only",
+            "decision": "expired"
+          }
         }
       ],
       "expect": [
@@ -556,7 +731,9 @@
             "kind": "approval_response",
             "turn_id": "",
             "item_id": "req-only",
-            "payload": { "request_id": "req-only" }
+            "payload": {
+              "request_id": "req-only"
+            }
           }
         }
       ]
@@ -570,7 +747,9 @@
           "method": "turn/started",
           "seq": 1,
           "event_id": "ev-late-start",
-          "payload": { "turn_id": "turn-9" }
+          "payload": {
+            "turn_id": "turn-9"
+          }
         },
         {
           "thread_id": "th",
@@ -580,7 +759,10 @@
           "payload": {
             "tool_call_id": "call-9",
             "name": "write_file",
-            "arguments": { "path": "notes.md", "content": "x" }
+            "arguments": {
+              "path": "notes.md",
+              "content": "x"
+            }
           }
         },
         {
@@ -588,35 +770,699 @@
           "method": "item/approval_request",
           "seq": 3,
           "event_id": "ev-late-ask",
-          "payload": { "request_id": "req-9", "tool_call_id": "call-9" }
+          "payload": {
+            "request_id": "req-9",
+            "tool_call_id": "call-9"
+          }
         },
         {
           "thread_id": "th",
           "method": "turn/completed",
           "seq": 4,
           "event_id": "ev-late-done",
-          "payload": { "text": "" }
+          "payload": {
+            "text": ""
+          }
         },
         {
           "thread_id": "th",
           "method": "item/approval_resolved",
           "seq": 5,
           "event_id": "ev-late-answer",
-          "payload": { "request_id": "req-9", "tool_call_id": "call-9", "decision": "approve" }
+          "payload": {
+            "request_id": "req-9",
+            "tool_call_id": "call-9",
+            "decision": "approve"
+          }
         }
       ],
       "expect": [
-        { "seq": 1, "payload": { "kind": "status", "turn_id": "turn-9" } },
-        { "seq": 2, "payload": { "kind": "tool_call" } },
-        { "seq": 3, "payload": { "kind": "approval_request" } },
-        { "seq": 4, "payload": { "kind": "status", "status": "completed", "turn_id": "turn-9" } },
+        {
+          "seq": 1,
+          "payload": {
+            "kind": "status",
+            "turn_id": "turn-9"
+          }
+        },
+        {
+          "seq": 2,
+          "payload": {
+            "kind": "tool_call"
+          }
+        },
+        {
+          "seq": 3,
+          "payload": {
+            "kind": "approval_request"
+          }
+        },
+        {
+          "method": "core/runItem",
+          "event_id": "ev-late-ask:pool",
+          "payload": {
+            "kind": "interaction_update",
+            "turn_id": "",
+            "item_id": "req-9",
+            "status": "pending",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-9",
+              "interaction_id": "req-9",
+              "tool_call_id": "call-9",
+              "kind": "approval",
+              "state": "appearing",
+              "lifecycle": "appearing",
+              "status": "open",
+              "sequence": 3,
+              "title": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ]
+            }
+          },
+          "seq": 3
+        },
+        {
+          "seq": 4,
+          "payload": {
+            "kind": "status",
+            "status": "completed",
+            "turn_id": "turn-9"
+          }
+        },
         {
           "seq": 5,
           "payload": {
             "kind": "approval_response",
             "turn_id": "",
             "item_id": "th:turn-9:call-9:tool",
-            "payload": { "request_id": "req-9", "state": "ending", "status": "resolved" }
+            "payload": {
+              "request_id": "req-9",
+              "state": "ending",
+              "status": "resolved"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "two calls in one answer: the read runs, the write asks",
+      "why": "a model answer may return several tool calls at once; the auto-approved ones run and settle on their own rows, and the one with a side effect asks, with both rows sharing a turn but never an item id",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 1,
+          "event_id": "ev-two-start",
+          "payload": {
+            "turn_id": "turn-1"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 2,
+          "event_id": "ev-two-read",
+          "payload": {
+            "tool_call_id": "call-read",
+            "name": "read_file",
+            "arguments": {
+              "path": "a.txt"
+            }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_dispatched",
+          "seq": 3,
+          "event_id": "ev-two-read-run",
+          "payload": {
+            "tool_call_id": "call-read"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/completed",
+          "seq": 4,
+          "event_id": "ev-two-read-done",
+          "payload": {
+            "tool_call_id": "call-read",
+            "content": "hello"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 5,
+          "event_id": "ev-two-write",
+          "payload": {
+            "tool_call_id": "call-write",
+            "name": "write_file",
+            "arguments": {
+              "path": "notes.md",
+              "content": "x"
+            }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_request",
+          "seq": 6,
+          "event_id": "ev-two-ask",
+          "payload": {
+            "request_id": "req-write",
+            "tool_call_id": "call-write"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "seq": 1,
+          "payload": {
+            "kind": "status"
+          }
+        },
+        {
+          "seq": 2,
+          "payload": {
+            "kind": "tool_call",
+            "turn_id": "turn-1",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-read:tool"
+          }
+        },
+        {
+          "seq": 3,
+          "payload": {
+            "kind": "tool_call",
+            "status": "running",
+            "item_id": "th:turn-1:call-read:tool"
+          }
+        },
+        {
+          "seq": 4,
+          "payload": {
+            "kind": "tool_result",
+            "status": "completed",
+            "item_id": "th:turn-1:call-read:tool"
+          }
+        },
+        {
+          "seq": 5,
+          "payload": {
+            "kind": "tool_call",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-write:tool"
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 6,
+          "event_id": "ev-two-ask",
+          "payload": {
+            "kind": "approval_request",
+            "turn_id": "turn-1",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-write:tool",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-write",
+              "tool_call_id": "call-write",
+              "kind": "approval",
+              "tool_name": "write_file",
+              "message": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ],
+              "metadata": {
+                "request_id": "req-write",
+                "waitingRequest": {
+                  "request_id": "req-write",
+                  "kind": "approval"
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 6,
+          "event_id": "ev-two-ask:pool",
+          "payload": {
+            "kind": "interaction_update",
+            "turn_id": "",
+            "item_id": "req-write",
+            "status": "pending",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-write",
+              "interaction_id": "req-write",
+              "tool_call_id": "call-write",
+              "kind": "approval",
+              "state": "appearing",
+              "lifecycle": "appearing",
+              "status": "open",
+              "sequence": 6,
+              "title": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a second card takes over after the first is answered",
+      "why": "only one decision is pending at a time; the next one must arrive on its own row with its own request id, and the settled row must be gone, or the panel either keeps a dead card or shows nothing",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 1,
+          "event_id": "ev-seq-start",
+          "payload": {
+            "turn_id": "turn-1"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 2,
+          "event_id": "ev-seq-a",
+          "payload": {
+            "tool_call_id": "call-a",
+            "name": "write_file",
+            "arguments": {
+              "path": "a.md"
+            }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_request",
+          "seq": 3,
+          "event_id": "ev-seq-ask-a",
+          "payload": {
+            "request_id": "req-a",
+            "tool_call_id": "call-a"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_resolved",
+          "seq": 4,
+          "event_id": "ev-seq-answer-a",
+          "payload": {
+            "request_id": "req-a",
+            "tool_call_id": "call-a",
+            "decision": "approve"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/completed",
+          "seq": 5,
+          "event_id": "ev-seq-done-a",
+          "payload": {
+            "tool_call_id": "call-a",
+            "content": "{\"ok\":true,\"path\":\"a.md\"}"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 6,
+          "event_id": "ev-seq-b",
+          "payload": {
+            "tool_call_id": "call-b",
+            "name": "write_file",
+            "arguments": {
+              "path": "b.md"
+            }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_request",
+          "seq": 7,
+          "event_id": "ev-seq-ask-b",
+          "payload": {
+            "request_id": "req-b",
+            "tool_call_id": "call-b"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "seq": 1,
+          "payload": {
+            "kind": "status"
+          }
+        },
+        {
+          "seq": 2,
+          "payload": {
+            "kind": "tool_call",
+            "item_id": "th:turn-1:call-a:tool"
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 3,
+          "event_id": "ev-seq-ask-a",
+          "payload": {
+            "kind": "approval_request",
+            "turn_id": "turn-1",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-a:tool",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-a",
+              "tool_call_id": "call-a",
+              "kind": "approval",
+              "tool_name": "write_file",
+              "message": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ],
+              "metadata": {
+                "request_id": "req-a",
+                "waitingRequest": {
+                  "request_id": "req-a",
+                  "kind": "approval"
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 3,
+          "event_id": "ev-seq-ask-a:pool",
+          "payload": {
+            "kind": "interaction_update",
+            "turn_id": "",
+            "item_id": "req-a",
+            "status": "pending",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-a",
+              "interaction_id": "req-a",
+              "tool_call_id": "call-a",
+              "kind": "approval",
+              "state": "appearing",
+              "lifecycle": "appearing",
+              "status": "open",
+              "sequence": 3,
+              "title": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 4,
+          "payload": {
+            "kind": "approval_response",
+            "turn_id": "",
+            "item_id": "th:turn-1:call-a:tool",
+            "payload": {
+              "request_id": "req-a",
+              "state": "ending",
+              "status": "resolved"
+            }
+          }
+        },
+        {
+          "seq": 5,
+          "payload": {
+            "kind": "tool_result",
+            "item_id": "th:turn-1:call-a:tool"
+          }
+        },
+        {
+          "seq": 6,
+          "payload": {
+            "kind": "tool_call",
+            "item_id": "th:turn-1:call-b:tool"
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 7,
+          "event_id": "ev-seq-ask-b",
+          "payload": {
+            "kind": "approval_request",
+            "turn_id": "turn-1",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-b:tool",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-b",
+              "tool_call_id": "call-b",
+              "kind": "approval",
+              "tool_name": "write_file",
+              "message": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ],
+              "metadata": {
+                "request_id": "req-b",
+                "waitingRequest": {
+                  "request_id": "req-b",
+                  "kind": "approval"
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 7,
+          "event_id": "ev-seq-ask-b:pool",
+          "payload": {
+            "kind": "interaction_update",
+            "turn_id": "",
+            "item_id": "req-b",
+            "status": "pending",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-b",
+              "interaction_id": "req-b",
+              "tool_call_id": "call-b",
+              "kind": "approval",
+              "state": "appearing",
+              "lifecycle": "appearing",
+              "status": "open",
+              "sequence": 7,
+              "title": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a denied approval closes the card and leaves the tool unrun",
+      "why": "a denial is a resolution, not a late failure: the card closes, the row says the call did not run, and nothing executes",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 1,
+          "event_id": "ev-deny-start",
+          "payload": {
+            "turn_id": "turn-1"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 2,
+          "event_id": "ev-deny-prepare",
+          "payload": {
+            "tool_call_id": "call-d",
+            "name": "write_file",
+            "arguments": {
+              "path": "d.md"
+            }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_request",
+          "seq": 3,
+          "event_id": "ev-deny-ask",
+          "payload": {
+            "request_id": "req-d",
+            "tool_call_id": "call-d"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_resolved",
+          "seq": 4,
+          "event_id": "ev-deny-answer",
+          "payload": {
+            "request_id": "req-d",
+            "tool_call_id": "call-d",
+            "decision": "deny"
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/failed",
+          "seq": 5,
+          "event_id": "ev-deny-failed",
+          "payload": {
+            "tool_call_id": "call-d",
+            "error": "denied by the user"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "seq": 1,
+          "payload": {
+            "kind": "status"
+          }
+        },
+        {
+          "seq": 2,
+          "payload": {
+            "kind": "tool_call"
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 3,
+          "event_id": "ev-deny-ask",
+          "payload": {
+            "kind": "approval_request",
+            "turn_id": "turn-1",
+            "status": "waiting",
+            "item_id": "th:turn-1:call-d:tool",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-d",
+              "tool_call_id": "call-d",
+              "kind": "approval",
+              "tool_name": "write_file",
+              "message": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ],
+              "metadata": {
+                "request_id": "req-d",
+                "waitingRequest": {
+                  "request_id": "req-d",
+                  "kind": "approval"
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "core/runItem",
+          "seq": 3,
+          "event_id": "ev-deny-ask:pool",
+          "payload": {
+            "kind": "interaction_update",
+            "turn_id": "",
+            "item_id": "req-d",
+            "status": "pending",
+            "payload": {
+              "type": "serverRequest",
+              "request_id": "req-d",
+              "interaction_id": "req-d",
+              "tool_call_id": "call-d",
+              "kind": "approval",
+              "state": "appearing",
+              "lifecycle": "appearing",
+              "status": "open",
+              "sequence": 3,
+              "title": "等待确认：write_file",
+              "options": [
+                {
+                  "id": "approve"
+                },
+                {
+                  "id": "deny"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 4,
+          "payload": {
+            "kind": "approval_response",
+            "turn_id": "",
+            "item_id": "th:turn-1:call-d:tool",
+            "payload": {
+              "action": "deny",
+              "state": "ending",
+              "status": "resolved",
+              "request_id": "req-d",
+              "interaction_id": "req-d",
+              "tool_call_id": "call-d"
+            }
+          }
+        },
+        {
+          "seq": 5,
+          "payload": {
+            "kind": "tool_result",
+            "status": "failed",
+            "item_id": "th:turn-1:call-d:tool",
+            "payload": {
+              "error": "denied by the user",
+              "status": "failed"
+            }
           }
         }
       ]

@@ -59,7 +59,7 @@ fn project_scenario(scenario: &Value) -> Vec<Value> {
         .as_array()
         .expect("a scenario has inputs")
         .iter()
-        .filter_map(|envelope| projector.project(envelope))
+        .flat_map(|envelope| projector.project_all(envelope))
         .collect()
 }
 
@@ -211,13 +211,32 @@ fn every_projected_item_is_domain_valid() {
                 problems.push(format!("{path}: method must be core/runItem"));
             }
             let kind = item["payload"]["kind"].as_str().unwrap_or("");
-            if !KINDS.contains(&kind) {
+            // `interaction_update` is the decision lifecycle, not a run item: the client
+            // handles it in its own branch (`applyDecisionLifecycle`) and updates the
+            // pool instead of the transcript. It is the one kind outside the run-item
+            // vocabulary, and it must carry a lifecycle word or the pool cannot use it.
+            if kind == "interaction_update" {
+                let state = item["payload"]["payload"]["state"].as_str().unwrap_or("");
+                if !matches!(state, "appearing" | "processing" | "ending") {
+                    problems.push(format!(
+                        "{path}: interaction_update without a lifecycle state, got {state:?}"
+                    ));
+                }
+                if item["payload"]["turn_id"].as_str() != Some("") {
+                    problems.push(format!(
+                        "{path}: a pool row must not name a turn, got {:?}",
+                        item["payload"]["turn_id"]
+                    ));
+                }
+            } else if !KINDS.contains(&kind) {
                 problems.push(format!(
                     "{path}: kind {kind:?} is outside the run-item domain"
                 ));
             }
             let status = item["payload"]["status"].as_str().unwrap_or("");
-            if !STATUSES.contains(&status) {
+            let known =
+                STATUSES.contains(&status) || (kind == "interaction_update" && status == "pending");
+            if !known {
                 problems.push(format!(
                     "{path}: status {status:?} is outside the run-item domain"
                 ));

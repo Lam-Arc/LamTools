@@ -19,6 +19,7 @@ import type { CoreAppEvent, CoreAppSnapshot } from '@/appServer/protocol.ts'
 import { applyCoreAppEvent } from '@/appServer/store.ts'
 import { selectCoreWorkbenchMessages } from '@/appServer/workbenchProjection.ts'
 import { selectLatestTurnStatus } from '@/appServer/selectors.ts'
+import { selectVisiblePendingDecisions } from '@/appServer/pendingDecisions.ts'
 import { coreDecisionSelectionPlan, isCoreActiveTurnStatus } from '@/appServer/workbenchActions.ts'
 
 const THREAD = 'th'
@@ -107,6 +108,14 @@ function partsOf(snapshot: CoreAppSnapshot) {
   return selectCoreWorkbenchMessages(snapshot).flatMap((message) => message.parts ?? [])
 }
 
+function panelDecisions(snapshot: CoreAppSnapshot) {
+  return selectVisiblePendingDecisions(
+    selectCoreWorkbenchMessages(snapshot),
+    snapshot.core?.decisions ?? snapshot.core?.interactions,
+    { requests: snapshot.core?.requests },
+  )
+}
+
 function decisionPart(snapshot: CoreAppSnapshot) {
   return partsOf(snapshot).find((part) => part.partType === 'decision')
 }
@@ -191,6 +200,43 @@ describe('what the contractor emits, the screen shows', () => {
     // that turn continuing. The composer offered Stop for a run that had already ended.
     const snapshot = applyAll(eventsOf('an answer that lands after the turn ended does not re-open it'))
     expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
+  })
+
+  it('hands the composer over to a card, which is what makes it answerable', () => {
+    // The regression this pins: the interface uses its interaction pool as the display
+    // authority the moment one exists, and the host used to send only the transcript
+    // row. The card was drawn, its buttons did nothing, and the composer stayed a
+    // composer, so the run could not be continued from the phone.
+    const panel = panelDecisions(
+      applyAll(eventsOf('a prepared tool and its approval card share one row')),
+    )
+    expect(panel.map(entry => entry.requestId)).toEqual(['req-1'])
+    expect(panel[0].options.map(option => option.id)).toEqual(['approve', 'deny'])
+  })
+
+  it('still hands over to the next card after an earlier one was answered', () => {
+    // Answering the first card leaves an empty pool behind, which is exactly the state
+    // where a card drawn only from the transcript became invisible.
+    const panel = panelDecisions(
+      applyAll(eventsOf('a second card takes over after the first is answered')),
+    )
+    expect(panel.map(entry => entry.requestId)).toEqual(['req-b'])
+  })
+
+  it('leaves nothing pending once a card is denied', () => {
+    const snapshot = applyAll(eventsOf('a denied approval closes the card and leaves the tool unrun'))
+    expect(panelDecisions(snapshot)).toEqual([])
+    const item = snapshot.core?.items?.['th:turn-1:call-d:tool']
+    expect(item?.status).toBe('failed')
+  })
+
+  it('keeps the read row and the write row apart when one answer asks for both', () => {
+    const snapshot = applyAll(
+      eventsOf('two calls in one answer: the read runs, the write asks'),
+    )
+    expect(snapshot.core?.items?.['th:turn-1:call-read:tool']?.status).toBe('completed')
+    expect(snapshot.core?.items?.['th:turn-1:call-write:tool']?.status).toBe('waiting')
+    expect(panelDecisions(snapshot).map(entry => entry.requestId)).toEqual(['req-write'])
   })
 
   it('ignores an event the contract says produces nothing', () => {
