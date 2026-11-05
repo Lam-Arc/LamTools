@@ -83,6 +83,22 @@ pub trait TurnRunner: Send + Sync {
         client_message_id: &str,
         sink: EventSink<'_>,
     ) -> Result<(), String>;
+    /// Starts a turn that also carries files.
+    ///
+    /// `input` is the client's own item list: `[{type:"text"…},{type:"attachment"…}]`.
+    /// The default refuses instead of running the turn without its files, because a turn
+    /// that silently dropped an attachment would answer as if the file had been read.
+    fn start_turn_with_input(
+        &self,
+        _thread_id: &str,
+        _prompt: &str,
+        _input: &serde_json::Value,
+        _client_message_id: &str,
+        _sink: EventSink<'_>,
+    ) -> Result<(), String> {
+        Err("this host cannot carry attachments into a turn".into())
+    }
+
     /// Refuses an approval the runner cannot honour, before the caller reports
     /// success.
     ///
@@ -1019,6 +1035,10 @@ fn dispatch(
         }
         "turn/start" | "turn/resume" => {
             let prompt = prompt_param(params);
+            // The whole item list, not only its text: the runner needs the attachment
+            // records, and the journal needs them to rebuild the transcript later.
+            let input = input_param(params);
+            let carries_files = input_carries_attachments(&input);
             let client_id = params
                 .get("client_message_id")
                 .and_then(|v| v.as_str())
@@ -1047,7 +1067,12 @@ fn dispatch(
                 let sink = move |event: BridgeEvent| {
                     sink_sender.event(event_json(&thread_for_run, &event));
                 };
-                if let Err(error) = worker.start_turn(&thread, &prompt, &client_id, &sink) {
+                let outcome = if carries_files {
+                    worker.start_turn_with_input(&thread, &prompt, &input, &client_id, &sink)
+                } else {
+                    worker.start_turn(&thread, &prompt, &client_id, &sink)
+                };
+                if let Err(error) = outcome {
                     error_sender.orphan_error(-32000, error);
                 }
             });
@@ -1186,6 +1211,29 @@ fn capabilities() -> serde_json::Value {
 /// `input` is `[{type:"text",text:"..."}]`. Fall back to a bare `text` for
 /// hand-written frames, and join multiple text items instead of keeping only
 /// the first one, which would silently drop half the prompt.
+/// The client's input items exactly as they arrived.
+///
+/// Absent rather than an empty array when the client sent only text, so a reader can tell
+/// "nothing attached" from "the list was lost".
+fn input_param(params: &serde_json::Value) -> serde_json::Value {
+    params
+        .get("input")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// Whether any item names a file, which decides which start path runs.
+fn input_carries_attachments(input: &serde_json::Value) -> bool {
+    input
+        .as_array()
+        .map(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(|value| value.as_str()) == Some("attachment")
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn prompt_param(params: &serde_json::Value) -> String {
     if let Some(items) = params.get("input").and_then(|i| i.as_array()) {
         let parts: Vec<String> = items

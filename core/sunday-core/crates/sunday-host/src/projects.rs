@@ -98,6 +98,11 @@ pub struct Projects {
     /// The only directory a project may live under.
     root: PathBuf,
     policy: PathPolicy,
+    /// Files a session owns. Built here because a session id addresses both.
+    ///
+    /// Shared rather than owned: a turn reads the same records the upload route wrote, and
+    /// two stores over one directory would each load its own copy of the index.
+    attachments: std::sync::Arc<crate::attachments::AttachmentStore>,
 }
 
 impl Projects {
@@ -111,7 +116,22 @@ impl Projects {
             file: data_dir.join(PROJECTS_FILE),
             root: root.to_path_buf(),
             policy: PathPolicy::default(),
+            // Imports are only accepted from the sandbox the host handed us, so a file
+            // picker cannot be used to read something the core would refuse.
+            attachments: std::sync::Arc::new(crate::attachments::AttachmentStore::new(
+                data_dir, data_dir,
+            )),
         }
+    }
+
+    /// Files a session owns, imported through this host's sandbox.
+    pub fn attachments(&self) -> &crate::attachments::AttachmentStore {
+        self.attachments.as_ref()
+    }
+
+    /// The same store, for a turn that has to read what a session attached.
+    pub fn attachments_handle(&self) -> std::sync::Arc<crate::attachments::AttachmentStore> {
+        std::sync::Arc::clone(&self.attachments)
     }
 
     fn load(&self) -> ProjectsFile {

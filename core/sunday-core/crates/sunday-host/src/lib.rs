@@ -5,6 +5,7 @@
 //! belongs in the agent, the store, or a platform host.
 
 pub mod app_server;
+pub mod attachments;
 pub mod lifecycle;
 pub mod lock;
 pub mod policy;

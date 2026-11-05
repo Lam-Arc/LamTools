@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
+import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import AndroidSettings from './AndroidSettings.vue'
 
@@ -21,14 +22,50 @@ import AndroidSettings from './AndroidSettings.vue'
 
 const transport = createIpcTransport()
 
+/** What the system picker hands back: a real path inside the app sandbox. */
+interface PickedFileEntry {
+  name: string
+  path: string
+  mime?: string
+  size?: number
+}
+
+interface PickedFilesResult {
+  files: PickedFileEntry[]
+  failed: { name: string; reason: string }[]
+}
+
+/**
+ * The system document picker, as the shared interface needs it.
+ *
+ * `pick()` answers with entries carrying a `path`, which is exactly what the desktop
+ * chooser already returns: `uploadFiles` posts a path to the core's reference import
+ * instead of encoding a multipart body. A `File` object cannot be built from a sandbox
+ * path in a WebView, and it would be the wrong thing to build anyway, because the core
+ * copies the bytes itself.
+ */
+const fileCapabilities = {
+  async pick(): Promise<File[] | null> {
+    const picked = await tauriInvoke<PickedFilesResult>('pick_files')
+    if (!picked.files.length) {
+      // Nothing chosen and nothing broken is a cancel: the screen stays quiet.
+      if (!picked.failed.length) return null
+      throw new Error(picked.failed.map(entry => `${entry.name}（${entry.reason}）`).join('、'))
+    }
+    // Partial failures still let the chosen files through: losing the readable nine
+    // because the tenth is a two-gigabyte video would be the wrong trade.
+    return picked.files.map(entry => ({ name: entry.name, path: entry.path })) as unknown as File[]
+  },
+}
+
 const runtime = createLamToolsRuntime({
   transport,
   platform: 'mobile',
   capabilities: {
-    // The in-app core has no native file picker yet, and no HTTP surface for
-    // attachments. Reporting them as unavailable makes the UI hide those
-    // affordances instead of failing when the user taps them.
-    filePicker: false,
+    // The system document picker is bridged through `pick_files`, so attaching a file goes
+    // through the same import route the desktop uses.
+    filePicker: true,
+    files: fileCapabilities,
     notifications: false,
     desktopWindow: false,
   },

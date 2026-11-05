@@ -11,6 +11,10 @@ class MainActivity : TauriActivity() {
     // it: Rust runs its setup inside `super.onCreate`, earlier than any callback.
     KeystoreBridge.register()
     super.onCreate(savedInstanceState)
+    // The file picker registers its result contract here, which has to happen before the
+    // activity is started. Touching the object also runs its initialiser, which is what
+    // hands the JavaVM to Rust.
+    FilePickerBridge.attach(this)
   }
 
   /**

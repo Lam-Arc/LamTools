@@ -60,8 +60,13 @@ fn split_path(path: &str) -> (&str, &str) {
 fn serve(state: &CoreState, method: &str, raw_path: &str, body: &str) -> HttpResponse {
     let (path, query) = split_path(raw_path);
     let reply = state.projects.handle(method, path, query, body);
-    // A binary reply is the raw file endpoint; everything else is JSON or empty.
-    if reply.content_type == "application/octet-stream" {
+    // A reply is textual only when it is JSON or an explicit text type. Deciding by
+    // "not octet-stream" corrupted every image: PNG bytes were pushed through
+    // `from_utf8_lossy`, so an attachment preview downloaded replacement characters and
+    // the thumbnail stayed blank.
+    let textual = reply.content_type == "application/json"
+        || reply.content_type.starts_with("text/");
+    if !textual {
         HttpResponse {
             status: reply.status,
             content_type: reply.content_type.to_owned(),

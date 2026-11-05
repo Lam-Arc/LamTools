@@ -299,14 +299,36 @@ pub async fn run_turn(
     input: TurnInput,
     budget: RunBudget,
 ) -> Result<RunOutcome, CoreError> {
+    run_turn_with_images(env, input, Vec::new(), budget).await
+}
+
+/// The same turn, carrying images the model can look at.
+///
+/// Separate from `run_turn` rather than an extra `TurnInput` field: most callers have no
+/// images, and a required field would make every one of them write `Vec::new()` to say so.
+/// The message shape belongs to the protocol, so a provider that already renders
+/// multimodal input keeps working unchanged.
+pub async fn run_turn_with_images(
+    env: &Env<'_>,
+    input: TurnInput,
+    images: Vec<sunday_protocol::ImageInput>,
+    budget: RunBudget,
+) -> Result<RunOutcome, CoreError> {
     let mut messages = Vec::new();
     if let Some(system) = &input.system {
         messages.push(Message::System {
             content: system.clone(),
         });
     }
-    messages.push(Message::User {
-        content: input.prompt,
+    messages.push(if images.is_empty() {
+        Message::User {
+            content: input.prompt,
+        }
+    } else {
+        Message::UserMultimodal {
+            content: input.prompt,
+            images,
+        }
     });
 
     env.emit(

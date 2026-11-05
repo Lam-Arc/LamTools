@@ -18,8 +18,10 @@ use serde_json::{json, Value};
 use sunday_host::app_server::{event_json, BridgeEvent, TurnRunner};
 use sunday_host::policy::GrantPolicy;
 use sunday_host::runner::{CoreOptions, CoreRunner};
+use sunday_host::attachments::AttachmentStore;
 use sunday_protocol::{
-    CoreError, HostKind, Model, ModelDelta, ModelRequest, ModelTurn, Prepared, SideEffect, ToolCall,
+    CoreError, HostKind, Message, Model, ModelDelta, ModelRequest, ModelTurn, Prepared, SideEffect,
+    ToolCall,
 };
 use sunday_store::Store;
 
@@ -859,4 +861,221 @@ fn one_runner_serves_a_second_turn_after_the_first() {
     runner.start_turn(THREAD, "second", "cm-2", &sink).unwrap();
     let replies = frames_of(&frames, "turn/model_completed");
     assert!(replies.len() >= 2, "the second turn produced no reply");
+}
+
+// ---------------------------------------------------------------- attachments
+
+/// Answers like `ScriptedModel`, and keeps every request so a test can read what the model
+/// was actually given. Checking the prompt is the only way to tell "the file was attached"
+/// from "the file was read".
+struct RecordingModel {
+    turns: Mutex<Vec<ModelTurn>>,
+    seen: Mutex<Vec<Vec<Message>>>,
+}
+
+impl RecordingModel {
+    fn new(turns: Vec<ModelTurn>) -> Self {
+        Self {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The last message the model received in its last call.
+    fn last_user_message(&self) -> Message {
+        let seen = self.seen.lock().unwrap();
+        let last = seen.last().expect("the model was never called");
+        last.last().cloned().expect("the request carried no message")
+    }
+}
+
+#[async_trait::async_trait]
+impl Model for RecordingModel {
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        sink: &mut (dyn FnMut(ModelDelta) + Send),
+    ) -> Result<ModelTurn, CoreError> {
+        self.seen.lock().unwrap().push(request.messages.clone());
+        let turn = self.turns.lock().unwrap().remove(0);
+        if let Some(text) = &turn.text {
+            sink(ModelDelta::Text(text.clone()));
+        }
+        Ok(turn)
+    }
+}
+
+/// A runner wired with an attachment store, the way the host wires one.
+fn runner_with_files(
+    dir: &std::path::Path,
+    model: Arc<dyn Model>,
+    images_allowed: bool,
+    attach: bool,
+) -> (CoreRunner, Arc<AttachmentStore>) {
+    let workspace = dir.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let store = Arc::new(AttachmentStore::new(dir, dir));
+    let runner = CoreRunner::new(CoreOptions {
+        store: Store::open(&dir.join("core.db")).unwrap(),
+        model,
+        model_id: "scripted".into(),
+        workspace: workspace.to_string_lossy().into_owned(),
+        workspace_for: None,
+        host_kind: HostKind::Android,
+        policy: GrantPolicy::read_only(),
+        system: Some("You are Sunday.".into()),
+    });
+    let runner = if attach {
+        runner.with_attachments(Arc::clone(&store), images_allowed)
+    } else {
+        runner
+    };
+    (runner, store)
+}
+
+/// One item the client sends for a file it attached.
+fn attachment_item(record: &sunday_host::attachments::AttachmentRecord) -> Value {
+    json!({
+        "type": "attachment",
+        "attachment_id": record.id,
+        "path": record.path,
+        "filename": record.filename,
+        "mime_type": record.mime_type,
+        "preview_type": record.preview_type,
+        "size": record.size,
+    })
+}
+
+fn imported(dir: &std::path::Path, name: &str, bytes: &[u8]) -> sunday_host::attachments::AttachmentRecord {
+    let store = AttachmentStore::new(dir, dir);
+    let incoming = dir.join("incoming");
+    std::fs::create_dir_all(&incoming).unwrap();
+    let path = incoming.join(name);
+    std::fs::write(&path, bytes).unwrap();
+    store.import("ses-1", "", &path).unwrap()
+}
+
+/// The acceptance case: the model answers about the file's content, not its name.
+#[test]
+fn an_attached_text_file_is_read_by_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = imported(dir.path(), "notes.md", b"goal: read the real content\n");
+    let model = Arc::new(RecordingModel::new(vec![text_turn("The goal is to read it.")]));
+    let (runner, _store) = runner_with_files(dir.path(), Arc::clone(&model) as Arc<dyn Model>, false, true);
+    let (frames, sink) = recorder();
+
+    let input = json!([
+        { "type": "text", "text": "what is the goal in this file?" },
+        attachment_item(&record),
+    ]);
+    runner
+        .start_turn_with_input(THREAD, "what is the goal in this file?", &input, "cm-1", &sink)
+        .unwrap();
+
+    match model.last_user_message() {
+        Message::User { content } => {
+            assert!(content.contains("goal: read the real content"), "{content}");
+            assert!(content.contains("notes.md"), "{content}");
+        }
+        other => panic!("the file was not carried as text: {other:?}"),
+    }
+
+    // The transcript has to remember the file too, or reopening the session shows a
+    // message whose attachment is gone.
+    let accepted = &frames_of(&frames, "turn/accepted")[0]["payload"];
+    assert_eq!(accepted["input"][1]["attachment_id"], record.id);
+}
+
+/// A model that can see gets the image itself.
+#[test]
+fn an_attached_image_is_passed_to_a_model_that_can_see() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = imported(dir.path(), "shot.png", &[0x89, b'P', b'N', b'G', 0x00]);
+    let model = Arc::new(RecordingModel::new(vec![text_turn("A small image.")]));
+    let (runner, _store) = runner_with_files(dir.path(), Arc::clone(&model) as Arc<dyn Model>, true, true);
+    let (_frames, sink) = recorder();
+
+    let input = json!([{ "type": "text", "text": "what is this?" }, attachment_item(&record)]);
+    runner
+        .start_turn_with_input(THREAD, "what is this?", &input, "cm-1", &sink)
+        .unwrap();
+
+    match model.last_user_message() {
+        Message::UserMultimodal { content, images } => {
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].mime, "image/png");
+            assert!(!images[0].data_b64.is_empty());
+            assert!(content.contains("shot.png"), "{content}");
+        }
+        other => panic!("the image never reached the model: {other:?}"),
+    }
+}
+
+/// and the same image, on a model that cannot see, is described as unreadable.
+#[test]
+fn an_attached_image_without_vision_is_described_not_invented() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = imported(dir.path(), "shot.png", &[0x89, b'P', b'N', b'G', 0x00]);
+    let model = Arc::new(RecordingModel::new(vec![text_turn("I cannot see it.")]));
+    let (runner, _store) = runner_with_files(dir.path(), Arc::clone(&model) as Arc<dyn Model>, false, true);
+    let (_frames, sink) = recorder();
+
+    let input = json!([{ "type": "text", "text": "what is this?" }, attachment_item(&record)]);
+    runner
+        .start_turn_with_input(THREAD, "what is this?", &input, "cm-1", &sink)
+        .unwrap();
+
+    match model.last_user_message() {
+        Message::User { content } => assert!(content.contains("看不到这张图片"), "{content}"),
+        other => panic!("an image was sent to a model that cannot read it: {other:?}"),
+    }
+}
+
+/// A host without an attachment store refuses the turn instead of running it blind.
+#[test]
+fn a_turn_with_a_file_is_refused_when_the_host_cannot_read_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = imported(dir.path(), "notes.md", b"content\n");
+    let model = Arc::new(RecordingModel::new(vec![text_turn("unused")]));
+    let (runner, _store) = runner_with_files(dir.path(), Arc::clone(&model) as Arc<dyn Model>, false, false);
+    let (_frames, sink) = recorder();
+
+    let input = json!([{ "type": "text", "text": "read it" }, attachment_item(&record)]);
+    let error = runner
+        .start_turn_with_input(THREAD, "read it", &input, "cm-1", &sink)
+        .unwrap_err();
+    assert!(error.contains("cannot read attached files"), "{error}");
+}
+
+/// Reopening the session redraws the file next to the text that carried it.
+#[test]
+fn a_reopened_transcript_still_shows_the_attachment() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = imported(dir.path(), "notes.md", b"goal\n");
+    let model = Arc::new(RecordingModel::new(vec![text_turn("noted")]));
+    let (runner, _store) = runner_with_files(dir.path(), Arc::clone(&model) as Arc<dyn Model>, false, true);
+    let (frames, sink) = recorder();
+
+    let input = json!([{ "type": "text", "text": "read the file" }, attachment_item(&record)]);
+    runner
+        .start_turn_with_input(THREAD, "read the file", &input, "cm-1", &sink)
+        .unwrap();
+
+    let mut projector = Projector::new();
+    let mut user_item: Option<Value> = None;
+    for frame in frames.lock().unwrap().iter() {
+        if let Some(item) = projector.project(frame) {
+            if item["payload"]["payload"]["type"] == "userMessage" {
+                user_item = Some(item);
+            }
+        }
+    }
+    let item = user_item.expect("the instruction never reached the transcript");
+    let parts = item["payload"]["payload"]["content"]
+        .as_array()
+        .expect("content is not typed parts");
+    assert!(
+        parts.iter().any(|part| part["type"] == "attachment" && part["attachment_id"] == record.id),
+        "{parts:?}"
+    );
 }

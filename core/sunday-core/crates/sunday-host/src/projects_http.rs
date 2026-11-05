@@ -49,6 +49,25 @@ fn json_body(body: &str) -> serde_json::Value {
     serde_json::from_str(body).unwrap_or(serde_json::Value::Null)
 }
 
+/// A stored content type as the header value the screen reads.
+///
+/// `Reply` carries a static string, and the set of types the store can produce is closed,
+/// so this maps within it instead of allocating per download.
+fn static_mime(mime: &str) -> &'static str {
+    match mime {
+        "text/plain" => "text/plain",
+        "text/markdown" => "text/markdown",
+        "text/csv" => "text/csv",
+        "application/json" => "application/json",
+        "image/png" => "image/png",
+        "image/jpeg" => "image/jpeg",
+        "image/gif" => "image/gif",
+        "image/webp" => "image/webp",
+        "application/pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+}
+
 fn string_field(body: &serde_json::Value, key: &str) -> Option<String> {
     body.get(key)
         .and_then(|value| value.as_str())
@@ -125,6 +144,122 @@ impl Projects {
                 Ok(()) => Reply::empty(204),
                 Err(error) => Reply::error(500, error),
             },
+
+            // user:“选择文件 → 显示附件 → 发送消息 → Agent 读取真实内容”+(附件由核心登记并
+            // 复制导入；界面在发送前把返回的记录放进待发托盘)。
+            //
+            // Reference import: the host has already placed the picked file inside the
+            // sandbox (a `content://` grant has no path worth trusting), so this records
+            // and copies it rather than reading an outside location later.
+            ("POST", ["sessions", id, "attachments", "reference"]) => {
+                if self.find_session(id).is_none() {
+                    return Reply::error(404, format!("no such session: {id}"));
+                }
+                let payload = json_body(body);
+                let path = string_field(&payload, "path").unwrap_or_default();
+                if path.trim().is_empty() {
+                    return Reply::error(400, "path is required");
+                }
+                let project = string_field(&payload, "project_id")
+                    .or_else(|| query_value(query, "project_id"))
+                    .unwrap_or_default();
+                match self
+                    .attachments()
+                    .import(id, &project, std::path::Path::new(&path))
+                {
+                    Ok(record) => Reply::json(200, serde_json::to_value(record).unwrap_or_default()),
+                    Err(error) => Reply::error(400, error),
+                }
+            }
+
+            ("GET", ["sessions", id, "attachments"]) => Reply::json(
+                200,
+                serde_json::json!({ "attachments": self.attachments().list(id) }),
+            ),
+
+            ("GET", ["attachments", attachment_id]) => match self
+                .attachments()
+                .get(attachment_id)
+            {
+                Some(record) => {
+                    Reply::json(200, serde_json::json!({ "attachment": record }))
+                }
+                None => Reply::error(404, format!("no such attachment: {attachment_id}")),
+            },
+
+            // The bytes, for a preview or for opening the file. Read through the record,
+            // never through a caller-supplied path.
+            ("GET", ["attachments", attachment_id, "content"])
+            | ("GET", ["attachments", attachment_id, "download"]) => {
+                match self.attachments().get(attachment_id) {
+                    Some(record) => match self.attachments().content(attachment_id) {
+                        Ok(bytes) => Reply {
+                            status: 200,
+                            body: bytes,
+                            // The screen decides how to render from this, so an image
+                            // served as generic bytes becomes a broken thumbnail.
+                            content_type: static_mime(&record.mime_type),
+                        },
+                        Err(error) => Reply::error(500, error),
+                    },
+                    None => Reply::error(404, format!("no such attachment: {attachment_id}")),
+                }
+            }
+
+            // What the deck needs before it renders: where the file is, and enough of a
+            // text file to show a few lines without downloading it twice.
+            ("GET", ["attachments", attachment_id, "preview"]) => {
+                match self.attachments().get(attachment_id) {
+                    Some(record) => {
+                        let mut payload = serde_json::json!({
+                            "id": record.id,
+                            "filename": record.filename,
+                            "mime_type": record.mime_type,
+                            "size": record.size,
+                            "preview_type": record.preview_type,
+                            "path": record.path,
+                        });
+                        let mut code = "";
+                        if record.preview_type == "text" {
+                            match self.attachments().content(attachment_id) {
+                                Ok(bytes) => {
+                                    if let Some(object) = payload.as_object_mut() {
+                                        object.insert(
+                                            "text".into(),
+                                            serde_json::Value::String(
+                                                String::from_utf8_lossy(&bytes).into_owned(),
+                                            ),
+                                        );
+                                    }
+                                }
+                                Err(_) => code = "file_unreadable",
+                            }
+                        } else if !std::path::Path::new(&record.path).exists() {
+                            code = "file_missing";
+                        }
+                        if !code.is_empty() {
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert("error_code".into(), serde_json::Value::String(code.into()));
+                            }
+                        }
+                        Reply::json(200, payload)
+                    }
+                    None => Reply::error(404, format!("no such attachment: {attachment_id}")),
+                }
+            }
+
+            // Opening a file with another program is the host's job: only it knows what
+            // this platform offers. Answering "done" here would leave a button that does
+            // nothing, so the reply is the truth the screen can show.
+            ("POST", ["attachments", attachment_id, "open"]) => {
+                match self.attachments().get(attachment_id) {
+                    Some(_) => Reply::error(
+                        501,
+                        "this core does not open files with another program",
+                    ),
+                    None => Reply::error(404, format!("no such attachment: {attachment_id}")),
+                }
+            }
 
             ("GET", ["projects"]) => Reply::json(
                 200,
@@ -277,6 +412,76 @@ mod tests {
             value["project"]["id"].as_str().unwrap().to_owned(),
             value["session"]["id"].as_str().unwrap().to_owned(),
         )
+    }
+
+    /// The attachment routes the shared interface already calls.
+    ///
+    /// The interface posts a picked file for a session, then renders the record it gets
+    /// back and reads the bytes for a preview. If any of the three steps is missing the
+    /// attachment shows up as a name that cannot be opened.
+    #[test]
+    fn an_attachment_is_imported_listed_and_readable() {
+        let fixture = fixture();
+        let (_, session) = create(&fixture, "演示");
+        let incoming = fixture._dir.path().join("incoming");
+        std::fs::create_dir_all(&incoming).unwrap();
+        let source = incoming.join("notes.txt");
+        std::fs::write(&source, b"goal\n").unwrap();
+
+        let payload = serde_json::json!({ "path": source.to_string_lossy() });
+        let reply = fixture.projects.handle(
+            "POST",
+            &format!("/sessions/{session}/attachments/reference"),
+            "",
+            &payload.to_string(),
+        );
+        assert_eq!(reply.status, 200, "{}", String::from_utf8_lossy(&reply.body));
+        let record = body(&reply);
+        let id = record["id"].as_str().unwrap().to_owned();
+        assert_eq!(record["filename"], "notes.txt");
+        assert_eq!(record["session_id"], session.as_str());
+        assert_eq!(record["preview_type"], "text");
+
+        let listed = body(&fixture.projects.handle(
+            "GET",
+            &format!("/sessions/{session}/attachments"),
+            "",
+            "",
+        ));
+        assert_eq!(listed["attachments"].as_array().unwrap().len(), 1);
+
+        let content = fixture
+            .projects
+            .handle("GET", &format!("/attachments/{id}/content"), "", "");
+        assert_eq!(content.status, 200);
+        assert_eq!(content.body, b"goal\n");
+    }
+
+    /// A path outside the sandbox is refused by the route, not only by the store: the
+    /// picker must not become a way around the core's own file boundary.
+    #[test]
+    fn an_attachment_outside_the_sandbox_is_refused_by_the_route() {
+        let fixture = fixture();
+        let (_, session) = create(&fixture, "演示");
+        let outside = std::env::temp_dir().join(format!(
+            "sunday-outside-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&outside, b"no").unwrap();
+        let payload = serde_json::json!({ "path": outside.to_string_lossy() });
+        let reply = fixture.projects.handle(
+            "POST",
+            &format!("/sessions/{session}/attachments/reference"),
+            "",
+            &payload.to_string(),
+        );
+        assert_eq!(reply.status, 400);
+        assert!(
+            String::from_utf8_lossy(&reply.body).contains("outside"),
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        let _ = std::fs::remove_file(&outside);
     }
 
     /// The shape the client reads: `{ project, session }`, snake_case inside.

@@ -33,6 +33,9 @@ pub struct ModelPatch {
     pub base_url: Option<String>,
     pub model_id: Option<String>,
     pub allow_insecure_local: Option<bool>,
+    /// Whether the model can read images. Stated by the user, because a wrong guess
+    /// either loses an image or loses the whole message it was attached to.
+    pub vision: Option<bool>,
 }
 
 fn vendor_for(config: &config::CoreConfig) -> Result<Vendor, String> {
@@ -83,6 +86,14 @@ pub fn apply_patch(state: &CoreState, patch: ModelPatch) -> Result<serde_json::V
     if let Some(allow) = patch.allow_insecure_local {
         next.allow_insecure_local = allow;
     }
+    let vision_changed = match patch.vision {
+        Some(vision) => {
+            let changed = next.vision != vision;
+            next.vision = vision;
+            changed
+        }
+        None => false,
+    };
 
     // Validate before writing, so a typo cannot leave the app unable to start.
     let next_fingerprint = fingerprint_of(&next, &state.data_dir)?;
@@ -97,8 +108,16 @@ pub fn apply_patch(state: &CoreState, patch: ModelPatch) -> Result<serde_json::V
 
     config::save(&state.data_dir, &next).map_err(|error| error.to_string())?;
 
+    // The image setting is read when a turn starts, so it takes effect immediately;
+    // only the provider binding needs a restart.
+    let runner = if vision_changed {
+        Some(state.runner.set_images_allowed(next.vision))
+    } else {
+        None
+    };
     let mut view = config::public_view(&state.data_dir);
     view["restart_required"] = serde_json::json!(moved);
+    view["vision_applied_live"] = serde_json::json!(runner.is_some());
     Ok(view)
 }
 

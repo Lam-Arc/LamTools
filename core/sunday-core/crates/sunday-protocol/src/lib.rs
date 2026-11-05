@@ -422,6 +422,17 @@ pub struct Event {
 pub enum Command {
     TurnStart {
         text: String,
+        /// The client's input items, verbatim JSON, when it sent more than text.
+        ///
+        /// A turn can carry files, and the transcript has to show them again after a
+        /// restart: the journal is the only thing that survives one, so what the user
+        /// attached is journalled next to what they typed. Text stays separate because it
+        /// is the part the core itself reads and every reader already has it.
+        ///
+        /// A string rather than a typed value because the item shape belongs to the
+        /// client; storing it as it arrived cannot drift from what the screen sent.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        input_json: String,
     },
     TurnCancel,
     ApprovalRespond {

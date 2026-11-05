@@ -31,6 +31,7 @@ mod loop_contract;
 
 pub mod config;
 pub mod config_rpc;
+pub mod files;
 pub mod http_surface;
 pub mod keystore;
 pub mod lifecycle;
@@ -233,6 +234,18 @@ fn lifecycle_signal(state: tauri::State<'_, Arc<CoreState>>, event: String) -> s
     apply_lifecycle(&state, &event)
 }
 
+/// Opens the system document picker and copies what the user chose into the sandbox.
+///
+/// Off the IPC thread: the picker is an activity result, so this call waits for the user.
+/// Blocking the thread that delivers events would freeze the screen while the picker is
+/// open, which is exactly when the screen has to stay alive.
+#[tauri::command]
+async fn pick_files() -> Result<crate::files::PickedFiles, String> {
+    tauri::async_runtime::spawn_blocking(crate::files::pick)
+        .await
+        .map_err(|error| format!("the picker task failed: {error}"))?
+}
+
 /// Kept as its own command because the old name is what the UI calls.
 #[tauri::command]
 fn lifecycle_pause(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
@@ -350,6 +363,7 @@ pub fn run() {
                 &workspace_path,
             ));
             let projects_for_runner = Arc::clone(&projects);
+            let attachments = projects.attachments_handle();
             let runner = Arc::new(CoreRunner::new(CoreOptions {
                 store,
                 model,
@@ -363,7 +377,10 @@ pub fn run() {
                 // tools in from the UI, one at a time.
                 policy: GrantPolicy::with_grants(cfg.granted_tools.clone()),
                 system: Some("You are Sunday. Use the tools you are given.".into()),
-            }));
+            })
+            // user:“将附件实际送入 Agent 的输入链路”+(附件存储交给这一轮：模型读到的是
+            // 文件正文，图片按设置决定是否原生送入)。
+            .with_attachments(attachments, cfg.vision));
 
             // A trusted session: IPC has no socket, so there is nothing to
             // authenticate against and no way to reach it from outside the app.
@@ -415,6 +432,7 @@ pub fn run() {
             settings::set_api_key,
             settings::clear_api_key,
             settings::tool_catalog,
+            pick_files,
             settings::set_tool_grant,
             lifecycle_signal,
             lifecycle_pause,

@@ -166,6 +166,23 @@ pub struct Projector {
     spoke: HashSet<String>,
 }
 
+/// The typed parts of a user message: the text, then the files it carried.
+///
+/// Kept out of the match arm because the same shape is used for mid-turn guidance, and two
+/// producers of one shape drift the moment only one of them is edited.
+fn user_content(text: &str, payload: &Value) -> Vec<Value> {
+    let mut parts = vec![json!({ "type": "text", "text": text })];
+    if let Some(items) = payload.get("input").and_then(Value::as_array) {
+        for item in items {
+            if item.get("type").and_then(Value::as_str) != Some("attachment") {
+                continue;
+            }
+            parts.push(item.clone());
+        }
+    }
+    parts
+}
+
 impl Projector {
     pub fn new() -> Self {
         Self::default()
@@ -308,7 +325,10 @@ impl Projector {
                     json!({
                         "type": "userMessage",
                         "role": "user",
-                        "content": [{ "type": "text", "text": content }],
+                        // The files travel with the text: `selectors.ts` reads the same
+                        // array for `attachments`, so a reopened transcript shows the deck
+                        // it showed while the turn was live.
+                        "content": user_content(&content, &payload),
                     }),
                 )
             }

@@ -27,7 +27,10 @@ fn envelope(request_id: &str, thread: &str, text: &str) -> CommandEnvelope {
         request_id: request_id.into(),
         thread_id: thread.into(),
         expected_revision: None,
-        payload: Command::TurnStart { text: text.into() },
+        payload: Command::TurnStart {
+            text: text.into(),
+            input_json: String::new(),
+        },
     }
 }
 

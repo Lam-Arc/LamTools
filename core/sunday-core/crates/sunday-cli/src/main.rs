@@ -598,7 +598,10 @@ fn self_test(args: &[String]) -> ExitCode {
                 request_id: "req-1".into(),
                 thread_id: "t1".into(),
                 expected_revision: None,
-                payload: sunday_protocol::Command::TurnStart { text: "hi".into() },
+                payload: sunday_protocol::Command::TurnStart {
+                    text: "hi".into(),
+                    input_json: String::new(),
+                },
             };
             let first = store.accept_command(&workspace, &envelope);
             let second = store.accept_command(&workspace, &envelope);

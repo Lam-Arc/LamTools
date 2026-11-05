@@ -43,6 +43,14 @@ pub struct CoreConfig {
     /// hole the binding exists to close.
     #[serde(default)]
     pub confirm_endpoint: bool,
+    /// Whether the configured model can read images.
+    ///
+    /// Off by default and stated by the user, not guessed: a text-only model rejects the
+    /// whole message when an image part appears, so trying it loses the text that was
+    /// typed along with the picture. With it off, an image attachment is described to the
+    /// model as unreadable instead of being sent.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 fn default_base_url() -> String {
@@ -74,6 +82,7 @@ impl Default for CoreConfig {
             // exception for 10.0.2.2.
             allow_insecure_local: true,
             confirm_endpoint: false,
+            vision: false,
         }
     }
 }
@@ -137,6 +146,7 @@ pub fn public_view(dir: &Path) -> serde_json::Value {
         "provider": config.provider,
         "provider_name": config.provider_name,
         "granted_tools": config.granted_tools,
+        "vision": config.vision,
         "has_api_key": has_api_key,
         "allow_insecure_local": config.allow_insecure_local,
         "endpoint_approved": endpoint_approved,

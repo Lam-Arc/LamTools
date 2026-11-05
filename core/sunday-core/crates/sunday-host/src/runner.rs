@@ -29,6 +29,7 @@ use sunday_store::Store;
 use crate::app_server::{
     BridgeEvent, EventBuffer, EventSink, HistoryPage, QueueView, SteerOutcome, StopMode, TurnRunner,
 };
+use crate::attachments::{AttachmentStore, TurnAttachment};
 use crate::policy::GrantPolicy;
 
 /// Seconds since the epoch. Approvals store `expires_at` in seconds while event
@@ -145,6 +146,16 @@ pub struct CoreRunner {
     /// Threads with a turn currently running. Used to answer `turn/steer`
     /// honestly: guidance only applies to a live turn.
     live: Mutex<HashMap<String, bool>>,
+    /// Where a turn's files are read from. `None` on a host that has no attachments, and
+    /// a turn carrying one is then refused rather than run without it.
+    files: Option<Arc<AttachmentStore>>,
+    /// Whether the configured model can be sent images.
+    ///
+    /// A text-only model rejects the whole message when one image part appears, so the
+    /// answer cannot be discovered by trying: the user states it, and an image attachment
+    /// is described instead when it is off. Atomic because the settings screen may flip it
+    /// while a turn is running.
+    images_allowed: std::sync::atomic::AtomicBool,
 }
 
 impl CoreRunner {
@@ -163,7 +174,56 @@ impl CoreRunner {
             buffer: EventBuffer::default(),
             cancel: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
+            files: None,
+            images_allowed: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Gives the runner the attachment store a turn reads its files from.
+    ///
+    /// A builder rather than two more `CoreOptions` fields: every existing caller
+    /// constructs that struct, and a host without attachments should keep saying nothing
+    /// about them.
+    pub fn with_attachments(mut self, store: Arc<AttachmentStore>, images_allowed: bool) -> Self {
+        self.files = Some(store);
+        self.images_allowed = std::sync::atomic::AtomicBool::new(images_allowed);
+        self
+    }
+
+    /// Flips whether images may be sent, for the settings screen.
+    ///
+    /// Applies to the next turn rather than to one already running: an image is read while
+    /// the turn is being assembled, and changing that halfway would send a message whose
+    /// parts disagree with its text.
+    pub fn set_images_allowed(&self, allowed: bool) {
+        self.images_allowed.store(allowed, Ordering::Relaxed);
+    }
+
+    /// The files a client's items name, in the order it sent them.
+    fn requested_files(input: &serde_json::Value) -> Vec<TurnAttachment> {
+        let Some(items) = input.as_array() else {
+            return Vec::new();
+        };
+        items
+            .iter()
+            .filter(|item| {
+                item.get("type").and_then(|value| value.as_str()) == Some("attachment")
+            })
+            .map(|item| {
+                let read = |key: &str| {
+                    item.get(key)
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                TurnAttachment {
+                    id: read("attachment_id"),
+                    path: read("path"),
+                    filename: read("filename"),
+                    mime_type: read("mime_type"),
+                }
+            })
+            .collect()
     }
 
     fn cancel_token(&self, thread: &str) -> CancelToken {
@@ -310,6 +370,42 @@ impl TurnRunner for CoreRunner {
         client_message_id: &str,
         sink: EventSink<'_>,
     ) -> Result<(), String> {
+        self.start_turn_with_input(
+            thread_id,
+            prompt,
+            &serde_json::Value::Null,
+            client_message_id,
+            sink,
+        )
+    }
+
+    fn start_turn_with_input(
+        &self,
+        thread_id: &str,
+        prompt: &str,
+        input: &serde_json::Value,
+        client_message_id: &str,
+        sink: EventSink<'_>,
+    ) -> Result<(), String> {
+        // user:“将附件实际送入 Agent 的输入链路”+(文件先变成模型能读的东西，再受理这一轮；
+        // 受理之后模型已经拿到正文，而不是只看到一个文件名)。
+        let requested = Self::requested_files(input);
+        let briefing = if requested.is_empty() {
+            Default::default()
+        } else {
+            let store = self
+                .files
+                .as_ref()
+                .ok_or_else(|| "this host cannot read attached files".to_owned())?;
+            store.briefing(&requested, self.images_allowed.load(Ordering::Relaxed))
+        };
+        let prompt = format!("{prompt}{}", briefing.text);
+        let prompt = prompt.as_str();
+        let input_json = if input.is_array() {
+            input.to_string()
+        } else {
+            String::new()
+        };
         // Acceptance must be a real journal event with a real seq: the client
         // treats it as authoritative and orders everything after it.
         let accept_seq = {
@@ -326,6 +422,9 @@ impl TurnRunner for CoreRunner {
                 expected_revision: None,
                 payload: sunday_protocol::Command::TurnStart {
                     text: prompt.to_owned(),
+                    // What the user attached travels with what they typed: the
+                    // transcript reads it back from here after a restart.
+                    input_json,
                 },
             };
             store
@@ -393,7 +492,12 @@ impl TurnRunner for CoreRunner {
             .enable_all()
             .build()
             .map_err(|e| format!("runtime: {e}"))?;
-        let run = runtime.block_on(sunday_agent::run_turn(&env, input, RunBudget::default()));
+        let run = runtime.block_on(sunday_agent::run_turn_with_images(
+            &env,
+            input,
+            briefing.images,
+            RunBudget::default(),
+        ));
 
         self.set_live(thread_id, false);
         self.emit_journal(thread_id, sink, accept_seq);

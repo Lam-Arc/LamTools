@@ -295,6 +295,7 @@ impl TurnRunner for AndroidRunner {
                 expected_revision: None,
                 payload: sunday_protocol::Command::TurnStart {
                     text: prompt.to_owned(),
+                    input_json: String::new(),
                 },
             };
             store

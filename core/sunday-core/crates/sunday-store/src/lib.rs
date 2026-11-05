@@ -443,9 +443,20 @@ impl Store {
                     // user asked, and a resumed screen must be able to show it
                     // without a second lookup that does not survive a restart.
                     let mut payload = json!({"kind": env.payload.kind()});
-                    if let sunday_protocol::Command::TurnStart { text } = &env.payload {
+                    if let sunday_protocol::Command::TurnStart { text, input_json } =
+                        &env.payload
+                    {
                         if let Some(object) = payload.as_object_mut() {
                             object.insert("text".into(), json!(text));
+                            // The items travel with the instruction, so a reopened
+                            // transcript still knows which files were attached instead of
+                            // showing a message whose attachment vanished.
+                            if let Ok(items) = serde_json::from_str::<serde_json::Value>(input_json)
+                            {
+                                if items.is_array() {
+                                    object.insert("input".into(), items);
+                                }
+                            }
                         }
                     }
                     payload.to_string()

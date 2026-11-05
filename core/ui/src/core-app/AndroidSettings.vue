@@ -31,6 +31,7 @@ type ModelConfig = {
   granted_tools: string[]
   has_api_key: boolean
   allow_insecure_local: boolean
+  vision: boolean
   endpoint_approved: boolean
   endpoint_prompt?: string | null
   credential_storage: CredentialStorage
@@ -51,7 +52,29 @@ const PROVIDERS = [
   { id: 'anthropic', label: 'Anthropic' },
 ]
 
-const config = ref<ModelConfig | null>(null)
+/**
+ * A real default rather than `null`.
+ *
+ * The template binds to `config.model_id` and friends, so a `null` start meant either a
+ * render crash before the first reply or a screen guarded by `config?.` everywhere. A blank
+ * record keeps the screen renderable and the types honest; `reload` fills it in.
+ */
+function emptyConfig(): ModelConfig {
+  return {
+    base_url: '',
+    model_id: '',
+    provider: 'openai-compatible',
+    granted_tools: [],
+    has_api_key: false,
+    allow_insecure_local: false,
+    vision: false,
+    endpoint_approved: false,
+    endpoint_prompt: null,
+    credential_storage: { kind: '', reason: null, needs_migration: false, has_key: false },
+  }
+}
+
+const config = ref<ModelConfig>(emptyConfig())
 const tools = ref<ToolEntry[]>([])
 const key = ref('')
 const busy = ref('')
@@ -100,7 +123,6 @@ async function run<T>(label: string, action: () => Promise<T>): Promise<T | null
 }
 
 async function saveModel(): Promise<void> {
-  if (!config.value) return
   const current = config.value
   const updated = await run('save', () =>
     invoke<ModelConfig>('save_model_config', {
@@ -109,6 +131,7 @@ async function saveModel(): Promise<void> {
         base_url: current.base_url,
         model_id: current.model_id,
         allow_insecure_local: current.allow_insecure_local,
+        vision: current.vision,
       },
     }),
   )
@@ -192,6 +215,12 @@ onMounted(() => {
       <label class="inline">
         <input v-model="config.allow_insecure_local" type="checkbox" :disabled="!!busy" />
         <span>允许本地明文 HTTP（仅用于本机或局域网模型）</span>
+      </label>
+      <!-- Stated by the user rather than detected: a text-only model rejects the whole
+           message when an image part appears, so a wrong guess loses the text too. -->
+      <label class="inline">
+        <input v-model="config.vision" type="checkbox" :disabled="!!busy" />
+        <span>这个模型能看图片</span>
       </label>
       <button :disabled="!!busy" @click="saveModel">保存模型设置</button>
     </section>

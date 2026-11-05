@@ -131,6 +131,7 @@ mod tests {
             provider_name: "test".into(),
             allow_insecure_local: true,
             confirm_endpoint: confirm,
+            vision: false,
         }
     }
 
