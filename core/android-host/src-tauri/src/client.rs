@@ -35,6 +35,18 @@ pub struct CoreLink {
     url: Mutex<String>,
     /// Wakes the driver so the next request travels on a fresh connection.
     reset: Arc<tokio::sync::Notify>,
+    /// True once the current connection has answered `initialize`. A second one
+    /// on the same socket is an error the core refuses; a first one must not
+    /// trigger the reset that this field guards.
+    initialized: Arc<std::sync::atomic::AtomicBool>,
+    /// The first successful `initialize` reply, reused for later clients.
+    ///
+    /// The core accepts one handshake per socket, and the shared UI opens a client
+    /// per page load. Rebuilding the socket for each one turned into a reconnect
+    /// storm: every reset told the UI it had lost its core, and it dialled again.
+    /// Answering the handshake from the reply already received keeps one socket
+    /// and still gives every client the capabilities it needs.
+    handshake: Mutex<Option<Value>>,
     token: Mutex<String>,
 }
 
@@ -48,6 +60,8 @@ impl CoreLink {
             app,
             url: Mutex::new(String::new()),
             reset: Arc::new(tokio::sync::Notify::new()),
+            initialized: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            handshake: Mutex::new(None),
             token: Mutex::new(String::new()),
         });
         let driver = Arc::clone(&link);
@@ -72,12 +86,9 @@ impl CoreLink {
     /// A JSON-RPC style call that resolves when the matching `id` comes back.
     pub async fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
         if method == "initialize" {
-            // The core accepts one `initialize` per WebSocket and answers the
-            // rest with "already initialized". The UI opens a new client on every
-            // page load, so the host has to present a new connection for it;
-            // reusing the last one leaves every reload stuck without capabilities.
-            self.reset.notify_waiters();
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            if let Some(cached) = self.handshake.lock().expect("handshake lock").clone() {
+                return Ok(cached);
+            }
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst).to_string();
         let (sender, receiver) = oneshot::channel();
@@ -86,14 +97,24 @@ impl CoreLink {
         self.outbound
             .send(frame.to_string())
             .map_err(|_| "the core connection is closed".to_owned())?;
-        match tokio::time::timeout(timeout, receiver).await {
+        let outcome = match tokio::time::timeout(timeout, receiver).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(_)) => Err("the core connection dropped this request".to_owned()),
             Err(_) => {
                 self.pending.lock().expect("pending lock").remove(&id);
                 Err(format!("the core did not answer {method} in time"))
             }
+        };
+        // A connection that answered `initialize` cannot accept another; the next client
+        // gets a new socket. Recording it only on success keeps a failed handshake from
+        // being treated as "already initialised".
+        if method == "initialize" {
+            if let Ok(reply) = &outcome {
+                self.initialized.store(true, Ordering::SeqCst);
+                *self.handshake.lock().expect("handshake lock") = Some(reply.clone());
+            }
         }
+        outcome
     }
 
     async fn run(self: Arc<Self>, mut inbound: mpsc::UnboundedReceiver<String>) {
@@ -135,6 +156,7 @@ impl CoreLink {
     ) {
         let (mut sink, mut source) = stream.split();
         let reset = Arc::clone(&self.reset);
+        self.initialized.store(false, Ordering::SeqCst);
         loop {
             tokio::select! {
                 _ = reset.notified() => return,
@@ -152,7 +174,15 @@ impl CoreLink {
                     match incoming {
                         Some(Ok(Message::Text(text))) => self.dispatch(&text),
                         Some(Ok(Message::Binary(_))) => {}
-                        Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+                        // A ping must be answered or the peer closes the socket. This
+                        // was the reconnect storm: every idle timeout dropped the
+                        // connection, the UI saw it as a lost core and re-handshaked.
+                        Some(Ok(Message::Ping(payload))) => {
+                            if sink.send(Message::Pong(payload)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Some(Ok(Message::Pong(_))) => {}
                         Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
                         Some(Ok(Message::Frame(_))) => {}
                     }
