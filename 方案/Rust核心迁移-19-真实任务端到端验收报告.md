@@ -8,8 +8,8 @@
 ## 一句话结论
 
 **从干净安装到重启恢复，全流程在设备上用真实 UI 操作跑通了**：新建工作环境、新建会话、发指令、审批、执行、文件落盘、结果显示、关掉应用再打开历史都在。
-过程中设备暴露出两个只有真机才看得见的缺陷，都已按契约修掉并补了断言。
-还剩一个产品层面的真问题：Agent 写文件的位置不是用户建的工作环境，见第六节。
+过程中设备暴露出三个只有真机才看得见的缺陷，都已修掉并补了断言：
+答复把已完成的回合重新点亮、一批结算事件挤在同一个空 id 上、Agent 写文件的位置不是用户建的工作环境。
 
 ## 一、本地先验证，再上设备
 
@@ -25,7 +25,7 @@
 | 新进程读同一个库，历史完整、卡片不再可点 | 同上 | 恢复 |
 | 协议字段与桌面核一致 | `src/projection/contract.rs` + `core/ui/tests/android-host-event-contract.test.ts` | 同一份样本两侧读，12 个场景 |
 
-数字：宿主 `cargo test --lib` 44 项；界面契约 11 项；`sunday-store` 67 项、`sunday-host` 59 项。
+数字：宿主 `cargo test --lib` 46 项；界面契约 11 项；`sunday-store` 67 项、`sunday-host` 32 项。
 
 ## 二、设备验收的实际步骤
 
@@ -75,19 +75,37 @@
 
 闭环测试从外部验证：重放同一事实，事件 id、内容、时间三者都不变。
 
-## 六、没解决的：Agent 写文件的位置不是用户建的工作环境
+## 六、设备暴露的缺陷三：Agent 写文件的位置不是用户建的工作环境
 
-这是这一轮最重要的遗留问题，**用户能直接看到**。
+**症状**：用户新建的项目 `demo`，工作目录是 `…/workspace/demo`；
+Agent 的写根是进程级的 `…/workspace`，于是 `notes.md` 落在了 `workspace/` 而不是 `workspace/demo/`。
+界面把 `@notes.md` 按项目目录解析：`GET /files/resolve-reference?path=notes.md -> 404`，引用上带红点。
+也就是说“创建工作环境”对 Agent 的落盘位置没有约束，项目是装饰性的。
 
-- 用户新建的项目 `demo`，工作目录是 `…/workspace/demo`。
-- Agent 的写根是 `…/workspace`，于是 `notes.md` 落在了 `workspace/` 而不是 `workspace/demo/`。
-- 界面把 `@notes.md` 按项目目录解析：`GET /files/resolve-reference?path=notes.md -> 404`，引用上带红点。
+**修法**：把工具根从“进程一个”改成“按会话所属项目”。
 
-也就是说“创建工作环境”目前对 Agent 的落盘位置没有约束。修它需要把工具根从“进程一个”改成“按会话所属项目”，属于架构层改动，不是补一个参数。
+- `Projects::work_root_for_session` 回答某个会话该在哪写；
+- `CoreOptions.workspace_for` 携带这个解析器，`None` 表示“所有会话共用一个目录”，没有项目的宿主用这个；
+- runner 每轮按线程解析目录再建工具，解析不到时回落到共享工作区。
 
-## 七、另一个小遗留
+按轮解析而不是按进程缓存，是因为审批可能晚到：答复落地时必须还写在同一处。
+断言覆盖两面：有项目的会话写进项目、不写共享目录；没项目的会话仍有地方可写；两者互不覆盖。
 
-强制停止发生在回合刚结束之后时，启动报告会报 `abandoned_receipts` 一条、`turn_state: needs_attention`。界面照常加载、可以用，但这条记录没有任何地方向用户解释。
+设备上确认到位：调试构建每轮打印一行解析结果，项目会话这一轮打的是
+`turn workspace for ses-13af0a2b70c0d0e9: /data/data/com.lamtools.sunday.core/workspace/demo`，
+写的就是项目目录。
+
+## 七、两个待查项
+
+**一、模型一次要两个工具时，设备上没出现审批卡。**
+这一轮模型一次返回了 `[read_file, write_file]`，日志里 `tool_prepared`、`approval_requested` 都有，
+但界面停在“停止运行”，看不到卡。同样的场景在本机用例 `two_calls_in_one_answer_still_produce_one_answerable_card`
+里是对的：读自动执行、写弹一张卡、卡片带两个选项、批准后文件落地。
+所以问题在界面这一侧，宿主不是嫌疑对象。下一步按同样方式给它写一个界面断言，看是不是决策面板只呈现第一个请求。
+
+**二、强制停止后报 `abandoned_receipts`。**
+回合刚结束就强停时，启动报告会有一条未完成回执、`turn_state: needs_attention`。
+界面照常加载、可以用，但这条记录没有任何地方向用户解释。
 
 ## 八、怎么复现这一轮
 
