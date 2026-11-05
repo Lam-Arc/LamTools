@@ -238,7 +238,9 @@ extract_deb() {  # extract_deb DEB DEST_FILE SOURCE_PATH_IN_DEB
 command -v ar >/dev/null || die "missing host tool: ar (binutils)"
 extract_deb "$PROOT_DEB"  "$JNI/libproot.so"               bin/proot
 extract_deb "$PROOT_DEB"  "$JNI/libproot-loader.so"        libexec/proot/loader
-extract_deb "$TALLOC_DEB" "$JNI/libtalloc.so.2"            lib/libtalloc.so.2
+# Gradle packages only *.so, so the file ships under that name and the host
+# materialises the .so.2 soname proot asks for.
+extract_deb "$TALLOC_DEB" "$JNI/libtalloc.so"              lib/libtalloc.so.2
 extract_deb "$SHMEM_DEB"  "$JNI/libandroid-shmem.so"       lib/libandroid-shmem.so
 
 # ---------------------------------------------------------------- archive

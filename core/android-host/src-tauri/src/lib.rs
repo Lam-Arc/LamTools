@@ -129,6 +129,15 @@ async fn core_http(
     let inner = Arc::clone(&state.inner);
     let port = inner.runtime.ensure_started()?;
     let token = inner.runtime.token();
+    // The shared UI asks for `/projects`, `/files/...` and so on; on desktop the base URL
+    // carries the `/api/core` prefix, which the direct transport prepends. IPC has no base
+    // URL, so the prefix has to be applied here — without it every such call is a 404,
+    // including creating a project.
+    let path = if path.starts_with("/api/") {
+        path
+    } else {
+        format!("/api/core{path}")
+    };
     let url = format!("http://127.0.0.1:{port}{path}");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))

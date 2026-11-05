@@ -75,7 +75,29 @@ Android 上「本机回环」等于「任何别的 App 都能连」，所以：
 | 文件写入落盘 | 通过 | guest 内 `notes.md` 内容与要求一致（三行文本） |
 | aarch64 运行时构建 | 通过 | `out/aarch64` 产出 200 MB rootfs + 四个 `.so` |
 
-## 四、未验证
+### APK 端到端（Android 16 x86_64 模拟器，debug 签名）
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| APK 构建 | 通过 | `app-universal-debug.apk` 282 MB，含 `rootfs-x86_64.targz` 与 5 个 `.so` |
+| 安装 | 通过 | `adb install` 成功，包名 `com.lamtools.sunday.core` |
+| 首次初始化 | 通过 | Kotlin 流式复制 assets → 解压 596 MB rootfs（跳过 2 个 Android 拒绝的条目）→ 写入安装标记 |
+| 应用内启动 Core | 通过 | `libproot.so` 与 `python3.14` 均为 app 自身 uid 进程，Uvicorn 监听随机 loopback 端口 |
+| 共享 UI 加载 | 通过 | 与桌面同一套 `LamToolsApp`，中文界面、软键盘 inset、配置页与主界面均正常渲染 |
+| UI ↔ Core 通道 | 通过 | WebSocket `/api/core/app-server` accepted，`GET /api/core/projects` 200 |
+| 配置生效 | 通过 | 写入 Core 的 providers/models 后重启，UI 从配置页进入主界面 |
+| 二次启动 | 通过 | 已安装时跳过解压，Core 直接拉起 |
+
+## 四、已知缺陷
+
+1. **返回键直接退出 App**。WebView 内的弹窗/键盘不拦截系统返回键，用户按返回会离开
+   应用而不是关闭当前面板。需要在 Activity 层拦截并交给 WebView 处理。
+2. **“选择项目”在 Android 上不可用**。该入口依赖系统文件选择器，而宿主把
+   `filePicker` 报为不可用，按钮点了没有反馈。
+3. **新建项目表单在软键盘弹出时按钮被遮挡**，且提交后没有可见的失败提示；用
+   `scripts/seed-model.sh` 直接写配置可以绕过，但这是产品缺陷不是方案。
+
+## 五、未验证
 
 * **实体 Android 设备（arm64）**：本机在线设备只有 x86_64 模拟器。aarch64 的 rootfs 和
   proot 已经构建出来，但没有在真机上跑过。
@@ -94,7 +116,30 @@ Android 上「本机回环」等于「任何别的 App 都能连」，所以：
 * bundled 插件 `network-exploration` 在启动时报「仅支持 Windows 桌面端」并跳过；这是插件
   自身的能力判断，不是移植缺陷。其余 bundled 插件正常加载。
 
-## 六、构建与运行
+## 六、交付物
+
+| 项 | 位置 |
+| --- | --- |
+| APK（debug 签名，x86_64） | `artifacts/android/sunday-m-x86_64-debug.apk`（501 MB，未压缩含调试符号） |
+| APK SHA-256 | `d2768e581a8f5f2cbfb9c30c24fe1e3f10262f21d20e52692b094567262787d1` |
+| 源码 | 分支 `sunday/m-python-core-android`，工作树 `.worktrees/m-python` |
+| 运行时构建 | `core/android-runtime/tools/build-runtime.sh`（x86_64 / aarch64） |
+| 安装与验证脚本 | `core/android-host/scripts/`（`android_project.py`、`verify-apk.sh`、`seed-model.sh`） |
+
+**这是 debug 签名，不是可发布版本。** 安装需要开启「允许安装未知来源」。首次启动会解压
+约 600 MB 的运行时，耗时取决于设备存储速度（模拟器约 40 秒）。
+
+安装与初始化：
+
+```bash
+adb install -r artifacts/android/sunday-m-x86_64-debug.apk
+adb shell am start -n com.lamtools.sunday.core/.MainActivity
+```
+
+首次进入会停在「连接模型」页：填接口地址（OpenAI 兼容）、模型 ID 与 API Key，保存后
+核心会重启并写入 Core 自己的 providers/models 配置，再进入主界面。
+
+## 七、构建与运行
 
 ```bash
 # 1. 构建运行时（Linux/WSL）

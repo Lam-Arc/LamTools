@@ -33,6 +33,8 @@ pub struct CoreLink {
     next_id: AtomicU64,
     app: AppHandle,
     url: Mutex<String>,
+    /// Wakes the driver so the next request travels on a fresh connection.
+    reset: Arc<tokio::sync::Notify>,
     token: Mutex<String>,
 }
 
@@ -45,6 +47,7 @@ impl CoreLink {
             next_id: AtomicU64::new(1),
             app,
             url: Mutex::new(String::new()),
+            reset: Arc::new(tokio::sync::Notify::new()),
             token: Mutex::new(String::new()),
         });
         let driver = Arc::clone(&link);
@@ -68,6 +71,14 @@ impl CoreLink {
 
     /// A JSON-RPC style call that resolves when the matching `id` comes back.
     pub async fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+        if method == "initialize" {
+            // The core accepts one `initialize` per WebSocket and answers the
+            // rest with "already initialized". The UI opens a new client on every
+            // page load, so the host has to present a new connection for it;
+            // reusing the last one leaves every reload stuck without capabilities.
+            self.reset.notify_waiters();
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst).to_string();
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().expect("pending lock").insert(id.clone(), sender);
@@ -123,8 +134,10 @@ impl CoreLink {
         inbound: &mut mpsc::UnboundedReceiver<String>,
     ) {
         let (mut sink, mut source) = stream.split();
+        let reset = Arc::clone(&self.reset);
         loop {
             tokio::select! {
+                _ = reset.notified() => return,
                 outgoing = inbound.recv() => {
                     match outgoing {
                         Some(text) => {
