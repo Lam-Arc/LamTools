@@ -186,8 +186,15 @@ impl Projector {
         // after its turn ended must not be attributed to it: the client treats an
         // `approval_response` as resuming the turn it names, so pointing one at a
         // finished turn revived it and the composer went back to offering Stop.
+        //
+        // `item/approval_resolved` never inherits the active turn. The journal's own
+        // answer event carries no turn id, and inheriting one put the answer after the
+        // turn's completion while still naming that turn, so the client re-opened a run
+        // that had already ended and the composer stayed on Stop. The row the answer
+        // belongs to is remembered when the call is prepared, not derived from the turn.
         let turn = match payload.get("turn_id").and_then(Value::as_str) {
             Some(explicit) => explicit.to_owned(),
+            None if method == "item/approval_resolved" => String::new(),
             None => self.turn_of.get(&thread).cloned().unwrap_or_default(),
         };
         let tool_item = |call: &str| format!("{thread}:{turn}:{call}:tool");

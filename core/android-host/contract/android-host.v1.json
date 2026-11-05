@@ -247,7 +247,6 @@
           "seq": 8,
           "event_id": "ev-answer",
           "payload": {
-            "turn_id": "",
             "request_id": "req-1",
             "tool_call_id": "call-1",
             "decision": "approve"
@@ -558,6 +557,66 @@
             "turn_id": "",
             "item_id": "req-only",
             "payload": { "request_id": "req-only" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "an answer that lands after the turn ended does not re-open it",
+      "why": "the journal's answer event carries no turn id, and inheriting the active turn put the answer after the turn's completion while still naming it, so the client revived a finished run and the composer stayed on Stop",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "turn/started",
+          "seq": 1,
+          "event_id": "ev-late-start",
+          "payload": { "turn_id": "turn-9" }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/tool_prepared",
+          "seq": 2,
+          "event_id": "ev-late-prepare",
+          "payload": {
+            "tool_call_id": "call-9",
+            "name": "write_file",
+            "arguments": { "path": "notes.md", "content": "x" }
+          }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_request",
+          "seq": 3,
+          "event_id": "ev-late-ask",
+          "payload": { "request_id": "req-9", "tool_call_id": "call-9" }
+        },
+        {
+          "thread_id": "th",
+          "method": "turn/completed",
+          "seq": 4,
+          "event_id": "ev-late-done",
+          "payload": { "text": "" }
+        },
+        {
+          "thread_id": "th",
+          "method": "item/approval_resolved",
+          "seq": 5,
+          "event_id": "ev-late-answer",
+          "payload": { "request_id": "req-9", "tool_call_id": "call-9", "decision": "approve" }
+        }
+      ],
+      "expect": [
+        { "seq": 1, "payload": { "kind": "status", "turn_id": "turn-9" } },
+        { "seq": 2, "payload": { "kind": "tool_call" } },
+        { "seq": 3, "payload": { "kind": "approval_request" } },
+        { "seq": 4, "payload": { "kind": "status", "status": "completed", "turn_id": "turn-9" } },
+        {
+          "seq": 5,
+          "payload": {
+            "kind": "approval_response",
+            "turn_id": "",
+            "item_id": "th:turn-9:call-9:tool",
+            "payload": { "request_id": "req-9", "state": "ending", "status": "resolved" }
           }
         }
       ]

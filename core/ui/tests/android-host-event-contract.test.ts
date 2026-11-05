@@ -18,7 +18,8 @@ import { describe, expect, it } from 'vitest'
 import type { CoreAppEvent, CoreAppSnapshot } from '@/appServer/protocol.ts'
 import { applyCoreAppEvent } from '@/appServer/store.ts'
 import { selectCoreWorkbenchMessages } from '@/appServer/workbenchProjection.ts'
-import { coreDecisionSelectionPlan } from '@/appServer/workbenchActions.ts'
+import { selectLatestTurnStatus } from '@/appServer/selectors.ts'
+import { coreDecisionSelectionPlan, isCoreActiveTurnStatus } from '@/appServer/workbenchActions.ts'
 
 const THREAD = 'th'
 /** Fixed instants: the contract only requires "a real timestamp", not a specific one. */
@@ -182,6 +183,14 @@ describe('what the contractor emits, the screen shows', () => {
   it('applies two unanchored closures without colliding', () => {
     const snapshot = applyAll(eventsOf('two unanchored closures stay distinguishable'))
     expect(Object.keys(snapshot.core?.items ?? {}).length).toBe(2)
+  })
+
+  it('does not re-open a turn when the answer arrives after it ended', () => {
+    // The device symptom: the journal's answer event carries no turn id, the projection
+    // filled in the active turn, and the client read an answer to a finished turn as
+    // that turn continuing. The composer offered Stop for a run that had already ended.
+    const snapshot = applyAll(eventsOf('an answer that lands after the turn ended does not re-open it'))
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
   })
 
   it('ignores an event the contract says produces nothing', () => {
