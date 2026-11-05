@@ -364,18 +364,15 @@ impl Projects {
     /// user:“优先复用 Windows Sunday 已经验证的功能…文件操作”+(桌面侧上传就是落到「资料/」
     /// 下的真实文件；手机上的选择器交回的是沙盒路径而不是 File，所以这里收路径，落到同一个
     /// 位置，资料库两边看到的是同一批文件)。
-    pub(crate) fn upload_artifact(
-        &self,
-        project_id: &str,
-        folder: &str,
-        source: &str,
-    ) -> Reply {
+    pub(crate) fn upload_artifact(&self, project_id: &str, folder: &str, source: &str) -> Reply {
         let Some(project) = self.find(project_id) else {
             return Reply::error(404, format!("no such project: {project_id}"));
         };
         let root = match self.root.canonicalize() {
             Ok(root) => root,
-            Err(error) => return Reply::error(500, format!("cannot resolve the workspace: {error}")),
+            Err(error) => {
+                return Reply::error(500, format!("cannot resolve the workspace: {error}"))
+            }
         };
         let origin = match std::path::Path::new(source).canonicalize() {
             Ok(path) => path,
@@ -393,10 +390,7 @@ impl Projects {
         }
         const LIMIT: u64 = 50 * 1024 * 1024;
         if metadata.len() > LIMIT {
-            return Reply::error(
-                413,
-                format!("文件超过 {} MB", LIMIT / (1024 * 1024)),
-            );
+            return Reply::error(413, format!("文件超过 {} MB", LIMIT / (1024 * 1024)));
         }
         let name = origin
             .file_name()
@@ -414,7 +408,10 @@ impl Projects {
             library.join(&inside)
         };
         if let Err(error) = std::fs::create_dir_all(&directory) {
-            return Reply::error(500, format!("cannot create {}: {error}", directory.display()));
+            return Reply::error(
+                500,
+                format!("cannot create {}: {error}", directory.display()),
+            );
         }
         let target = match unique_target(&directory, &name, &origin) {
             Ok(target) => target,
@@ -427,7 +424,10 @@ impl Projects {
             .strip_prefix(&library)
             .map(|value| value.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| name.clone());
-        let stored = target.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+        let stored = target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
         Reply::json(
             200,
             serde_json::json!({

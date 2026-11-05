@@ -287,13 +287,19 @@ impl Projects {
                         if record.preview_type == "text" {
                             match self.attachments().content(attachment_id) {
                                 Ok(bytes) => {
+                                    let (shown, truncated) =
+                                        crate::file_refs::preview_text(&bytes, 64 * 1024);
                                     if let Some(object) = payload.as_object_mut() {
                                         object.insert(
                                             "text".into(),
-                                            serde_json::Value::String(
-                                                String::from_utf8_lossy(&bytes).into_owned(),
-                                            ),
+                                            serde_json::Value::String(shown),
                                         );
+                                        if truncated {
+                                            object.insert(
+                                                "truncated".into(),
+                                                serde_json::Value::Bool(true),
+                                            );
+                                        }
                                     }
                                 }
                                 Err(_) => code = "file_unreadable",
@@ -976,7 +982,12 @@ mod tests {
             "",
             &serde_json::json!({ "path": source.to_string_lossy(), "folder": "" }).to_string(),
         );
-        assert_eq!(reply.status, 200, "{}", String::from_utf8_lossy(&reply.body));
+        assert_eq!(
+            reply.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
         let record = body(&reply);
         assert_eq!(record["name"], "参考.txt");
         assert_eq!(record["path"], "资料/参考.txt");

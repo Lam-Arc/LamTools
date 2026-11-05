@@ -1017,6 +1017,15 @@ fn dispatch(
             });
             Ok(serde_json::json!({}))
         }
+        // user:“继续推进文件预览与 Library 复用”+(这两处界面一开就跑起来问一句；核心没有
+        // 目标与插件面板，空列表是事实，而 "method not found" 会在屏幕上变成一条红色提示)。
+        "goal.list" => Ok(serde_json::json!({ "goals": [] })),
+        "plugin.ui.list" | "plugin.widget.list" => Ok(serde_json::json!({
+            "widgets": [],
+            "entries": [],
+            "sidebar": { "widgets": [] },
+        })),
+
         "thread/snapshot" => {
             let thread = if thread.is_empty() {
                 state.thread_id.clone()

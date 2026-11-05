@@ -270,6 +270,21 @@ pub fn mime_for_name(name: &str) -> &'static str {
     }
 }
 
+/// A prefix of a text file, cut on a character boundary, for a preview card.
+///
+/// A preview is a glance, not a download: a 40 MB log would otherwise be parsed as JSON on
+/// the screen's thread to fill a card that shows ten lines.
+pub fn preview_text(bytes: &[u8], limit: usize) -> (String, bool) {
+    if bytes.len() <= limit {
+        return (String::from_utf8_lossy(bytes).into_owned(), false);
+    }
+    let mut end = limit;
+    while end > 0 && bytes[end] & 0b1100_0000 == 0b1000_0000 {
+        end -= 1;
+    }
+    (String::from_utf8_lossy(&bytes[..end]).into_owned(), true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,6 +393,19 @@ mod tests {
             resolve(&files, "https://example.com/a.png"),
             Err(ReferenceError::Missing)
         );
+    }
+
+    /// A long file is cut, the cut is announced, and the cut never splits a character.
+    #[test]
+    fn a_preview_is_a_prefix_that_says_it_was_cut() {
+        let text = "字".repeat(100);
+        let (shown, truncated) = preview_text(text.as_bytes(), 100);
+        assert!(truncated);
+        assert!(shown.len() <= 100);
+        assert!(shown.chars().all(|character| character == '字'));
+        let (whole, cut) = preview_text(b"short", 100);
+        assert_eq!(whole, "short");
+        assert!(!cut);
     }
 
     #[test]
