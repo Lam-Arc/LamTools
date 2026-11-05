@@ -4,7 +4,15 @@ import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
+  companion object {
+    private var alive: java.lang.ref.WeakReference<MainActivity>? = null
+
+    /** The activity, for a bridge that needs a context: opening a file, mostly. */
+    fun current(): MainActivity? = alive?.get()
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
+    alive = java.lang.ref.WeakReference(this)
     enableEdgeToEdge()
     // Touch the keystore bridge before Tauri starts. Its initialiser is what hands the
     // JavaVM to Rust, and Kotlin only initialises an object when something refers to
@@ -52,6 +60,7 @@ class MainActivity : TauriActivity() {
    */
   override fun onDestroy() {
     LifecycleBridge.signal("destroy")
+    if (alive?.get() === this) alive = null
     super.onDestroy()
   }
 }

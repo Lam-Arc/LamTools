@@ -98,6 +98,12 @@ pub struct Projects {
     /// The only directory a project may live under.
     root: PathBuf,
     policy: PathPolicy,
+    /// Who can open a file with the platform's own programs.
+    ///
+    /// `None` on a host without a window manager. The seam exists because only the host
+    /// knows how its platform hands a file to another app, and this crate must not grow a
+    /// per-platform branch for a button.
+    opener: std::sync::RwLock<Option<Opener>>,
     /// Files a session owns. Built here because a session id addresses both.
     ///
     /// Shared rather than owned: a turn reads the same records the upload route wrote, and
@@ -105,7 +111,35 @@ pub struct Projects {
     attachments: std::sync::Arc<crate::attachments::AttachmentStore>,
 }
 
+/// Opens one file with the platform's default program for its type.
+pub type Opener = std::sync::Arc<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
+
 impl Projects {
+    /// Installs the platform's file opener, or replaces the one in place.
+    pub fn set_opener(&self, opener: Opener) {
+        if let Ok(mut slot) = self.opener.write() {
+            *slot = Some(opener);
+        }
+    }
+
+    /// Opens a resolved file, or explains who has to do it.
+    pub(crate) fn open_with_platform(&self, path: &Path, mime: &str) -> Reply {
+        let opener = match self.opener.read() {
+            Ok(slot) => slot.clone(),
+            Err(_) => None,
+        };
+        let Some(opener) = opener else {
+            return Reply::json(
+                501,
+                serde_json::json!({ "detail": "这个核心不负责用系统程序打开文件" }),
+            );
+        };
+        match opener(&path.to_string_lossy(), mime) {
+            Ok(()) => Reply::json(200, serde_json::json!({ "status": "opened" })),
+            Err(reason) => Reply::json(400, serde_json::json!({ "detail": reason })),
+        }
+    }
+
     pub fn new(data_dir: impl AsRef<Path>, root: impl AsRef<Path>) -> Self {
         let data_dir = data_dir.as_ref();
         let root = root.as_ref();
@@ -118,6 +152,7 @@ impl Projects {
             policy: PathPolicy::default(),
             // Imports are only accepted from the sandbox the host handed us, so a file
             // picker cannot be used to read something the core would refuse.
+            opener: std::sync::RwLock::new(None),
             attachments: std::sync::Arc::new(crate::attachments::AttachmentStore::new(
                 data_dir, data_dir,
             )),

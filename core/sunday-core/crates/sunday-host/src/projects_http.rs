@@ -153,10 +153,29 @@ impl Projects {
             // Opening a file with whatever the system installed is the host's job, and
             // this core has no window manager. Answering "opened" would leave a button
             // that does nothing; the screen can show this instead.
-            ("POST", ["files", "open-reference"]) => Reply::json(
-                501,
-                serde_json::json!({ "detail": "这个核心不负责用系统程序打开文件" }),
-            ),
+            // user:“先建立最小可工作的真实功能链路”+(宿主能打开文件时就用系统应用打开；
+            // 打不开要说清楚是谁的事，不能回一个假的成功)。
+            ("POST", ["files", "open-reference"]) => {
+                let payload = json_body(body);
+                let raw = string_field(&payload, "path").unwrap_or_default();
+                match self.reference_root(query) {
+                    Err(reply) => reply,
+                    Ok(files) => match crate::file_refs::resolve(&files, &raw) {
+                        Ok(path) => {
+                            let name = path
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .unwrap_or_default();
+                            let mime = crate::file_refs::mime_for_name(name);
+                            self.open_with_platform(&path, mime)
+                        }
+                        Err(error) => Reply::json(
+                            error.status(),
+                            serde_json::json!({ "detail": error.detail() }),
+                        ),
+                    },
+                }
+            }
 
             // The sidebar loads every session once, grouped by project, so this is the
             // endpoint that decides whether the app looks empty or alive.
@@ -326,9 +345,8 @@ impl Projects {
             // nothing, so the reply is the truth the screen can show.
             ("POST", ["attachments", attachment_id, "open"]) => {
                 match self.attachments().get(attachment_id) {
-                    Some(_) => {
-                        Reply::error(501, "this core does not open files with another program")
-                    }
+                    Some(record) => self
+                        .open_with_platform(std::path::Path::new(&record.path), &record.mime_type),
                     None => Reply::error(404, format!("no such attachment: {attachment_id}")),
                 }
             }
@@ -1019,6 +1037,55 @@ mod tests {
             &serde_json::json!({ "path": source.to_string_lossy() }).to_string(),
         );
         assert_eq!(body(&renamed)["path"], "资料/参考-2.txt");
+    }
+
+    /// A host that can open files gets asked; one that cannot says whose job it is.
+    #[test]
+    fn opening_a_file_is_the_hosts_job_and_says_so_when_it_has_none() {
+        let fixture = fixture();
+        let (project, _) = create(&fixture, "演示");
+        fixture.projects.handle(
+            "PUT",
+            &format!("/projects/{project}/files/content"),
+            "path=notes.md",
+            &serde_json::json!({ "content": "# hi" }).to_string(),
+        );
+        let root = body(&fixture.projects.handle("GET", "/projects", "", ""))["projects"][0]
+            ["work_root"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let payload = serde_json::json!({ "path": "notes.md", "work_root": root }).to_string();
+
+        let refused = fixture
+            .projects
+            .handle("POST", "/files/open-reference", "", &payload);
+        assert_eq!(refused.status, 501);
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = std::sync::Arc::clone(&seen);
+        fixture
+            .projects
+            .set_opener(std::sync::Arc::new(move |path, mime| {
+                recorder.lock().unwrap().push(format!("{path}|{mime}"));
+                Ok(())
+            }));
+        let opened = fixture
+            .projects
+            .handle("POST", "/files/open-reference", "", &payload);
+        assert_eq!(
+            opened.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&opened.body)
+        );
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].ends_with("notes.md|text/markdown"),
+            "{}",
+            calls[0]
+        );
     }
 
     fn the_plan_library_answers_with_an_empty_library() {

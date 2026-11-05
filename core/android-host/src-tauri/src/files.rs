@@ -47,6 +47,89 @@ pub struct PickedFiles {
 }
 
 #[cfg(target_os = "android")]
+mod opener {
+    use std::sync::OnceLock;
+
+    use jni::objects::{GlobalRef, JClass, JString, JValue, JValueOwned};
+    use jni::{JNIEnv, JavaVM};
+
+    static VM: OnceLock<JavaVM> = OnceLock::new();
+    static CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
+
+    pub fn register(vm: JavaVM, class: GlobalRef) {
+        let _ = VM.set(vm);
+        let _ = CLASS_REF.set(class);
+    }
+
+    fn cached_class<'local>() -> Result<JClass<'local>, String> {
+        let held = CLASS_REF
+            .get()
+            .ok_or_else(|| "the file opener bridge was never registered".to_owned())?;
+        // Safety: a global reference outlives this call, and the wrapper never escapes it.
+        Ok(unsafe { JClass::from_raw(held.as_obj().as_raw() as jni::sys::jclass) })
+    }
+
+    /// Asks the platform to open the file. An empty answer means it opened.
+    pub fn open(path: &str, mime: &str) -> Result<(), String> {
+        let vm = VM
+            .get()
+            .ok_or_else(|| "the file opener bridge was never registered".to_owned())?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|error| format!("cannot attach a thread: {error}"))?;
+        let class = cached_class()?;
+        let path_arg = env
+            .new_string(path)
+            .map_err(|error| format!("cannot pass the path: {error}"))?;
+        let mime_arg = env
+            .new_string(mime)
+            .map_err(|error| format!("cannot pass the type: {error}"))?;
+        let outcome = env.call_static_method(
+            &class,
+            "open",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            &[JValue::Object(&path_arg), JValue::Object(&mime_arg)],
+        );
+        let value = match outcome {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = env.exception_clear();
+                return Err(format!("the file opener failed: {error}"));
+            }
+        };
+        let object = match value {
+            JValueOwned::Object(object) => object,
+            _ => return Err("the file opener answered with something that is not text".into()),
+        };
+        if object.is_null() {
+            return Ok(());
+        }
+        let reason = JString::from(object);
+        let reason = env
+            .get_string(&reason)
+            .map(|text| String::from(text))
+            .unwrap_or_default();
+        if reason.is_empty() {
+            Ok(())
+        } else {
+            Err(reason)
+        }
+    }
+}
+
+/// Asks the platform to open a file with whatever handles its type.
+#[cfg(target_os = "android")]
+pub fn open_with_system(path: &str, mime: &str) -> Result<(), String> {
+    opener::open(path, mime)
+}
+
+/// A host with no window manager cannot lend a file to another program.
+#[cfg(not(target_os = "android"))]
+pub fn open_with_system(_path: &str, _mime: &str) -> Result<(), String> {
+    Err("this build cannot open files with another program".to_owned())
+}
+
+#[cfg(target_os = "android")]
 mod bridge {
     use std::collections::HashMap;
     use std::sync::mpsc::{channel, Sender};
@@ -148,6 +231,21 @@ mod bridge {
             let _ = sender.send(payload.to_owned());
         }
     }
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_OpenFileBridge_nativeRegister(
+    mut env: jni::JNIEnv,
+    class: jni::objects::JClass,
+) {
+    let Ok(vm) = env.get_java_vm() else {
+        return;
+    };
+    let Ok(global) = env.new_global_ref(&class) else {
+        return;
+    };
+    opener::register(vm, global);
 }
 
 #[cfg(target_os = "android")]

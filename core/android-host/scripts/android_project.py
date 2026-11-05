@@ -389,6 +389,7 @@ def verify(apk: Path) -> int:
             "class LifecycleBridge (dex)": b"LifecycleBridge" in blob,
             "class FilePickerBridge (dex)": b"FilePickerBridge" in blob,
             "class KeyboardBridge (dex)": b"KeyboardBridge" in blob,
+            "class OpenFileBridge (dex)": b"OpenFileBridge" in blob,
             "class MainActivity (dex)": b"MainActivity" in blob,
         }
 

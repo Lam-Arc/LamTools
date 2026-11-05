@@ -396,6 +396,11 @@ pub fn run() {
                 &data_dir,
                 &workspace_path,
             ));
+            // Opening a file with another program is the host's job, so the host is what
+            // installs the opener. A build without one says so instead of pretending.
+            projects.set_opener(std::sync::Arc::new(
+                |path: &str, mime: &str| files::open_with_system(path, mime),
+            ));
             let projects_for_runner = Arc::clone(&projects);
             let attachments = projects.attachments_handle();
             let runner = Arc::new(CoreRunner::new(CoreOptions {
