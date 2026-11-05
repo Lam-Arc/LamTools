@@ -282,6 +282,17 @@ mod android_bridge {
         app.try_state::<Arc<CoreState>>()
     }
 
+    /// Reports how much of the window the keyboard covers, in dp.
+    ///
+    /// Emitted rather than stored: the value changes while the window is live, and the
+    /// interface sets one CSS variable from it. Nothing else in the core needs it.
+    pub fn publish_keyboard(inset_dp: f64) {
+        let Some(app) = APP.get() else {
+            return;
+        };
+        let _ = app.emit("keyboard-inset", inset_dp);
+    }
+
     pub fn deliver(event: &str) {
         let Some(app) = APP.get() else {
             return;
@@ -308,6 +319,29 @@ pub extern "system" fn Java_com_lamtools_sunday_core_LifecycleBridge_signal(
     };
     let event: String = text.into();
     android_bridge::deliver(&event);
+}
+
+/// Registration for the keyboard bridge.
+///
+/// Kotlin calls this from its initialiser, before reporting anything. Nothing is cached
+/// here: the inset is a one-way value, so there is no class reference to keep.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativeRegister(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+) {
+}
+
+/// The keyboard inset, arriving from Kotlin.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativePublish(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    inset_dp: jni::sys::jint,
+) {
+    android_bridge::publish_keyboard(inset_dp as f64);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -376,7 +410,15 @@ pub fn run() {
                 // Reads are fine; writes and deletes ask. The user opts specific
                 // tools in from the UI, one at a time.
                 policy: GrantPolicy::with_grants(cfg.granted_tools.clone()),
-                system: Some("You are Sunday. Use the tools you are given.".into()),
+                // user:“Agent 能实际读取、理解和使用文件，而不只是显示附件名称”+(原来的
+                // 「Use the tools you are given」把小模型推向先调工具：附件内容明明已经
+                // 在消息里，它还是去 read_file 一个沙盒路径，失败了再来告诉用户读不到)。
+                system: Some(
+                    "You are Sunday. Do what the user asks directly, and use a tool only \
+                     when the task really needs one; content already in the message needs \
+                     no tool."
+                        .into(),
+                ),
             })
             // user:“将附件实际送入 Agent 的输入链路”+(附件存储交给这一轮：模型读到的是
             // 文件正文，图片按设置决定是否原生送入)。

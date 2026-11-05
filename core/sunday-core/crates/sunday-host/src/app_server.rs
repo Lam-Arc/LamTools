@@ -1227,9 +1227,9 @@ fn input_carries_attachments(input: &serde_json::Value) -> bool {
     input
         .as_array()
         .map(|items| {
-            items.iter().any(|item| {
-                item.get("type").and_then(|value| value.as_str()) == Some("attachment")
-            })
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(|value| value.as_str()) == Some("attachment"))
         })
         .unwrap_or(false)
 }

@@ -2337,7 +2337,10 @@ const splitDocuments = createSplitDocuments()
 const splitShellStyle = ref<Record<string, string>>({})
 const splitDirtyTabs = ref(new Set<string>())
 function setSplitDirty(id: string, value: boolean) { if (value) splitDirtyTabs.value.add(id); else splitDirtyTabs.value.delete(id) }
-const splitEnabled = computed(() => Object.keys(splitWorkspace.state.panes).length > 0)
+// user:“附件选完以后输入框整条没了”+(手机端恢复了分屏状态时，分屏层不挂载，
+// 但这类名还在，输入栏就会去读一份没人发布的几何量，宽度算成 0)。
+// 分屏能不能用，和分屏层能不能挂载必须是同一个判断。
+const splitEnabled = computed(() => appRuntime.platform !== 'mobile' && Object.keys(splitWorkspace.state.panes).length > 0)
 function activateSplitMain(event: Event) { if (event.target instanceof Element && event.target.closest('.workspace-main, .composer-root--floating')) splitWorkspace.activate('main') }
 const openSubAgentRef = ref<CoreSubAgentRef | null>(null)
 const openSubAgentRun = computed(() => openSubAgentRef.value ? selectCoreSubAgentRun(messages.value, openSubAgentRef.value) : undefined)

@@ -110,14 +110,12 @@ pub fn apply_patch(state: &CoreState, patch: ModelPatch) -> Result<serde_json::V
 
     // The image setting is read when a turn starts, so it takes effect immediately;
     // only the provider binding needs a restart.
-    let runner = if vision_changed {
-        Some(state.runner.set_images_allowed(next.vision))
-    } else {
-        None
-    };
+    if vision_changed {
+        state.runner.set_images_allowed(next.vision);
+    }
     let mut view = config::public_view(&state.data_dir);
     view["restart_required"] = serde_json::json!(moved);
-    view["vision_applied_live"] = serde_json::json!(runner.is_some());
+    view["vision_applied_live"] = serde_json::json!(vision_changed);
     Ok(view)
 }
 

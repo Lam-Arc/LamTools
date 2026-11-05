@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
+import { listen as tauriListen } from '@tauri-apps/api/event'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import AndroidSettings from './AndroidSettings.vue'
 
@@ -144,6 +145,23 @@ function mountSettingsEntry(): void {
 // Connect first, mount second. Mounting first would let a render overwrite the
 // failure banner, leaving the exact symptom this is meant to avoid: a black
 // screen with no explanation.
+/**
+ * The keyboard inset, as the shared stylesheet reads it.
+ *
+ * `--native-keyboard-inset` is the documented seam for a host whose window does not
+ * shrink with the keyboard. Android is exactly that host, and until something set this
+ * variable the composer stayed behind the keyboard: visible on screen, impossible to
+ * type into.
+ */
+void tauriListen<number>('keyboard-inset', event => {
+  const inset = Number(event.payload)
+  if (!Number.isFinite(inset)) return
+  document.documentElement.style.setProperty(
+    '--native-keyboard-inset',
+    `${Math.max(0, Math.round(inset))}px`,
+  )
+})
+
 transport
   .connect()
   .then(() => {

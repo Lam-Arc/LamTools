@@ -206,9 +206,7 @@ impl CoreRunner {
         };
         items
             .iter()
-            .filter(|item| {
-                item.get("type").and_then(|value| value.as_str()) == Some("attachment")
-            })
+            .filter(|item| item.get("type").and_then(|value| value.as_str()) == Some("attachment"))
             .map(|item| {
                 let read = |key: &str| {
                     item.get(key)
@@ -399,7 +397,14 @@ impl TurnRunner for CoreRunner {
                 .ok_or_else(|| "this host cannot read attached files".to_owned())?;
             store.briefing(&requested, self.images_allowed.load(Ordering::Relaxed))
         };
-        let prompt = format!("{prompt}{}", briefing.text);
+        // user:“消息、工具结果、审批状态与真实执行一致”+(日志和对话里存的是用户说的话，
+        // 真正发给模型的那段是加了附件正文的版本；两者混在一起，用户会在对话里看到内部
+        // 拼接的提示)。
+        let spoken = prompt.to_owned();
+        // The file's name stands where the text held this app's own path, and its content
+        // arrives from the briefing above.
+        let cleaned = briefing.clean_text(prompt);
+        let prompt = format!("{cleaned}{}", briefing.text);
         let prompt = prompt.as_str();
         let input_json = if input.is_array() {
             input.to_string()
@@ -421,7 +426,8 @@ impl TurnRunner for CoreRunner {
                 thread_id: thread_id.to_owned(),
                 expected_revision: None,
                 payload: sunday_protocol::Command::TurnStart {
-                    text: prompt.to_owned(),
+                    // What the user wrote, not what the model was given.
+                    text: spoken.clone(),
                     // What the user attached travels with what they typed: the
                     // transcript reads it back from here after a restart.
                     input_json,
@@ -433,6 +439,16 @@ impl TurnRunner for CoreRunner {
                 .seq
                 .ok_or_else(|| "the store accepted without returning a seq".to_owned())?
         };
+        // The files belong to the message that carried them, not only to the session: a
+        // transcript that can say which turn a file arrived with is the one that can show
+        // it in the right place later.
+        if !client_message_id.is_empty() {
+            if let Some(files) = self.files.as_ref() {
+                for request in &requested {
+                    let _ = files.bind_message(&request.id, client_message_id);
+                }
+            }
+        }
         {
             let store = self.store.lock().unwrap();
             if let Some(event) = store

@@ -167,7 +167,9 @@ impl Projects {
                     .attachments()
                     .import(id, &project, std::path::Path::new(&path))
                 {
-                    Ok(record) => Reply::json(200, serde_json::to_value(record).unwrap_or_default()),
+                    Ok(record) => {
+                        Reply::json(200, serde_json::to_value(record).unwrap_or_default())
+                    }
                     Err(error) => Reply::error(400, error),
                 }
             }
@@ -177,15 +179,12 @@ impl Projects {
                 serde_json::json!({ "attachments": self.attachments().list(id) }),
             ),
 
-            ("GET", ["attachments", attachment_id]) => match self
-                .attachments()
-                .get(attachment_id)
-            {
-                Some(record) => {
-                    Reply::json(200, serde_json::json!({ "attachment": record }))
+            ("GET", ["attachments", attachment_id]) => {
+                match self.attachments().get(attachment_id) {
+                    Some(record) => Reply::json(200, serde_json::json!({ "attachment": record })),
+                    None => Reply::error(404, format!("no such attachment: {attachment_id}")),
                 }
-                None => Reply::error(404, format!("no such attachment: {attachment_id}")),
-            },
+            }
 
             // The bytes, for a preview or for opening the file. Read through the record,
             // never through a caller-supplied path.
@@ -239,7 +238,10 @@ impl Projects {
                         }
                         if !code.is_empty() {
                             if let Some(object) = payload.as_object_mut() {
-                                object.insert("error_code".into(), serde_json::Value::String(code.into()));
+                                object.insert(
+                                    "error_code".into(),
+                                    serde_json::Value::String(code.into()),
+                                );
                             }
                         }
                         Reply::json(200, payload)
@@ -253,10 +255,9 @@ impl Projects {
             // nothing, so the reply is the truth the screen can show.
             ("POST", ["attachments", attachment_id, "open"]) => {
                 match self.attachments().get(attachment_id) {
-                    Some(_) => Reply::error(
-                        501,
-                        "this core does not open files with another program",
-                    ),
+                    Some(_) => {
+                        Reply::error(501, "this core does not open files with another program")
+                    }
                     None => Reply::error(404, format!("no such attachment: {attachment_id}")),
                 }
             }
@@ -435,7 +436,12 @@ mod tests {
             "",
             &payload.to_string(),
         );
-        assert_eq!(reply.status, 200, "{}", String::from_utf8_lossy(&reply.body));
+        assert_eq!(
+            reply.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
         let record = body(&reply);
         let id = record["id"].as_str().unwrap().to_owned();
         assert_eq!(record["filename"], "notes.txt");
@@ -463,10 +469,8 @@ mod tests {
     fn an_attachment_outside_the_sandbox_is_refused_by_the_route() {
         let fixture = fixture();
         let (_, session) = create(&fixture, "演示");
-        let outside = std::env::temp_dir().join(format!(
-            "sunday-outside-{}.txt",
-            std::process::id()
-        ));
+        let outside =
+            std::env::temp_dir().join(format!("sunday-outside-{}.txt", std::process::id()));
         std::fs::write(&outside, b"no").unwrap();
         let payload = serde_json::json!({ "path": outside.to_string_lossy() });
         let reply = fixture.projects.handle(

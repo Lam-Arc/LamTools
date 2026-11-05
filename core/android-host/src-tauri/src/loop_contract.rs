@@ -961,7 +961,7 @@ fn an_attached_text_file_is_read_by_the_model() {
     let dir = tempfile::tempdir().unwrap();
     let record = imported(dir.path(), "notes.md", b"goal: read the real content\n");
     let model = Arc::new(RecordingModel::new(vec![text_turn("The goal is to read it.")]));
-    let (runner, _store) = runner_with_files(dir.path(), Arc::clone(&model) as Arc<dyn Model>, false, true);
+    let (runner, store) = runner_with_files(dir.path(), Arc::clone(&model) as Arc<dyn Model>, false, true);
     let (frames, sink) = recorder();
 
     let input = json!([
@@ -982,8 +982,16 @@ fn an_attached_text_file_is_read_by_the_model() {
 
     // The transcript has to remember the file too, or reopening the session shows a
     // message whose attachment is gone.
+    // The file is bound to the message that carried it, so the transcript can place it.
+    assert_eq!(
+        store.get(&record.id).map(|row| row.message_id),
+        Some("cm-1".to_owned())
+    );
     let accepted = &frames_of(&frames, "turn/accepted")[0]["payload"];
     assert_eq!(accepted["input"][1]["attachment_id"], record.id);
+    // The transcript shows what the user wrote, not the briefing that was assembled for
+    // the model: internal prompt text on screen reads as if the user had typed it.
+    assert_eq!(accepted["text"], "what is the goal in this file?");
 }
 
 /// A model that can see gets the image itself.

@@ -167,7 +167,10 @@ impl AttachmentStore {
         if let Some(existing) = index.attachments.iter().find(|record| {
             record.session_id == session_id
                 && record.filename == filename
-                && record.metadata.get("digest").and_then(|value| value.as_str())
+                && record
+                    .metadata
+                    .get("digest")
+                    .and_then(|value| value.as_str())
                     == Some(digest.as_str())
         }) {
             return Ok(existing.clone());
@@ -312,6 +315,37 @@ pub struct AttachmentBriefing {
     pub text: String,
     /// Images that can be sent as themselves.
     pub images: Vec<sunday_protocol::ImageInput>,
+    /// Stored path and display name, for every file that was read.
+    paths: Vec<(String, String)>,
+}
+
+impl AttachmentBriefing {
+    /// The instruction with this app's own file paths replaced by file names.
+    ///
+    /// user:“Agent 能实际读取、理解和使用文件，而不只是显示附件名称”+(输入框里带着附件的
+    /// 沙盒绝对路径，小模型看到路径就去读它，读不到再回头问用户要文件；内容本来就在消息
+    /// 里，把路径换成文件名，它就没了那个错误选项)。
+    ///
+    /// The path is app bookkeeping. It is not why the file is in the message, no tool can
+    /// open it, and a model that sees it will try anyway.
+    pub fn clean_text(&self, text: &str) -> String {
+        let mut cleaned = text.to_owned();
+        for (path, name) in &self.paths {
+            if path.is_empty() {
+                continue;
+            }
+            // The mention can be quoted, and the same file can be spelled with either
+            // separator, so every spelling is replaced rather than only the stored one.
+            for variant in [path.clone(), path.replace('/', "\\")] {
+                for quoted in [format!("\"{variant}\""), format!("'{variant}'")] {
+                    cleaned = cleaned.replace(&format!("@{quoted}"), &format!("@{name}"));
+                    cleaned = cleaned.replace(&quoted, name);
+                }
+                cleaned = cleaned.replace(&variant, name);
+            }
+        }
+        cleaned
+    }
 }
 
 /// How much of one text file is put in the prompt.
@@ -358,9 +392,12 @@ impl AttachmentStore {
             return briefing;
         }
         let mut inlined = 0usize;
+        // user:“Agent 能实际读取、理解和使用文件，而不只是显示附件名称”+(内容就在这条
+        // 消息里，模型不该再去按路径读一遍——那条路径在应用沙盒里，工具本来就打不开，
+        // 读失败会让它编一个「没有权限」的答案，而不是回答文件里写了什么)。
         briefing
             .text
-            .push_str("\n\n以下是用户随这条消息附上的文件。\n");
+            .push_str("\n\n以下是用户随这条消息附上的文件：\n");
         for (index, request) in requested.iter().enumerate() {
             let number = index + 1;
             let Some(record) = self.resolve(request) else {
@@ -376,15 +413,24 @@ impl AttachmentStore {
                 record.mime_type,
                 human_size(record.size)
             ));
+            briefing
+                .paths
+                .push((record.path.clone(), record.filename.clone()));
             match self.brief_one(&record, &mut briefing, vision, &mut inlined) {
                 Ok(()) => {}
                 Err(reason) => {
-                    briefing
-                        .text
-                        .push_str(&format!("（{reason}）\n"));
+                    briefing.text.push_str(&format!("（{reason}）\n"));
                 }
             }
         }
+        // The instruction is the last thing in the prompt on purpose. A small model reads
+        // the end of a message more reliably than its middle: with this line first, the
+        // 3B model used on the device still called `read_file` on a sandbox path it cannot
+        // open and then answered about the permission error instead of the file.
+        briefing.text.push_str(
+            "\n以上文件的内容已经在这条消息里，请直接据此回答或操作。\
+             不要调用 read_file 或其它工具去读这些路径，它们是应用保存的副本，工具访问不到。\n",
+        );
         briefing
     }
 
@@ -399,7 +445,9 @@ impl AttachmentStore {
         match record.preview_type.as_str() {
             "text" => {
                 if *inlined >= MAX_INLINE_TOTAL {
-                    return Err("附带的文本已经够多，这个文件只保存了本身，需要时请让用户单独发送。".into());
+                    return Err(
+                        "附带的文本已经够多，这个文件只保存了本身，需要时请让用户单独发送。".into(),
+                    );
                 }
                 let budget = MAX_INLINE_TEXT.min(MAX_INLINE_TOTAL - *inlined);
                 let (body, truncated) = slice_text(&bytes, budget);
@@ -408,9 +456,9 @@ impl AttachmentStore {
                 // delimiter that closes its own block: the marker cannot be forged by
                 // the content it wraps.
                 let marker = record.id.replace("att-", "");
-                briefing.text.push_str(&format!(
-                    "<<<{marker}\n{body}\n{marker}>>>\n"
-                ));
+                briefing
+                    .text
+                    .push_str(&format!("<<<{marker}\n{body}\n{marker}>>>\n"));
                 if truncated {
                     briefing.text.push_str(
                         "（文件更长，这里只放了开头部分；需要后面的内容请让用户分批发送。）\n",
@@ -435,7 +483,9 @@ impl AttachmentStore {
                     mime: record.mime_type.clone(),
                     data_b64: base64(&bytes),
                 });
-                briefing.text.push_str("（图片已随消息附上，可以直接查看。）\n");
+                briefing
+                    .text
+                    .push_str("（图片已随消息附上，可以直接查看。）\n");
                 Ok(())
             }
             _ => Err("这个格式暂时无法提取内容，只保存了文件本身。".into()),
@@ -487,8 +537,7 @@ fn is_char_boundary(byte: u8) -> bool {
 
 /// Standard base64, written here so the host crate needs no new dependency for one call.
 fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let first = chunk[0] as u32;
@@ -542,11 +591,18 @@ mod tests {
         assert_eq!(record.session_id, "ses-1");
         assert_eq!(record.project_id, "prj-1");
         let storage = store.storage.to_string_lossy().replace(BACKSLASH, "/");
-        assert!(record.path.starts_with(&storage), "{} not under {storage}", record.path);
+        assert!(
+            record.path.starts_with(&storage),
+            "{} not under {storage}",
+            record.path
+        );
 
         assert_eq!(store.content(&record.id).unwrap(), b"goal\nprogress\n");
         assert_eq!(store.list("ses-1"), vec![record.clone()]);
-        assert_eq!(store.get(&record.id).map(|row| row.filename), Some("notes.txt".into()));
+        assert_eq!(
+            store.get(&record.id).map(|row| row.filename),
+            Some("notes.txt".into())
+        );
         // The original is only provenance; the copy is what a transcript reads, and the
         // provenance names the file the picker handed over.
         let original = record.metadata["original_path"]
@@ -674,7 +730,11 @@ mod tests {
 
         let briefing = store.briefing(&[asking(&record)], false);
         assert!(briefing.images.is_empty());
-        assert!(briefing.text.contains("看不到这张图片"), "{}", briefing.text);
+        assert!(
+            briefing.text.contains("看不到这张图片"),
+            "{}",
+            briefing.text
+        );
     }
 
     #[test]
@@ -729,7 +789,11 @@ mod tests {
         let record = store.import("ses-1", "", &source).unwrap();
 
         let briefing = store.briefing(&[asking(&record)], false);
-        assert!(briefing.text.contains("只放了开头部分"), "{}", briefing.text.len());
+        assert!(
+            briefing.text.contains("只放了开头部分"),
+            "{}",
+            briefing.text.len()
+        );
         // The cut lands on a character boundary, so the block stays valid UTF-8.
         assert!(std::str::from_utf8(briefing.text.as_bytes()).is_ok());
     }
@@ -766,6 +830,26 @@ mod tests {
             mime_type: String::new(),
         };
         assert_eq!(store.resolve(&by_path).map(|row| row.id), Some(record.id));
+    }
+
+    /// The model is told which file it has, not where this app happens to keep the copy.
+    #[test]
+    fn the_message_names_the_file_and_not_the_sandbox_path() {
+        let (_dir, store, incoming) = fixture();
+        let source = incoming.join("notes.md");
+        std::fs::write(&source, "goal\n").unwrap();
+        let record = store.import("ses-1", "", &source).unwrap();
+        let briefing = store.briefing(&[asking(&record)], false);
+
+        let spoken = format!("@\"{}\" what is in it?", record.path);
+        assert_eq!(briefing.clean_text(&spoken), "@notes.md what is in it?");
+
+        // The same path written with the other separator is the same file.
+        let windows = record.path.replace('/', "\\");
+        assert_eq!(
+            briefing.clean_text(&format!("look at {windows}")),
+            "look at notes.md"
+        );
     }
 
     #[test]

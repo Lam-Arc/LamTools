@@ -216,6 +216,10 @@ impl LlmClient {
 
         let mut stream = response.bytes_stream();
         let mut parser = sse::SseParser::new();
+        // Kept for the empty-turn report below. A provider that answers 200 and then says
+        // nothing is indistinguishable from a model that chose to be silent, and the two
+        // need different fixes: one is a wire problem, the other a prompt problem.
+        let mut tail_events: Vec<String> = Vec::new();
         let mut assembler = match self.config.wire {
             Wire::OpenAiChat => Assembler::OpenAi(openai::Assembler::new()),
             Wire::AnthropicMessages => Assembler::Anthropic(anthropic::Assembler::new()),
@@ -252,6 +256,9 @@ impl LlmClient {
                 if event.data.trim() == "[DONE]" {
                     continue;
                 }
+                if tail_events.len() < 3 {
+                    tail_events.push(event.data.chars().take(240).collect());
+                }
                 for delta in assembler.push(&event).map_err(Failure::fatal)? {
                     *delivered = true;
                     sink(delta);
@@ -264,7 +271,15 @@ impl LlmClient {
                 sink(delta);
             }
         }
-        assembler.finish().map_err(Failure::fatal)
+        let turn = assembler.finish().map_err(Failure::fatal)?;
+        #[cfg(debug_assertions)]
+        if turn.text.is_none() && turn.tool_calls.is_empty() {
+            println!(
+                "provider answered with an empty turn; first events: {}",
+                tail_events.join(" || ")
+            );
+        }
+        Ok(turn)
     }
 }
 

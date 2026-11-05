@@ -387,6 +387,8 @@ def verify(apk: Path) -> int:
         wanted = {
             "native library": True,
             "class LifecycleBridge (dex)": b"LifecycleBridge" in blob,
+            "class FilePickerBridge (dex)": b"FilePickerBridge" in blob,
+            "class KeyboardBridge (dex)": b"KeyboardBridge" in blob,
             "class MainActivity (dex)": b"MainActivity" in blob,
         }
 
@@ -398,7 +400,7 @@ def verify(apk: Path) -> int:
             EXIT_BUILD,
             "the APK is missing " + ", ".join(missing) + ": the Kotlin injection did not land",
         )
-    say("verify: the APK carries the bridge and the Rust library")
+    say("verify: the APK carries the bridges and the Rust library")
     return EXIT_OK
 
 
