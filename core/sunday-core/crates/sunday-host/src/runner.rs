@@ -245,6 +245,12 @@ impl CoreRunner {
         Ok(vec![
             Arc::new(sunday_tools::file_read::ReadFile::new(files.clone())),
             Arc::new(sunday_tools::file_write::WriteFile::new(files)),
+            // The tool existed and no runner offered it. Constructed with the default
+            // guard, so a fetch cannot be used to read this machine or a private
+            // network; the tests reach a local server through the explicit opt-in.
+            Arc::new(sunday_tools::web_fetch::WebFetch::new(
+                std::time::Duration::from_secs(30),
+            )),
         ])
     }
 

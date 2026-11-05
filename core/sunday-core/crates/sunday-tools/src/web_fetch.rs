@@ -404,6 +404,35 @@ mod tests {
         assert!(matches!(err, CoreError::InvalidRequest { .. }));
     }
 
+    /// The happy path, against a real socket: an HTML page becomes its text.
+    #[tokio::test]
+    async fn a_real_page_is_reduced_to_its_text() {
+        let base = serve(|_| {
+            ok_response(
+                "text/html",
+                "<html><body><h1>Sunday</h1><p>works</p><script>bad()</script></body></html>",
+            )
+        });
+        let tool = WebFetch::allowing_local_endpoints(DEFAULT_TIMEOUT);
+        let out = tool
+            .execute(json!({"url": format!("{base}/page")}), &ToolCtx::default())
+            .await
+            .unwrap();
+        assert!(out.content.contains("Sunday"), "{}", out.content);
+        assert!(out.content.contains("works"), "{}", out.content);
+        assert!(
+            !out.content.contains("<h1>"),
+            "tags survived: {}",
+            out.content
+        );
+        assert!(
+            !out.content.contains("bad()"),
+            "a script body was returned as text: {}",
+            out.content
+        );
+        assert!(!out.is_error);
+    }
+
     /// The default must refuse this machine. A `Pure` tool pointed at `127.0.0.1` is
     /// a way to read whatever local service happens to be listening.
     #[tokio::test]

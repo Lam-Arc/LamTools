@@ -520,6 +520,28 @@ fn two_calls_in_one_answer_still_produce_one_answerable_card() {
     );
 }
 
+/// The model is offered the tools this host claims to have.
+///
+/// `web_fetch` existed in the crate and no runner ever registered it, so a model could
+/// not use a capability the settings screen would happily describe. The catalogue is
+/// also what the grant list is built from, so a missing tool is a missing setting.
+#[test]
+fn the_catalogue_offers_every_tool_this_host_ships() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = runner(dir.path(), Vec::new());
+    let ids: Vec<String> = runner
+        .tool_catalog()
+        .into_iter()
+        .map(|descriptor| descriptor.id)
+        .collect();
+    for expected in ["read_file", "write_file", "web_fetch"] {
+        assert!(
+            ids.iter().any(|id| id == expected),
+            "{expected} is not offered: {ids:?}"
+        );
+    }
+}
+
 /// A denied call does not run, and the conversation keeps going.
 ///
 /// The denial is a resolution, not a stuck state: the row must say the call did not run,
