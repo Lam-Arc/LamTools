@@ -23,7 +23,12 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from lamtools_core.event import RunItemEvent
 from lamtools_core.runtime import RuntimeState, RuntimeStateConflictError
-from lamtools_core.runtime_owner import read_owner, refresh_owner, state_row_is_live
+from lamtools_core.runtime_owner import (
+    is_own_token,
+    read_owner,
+    refresh_owner,
+    state_row_is_live,
+)
 from lamtools_core.runtime.arrange import (
     ArrangeJob,
     ArrangeOccurrence,
@@ -1366,9 +1371,18 @@ class SqlAlchemyRuntimeStateStore:
         now = datetime.now()
 
         def blocked_by_live_owner(row: Any) -> bool:
-            """Whether the row belongs to a run that is still in flight."""
+            """Whether the row belongs to a run that is still in flight.
+
+            user:“监控、处理异常、恢复任务、验证成果并完成交付”+(自己进程写的行不算
+            「别的进程在写」：同一进程里两次写入之间 revision 落后是正常的，把这种情况
+            也拒掉会让每一次重试都死在自己的旧时间戳上。下面的更新仍然是 revision 上的
+            条件更新，谁输谁拿冲突，丢写不会被放过)。
+            """
             payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
-            return state_row_is_live(payload)
+            if not state_row_is_live(payload):
+                return False
+            metadata = payload.get("metadata") if isinstance(payload, dict) else None
+            return not is_own_token(read_owner(metadata))
 
         def adopt(reason: str, current_revision: int) -> None:
             _logger.warning(
