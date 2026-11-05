@@ -31,6 +31,7 @@ def register_superagent(sub: argparse._SubParsersAction) -> None:
         cmd_superagent_goal,
         cmd_superagent_ingest,
         cmd_superagent_policy,
+        cmd_superagent_publish,
         cmd_superagent_reject,
         cmd_superagent_report,
         cmd_superagent_retry,
@@ -79,6 +80,13 @@ def register_superagent(sub: argparse._SubParsersAction) -> None:
     retry.add_argument("ticket_id")
     _common(retry)
     retry.set_defaults(func=cmd_superagent_retry, raw=False)
+
+    publish = group.add_parser("publish", help="Push the ticket branch and open a PR")
+    publish.add_argument("ticket_id")
+    publish.add_argument("--title", default="", help="PR title")
+    publish.add_argument("--body", default="", help="PR body")
+    _common(publish)
+    publish.set_defaults(func=cmd_superagent_publish, raw=False)
 
     ingest = group.add_parser("ingest", help="Deliver one source event")
     ingest.add_argument("--source", required=True, help="Source id (must be authorized)")

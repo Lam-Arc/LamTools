@@ -779,6 +779,8 @@ def create_core_agent_http_app(
         # +(排期仍由 Arrange 负责：这里注入的 scheduler 就是 arrange_manager.create，
         # 不另外造一套调度器；权限边界由宿主 env 决定，事件正文无法扩权)。
         from lamtools_core.superagent import (
+            EffectOutbox,
+            GithubCliAdapter,
             InMemorySuperagentStore,
             PolicyConfig,
             PolicyGate,
@@ -833,9 +835,14 @@ def create_core_agent_http_app(
             arrange_runner.wake()
             return job.id
 
+        # user:“将推送分支和创建 PR 变成可控、可追踪、可重试的确定性操作”+(发布复用
+        # 同一个 superagent store 里的 effect outbox：幂等键与先查后建都在库里，
+        # 认证交给本机 gh，不建第二套 GitHub 客户端)。
+        superagent_store = getattr(core_db_handle, "superagent_store", None) or (
+            InMemorySuperagentStore()
+        )
         superagent_service = SuperagentService(
-            store=getattr(core_db_handle, "superagent_store", None)
-            or InMemorySuperagentStore(),
+            store=superagent_store,
             policy=PolicyGate(
                 PolicyConfig(
                     allowed_sources=_split_env("LAMTOOLS_SUPERAGENT_SOURCES"),
@@ -849,6 +856,8 @@ def create_core_agent_http_app(
             ),
             scheduler=_schedule_superagent_ticket,
             job_canceller=arrange_runner.cancel,
+            outbox=EffectOutbox(superagent_store),
+            github=GithubCliAdapter(),
             worktree_manager=WorktreeManager(
                 resolved_data_dir / "superagent",
                 allowed_repo_roots=tuple(sorted(_split_env("LAMTOOLS_SUPERAGENT_REPOS"))),

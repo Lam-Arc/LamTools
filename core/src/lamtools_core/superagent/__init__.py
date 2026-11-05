@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .effects import EffectAdapter, EffectOutbox
+from .github import GithubCliAdapter, GithubError, PublishAdapter, PublishTarget
 from .models import (
     Assignment,
     Decision,
@@ -41,6 +42,10 @@ __all__ = [
     "EffectOutbox",
     "EvalEngine",
     "ExecutionPlan",
+    "GithubCliAdapter",
+    "GithubError",
+    "PublishAdapter",
+    "PublishTarget",
     "HandleResult",
     "REPORT_CONTRACT",
     "build_ticket_prompt",

@@ -489,6 +489,13 @@ class MemoryResumeSupervisor:
             _logger.info("[member-wake] queued user message wins thread_id=%s", thread_id)
             return False
 
+        # Guard 3: a turn already in flight owns the session. Writing the marker
+        # first would bump the revision under that run and the store would have
+        # to refuse its next checkpoint, killing a healthy turn.
+        if await self._has_active_turn(thread_id):
+            _logger.info("[member-wake] thread already running thread_id=%s", thread_id)
+            return False
+
         # Tell the kernel this turn is ours BEFORE it starts, so its streak reset
         # does not wipe the counter we are enforcing (see runtime/member_wake.py).
         await _save_runtime_state_with_retry(store, thread_id, mutate=mark_member_wake_autostart)
@@ -521,6 +528,27 @@ class MemoryResumeSupervisor:
             member_wake_streak(latest) if latest is not None else 0,
         )
         return True
+
+    async def _has_active_turn(self, thread_id: str) -> bool:
+        """Whether this thread already has a turn in flight.
+
+        user:“绝不放宽旧 revision 写入限制，不能允许两个执行器同时修改同一工单”
+        +(这条守卫必须排在一切写入之前。先写标记再问「线程忙不忙」，等于拿着一个过期的
+        revision 去打正在跑的那一轮：守卫只能拒绝，而正在跑的回合就死在这里。
+        后台的唤醒与续跑都属于「不该碰正在跑的会话」的那一类)。
+        """
+        persistence = getattr(self._context, "persistence", None)
+        session_factory = getattr(self._context, "session_factory", None)
+        lister = getattr(persistence, "list_active_thread_ids", None)
+        if not callable(lister) or session_factory is None:
+            return False
+        try:
+            async with session_factory() as db:
+                active = await lister(db)
+        except BaseException:
+            _logger.exception("[member-wake] active-turn read failed thread_id=%s", thread_id)
+            return False
+        return thread_id in set(active)
 
     async def _has_queued_user_item(self, thread_id: str) -> bool:
         persistence = getattr(self._context, "persistence", None)
@@ -603,6 +631,11 @@ class MemoryResumeSupervisor:
         if registry is not None and registry.is_running(thread_id):
             # The user is already running something in this session; their turn
             # wins and the marker goes away in the kernel when that turn starts.
+            return False
+        if await self._has_active_turn(thread_id):
+            # The in-process registry only knows live turns. A turn started by
+            # another path (an arrange job running the kernel directly) is
+            # invisible there, and writing the marker under it would break it.
             return False
 
         # Disarm before starting: a start that is refused (the thread is busy

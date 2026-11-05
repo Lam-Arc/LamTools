@@ -25,6 +25,7 @@ SUPERAGENT_OPERATION_NAMES: tuple[str, ...] = (
     "superagent.ticket.stop",
     "superagent.ticket.close",
     "superagent.ticket.retry",
+    "superagent.ticket.publish",
     "superagent.assignment.list",
     "superagent.audit.list",
     "superagent.policy",
@@ -163,6 +164,30 @@ def register_superagent_operations(
             return _error(request, exc)
         return OperationResult(name=request.name, payload={"ticket": ticket.to_dict()})
 
+    async def superagent_ticket_publish(request: OperationRequest) -> OperationResult:
+        """推送工单分支并按授权开 PR。
+
+        user:“未获得明确授权时不推送、不创建 PR”“PR 链接和状态回写工单”+(授权来自
+        工单自己的 mandate，不是这次请求的参数：请求里写「请推送」不会扩权)。
+        """
+        payload = dict(request.payload)
+        try:
+            outcome = await service.publish(
+                _ticket_id(payload),
+                title=str(payload.get("title") or ""),
+                body=str(payload.get("body") or ""),
+            )
+        except (LookupError, PermissionError, RuntimeError, ValueError) as exc:
+            return _error(request, exc)
+        ticket = await service.get_ticket(_ticket_id(payload))
+        return OperationResult(
+            name=request.name,
+            payload={
+                "publish": outcome,
+                **({"ticket": ticket.to_dict()} if ticket is not None else {}),
+            },
+        )
+
     async def superagent_ticket_list(request: OperationRequest) -> OperationResult:
         stage = str(request.payload.get("stage") or "").strip()
         tickets = await service.list_tickets(stage=stage)
@@ -244,6 +269,7 @@ def register_superagent_operations(
         "superagent.ticket.stop": superagent_ticket_stop,
         "superagent.ticket.close": superagent_ticket_close,
         "superagent.ticket.retry": superagent_ticket_retry,
+        "superagent.ticket.publish": superagent_ticket_publish,
         "superagent.assignment.list": superagent_assignment_list,
         "superagent.audit.list": superagent_audit_list,
         "superagent.policy": superagent_policy,

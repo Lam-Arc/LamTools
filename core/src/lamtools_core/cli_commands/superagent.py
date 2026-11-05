@@ -119,6 +119,21 @@ async def cmd_superagent_retry(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_superagent_publish(args: argparse.Namespace) -> int:
+    """推送分支并按授权开 PR。"""
+    params = {
+        "ticket_id": args.ticket_id,
+        "title": str(args.title or ""),
+        "body": str(args.body or ""),
+    }
+    result = await _call(args, "superagent.ticket.publish", params)
+    if result.get("status") == "error":
+        print(f"error: {result.get('payload', {}).get('error')}")
+        return 1
+    print(json.dumps(result.get("publish") or {}, ensure_ascii=False, indent=2))
+    return 0
+
+
 async def cmd_superagent_tickets(args: argparse.Namespace) -> int:
     result = await _call(args, "superagent.ticket.list", {"stage": args.stage})
     tickets = result.get("tickets") or []
@@ -213,6 +228,7 @@ __all__ = [
     "cmd_superagent_goal",
     "cmd_superagent_ingest",
     "cmd_superagent_policy",
+    "cmd_superagent_publish",
     "cmd_superagent_reject",
     "cmd_superagent_report",
     "cmd_superagent_retry",

@@ -127,6 +127,8 @@ class SuperagentService:
         scheduler: Scheduler | None = None,
         worktree_manager: Any = None,
         job_canceller: Any = None,
+        outbox: Any = None,
+        github: Any = None,
     ) -> None:
         self.store = store
         self.policy = policy
@@ -136,6 +138,10 @@ class SuperagentService:
         # user:“干预执行”+(停下和重试必须真的动到底层排期任务：否则「停下」只是改了个
         # 工单字段，任务还在后台跑；重试会把同一张工单叠成好几个任务一起跑)。
         self.job_canceller = job_canceller
+        # user:“将推送分支和创建 PR 变成可控、可追踪、可重试的确定性操作”+(发布走
+        # EffectOutbox 的幂等键与先查后建，适配器只负责真的调 git / gh)。
+        self.outbox = outbox
+        self.github = github
 
     # ------------------------------------------------------------------ 入口
     async def handle_event(self, event: SourceEvent) -> HandleResult:
@@ -563,6 +569,97 @@ class SuperagentService:
         )
         await self._schedule(updated)
         return await self.get_ticket(ticket_id) or updated
+
+    # ------------------------------------------------------------------ 发布
+    async def publish(
+        self, ticket_id: str, *, title: str = "", body: str = ""
+    ) -> dict[str, Any]:
+        """把工单分支推上去，并按授权决定要不要开 PR。
+
+        user:“未获得明确授权时不推送、不创建 PR”“PR 链接和状态回写工单，用户可在界面
+        直接查看”“网络超时后能够核对实际结果并安全重试”+(幂等键按 工单+分支+基线 固定，
+        重复调用不会建第二个 PR；超时后 EffectOutbox 会先查远端再决定要不要创建)。
+        """
+        ticket = await self.get_ticket(ticket_id)
+        if ticket is None:
+            raise LookupError(f"ticket not found: {ticket_id}")
+        if ticket.mandate.revoked:
+            raise PermissionError("mandate revoked")
+        if self.outbox is None or self.github is None:
+            raise RuntimeError("publishing is not configured")
+
+        branch = ""
+        for item in await self.list_assignments(ticket_id):
+            if item.branch:
+                branch = item.branch
+        if not branch:
+            raise ValueError("ticket has no branch to publish")
+
+        base = ticket.mandate.base_branch or "main"
+        payload = {
+            "repo_root": ticket.mandate.repo_root,
+            "branch": branch,
+            "base_branch": base,
+            "title": title or ticket.title or ticket.ticket_id,
+            "body": body,
+        }
+        outcome: dict[str, Any] = {"branch": branch, "base_branch": base}
+
+        if ticket.mandate.can_push:
+            effect = await self.outbox.ensure(
+                ticket_id=ticket_id,
+                kind="push",
+                idempotency_key=f"{ticket_id}:push:{branch}",
+                payload=payload,
+            )
+            delivered = await self.outbox.deliver(effect, self.github)
+            outcome["push"] = delivered.to_dict()
+        else:
+            outcome["push"] = {"status": "skipped", "reason": "push-not-authorized"}
+
+        push_ok = str(outcome["push"].get("status") or "") in {"done", "skipped"}
+        if ticket.mandate.can_create_pr and push_ok:
+            effect = await self.outbox.ensure(
+                ticket_id=ticket_id,
+                kind="create_pr",
+                idempotency_key=f"{ticket_id}:pr:{base}:{branch}",
+                payload=payload,
+            )
+            delivered = await self.outbox.deliver(effect, self.github)
+            outcome["pr"] = delivered.to_dict()
+        elif ticket.mandate.can_create_pr:
+            outcome["pr"] = {"status": "skipped", "reason": "push-failed"}
+        else:
+            outcome["pr"] = {"status": "skipped", "reason": "pr-not-authorized"}
+
+        pr_url = str(outcome["pr"].get("remote_ref") or "") if isinstance(outcome.get("pr"), dict) else ""
+        if pr_url:
+            try:
+                status = await self.github.pr_status(
+                    pr_url, repo_root=ticket.mandate.repo_root
+                )
+                outcome["pr_state"] = str(status.get("state") or "")
+                outcome["pr_number"] = status.get("number")
+            except Exception as exc:  # 状态回读失败不该让发布结果丢失
+                outcome["pr_state_error"] = f"{type(exc).__name__}: {exc}"
+
+        merged = dict(ticket.result or {})
+        merged["publish"] = outcome
+        if pr_url:
+            merged["pr_url"] = pr_url
+            if outcome.get("pr_state"):
+                merged["pr_state"] = outcome["pr_state"]
+        await self._patch_ticket(ticket_id, result=merged)
+        await self._audit(
+            f"publish:{ticket_id}",
+            {
+                "branch": branch,
+                "push": str(outcome["push"].get("status") or ""),
+                "pr": str(outcome.get("pr", {}).get("status") or ""),
+                "pr_url": pr_url,
+            },
+        )
+        return outcome
 
     # ------------------------------------------------------------------ 内部
     async def _cancel_job(self, job_id: str) -> bool:
