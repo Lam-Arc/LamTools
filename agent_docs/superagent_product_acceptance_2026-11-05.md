@@ -116,6 +116,7 @@
 1. **启动时回收失效所有权**：`release_orphaned_owners` 在启动时、reaper 之前、Arrange 起跑之前跑一遍。只看持久化状态仍是 `running`/`waiting`/`interrupting` 的会话；占用者是别的活进程就一律跳过；剩下的用 `store.patch` 的事务读改写转成 `cancelled`，仍然是对 revision 的条件更新。旧 revision 写入限制一点没放宽，两个运行时照样不能交叉写。
 2. **顺序是修复的一部分**：先回收，再让既有 reaper 收尾快照。反过来的话，被死进程占着的会话会被 reaper 当成「别的进程还在跑」直接跳过。
 3. **找到并修掉真正的第二个写入者**：真机复现显示，重启后 Arrange 恢复工单、内核持有 revision 27，而 member-wake 在同一会话上又起了一次回合，把 revision 推到 29，内核的下一次检查点保存只能被拒。根因是 member-wake 先写标记、后问「线程忙不忙」。现在两条唤醒路径都在任何写入之前先读快照的活动回合，忙就什么都不做。
+4. **回收不能吞掉待审批**：第一版回收把「停在工具审批上」的会话也当成失效占用，直接取消了，结果审批卡片在重启后消失，`test_pending_approval_survives_an_app_restart_over_the_wire` 当场变红。已改成跳过带 `pending_approval` 或 `pending_waiting_request` 的行，和既有 reaper 的豁免保持一致。
 
 ### 验证
 
@@ -127,6 +128,7 @@
 | 用户重试 | 工单从 blocked 回到 running 并跑完，进入 review |
 | 独立复核 | 25 个测试通过；`sort_by='word'` 与 `sort_by='count'` 排序都正确 |
 | 人工验收 | 关闭为已交付 |
+| 待审批不受影响 | 停在工具审批上的会话在重启后仍然可回答（5 条回收用例覆盖，含新增的一条） |
 
 ## 五之三、GitHub PR 适配器
 
