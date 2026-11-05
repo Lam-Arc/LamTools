@@ -916,6 +916,19 @@ class CoreCheckpointArtifactRef(CoreDbBase):
     revision_id: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+def _has_pending_decision(payload: Any, pending_payload: Any) -> bool:
+    """Whether a session is parked on something only the user can answer."""
+    sources = [payload.get("metadata") if isinstance(payload, dict) else None, pending_payload]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if source.get("pending_approval"):
+            return True
+        if source.get("pending_waiting_request"):
+            return True
+    return False
+
+
 class SqlAlchemyRuntimeStateStore:
     def __init__(
         self,
@@ -1386,6 +1399,10 @@ class SqlAlchemyRuntimeStateStore:
         for row in rows:
             payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
             metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+            # user:“人工审批”+(停在用户决定上的会话不算失效占用：审批是持久的，重启之后
+            # 用户还要能回答它。回收它会连审批一起清掉，等于把用户正要点的卡片吞了)。
+            if _has_pending_decision(payload, row.pending_approval_json):
+                continue
             owner = read_owner(metadata)
             # 另一个进程还活着并且正握着这个会话：绝不回收。
             if owner and not is_own_token(owner) and owner_is_live(owner):

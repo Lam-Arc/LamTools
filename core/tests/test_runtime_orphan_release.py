@@ -138,3 +138,31 @@ async def test_release_does_not_loosen_the_stale_writer_guard(tmp_path: Path) ->
             await db.runtime_state_store.save(second)
     finally:
         await db.close()
+
+@pytest.mark.asyncio
+async def test_release_keeps_a_session_parked_on_a_pending_approval(tmp_path: Path) -> None:
+    """停在用户决定上的会话不是失效占用：审批要在重启后仍然可回答。"""
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        state = RuntimeState(session_id="thread-waiting")
+        state.status = "waiting"
+        state.metadata["pending_approval"] = {
+            "request_id": "req-1",
+            "tool_call": {"id": "call-1", "name": "write_file"},
+        }
+        await db.runtime_state_store.save_checkpoint(state, [])
+        await _set_owner(
+            db,
+            "thread-waiting",
+            {"pid": 999_999_999, "host": "testhost", "started_at": 0.0, "heartbeat_at": 0.0},
+        )
+
+        released = await db.runtime_state_store.release_orphaned_owners()
+
+        assert released == 0
+        after = await db.runtime_state_store.get("thread-waiting")
+        assert after is not None
+        assert after.status == "waiting"
+        assert after.metadata.get("pending_approval"), "审批被回收清掉了"
+    finally:
+        await db.close()

@@ -107,9 +107,55 @@
 
 它自己做的：读代码摸清现状、写计划、拆解、委派子任务、改代码、跑测试验证、处理失败、按四段汇报、把改动提交到工单分支且不推送。
 
+## 五之二、崩溃恢复（第二轮）
+
+上一轮留下的问题是：强杀之后重启，工单会带着 `RuntimeStateConflictError` 落到 blocked，用户重试也起不来。这一轮把它做完了。
+
+### 做了什么
+
+1. **启动时回收失效所有权**：`release_orphaned_owners` 在启动时、reaper 之前、Arrange 起跑之前跑一遍。只看持久化状态仍是 `running`/`waiting`/`interrupting` 的会话；占用者是别的活进程就一律跳过；剩下的用 `store.patch` 的事务读改写转成 `cancelled`，仍然是对 revision 的条件更新。旧 revision 写入限制一点没放宽，两个运行时照样不能交叉写。
+2. **顺序是修复的一部分**：先回收，再让既有 reaper 收尾快照。反过来的话，被死进程占着的会话会被 reaper 当成「别的进程还在跑」直接跳过。
+3. **找到并修掉真正的第二个写入者**：真机复现显示，重启后 Arrange 恢复工单、内核持有 revision 27，而 member-wake 在同一会话上又起了一次回合，把 revision 推到 29，内核的下一次检查点保存只能被拒。根因是 member-wake 先写标记、后问「线程忙不忙」。现在两条唤醒路径都在任何写入之前先读快照的活动回合，忙就什么都不做。
+
+### 验证
+
+| 步骤 | 结果 |
+| --- | --- |
+| 运行中整棵进程树强杀 | `taskkill /T /F`，4 个进程全部终止 |
+| 重启 | 日志 `released 2 orphaned run(s) reason=owner_gone`，随后 `recovered 5 stale active turn(s)` |
+| 重启后执行 | 同类冲突计数 **0** |
+| 用户重试 | 工单从 blocked 回到 running 并跑完，进入 review |
+| 独立复核 | 25 个测试通过；`sort_by='word'` 与 `sort_by='count'` 排序都正确 |
+| 人工验收 | 关闭为已交付 |
+
+## 五之三、GitHub PR 适配器
+
+### 做了什么
+
+- `superagent/github.py`：`GithubCliAdapter` 实现既有的 `EffectAdapter` 契约。`lookup` 只读，`perform` 才写。认证完全交给本机 `gh`，没有第二套 GitHub 客户端，也没有在这里处理 token。
+- 推送的 `lookup` 比对远端 head 与本地 HEAD，分支停在旧提交上仍会推。
+- 开 PR 的 `lookup` 按 仓库 + 源分支 + 目标分支 查 `gh pr list`，有就复用。创建失败时会再查一次，超时但远端已成功的情况靠这一步收敛。
+- `SuperagentService.publish` 复用既有 `EffectOutbox`：幂等键是 工单+分支，PR 再加基线。重复调用返回同一个 PR，不会建第二个。授权只来自工单的 mandate，不来自这次请求；没授权就不创建 effect，结果里记 `skipped` 和原因。
+- PR 链接与状态回写工单，界面直接显示，并在授权时给一个「推送并开 PR」按钮。
+
+### 真实仓库验证
+
+私有仓库 `Laaaaaaaam/sunday-superagent-e2e`。
+
+| 步骤 | 结果 |
+| --- | --- |
+| 任务执行 | 工单实现 `slugify` 与 `python -m slug`，9 个测试通过，`Hello, World!` 输出 `hello-world` |
+| 人工验收 | 进入 review |
+| 推送 | `origin/ticket/tkt_501bdb064b4bbf81`，远端分支提交 `5ebb878` 与本地一致 |
+| 创建 PR | `https://github.com/Laaaaaaaam/sunday-superagent-e2e/pull/1`，`gh pr list` 核对 head/base 正确，状态 OPEN |
+| 回写工单 | `pr_url` 与 `pr_state=OPEN` 落在工单结果里 |
+| 重复请求去重 | 再发布一次返回同一个 PR，`attempts=1`，远端 PR 数量仍为 **1** |
+
+另外 10 条单元用例覆盖适配器行为、未授权不动作、幂等、超时后先查后建。
+
 ## 六、还没做的
 
-- **GitHub 工作流**：没有专门的 PR / 评论副作用执行器。`effects.py` 里的幂等 outbox 还在，但没有接远端适配器。当前它靠 `run_command` 调 `git` / `gh`，受工单的推送 / PR 权限约束。要真正做成「一键开 PR」还差一个 GitHub 适配器。
-- **强杀后的自动续跑**：能停得干净（工单带原因落到 blocked、工作不丢），但不能自动接着跑。要自动续跑得让运行时在启动时释放已死进程的会话占用，那会牵动「两个运行时不得交叉写」的守卫，本次明确没做。
+- **GitHub 评论与合并**：只做了推送与开 PR。评论、合并、发布仍然是模型自己敲命令，没有对应的副作用适配器。
+- **强杀后的自动续跑**：已修，见第五之二节。现在重启后 Arrange 会自己接上，冲突为 0；即使用户手动点「再跑一次」也能起来。
 - **`ask` 档的逐条审批**：明确不支持，没有做后台审批卡。
 - **观察器驱动**：Observer 已接通（事件触发排期），但这次没有做「外部事件自动建工单」的端到端验收，只验证了用户直接交付。
