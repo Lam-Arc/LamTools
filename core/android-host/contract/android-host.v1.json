@@ -536,6 +536,31 @@
         }
       ],
       "expect": []
+    },
+    {
+      "name": "a closure with no tool call is named after its request",
+      "why": "the resume sweep settles aged-out cards and carries a request id but no tool call; naming it after an empty call gave every closure one shared row, which the device showed as thread:::tool eight times",
+      "given": [
+        {
+          "thread_id": "th",
+          "method": "item/approval_resolved",
+          "seq": 0,
+          "event_id": "ev-sweep-nocall",
+          "payload": { "request_id": "req-only", "decision": "expired" }
+        }
+      ],
+      "expect": [
+        {
+          "seq": "$absent",
+          "event_id": "ev-sweep-nocall:req-only",
+          "payload": {
+            "kind": "approval_response",
+            "turn_id": "",
+            "item_id": "req-only",
+            "payload": { "request_id": "req-only" }
+          }
+        }
+      ]
     }
   ]
 }

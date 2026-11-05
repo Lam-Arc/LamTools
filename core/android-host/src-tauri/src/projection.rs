@@ -359,9 +359,20 @@ impl Projector {
                         declared
                     }
                 };
+                // A closure without a call id settles a card, not a tool row: the resume
+                // sweep reports what aged out, and those events carry a request id but no
+                // tool call. Naming them after an empty call produced `thread:::tool`, a
+                // single id that eight closures shared, so the transcript showed one row
+                // where eight cards had been settled. The desktop core names a closure
+                // after its request id.
+                let item_id = if call.is_empty() {
+                    request.clone()
+                } else {
+                    self.row_of(&call).unwrap_or_else(|| tool_item(&call))
+                };
                 (
                     "approval_response",
-                    self.row_of(&call).unwrap_or_else(|| tool_item(&call)),
+                    item_id,
                     "completed",
                     json!({
                         "type": "serverRequest",
