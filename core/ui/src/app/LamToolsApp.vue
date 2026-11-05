@@ -1751,15 +1751,26 @@ async function uploadArtifactFiles(folder: string): Promise<void> {
   const query = folder ? `?folder=${encodeURIComponent(folder)}` : ''
   const failures: string[] = []
   for (const file of files) {
-    const multipart = await encodeMultipartFile(file)
+    // user:“优先复用…文件操作”+(手机的选择器交回的是沙盒路径而不是 File，桌面走 multipart；
+    // 落点相同，都是项目里的「资料/」，所以这里只分开发字节的方式)。
+    const nativePath = (file as File & { path?: string }).path
+    const multipart = nativePath ? null : await encodeMultipartFile(file as File)
     try {
-      const response = await appRuntime.request({
-        kind: 'http',
-        method: 'POST',
-        path: `/projects/${encodeURIComponent(projectId)}/artifacts${query}`,
-        headers: { 'Content-Type': multipart.contentType },
-        body: multipart.body,
-      })
+      const response = await appRuntime.request(nativePath
+        ? {
+            kind: 'http',
+            method: 'POST',
+            path: `/projects/${encodeURIComponent(projectId)}/artifacts/reference`,
+            headers: { 'Content-Type': 'application/json' },
+            body: new TextEncoder().encode(JSON.stringify({ path: nativePath, folder })),
+          }
+        : {
+            kind: 'http',
+            method: 'POST',
+            path: `/projects/${encodeURIComponent(projectId)}/artifacts${query}`,
+            headers: { 'Content-Type': multipart!.contentType },
+            body: multipart!.body,
+          })
       if (response.status < 200 || response.status >= 300) {
         throw new Error(new TextDecoder().decode(response.body) || `HTTP ${response.status}`)
       }

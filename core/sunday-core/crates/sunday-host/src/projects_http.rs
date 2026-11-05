@@ -32,6 +32,11 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// The same reader, for `Projects`' own helpers.
+pub(crate) fn query_value_public(query: &str, key: &str) -> Option<String> {
+    query_value(query, key)
+}
+
 fn query_value(query: &str, key: &str) -> Option<String> {
     for pair in query.split('&') {
         let (name, value) = match pair.split_once('=') {
@@ -92,6 +97,66 @@ impl Projects {
                 let relative = query_value(query, "path").unwrap_or_default();
                 self.browse(&relative)
             }
+
+            // user:“先调查现有 Windows 功能，最大化复用成熟实现，再补齐 Rust Core 与 Android
+            // 平台的必要接口”+(界面显示引用、读取预览、用系统打开都走这三个端点，桌面侧就是
+            // 它们；这里补同一份语义，手机上的预览才真的出图出文)。
+            ("GET", ["files", "resolve-reference"]) => {
+                let raw = query_value(query, "path").unwrap_or_default();
+                match self.reference_root(query) {
+                    Err(reply) => reply,
+                    Ok(files) => match crate::file_refs::resolve(&files, &raw) {
+                        Ok(path) => Reply::json(
+                            200,
+                            serde_json::json!({
+                                "path": path.to_string_lossy().replace('\\', "/"),
+                            }),
+                        ),
+                        Err(error) => Reply::json(
+                            error.status(),
+                            serde_json::json!({ "detail": error.detail() }),
+                        ),
+                    },
+                }
+            }
+
+            ("GET", ["files", "read-reference"]) => {
+                let raw = query_value(query, "path").unwrap_or_default();
+                match self.reference_root(query) {
+                    Err(reply) => reply,
+                    Ok(files) => match crate::file_refs::resolve(&files, &raw) {
+                        Ok(path) => match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                let name = path
+                                    .file_name()
+                                    .and_then(|value| value.to_str())
+                                    .unwrap_or_default();
+                                Reply {
+                                    status: 200,
+                                    body: bytes,
+                                    content_type: crate::file_refs::mime_for_name(name),
+                                }
+                            }
+                            Err(error) => Reply::json(
+                                404,
+                                serde_json::json!({ "detail": format!("原文件不存在: {error}") }),
+                            ),
+                        },
+                        Err(error) => Reply::json(
+                            error.status(),
+                            serde_json::json!({ "detail": error.detail() }),
+                        ),
+                    },
+                }
+            }
+
+            // Opening a file with whatever the system installed is the host's job, and
+            // this core has no window manager. Answering "opened" would leave a button
+            // that does nothing; the screen can show this instead.
+            ("POST", ["files", "open-reference"]) => Reply::json(
+                501,
+                serde_json::json!({ "detail": "这个核心不负责用系统程序打开文件" }),
+            ),
 
             // The sidebar loads every session once, grouped by project, so this is the
             // endpoint that decides whether the app looks empty or alive.
@@ -328,6 +393,20 @@ impl Projects {
                 }
             }
 
+            // user:“优先复用…文件操作”+(桌面用 multipart 传字节；手机的选择器只交回沙盒
+            // 路径，所以这条只收路径，落到同一个「资料/」，资料库两边看到同一批文件)。
+            ("POST", ["projects", id, "artifacts", "reference"]) => {
+                let payload = json_body(body);
+                let path = string_field(&payload, "path").unwrap_or_default();
+                if path.trim().is_empty() {
+                    return Reply::error(400, "path is required");
+                }
+                let folder = string_field(&payload, "folder")
+                    .or_else(|| query_value(query, "folder"))
+                    .unwrap_or_default();
+                self.upload_artifact(id, &folder, &path)
+            }
+
             ("GET", ["projects", id, "files"]) => {
                 let relative = query_value(query, "path").unwrap_or_default();
                 self.list_files(id, &relative)
@@ -358,9 +437,109 @@ impl Projects {
                 self.write_agents_md(id, &content)
             }
 
-            // The plan library is not part of this host yet. Serving an empty one keeps a
-            // missing feature from reading as a broken project, and the shape matches.
-            (_, ["projects", id, "plan-library", ..]) => self.plan_library(id),
+            // user:“优先复用 Windows Sunday 已经验证的功能、Library、预览器、文件操作与 UI”
+            // +(资料库是项目里「方案/」下的普通 markdown，桌面侧早就这么做；这里补齐同一批
+            // 文件操作，界面不用为手机另开一套)。
+            ("GET", ["projects", id, "plan-library"]) => match self.plan_root(id) {
+                Err(reply) => reply,
+                Ok(root) => Reply::json(
+                    200,
+                    serde_json::json!({
+                        "dir": crate::plan_library::DIRNAME,
+                        "entries": crate::plan_library::scan(&root),
+                        "folders": crate::plan_library::folders(&root),
+                    }),
+                ),
+            },
+
+            ("POST", ["projects", id, "plan-library", "files"]) => {
+                let payload = json_body(body);
+                let name = string_field(&payload, "name").unwrap_or_default();
+                let folder = string_field(&payload, "folder").unwrap_or_default();
+                match self.plan_root(id) {
+                    Err(reply) => reply,
+                    Ok(root) => match crate::plan_library::create_file(&root, &name, &folder) {
+                        Ok(entry) => Reply::json(200, serde_json::json!({ "entry": entry })),
+                        Err(error) => Reply::error(400, error),
+                    },
+                }
+            }
+
+            ("POST", ["projects", id, "plan-library", "folders"]) => {
+                let payload = json_body(body);
+                let path = string_field(&payload, "path").unwrap_or_default();
+                match self.plan_root(id) {
+                    Err(reply) => reply,
+                    Ok(root) => match crate::plan_library::create_folder(&root, &path) {
+                        Ok(folder) => Reply::json(200, serde_json::json!({ "folder": folder })),
+                        Err(error) => Reply::error(400, error),
+                    },
+                }
+            }
+
+            ("DELETE", ["projects", id, "plan-library", "folders"]) => {
+                let path = query_value(query, "path").unwrap_or_default();
+                match self.plan_root(id) {
+                    Err(reply) => reply,
+                    Ok(root) => match crate::plan_library::delete_folder(&root, &path) {
+                        Ok(deleted) => Reply::json(200, serde_json::json!({ "deleted": deleted })),
+                        Err(error) => Reply::error(400, error),
+                    },
+                }
+            }
+
+            ("POST", ["projects", id, "plan-library", "rename"]) => {
+                let payload = json_body(body);
+                let path = string_field(&payload, "path").unwrap_or_default();
+                let name = string_field(&payload, "name").unwrap_or_default();
+                match self.plan_root(id) {
+                    Err(reply) => reply,
+                    Ok(root) => match crate::plan_library::rename(&root, &path, &name) {
+                        Ok(entry) => Reply::json(200, serde_json::json!({ "entry": entry })),
+                        Err(error) => Reply::error(400, error),
+                    },
+                }
+            }
+
+            ("POST", ["projects", id, "plan-library", "move"]) => {
+                let payload = json_body(body);
+                let path = string_field(&payload, "path").unwrap_or_default();
+                let folder = string_field(&payload, "folder").unwrap_or_default();
+                match self.plan_root(id) {
+                    Err(reply) => reply,
+                    Ok(root) => match crate::plan_library::move_to(&root, &path, &folder) {
+                        Ok(entry) => Reply::json(200, serde_json::json!({ "entry": entry })),
+                        Err(error) => Reply::error(400, error),
+                    },
+                }
+            }
+
+            ("POST", ["projects", id, "plan-library", "favorite"]) => {
+                let payload = json_body(body);
+                let path = string_field(&payload, "path").unwrap_or_default();
+                let starred = payload
+                    .get("favorite")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                match self.plan_root(id) {
+                    Err(reply) => reply,
+                    Ok(root) => match crate::plan_library::favorite(&root, &path, starred) {
+                        Ok(entry) => Reply::json(200, serde_json::json!({ "entry": entry })),
+                        Err(error) => Reply::error(400, error),
+                    },
+                }
+            }
+
+            ("DELETE", ["projects", id, "plan-library"]) => {
+                let path = query_value(query, "path").unwrap_or_default();
+                match self.plan_root(id) {
+                    Err(reply) => reply,
+                    Ok(root) => match crate::plan_library::delete_file(&root, &path) {
+                        Ok(deleted) => Reply::json(200, serde_json::json!({ "deleted": deleted })),
+                        Err(error) => Reply::error(400, error),
+                    },
+                }
+            }
 
             _ => Reply::error(
                 404,
@@ -413,6 +592,81 @@ mod tests {
             value["project"]["id"].as_str().unwrap().to_owned(),
             value["session"]["id"].as_str().unwrap().to_owned(),
         )
+    }
+
+    /// The preview chain the shared interface already speaks: a reference resolves, its
+    /// bytes come back with a type a preview can use, and opening it names who owns that.
+    #[test]
+    fn a_file_reference_resolves_and_reads_through_the_routes() {
+        let fixture = fixture();
+        let (project, _) = create(&fixture, "演示");
+        let write = format!("/projects/{project}/files/content");
+        let written = fixture.projects.handle(
+            "PUT",
+            &write,
+            "path=notes.md",
+            &serde_json::json!({ "content": "# hi" }).to_string(),
+        );
+        assert_eq!(written.status, 200);
+
+        let root = body(&fixture.projects.handle("GET", "/projects", "", ""))["projects"][0]
+            ["work_root"]
+            .as_str()
+            .expect("the project has no work root")
+            .to_owned();
+        let query = format!("path=workspace%3A%2F%2Fnotes.md&work_root={root}");
+
+        let resolved = fixture
+            .projects
+            .handle("GET", "/files/resolve-reference", &query, "");
+        assert_eq!(
+            resolved.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&resolved.body)
+        );
+        assert!(
+            body(&resolved)["path"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("notes.md"),
+            "{}",
+            String::from_utf8_lossy(&resolved.body)
+        );
+
+        let read = fixture
+            .projects
+            .handle("GET", "/files/read-reference", &query, "");
+        assert_eq!(read.status, 200);
+        assert_eq!(read.body, b"# hi");
+        assert_eq!(read.content_type, "text/markdown");
+
+        let open = fixture.projects.handle(
+            "POST",
+            "/files/open-reference",
+            "",
+            &serde_json::json!({ "path": "notes.md" }).to_string(),
+        );
+        assert_eq!(open.status, 501, "the host opens files, not this core");
+    }
+
+    /// A working directory outside the sandbox is refused: a reference is not a grant.
+    #[test]
+    fn a_reference_root_outside_the_sandbox_is_refused() {
+        let fixture = fixture();
+        let (_, _) = create(&fixture, "演示");
+        let reply = fixture.projects.handle(
+            "GET",
+            "/files/resolve-reference",
+            "path=notes.md&work_root=/sdcard",
+            "",
+        );
+        assert!(
+            reply.status >= 400,
+            "{} {}",
+            reply.status,
+            String::from_utf8_lossy(&reply.body)
+        );
     }
 
     /// The attachment routes the shared interface already calls.
@@ -661,6 +915,101 @@ mod tests {
 
     /// The plan library is empty here, but it must answer with the documented shape.
     #[test]
+    /// The library round trip the interface performs: create, list, star, delete. Every
+    /// step is a file operation on the project, so the same folder is readable from the
+    /// desktop and from the phone.
+    #[test]
+    fn a_plan_is_created_listed_starred_and_deleted_through_the_routes() {
+        let fixture = fixture();
+        let (project, _) = create(&fixture, "演示");
+        let base = format!("/projects/{project}/plan-library");
+
+        let created = fixture.projects.handle(
+            "POST",
+            &format!("{base}/files"),
+            "",
+            &serde_json::json!({ "name": "第一期", "folder": "" }).to_string(),
+        );
+        assert_eq!(
+            created.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&created.body)
+        );
+        assert_eq!(body(&created)["entry"]["title"], "第一期");
+
+        let listed = body(&fixture.projects.handle("GET", &base, "", ""));
+        assert_eq!(listed["dir"], "方案");
+        assert_eq!(listed["entries"].as_array().unwrap().len(), 1);
+
+        let starred = fixture.projects.handle(
+            "POST",
+            &format!("{base}/favorite"),
+            "",
+            &serde_json::json!({ "path": "方案/第一期.md", "favorite": true }).to_string(),
+        );
+        assert_eq!(body(&starred)["entry"]["favorite"], true);
+
+        let deleted = fixture
+            .projects
+            .handle("DELETE", &base, "path=方案%2F第一期.md", "");
+        assert_eq!(deleted.status, 200);
+        let after = body(&fixture.projects.handle("GET", &base, "", ""));
+        assert_eq!(after["entries"].as_array().unwrap().len(), 0);
+    }
+
+    /// The 资料库 upload on a phone: the picker hands over a sandbox path, and the file
+    /// becomes a real file in the project's 「资料/」.
+    #[test]
+    fn an_artifact_is_copied_into_the_materials_folder() {
+        let fixture = fixture();
+        let (project, _) = create(&fixture, "演示");
+        // The picker stages files inside the app sandbox, which is this fixture root.
+        let picked = fixture.root.join("picked");
+        std::fs::create_dir_all(&picked).unwrap();
+        let source = picked.join("参考.txt");
+        std::fs::write(&source, b"material").unwrap();
+
+        let reply = fixture.projects.handle(
+            "POST",
+            &format!("/projects/{project}/artifacts/reference"),
+            "",
+            &serde_json::json!({ "path": source.to_string_lossy(), "folder": "" }).to_string(),
+        );
+        assert_eq!(reply.status, 200, "{}", String::from_utf8_lossy(&reply.body));
+        let record = body(&reply);
+        assert_eq!(record["name"], "参考.txt");
+        assert_eq!(record["path"], "资料/参考.txt");
+        assert_eq!(record["size"], 8);
+
+        let root = body(&fixture.projects.handle("GET", "/projects", "", ""))["projects"][0]
+            ["work_root"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let stored = std::path::PathBuf::from(root).join("资料/参考.txt");
+        assert_eq!(std::fs::read(&stored).unwrap(), b"material");
+
+        // The same bytes again is the same upload, not a second copy.
+        let again = fixture.projects.handle(
+            "POST",
+            &format!("/projects/{project}/artifacts/reference"),
+            "",
+            &serde_json::json!({ "path": source.to_string_lossy() }).to_string(),
+        );
+        assert_eq!(body(&again)["path"], "资料/参考.txt");
+
+        // A different file with the same name keeps both.
+        std::fs::write(&source, b"other").unwrap();
+        let renamed = fixture.projects.handle(
+            "POST",
+            &format!("/projects/{project}/artifacts/reference"),
+            "",
+            &serde_json::json!({ "path": source.to_string_lossy() }).to_string(),
+        );
+        assert_eq!(body(&renamed)["path"], "资料/参考-2.txt");
+    }
+
     fn the_plan_library_answers_with_an_empty_library() {
         let fixture = fixture();
         let (project, _) = create(&fixture, "one");

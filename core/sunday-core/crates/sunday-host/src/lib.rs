@@ -6,8 +6,10 @@
 
 pub mod app_server;
 pub mod attachments;
+pub mod file_refs;
 pub mod lifecycle;
 pub mod lock;
+pub mod plan_library;
 pub mod policy;
 pub mod projects;
 pub mod projects_http;

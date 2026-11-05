@@ -354,6 +354,121 @@ impl Projects {
         Ok(existing.join(rest))
     }
 
+    /// The directory a reference is resolved against.
+    ///
+    /// The interface sends the work root it already knows. A directory outside this app's
+    /// sandbox is refused rather than honoured: a reference is not a grant, and a phone
+    /// must not read `/sdcard` because a reply mentioned a path there.
+    /// Copies a file the user picked into the project's `资料/` folder.
+    ///
+    /// user:“优先复用 Windows Sunday 已经验证的功能…文件操作”+(桌面侧上传就是落到「资料/」
+    /// 下的真实文件；手机上的选择器交回的是沙盒路径而不是 File，所以这里收路径，落到同一个
+    /// 位置，资料库两边看到的是同一批文件)。
+    pub(crate) fn upload_artifact(
+        &self,
+        project_id: &str,
+        folder: &str,
+        source: &str,
+    ) -> Reply {
+        let Some(project) = self.find(project_id) else {
+            return Reply::error(404, format!("no such project: {project_id}"));
+        };
+        let root = match self.root.canonicalize() {
+            Ok(root) => root,
+            Err(error) => return Reply::error(500, format!("cannot resolve the workspace: {error}")),
+        };
+        let origin = match std::path::Path::new(source).canonicalize() {
+            Ok(path) => path,
+            Err(error) => return Reply::error(400, format!("cannot read {source}: {error}")),
+        };
+        if !origin.starts_with(&root) {
+            return Reply::error(400, "this file is outside the directory this app may read");
+        }
+        let metadata = match std::fs::metadata(&origin) {
+            Ok(metadata) => metadata,
+            Err(error) => return Reply::error(400, format!("cannot stat: {error}")),
+        };
+        if metadata.is_dir() {
+            return Reply::error(400, "一个文件夹不能作为资料上传");
+        }
+        const LIMIT: u64 = 50 * 1024 * 1024;
+        if metadata.len() > LIMIT {
+            return Reply::error(
+                413,
+                format!("文件超过 {} MB", LIMIT / (1024 * 1024)),
+            );
+        }
+        let name = origin
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(safe_segment)
+            .unwrap_or_else(|| "文件".to_owned());
+        let inside = match clean_folder(folder) {
+            Ok(inside) => inside,
+            Err(reason) => return Reply::error(400, reason),
+        };
+        let library = std::path::PathBuf::from(&project.work_root).join("资料");
+        let directory = if inside.is_empty() {
+            library.clone()
+        } else {
+            library.join(&inside)
+        };
+        if let Err(error) = std::fs::create_dir_all(&directory) {
+            return Reply::error(500, format!("cannot create {}: {error}", directory.display()));
+        }
+        let target = match unique_target(&directory, &name, &origin) {
+            Ok(target) => target,
+            Err(reason) => return Reply::error(500, reason),
+        };
+        if let Err(error) = std::fs::copy(&origin, &target) {
+            return Reply::error(500, format!("cannot store: {error}"));
+        }
+        let relative = target
+            .strip_prefix(&library)
+            .map(|value| value.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| name.clone());
+        let stored = target.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+        Reply::json(
+            200,
+            serde_json::json!({
+                "id": format!("资料/{relative}"),
+                "name": stored,
+                "path": format!("资料/{relative}"),
+                "folder": inside,
+                "size": metadata.len(),
+                "mime_type": crate::file_refs::mime_for_name(stored),
+            }),
+        )
+    }
+
+    /// The project's own directory, for the plan library's file operations.
+    pub(crate) fn plan_root(&self, project_id: &str) -> Result<PathBuf, Reply> {
+        self.find(project_id)
+            .map(|project| PathBuf::from(project.work_root))
+            .ok_or_else(|| Reply::error(404, format!("no such project: {project_id}")))
+    }
+
+    pub(crate) fn reference_root(&self, query: &str) -> Result<LocalFiles, Reply> {
+        let root = self.root.canonicalize().map_err(|error| {
+            Reply::error(500, format!("cannot resolve the workspace root: {error}"))
+        })?;
+        let wanted =
+            crate::projects_http::query_value_public(query, "work_root").unwrap_or_default();
+        let base = if wanted.trim().is_empty() {
+            root.clone()
+        } else {
+            let candidate = PathBuf::from(&wanted)
+                .canonicalize()
+                .map_err(|_| Reply::error(404, "项目目录不存在"))?;
+            if !candidate.starts_with(&root) {
+                return Err(Reply::error(403, "项目目录不在这个应用的沙箱里"));
+            }
+            candidate
+        };
+        LocalFiles::with_policy(base, self.policy.clone())
+            .map_err(|error| Reply::error(500, error.to_string()))
+    }
+
     fn files_of(&self, project_id: &str) -> Result<LocalFiles, Reply> {
         let project = self
             .find(project_id)
@@ -543,6 +658,71 @@ impl Projects {
             "updated_at": project.updated_at,
         })
     }
+}
+
+/// Keeps a display name usable as a file name without changing what is shown.
+fn safe_segment(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            control if control.is_control() => '_',
+            other => other,
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').to_owned();
+    if trimmed.is_empty() {
+        "文件".into()
+    } else {
+        trimmed
+    }
+}
+
+/// A folder path under `资料/`, one validated segment at a time.
+fn clean_folder(raw: &str) -> Result<String, String> {
+    let cleaned = raw.trim().replace('\\', "/");
+    let cleaned = cleaned.trim_matches('/');
+    if cleaned.is_empty() {
+        return Ok(String::new());
+    }
+    let segments: Vec<String> = cleaned
+        .split('/')
+        .filter(|segment| !segment.trim().is_empty())
+        .map(safe_segment)
+        .collect();
+    Ok(segments.join("/"))
+}
+
+/// The name to write, without replacing a file the user already has.
+///
+/// Same bytes under the same name is the same upload, so it is written once. Different
+/// bytes get a numbered name instead of overwriting what was there.
+fn unique_target(
+    directory: &std::path::Path,
+    name: &str,
+    origin: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let candidate = directory.join(name);
+    if !candidate.exists() {
+        return Ok(candidate);
+    }
+    if std::fs::read(&candidate).ok() == std::fs::read(origin).ok() {
+        return Ok(candidate);
+    }
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem.to_owned(), format!(".{extension}")),
+        _ => (name.to_owned(), String::new()),
+    };
+    for index in 2..1000 {
+        let next = directory.join(format!("{stem}-{index}{extension}"));
+        if !next.exists() {
+            return Ok(next);
+        }
+        if std::fs::read(&next).ok() == std::fs::read(origin).ok() {
+            return Ok(next);
+        }
+    }
+    Err("同名文件过多，换一个名字再试".into())
 }
 
 fn read_dir_entries(
