@@ -1081,11 +1081,7 @@ mod tests {
         );
         let calls = seen.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert!(
-            calls[0].ends_with("notes.md|text/markdown"),
-            "{}",
-            calls[0]
-        );
+        assert!(calls[0].ends_with("notes.md|text/markdown"), "{}", calls[0]);
     }
 
     fn the_plan_library_answers_with_an_empty_library() {
