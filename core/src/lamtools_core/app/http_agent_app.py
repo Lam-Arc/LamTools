@@ -848,6 +848,7 @@ def create_core_agent_http_app(
                 )
             ),
             scheduler=_schedule_superagent_ticket,
+            job_canceller=arrange_runner.cancel,
             worktree_manager=WorktreeManager(
                 resolved_data_dir / "superagent",
                 allowed_repo_roots=tuple(sorted(_split_env("LAMTOOLS_SUPERAGENT_REPOS"))),

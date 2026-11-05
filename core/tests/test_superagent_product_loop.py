@@ -268,3 +268,35 @@ async def test_unknown_permission_preset_is_rejected(tmp_path: Path) -> None:
     result = await service.submit_goal("随便", repo_root=str(repo), permission_preset="god")
     assert result.status == "rejected"
     assert "invalid-permission-preset" in result.reason
+
+@pytest.mark.asyncio
+async def test_stop_and_retry_really_cancel_the_scheduled_job(tmp_path: Path) -> None:
+    """「停下」和「再跑一次」必须动到底层排期任务，否则任务还在后台跑。"""
+    repo = _make_repo(tmp_path / "repo")
+    service = _service(repo, tmp_path / "data")
+    cancelled: list[str] = []
+    created: list[str] = []
+
+    async def canceller(job_id: str) -> bool:
+        cancelled.append(job_id)
+        return True
+
+    async def scheduler(ticket):
+        await service.begin_execution(ticket.ticket_id)
+        created.append(f"job-{len(created) + 1}")
+        return created[-1]
+
+    service.job_canceller = canceller
+    service.scheduler = scheduler
+
+    result = await service.submit_goal("会被停下的目标", repo_root=str(repo))
+    assert created == ["job-1"]
+
+    stopped = await service.stop(result.ticket_id)
+    assert stopped.stage == "blocked"
+    assert cancelled == ["job-1"], "停下没有取消排期任务"
+
+    retried = await service.retry_ticket(result.ticket_id)
+    assert retried.stage == "running"
+    assert retried.job_id == "job-2"
+    assert cancelled == ["job-1", "job-1"], "重试没有先取消上一轮的任务"

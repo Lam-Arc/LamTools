@@ -126,12 +126,16 @@ class SuperagentService:
         eval_engine: EvalEngine | None = None,
         scheduler: Scheduler | None = None,
         worktree_manager: Any = None,
+        job_canceller: Any = None,
     ) -> None:
         self.store = store
         self.policy = policy
         self.eval_engine = eval_engine or DefaultEvalEngine()
         self.scheduler = scheduler
         self.worktree_manager = worktree_manager
+        # user:“干预执行”+(停下和重试必须真的动到底层排期任务：否则「停下」只是改了个
+        # 工单字段，任务还在后台跑；重试会把同一张工单叠成好几个任务一起跑)。
+        self.job_canceller = job_canceller
 
     # ------------------------------------------------------------------ 入口
     async def handle_event(self, event: SourceEvent) -> HandleResult:
@@ -274,6 +278,10 @@ class SuperagentService:
         return await self._set_stage(ticket_id, "closed", reason=f"rejected:{reason}")
 
     async def stop(self, ticket_id: str) -> Ticket:
+        ticket = await self.get_ticket(ticket_id)
+        if ticket is None:
+            raise LookupError(f"ticket not found: {ticket_id}")
+        await self._cancel_job(ticket.job_id)
         return await self._set_stage(ticket_id, "blocked", reason="stopped-by-user")
 
     async def _set_stage(self, ticket_id: str, stage: TicketStage, *, reason: str) -> Ticket:
@@ -544,6 +552,8 @@ class SuperagentService:
             raise LookupError(f"ticket not found: {ticket_id}")
         if ticket.stage == "running":
             raise ValueError("ticket is still running")
+        # 上一轮的任务可能还挂在排期里；不取消就会和新的这一轮抢同一个工作树。
+        await self._cancel_job(ticket.job_id)
         updated = await self._patch_ticket(
             ticket_id,
             stage="open",
@@ -555,6 +565,20 @@ class SuperagentService:
         return await self.get_ticket(ticket_id) or updated
 
     # ------------------------------------------------------------------ 内部
+    async def _cancel_job(self, job_id: str) -> bool:
+        clean = str(job_id or "").strip()
+        if not clean or self.job_canceller is None:
+            return False
+        try:
+            result = self.job_canceller(clean)
+            if hasattr(result, "__await__"):
+                result = await result
+            return bool(result)
+        except Exception as exc:
+            # 取消失败不能把工单状态卡住；留痕后继续把阶段改对。
+            await self._audit(f"cancel-failed:{clean}", {"reason": str(exc)})
+            return False
+
     async def _prepare_worktree(
         self, ticket: Ticket, *, base_branch: str
     ) -> tuple[str, str]:
