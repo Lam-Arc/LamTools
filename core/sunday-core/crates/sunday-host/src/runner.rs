@@ -107,6 +107,11 @@ pub struct CoreOptions {
     /// Absolute path the tools may touch. Resolved by the host, because only it
     /// knows what the platform's private storage is.
     pub workspace: String,
+    /// Where a particular thread's tools may write, when the host knows better.
+    ///
+    /// A host with projects knows which directory the user is working in; the runner
+    /// does not. `None` keeps `workspace` as the answer for every thread.
+    pub workspace_for: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
     pub host_kind: HostKind,
     pub policy: GrantPolicy,
     /// System prompt for a turn. Hosts differ: a headless server and an app may
@@ -120,6 +125,8 @@ pub struct CoreRunner {
     model: Arc<dyn Model>,
     model_id: String,
     workspace: String,
+    /// Resolved per thread when the host has projects; `workspace` is the fallback.
+    workspace_for: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
     host_kind: HostKind,
     /// Shared so the host can change grants while a turn is running.
     policy: std::sync::Arc<crate::policy::LivePolicy>,
@@ -147,6 +154,7 @@ impl CoreRunner {
             model: options.model,
             model_id: options.model_id,
             workspace: options.workspace,
+            workspace_for: options.workspace_for,
             host_kind: options.host_kind,
             policy: std::sync::Arc::new(crate::policy::LivePolicy::new(options.policy)),
             system: options.system,
@@ -230,9 +238,9 @@ impl CoreRunner {
     /// This is the single list. `tool_catalog` reads it, so a grant can only be offered
     /// for a tool that actually exists, and adding a tool cannot leave the settings
     /// screen behind.
-    fn build_tools(&self) -> Result<Vec<Arc<dyn Tool>>, String> {
+    fn build_tools(&self, workspace: &str) -> Result<Vec<Arc<dyn Tool>>, String> {
         let files = Arc::new(
-            sunday_platform::LocalFiles::new(&self.workspace).map_err(|error| error.to_string())?,
+            sunday_platform::LocalFiles::new(workspace).map_err(|error| error.to_string())?,
         );
         Ok(vec![
             Arc::new(sunday_tools::file_read::ReadFile::new(files.clone())),
@@ -240,9 +248,22 @@ impl CoreRunner {
         ])
     }
 
+    /// Where this thread's tools may write.
+    ///
+    /// A project is a directory the user chose. Writing outside it makes the project
+    /// decorative and leaves the file a reply names unopenable from the transcript, so
+    /// the host's answer wins whenever it has one.
+    fn workspace_for(&self, thread: &str) -> String {
+        self.workspace_for
+            .as_ref()
+            .and_then(|resolve| resolve(thread))
+            .filter(|path| !path.trim().is_empty())
+            .unwrap_or_else(|| self.workspace.clone())
+    }
+
     /// What the settings screen may show, and what it may grant.
     pub fn tool_catalog(&self) -> Vec<ToolDescriptor> {
-        let Ok(tools) = self.build_tools() else {
+        let Ok(tools) = self.build_tools(&self.workspace) else {
             // A workspace that cannot be resolved means no tool can run, so an empty
             // catalogue is the truth rather than an error the screen cannot act on.
             return Vec::new();
@@ -330,7 +351,8 @@ impl TurnRunner for CoreRunner {
         cancel.reset();
         self.set_live(thread_id, true);
 
-        let owned = self.build_tools()?;
+        let workspace = self.workspace_for(thread_id);
+        let owned = self.build_tools(&workspace)?;
         let tools: Vec<&dyn Tool> = owned.iter().map(|tool| tool.as_ref()).collect();
 
         let env = Env {
@@ -508,7 +530,8 @@ impl TurnRunner for CoreRunner {
         };
         let cancel = self.cancel_token(thread_id);
 
-        let owned = self.build_tools()?;
+        let workspace = self.workspace_for(thread_id);
+        let owned = self.build_tools(&workspace)?;
         let tools: Vec<&dyn Tool> = owned.iter().map(|tool| tool.as_ref()).collect();
         let env = Env {
             store: &self.store,

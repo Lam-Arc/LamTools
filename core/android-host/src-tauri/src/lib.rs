@@ -107,7 +107,9 @@ pub struct CoreState {
     runner: Arc<CoreRunner>,
     data_dir: std::path::PathBuf,
     /// Projects, sessions and their files, served to the shared UI over `core_http`.
-    projects: sunday_host::projects::Projects,
+    ///
+    /// Shared with the runner, which asks it where a session's files belong.
+    projects: Arc<sunday_host::projects::Projects>,
     /// What the operating system reported, and what it is allowed to claim.
     lifecycle: lifecycle::Lifecycle,
     /// Turns the runner's events into the projection the shared UI renders.
@@ -336,11 +338,24 @@ pub fn run() {
             // of a client that would send the key anyway.
             let model = provider::build_model(&data_dir, &cfg)?;
 
+            // Projects live under the same workspace the runner uses, so a file the
+            // agent writes is a file the user can open, and the boundary is one
+            // directory. Built before the runner because the runner asks it where a
+            // session's files belong: a turn in project `demo` must write in `demo`,
+            // not in the directory every session shares.
+            let projects = Arc::new(sunday_host::projects::Projects::new(
+                &data_dir,
+                &workspace_path,
+            ));
+            let projects_for_runner = Arc::clone(&projects);
             let runner = Arc::new(CoreRunner::new(CoreOptions {
                 store,
                 model,
                 model_id: cfg.model_id.clone(),
                 workspace: workspace.to_string_lossy().to_string(),
+                workspace_for: Some(Arc::new(move |thread: &str| {
+                    projects_for_runner.work_root_for_session(thread)
+                })),
                 host_kind: sunday_protocol::HostKind::Android,
                 // Reads are fine; writes and deletes ask. The user opts specific
                 // tools in from the UI, one at a time.
@@ -360,9 +375,6 @@ pub fn run() {
                 data_dir.display(),
                 lifecycle.instance()
             );
-            // Projects live under the same workspace the runner uses, so a file the agent
-            // writes is a file the user can open, and the boundary is one directory.
-            let projects = sunday_host::projects::Projects::new(&data_dir, &workspace_path);
             app.manage(Arc::new(CoreState {
                 session,
                 runner,

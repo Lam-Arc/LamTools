@@ -142,6 +142,24 @@ impl Projects {
         self.load().projects.into_iter().find(|item| item.id == id)
     }
 
+    /// Where a session's files belong: the work root of the project it was opened in.
+    ///
+    /// The runner needs this so a turn's tools write where the user is looking. Without
+    /// it every session shares one process-wide directory, a project becomes decorative,
+    /// and the file a reply mentions cannot be opened from the transcript.
+    pub fn work_root_for_session(&self, session_id: &str) -> Option<String> {
+        let data = self.load();
+        let project_id = data
+            .sessions
+            .into_iter()
+            .find(|session| session.id == session_id)?
+            .project_id;
+        data.projects
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.work_root)
+    }
+
     /// Creates a project and its first session.
     pub fn create_project(
         &self,

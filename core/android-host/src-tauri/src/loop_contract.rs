@@ -89,6 +89,7 @@ fn runner(dir: &std::path::Path, turns: Vec<ModelTurn>) -> CoreRunner {
         model: Arc::new(ScriptedModel::new(turns)),
         model_id: "scripted".into(),
         workspace: workspace.to_string_lossy().into_owned(),
+        workspace_for: None,
         host_kind: HostKind::Android,
         // The host's default: reads run, anything with a side effect asks. A test that
         // pre-granted the write would skip the half of the loop the user performs.
@@ -431,6 +432,85 @@ fn a_write_that_died_mid_flight_is_reported_and_never_redone() {
     assert!(
         !runner.events(THREAD, 0).unwrap().is_empty(),
         "history did not survive the crash"
+    );
+}
+
+/// A turn writes where the user is working, not in one directory for the whole app.
+///
+/// The device showed the consequence: the project `demo` was created, the reply said
+/// `notes.md`, and the file was one level up in the shared workspace. The transcript's
+/// reference then resolved against an empty project directory and rendered as an error,
+/// while every project a user made stayed decorative.
+#[test]
+fn a_turn_writes_inside_the_project_its_session_belongs_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = dir.path().join("shared");
+    let demo = dir.path().join("demo");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&demo).unwrap();
+
+    let runner = CoreRunner::new(CoreOptions {
+        store: Store::open(&dir.path().join("core.db")).unwrap(),
+        model: Arc::new(ScriptedModel::new(vec![
+            write_call("call-a", "notes.md", "from demo"),
+            text_turn("done"),
+            write_call("call-b", "notes.md", "from nowhere"),
+            text_turn("done"),
+        ])),
+        model_id: "scripted".into(),
+        workspace: shared.to_string_lossy().into_owned(),
+        workspace_for: Some(Arc::new({
+            let demo = demo.to_string_lossy().into_owned();
+            move |thread: &str| (thread == "ses-demo").then(|| demo.clone())
+        })),
+        host_kind: HostKind::Android,
+        policy: GrantPolicy::read_only(),
+        system: None,
+    });
+
+    let approve = |thread: &str,
+                   frames: &Arc<Mutex<Vec<Value>>>,
+                   sink: &(dyn Fn(BridgeEvent) + Send + Sync)| {
+        let request = frames_of(frames, "item/approval_request")[0]["payload"]["request_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        runner
+            .respond(thread, &request, "approve", "", sink)
+            .unwrap();
+    };
+
+    let (frames, sink) = recorder();
+    runner
+        .start_turn("ses-demo", "write notes", "cm-1", &sink)
+        .unwrap();
+    approve("ses-demo", &frames, &sink);
+
+    assert_eq!(
+        std::fs::read_to_string(demo.join("notes.md")).unwrap(),
+        "from demo",
+        "the project session wrote outside its project"
+    );
+    assert!(
+        !shared.join("notes.md").exists(),
+        "the shared workspace got the project's file"
+    );
+
+    // A session with no project still has somewhere to work, and it is not the project.
+    let (frames2, sink2) = recorder();
+    runner
+        .start_turn("ses-loose", "write notes", "cm-2", &sink2)
+        .unwrap();
+    approve("ses-loose", &frames2, &sink2);
+    assert_eq!(
+        std::fs::read_to_string(shared.join("notes.md")).unwrap(),
+        "from nowhere",
+        "a projectless session lost its workspace"
+    );
+    assert_eq!(
+        std::fs::read_to_string(demo.join("notes.md")).unwrap(),
+        "from demo",
+        "the project's file was overwritten by another session"
     );
 }
 

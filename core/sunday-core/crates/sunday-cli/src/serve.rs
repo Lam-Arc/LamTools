@@ -77,6 +77,8 @@ pub fn run(options: Options) -> Result<(), sunday_protocol::CoreError> {
         model: options.model,
         model_id: options.model_id,
         workspace: options.workspace,
+        // The CLI has no projects; one workspace serves every thread.
+        workspace_for: None,
         host_kind: sunday_protocol::HostKind::Server,
         policy: options.policy,
         system: Some("You are Sunday. Use the tools you are given.".into()),
