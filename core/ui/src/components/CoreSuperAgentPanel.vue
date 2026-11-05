@@ -9,7 +9,7 @@
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeft, CircleAlert, FileCheck2, Plus, RotateCw, Square, Undo2 } from 'lucide-vue-next'
+import { ArrowLeft, CircleAlert, FileCheck2, Plus, RotateCw, Square, Undo2, Upload } from 'lucide-vue-next'
 import FullAreaActions from '@/components/FullAreaActions.vue'
 import UiSelect from '@/components/UiSelect.vue'
 
@@ -135,6 +135,34 @@ function sessionId(): string {
   return String(selected.value?.result?.thread_id || '')
 }
 
+// user:“PR 链接和状态回写工单，用户可在界面直接查看”+(链接直接点开，状态用文字，
+// 不另做一套 GitHub 面板)。
+function prUrl(): string {
+  return String(selected.value?.result?.pr_url || '')
+}
+
+function prState(): string {
+  return String(selected.value?.result?.pr_state || '')
+}
+
+function publishState(): string {
+  const publish = selected.value?.result?.publish
+  if (!publish || typeof publish !== 'object') return ''
+  const push = (publish as Record<string, any>).push || {}
+  const pr = (publish as Record<string, any>).pr || {}
+  const parts: string[] = []
+  if (push.status) parts.push(`${t('推送')} ${push.status}`)
+  if (pr.status) parts.push(`PR ${pr.status}`)
+  return parts.join(' · ')
+}
+
+function canPublish(): boolean {
+  const mandate = selected.value?.mandate
+  if (!mandate) return false
+  if (!mandate.can_push && !mandate.can_create_pr) return false
+  return Boolean(selected.value?.assignment_id)
+}
+
 async function call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   return (await props.requestRpc(method, params)) as T
 }
@@ -224,7 +252,7 @@ async function openDetail(ticket: Ticket) {
   }
 }
 
-async function act(action: 'close' | 'reject' | 'retry' | 'stop' | 'approve') {
+async function act(action: 'close' | 'reject' | 'retry' | 'stop' | 'approve' | 'publish') {
   const ticket = selected.value
   if (!ticket) return
   busy.value = action
@@ -233,6 +261,11 @@ async function act(action: 'close' | 'reject' | 'retry' | 'stop' | 'approve') {
   try {
     if (action === 'approve') {
       await call('superagent.ticket.approve', { ticket_id: ticket.ticket_id, approver: 'ui' })
+    } else if (action === 'publish') {
+      await call('superagent.ticket.publish', {
+        ticket_id: ticket.ticket_id,
+        title: ticket.title || '',
+      })
     } else if (action === 'retry') {
       await call('superagent.ticket.retry', { ticket_id: ticket.ticket_id })
     } else if (action === 'stop') {
@@ -403,6 +436,17 @@ onUnmounted(() => {
           </ul>
         </div>
 
+        <div v-if="prUrl() || publishState()" class="sa-card">
+          <h3 class="sa-section">{{ t("发布") }}</h3>
+          <p v-if="publishState()" class="sa-muted">{{ publishState() }}</p>
+          <p v-if="prUrl()" class="sa-pr">
+            <a :href="prUrl()" target="_blank" rel="noopener noreferrer">{{ prUrl() }}</a>
+            <span v-if="prState()" class="sa-stage" :data-stage="prState() === 'OPEN' ? 'review' : 'closed'">
+              <i aria-hidden="true" />{{ prState() }}
+            </span>
+          </p>
+        </div>
+
         <div v-if="assignments.length" class="sa-card">
           <h3 class="sa-section">{{ t("执行现场") }}</h3>
           <div v-for="item in assignments" :key="item.assignment_id" class="sa-assignment">
@@ -415,6 +459,15 @@ onUnmounted(() => {
         <div class="sa-actions">
           <button v-if="sessionId()" class="quiet-button" type="button" @click="emit('openSession', sessionId())">
             {{ t("打开这次执行的会话") }}
+          </button>
+          <button
+            v-if="canPublish() && (selected.stage === 'review' || selected.stage === 'closed')"
+            class="quiet-button"
+            type="button"
+            :disabled="Boolean(busy)"
+            @click="act('publish')"
+          >
+            <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />{{ t("推送并开 PR") }}
           </button>
           <button
             v-if="selected.stage === 'blocked' && selected.decision_reason === 'awaiting-user-approval'"
@@ -705,6 +758,9 @@ button { font: inherit; }
 .sa-report--error { color: var(--red); margin-top: var(--space-2); }
 
 .sa-files { margin: var(--space-2) 0 0; padding-left: var(--space-4); font-size: 12.5px; font-family: var(--font-mono); }
+
+.sa-pr { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; font-size: 12.5px; }
+.sa-pr a { color: var(--blue); word-break: break-all; }
 
 .sa-assignment { display: flex; flex-direction: column; gap: 2px; padding: var(--space-1) 0; font-size: 12.5px; }
 .sa-assignment code { font-family: var(--font-mono); font-size: 12px; color: color-mix(in srgb, var(--text) 72%, transparent); word-break: break-all; }
