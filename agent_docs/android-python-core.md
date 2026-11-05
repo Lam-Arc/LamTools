@@ -104,11 +104,12 @@ Android 上「本机回环」等于「任何别的 App 都能连」，所以：
 
 ### 排查过程中修掉的真实缺陷（供后续参考）
 
-- aapt2 会把 assets 里的  解压改名，归档必须用不认识的扩展名；
-- Gradle 的 jniLibs 只收 ， 会被丢弃；
-- Android 上 / 必须在 Tauri 启动前由 Kotlin 交给宿主；
-- Tauri 生成的 Gradle 任务在 Windows 上既不能执行裸 ，也不能把  当模块；
-- 共享 UI 的 HTTP 路径是相对的，IPC 没有 base URL，需要宿主补  前缀。
+- aapt2 会把 assets 里的 `.tar.gz` 解压改名，归档必须用不认识的扩展名；
+- Gradle 的 jniLibs 只收 `*.so`，`libtalloc.so.2` 会被丢弃；
+- Android 上 `filesDir` / `nativeLibraryDir` 必须在 Tauri 启动前由 Kotlin 交给宿主；
+- Tauri 生成的 Gradle 任务在 Windows 上既不能执行裸 `node`，也不能把 `tauri` 当模块；
+- 共享 UI 的 HTTP 路径是相对的，IPC 没有 base URL，需要宿主补 `/api/core` 前缀。
+- WebSocket 的 Ping 必须回 Pong，否则对端按空闲超时断开，表现为界面反复重连。
 
 ## 五、未验证
 
@@ -134,7 +135,7 @@ Android 上「本机回环」等于「任何别的 App 都能连」，所以：
 | 项 | 位置 |
 | --- | --- |
 | APK（debug 签名，x86_64） | `artifacts/android/sunday-m-x86_64-debug.apk`（501 MB，未压缩含调试符号） |
-| APK SHA-256 | `d2768e581a8f5f2cbfb9c30c24fe1e3f10262f21d20e52692b094567262787d1` |
+| APK SHA-256 | `be07f1d73f44c65893f8d45e6953da5cdfd9621e4bacd7f64b99b24e547cbcd4` |
 | 源码 | 分支 `sunday/m-python-core-android`，工作树 `.worktrees/m-python` |
 | 运行时构建 | `core/android-runtime/tools/build-runtime.sh`（x86_64 / aarch64） |
 | 安装与验证脚本 | `core/android-host/scripts/`（`android_project.py`、`verify-apk.sh`、`seed-model.sh`） |
