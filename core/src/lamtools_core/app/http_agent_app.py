@@ -627,6 +627,26 @@ def create_core_agent_http_app(
             except Exception:
                 _logger.exception("[superagent] failed to record result for %s", ticket_id)
 
+        async def _record_superagent_failure(job: Any, payload: dict[str, Any], exc: BaseException) -> None:
+            """执行抛异常时把失败落到工单上，别让工单永远停在 running。"""
+            ticket_id = str(payload.get("superagent_ticket_id") or "").strip()
+            if not ticket_id:
+                return
+            service = app_state.get("superagent_service")
+            if service is None:
+                return
+            try:
+                await service.record_execution_result(
+                    ticket_id,
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    report={"job_id": job.id},
+                )
+            except Exception:
+                _logger.exception(
+                    "[superagent] failed to record failure for %s", ticket_id
+                )
+
         async def execute_arranged_job(job: Any) -> OperationResult:
             payload = arranged_operation_payload(job)
             if job.operation == "turn.start":
@@ -706,16 +726,22 @@ def create_core_agent_http_app(
                         await live_hub.publish(user_envelope)
                     except Exception:
                         pass  # best-effort; never block arrange execution
-            result = await agent_operations.execute(
-                job.operation,
-                payload,
-                metadata={
-                    "source": "arrange",
-                    "arrange_job_id": job.id,
-                    "occurrence_id": job.occurrence_id,
-                    **({"arrange_signal": job.signal} if job.signal else {}),
-                },
-            )
+            try:
+                result = await agent_operations.execute(
+                    job.operation,
+                    payload,
+                    metadata={
+                        "source": "arrange",
+                        "arrange_job_id": job.id,
+                        "occurrence_id": job.occurrence_id,
+                        **({"arrange_signal": job.signal} if job.signal else {}),
+                    },
+                )
+            except BaseException as exc:
+                # user:“监控、处理异常、恢复任务、验证成果并完成交付”+(执行抛异常也必须把
+                # 失败写回工单：否则用户看到的是一个永远停在 running 的工单，连失败原因都没有)。
+                await _record_superagent_failure(job, payload, exc)
+                raise
             await _record_superagent_result(job, payload, result)
             return result
 

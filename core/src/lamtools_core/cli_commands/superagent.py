@@ -63,6 +63,62 @@ async def cmd_superagent_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_superagent_goal(args: argparse.Namespace) -> int:
+    """用户直接交付一个目标。
+
+    user:“让用户能够直接交付复杂目标”+(界面和命令行走同一条路：都提交到
+    superagent.goal.submit，不各自维护一套建单逻辑)。
+    """
+    params = {
+        "goal": str(args.goal or ""),
+        "repo_root": str(args.repo or ""),
+        "title": str(args.title or ""),
+        "base_branch": str(args.base_branch or ""),
+        "can_push": bool(args.allow_push),
+        "can_create_pr": bool(args.allow_pr),
+        "permission_preset": str(args.permission_preset or "auto"),
+        "require_approval": bool(args.require_approval),
+    }
+    result = await _call(args, "superagent.goal.submit", params)
+    print(json.dumps(result.get("result", result), ensure_ascii=False, indent=2))
+    return 0
+
+
+async def cmd_superagent_report(args: argparse.Namespace) -> int:
+    result = await _call(args, "superagent.ticket.report", {"ticket_id": args.ticket_id})
+    if result.get("status") == "error":
+        print(f"error: {result.get('payload', {}).get('error')}")
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def cmd_superagent_close(args: argparse.Namespace) -> int:
+    result = await _call(
+        args,
+        "superagent.ticket.close",
+        {
+            "ticket_id": args.ticket_id,
+            "accepted": not bool(args.reject),
+            "note": str(args.note or ""),
+        },
+    )
+    if result.get("status") == "error":
+        print(f"error: {result.get('payload', {}).get('error')}")
+        return 1
+    _print_ticket(result.get("ticket") or {})
+    return 0
+
+
+async def cmd_superagent_retry(args: argparse.Namespace) -> int:
+    result = await _call(args, "superagent.ticket.retry", {"ticket_id": args.ticket_id})
+    if result.get("status") == "error":
+        print(f"error: {result.get('payload', {}).get('error')}")
+        return 1
+    _print_ticket(result.get("ticket") or {})
+    return 0
+
+
 async def cmd_superagent_tickets(args: argparse.Namespace) -> int:
     result = await _call(args, "superagent.ticket.list", {"stage": args.stage})
     tickets = result.get("tickets") or []
@@ -153,9 +209,13 @@ __all__ = [
     "cmd_superagent_approve",
     "cmd_superagent_assignments",
     "cmd_superagent_audit",
+    "cmd_superagent_close",
+    "cmd_superagent_goal",
     "cmd_superagent_ingest",
     "cmd_superagent_policy",
     "cmd_superagent_reject",
+    "cmd_superagent_report",
+    "cmd_superagent_retry",
     "cmd_superagent_show",
     "cmd_superagent_stop",
     "cmd_superagent_tickets",

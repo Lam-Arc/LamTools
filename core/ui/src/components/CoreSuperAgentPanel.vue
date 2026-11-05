@@ -74,18 +74,18 @@ const formBranch = ref('')
 const formPush = ref(false)
 const formPr = ref(false)
 const formPreset = ref('auto')
+const formRequireApproval = ref(false)
 
 const presetOptions = computed(() => [
   { value: 'auto', label: t('自己动手，危险操作仍然拦下') },
-  { value: 'ask', label: t('每步写入都问我') },
   { value: 'full_access', label: t('完全放开') },
 ])
 
-const presetHint = computed(() => {
-  if (formPreset.value === 'ask') return t('它会停在第一次写文件或跑命令的地方等你审批。')
-  if (formPreset.value === 'full_access') return t('不再拦任何操作，包括越界访问。只在完全信任目标时用。')
-  return t('读写文件、跑测试自己决定；真正的危险操作仍会被拦。')
-})
+const presetHint = computed(() =>
+  formPreset.value === 'full_access'
+    ? t('不再拦任何操作，包括越界访问。只在完全信任目标时用。')
+    : t('读写文件、跑测试自己决定；真正的危险操作仍会被拦。'),
+)
 
 const STAGE_LABEL: Record<Stage, string> = {
   open: '待开始',
@@ -159,6 +159,7 @@ function openCompose() {
   formPush.value = false
   formPr.value = false
   formPreset.value = 'auto'
+  formRequireApproval.value = false
   error.value = ''
   notice.value = ''
   view.value = 'compose'
@@ -183,11 +184,15 @@ async function submitGoal() {
         can_push: formPush.value,
         can_create_pr: formPr.value,
         permission_preset: formPreset.value,
+        require_approval: formRequireApproval.value,
       },
     )
     const status = String(payload.result?.status || '')
     if (status === 'duplicate') {
       notice.value = t('这个目标已经在队列里了，直接打开那张工单就行')
+    } else if (status === 'ask_human') {
+      // 工单停在待确认：这不是失败，用户点头之后才开工。
+      notice.value = t('已提交，等你确认后开工。在列表里打开它点「批准开工」。')
     } else if (status !== 'accepted') {
       error.value = String(payload.result?.reason || t('没能接单'))
       return
@@ -219,14 +224,16 @@ async function openDetail(ticket: Ticket) {
   }
 }
 
-async function act(action: 'close' | 'reject' | 'retry' | 'stop') {
+async function act(action: 'close' | 'reject' | 'retry' | 'stop' | 'approve') {
   const ticket = selected.value
   if (!ticket) return
   busy.value = action
   error.value = ''
   notice.value = ''
   try {
-    if (action === 'retry') {
+    if (action === 'approve') {
+      await call('superagent.ticket.approve', { ticket_id: ticket.ticket_id, approver: 'ui' })
+    } else if (action === 'retry') {
       await call('superagent.ticket.retry', { ticket_id: ticket.ticket_id })
     } else if (action === 'stop') {
       await call('superagent.ticket.stop', { ticket_id: ticket.ticket_id })
@@ -320,6 +327,9 @@ onUnmounted(() => {
           <span class="sa-label">{{ t("从哪条分支开始") }}</span>
           <input v-model="formBranch" class="sa-input" type="text" placeholder="main" />
         </label>
+        <label class="sa-check sa-check--wide">
+          <input v-model="formRequireApproval" type="checkbox" />{{ t("先让我确认再开工") }}
+        </label>
         <label class="sa-field">
           <span class="sa-label">{{ t("它能不能自己动手") }}</span>
           <UiSelect v-model="formPreset" :options="presetOptions" :aria-label="t('权限档')" />
@@ -405,6 +415,15 @@ onUnmounted(() => {
         <div class="sa-actions">
           <button v-if="sessionId()" class="quiet-button" type="button" @click="emit('openSession', sessionId())">
             {{ t("打开这次执行的会话") }}
+          </button>
+          <button
+            v-if="selected.stage === 'blocked' && selected.decision_reason === 'awaiting-user-approval'"
+            class="primary-button"
+            type="button"
+            :disabled="Boolean(busy)"
+            @click="act('approve')"
+          >
+            <FileCheck2 :size="14" :stroke-width="1.8" aria-hidden="true" />{{ t("批准开工") }}
           </button>
           <button
             v-if="selected.stage === 'review'"
@@ -601,6 +620,7 @@ button { font: inherit; }
 
 .sa-checks { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-bottom: 6px; }
 .sa-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.sa-check--wide { display: flex; margin-bottom: var(--space-3); }
 
 .sa-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
 

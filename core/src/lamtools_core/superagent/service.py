@@ -267,7 +267,8 @@ class SuperagentService:
             # 而不是抛一个用户看不懂的异常然后工单状态还留在 open。
             await self._set_stage(ticket_id, "blocked", reason=f"schedule-failed:{exc}")
             raise
-        return approved
+        # 排期会把工单推到 running，返回旧值会让界面显示成还没开工。
+        return await self.get_ticket(ticket_id) or approved
 
     async def reject(self, ticket_id: str, *, reason: str = "") -> Ticket:
         return await self._set_stage(ticket_id, "closed", reason=f"rejected:{reason}")
@@ -356,6 +357,7 @@ class SuperagentService:
         can_push: bool = False,
         can_create_pr: bool = False,
         permission_preset: str = "auto",
+        require_approval: bool = False,
     ) -> HandleResult:
         """用户直接把目标交给 Super-agent。
 
@@ -371,6 +373,15 @@ class SuperagentService:
         if preset not in _PERMISSION_PRESETS:
             return HandleResult(
                 "rejected", reason=f"invalid-permission-preset:{preset}", policy_version=version
+            )
+        # user:“人工审批”+(ask 档要求每一次工具调用都有人在会话里点头；后台工单没有
+        # 可回答的审批卡，实测会空转到超时。所以这里明确拒绝，并指向真正能用的关口：
+        # require_approval 让工单在开工前停下来等人确认)。
+        if preset == "ask":
+            return HandleResult(
+                "rejected",
+                reason="ask-preset-needs-a-live-session:use-require_approval",
+                policy_version=version,
             )
         repo = str(repo_root or "").strip()
         if not repo:
@@ -403,7 +414,7 @@ class SuperagentService:
             source_id="user",
             source_event_key=f"goal:{_digest(text)}",
             thread_key=f"goal:{_digest(text)}",
-            stage="open",
+            stage="blocked" if require_approval else "open",
             mandate=Mandate(
                 repo_root=repo,
                 allowed_paths=tuple(allowed_paths or ()),
@@ -414,7 +425,9 @@ class SuperagentService:
                 policy_version=version,
             ),
             instructions=text,
-            decision_reason="submitted-by-user",
+            decision_reason=(
+                "awaiting-user-approval" if require_approval else "submitted-by-user"
+            ),
             policy_version=version,
             title=(title or text)[:120],
             permission_preset=preset,
@@ -429,12 +442,12 @@ class SuperagentService:
                 "can_create_pr": ticket.mandate.can_create_pr,
             },
         )
-        if self.scheduler is not None:
+        if ticket.stage == "open" and self.scheduler is not None:
             await self._schedule(ticket)
         return HandleResult(
-            "accepted",
+            "accepted" if ticket.stage == "open" else "ask_human",
             ticket_id=ticket.ticket_id,
-            reason="submitted-by-user",
+            reason=ticket.decision_reason,
             policy_version=version,
         )
 

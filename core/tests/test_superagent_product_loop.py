@@ -220,23 +220,45 @@ async def test_non_git_directory_runs_in_place(tmp_path: Path) -> None:
     assert ticket is not None and ticket.stage == "running"
 
 @pytest.mark.asyncio
-async def test_permission_preset_travels_into_the_execution_plan(tmp_path: Path) -> None:
-    """无人值守的工单必须自带权限档，否则第一次写文件就永久卡在审批上。"""
+async def test_ask_preset_is_refused_for_unattended_tickets(tmp_path: Path) -> None:
+    """ask 档要有人逐条点头；后台工单没有可回答的审批卡，必须明确拒绝而不是空转。"""
     repo = _make_repo(tmp_path / "repo")
     service = _service(repo, tmp_path / "data")
-    seen: dict[str, str] = {}
+    result = await service.submit_goal("盯着它写代码", repo_root=str(repo), permission_preset="ask")
+    assert result.status == "rejected"
+    assert "use-require_approval" in result.reason
+    assert await service.list_tickets() == []
+
+
+@pytest.mark.asyncio
+async def test_require_approval_parks_the_ticket_until_a_human_approves(
+    tmp_path: Path,
+) -> None:
+    """人工审批关口：先停在 blocked，人点头之后才排期开工。"""
+    repo = _make_repo(tmp_path / "repo")
+    service = _service(repo, tmp_path / "data")
+    scheduled: list[str] = []
 
     async def scheduler(ticket):
         plan = await service.begin_execution(ticket.ticket_id)
-        seen["preset"] = plan.permission_preset
+        assert plan.permission_preset == "auto"
+        scheduled.append(ticket.ticket_id)
         return "job"
 
     service.scheduler = scheduler
-    result = await service.submit_goal("盯着它写代码", repo_root=str(repo), permission_preset="ask")
-    assert result.status == "accepted"
-    assert seen["preset"] == "ask"
-    ticket = await service.get_ticket(result.ticket_id)
-    assert ticket is not None and ticket.permission_preset == "ask"
+    result = await service.submit_goal(
+        "先让我确认再动手", repo_root=str(repo), require_approval=True
+    )
+    assert result.status == "ask_human"
+    parked = await service.get_ticket(result.ticket_id)
+    assert parked is not None
+    assert parked.stage == "blocked"
+    assert parked.decision_reason == "awaiting-user-approval"
+    assert scheduled == [], "还没批准就排期了"
+
+    approved = await service.approve(result.ticket_id, approver="e2e")
+    assert approved.stage == "running"
+    assert scheduled == [result.ticket_id]
 
 
 @pytest.mark.asyncio

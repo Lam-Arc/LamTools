@@ -109,6 +109,9 @@ def register_superagent_operations(
                 permission_preset=str(
                     payload.get("permission_preset") or payload.get("permissionPreset") or "auto"
                 ),
+                require_approval=bool(
+                    payload.get("require_approval") or payload.get("requireApproval")
+                ),
             )
         except (LookupError, PermissionError, RuntimeError, ValueError) as exc:
             return _error(request, exc)

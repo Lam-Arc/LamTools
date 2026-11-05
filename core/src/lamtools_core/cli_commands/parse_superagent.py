@@ -27,9 +27,13 @@ def register_superagent(sub: argparse._SubParsersAction) -> None:
         cmd_superagent_approve,
         cmd_superagent_assignments,
         cmd_superagent_audit,
+        cmd_superagent_close,
+        cmd_superagent_goal,
         cmd_superagent_ingest,
         cmd_superagent_policy,
         cmd_superagent_reject,
+        cmd_superagent_report,
+        cmd_superagent_retry,
         cmd_superagent_show,
         cmd_superagent_stop,
         cmd_superagent_tickets,
@@ -37,6 +41,44 @@ def register_superagent(sub: argparse._SubParsersAction) -> None:
 
     root = sub.add_parser("superagent", help="Authorized event-driven tickets (Super-agent)")
     group = root.add_subparsers(dest="superagent_command", required=True)
+
+    goal = group.add_parser("goal", help="Hand a goal to Super-agent directly")
+    goal.add_argument("goal", help="What it should accomplish")
+    goal.add_argument("--repo", required=True, help="Repository or directory to work in")
+    goal.add_argument("--title", default="", help="Short title shown in the list")
+    goal.add_argument("--base-branch", default="", help="Branch to start the worktree from")
+    goal.add_argument("--allow-push", action="store_true", help="Let it push its branch")
+    goal.add_argument("--allow-pr", action="store_true", help="Let it open a pull request")
+    goal.add_argument(
+        "--permission-preset",
+        choices=("auto", "full_access"),
+        default="auto",
+        help="auto = decide writes itself; full_access = no bounds",
+    )
+    goal.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="Park the ticket until a human approves it, then start",
+    )
+    _common(goal)
+    goal.set_defaults(func=cmd_superagent_goal, raw=False)
+
+    report = group.add_parser("report", help="Show one ticket with its executions")
+    report.add_argument("ticket_id")
+    _common(report)
+    report.set_defaults(func=cmd_superagent_report, raw=False)
+
+    close = group.add_parser("close", help="Accept or reject a delivery")
+    close.add_argument("ticket_id")
+    close.add_argument("--reject", action="store_true", help="Send it back instead of accepting")
+    close.add_argument("--note", default="", help="Note recorded with the decision")
+    _common(close)
+    close.set_defaults(func=cmd_superagent_close, raw=False)
+
+    retry = group.add_parser("retry", help="Queue a blocked or delivered ticket again")
+    retry.add_argument("ticket_id")
+    _common(retry)
+    retry.set_defaults(func=cmd_superagent_retry, raw=False)
 
     ingest = group.add_parser("ingest", help="Deliver one source event")
     ingest.add_argument("--source", required=True, help="Source id (must be authorized)")

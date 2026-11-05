@@ -58,10 +58,10 @@ def build_ticket_prompt(
             extra = f"\n\n附加上下文：\n{rendered}"
 
     delegate = (
-        "需要委派时用 sub_agent 工具，参数必须是 action、type、name、model、reasoning_level 五项；"
+        "用 sub_agent 工具，参数必须是 action、type、name、model、reasoning_level 五项；"
         f"model 直接用 {model_id}，不要自己编模型名。"
         if model_id
-        else "需要委派时用 sub_agent 工具，参数必须是 action、type、name、model、reasoning_level 五项；"
+        else "用 sub_agent 工具，参数必须是 action、type、name、model、reasoning_level 五项；"
         "model 填你当前正在使用的模型。"
     )
 
@@ -80,7 +80,7 @@ def build_ticket_prompt(
 按这个顺序推进，不要跳步：
 1. 先摸清现状：读代码、读配置、读测试，弄清这件事在这个仓库里到底怎么实现。不要凭文件名猜。
 2. 写出计划：用 write_checklist 建 3 到 7 步的清单，每步都要有能验证的产出。发现计划错了就改计划，不要硬撑。
-3. 拆解与委派：互相独立的子任务用 {delegate} 你自己负责需要连续上下文的改动。
+3. 拆解与委派：互相独立的子任务交出去，{delegate}你自己负责需要连续上下文的改动。
 4. 动手实现：直接改代码。发现是真实缺陷就修掉，不要只写报告。
 5. 验证成果：必须跑真实命令来证明，例如跑相关测试、跑一次真实调用、对比输出。单元测试通过不等于功能可用，能跑端到端就跑端到端。
 6. 处理异常：命令失败、测试不过、依赖缺失，先判断是自己改错了还是环境缺东西。自己改错的必须修；环境缺东西的写进报告，不要伪造通过。
