@@ -1,7 +1,8 @@
 import { createApp } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
-import AndroidSettings from './AndroidSettings.vue'
+import AndroidSetup from './AndroidSetup.vue'
 
 /**
  * Android/webview entry point.
@@ -14,45 +15,92 @@ import AndroidSettings from './AndroidSettings.vue'
  * frontend would be a second product to keep in sync, and would drift the moment
  * desktop changed.
  *
- * What is Android-specific lives in one overlay: the app has one endpoint and one key,
- * while the desktop settings screen edits a provider catalogue. See
- * `AndroidSettings.vue` for why those are two screens rather than one with a branch.
+ * What is Android-specific: the app first has to start its own Linux runtime and wait
+ * for the Python core inside it to answer. That boot step is why the sequence below is
+ * explicit instead of "connect and render": rendering before the core exists produces
+ * exactly the failure this file is written to avoid, a dark screen with no explanation.
  */
 
 const transport = createIpcTransport()
 
-const runtime = createLamToolsRuntime({
-  transport,
-  platform: 'mobile',
-  capabilities: {
-    // The in-app core has no native file picker yet, and no HTTP surface for
-    // attachments. Reporting them as unavailable makes the UI hide those
-    // affordances instead of failing when the user taps them.
-    filePicker: false,
-    notifications: false,
-    desktopWindow: false,
-  },
-})
+const capabilities = {
+  // The picker bridge exists, but attachments still travel through the desktop HTTP
+  // surface, which this host does not serve yet. Reporting them unavailable hides the
+  // affordances instead of failing when the user taps them.
+  filePicker: false,
+  notifications: false,
+  desktopWindow: false,
+} as const
 
-function showFailure(message: string): void {
+function renderScreen(text: string, options: { error?: boolean; action?: string } = {}): void {
   const node = document.getElementById('app')
   if (!node) return
   node.innerHTML = ''
-  const banner = document.createElement('pre')
-  banner.style.cssText = 'padding:16px;color:#f08a8a;white-space:pre-wrap;font:14px system-ui'
-  banner.textContent = `Sunday could not reach its core.\n\n${message}`
-  node.append(banner)
+  const panel = document.createElement('div')
+  panel.style.cssText = [
+    'padding:32px 22px',
+    'font:15px/1.65 system-ui',
+    'color:' + (options.error ? '#f08a8a' : '#e6e8eb'),
+    'white-space:pre-wrap',
+    'background:#14161a',
+    'min-height:100vh',
+    'box-sizing:border-box',
+  ].join(';')
+  panel.textContent = text
+  if (options.action) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = options.action
+    button.style.cssText =
+      'margin-top:18px;padding:11px 16px;border-radius:10px;border:1px solid #2f3540;background:#1b1f26;color:#e6e8eb;font:14px system-ui'
+    button.addEventListener('click', () => window.location.reload())
+    panel.append(document.createElement('br'), button)
+  }
+  node.append(panel)
+}
+
+async function boot(): Promise<void> {
+  renderScreen('正在启动核心…\n\n首次打开需要解压随包的 Linux 运行时，可能要等一会儿。')
+  try {
+    await invoke('core_start')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    renderScreen(`核心启动失败。\n\n${message}`, { error: true, action: '重试' })
+    return
+  }
+
+  const config = await invoke<{ hasKey: boolean }>('model_config').catch(() => null)
+  if (config && !config.hasKey) {
+    // No endpoint yet: the first task is configuration, not a chat that cannot answer.
+    const host = document.getElementById('app')
+    if (!host) return
+    host.innerHTML = ''
+    createApp(AndroidSetup).mount(host)
+    return
+  }
+
+  const runtime = createLamToolsRuntime({
+    transport,
+    platform: 'mobile',
+    capabilities: { ...capabilities },
+  })
+  await transport.connect()
+  createApp(LamToolsApp, { runtime }).mount('#app')
+  mountSettingsEntry()
+
+  window.addEventListener('error', (event) => {
+    if (!document.getElementById('app')?.textContent?.trim()) {
+      renderScreen(`界面加载失败。\n\n${event.message}`, { error: true, action: '重试' })
+    }
+  })
 }
 
 /**
- * A settings entry point that does not depend on the app shell.
+ * The settings entry point.
  *
- * The shell is shared with desktop and its navigation assumes screens this host does not
- * have yet. An overlay keeps the settings reachable today and can be folded into the
- * shell later without touching the screen itself.
- *
- * The panel mounts on first open rather than at startup: mounting early would make the
- * first paint wait on two IPC calls for a screen most launches never show.
+ * Opens the same first-run screen: on this host "settings" and "configuration" are one
+ * form, and a second screen that edits the same three fields would only be able to
+ * disagree with the first.
  */
 function mountSettingsEntry(): void {
   const host = document.createElement('div')
@@ -60,7 +108,7 @@ function mountSettingsEntry(): void {
 
   const panel = document.createElement('div')
   panel.setAttribute('role', 'dialog')
-  panel.setAttribute('aria-label', '模型与权限设置')
+  panel.setAttribute('aria-label', '模型与运行时设置')
   panel.style.cssText = [
     'position:fixed',
     'inset:0',
@@ -95,7 +143,9 @@ function mountSettingsEntry(): void {
   const setOpen = (next: boolean) => {
     open = next
     if (open && !mounted) {
-      createApp(AndroidSettings).mount(panel)
+      const target = document.createElement('div')
+      panel.append(target)
+      createApp(AndroidSetup).mount(target)
       mounted = true
     }
     panel.style.display = open ? 'block' : 'none'
@@ -104,22 +154,4 @@ function mountSettingsEntry(): void {
   toggle.addEventListener('click', () => setOpen(!open))
 }
 
-// Connect first, mount second. Mounting first would let a render overwrite the
-// failure banner, leaving the exact symptom this is meant to avoid: a black
-// screen with no explanation.
-transport
-  .connect()
-  .then(() => {
-    createApp(LamToolsApp, { runtime }).mount('#app')
-    mountSettingsEntry()
-    // A runtime that throws on first render must also say why, rather than
-    // leaving the user with an empty dark screen.
-    window.addEventListener('error', (event) => {
-      if (!document.getElementById('app')?.textContent?.trim()) {
-        showFailure(event.message)
-      }
-    })
-  })
-  .catch((error: unknown) => {
-    showFailure(error instanceof Error ? error.message : String(error))
-  })
+void boot()

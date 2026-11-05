@@ -194,45 +194,134 @@ def sync_sources() -> int:
         written += 1
 
     say(f"sync: {written} written, {unchanged} unchanged, into {JAVA_ROOT}")
+    return sync_runtime_gradle()
+
+
+# Gradle fragment the app module applies. Kept out of `android-src/com/**` because it
+# is not Kotlin, and out of the generated project because regenerating would drop it.
+RUNTIME_MARKER = "// >>> Sunday runtime"
+
+
+def sync_runtime_gradle() -> int:
+    """Injects the runtime wiring into the app module's Gradle script, once."""
+    build_gradle = PROJECT / "app" / "build.gradle.kts"
+    build_text = build_gradle.read_text(encoding="utf-8")
+    nl = "\r\n" if "\r\n" in build_text else "\n"
+
+    # An earlier design applied a separate script; that cannot reach the android {}
+    # accessors, so remove the apply line if it is still there.
+    stale = 'apply(from = "sunday-runtime.gradle.kts")'
+    if stale in build_text:
+        build_text = build_text.replace(stale, "").rstrip() + "\n"
+
+    if RUNTIME_MARKER in build_text:
+        build_gradle.write_text(build_text, encoding="utf-8")
+        return EXIT_OK
+
+    anchor = "android {"
+    if anchor not in build_text:
+        return fail(EXIT_PROJECT, "app/build.gradle.kts has no android block to extend")
+
+    injected = nl.join([
+        "",
+        "    // >>> Sunday runtime: filled in by android_project.py, do not edit by hand.",
+        "    // proot and its loader are packaged as lib*.so so Gradle extracts them into",
+        "    // nativeLibraryDir at install time. Without legacy packaging the APK keeps",
+        "    // them compressed and Android refuses to execute a binary from app data.",
+        "    packaging {",
+        "        jniLibs { useLegacyPackaging = true }",
+        "    }",
+        "    // One ABI per APK: the archive carries that ABI's Python, so a universal build",
+        "    // would ship the wrong interpreter to half the devices.",
+        "    defaultConfig {",
+        "        ndk {",
+        "            abiFilters.clear()",
+        '            val rtAbi = System.getenv("SUNDAY_RT_ABI") ?: "x86_64"',
+        '            abiFilters.add(if (rtAbi == "aarch64") "arm64-v8a" else "x86_64")',
+        "        }",
+        "    }",
+        "    // The unpacked runtime (manifest + rootfs archive) ships as an Android asset",
+        "    // and is copied to filesDir on first launch.",
+        '    val sundayRuntimeAssets = System.getenv("SUNDAY_RT_ASSETS")',
+        '        ?: file("../../../../../android-runtime/tools/out/x86_64/assets").absolutePath',
+        '    sourceSets.getByName("main").assets.srcDir(sundayRuntimeAssets)',
+        "    // <<< Sunday runtime",
+        "",
+    ])
+    build_text = build_text.replace(anchor, anchor + nl + injected, 1)
+    build_gradle.write_text(build_text, encoding="utf-8")
+    say("sync: injected the runtime wiring into app/build.gradle.kts")
     return EXIT_OK
 
 
-# --------------------------------------------------------------------- ensure
+def tauri_cli_js() -> Path | None:
+    """The CLI's own JS entry point, which is what `node` must be given to run it."""
+    explicit = os.environ.get("TAURI_CLI")
+    if explicit:
+        path = Path(explicit)
+        if path.suffix == ".js" and path.exists():
+            return path
+        # `TAURI_CLI` may also name the launcher binary; resolve its js sibling.
+        sibling = path.with_suffix(".js")
+        if sibling.exists():
+            return sibling
+    for candidate in (
+        APP_DIR / "node_modules/@tauri-apps/cli/tauri.js",
+        APP_DIR.parent / "desktop/node_modules/@tauri-apps/cli/tauri.js",
+    ):
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def fix_generated_node_path() -> None:
-    """Repairs the node path `tauri android init` bakes into the generated buildSrc.
+    """Makes the generated Gradle task start, on Windows in particular.
 
-    The template writes the absolute node binary it detected, extension included and
-    in whatever case it happened to be spelled. Gradle then treats `node.EXE` as an
-    unknown executable, appends `.bat`, and fails with
+    `tauri android init` writes the node binary and an argv that begins with `tauri`. That
+    works only when `tauri` happens to be resolvable as a module; through `project.exec`
+    it is not, and the task dies with `MODULE_NOT_FOUND` or with a fabricated
+    `node.EXE.bat` path. Both were real failures here.
 
-        A problem occurred starting process 'command '...\node.EXE.bat''
-
-    which is a build that cannot start for a reason that has nothing to do with the
-    code being built. Every other machine that spells it `node.exe` builds fine, so
-    this looks like an environment problem until it is read closely.
-
-    Rewriting it to the bare command name lets the OS resolve `node` through PATH,
-    which is what the generated fallbacks already assume.
+    The fix is to name both sides explicitly: this machine's node, and the CLI's JS entry
+    point as the first argument.
     """
     build_task = PROJECT / "buildSrc/src/main/java/com/lamtools/sunday/core/kotlin/BuildTask.kt"
     if not build_task.exists():
         return
+    node = shutil.which("node")
+    if not node:
+        return fail(EXIT_ENV, "node is not on PATH: the Tauri Gradle task cannot run")
+    resolved = Path(node)
+    if os.name == "nt" and resolved.suffix.lower() != ".exe":
+        resolved = resolved.with_suffix(".exe")
+    node_path = str(resolved).replace("\\", "/")
+
+    cli = tauri_cli_js()
+    if cli is None:
+        return fail(EXIT_ENV, "the tauri CLI is not installed: set TAURI_CLI to its tauri.js")
+    cli_path = str(cli).replace("\\", "/")
+
     text = build_task.read_text(encoding="utf-8")
+    original = text
+
     marker = 'val executable = """'
-    start = text.find(marker)
-    if start < 0:
-        return
-    end = text.find('"""', start + len(marker))
-    if end < 0:
-        return
-    current = text[start + len(marker):end]
-    if current.strip() == "node":
-        return
-    fixed = text[:start] + marker + "node" + text[end:]
-    build_task.write_text(fixed, encoding="utf-8")
-    say(f"fixed generated node path ({current} -> node)")
+    begin = text.find(marker)
+    if begin >= 0:
+        finish = text.find('"""', begin + len(marker))
+        if finish >= 0:
+            text = text[:begin] + marker + node_path + text[finish:]
+
+    old_args = 'val args = listOf("tauri", "android", "android-studio-script")'
+    if old_args in text:
+        text = text.replace(
+            old_args,
+            'val args = listOf("%s", "android", "android-studio-script")' % cli_path,
+            1,
+        )
+
+    if text != original:
+        build_task.write_text(text, encoding="utf-8")
+        say(f"fixed generated Gradle task (node={node_path}, cli={cli_path})")
 
 
 def ensure_project(env: dict[str, str], timeout: int) -> int:

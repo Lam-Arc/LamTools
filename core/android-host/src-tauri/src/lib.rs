@@ -1,283 +1,225 @@
-//! Android host for the Rust core.
+//! The Android host: everything the shared UI needs to reach a real Python core.
 //!
-//! Two decisions worth stating, because both were changed after review:
+//! user:"Android：应用内运行环境承载共享 Core；平台特有的系统操作通过薄适配层处理"
+//! +(宿主只做平台事情：装运行时、起进程、转发 IPC、放行文件选择；业务一律在 Core)。
 //!
-//! 1. **No listening socket.** The previous version served the protocol on a
-//!    loopback WebSocket. On Android every app on the device can dial another
-//!    app's loopback port, so that was reachable by anything installed alongside
-//!    this one. The protocol now runs over Tauri IPC: the webview invokes a
-//!    command, the command hands it to `Session`, and there is no socket to find.
-//!    A token is kept for the desktop/CLI transport, where a socket is unavoidable
-//!    and cross-process access is the point.
+//! What this host owns, and nothing else:
 //!
-//! 2. **Deny by default.** The previous config defaulted `auto_approve` to `true`,
-//!    so a fresh install would write and delete files without asking. Approvals
-//!    are now governed by `GrantPolicy`: reading is allowed, anything with a side
-//!    effect asks unless the host names that exact tool.
+//! * the runtime install (unpack once per version) and the guest process lifetime;
+//! * the port and bearer token the guest listens with — neither crosses into the UI,
+//!   because on Android every other app can dial this app's loopback ports;
+//! * the two IPC commands the shared transport speaks (`core_rpc`, `core_http`) and
+//!   the `core-event` channel it subscribes to;
+//! * the model configuration files the guest reads at startup.
 //!
-//! What this host owns, and nothing else: the sandbox path, the lifecycle hooks,
-//! the secret storage, and the IPC surface. Everything about how a turn runs is
-//! in `sunday_host::runner`, shared with the CLI.
+//! There is no second implementation of turns, tools or approvals here. That is the
+//! whole point of running the shipping Python core instead of porting it.
 
 use std::sync::Arc;
 
-use sunday_host::app_server::{FrameSink, Session};
-use sunday_host::policy::GrantPolicy;
-use sunday_host::runner::{CoreOptions, CoreRunner};
-use tauri::{Emitter, Manager};
+use serde_json::{json, Value};
+use tauri::{Manager, State};
 
-#[cfg(test)]
-mod loop_contract;
+mod client;
+mod runtime;
+mod settings_cmd;
 
-pub mod config;
-pub mod config_rpc;
-pub mod http_surface;
-pub mod keystore;
-pub mod lifecycle;
-pub mod projection;
-pub mod provider;
-pub mod secrets;
-pub mod settings;
+use client::CoreLink;
+use runtime::Runtime;
 
-/// Bridges the core's event stream to the webview.
-///
-/// Events are emitted as `core-event` with the same envelope the socket transport
-/// would have written, so the frontend does not need two code paths.
-struct IpcSink {
+pub struct HostState {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
     app: tauri::AppHandle,
-    /// Shared with the resume path so history and realtime agree on which turn an
-    /// item belongs to and on what a tool call is called.
-    projector: Arc<std::sync::Mutex<projection::Projector>>,
-}
-
-impl FrameSink for IpcSink {
-    fn event(&self, body: serde_json::Value) {
-        // The webview renders `core/runItem`, not the runner's own words. Projecting
-        // here — at the boundary, not in the UI — keeps one code path for both cores.
-        let projected = {
-            let mut projector = self.projector.lock().unwrap();
-            projector.project(&body)
-        };
-        let Some(projected) = projected else {
-            #[cfg(debug_assertions)]
-            println!(
-                "core_event (not rendered) -> {} seq={}",
-                body.get("method")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("?"),
-                body.get("seq")
-                    .and_then(|value| value.as_u64())
-                    .unwrap_or(0),
-            );
-            return;
-        };
-        #[cfg(debug_assertions)]
-        println!(
-            "core_event -> {} kind={} seq={}",
-            projected
-                .get("method")
-                .and_then(|value| value.as_str())
-                .unwrap_or("?"),
-            projected
-                .get("payload")
-                .and_then(|payload| payload.get("kind"))
-                .and_then(|value| value.as_str())
-                .unwrap_or("?"),
-            projected
-                .get("seq")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0),
-        );
-        let _ = self.app.emit("core-event", projected);
-    }
-    fn orphan_error(&self, code: i32, message: String) {
-        let _ = self.app.emit(
-            "core-event",
-            serde_json::json!({
-                "method": "core/error",
-                "params": {"code": code, "message": message},
-            }),
-        );
-    }
-}
-
-/// State the IPC commands need.
-pub struct CoreState {
-    session: Session,
-    runner: Arc<CoreRunner>,
+    link: Arc<CoreLink>,
+    runtime: Runtime,
     data_dir: std::path::PathBuf,
-    /// Projects, sessions and their files, served to the shared UI over `core_http`.
-    projects: sunday_host::projects::Projects,
-    /// What the operating system reported, and what it is allowed to claim.
-    lifecycle: lifecycle::Lifecycle,
-    /// Turns the runner's events into the projection the shared UI renders.
-    projector: Arc<std::sync::Mutex<projection::Projector>>,
-    /// Kept alive for the process lifetime: dropping it releases the single-writer
-    /// lock and a second instance could then open the same database.
-    _lock: sunday_host::lock::SingleWriterLock,
 }
 
-/// One RPC call. This is the whole IPC surface: it mirrors the socket protocol
-/// exactly, so the frontend can swap transports without changing call sites.
-#[tauri::command]
-async fn core_rpc(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<CoreState>>,
-    method: String,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    // The settings screen speaks a `config.*` catalog that the desktop core owns.
-    // This host has a single provider binding instead, so those methods are answered
-    // by the adapter rather than handed to the runner, which would answer "method
-    // not found" and leave the model screen permanently unusable.
-    let core = Arc::clone(state.inner());
-    if let Some(answer) = config_rpc::handle(&core, &method, &params).await {
-        return answer;
-    }
-
-    let sink: Arc<dyn FrameSink> = Arc::new(IpcSink {
-        app,
-        projector: Arc::clone(&core.projector),
-    });
-    match state.session.handle(&method, &params, sink) {
-        Ok(mut result) => {
-            // A resumed conversation arrives as journal events. They have to be
-            // projected by the same rules as the live stream, or the restored
-            // transcript would be a second dialect of the same facts.
-            project_events(&mut result, &core.projector);
-            Ok(result)
-        }
-        Err((code, message, _data)) => Err(format!("{code}: {message}")),
-    }
-}
-
-/// Rewrites a reply's `events` array into the shared UI's projection.
+/// Starts the guest if needed and points the RPC link at it.
 ///
-/// Only replies that carry history are affected; everything else passes through
-/// untouched, so a method that never had events cannot be changed by this.
-fn project_events(
-    result: &mut serde_json::Value,
-    projector: &Arc<std::sync::Mutex<projection::Projector>>,
-) {
-    let Some(events) = result
-        .get_mut("events")
-        .and_then(|value| value.as_array_mut())
-    else {
-        return;
-    };
-    let mut guard = projector.lock().unwrap();
-    let projected: Vec<serde_json::Value> = events
-        .iter()
-        .filter_map(|event| guard.project(event))
-        .collect();
-    // One line that answers "why does the composer still say Stop": the exact
-    // kind/item/status triple the client is about to receive, in order.
-    #[cfg(debug_assertions)]
-    {
-        let summary: Vec<String> = projected
-            .iter()
-            .map(|item| {
-                let payload = item.get("payload").cloned().unwrap_or_default();
-                format!(
-                    "{}|{}|{}",
-                    payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?"),
-                    payload
-                        .get("item_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?"),
-                    payload
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?"),
-                )
-            })
-            .collect();
-        println!(
-            "resume projection: {} events :: {}",
-            summary.len(),
-            summary.join(", ")
-        );
+/// Blocking on purpose: the first launch unpacks a few hundred megabytes, and reporting
+/// progress from a background thread would be more machinery than the one screen that
+/// waits for it needs. `spawn_blocking` keeps the async runtime free while it runs.
+#[tauri::command]
+async fn core_start(state: State<'_, HostState>) -> Result<Value, String> {
+    let inner = Arc::clone(&state.inner);
+    let started = tauri::async_runtime::spawn_blocking(move || {
+        let port = inner.runtime.ensure_started()?;
+        inner.link.retarget(port, &inner.runtime.token());
+        Ok::<_, String>(port)
+    })
+    .await
+    .map_err(|error| format!("the start task was lost: {error}"))?;
+    match started {
+        Ok(port) => Ok(json!({ "phase": "ready", "port": port, "status": status_of(&state) })),
+        Err(error) => Err(error),
     }
-    *events = projected;
 }
 
-/// Where the data actually lives, for Settings and for tests.
 #[tauri::command]
-fn core_info(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
-    serde_json::json!({
+fn core_status(state: State<'_, HostState>) -> Value {
+    let status = state.inner.runtime.status();
+    serde_json::to_value(status).unwrap_or_else(|_| json!({}))
+}
+
+#[tauri::command]
+fn core_stop(state: State<'_, HostState>) {
+    state.inner.runtime.stop();
+}
+
+#[tauri::command]
+fn core_info(state: State<'_, HostState>) -> Value {
+    let status = status_of(&state);
+    json!({
         "transport": "ipc",
-        "data_dir": state.data_dir.to_string_lossy(),
-        "thread_id": state.session.thread_id(),
+        "guest": "proot",
+        "runtimeVersion": status["runtimeVersion"],
+        "coreVersion": status["coreVersion"],
+        "pythonVersion": status["pythonVersion"],
+        "phase": status["phase"],
+        "workRoot": runtime::GUEST_WORK_ROOT,
+        "logTail": runtime::read_log_tail(&state.inner.app, 12),
     })
 }
 
-/// One lifecycle signal, from whichever side reported it.
-///
-/// Both the JNI bridge and the IPC command come through here, so a signal reported
-/// by the OS and one requested by the UI cannot produce different answers.
-fn apply_lifecycle(state: &CoreState, event: &str) -> serde_json::Value {
-    lifecycle::signal(&state.lifecycle, &state.runner, event)
+fn status_of(state: &State<'_, HostState>) -> Value {
+    let status = state.inner.runtime.status();
+    serde_json::to_value(status).unwrap_or_else(|_| json!({}))
 }
 
-/// Asks the core for a lifecycle report, on behalf of the UI.
-///
-/// Reading it here does not change what happened: the tracker already holds the
-/// answer from the OS. This exists so a resumed screen can render synchronously
-/// without waiting for the event that the JNI path emits.
+/// Forwards one app-server RPC. The UI's transport calls this for every mutation.
 #[tauri::command]
-fn lifecycle_signal(state: tauri::State<'_, Arc<CoreState>>, event: String) -> serde_json::Value {
-    apply_lifecycle(&state, &event)
+async fn core_rpc(
+    state: State<'_, HostState>,
+    method: String,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    let link = Arc::clone(&state.inner.link);
+    let answer = link
+        .call(&method, params.unwrap_or_else(|| json!({})), std::time::Duration::from_secs(120))
+        .await?;
+    if let Some(error) = answer.get("error") {
+        // The transport parses "<code>: <message>" back into an RpcError, so the code
+        // survives this boundary instead of degrading into a bare string.
+        let code = error.get("code").and_then(Value::as_i64).unwrap_or(-32000);
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("core request failed");
+        return Err(format!("{code}: {message}"));
+    }
+    Ok(answer.get("result").cloned().unwrap_or(Value::Null))
 }
 
-/// Kept as its own command because the old name is what the UI calls.
-#[tauri::command]
-fn lifecycle_pause(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
-    apply_lifecycle(&state, "pause")
-}
-
-#[tauri::command]
-fn lifecycle_resume(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
-    apply_lifecycle(&state, "resume")
-}
-
-/// The Android Activity callbacks, arriving over JNI.
+/// Forwards one HTTP request to the guest's REST surface.
 ///
-/// `onStop` is the reason this exists: Tauri maps `onPause` and `onResume` to window
-/// events but has no equivalent for `onStop`, and `onStop` is the one that means the
-/// app is no longer visible. `onPause` fires on a rotation and on a permission
-/// dialog, so treating it as "backgrounded" would be wrong most of the time.
-#[cfg(target_os = "android")]
-mod android_bridge {
-    use std::sync::{Arc, OnceLock};
-
-    use super::CoreState;
-    use tauri::{Emitter, Manager};
-
-    static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
-
-    pub fn publish(handle: tauri::AppHandle) {
-        let _ = APP.set(handle);
+/// The shared UI asks for projects, files and attachments over HTTP because desktop does;
+/// answering the same paths here keeps one code path in the frontend.
+#[tauri::command]
+async fn core_http(
+    state: State<'_, HostState>,
+    method: String,
+    path: String,
+    body: Option<String>,
+) -> Result<Value, String> {
+    let inner = Arc::clone(&state.inner);
+    let port = inner.runtime.ensure_started()?;
+    let token = inner.runtime.token();
+    let url = format!("http://127.0.0.1:{port}{path}");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut request = client.request(
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| error.to_string())?,
+        &url,
+    );
+    request = request.bearer_auth(token);
+    if let Some(body) = body {
+        request = request
+            .header("content-type", "application/json")
+            .body(body);
     }
-
-    fn state(app: &tauri::AppHandle) -> Option<tauri::State<'_, Arc<CoreState>>> {
-        // Before `setup` completes there is no state, and a signal that arrives then
-        // has nothing to report on: there is no turn and no journal worth reading.
-        app.try_state::<Arc<CoreState>>()
-    }
-
-    pub fn deliver(event: &str) {
-        let Some(app) = APP.get() else {
-            return;
-        };
-        let Some(state) = state(app) else {
-            return;
-        };
-        let report = super::apply_lifecycle(&state, event);
-        // Emitted as well as returned, because the JNI call has no caller waiting:
-        // a resumed UI learns what happened through this event.
-        let _ = app.emit("lifecycle", report);
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/json")
+        .to_owned();
+    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+    // Text stays text so the UI can parse JSON without a base64 round trip; only real
+    // binaries (attachment downloads) take the base64 path.
+    let is_text = content_type.starts_with("application/json")
+        || content_type.starts_with("text/")
+        || content_type.starts_with("application/javascript");
+    if is_text {
+        Ok(json!({
+            "status": status,
+            "content_type": content_type,
+            "body": String::from_utf8_lossy(&bytes).to_string(),
+            "body_base64": Value::Null,
+        }))
+    } else {
+        Ok(json!({
+            "status": status,
+            "content_type": content_type,
+            "body": Value::Null,
+            "body_base64": base64(&bytes),
+        }))
     }
 }
+
+/// Progress and diagnostics for the installing screen.
+#[tauri::command]
+fn runtime_log(state: State<'_, HostState>, lines: Option<usize>) -> String {
+    runtime::read_log_tail(&state.inner.app, lines.unwrap_or(40))
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0] as u32;
+        let second = *chunk.get(1).unwrap_or(&0) as u32;
+        let third = *chunk.get(2).unwrap_or(&0) as u32;
+        let combined = (first << 16) | (second << 8) | third;
+        out.push(ALPHABET[(combined >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(combined >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(combined >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[combined as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Lifecycle callbacks from the Activity.
+///
+/// Nothing here decides anything: the guest owns its own turn state, so the host only
+/// records what the OS said and lets the core reconcile on resume. A stop is not a
+/// reason to kill a running turn — Android kills the process when it means it.
+#[tauri::command]
+fn lifecycle_signal(state: State<'_, HostState>, event: String) -> Value {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
+    let status = state.inner.runtime.status();
+    json!({ "event": event, "at": at, "phase": status.phase })
+}
+
+// ------------------------------------------------------------------ JNI surface
 
 #[cfg(target_os = "android")]
 #[no_mangle]
@@ -286,11 +228,40 @@ pub extern "system" fn Java_com_lamtools_sunday_core_LifecycleBridge_signal(
     _class: jni::objects::JClass,
     event: jni::objects::JString,
 ) {
-    let Ok(text) = env.get_string(&event) else {
-        return;
-    };
-    let event: String = text.into();
-    android_bridge::deliver(&event);
+    // The Kotlin side passes the OS callback verbatim; the guest re-reads its own state
+    // when the UI reconnects, so this is only a timestamped note in logcat.
+    if let Ok(text) = env.get_string(&event) {
+        let value: String = text.into();
+        println!("[sunday] lifecycle {value}");
+    }
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_KeystoreBridge_nativeRegister(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+) {
+    // The keystore is not used: the API key lives in the guest's own provider config,
+    // the same place desktop keeps it. Keeping the symbol means the Kotlin initialiser
+    // still links; when key sealing moves here, this is where it plugs in.
+    println!("[sunday] keystore bridge registered (unused, keys live in the guest config)");
+}
+
+/// Called from the Activity before Tauri starts: `applicationInfo.nativeLibraryDir` is
+/// the only directory Android still executes binaries from.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeSetLibraryDir(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    dir: jni::objects::JString,
+) {
+    if let Ok(text) = env.get_string(&dir) {
+        let value: String = text.into();
+        runtime::set_native_lib_dir(&value);
+        println!("[sunday] native library dir: {value}");
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -298,114 +269,67 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| format!("cannot resolve the app data dir: {e}"))?;
-            std::fs::create_dir_all(&data_dir)
-                .map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
+            let data_dir = runtime::data_dir(&handle);
+            std::fs::create_dir_all(&data_dir).ok();
+            // The runtime directory carries the manifest that ships in assets; copy it
+            // out once so every later read is a plain file read.
+            let runtime_dir = runtime::path_of(&handle);
+            std::fs::create_dir_all(&runtime_dir).ok();
+            copy_manifest(app, &runtime_dir);
 
-            let lock = sunday_host::lock::SingleWriterLock::acquire(&data_dir, "sunday-android")
-                .map_err(|e| format!("cannot take the data directory: {e}"))?;
-
-            let cfg = config::load_or_default(&data_dir)?;
-            let workspace = data_dir.join("workspace");
-            let workspace_path = workspace.clone();
-            std::fs::create_dir_all(&workspace)?;
-
-            // The API key comes from the platform secret store, not from the JSON
-            // config: a key in a JSON file is a key in every backup and log.
-            // Which credential storage is actually in use, on the record. This is the
-            // only place the keystore probe runs at startup, and a support log without
-            // it cannot answer "is the key sealed or sitting in a file".
-            let storage = secrets::storage_view(&data_dir);
-            println!(
-                "credential storage: {} (needs migration: {}, key present: {}, readable: {})",
-                storage["kind"],
-                storage["needs_migration"],
-                storage["has_key"],
-                storage["readable"]
-            );
-            if let Some(reason) = storage["reason"].as_str() {
-                println!("credential storage unavailable: {reason}");
-            }
-
-            let store = sunday_store::Store::open(data_dir.join("core.db"))?;
-            // The key is only ever handed to an endpoint the user approved. When it
-            // has not been, this returns a model that refuses with the reason instead
-            // of a client that would send the key anyway.
-            let model = provider::build_model(&data_dir, &cfg)?;
-
-            let runner = Arc::new(CoreRunner::new(CoreOptions {
-                store,
-                model,
-                model_id: cfg.model_id.clone(),
-                workspace: workspace.to_string_lossy().to_string(),
-                host_kind: sunday_protocol::HostKind::Android,
-                // Reads are fine; writes and deletes ask. The user opts specific
-                // tools in from the UI, one at a time.
-                policy: GrantPolicy::with_grants(cfg.granted_tools.clone()),
-                system: Some("You are Sunday. Use the tools you are given.".into()),
-            }));
-
-            // A trusted session: IPC has no socket, so there is nothing to
-            // authenticate against and no way to reach it from outside the app.
-            let session = Session::trusted(
-                Arc::clone(&runner) as Arc<dyn sunday_host::app_server::TurnRunner>
-            );
-
-            let lifecycle = lifecycle::Lifecycle::new(&data_dir);
-            println!(
-                "sunday core ready over ipc, data at {}, instance {}",
-                data_dir.display(),
-                lifecycle.instance()
-            );
-            // Projects live under the same workspace the runner uses, so a file the agent
-            // writes is a file the user can open, and the boundary is one directory.
-            let projects = sunday_host::projects::Projects::new(&data_dir, &workspace_path);
-            app.manage(Arc::new(CoreState {
-                session,
-                runner,
-                data_dir,
-                projects,
-                lifecycle,
-                projector: Arc::new(std::sync::Mutex::new(projection::Projector::new())),
-                _lock: lock,
-            }));
-            // Published so the JNI bridge, which runs on an Android thread with no
-            // access to Tauri's context, can find the state it is reporting to.
-            #[cfg(target_os = "android")]
-            android_bridge::publish(handle.clone());
-            // Android delivers its first `onResume` before `setup` has registered
-            // the state above, so that signal is dropped. The report it would have
-            // produced is the one that matters most: whether the previous process
-            // died with work in flight. Ask for it here, where the state exists.
-            let startup = {
-                let state = app.state::<Arc<CoreState>>();
-                lifecycle::resume(&state.lifecycle, &state.runner)
-            };
-            // Printed as well as emitted: a cold-start report is the only evidence
-            // that a kill was noticed, and a dropped event would erase it.
-            println!("lifecycle at startup: {startup}");
-            handle.emit("lifecycle", &startup).ok();
-            handle.emit("core-ready", ()).ok();
+            let link = CoreLink::new(handle.clone());
+            let runtime = Runtime::new(handle.clone());
+            app.manage(HostState {
+                inner: Arc::new(Inner {
+                    app: handle.clone(),
+                    link,
+                    runtime,
+                    data_dir,
+                }),
+            });
+            handle.emit_core_info();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            core_rpc,
+            core_start,
+            core_status,
+            core_stop,
             core_info,
-            http_surface::core_http,
-            settings::model_config,
-            settings::save_model_config,
-            settings::approve_endpoint,
-            settings::set_api_key,
-            settings::clear_api_key,
-            settings::tool_catalog,
-            settings::set_tool_grant,
+            core_rpc,
+            core_http,
+            runtime_log,
             lifecycle_signal,
-            lifecycle_pause,
-            lifecycle_resume,
+            settings_cmd::model_config,
+            settings_cmd::configure_model,
+            settings_cmd::runtime_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Android host");
+}
+
+/// Copies `assets/runtime/manifest.json` next to the installed rootfs.
+fn copy_manifest(app: &tauri::App, target: &std::path::Path) {
+    let Ok(resource) = app
+        .path()
+        .resource_dir()
+        .map(|dir| dir.join("runtime").join("manifest.json"))
+    else {
+        return;
+    };
+    if target.join("runtime-manifest.json").exists() {
+        return;
+    }
+    let _ = std::fs::copy(&resource, target.join("runtime-manifest.json"));
+}
+
+trait EmitCoreInfo {
+    fn emit_core_info(&self);
+}
+
+impl EmitCoreInfo for tauri::AppHandle {
+    fn emit_core_info(&self) {
+        use tauri::Emitter;
+        self.emit("core-event", json!({ "method": "core/hostReady", "payload": {} }))
+            .ok();
+    }
 }
