@@ -27,6 +27,9 @@ from .prompt import build_ticket_prompt
 from .store import ConcurrentUpdate, RecordExists, SuperagentStore
 from .worktree import WorktreeError
 
+# 与 app.runtime_permissions 的档位保持一致；superagent 不反向依赖 app 层。
+_PERMISSION_PRESETS = ("ask", "auto", "full_access")
+
 _INBOX = "inbox"
 _TICKET = "ticket"
 _ASSIGNMENT = "assignment"
@@ -61,6 +64,7 @@ class ExecutionPlan:
     branch: str
     prompt: str
     thread_id: str = ""
+    permission_preset: str = "auto"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +73,7 @@ class ExecutionPlan:
             "work_root": self.work_root,
             "branch": self.branch,
             "thread_id": self.thread_id,
+            "permission_preset": self.permission_preset,
         }
 
 
@@ -350,6 +355,7 @@ class SuperagentService:
         allowed_paths: tuple[str, ...] = (),
         can_push: bool = False,
         can_create_pr: bool = False,
+        permission_preset: str = "auto",
     ) -> HandleResult:
         """用户直接把目标交给 Super-agent。
 
@@ -361,6 +367,11 @@ class SuperagentService:
         version = self.policy.config.version
         if not text:
             return HandleResult("rejected", reason="empty-goal", policy_version=version)
+        preset = str(permission_preset or "auto").strip() or "auto"
+        if preset not in _PERMISSION_PRESETS:
+            return HandleResult(
+                "rejected", reason=f"invalid-permission-preset:{preset}", policy_version=version
+            )
         repo = str(repo_root or "").strip()
         if not repo:
             return HandleResult("rejected", reason="repo-required", policy_version=version)
@@ -406,6 +417,7 @@ class SuperagentService:
             decision_reason="submitted-by-user",
             policy_version=version,
             title=(title or text)[:120],
+            permission_preset=preset,
         )
         # 同一个目标在关闭之后可以重新交付一次，所以这里不是 create_only。
         await self.store.put(_TICKET, ticket.ticket_id, ticket.to_dict())
@@ -458,6 +470,7 @@ class SuperagentService:
             branch=assignment.branch,
             prompt=prompt,
             thread_id=f"ticket:{ticket_id}",
+            permission_preset=ticket.permission_preset or "auto",
         )
 
     async def record_execution_result(

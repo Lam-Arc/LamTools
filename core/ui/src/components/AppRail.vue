@@ -112,10 +112,10 @@ import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { contributionState } from '@/plugins/contributions'
 import type { PluginPageEntry } from '@/plugins/pages'
 import { openContextMenu } from '@/components/context-menu/context-menu'
-import { CalendarClock, Download, House, MoreHorizontal, Network, PackageCheck, Settings, UserRound } from 'lucide-vue-next'
+import { Bot, CalendarClock, Download, House, MoreHorizontal, Network, PackageCheck, Settings, UserRound } from 'lucide-vue-next'
 import { BookOne, Receive } from '@icon-park/vue-next'
 
-export type AppRailView = 'chat' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
+export type AppRailView = 'chat' | 'superagent' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
 
 const props = defineProps<{
   /** 当前所处的整界面分区；'chat' 表示在聊天界面。 */
@@ -238,6 +238,9 @@ interface RailEntry {
 
 const topItems: RailEntry[] = [
   { id: 'chat', get label() { return t("聊天") }, icon: House },
+  // user:“让用户能直观地发起任务、查看进度、干预执行和查看成果”+(Super-agent 是交付入口，
+  // 排在聊天之后、定时任务之前：它是把复杂目标交出去的地方，不是又一个管理面板)。
+  { id: 'superagent', get label() { return t("Super-agent") }, icon: Bot },
   // 定时任务用 lucide 的 calendar-clock：IconPark 的时间家族里没有「日历+时钟」这一枚。
   { id: 'arrange', get label() { return t("定时任务") }, icon: CalendarClock },
   // 资料库用 IconPark 的 book-one：一叠合着的资料，而不是一本摊开的书。

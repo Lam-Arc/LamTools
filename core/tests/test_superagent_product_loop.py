@@ -218,3 +218,31 @@ async def test_non_git_directory_runs_in_place(tmp_path: Path) -> None:
     assert result.status == "accepted"
     ticket = await service.get_ticket(result.ticket_id)
     assert ticket is not None and ticket.stage == "running"
+
+@pytest.mark.asyncio
+async def test_permission_preset_travels_into_the_execution_plan(tmp_path: Path) -> None:
+    """无人值守的工单必须自带权限档，否则第一次写文件就永久卡在审批上。"""
+    repo = _make_repo(tmp_path / "repo")
+    service = _service(repo, tmp_path / "data")
+    seen: dict[str, str] = {}
+
+    async def scheduler(ticket):
+        plan = await service.begin_execution(ticket.ticket_id)
+        seen["preset"] = plan.permission_preset
+        return "job"
+
+    service.scheduler = scheduler
+    result = await service.submit_goal("盯着它写代码", repo_root=str(repo), permission_preset="ask")
+    assert result.status == "accepted"
+    assert seen["preset"] == "ask"
+    ticket = await service.get_ticket(result.ticket_id)
+    assert ticket is not None and ticket.permission_preset == "ask"
+
+
+@pytest.mark.asyncio
+async def test_unknown_permission_preset_is_rejected(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path / "repo")
+    service = _service(repo, tmp_path / "data")
+    result = await service.submit_goal("随便", repo_root=str(repo), permission_preset="god")
+    assert result.status == "rejected"
+    assert "invalid-permission-preset" in result.reason

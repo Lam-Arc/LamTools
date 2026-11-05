@@ -82,6 +82,7 @@ export function useCorePageBindings(context: {
   startPlanFromLibrary: any
   startRemoteGateway: any
   stopRemoteGateway: any
+  superagentHeading: any
   submitEffectiveAccount: any
   theme: any
   themeMode: any
@@ -98,8 +99,17 @@ export function useCorePageBindings(context: {
   updateState: any
   uploadArtifactFiles: any
 }) {
-  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, createRemotePairing, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveAccountDevices, effectiveAccountError, effectiveAccountLoading, effectiveAccountStatus, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, logoutEffectiveAccount, modelCatalogView, modelGroups, openAccountSettings, openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, refreshRemoteAccount, remoteAccountIdentity, remoteAccountLoading, remoteGatewayAvailable, remoteGatewayError, remoteGatewayLoading, remoteGatewayStatus, remotePairing, renameProject, reopenOnboarding, requestConfigOperation, revokeRemoteDevice, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway, submitEffectiveAccount, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
+  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, createRemotePairing, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveAccountDevices, effectiveAccountError, effectiveAccountLoading, effectiveAccountStatus, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, logoutEffectiveAccount, modelCatalogView, modelGroups, openAccountSettings, openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, refreshRemoteAccount, remoteAccountIdentity, remoteAccountLoading, remoteGatewayAvailable, remoteGatewayError, remoteGatewayLoading, remoteGatewayStatus, remotePairing, renameProject, reopenOnboarding, requestConfigOperation, revokeRemoteDevice, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway, superagentHeading, submitEffectiveAccount, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
   return computed<Record<string, Record<string, any>>>(() => ({
+  superagent: {
+    'class': 'full-area-view',
+    'bandActions': appRuntime.platform !== 'mobile',
+    'workRoot': currentWorkRoot(),
+    'requestRpc': unref(requestConfigOperation),
+    'onBack': unref(closeFullArea),
+    'onHeading': ($event: any) => { superagentHeading.value = $event },
+    'onOpenSession': unref(openSessionFromSearch)
+  },
   arrange: {
     ref: (instance: unknown) => { arrangeRef.value = instance as typeof arrangeRef.value },
     'class': 'full-area-view',

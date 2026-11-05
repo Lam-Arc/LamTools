@@ -131,6 +131,10 @@ class Ticket:
     job_id: str = ""
     assignment_id: str = ""
     result: dict[str, Any] = field(default_factory=dict)
+    # user:“人工审批”+(无人值守的工单必须自带权限档：ask 表示每一步写入都要人点头，
+    # auto 表示写文件和跑命令自己决定，full_access 才放开越界访问。默认 auto，
+    # 否则后台任务会在第一次写文件时永久卡住)。
+    permission_preset: str = "auto"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,6 +154,7 @@ class Ticket:
             "job_id": self.job_id,
             "assignment_id": self.assignment_id,
             "result": dict(self.result),
+            "permission_preset": self.permission_preset,
         }
 
     @classmethod
@@ -171,6 +176,7 @@ class Ticket:
             job_id=str(raw.get("job_id") or ""),
             assignment_id=str(raw.get("assignment_id") or ""),
             result=dict(raw.get("result") or {}),
+            permission_preset=str(raw.get("permission_preset") or "auto"),
         )
 
 

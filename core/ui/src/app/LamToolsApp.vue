@@ -1041,7 +1041,7 @@ const settingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requ
 const projectSettingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requestSection: (id: string) => void } | null>(null)
 // 整版界面状态：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
-type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
+type FullAreaViewId = 'library' | 'search' | 'superagent' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
 const fullAreaView = ref<FullAreaViewId | null>(null)
 // user:“实现这个插件，也正好实验我们的新插件架构”+(主界面与分屏使用相同的自绘页面加载器；服务不属于页面)。
 const mainPluginPage = ref<PluginPageEntry | null>(null)
@@ -1102,6 +1102,7 @@ const sidebarNavTitle = computed(() => {
 const libraryRefreshTick = ref(0)
 // 定时任务 / 资料库的内部子页通过 heading 上报顶部标题；组件卸载即失效，避免残留面包屑。
 const arrangeHeading = ref<{ title: string; subtitle: string } | null>(null)
+const superagentHeading = ref<{ title: string; subtitle: string } | null>(null)
 const arrangeRef = ref<{ handleBack?: () => boolean } | null>(null)
 const libraryHeading = ref<{ title: string; subtitle: string } | null>(null)
 const libraryRef = ref<{ handleBack?: () => boolean } | null>(null)
@@ -1121,6 +1122,8 @@ const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
       return libraryHeading.value ?? { get title() { return t("资料库") }, get subtitle() { return t("资料 / 记忆 / 方案 — 一个入口三块内容。") } }
     case 'arrange':
       return arrangeHeading.value ?? { get title() { return t("定时任务") }, get subtitle() { return t("按计划运行任务，或在需要时随时执行。") } }
+    case 'superagent':
+      return superagentHeading.value ?? { get title() { return t("Super-agent") }, get subtitle() { return t("把复杂目标交给它，自己规划、执行并交付结果。") } }
     case 'settings':
       return { get title() { return t("设置") }, get subtitle() { return t("模型与供应商、外观主题、工具权限等应用配置。") } }
     case 'plugins':
@@ -1162,7 +1165,7 @@ const railActiveView = computed<AppRailView>(() => {
 function openRailSplit(view: AppRailView, edge: 'right' | 'bottom' = 'right') {
   if (view === 'chat') return
   const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
-  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), arrange: t('定时任务'), plugins: t('插件'), account: t('账号') })[view], pane)
+  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), superagent: t('Super-agent'), arrange: t('定时任务'), plugins: t('插件'), account: t('账号') })[view], pane)
 }
 function onRailOpen(view: AppRailView): void {
   if (view === 'chat') {
@@ -4494,7 +4497,7 @@ const pageBindings = useCorePageBindings({
   remoteGatewayError, remoteGatewayLoading, remoteGatewayStatus, remotePairing, renameProject,
   reopenOnboarding, requestConfigOperation, revokeRemoteDevice, saveAgents, searchCommands,
   selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers,
-  settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway,
+  settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway, superagentHeading,
   submitEffectiveAccount, theme, themeMode, themeSchedule, transport,
   uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
   updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles,

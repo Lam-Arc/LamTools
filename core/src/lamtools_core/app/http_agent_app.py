@@ -793,6 +793,11 @@ def create_core_agent_http_app(
                     "message": plan.prompt,
                     "superagent_ticket_id": ticket.ticket_id,
                     "superagent_assignment_id": plan.assignment_id,
+                    # 无人值守的工单自带权限档：auto 让写文件和跑命令不必等人点头，
+                    # ask 则把每一步写入都留成待审批，供用户现场盯着。
+                    "runtime_snapshot": {
+                        "permission_preset": plan.permission_preset,
+                    },
                 },
                 trigger={"type": "once"},
                 title=ticket.title or f"ticket {ticket.ticket_id}",

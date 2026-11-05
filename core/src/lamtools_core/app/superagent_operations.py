@@ -106,6 +106,9 @@ def register_superagent_operations(
                 can_create_pr=bool(
                     payload.get("can_create_pr") or payload.get("canCreatePr")
                 ),
+                permission_preset=str(
+                    payload.get("permission_preset") or payload.get("permissionPreset") or "auto"
+                ),
             )
         except (LookupError, PermissionError, RuntimeError, ValueError) as exc:
             return _error(request, exc)
