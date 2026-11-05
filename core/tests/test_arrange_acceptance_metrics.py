@@ -16,7 +16,7 @@ import time
 import pytest
 
 from lamtools_core.app.core_db import open_core_app_db
-from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner
+from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, _TERMINAL_STATUSES
 
 
 async def _seed(manager: ArrangeManager, count: int, *, now: datetime) -> None:
@@ -66,6 +66,14 @@ async def test_1000_jobs_with_capacity_three_never_exceeds_peak(tmp_path: Path) 
             deadline = asyncio.get_running_loop().time() + 120
             while stats["runs"] < 1000:
                 if asyncio.get_running_loop().time() > deadline:
+                    break
+                await asyncio.sleep(0.05)
+            # user:“1000 个待执行任务，配置并发为 3，实际峰值并发不得超过 3”+(runner.stop()
+            # 会取消仍在跑的任务，所以必须等最后一个任务把终态写进库再停；否则断言测到的
+            # 是用例自己的收尾竞态，而不是调度器少算了任务)
+            while asyncio.get_running_loop().time() < deadline:
+                jobs = await manager.list()
+                if all(job.status in _TERMINAL_STATUSES for job in jobs):
                     break
                 await asyncio.sleep(0.05)
         finally:
