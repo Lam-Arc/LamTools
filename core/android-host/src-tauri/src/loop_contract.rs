@@ -18,7 +18,9 @@ use serde_json::{json, Value};
 use sunday_host::app_server::{event_json, BridgeEvent, TurnRunner};
 use sunday_host::policy::GrantPolicy;
 use sunday_host::runner::{CoreOptions, CoreRunner};
-use sunday_protocol::{CoreError, HostKind, Model, ModelDelta, ModelRequest, ModelTurn, ToolCall};
+use sunday_protocol::{
+    CoreError, HostKind, Model, ModelDelta, ModelRequest, ModelTurn, Prepared, SideEffect, ToolCall,
+};
 use sunday_store::Store;
 
 use crate::projection::Projector;
@@ -105,6 +107,11 @@ fn recorder() -> (Arc<Mutex<Vec<Value>>>, impl Fn(BridgeEvent) + Send + Sync) {
         }
     };
     (frames, sink)
+}
+
+/// A sink that throws the frames away, for a test that only cares what happened on disk.
+fn sink_none() -> impl Fn(BridgeEvent) + Send + Sync {
+    |_event: BridgeEvent| {}
 }
 
 fn frames_of(frames: &Arc<Mutex<Vec<Value>>>, method: &str) -> Vec<Value> {
@@ -349,6 +356,150 @@ fn replayed_facts_keep_one_identity() {
             "{method} carries no real timestamp: {stamp:?}"
         );
     }
+}
+
+/// A write that died mid flight must be reported, and must never run again by itself.
+///
+/// This is the one failure a file-writing agent must not get wrong in either direction.
+/// Calling it finished tells the user their file is there when nobody knows; running it
+/// again rewrites a file the user may have since changed. The store classifies the call
+/// and refuses to prepare it a second time, which every retry path has to go through, so
+/// the guarantee is in the data rather than in a caller remembering to check.
+#[test]
+fn a_write_that_died_mid_flight_is_reported_and_never_redone() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("core.db");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let call = ToolCall {
+        id: "call-crashed".into(),
+        name: "write_file".into(),
+        args: json!({ "path": "notes.md", "content": "was this written?" }),
+    };
+
+    // A process that got as far as the side effect and then died: the intent is durable
+    // and the answer never arrived, because nothing had the chance to record one.
+    {
+        let mut store = Store::open(&db).unwrap();
+        assert_eq!(
+            store
+                .prepare_tool_once(THREAD, &call, SideEffect::NonIdempotent)
+                .unwrap(),
+            Prepared::Ready
+        );
+        store.mark_dispatched(&call.id).unwrap();
+    }
+
+    // Before anything classifies it, the retry gate already refuses: a dispatched call
+    // with a side effect is not "ready", whatever a caller hopes.
+    {
+        let mut store = Store::open(&db).unwrap();
+        assert_eq!(
+            store
+                .prepare_tool_once(THREAD, &call, SideEffect::NonIdempotent)
+                .unwrap(),
+            Prepared::MustReconcile,
+            "a dispatched write was offered for another run"
+        );
+    }
+    assert!(
+        !workspace.join("notes.md").exists(),
+        "the crashed write was replayed"
+    );
+
+    // The next launch says so instead of guessing either way.
+    let runner = runner(
+        dir.path(),
+        vec![text_turn("I cannot tell whether that file was written.")],
+    );
+    let plan = runner.recovery().unwrap();
+    assert_eq!(
+        plan.unknown,
+        vec![call.id.clone()],
+        "a dispatched write with no answer was reported as fine"
+    );
+
+    // The thread is still usable afterwards, and its journal still reads back.
+    runner
+        .start_turn(THREAD, "what happened to notes.md?", "cm-1", &sink_none())
+        .unwrap();
+    assert!(
+        !workspace.join("notes.md").exists(),
+        "starting a new turn re-ran the crashed write"
+    );
+    assert!(
+        !runner.events(THREAD, 0).unwrap().is_empty(),
+        "history did not survive the crash"
+    );
+}
+
+/// Closing the app and opening it again must restore what was there.
+///
+/// The transcript is rebuilt from the journal alone, so this is the whole restore path:
+/// a second runner over the same database, reading history, then projecting it. What it
+/// must not do is leave the answered card answerable or lose the file it reported.
+#[test]
+fn a_new_process_restores_the_transcript_it_left() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let runner = runner(
+            dir.path(),
+            vec![
+                write_call("call-1", "notes.md", "goal\nprogress\ntomorrow"),
+                text_turn("Created notes.md."),
+            ],
+        );
+        let (frames, sink) = recorder();
+        runner.start_turn(THREAD, PROMPT, "cm-1", &sink).unwrap();
+        let request_id = frames_of(&frames, "item/approval_request")[0]["payload"]["request_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        runner
+            .respond(THREAD, &request_id, "approve", "", &sink)
+            .unwrap();
+    } // the process ends here
+
+    let restored = runner(dir.path(), Vec::new());
+    let page = restored.history(THREAD, None, 100).unwrap();
+    assert!(
+        page.events.len() >= 5,
+        "the journal came back with {} events",
+        page.events.len()
+    );
+    for event in &page.events {
+        assert!(
+            event.created_at_ms.is_some_and(|ms| ms > 1_600_000_000_000),
+            "{} came back without the time it happened",
+            event.method
+        );
+    }
+    assert!(
+        !restored.has_pending_approval(THREAD).unwrap(),
+        "an answered card came back answerable"
+    );
+
+    let mut projector = Projector::new();
+    let items: Vec<Value> = page
+        .events
+        .iter()
+        .map(|event| event_json(THREAD, event))
+        .filter_map(|frame| projector.project(&frame))
+        .collect();
+    assert!(
+        items
+            .iter()
+            .any(|item| item["payload"]["kind"] == "approval_response"),
+        "the restored transcript forgot the card was answered"
+    );
+    assert!(
+        items.iter().any(|item| item["payload"]["artifacts"]
+            .as_array()
+            .map(|artifacts| artifacts.iter().any(|a| a["name"] == "notes.md"))
+            .unwrap_or(false)),
+        "the restored transcript lost the file it reported"
+    );
 }
 
 /// The runner is the same instance for the process lifetime; this only pins that it can
