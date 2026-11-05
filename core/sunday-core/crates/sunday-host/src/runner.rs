@@ -400,7 +400,7 @@ impl TurnRunner for CoreRunner {
         // user:“消息、工具结果、审批状态与真实执行一致”+(日志和对话里存的是用户说的话，
         // 真正发给模型的那段是加了附件正文的版本；两者混在一起，用户会在对话里看到内部
         // 拼接的提示)。
-        let spoken = prompt.to_owned();
+        let spoken = briefing.clean_text(prompt);
         // The file's name stands where the text held this app's own path, and its content
         // arrives from the briefing above.
         let cleaned = briefing.clean_text(prompt);
@@ -426,7 +426,9 @@ impl TurnRunner for CoreRunner {
                 thread_id: thread_id.to_owned(),
                 expected_revision: None,
                 payload: sunday_protocol::Command::TurnStart {
-                    // What the user wrote, not what the model was given.
+                    // What the user wrote, with this app's own copy path replaced by the
+                    // file name: a `@"/data/user/0/..."` line on screen is noise, and the
+                    // file itself is already carried as an item below.
                     text: spoken.clone(),
                     // What the user attached travels with what they typed: the
                     // transcript reads it back from here after a restart.
