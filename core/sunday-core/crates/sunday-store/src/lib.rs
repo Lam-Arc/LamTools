@@ -928,7 +928,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT thread_id, seq, event_id, kind, payload FROM journal_events \
+                "SELECT thread_id, seq, event_id, kind, payload, created_at FROM journal_events \
                  WHERE thread_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(CoreError::storage)?;
@@ -940,12 +940,14 @@ impl Store {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             })
             .map_err(CoreError::storage)?;
         let mut collected = Vec::new();
         for row in rows {
-            let (thread_id, seq, event_id, kind, payload) = row.map_err(CoreError::storage)?;
+            let (thread_id, seq, event_id, kind, payload, created_at) =
+                row.map_err(CoreError::storage)?;
             collected.push(Event {
                 thread_id,
                 seq,
@@ -954,6 +956,7 @@ impl Store {
                     reason: format!("unknown event kind {kind}"),
                 })?,
                 payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                created_at,
             });
         }
         let has_more = collected.len() > limit;
@@ -1402,7 +1405,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT thread_id, seq, event_id, kind, payload FROM journal_events \
+                "SELECT thread_id, seq, event_id, kind, payload, created_at FROM journal_events \
                  WHERE thread_id = ?1 AND seq > ?2 ORDER BY seq",
             )
             .map_err(CoreError::storage)?;
@@ -1414,12 +1417,14 @@ impl Store {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             })
             .map_err(CoreError::storage)?;
         let mut out = Vec::new();
         for row in rows {
-            let (thread_id, seq, event_id, kind, payload) = row.map_err(CoreError::storage)?;
+            let (thread_id, seq, event_id, kind, payload, created_at) =
+                row.map_err(CoreError::storage)?;
             out.push(Event {
                 thread_id,
                 seq,
@@ -1428,6 +1433,7 @@ impl Store {
                     reason: format!("unknown event kind {kind}"),
                 })?,
                 payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                created_at,
             });
         }
         Ok(out)

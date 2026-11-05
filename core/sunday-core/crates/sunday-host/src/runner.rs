@@ -194,6 +194,9 @@ impl CoreRunner {
                 seq: event.seq,
                 payload,
                 client_message_id: None,
+                // Read from the journal row, so a replay reports when the fact happened
+                // rather than when it was replayed.
+                created_at_ms: Some(event.created_at),
             };
             self.buffer.push(thread, bridge.clone());
             sink(bridge);
@@ -318,6 +321,7 @@ impl TurnRunner for CoreRunner {
                     seq: accept_seq,
                     payload,
                     client_message_id: Some(client_message_id.to_owned()),
+                    created_at_ms: Some(event.created_at),
                 });
             }
         }
@@ -570,6 +574,7 @@ impl TurnRunner for CoreRunner {
                     seq: event.seq,
                     payload,
                     client_message_id: None,
+                    created_at_ms: Some(event.created_at),
                 }
             })
             .collect();
@@ -597,6 +602,7 @@ impl TurnRunner for CoreRunner {
                     seq: event.seq,
                     payload,
                     client_message_id: None,
+                    created_at_ms: Some(event.created_at),
                 }
             })
             .collect())
@@ -623,6 +629,7 @@ impl TurnRunner for CoreRunner {
                         seq: event.seq,
                         payload,
                         client_message_id: None,
+                        created_at_ms: Some(event.created_at),
                     }
                 })
                 .collect(),
@@ -758,6 +765,8 @@ impl TurnRunner for CoreRunner {
                 "mode": format!("{mode:?}"),
             }),
             client_message_id: None,
+            // A stop acknowledgement is this runner speaking, not a journal row.
+            created_at_ms: None,
         });
         Ok(())
     }

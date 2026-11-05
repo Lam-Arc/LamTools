@@ -257,6 +257,12 @@ pub struct BridgeEvent {
     pub seq: u64,
     pub payload: serde_json::Value,
     pub client_message_id: Option<String>,
+    /// When the journal wrote this fact, in epoch milliseconds.
+    ///
+    /// `None` for an event the runner synthesises rather than reads from the journal. A
+    /// synthesised fact has no row, and stamping it with the replay time is exactly the
+    /// mistake this field exists to stop making for rows that do have one.
+    pub created_at_ms: Option<i64>,
 }
 
 pub struct AppServer {
@@ -680,6 +686,8 @@ fn dispatch(
                         method: "turn/completed".into(),
                         seq: 0,
                         client_message_id: None,
+                        // Synthesised at resume: no row, so no time to report.
+                        created_at_ms: None,
                         payload: serde_json::json!({
                             "text": "",
                             "recovered": true,
@@ -697,6 +705,7 @@ fn dispatch(
                     method: "item/approval_resolved".into(),
                     seq: 0,
                     client_message_id: None,
+                    created_at_ms: None,
                     payload: serde_json::json!({
                         "approval_id": approval_id,
                         "request_id": approval_id,
@@ -1207,16 +1216,54 @@ fn prompt_param(params: &serde_json::Value) -> String {
 /// protocol. `event_id` is derived from the journal position, so a replayed fact keeps
 /// its identity and the client's seen-set drops the copy.
 pub fn event_json(thread: &str, event: &BridgeEvent) -> serde_json::Value {
-    serde_json::json!({
+    let mut frame = serde_json::json!({
         "event_id": format!("{thread}:{}", event.seq),
         "protocol_version": APP_SERVER_PROTOCOL,
         "seq": event.seq,
         "thread_id": thread,
         "method": event.method,
         "payload": event.payload,
-        "created_at": "",
         "client_message_id": event.client_message_id,
-    })
+    });
+    // Omitted rather than empty when unknown. `created_at: ""` is a string to the client,
+    // which then formats it and shows an invalid date; a missing key falls back to the
+    // turn's own time instead.
+    if let Some(ms) = event.created_at_ms {
+        frame["created_at"] = serde_json::Value::String(iso_utc(ms));
+        // The same instant as a number, for a host that stamps its projected item with
+        // this time instead of its own clock. Without it the client-facing string is the
+        // only copy, and the only way back to a number is parsing it again.
+        frame["created_at_ms"] = serde_json::Value::from(ms);
+    }
+    frame
+}
+
+/// RFC-3339 in UTC, millisecond precision.
+///
+/// Hand-written because nothing here carries a date crate for one field. Howard
+/// Hinnant's days-from-civil, exact for every instant this can see.
+pub fn iso_utc(ms: i64) -> String {
+    let seconds = ms.div_euclid(1000);
+    let millis = ms.rem_euclid(1000);
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = if month_part < 10 {
+        month_part + 3
+    } else {
+        month_part - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 /// Used by tests and by hosts that need to shove a raw frame at a socket.

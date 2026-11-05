@@ -24,6 +24,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
+use sunday_host::app_server::iso_utc;
 
 #[cfg(test)]
 mod contract;
@@ -68,43 +69,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0)
-}
-
-/// RFC-3339 in UTC, millisecond precision.
-///
-/// The client stores `created_at` verbatim and formats it (`store.ts`), so an empty
-/// string is not "no timestamp" to it: `typeof '' === 'string'` holds, and the item
-/// ends up with an invalid date. That is why this host has to produce a real one.
-///
-/// Written by hand because the host carries no date crate for one field. The
-/// conversion is Howard Hinnant's days-from-civil, exact for every date this can see.
-///
-/// Known gap: the Rust journal stores `journal_events.created_at`, but the read path
-/// (`sunday_store::history_page`) does not return it, so a replayed event is stamped
-/// with the moment it was projected rather than the moment it happened. Ordering is
-/// unaffected (it comes from `seq`); only the displayed time of an old message is.
-fn iso_utc_from_ms(ms: u64) -> String {
-    let seconds = (ms / 1000) as i64;
-    let millis = ms % 1000;
-    let days = seconds.div_euclid(86_400);
-    let rest = seconds.rem_euclid(86_400);
-    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
-    let shifted = days + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_part = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
-    let month = if month_part < 10 {
-        month_part + 3
-    } else {
-        month_part - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 /// What the desktop core offers on an approval card. Copied rather than invented so a
@@ -572,7 +536,15 @@ impl Projector {
             _ => Vec::new(),
         };
 
-        let created_at_ms = now_ms();
+        // The journal's own instant when the frame carries one: `respond` replays the
+        // journal, and a replayed fact has to show when it happened rather than when it
+        // was replayed. Without a time on the frame this host is stamping a fact it has
+        // just observed itself.
+        let created_at_ms = envelope
+            .get("created_at_ms")
+            .and_then(Value::as_i64)
+            .filter(|ms| *ms > 0)
+            .unwrap_or_else(|| now_ms() as i64);
         let mut item = serde_json::Map::new();
         item.insert("kind".into(), json!(kind));
         item.insert("thread_id".into(), json!(thread));
@@ -598,7 +570,7 @@ impl Projector {
         envelope.insert("event_id".into(), json!(event_id));
         // A real timestamp, never "". The client stores this string verbatim and
         // formats it; an empty one is a valid string holding an invalid date.
-        envelope.insert("created_at".into(), json!(iso_utc_from_ms(created_at_ms)));
+        envelope.insert("created_at".into(), json!(iso_utc(created_at_ms)));
         envelope.insert("turn_id".into(), json!(turn));
         envelope.insert("item_id".into(), json!(item_id));
         // seq = 0 means "no persisted anchor". Writing the 0 makes the client treat

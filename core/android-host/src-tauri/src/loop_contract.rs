@@ -335,7 +335,19 @@ fn replayed_facts_keep_one_identity() {
                 first,
                 "one event id describes two different {method} facts"
             );
+            // A replay is not when the fact happened. The journal row knows; inventing
+            // the projection time instead made last week's message look like it was sent
+            // the moment the app was reopened.
+            assert_eq!(
+                copy["created_at_ms"], copies[0]["created_at_ms"],
+                "{method} reports a different time when replayed"
+            );
         }
+        let stamp = copies[0]["created_at"].as_str().unwrap_or_default();
+        assert!(
+            stamp.len() == 24 && stamp.ends_with('Z'),
+            "{method} carries no real timestamp: {stamp:?}"
+        );
     }
 }
 

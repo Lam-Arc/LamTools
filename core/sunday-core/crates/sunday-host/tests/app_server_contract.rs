@@ -7,7 +7,7 @@
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use sunday_host::app_server::{AppServer, BridgeEvent, EventSink, TurnRunner};
+use sunday_host::app_server::{event_json, iso_utc, AppServer, BridgeEvent, EventSink, TurnRunner};
 
 type Socket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
@@ -36,6 +36,7 @@ fn event(method: &str, seq: u64, payload: serde_json::Value, cmid: Option<&str>)
         seq,
         payload,
         client_message_id: cmid.map(str::to_owned),
+        created_at_ms: None,
     }
 }
 
@@ -781,4 +782,39 @@ fn a_cancel_is_answered_while_a_slow_turn_is_still_running() {
         }
     }
     panic!("the turn never reported completion after cancel");
+}
+
+/// One frame, read the way a host that projects it reads it.
+///
+/// Two things have to be true here. The display time must be the instant the journal
+/// recorded, not the instant the frame was built: a replay is not when the fact
+/// happened. And an event with no row behind it must report no time at all, because an
+/// empty string is a string to the client, which then formats it and shows an invalid
+/// date.
+#[test]
+fn a_frame_carries_the_instant_the_journal_recorded() {
+    let mut recorded = event("turn/started", 7, serde_json::json!({}), None);
+    recorded.created_at_ms = Some(1_700_000_000_000);
+    let frame = event_json("th", &recorded);
+    assert_eq!(frame["created_at"], "2023-11-14T22:13:20.000Z");
+    assert_eq!(frame["created_at_ms"], 1_700_000_000_000i64);
+    // Identity still comes from the journal position.
+    assert_eq!(frame["event_id"], "th:7");
+
+    let mut synthesised = event("turn/completed", 0, serde_json::json!({}), None);
+    synthesised.created_at_ms = None;
+    let frame = event_json("th", &synthesised);
+    assert!(
+        frame.get("created_at").is_none(),
+        "an unknown time must be absent, never an empty string"
+    );
+}
+
+/// Hand-written date arithmetic; three known instants catch a wrong era, a wrong month
+/// offset and a lost leap day.
+#[test]
+fn the_formatter_matches_known_instants() {
+    assert_eq!(iso_utc(0), "1970-01-01T00:00:00.000Z");
+    assert_eq!(iso_utc(1_700_000_000_000), "2023-11-14T22:13:20.000Z");
+    assert_eq!(iso_utc(1_709_164_800_123), "2024-02-29T00:00:00.123Z");
 }

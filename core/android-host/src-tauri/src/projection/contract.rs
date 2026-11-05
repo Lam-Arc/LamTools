@@ -11,7 +11,7 @@
 
 use serde_json::Value;
 
-use super::{iso_utc_from_ms, Projector};
+use super::Projector;
 
 /// The contract, compiled in: a fixture that is not there is a build error rather
 /// than a test that quietly finds nothing to check.
@@ -254,20 +254,5 @@ fn every_projected_item_is_domain_valid() {
         problems.is_empty(),
         "projected items are outside the contract:\n  {}",
         problems.join("\n  ")
-    );
-}
-
-/// The formatter is the only hand-written date arithmetic in the host; three known
-/// instants are enough to catch a wrong era, a wrong month offset or a lost leap day.
-#[test]
-fn the_timestamp_formatter_matches_known_instants() {
-    assert_eq!(iso_utc_from_ms(0), "1970-01-01T00:00:00.000Z");
-    assert_eq!(
-        iso_utc_from_ms(1_700_000_000_000),
-        "2023-11-14T22:13:20.000Z"
-    );
-    assert_eq!(
-        iso_utc_from_ms(1_709_164_800_123),
-        "2024-02-29T00:00:00.123Z"
     );
 }

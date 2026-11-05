@@ -405,6 +405,14 @@ pub struct Event {
     pub event_id: String,
     pub kind: EventKind,
     pub payload: Value,
+    /// When the journal row was written, in epoch milliseconds.
+    ///
+    /// The journal has always stored this; the read path simply did not bring it back,
+    /// so every replay invented a time and a message from last week was displayed at the
+    /// moment the app was reopened. 0 means the producer did not know, which is how an
+    /// event serialized before this field existed still parses.
+    #[serde(default)]
+    pub created_at: i64,
 }
 
 // ---------------------------------------------------------------- commands
