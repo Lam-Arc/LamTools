@@ -874,6 +874,15 @@ def create_core_agent_http_app(
         app_state["plugin_system_host"] = getattr(agent_operations, "plugin_system_host", None)
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
+        # user:“服务器重启后，应能够识别已死亡的执行进程，安全释放旧任务占用，使用户
+        # 可以继续或重试”+(必须先回收失效所有权，再让下面的 reaper 收尾快照：顺序反了的话，
+        # 被死进程占着的会话会被 reaper 当成「别的进程还在跑」直接跳过，用户重试也起不来)。
+        try:
+            released = await core_db_handle.runtime_state_store.release_orphaned_owners()
+            if released:
+                _logger.warning("[startup] released %d orphaned run(s)", released)
+        except BaseException:
+            _logger.exception("[startup] orphaned run release failed (non-fatal)")
         # Reap turns left durably "running"/"waiting"/"interrupting" by an
         # unexpected shutdown, mirroring arrange job recovery. Without this the
         # durable-snapshot guard in turn.start blocks the thread with

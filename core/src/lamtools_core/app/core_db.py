@@ -1353,6 +1353,69 @@ class SqlAlchemyRuntimeStateStore:
                 return await self.get(row.thread_id)
         return None
 
+    async def release_orphaned_owners(self, *, reason: str = "owner_gone") -> int:
+        """Release sessions whose persisted state still claims an in-flight run.
+
+        user:“服务器重启后，应能够识别已死亡的执行进程，安全释放旧任务占用，使用户可以
+        继续或重试”“优先复用现有 revision、fencing 和任务生命周期机制，通过原子状态
+        转移回收失效所有权”“绝不放宽旧 revision 写入限制”
+        +(启动时把「看着还在跑、但跑它的进程已经没了」的会话原子地转成终止态。不清掉它，
+        后续任何写入都会被并发守卫当成「别的进程在写」而拒绝，用户点重试也起不来。
+        整个读改写复用 store.patch 的事务与 revision 条件更新，没有为落后写入开口子；
+        别的进程还活着时一律不动它)。
+        """
+        from lamtools_core.runtime_owner import (
+            LIVE_RUN_STATES,
+            is_own_token,
+            owner_is_live,
+            read_owner,
+        )
+
+        async with self.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(CoreRuntimeSession).where(
+                        func.json_extract(
+                            CoreRuntimeSession.runtime_state_json, "$.status"
+                        ).in_(sorted(LIVE_RUN_STATES))
+                    )
+                )
+            ).scalars().all()
+
+        candidates: list[str] = []
+        for row in rows:
+            payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
+            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+            owner = read_owner(metadata)
+            # 另一个进程还活着并且正握着这个会话：绝不回收。
+            if owner and not is_own_token(owner) and owner_is_live(owner):
+                continue
+            candidates.append(row.thread_id)
+
+        released = 0
+        for thread_id in candidates:
+            def _release(state: Any) -> None:
+                state.status = "cancelled"
+                state.loop_state = "failed"
+                if isinstance(state.metadata, dict):
+                    state.metadata["cancellation_reason"] = reason
+                    state.metadata.pop("pending_approval", None)
+                    state.metadata.pop("pending_waiting_request", None)
+
+            try:
+                await self.patch(thread_id, _release)
+            except BaseException:
+                _logger.exception(
+                    "[runtime-state] failed to release orphaned session=%s", thread_id
+                )
+                continue
+            released += 1
+        if released:
+            _logger.warning(
+                "[runtime-state] released %d orphaned run(s) reason=%s", released, reason
+            )
+        return released
+
     async def _save(
         self, state: RuntimeState, *, history: list[dict[str, Any]] | None,
         append_messages: list[dict[str, Any]] | None = None,
