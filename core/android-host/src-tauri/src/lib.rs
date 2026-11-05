@@ -26,6 +26,9 @@ use sunday_host::policy::GrantPolicy;
 use sunday_host::runner::{CoreOptions, CoreRunner};
 use tauri::{Emitter, Manager};
 
+#[cfg(test)]
+mod loop_contract;
+
 pub mod config;
 pub mod config_rpc;
 pub mod http_surface;

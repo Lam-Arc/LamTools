@@ -1200,7 +1200,13 @@ fn prompt_param(params: &serde_json::Value) -> String {
         .to_owned()
 }
 
-fn event_json(thread: &str, event: &BridgeEvent) -> serde_json::Value {
+/// One journal event as the client receives it.
+///
+/// Public because a host that drives the runner itself has to frame events the same
+/// way this server does: two framings of one fact would be two dialects of the client
+/// protocol. `event_id` is derived from the journal position, so a replayed fact keeps
+/// its identity and the client's seen-set drops the copy.
+pub fn event_json(thread: &str, event: &BridgeEvent) -> serde_json::Value {
     serde_json::json!({
         "event_id": format!("{thread}:{}", event.seq),
         "protocol_version": APP_SERVER_PROTOCOL,
