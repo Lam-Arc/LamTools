@@ -78,14 +78,11 @@ mod bridge {
                 let input = env
                     .new_string(text)
                     .map_err(|error| unavailable(format!("cannot pass the value: {error}")))?;
-                env.call_static_method(
-                    &class,
-                    method,
-                    STRING_SIGNATURE,
-                    &[JValue::Object(&input)],
-                )
+                env.call_static_method(&class, method, STRING_SIGNATURE, &[JValue::Object(&input)])
             }
-            None => env.call_static_method(&class, method, "()Ljava/lang/String;", &[] as &[JValue]),
+            None => {
+                env.call_static_method(&class, method, "()Ljava/lang/String;", &[] as &[JValue])
+            }
         }
         .map_err(|error| unavailable(describe(&mut env, error)))?;
 

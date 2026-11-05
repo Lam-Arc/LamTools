@@ -28,10 +28,10 @@ use tauri::{Emitter, Manager};
 
 pub mod config;
 pub mod config_rpc;
-pub mod keystore;
-pub mod projection;
 pub mod http_surface;
+pub mod keystore;
 pub mod lifecycle;
+pub mod projection;
 pub mod provider;
 pub mod secrets;
 pub mod settings;
@@ -59,21 +59,31 @@ impl FrameSink for IpcSink {
             #[cfg(debug_assertions)]
             println!(
                 "core_event (not rendered) -> {} seq={}",
-                body.get("method").and_then(|value| value.as_str()).unwrap_or("?"),
-                body.get("seq").and_then(|value| value.as_u64()).unwrap_or(0),
+                body.get("method")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("?"),
+                body.get("seq")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0),
             );
             return;
         };
         #[cfg(debug_assertions)]
         println!(
             "core_event -> {} kind={} seq={}",
-            projected.get("method").and_then(|value| value.as_str()).unwrap_or("?"),
+            projected
+                .get("method")
+                .and_then(|value| value.as_str())
+                .unwrap_or("?"),
             projected
                 .get("payload")
                 .and_then(|payload| payload.get("kind"))
                 .and_then(|value| value.as_str())
                 .unwrap_or("?"),
-            projected.get("seq").and_then(|value| value.as_u64()).unwrap_or(0),
+            projected
+                .get("seq")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
         );
         let _ = self.app.emit("core-event", projected);
     }
@@ -146,7 +156,10 @@ fn project_events(
     result: &mut serde_json::Value,
     projector: &Arc<std::sync::Mutex<projection::Projector>>,
 ) {
-    let Some(events) = result.get_mut("events").and_then(|value| value.as_array_mut()) else {
+    let Some(events) = result
+        .get_mut("events")
+        .and_then(|value| value.as_array_mut())
+    else {
         return;
     };
     let mut guard = projector.lock().unwrap();
@@ -165,12 +178,22 @@ fn project_events(
                 format!(
                     "{}|{}|{}",
                     payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?"),
-                    payload.get("item_id").and_then(|v| v.as_str()).unwrap_or("?"),
-                    payload.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
+                    payload
+                        .get("item_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?"),
+                    payload
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?"),
                 )
             })
             .collect();
-        println!("resume projection: {} events :: {}", summary.len(), summary.join(", "));
+        println!(
+            "resume projection: {} events :: {}",
+            summary.len(),
+            summary.join(", ")
+        );
     }
     *events = projected;
 }
@@ -213,7 +236,6 @@ fn lifecycle_pause(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value
 fn lifecycle_resume(state: tauri::State<'_, Arc<CoreState>>) -> serde_json::Value {
     apply_lifecycle(&state, "resume")
 }
-
 
 /// The Android Activity callbacks, arriving over JNI.
 ///

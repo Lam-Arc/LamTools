@@ -56,7 +56,9 @@ pub async fn handle(
         | "config.model_group.members.set"
         | "config.model_group.delete" => read_groups(state),
         "config.notices.drain" => Ok(json!({ "notices": [] })),
-        "config.models.usage" => Ok(json!({ "usage": {}, "total": {}, "range": params.get("range").cloned().unwrap_or(Value::Null) })),
+        "config.models.usage" => Ok(
+            json!({ "usage": {}, "total": {}, "range": params.get("range").cloned().unwrap_or(Value::Null) }),
+        ),
         "config.provider.create" | "config.provider.update" => write_provider(state, params),
         "config.provider.delete" => delete_provider(state),
         "config.models.upsert" | "config.model.create_with_provider" => write_model(state, params),
@@ -185,7 +187,13 @@ fn normalise_api_type(raw: &str) -> String {
 
 fn write_provider(state: &CoreState, params: &Value) -> Result<Value, String> {
     let mut config = load(state)?;
-    let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let text = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+    };
 
     let name = text("name");
     if !name.is_empty() {
@@ -390,7 +398,10 @@ async fn probe_at_timeout(dir: &Path, _params: &Value, timeout: Duration) -> Res
 
     if !has_key {
         return Ok(probe_reply(from_outcome(
-            &reached, latency, false, &checked_at,
+            &reached,
+            latency,
+            false,
+            &checked_at,
         )));
     }
 
@@ -654,7 +665,10 @@ mod tests {
         seed(dir.path(), &trusted.base_url(), false);
         probe_at(dir.path(), &json!({})).await.unwrap();
         let mut config = load_dir(dir.path()).unwrap();
-        assert!(config.confirm_endpoint, "a reachable endpoint earned no approval");
+        assert!(
+            config.confirm_endpoint,
+            "a reachable endpoint earned no approval"
+        );
 
         // The user edits the address. `write_provider` drops the approval; do the same
         // here so the test proves the probe honours it rather than the editor does.

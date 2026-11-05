@@ -76,7 +76,11 @@ fn read_optional(path: &Path) -> Result<Option<String>, CoreError> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
             let trimmed = text.trim().to_owned();
-            Ok(if trimmed.is_empty() { None } else { Some(trimmed) })
+            Ok(if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(CoreError::storage(format!("secret read: {error}"))),
@@ -203,11 +207,7 @@ impl SecretStore for HostSecrets {
                 std::fs::create_dir_all(&self.dir).map_err(|error| {
                     CoreError::storage(format!("cannot create {}: {error}", self.dir.display()))
                 })?;
-                sunday_host::private_file::write(
-                    &plaintext_path(&self.dir),
-                    value,
-                    "secret file",
-                )
+                sunday_host::private_file::write(&plaintext_path(&self.dir), value, "secret file")
             }
         }
     }
@@ -215,8 +215,9 @@ impl SecretStore for HostSecrets {
     fn delete(&self, _key: &str) -> Result<(), CoreError> {
         for path in [sealed_path(&self.dir), plaintext_path(&self.dir)] {
             if path.exists() {
-                std::fs::remove_file(&path)
-                    .map_err(|error| CoreError::storage(format!("cannot remove secret: {error}")))?;
+                std::fs::remove_file(&path).map_err(|error| {
+                    CoreError::storage(format!("cannot remove secret: {error}"))
+                })?;
             }
         }
         Ok(())
@@ -251,7 +252,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = HostSecrets::new(dir.path());
         store.set(API_KEY_NAME, "sk-test-123").unwrap();
-        assert_eq!(store.get(API_KEY_NAME).unwrap().as_deref(), Some("sk-test-123"));
+        assert_eq!(
+            store.get(API_KEY_NAME).unwrap().as_deref(),
+            Some("sk-test-123")
+        );
         assert!(has_api_key(dir.path()));
     }
 
@@ -291,7 +295,11 @@ mod tests {
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & 0o077, 0, "the key file is readable by others: {mode:o}");
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "the key file is readable by others: {mode:o}"
+        );
     }
 
     /// On a desktop build there is no keystore, and the report says so rather than

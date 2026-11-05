@@ -26,8 +26,7 @@ pub struct HttpResponse {
 }
 
 fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
     for chunk in bytes.chunks(3) {
         let first = chunk[0] as u32;
@@ -130,7 +129,10 @@ mod tests {
 
     #[test]
     fn the_query_is_split_off_the_path() {
-        assert_eq!(split_path("/projects/abc/files"), ("/projects/abc/files", ""));
+        assert_eq!(
+            split_path("/projects/abc/files"),
+            ("/projects/abc/files", "")
+        );
         assert_eq!(
             split_path("/projects/abc/files?path=a.txt"),
             ("/projects/abc/files", "path=a.txt")

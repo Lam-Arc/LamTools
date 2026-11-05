@@ -66,8 +66,7 @@ fn fingerprint_of(config: &config::CoreConfig, dir: &std::path::Path) -> Result<
 
 /// Applies a patch, validates it, and writes it back.
 pub fn apply_patch(state: &CoreState, patch: ModelPatch) -> Result<serde_json::Value, String> {
-    let mut next =
-        config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
+    let mut next = config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
     let previous_fingerprint = fingerprint_of(&next, &state.data_dir)?;
     let previous_provider = next.provider.clone();
     let previous_model = next.model_id.clone();
@@ -105,8 +104,7 @@ pub fn apply_patch(state: &CoreState, patch: ModelPatch) -> Result<serde_json::V
 
 /// Records that the user approved the endpoint currently configured.
 pub fn approve(state: &CoreState) -> Result<serde_json::Value, String> {
-    let mut next =
-        config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
+    let mut next = config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
     let vendor = vendor_for(&next)?;
     let path = crate::provider::bindings_path(&state.data_dir);
     let mut book = ProviderBook::load(&path);
@@ -141,8 +139,7 @@ pub fn store_key(state: &CoreState, key: &str) -> Result<serde_json::Value, Stri
         .set(secrets::API_KEY_NAME, trimmed)
         .map_err(|error| error.to_string())?;
 
-    let mut next =
-        config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
+    let mut next = config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
     // A new key for the same endpoint still has to be approved: the binding is about
     // where the credential goes, and this is a different credential.
     next.confirm_endpoint = false;
@@ -157,8 +154,7 @@ pub fn forget_key(state: &CoreState) -> Result<serde_json::Value, String> {
     HostSecrets::new(&state.data_dir)
         .delete(secrets::API_KEY_NAME)
         .map_err(|error| error.to_string())?;
-    let mut next =
-        config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
+    let mut next = config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
     next.confirm_endpoint = false;
     config::save(&state.data_dir, &next).map_err(|error| error.to_string())?;
 
@@ -214,8 +210,7 @@ pub fn grant(state: &CoreState, tool_id: &str, granted: bool) -> Result<serde_js
     }
     state.runner.set_policy(policy.clone());
 
-    let mut next =
-        config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
+    let mut next = config::load_or_default(&state.data_dir).map_err(|error| error.to_string())?;
     next.granted_tools = policy.granted.iter().cloned().collect();
     next.granted_tools.sort();
     config::save(&state.data_dir, &next).map_err(|error| error.to_string())?;
