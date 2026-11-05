@@ -352,6 +352,8 @@ impl TurnRunner for CoreRunner {
         self.set_live(thread_id, true);
 
         let workspace = self.workspace_for(thread_id);
+        #[cfg(debug_assertions)]
+        println!("turn workspace for {thread_id}: {workspace}");
         let owned = self.build_tools(&workspace)?;
         let tools: Vec<&dyn Tool> = owned.iter().map(|tool| tool.as_ref()).collect();
 
@@ -531,6 +533,8 @@ impl TurnRunner for CoreRunner {
         let cancel = self.cancel_token(thread_id);
 
         let workspace = self.workspace_for(thread_id);
+        #[cfg(debug_assertions)]
+        println!("turn workspace for {thread_id}: {workspace}");
         let owned = self.build_tools(&workspace)?;
         let tools: Vec<&dyn Tool> = owned.iter().map(|tool| tool.as_ref()).collect();
         let env = Env {

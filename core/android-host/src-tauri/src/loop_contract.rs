@@ -435,6 +435,87 @@ fn a_write_that_died_mid_flight_is_reported_and_never_redone() {
     );
 }
 
+/// One model answer may ask for several tools; only the one with a side effect asks.
+///
+/// The device hit this: the model returned `[read_file, write_file]` in a single answer,
+/// and the screen showed a running turn with no card. This pins the host half — the read
+/// must run, the write must ask, and the card must name the call it is asking about.
+#[test]
+fn two_calls_in_one_answer_still_produce_one_answerable_card() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("workspace").join("seed.txt"), "seed").ok();
+    let runner = runner(
+        dir.path(),
+        vec![
+            ModelTurn {
+                text: Some("Looking, then writing.".into()),
+                reasoning: None,
+                tool_calls: vec![
+                    ToolCall {
+                        id: "call-read".into(),
+                        name: "read_file".into(),
+                        args: json!({ "path": "seed.txt" }),
+                    },
+                    ToolCall {
+                        id: "call-write".into(),
+                        name: "write_file".into(),
+                        args: json!({ "path": "notes.md", "content": "x" }),
+                    },
+                ],
+                usage: None,
+                provider_state: None,
+            },
+            text_turn("done"),
+        ],
+    );
+    let (frames, sink) = recorder();
+    runner.start_turn(THREAD, PROMPT, "cm-1", &sink).unwrap();
+
+    let asking = frames_of(&frames, "item/approval_request");
+    assert_eq!(asking.len(), 1, "the write did not ask: {frames:#?}");
+    assert_eq!(asking[0]["payload"]["tool_call_id"], "call-write");
+    let request = asking[0]["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    runner
+        .respond(THREAD, &request, "approve", "", &sink)
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("workspace").join("notes.md")).unwrap(),
+        "x"
+    );
+
+    // Projected, the same stream must give the card options and the file.
+    let mut projector = Projector::new();
+    let mut seen = std::collections::HashSet::new();
+    let items: Vec<Value> = frames
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|frame| {
+            let id = format!(
+                "{}|{}",
+                frame["event_id"].as_str().unwrap_or_default(),
+                frame["method"]
+            );
+            seen.insert(id)
+        })
+        .filter_map(|frame| projector.project(frame))
+        .collect();
+    let card = items
+        .iter()
+        .find(|item| item["payload"]["kind"] == "approval_request")
+        .expect("no card after projection");
+    assert_eq!(
+        card["payload"]["payload"]["options"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+}
+
 /// A turn writes where the user is working, not in one directory for the whole app.
 ///
 /// The device showed the consequence: the project `demo` was created, the reply said
