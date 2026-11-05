@@ -1303,7 +1303,7 @@
     },
     {
       "name": "a denied approval closes the card and leaves the tool unrun",
-      "why": "a denial is a resolution, not a late failure: the card closes, the row says the call did not run, and nothing executes",
+      "why": "a denial is a resolution, not a late failure: the card closes, no result is reported on that call because it never ran, and the turn ends by itself",
       "given": [
         {
           "thread_id": "th",
@@ -1350,12 +1350,11 @@
         },
         {
           "thread_id": "th",
-          "method": "item/failed",
+          "method": "turn/completed",
           "seq": 5,
-          "event_id": "ev-deny-failed",
+          "event_id": "ev-deny-done",
           "payload": {
-            "tool_call_id": "call-d",
-            "error": "denied by the user"
+            "text": ""
           }
         }
       ],
@@ -1456,13 +1455,9 @@
         {
           "seq": 5,
           "payload": {
-            "kind": "tool_result",
-            "status": "failed",
-            "item_id": "th:turn-1:call-d:tool",
-            "payload": {
-              "error": "denied by the user",
-              "status": "failed"
-            }
+            "kind": "status",
+            "status": "completed",
+            "turn_id": "turn-1"
           }
         }
       ]

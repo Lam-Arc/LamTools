@@ -227,7 +227,7 @@ describe('what the contractor emits, the screen shows', () => {
     const snapshot = applyAll(eventsOf('a denied approval closes the card and leaves the tool unrun'))
     expect(panelDecisions(snapshot)).toEqual([])
     const item = snapshot.core?.items?.['th:turn-1:call-d:tool']
-    expect(item?.status).toBe('failed')
+    expect(item?.status, 'a settled row is not a waiting row').toBe('completed')
   })
 
   it('keeps the read row and the write row apart when one answer asks for both', () => {

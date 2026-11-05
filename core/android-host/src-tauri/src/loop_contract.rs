@@ -82,11 +82,15 @@ fn text_turn(text: &str) -> ModelTurn {
 
 /// Wired the way `lib.rs` wires it, minus the Tauri handle.
 fn runner(dir: &std::path::Path, turns: Vec<ModelTurn>) -> CoreRunner {
+    runner_with(dir, Arc::new(ScriptedModel::new(turns)))
+}
+
+fn runner_with(dir: &std::path::Path, model: Arc<dyn Model>) -> CoreRunner {
     let workspace = dir.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     CoreRunner::new(CoreOptions {
         store: Store::open(&dir.join("core.db")).unwrap(),
-        model: Arc::new(ScriptedModel::new(turns)),
+        model,
         model_id: "scripted".into(),
         workspace: workspace.to_string_lossy().into_owned(),
         workspace_for: None,
@@ -513,6 +517,149 @@ fn two_calls_in_one_answer_still_produce_one_answerable_card() {
             .as_array()
             .map(Vec::len),
         Some(2)
+    );
+}
+
+/// A denied call does not run, and the conversation keeps going.
+///
+/// The denial is a resolution, not a stuck state: the row must say the call did not run,
+/// the turn must close, and the next turn must still work. Otherwise "no" would be as
+/// blocking as a missing card.
+#[test]
+fn a_denied_call_does_not_write_and_the_thread_stays_usable() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let runner = runner(
+        dir.path(),
+        vec![
+            write_call("call-d", "denied.txt", "no"),
+            // A denial ends the run without asking the model again, so this next turn is
+            // what the following instruction gets.
+            write_call("call-e", "allowed.txt", "yes"),
+            text_turn("I did not create it."),
+            text_turn("Created allowed.txt."),
+        ],
+    );
+    let (frames, sink) = recorder();
+    runner.start_turn(THREAD, PROMPT, "cm-1", &sink).unwrap();
+    let request = frames_of(&frames, "item/approval_request")[0]["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    runner.respond(THREAD, &request, "deny", "", &sink).unwrap();
+
+    assert!(
+        !workspace.join("denied.txt").exists(),
+        "a denied write still wrote"
+    );
+    // A denial is answered, not failed: the call never ran, so no result is reported,
+    // and the turn closes on its own. What must not happen is a row left waiting.
+    let raw = frames.lock().unwrap().clone();
+    assert!(
+        raw.iter()
+            .any(|frame| frame["method"] == "item/approval_resolved"),
+        "the denial was not answered: {raw:#?}"
+    );
+    assert!(
+        !raw.iter().any(|frame| {
+            frame["method"] == "item/completed" && frame["payload"]["tool_call_id"] == "call-d"
+        }),
+        "a denied call reported a tool result"
+    );
+    assert!(
+        raw.iter().any(|frame| frame["method"] == "turn/completed"),
+        "the turn did not close after a denial"
+    );
+    assert!(
+        runner.history(THREAD, None, 50).unwrap().events.len() >= 5,
+        "the journal lost the denial"
+    );
+
+    // The next turn still runs, and its own approval still works.
+    let (frames2, sink2) = recorder();
+    runner
+        .start_turn(THREAD, "now create allowed.txt", "cm-2", &sink2)
+        .unwrap();
+    let request2 = frames_of(&frames2, "item/approval_request")[0]["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    runner
+        .respond(THREAD, &request2, "approve", "", &sink2)
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("allowed.txt")).unwrap(),
+        "yes"
+    );
+}
+
+/// Stop during the model call leaves the thread usable and writes nothing.
+///
+/// The composer's Stop is only honest if what follows it is a resting state: a turn that
+/// keeps the session busy after being stopped is the phone refusing to take the next
+/// instruction.
+#[test]
+fn a_stopped_turn_writes_nothing_and_leaves_the_thread_idle() {
+    struct SlowModel {
+        turns: Mutex<Vec<ModelTurn>>,
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl Model for SlowModel {
+        async fn stream(
+            &self,
+            _request: ModelRequest,
+            _sink: &mut (dyn FnMut(ModelDelta) + Send),
+        ) -> Result<ModelTurn, CoreError> {
+            std::thread::sleep(self.delay);
+            Ok(self.turns.lock().unwrap().remove(0))
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let runner = Arc::new(runner_with(
+        dir.path(),
+        Arc::new(SlowModel {
+            turns: Mutex::new(vec![
+                write_call("call-stop", "stopped.txt", "no"),
+                text_turn("fine"),
+            ]),
+            delay: std::time::Duration::from_millis(400),
+        }),
+    ));
+
+    let (frames, sink) = recorder();
+    let worker = Arc::clone(&runner);
+    let handle = std::thread::spawn(move || {
+        worker.start_turn(THREAD, PROMPT, "cm-1", &sink).unwrap();
+        worker
+    });
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    runner.cancel(THREAD).unwrap();
+    let runner = handle.join().unwrap();
+
+    assert!(
+        !workspace.join("stopped.txt").exists(),
+        "a stopped turn still wrote its file"
+    );
+    let cancelled = frames
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|frame| frame["method"] == "turn/cancelled");
+    assert!(cancelled, "a stop was not reported as a cancelled turn");
+
+    // The same runner serves the next turn.
+    let (frames2, sink2) = recorder();
+    runner
+        .start_turn(THREAD, "hello again", "cm-2", &sink2)
+        .unwrap();
+    assert!(
+        !frames_of(&frames2, "turn/accepted").is_empty(),
+        "the thread refused the turn after a stop"
     );
 }
 
