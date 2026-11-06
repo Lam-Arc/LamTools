@@ -32,6 +32,8 @@ struct Flags {
     ticket: String,
     method: String,
     params: String,
+    core_port: u16,
+    core_token: String,
 }
 
 fn parse(args: Vec<String>) -> Result<Flags> {
@@ -41,6 +43,8 @@ fn parse(args: Vec<String>) -> Result<Flags> {
         ticket: String::new(),
         method: "ping".to_owned(),
         params: "{}".to_owned(),
+        core_port: 0,
+        core_token: String::new(),
     };
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
@@ -51,6 +55,8 @@ fn parse(args: Vec<String>) -> Result<Flags> {
             "--ticket" => flags.ticket = value()?,
             "--method" => flags.method = value()?,
             "--params" => flags.params = value()?,
+            "--core-port" => flags.core_port = value()?.parse()?,
+            "--core-token" => flags.core_token = value()?,
             other => bail!("unknown flag {other}"),
         }
     }
@@ -78,14 +84,37 @@ async fn serve(args: Vec<String>) -> Result<()> {
         let mut link = ServerLink::accept(&endpoint, Arc::clone(&trust)).await?;
         println!("PEER {} trusted={}", link.peer, link.trusted);
         let name = flags.name.clone();
+        let core_port = flags.core_port;
+        let core_token = flags.core_token.clone();
         let result = link
             .serve(move |method, params| {
                 let name = name.clone();
+                let core_token = core_token.clone();
                 async move {
                     match method.as_str() {
                         "ping" => Ok(serde_json::json!({ "pong": true })),
                         "whoami" => Ok(serde_json::json!({ "device": name })),
                         "echo" => Ok(params),
+                        // 远程的 Core 调用：把 method/path 原样转给本机 Core。
+                        "core_http" => {
+                            if core_port == 0 {
+                                bail!("这台设备没有配置 Core 端口");
+                            }
+                            let http = params
+                                .get("method")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("GET")
+                                .to_owned();
+                            let path = params
+                                .get("path")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("/")
+                                .to_owned();
+                            let body = params.get("body");
+                            let (status, answer) =
+                                sunday_p2p::call_core("127.0.0.1", core_port, &core_token, &http, &path, body)?;
+                            Ok(serde_json::json!({ "status": status, "body": answer }))
+                        }
                         other => bail!("unknown method {other}"),
                     }
                 }

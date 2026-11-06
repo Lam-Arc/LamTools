@@ -10,10 +10,12 @@
 
 pub mod identity;
 pub mod link;
+pub mod proxy;
 pub mod ticket;
 pub mod trust;
 
 pub use identity::{Identity, ALPN};
 pub use link::{Client, Frame, ServerLink};
+pub use proxy::call_core;
 pub use ticket::{decode_ticket, encode_ticket};
 pub use trust::{TrustStore, TrustedDevice};
