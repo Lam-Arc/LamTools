@@ -110,7 +110,32 @@ pub fn path_of(app: &AppHandle) -> PathBuf {
 }
 
 fn rootfs_dir(app: &AppHandle) -> PathBuf {
-    path_of(app).join("rootfs")
+    // Versioned on purpose. A single `rootfs` directory has to be deleted before it can
+    // be rewritten, and a guest that is still shutting down holds files inside it, so the
+    // delete fails halfway and the install stalls on directories it cannot remove. A new
+    // directory per runtime version makes an upgrade additive: write beside the old one,
+    // then clean up what is no longer referenced.
+    match installed_manifest(app) {
+        Some(manifest) => path_of(app).join(format!("rootfs-{}", sanitise(&manifest.runtime_version))),
+        None => path_of(app).join("rootfs"),
+    }
+}
+
+fn installed_manifest(app: &AppHandle) -> Option<Manifest> {
+    let marker = std::fs::read_to_string(marker_path(app)).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&marker).ok()?;
+    let version = value.get("runtimeVersion")?.as_str()?.to_owned();
+    let text = std::fs::read_to_string(path_of(app).join("runtime-manifest.json")).ok()?;
+    let mut manifest: Manifest = serde_json::from_str(&text).ok()?;
+    manifest.runtime_version = version;
+    Some(manifest)
+}
+
+fn sanitise(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
 }
 
 fn marker_path(app: &AppHandle) -> PathBuf {
@@ -172,7 +197,21 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     }
 
     println!("[sunday] unpacking runtime from {}", archive.display());
-    let rootfs = rootfs_dir(app);
+    // Earlier builds kept user data inside the rootfs, so replacing the runtime
+    // would delete the database and the model config. Move it out once, before the
+    // tree is cleared; the layout is now filesDir/runtime/userdata bound over
+    // /root/.sunday.
+    let userdata = path_of(app).join("userdata");
+    let legacy = rootfs_dir(app).join("root/.sunday");
+    if legacy.exists() && !userdata.exists() {
+        if let Err(error) = copy_tree(&legacy, &userdata) {
+            println!("[sunday] could not carry user data forward: {error}");
+        } else {
+            println!("[sunday] carried user data out of the runtime tree");
+        }
+    }
+
+    let rootfs = path_of(app).join(format!("rootfs-{}", sanitise(&manifest.runtime_version)));
     if rootfs.exists() {
         std::fs::remove_dir_all(&rootfs)
             .map_err(|error| format!("cannot clear the previous runtime: {error}"))?;
@@ -232,6 +271,21 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     // The archive has done its job. Keeping it would cost the user another 200 MB for a
     // file that is never read again unless the runtime version changes.
     let _ = std::fs::remove_file(&archive);
+    // Old images are only deleted once the new one works; a failed delete is not an error,
+    // it just means the next launch will try again.
+    if let Ok(entries) = std::fs::read_dir(path_of(app)) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_other_rootfs = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("rootfs") && path != rootfs)
+                .unwrap_or(false);
+            if is_other_rootfs {
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
 
     Ok(InstallState {
         installed: true,
@@ -239,6 +293,23 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
         abi: manifest.abi,
         message: "installed".into(),
     })
+}
+
+/// Copies a directory tree, creating parents. Used once, to move user data out of a
+/// runtime image that is about to be replaced.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
@@ -381,12 +452,19 @@ impl Runtime {
         }
         std::fs::create_dir_all(&l2s).ok();
 
+        // User data lives beside the runtime, never inside it: replacing the rootfs on
+        // an upgrade must not take the database, config and workspace with it.
+        let userdata = path_of(&self.app).join("userdata");
+        std::fs::create_dir_all(&userdata).ok();
+        let userdata = userdata.to_string_lossy().to_string();
+
         let mut argv: Vec<String> = manifest
             .launch
             .argv
             .iter()
             .map(|item| {
-                item.replace("{NATIVE_LIB_DIR}", &native.to_string_lossy())
+                item.replace("{USERDATA}", &userdata)
+                    .replace("{NATIVE_LIB_DIR}", &native.to_string_lossy())
                     .replace("{ROOTFS}", &rootfs.to_string_lossy())
                     .replace("{TMP}", &tmp.to_string_lossy())
                     .replace("{PORT}", &port.to_string())
@@ -458,6 +536,45 @@ impl Runtime {
         });
 
         Ok(port)
+    }
+
+    /// Blocks until the guest answers an authenticated request.
+    ///
+    /// `ensure_started` returns as soon as proot is spawned, which is what the UI's
+    /// boot screen wants but not what its first request needs: the guest spends
+    /// seconds importing Python before uvicorn binds the port, so a request issued
+    /// immediately after start fails with a connection error. Waiting here makes the
+    /// start command mean what its name says.
+    pub fn wait_ready(&self, timeout: std::time::Duration) -> Result<(), String> {
+        let (port, token) = {
+            let inner = self.inner.lock().expect("runtime lock");
+            (inner.port, inner.token.clone())
+        };
+        if port == 0 {
+            return Err("the guest was not started".to_owned());
+        }
+        let client = blocking_client();
+        let deadline = std::time::Instant::now() + timeout;
+        let mut last = String::new();
+        while std::time::Instant::now() < deadline {
+            match client
+                .get(format!("http://127.0.0.1:{port}/api/core/projects"))
+                .bearer_auth(&token)
+                .timeout(std::time::Duration::from_secs(4))
+                .send()
+            {
+                Ok(response) if response.status().is_success() => {
+                    if let Ok(mut inner) = self.inner.lock() {
+                        inner.running.store(true, Ordering::SeqCst);
+                    }
+                    return Ok(());
+                }
+                Ok(response) => last = format!("core answered {}", response.status()),
+                Err(error) => last = error.to_string(),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        Err(format!("the core did not become ready: {last}"))
     }
 
     pub fn stop(&self) {

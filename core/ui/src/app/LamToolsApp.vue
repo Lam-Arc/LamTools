@@ -2523,12 +2523,17 @@ async function handleQueuedInputEdit(item: CoreQueuedInput): Promise<void> {
 async function loadInitialData() {
   try {
     loadError.value = null
+    // The project list is what the start screen is built from; a failure in model
+    // discovery or theme preferences must not leave it empty. On a phone that was
+    // exactly the symptom: a 200 with a full list, and a screen saying there is none.
+    await refreshProjects().catch((error) => setLoadError(
+      error instanceof Error ? error.message : String(error),
+    ))
     await Promise.all([
       loadModelOptions(),
       loadModelGroups(),
       loadModelCatalogPreference(),
       loadPermissionMode(),
-      refreshProjects(),
       refreshSessions(),
     ])
     await refreshPluginModes()
@@ -2577,6 +2582,12 @@ async function createProject(payload: CoreProjectCreatePayload) {
     selectedProjectId.value = created.project.id
     rememberRecentProject(created.project)
     showProjectCreate.value = false
+    // The core answers a create with the session it just made. Opening it is what the
+    // user asked for by pressing 创建项目; leaving them on the start screen was the
+    // Android symptom where the project existed but nothing opened.
+    if (created.session) {
+      await selectSession(created.session.id)
+    }
   } catch (error) {
     projectCreateError.value = messageFromError(error)
   } finally {

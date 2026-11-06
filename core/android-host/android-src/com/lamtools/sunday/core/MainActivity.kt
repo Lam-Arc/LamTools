@@ -53,6 +53,19 @@ class MainActivity : TauriActivity() {
    * and for a permission dialog, so nothing here may be expensive: the host records a
    * timestamp and the guest re-reads its own state when the UI comes back.
    */
+  /**
+   * Back leaves the app in the background when there is nothing to go back to.
+   *
+   * The default ends the activity, and ending it kills the Linux runtime and the core
+   * with it: a user who taps back on the start screen would lose the process that
+   * holds their turns. Navigation inside the webview still works, because WryActivity
+   * checks canGoBack() before calling this.
+   */
+  @Deprecated("WryActivity still routes back through this method")
+  override fun onBackPressed() {
+    moveTaskToBack(true)
+  }
+
   override fun onPause() {
     super.onPause()
     LifecycleBridge.signal("pause")

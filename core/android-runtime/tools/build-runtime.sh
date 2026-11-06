@@ -64,7 +64,7 @@ TERMUX_POOL="https://packages.termux.dev/apt/termux-main/pool/main"
 PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$PBS_RELEASE"
 PIP_INDEX="${PIP_INDEX_URL:-https://pypi.org/simple}"
 
-RUNTIME_VERSION="1-$(date -u +%Y%m%d)"
+RUNTIME_VERSION="1-$(date -u +%Y%m%d%H%M)"
 
 log() { printf '\033[1;34m[runtime %s]\033[0m %s\n' "$ABI" "$*" >&2; }
 die() { printf '\033[1;31m[runtime %s] error:\033[0m %s\n' "$ABI" "$*" >&2; exit 1; }
@@ -132,6 +132,15 @@ mkdir -p "$ROOTFS"
 tar -xzf "$UBUNTU_TAR" -C "$ROOTFS"
 
 mkdir -p "$ROOTFS"/{opt/sunday,root/.sunday/{data,work},tmp,var/lib/sunday/{empty,shm},etc/ssl/certs}
+# Android resolves names through netd, which a proot guest cannot see, and the base
+# image ships no resolver at all. Without this the core starts fine and then every
+# model call dies on "Temporary failure in name resolution". The host rewrites the
+# file with the device's own servers on first launch; these are the fallback.
+printf 'nameserver 223.5.5.5
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+' > "$ROOTFS/etc/resolv.conf"
+chmod 644 "$ROOTFS/etc/resolv.conf"
 chmod 1777 "$ROOTFS/tmp"
 chmod 700 "$ROOTFS/root"
 
@@ -283,6 +292,7 @@ cat > "$OUT/$ABI/assets/runtime/manifest.json" <<JSON
       "-b", "{ROOTFS}/var/lib/sunday/shm:/dev/shm",
       "-b", "/system",
       "-b", "/apex",
+      "-b", "{USERDATA}:/root/.sunday",
       "/usr/bin/env", "-i",
       "HOME=/root", "USER=root", "LOGNAME=root", "SHELL=/bin/sh",
       "LAMTOOLS_HOME=/root/.sunday",
@@ -306,7 +316,8 @@ cat > "$OUT/$ABI/assets/runtime/manifest.json" <<JSON
       "{ROOTFS}": "filesDir/runtime/rootfs",
       "{TMP}": "cacheDir/proot-tmp",
       "{PORT}": "loopback port chosen by the host",
-      "{GUEST_ENV}": "standalone element: zero or more KEY=VALUE (LAMTOOLS_CORE_API_TOKEN, TZ)"
+      "{GUEST_ENV}": "standalone element: zero or more KEY=VALUE (LAMTOOLS_CORE_API_TOKEN, TZ)",
+      "{USERDATA}": "filesDir/userdata, bound over /root/.sunday so a runtime upgrade keeps it"
     }
   }
 }

@@ -4,10 +4,26 @@
 //! "本机回环"等于"任何别的 App 都能连"，因此 UI 不直连端口：它只发 IPC，宿主
 //! 持令牌转发，端口和令牌都不离开这个进程)。
 //!
-//! The shared UI talks the Core app-server protocol (JSON frames with an `id` for
-//! requests and a `method` for notifications). This module is a WebSocket client for
-//! that protocol plus a request table, so `core_rpc` can behave like a normal async
-//! call from the webview's point of view.
+//! ## One socket, one subscription, many page loads
+//!
+//! The core's app-server is session-scoped: `initialize` is accepted once per socket and
+//! carries the `threadId` that socket subscribes to. Everything else — run items, turn
+//! events, approval cards — is delivered only to the subscriber of that thread.
+//!
+//! The app has one window, and a page reload creates a new client against the same guest.
+//! Two models were tried and both had a real failure:
+//!
+//! * **One socket per client handshake.** Correct per connection, but a new socket starts
+//!   unsubscribed, and the previous socket is the one whose subscription the core is
+//!   still streaming into. The UI then showed a turn running forever with no items.
+//! * **Reuse the socket and cache the handshake.** The UI stayed alive, but a reloaded
+//!   page got a reply for a subscription it had never asked for.
+//!
+//! What is here is one socket for the life of the guest, a cached handshake reply for
+//! later clients, and — the part both earlier versions missed — `thread/resume` on the
+//! socket whenever a client handshakes with a thread. That re-points the one subscription
+//! at the thread the newest client is looking at, which is exactly what "open this
+//! session" means.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,191 +37,222 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
-
-/// One connection to the guest, shared by every caller in the app.
-///
-/// Reconnecting is handled inside the driver task: the UI's transport treats a closed
-/// socket as a lost connection and would otherwise need to rebuild its world.
-pub struct CoreLink {
+struct Session {
     outbound: mpsc::UnboundedSender<String>,
-    pending: Pending,
-    next_id: AtomicU64,
+    pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
+    /// Streams run items in the order the core produced them.
+    ordered: Mutex<()>,
+}
+
+impl Session {
+    fn new() -> (Arc<Self>, mpsc::UnboundedReceiver<String>) {
+        let (outbound, inbound) = mpsc::unbounded_channel();
+        (
+            Arc::new(Self {
+                outbound,
+                pending: Mutex::new(HashMap::new()),
+                ordered: Mutex::new(()),
+            }),
+            inbound,
+        )
+    }
+
+    fn fail_pending(&self) {
+        self.pending.lock().expect("pending lock").clear();
+    }
+}
+
+pub struct CoreLink {
     app: AppHandle,
-    url: Mutex<String>,
-    /// Wakes the driver so the next request travels on a fresh connection.
-    reset: Arc<tokio::sync::Notify>,
-    /// True once the current connection has answered `initialize`. A second one
-    /// on the same socket is an error the core refuses; a first one must not
-    /// trigger the reset that this field guards.
-    initialized: Arc<std::sync::atomic::AtomicBool>,
-    /// The first successful `initialize` reply, reused for later clients.
-    ///
-    /// The core accepts one handshake per socket, and the shared UI opens a client
-    /// per page load. Rebuilding the socket for each one turned into a reconnect
-    /// storm: every reset told the UI it had lost its core, and it dialled again.
-    /// Answering the handshake from the reply already received keeps one socket
-    /// and still gives every client the capabilities it needs.
+    endpoint: Mutex<(String, String)>,
+    session: Mutex<Option<Arc<Session>>>,
+    /// The first successful `initialize` reply. Later clients get it back rather than a
+    /// second handshake, which the core would refuse on the same socket.
     handshake: Mutex<Option<Value>>,
-    token: Mutex<String>,
+    next_id: AtomicU64,
 }
 
 impl CoreLink {
     pub fn new(app: AppHandle) -> Arc<Self> {
-        let (outbound, inbound) = mpsc::unbounded_channel::<String>();
-        let link = Arc::new(Self {
-            outbound,
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            next_id: AtomicU64::new(1),
+        Arc::new(Self {
             app,
-            url: Mutex::new(String::new()),
-            reset: Arc::new(tokio::sync::Notify::new()),
-            initialized: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            endpoint: Mutex::new((String::new(), String::new())),
+            session: Mutex::new(None),
             handshake: Mutex::new(None),
-            token: Mutex::new(String::new()),
-        });
-        let driver = Arc::clone(&link);
-        tauri::async_runtime::spawn(async move { driver.run(inbound).await });
-        link
+            next_id: AtomicU64::new(1),
+        })
     }
 
-    /// Points the link at a freshly started guest. A different URL starts a new driver
-    /// loop; the old socket is closed because the guest it spoke to is gone.
+    /// Points the link at a freshly started guest and drops the socket to the old one.
     pub fn retarget(&self, port: u16, token: &str) {
-        *self.url.lock().expect("url lock") = format!("ws://127.0.0.1:{port}/api/core/app-server");
-        *self.token.lock().expect("token lock") = token.to_owned();
+        *self.endpoint.lock().expect("endpoint lock") =
+            (format!("ws://127.0.0.1:{port}/api/core/app-server"), token.to_owned());
+        self.close_session();
     }
 
-    fn current(&self) -> (String, String) {
-        (
-            self.url.lock().expect("url lock").clone(),
-            self.token.lock().expect("token lock").clone(),
-        )
+    fn close_session(&self) {
+        if let Some(previous) = self.session.lock().expect("session lock").take() {
+            previous.fail_pending();
+        }
+        *self.handshake.lock().expect("handshake lock") = None;
     }
 
-    /// A JSON-RPC style call that resolves when the matching `id` comes back.
+    fn endpoint(&self) -> (String, String) {
+        self.endpoint.lock().expect("endpoint lock").clone()
+    }
+
+    /// Returns the live session, connecting on first use.
+    async fn ensure_session(&self) -> Result<Arc<Session>, String> {
+        if let Some(session) = self.session.lock().expect("session lock").clone() {
+            return Ok(session);
+        }
+        let (url, token) = self.endpoint();
+        if url.is_empty() {
+            return Err("the core is not running yet".to_owned());
+        }
+        let stream = connect(&url, &token).await?;
+        let (session, inbound) = Session::new();
+        *self.session.lock().expect("session lock") = Some(Arc::clone(&session));
+        let app = self.app.clone();
+        let driving = Arc::clone(&session);
+        tauri::async_runtime::spawn(async move {
+            pump(app, driving, stream, inbound).await;
+        });
+        Ok(session)
+    }
+
     pub async fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
         if method == "initialize" {
-            if let Some(cached) = self.handshake.lock().expect("handshake lock").clone() {
-                return Ok(cached);
+            return self.initialize(params, timeout).await;
+        }
+        let session = self.ensure_session().await?;
+        self.call_on(&session, method, params, timeout).await
+    }
+
+    /// Handshake for a client, reusing the socket and moving its subscription.
+    async fn initialize(&self, params: Value, timeout: Duration) -> Result<Value, String> {
+        let session = self.ensure_session().await?;
+        let cached = self.handshake.lock().expect("handshake lock").clone();
+        let reply = match cached {
+            Some(reply) => reply,
+            None => {
+                let reply = self.call_on(&session, "initialize", params.clone(), timeout).await?;
+                *self.handshake.lock().expect("handshake lock") = Some(reply.clone());
+                reply
+            }
+        };
+        // Point the socket's one subscription at the thread this client is opening. A new
+        // page load always comes with one; without this the core keeps streaming into a
+        // subscription nobody renders, which looks exactly like a frozen turn.
+        if let Some(thread) = params.get("threadId").and_then(Value::as_str) {
+            if !thread.is_empty() {
+                if let Err(error) = self
+                    .call_on(&session, "thread/resume", json!({ "thread_id": thread }), timeout)
+                    .await
+                {
+                    println!("[sunday] could not subscribe {thread}: {error}");
+                }
             }
         }
+        Ok(reply)
+    }
+
+    async fn call_on(
+        &self,
+        session: &Arc<Session>,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst).to_string();
         let (sender, receiver) = oneshot::channel();
-        self.pending.lock().expect("pending lock").insert(id.clone(), sender);
+        session
+            .pending
+            .lock()
+            .expect("pending lock")
+            .insert(id.clone(), sender);
         let frame = json!({ "id": id, "method": method, "params": params });
-        self.outbound
-            .send(frame.to_string())
-            .map_err(|_| "the core connection is closed".to_owned())?;
-        let outcome = match tokio::time::timeout(timeout, receiver).await {
+        if session.outbound.send(frame.to_string()).is_err() {
+            return Err("the core connection is closed".to_owned());
+        }
+        match tokio::time::timeout(timeout, receiver).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(_)) => Err("the core connection dropped this request".to_owned()),
             Err(_) => {
-                self.pending.lock().expect("pending lock").remove(&id);
+                session.pending.lock().expect("pending lock").remove(&id);
                 Err(format!("the core did not answer {method} in time"))
             }
-        };
-        // A connection that answered `initialize` cannot accept another; the next client
-        // gets a new socket. Recording it only on success keeps a failed handshake from
-        // being treated as "already initialised".
-        if method == "initialize" {
-            if let Ok(reply) = &outcome {
-                self.initialized.store(true, Ordering::SeqCst);
-                *self.handshake.lock().expect("handshake lock") = Some(reply.clone());
-            }
-        }
-        outcome
-    }
-
-    async fn run(self: Arc<Self>, mut inbound: mpsc::UnboundedReceiver<String>) {
-        loop {
-            let (url, token) = self.current();
-            if url.is_empty() {
-                // No guest yet: park until something retargets us.
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                continue;
-            }
-            match connect(&url, &token).await {
-                Ok(stream) => {
-                    self.app
-                        .emit("core-event", json!({ "method": "core/connected", "payload": {} }))
-                        .ok();
-                    self.pump(stream, &mut inbound).await;
-                    self.app
-                        .emit("core-event", json!({ "method": "core/disconnected", "payload": {} }))
-                        .ok();
-                }
-                Err(error) => {
-                    // A guest that is still booting refuses connections; retrying is the
-                    // whole point, so this is a log line rather than an error surface.
-                    eprintln!("core link: {error}");
-                }
-            }
-            // Fail every waiter: their request died with the socket.
-            self.pending.lock().expect("pending lock").clear();
-            tokio::time::sleep(Duration::from_millis(700)).await;
         }
     }
+}
 
-    async fn pump(
-        &self,
-        stream: tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        inbound: &mut mpsc::UnboundedReceiver<String>,
-    ) {
-        let (mut sink, mut source) = stream.split();
-        let reset = Arc::clone(&self.reset);
-        self.initialized.store(false, Ordering::SeqCst);
-        loop {
-            tokio::select! {
-                _ = reset.notified() => return,
-                outgoing = inbound.recv() => {
-                    match outgoing {
-                        Some(text) => {
-                            if sink.send(Message::Text(text)).await.is_err() {
-                                return;
-                            }
+/// Reads and writes one socket until it closes.
+async fn pump(
+    app: AppHandle,
+    session: Arc<Session>,
+    stream: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    mut inbound: mpsc::UnboundedReceiver<String>,
+) {
+    println!("[sunday] core socket open");
+    app.emit("core-event", json!({ "method": "core/connected", "payload": {} }))
+        .ok();
+    let (mut sink, mut source) = stream.split();
+    loop {
+        tokio::select! {
+            outgoing = inbound.recv() => {
+                match outgoing {
+                    Some(text) => {
+                        if sink.send(Message::Text(text)).await.is_err() {
+                            break;
                         }
-                        None => return,
                     }
+                    None => break,
                 }
-                incoming = source.next() => {
-                    match incoming {
-                        Some(Ok(Message::Text(text))) => self.dispatch(&text),
-                        Some(Ok(Message::Binary(_))) => {}
-                        // A ping must be answered or the peer closes the socket. This
-                        // was the reconnect storm: every idle timeout dropped the
-                        // connection, the UI saw it as a lost core and re-handshaked.
-                        Some(Ok(Message::Ping(payload))) => {
-                            if sink.send(Message::Pong(payload)).await.is_err() {
-                                return;
-                            }
+            }
+            incoming = source.next() => {
+                match incoming {
+                    Some(Ok(Message::Text(text))) => dispatch(&app, &session, &text),
+                    Some(Ok(Message::Binary(_))) => {}
+                    // An unanswered ping is a closed socket on the core side.
+                    Some(Ok(Message::Ping(payload))) => {
+                        if sink.send(Message::Pong(payload)).await.is_err() {
+                            break;
                         }
-                        Some(Ok(Message::Pong(_))) => {}
-                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
-                        Some(Ok(Message::Frame(_))) => {}
                     }
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(Message::Frame(_))) => {}
                 }
             }
         }
     }
+    session.fail_pending();
+    println!("[sunday] core socket closed");
+    app.emit("core-event", json!({ "method": "core/disconnected", "payload": {} }))
+        .ok();
+}
 
-    fn dispatch(&self, text: &str) {
-        let Ok(value) = serde_json::from_str::<Value>(text) else {
+fn dispatch(app: &AppHandle, session: &Arc<Session>, text: &str) {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return;
+    };
+    if let Some(id) = value.get("id").and_then(Value::as_str) {
+        if let Some(sender) = session.pending.lock().expect("pending lock").remove(id) {
+            let _ = sender.send(value);
             return;
-        };
-        if let Some(id) = value.get("id").and_then(Value::as_str) {
-            if let Some(sender) = self.pending.lock().expect("pending lock").remove(id) {
-                let _ = sender.send(value);
-                return;
-            }
         }
-        // Notifications carry a method and no id; the UI's transport expects exactly
-        // this envelope, with the frame itself as `payload`.
-        if value.get("method").is_some() {
-            self.app.emit("core-event", value).ok();
+    }
+    if let Some(method) = value.get("method").and_then(Value::as_str) {
+        // Which notifications leave the host: a stream that stops here is a forwarding
+        // bug, one that stops in the UI is a rendering bug, and a screenshot cannot tell
+        // them apart.
+        if method.starts_with("core/") || method.starts_with("turn/") {
+            println!("[sunday] forward {method}");
         }
+        let _guard = session.ordered.lock().expect("order lock");
+        app.emit("core-event", value).ok();
     }
 }
 

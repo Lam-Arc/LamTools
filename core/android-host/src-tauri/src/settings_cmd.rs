@@ -18,10 +18,13 @@ use tauri::State;
 
 use crate::HostState;
 
-/// Where the guest's user-level config lives inside the installed rootfs.
+/// Where the guest's user-level config lives.
+///
+/// Not inside the rootfs any more: that tree is replaced on every runtime update, so a
+/// config kept there would be the first casualty of an upgrade. The guest binds this
+/// directory over `/root/.sunday`.
 fn config_dir(state: &HostState) -> PathBuf {
-    crate::runtime::path_of(&state.inner.app)
-        .join("rootfs/root/.sunday/core/config")
+    crate::runtime::path_of(&state.inner.app).join("userdata/core/config")
 }
 
 fn provider_id(base_url: &str) -> String {

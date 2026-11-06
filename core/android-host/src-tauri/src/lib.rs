@@ -48,7 +48,16 @@ struct Inner {
 async fn core_start(state: State<'_, HostState>) -> Result<Value, String> {
     let inner = Arc::clone(&state.inner);
     let started = tauri::async_runtime::spawn_blocking(move || {
+        // A guest from a previous image still holds files in the old runtime; stopping
+        // it first is what lets the new one be unpacked without fighting for paths.
+        inner.runtime.stop();
         let port = inner.runtime.ensure_started()?;
+        // The UI renders as soon as this resolves and immediately asks for its
+        // project list; returning before uvicorn binds the port made that first
+        // request fail, and the start screen then claimed there were no projects.
+        inner
+            .runtime
+            .wait_ready(std::time::Duration::from_secs(180))?;
         inner.link.retarget(port, &inner.runtime.token());
         Ok::<_, String>(port)
     })
@@ -153,7 +162,14 @@ async fn core_http(
             .header("content-type", "application/json")
             .body(body);
     }
-    let response = request.send().await.map_err(|error| error.to_string())?;
+    let response = request
+        .send()
+        .await
+        .map_err(|error| {
+            println!("[sunday] core_http {method} {path} failed: {error}");
+            error.to_string()
+        })?;
+    println!("[sunday] core_http {method} {path} -> {}", response.status());
     let status = response.status().as_u16();
     let content_type = response
         .headers()
