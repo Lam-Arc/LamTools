@@ -34,6 +34,7 @@ struct Flags {
     params: String,
     core_port: u16,
     core_token: String,
+    watch: u64,
 }
 
 fn parse(args: Vec<String>) -> Result<Flags> {
@@ -45,6 +46,7 @@ fn parse(args: Vec<String>) -> Result<Flags> {
         params: "{}".to_owned(),
         core_port: 0,
         core_token: String::new(),
+        watch: 0,
     };
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
@@ -57,6 +59,7 @@ fn parse(args: Vec<String>) -> Result<Flags> {
             "--params" => flags.params = value()?,
             "--core-port" => flags.core_port = value()?.parse()?,
             "--core-token" => flags.core_token = value()?,
+            "--watch" => flags.watch = value()?.parse()?,
             other => bail!("unknown flag {other}"),
         }
     }
@@ -83,6 +86,15 @@ async fn serve(args: Vec<String>) -> Result<()> {
     loop {
         let mut link = ServerLink::accept(&endpoint, Arc::clone(&trust)).await?;
         println!("PEER {} trusted={}", link.peer, link.trusted);
+        // 每来一台设备就起一条事件泵：Core 的通知按帧推回给对端。
+        let closed = Arc::new(tokio::sync::Mutex::new(false));
+        if flags.core_port != 0 {
+            let send = link.sender();
+            let token = flags.core_token.clone();
+            let port = flags.core_port;
+            let flag = Arc::clone(&closed);
+            tokio::spawn(sunday_p2p::events::pump_until_closed(port, token, send, flag));
+        }
         let name = flags.name.clone();
         let core_port = flags.core_port;
         let core_token = flags.core_token.clone();
@@ -120,6 +132,7 @@ async fn serve(args: Vec<String>) -> Result<()> {
                 }
             })
             .await;
+        *closed.lock().await = true;
         match result {
             Ok(()) => println!("PEER-CLOSED {}", link.peer),
             Err(error) => println!("PEER-ERROR {} {error}", link.peer),
@@ -141,6 +154,25 @@ async fn call(args: Vec<String>) -> Result<()> {
     let result = client.call(&flags.method, params).await?;
     println!("PEER {}", client.peer);
     println!("RESULT {}", serde_json::to_string(&result)?);
+    if flags.watch > 0 {
+        let mut events = client.subscribe();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(flags.watch);
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(left, events.recv()).await {
+                Ok(Ok(event)) => println!(
+                    "EVENT {} {}",
+                    event.method,
+                    serde_json::to_string(&event.params)?
+                ),
+                Ok(Err(_)) => break,
+                Err(_) => break,
+            }
+        }
+    }
     client.close();
     endpoint.close().await;
     Ok(())

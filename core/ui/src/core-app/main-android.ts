@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
+import { createRemoteTransport } from '@/transport/remoteTransport.ts'
 
 /**
  * Android entry point.
@@ -20,6 +21,8 @@ import { createIpcTransport } from '@/transport/ipcTransport.ts'
  * the same files would be a second source of truth for one decision.
  */
 
+// user:“手机仍可独立运行自己的本地 Core，两种模式可切换”+(宿主状态决定这一层用哪条
+// 通道：连着电脑就用隧道，没连就用本机 Core 的 IPC。界面是同一套，不复制)。
 const transport = createIpcTransport()
 
 const capabilities = {
@@ -85,12 +88,15 @@ async function boot(): Promise<void> {
     return
   }
 
+  // 已经连着电脑就整条走隧道；否则照旧是本机 Core。
+  const remote = await invoke<{ connected?: boolean }>('p2p_status').catch(() => null)
+  const activeTransport = remote?.connected ? createRemoteTransport() : transport
   const runtime = createLamToolsRuntime({
-    transport,
+    transport: activeTransport,
     platform: 'mobile',
     capabilities,
   })
-  await transport.connect()
+  await activeTransport.connect()
   // The window is edge to edge, so nothing resizes when the keyboard opens and nothing
   // reserves the status bar. The host publishes both heights; the shared layout already
   // reads these two variables, so there is no second layout engine here.

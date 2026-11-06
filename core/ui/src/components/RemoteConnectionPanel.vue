@@ -175,7 +175,9 @@ async function connect(): Promise<void> {
     const result = await call<{ peer?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
     connected.value = Boolean(result?.peer)
     peer.value = result?.peer ?? ''
-    await refresh()
+    // user:“两种模式可切换”+(通道在启动时选定，切换就是让界面按新通道重开一次；
+    // 本机 Core 不受影响，重开后仍是同一个会话)。
+    window.location.reload()
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -189,6 +191,7 @@ async function disconnect(): Promise<void> {
     await call('p2p_disconnect')
     connected.value = false
     peer.value = ''
+    window.location.reload()
   } finally {
     busy.value = false
   }

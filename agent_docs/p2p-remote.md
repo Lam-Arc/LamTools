@@ -74,12 +74,35 @@ iroh 的 `netwatch` 在 Windows 拉 `wmi`，与桌面端已有的 windows crate 
 传输程序的位置：`SUNDAY_P2P_BIN` 优先，其次应用同目录，最后开发目录
 `core/p2p/target/{release,debug}`。打包版需要把 `sunday-p2p.exe` 放进应用旁边。
 
+## 事件通道（已打通）
+
+远端只发得出去、收不到回复是不成立的，所以隧道现在是双向的：
+
+- 客户端读帧一直在跑：应答按 `id` 交给对应调用，事件交给订阅者；流断了会把所有等待中的
+  调用一次性置为失败，不会挂住。
+- PC 侧每接受一台设备就起一条泵：连本机 Core 的 WebSocket（`/app-server`，带同一个
+  bearer 令牌），照界面同样的方式发 `initialize`，之后把每条带 `method` 的通知包成事件帧
+  推过隧道。断线会重连。
+- 手机宿主把事件抛成 `p2p-event`，界面的 `RemoteTransport` 再还原成与本地 IPC 完全同形状
+  的 notification。
+
+实测（假 Core 推送一条通知）：
+
+```
+$ sunday-p2p call … --method ping --watch 6
+PEER 81d9e03138787fc6…
+RESULT {"pong":true}
+EVENT thread/event {"note":"hello from core","seq":1}
+```
+
+## 模式切换
+
+手机启动时看宿主状态：连着电脑就整条走 `RemoteTransport`，否则用本机 Core 的 IPC。
+连接或断开之后界面重载一次，通道随之切换。本机 Core 一直活着，重开仍是同一个会话。
+
 ## 还没做
 
-1. 接进两端宿主：桌面（`core/desktop/src-tauri`）与 Android 宿主各暴露一组命令
-   （票据、连接、调用、事件、撤销），UI 的"远程连接"页接这组命令。
-2. 远程会话界面：手机连上电脑后，用同一条通道把 Core 的 JSON-RPC 搬过去，会话列表、
-   发消息、审批、事件订阅全部复用现有共享 UI，只换 transport。
-3. 二维码渲染与扫码，本地/远程模式切换与状态展示。
-4. 自定义 relay 配置入口。
-5. `events()` 还只是个占位：事件帧已经在协议里，尚未接到调用方。
+1. 二维码渲染与扫码：票据已经就绪，缺的是把它画成码、以及用相机扫回来。
+2. 自定义 relay 配置入口（现在固定用 `presets::N0` 的公共 relay）。
+3. 删除旧的 `core/desktop/src-tauri/src/remote/`：要等 UI 完全不再引用它的账号/网关绑定。
+4. 实体设备上的整链验收：手机连电脑、看会话、发消息、收审批。

@@ -4,15 +4,20 @@
 //! Core API，不重新实现业务逻辑”+(这一层搬的就是 Core 本来就在说的 JSON-RPC 帧：
 //! 同一个 method、同一份 params，到了对面直接交给同一个 Python Core)。
 //!
+//! user:“网络切换后尽可能恢复连接及会话状态”+(读帧必须一直在跑：应答按 id 回给调用方，
+//! 事件直接交给订阅者。否则界面发得出消息却看不到回复)。
+//!
 //! Framing is a 4-byte big-endian length followed by UTF-8 JSON: trivial to read from any
 //! side, and impossible to desync because the length is authoritative.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use iroh::{Endpoint, EndpointAddr};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, oneshot, Mutex};
 
 use crate::ticket::decode_ticket;
 use crate::trust::TrustStore;
@@ -37,7 +42,15 @@ pub enum Frame {
     Pong,
 }
 
+/// An event pushed by the far side.
+#[derive(Debug, Clone)]
+pub struct Event {
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+const EVENT_BUFFER: usize = 256;
 
 async fn write_frame(send: &mut iroh::endpoint::SendStream, frame: &Frame) -> Result<()> {
     let bytes = serde_json::to_vec(frame).context("cannot encode a frame")?;
@@ -70,8 +83,9 @@ async fn read_frame(recv: &mut iroh::endpoint::RecvStream) -> Result<Frame> {
 /// The dialing side.
 pub struct Client {
     conn: iroh::endpoint::Connection,
-    send: iroh::endpoint::SendStream,
-    recv: iroh::endpoint::RecvStream,
+    send: Arc<Mutex<iroh::endpoint::SendStream>>,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>>>,
+    events: broadcast::Sender<Event>,
     next_id: u64,
     pub peer: String,
 }
@@ -104,42 +118,91 @@ impl Client {
             }
             other => bail!("对端先说了别的话：{other:?}"),
         };
+
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, _) = broadcast::channel(EVENT_BUFFER);
+
+        // One reader for the whole connection: replies go to their caller, events go to
+        // subscribers, and a closed stream fails every waiting call instead of hanging.
+        let reader_pending = Arc::clone(&pending);
+        let reader_events = event_tx.clone();
+        let reader_conn = conn.clone();
+        tauri_free_spawn(async move {
+            loop {
+                match read_frame(&mut recv).await {
+                    Ok(Frame::Reply { id, result }) => {
+                        if let Some(sender) = reader_pending.lock().await.remove(&id) {
+                            let _ = sender.send(Ok(result));
+                        }
+                    }
+                    Ok(Frame::Error { id, message }) => {
+                        if let Some(sender) = reader_pending.lock().await.remove(&id) {
+                            let _ = sender.send(Err(message));
+                        }
+                    }
+                    Ok(Frame::Event { method, params }) => {
+                        let _ = reader_events.send(Event { method, params });
+                    }
+                    Ok(Frame::Pong) => {}
+                    Ok(_) => {}
+                    Err(error) => {
+                        for (_, sender) in reader_pending.lock().await.drain() {
+                            let _ = sender.send(Err(error.to_string()));
+                        }
+                        reader_conn.close(0u32.into(), b"closed");
+                        return;
+                    }
+                }
+            }
+        });
+
         Ok(Self {
             conn,
-            send,
-            recv,
+            send: Arc::new(Mutex::new(send)),
+            pending,
+            events: event_tx,
             next_id: 1,
             peer,
         })
     }
 
-    /// One Core-style call. Matches the reply by id, so a slow answer cannot be mistaken
-    /// for the next one.
-    pub async fn call(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    /// One Core-style call. Matched by id, so a slow answer cannot be taken for the next one.
+    pub async fn call(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let id = self.next_id;
         self.next_id += 1;
-        write_frame(
-            &mut self.send,
-            &Frame::Call {
-                id,
-                method: method.to_owned(),
-                params,
-            },
-        )
-        .await?;
-        loop {
-            match read_frame(&mut self.recv).await? {
-                Frame::Reply { id: got, result } if got == id => return Ok(result),
-                Frame::Error { id: got, message } if got == id => bail!("{message}"),
-                Frame::Event { .. } => continue,
-                other => bail!("对端回了意外的帧：{other:?}"),
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        {
+            let mut send = self.send.lock().await;
+            write_frame(
+                &mut send,
+                &Frame::Call {
+                    id,
+                    method: method.to_owned(),
+                    params,
+                },
+            )
+            .await?;
+        }
+        match tokio::time::timeout(Duration::from_secs(180), rx).await {
+            Ok(Ok(Ok(result))) => Ok(result),
+            Ok(Ok(Err(message))) => bail!("{message}"),
+            Ok(Err(_)) => bail!("连接已关闭"),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                bail!("等待对端回答超时")
             }
         }
     }
 
-    /// Remote events, in order.
-    pub fn events(&mut self) -> impl FnMut() -> Option<(String, serde_json::Value)> + '_ {
-        move || None
+    /// Events pushed by the far side.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.events.subscribe()
     }
 
     pub fn close(&self) {
@@ -150,7 +213,7 @@ impl Client {
 /// Accepting side, one connection at a time.
 pub struct ServerLink {
     conn: iroh::endpoint::Connection,
-    send: iroh::endpoint::SendStream,
+    send: Arc<Mutex<iroh::endpoint::SendStream>>,
     recv: iroh::endpoint::RecvStream,
     pub peer: String,
     pub trusted: bool,
@@ -158,9 +221,6 @@ pub struct ServerLink {
 
 impl ServerLink {
     /// Waits for one connection and runs the handshake.
-    ///
-    /// `trust` is taken as a lock because a pairing decision can happen while another
-    /// connection is being served.
     pub async fn accept(endpoint: &Endpoint, trust: Arc<Mutex<TrustStore>>) -> Result<Self> {
         let connecting = match endpoint.accept().await {
             Some(connecting) => connecting,
@@ -195,17 +255,27 @@ impl ServerLink {
         .await?;
         Ok(Self {
             conn,
-            send,
+            send: Arc::new(Mutex::new(send)),
             recv,
             peer,
             trusted,
         })
     }
 
-    /// Serves calls until the peer hangs up, answering with `handler`.
+    /// Pushes one event to the far side.
+    pub async fn send_event(&self, method: &str, params: serde_json::Value) -> Result<()> {
+        write_event(&self.send, method, params).await
+    }
+
+    /// The write half, for a task that pushes events while `serve` answers calls.
     ///
-    /// The handler is async and may fail; a failure becomes an `Error` frame so the phone
-    /// shows the real reason instead of a timeout.
+    /// Frames are written under the same lock, so an event never lands in the middle of a
+    /// reply.
+    pub fn sender(&self) -> Arc<Mutex<iroh::endpoint::SendStream>> {
+        Arc::clone(&self.send)
+    }
+
+    /// Serves calls until the peer hangs up, answering with `handler`.
     pub async fn serve<F, Fut>(&mut self, handler: F) -> Result<()>
     where
         F: Fn(String, serde_json::Value) -> Fut,
@@ -226,12 +296,14 @@ impl ServerLink {
                             message: error.to_string(),
                         },
                     };
-                    write_frame(&mut self.send, &reply).await?;
+                    let mut send = self.send.lock().await;
+                    write_frame(&mut send, &reply).await?;
                 }
-                Frame::Ping => write_frame(&mut self.send, &Frame::Pong).await?,
-                Frame::Hello { .. } | Frame::Welcome { .. } => {
-                    bail!("在一次连接里重复握手")
+                Frame::Ping => {
+                    let mut send = self.send.lock().await;
+                    write_frame(&mut send, &Frame::Pong).await?;
                 }
+                Frame::Hello { .. } | Frame::Welcome { .. } => bail!("在一次连接里重复握手"),
                 other => bail!("意外的帧：{other:?}"),
             }
         }
@@ -240,4 +312,32 @@ impl ServerLink {
     pub fn close(&self) {
         self.conn.close(0u32.into(), b"done");
     }
+}
+
+/// Writes one event frame through a shared write half.
+pub async fn write_event(
+    send: &Arc<Mutex<iroh::endpoint::SendStream>>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<()> {
+    let mut send = send.lock().await;
+    write_frame(
+        &mut send,
+        &Frame::Event {
+            method: method.to_owned(),
+            params,
+        },
+    )
+    .await
+}
+
+/// Spawns a task on whatever async runtime is current.
+///
+/// The crate is used from Tauri's runtime and from the CLI's; `tokio::spawn` needs the
+/// caller to have entered a runtime, which both do.
+fn tauri_free_spawn<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(future);
 }

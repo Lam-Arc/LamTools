@@ -27,3 +27,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 base64 = "0.22"
+# Core 的事件走它自己的 WebSocket；客户端与宿主都用同一条连接搬运。
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

@@ -65,6 +65,7 @@ pub async fn p2p_ticket(state: State<'_, Arc<P2pState>>) -> Result<Value, String
 /// Dials a ticket. The ticket is consent, so the peer is remembered on its side.
 #[tauri::command]
 pub async fn p2p_connect(
+    app: tauri::AppHandle,
     state: State<'_, Arc<P2pState>>,
     ticket: String,
     name: String,
@@ -84,6 +85,21 @@ pub async fn p2p_connect(
         .await
         .map_err(|error| format!("{error:#}"))?;
     let peer = client.peer.clone();
+    // user:“接收实时事件”+(Core 的通知由 PC 侧泵进隧道，这里换成 Tauri 事件交给界面；
+    // 界面拿到的是同一条通知，不需要知道它是从哪条网络路径来的)。
+    let mut events = client.subscribe();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri::Emitter;
+        while let Ok(event) = events.recv().await {
+            handle
+                .emit(
+                    "p2p-event",
+                    json!({ "method": event.method, "params": event.params }),
+                )
+                .ok();
+        }
+    });
     inner.client = Some(client);
     Ok(json!({ "peer": peer }))
 }

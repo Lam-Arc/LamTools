@@ -14,8 +14,8 @@
 校验和：
 
 ```
-1f8c134093bd325ea5a604dd10fa23d7e3393d03a8714b2622c31b494d0f01f8  sunday-m-arm64-debug.apk
-626458e70b6d1377126d78b49c2737e437bbf2d8e5766187fe6e75c0a7e691e9  sunday-m-x86_64-debug.apk
+454d855abd3d2f86f0f44646f802e90acf853196eee878a70c4aaf1dc4a7ac86  sunday-m-arm64-debug.apk
+2a9ffb8713154ac7c462de841fa7aed6265367ab300253b6c6e30a656347576e  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
@@ -87,7 +87,8 @@ files/runtime/
 | 思考滑块 | 通过 | 轨道与刻度一起声明 touch-action:none，触摸可以拖动而不是只点选 |
 | 点击高亮 | 通过 | 去掉触屏点击高亮与非键盘的焦点框，键盘操作仍保留可见焦点 |
 | 附件/引用 | 通过 | 引用 token 固定行高，插入后重新量输入框高度，不再整块错位 |
-| 设备连接（传输层） | 部分 | 两进程直连 + Core 转发实测通过；手机 App 与 PC 之间的整链未在设备上点过 |
+| 设备连接（传输层） | 部分 | 两进程直连 + Core 转发 + 事件推送实测通过；手机 App 与 PC 之间的整链未在设备上点过 |
+| 远程模式 | 部分 | 手机会在连着电脑时整条走隧道（RemoteTransport），否则用本机 Core；切换靠重载，未在设备上点过 |
 
 ## 未验证（不得当作通过）
 
