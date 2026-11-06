@@ -68,6 +68,8 @@ import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
 
+import { saveTicket } from '@/app/remoteSession.ts'
+
 /**
  * 设备连接面板。
  *
@@ -208,6 +210,7 @@ async function connect(): Promise<void> {
     const result = await call<{ peer?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
     connected.value = Boolean(result?.peer)
     peer.value = result?.peer ?? ''
+    if (result?.peer) saveTicket(ticketInput.value.trim())
     // user:“两种模式可切换”+(通道在启动时选定，切换就是让界面按新通道重开一次；
     // 本机 Core 不受影响，重开后仍是同一个会话)。
     window.location.reload()
@@ -224,6 +227,7 @@ async function disconnect(): Promise<void> {
     await call('p2p_disconnect')
     connected.value = false
     peer.value = ''
+    saveTicket('')
     window.location.reload()
   } finally {
     busy.value = false

@@ -33,6 +33,16 @@ export interface RuntimeSessionExportCapabilities {
   saveFullArchive(sessionId: string, suggestedFilename: string): Promise<string | null>
 }
 
+/**
+ * Which device is actually running the work.
+ *
+ * user:“清晰展示当前设备、连接状态和运行位置”+(手机连着电脑时，界面顶上要能看出来
+ * 这一步是在电脑上执行的；本机模式就没有这个标记)。
+ */
+export interface RuntimeRemoteInfo {
+  peer: string
+}
+
 export interface RuntimeCapabilities {
   filePicker: boolean
   notifications: boolean
@@ -40,6 +50,7 @@ export interface RuntimeCapabilities {
   files?: RuntimeFileCapabilities
   sessionExports?: RuntimeSessionExportCapabilities
   localProjects?: Readonly<Ref<boolean>>
+  remote?: RuntimeRemoteInfo
 }
 
 export interface RuntimeWorkspaceOption {

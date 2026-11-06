@@ -71,3 +71,21 @@
   height: 32px;
   background: var(--theme-main-background, rgba(27, 29, 34, 0.92));
 }
+
+/* user:“清晰展示当前设备、连接状态和运行位置”+(跟着状态栏下来，不挡内容)。 */
+.core-remote-badge {
+  position: fixed;
+  right: 10px;
+  top: calc(var(--native-safe-area-top, 0px) + 6px);
+  z-index: var(--z-popover);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-main-text) 10%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text) 82%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  pointer-events: none;
+}

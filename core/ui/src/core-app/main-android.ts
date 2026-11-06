@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import { createRemoteTransport } from '@/transport/remoteTransport.ts'
+import { ensureRemote } from '@/app/remoteSession.ts'
 
 /**
  * Android entry point.
@@ -25,7 +26,7 @@ import { createRemoteTransport } from '@/transport/remoteTransport.ts'
 // 通道：连着电脑就用隧道，没连就用本机 Core 的 IPC。界面是同一套，不复制)。
 const transport = createIpcTransport()
 
-const capabilities = {
+const capabilities: import('@/app/runtime.ts').RuntimeCapabilities = {
   // No DOM file input on Android: the answer comes from the system document picker.
   // `files.pickPaths` is the same contract desktop uses; the host copies the chosen
   // document into the guest's own directory and answers its in-guest path, which the
@@ -104,9 +105,10 @@ async function boot(): Promise<void> {
     return
   }
 
-  // 已经连着电脑就整条走隧道；否则照旧是本机 Core。
-  const remote = await invoke<{ connected?: boolean }>('p2p_status').catch(() => null)
-  const activeTransport = remote?.connected ? createRemoteTransport() : transport
+  // 已经连着电脑就整条走隧道；断了就用记住的票据重连一次；都不行才退回本机 Core。
+  const peer = await ensureRemote()
+  const activeTransport = peer === null ? transport : createRemoteTransport()
+  if (peer !== null) capabilities.remote = { peer }
   const runtime = createLamToolsRuntime({
     transport: activeTransport,
     platform: 'mobile',

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
+import { ensureRemote } from '@/app/remoteSession.ts'
+
 import {
   TransportRpcError,
   type LamToolsTransport,
@@ -50,6 +52,18 @@ export class RemoteTransport implements LamToolsTransport {
   }
 
   async request<TResponse = unknown>(request: TransportRequest): Promise<TResponse> {
+    try {
+      return await this.perform<TResponse>(request)
+    } catch (error) {
+      // user:“网络切换后尽可能恢复连接及会话状态”+(PC 重启或换网之后，先按记住的票据
+      // 重连一次；重连成功就把这次请求补上，不让一次断线变成一条发不出去的消息)。
+      const peer = await ensureRemote()
+      if (peer === null) throw new TransportRpcError(undefined, String(error))
+      return await this.perform<TResponse>(request)
+    }
+  }
+
+  private async perform<TResponse>(request: TransportRequest): Promise<TResponse> {
     try {
       if (request.kind === 'http') {
         const body = request.body ? JSON.parse(new TextDecoder().decode(request.body)) : undefined

@@ -14,8 +14,8 @@
 校验和：
 
 ```
-d60f4a1e2e9b563aa85b305a035ced64ab7741b0ba5b276eb46734c6340e8f02  sunday-m-arm64-debug.apk
-a614955ef9dad5bdfbcfe5187e305e204018e3da6d9b834e5cea54545bed4859  sunday-m-x86_64-debug.apk
+bc155a3fcd9e8c7af933baa3d2951845045a05d73f6603c00bc4a6ad023e81ec  sunday-m-arm64-debug.apk
+a33bc0baffc9268dc06f8418c9a6eb19b75f58f2a2d09fb01a2f86fdfe1ed204  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
@@ -89,6 +89,8 @@ files/runtime/
 | 附件/引用 | 通过 | 引用 token 固定行高，插入后重新量输入框高度，不再整块错位 |
 | 设备连接（传输层） | 部分 | 两进程直连 + Core 转发 + 事件推送实测通过；手机 App 与 PC 之间的整链未在设备上点过 |
 | 远程模式 | 部分 | 手机会在连着电脑时整条走隧道（RemoteTransport），否则用本机 Core；切换靠重载，未在设备上点过 |
+| 远程重连 | 通过（逻辑） | 票据记在本机，入口与请求失败时都会按它重连一次；连不上回落本机 Core |
+| 运行位置标记 | 通过（逻辑） | 远端模式下界面右上角常驻「在电脑上运行」 |
 | 界面错位（点图片链接） | 通过 | 根因是分屏状态被持久化后仍套用桌面分栏几何；手机上不再套用，并在启动时清掉遗留状态 |
 
 ## 未验证（不得当作通过）

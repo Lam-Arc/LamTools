@@ -341,6 +341,17 @@
     </template>
 
     <template #main-content>
+      <!-- user:“清晰展示当前设备、连接状态和运行位置”+(连着电脑时钉一个标记，
+           免得用户以为这些操作跑在手机上)。 -->
+      <div
+        v-if="appRuntime.capabilities.remote"
+        class="core-remote-badge"
+        data-remote-badge
+        :title="t('这一步在电脑上执行')"
+      >
+        <MonitorSmartphone :size="13" :stroke-width="1.9" aria-hidden="true" />
+        <span>{{ t("在电脑上运行") }}</span>
+      </div>
       <!-- 手机没有顶部条：整版界面的返回键浮动在左上角，内容由 --full-area-head-inset 让位。 -->
       <button
         v-if="appRuntime.platform === 'mobile' && fullAreaView"
