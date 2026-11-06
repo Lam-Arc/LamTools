@@ -8,6 +8,9 @@
 //! user:“用公共 Relay 仅作回退，允许用户自己配置中继”+(presets::N0 用 n0 的公共
 //! relay 和 DNS 发现；以后要做自定义 relay，只改这里构造 endpoint 的参数)。
 
+/// Re-exported so hosts never pin a second iroh version.
+pub use iroh;
+
 pub mod identity;
 pub mod link;
 pub mod proxy;

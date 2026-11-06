@@ -23,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "process"] }
 tokio-tungstenite = "0.24"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -30,6 +31,9 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # and TLS is not compiled in: fewer native dependencies to cross-build.
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking"] }
 flate2 = "1"
+# user:“优先考虑两端共享同一套 Rust/Iroh 传输实现”+(手机端只做客户端，
+# 全部协议与身份逻辑都在 core/p2p 里，Windows 用的是同一份)。
+sunday-p2p = { path = "../../p2p" }
 tar = "0.4"
 
 # The Activity callbacks reach Rust directly. Tauri exposes onPause and onResume as

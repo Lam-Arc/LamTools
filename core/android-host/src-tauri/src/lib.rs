@@ -22,6 +22,7 @@ use tauri::{Manager, State};
 
 mod android_jni;
 mod client;
+mod p2p_bridge;
 mod picker;
 mod runtime;
 
@@ -365,6 +366,11 @@ pub fn run() {
             // out once so every later read is a plain file read.
 
             let _ = APP.set(handle.clone());
+            // user:“P2P 作为独立、可复用的传输组件”+(宿主只保存身份与当前连接，
+            // 协议本身在 core/p2p)。
+            app.manage(std::sync::Arc::new(p2p_bridge::P2pState::new(
+                data_dir.join("p2p"),
+            )));
             let link = CoreLink::new(handle.clone());
             let runtime = Runtime::new(handle.clone());
             // Nothing is copied here: staging the packaged archive is Kotlin's job (it
@@ -390,6 +396,13 @@ pub fn run() {
             core_http,
             pick_paths,
             app_background,
+            p2p_bridge::p2p_ticket,
+            p2p_bridge::p2p_connect,
+            p2p_bridge::p2p_call,
+            p2p_bridge::p2p_status,
+            p2p_bridge::p2p_disconnect,
+            p2p_bridge::p2p_devices,
+            p2p_bridge::p2p_revoke,
             runtime_log,
         ])
         .run(tauri::generate_context!())
