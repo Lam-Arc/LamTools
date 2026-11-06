@@ -31,17 +31,18 @@ use runtime::Runtime;
 /// The one handle the JNI callbacks need, for events the webview must see.
 static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
-/// Publishes the keyboard height to the shared interface.
+/// Publishes the keyboard and status-bar heights to the shared interface.
 ///
-/// Called from Kotlin through JNI. The value lands on `--native-keyboard-inset`, which
-/// `useComposerLayout` already layers over its own `visualViewport` measurement, so the
-/// composer lifts above the keys exactly the way it does on the platforms that report a
-/// resized viewport.
+/// Called from Kotlin through JNI. `--native-keyboard-inset` is what `useComposerLayout`
+/// already layers over its own `visualViewport` measurement; `--native-safe-area-top`
+/// is the room the status bar and any cutout take, which an edge-to-edge window never
+/// reports on its own.
 #[cfg(target_os = "android")]
-fn publish_keyboard_inset(inset: i64) {
+fn publish_insets(keyboard: i64, top: i64) {
     use tauri::Emitter;
     if let Some(app) = APP.get() {
-        app.emit("keyboard-inset", inset).ok();
+        app.emit("insets", serde_json::json!({ "keyboard": keyboard, "top": top }))
+            .ok();
     }
 }
 
@@ -217,6 +218,17 @@ async fn core_http(
     }
 }
 
+/// Moves the task to the background after the interface reported nothing left to close.
+///
+/// The decision belongs to the interface: only it knows whether a full-area view is open.
+#[tauri::command]
+fn app_background() {
+    #[cfg(target_os = "android")]
+    if let Err(error) = picker::call_main("background", "()V") {
+        println!("[sunday] cannot background the app: {error}");
+    }
+}
+
 /// The system document picker, answering in-guest paths.
 ///
 /// user:“使用 Android SAF 桥接现有 Python Core 附件接口”+(共享 UI 拿到路径后走它本来
@@ -290,6 +302,24 @@ pub extern "system" fn Java_com_lamtools_sunday_core_KeystoreBridge_nativeRegist
     println!("[sunday] keystore bridge registered (unused, keys live in the guest config)");
 }
 
+/// The system back button, offered to the interface first.
+///
+/// Returns false when no window is listening, which makes the Activity fall back to
+/// backgrounding the task instead of ignoring the press.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeBack(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+) -> jni::sys::jboolean {
+    use tauri::Emitter;
+    picker::remember(&mut env);
+    match APP.get() {
+        Some(app) if app.emit("back-request", true).is_ok() => 1,
+        _ => 0,
+    }
+}
+
 /// Called from the Activity before Tauri starts: `applicationInfo.nativeLibraryDir` is
 /// the only directory Android still executes binaries from.
 #[cfg(target_os = "android")]
@@ -359,6 +389,7 @@ pub fn run() {
             core_rpc,
             core_http,
             pick_paths,
+            app_background,
             runtime_log,
         ])
         .run(tauri::generate_context!())

@@ -23,7 +23,8 @@ object KeyboardBridge {
   private const val TAG = "SundayKeyboard"
 
   private var host: WeakReference<MainActivity>? = null
-  private var lastPublished = -1
+  private var lastPublishedKeyboard = -1
+  private var lastPublishedTop = -1
 
   init {
     System.loadLibrary("sunday_android_host_lib")
@@ -32,8 +33,13 @@ object KeyboardBridge {
 
   @JvmStatic external fun nativeRegister()
 
-  /** Rust's channel: one inset change, already in CSS pixels. */
-  @JvmStatic external fun nativePublish(insetDp: Int)
+  /**
+   * Rust's channel: one inset change, already in CSS pixels.
+   *
+   * user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(所以除了键盘，还要把
+   * 状态栏/刘海那一截一起报上去；界面用它给顶部留位)。
+   */
+  @JvmStatic external fun nativePublishInsets(keyboardDp: Int, topDp: Int)
 
   /**
    * Starts watching. Called from `MainActivity.onCreate`.
@@ -45,24 +51,35 @@ object KeyboardBridge {
   fun watch(activity: MainActivity) {
     host = WeakReference(activity)
     val root = activity.findViewById<View>(android.R.id.content) ?: return
+    val topType = WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout()
     ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-      publish(activity, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom)
+      publish(
+        activity,
+        insets.getInsets(WindowInsetsCompat.Type.ime()).bottom,
+        insets.getInsets(topType).top,
+      )
       insets
     }
     // The insets may already be known: reading them once here saves the interface from
     // starting up with a wrong offset.
     ViewCompat.getRootWindowInsets(root)?.let { insets ->
-      publish(activity, insets.getInsets(WindowInsetsCompat.Type.ime()).bottom)
+      publish(
+        activity,
+        insets.getInsets(WindowInsetsCompat.Type.ime()).bottom,
+        insets.getInsets(topType).top,
+      )
     }
   }
 
-  private fun publish(activity: MainActivity, physicalBottom: Int) {
+  private fun publish(activity: MainActivity, physicalKeyboard: Int, physicalTop: Int) {
     val density = activity.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
-    val cssPixels = (physicalBottom / density).roundToInt().coerceAtLeast(0)
-    if (cssPixels == lastPublished) return
-    lastPublished = cssPixels
+    val keyboard = (physicalKeyboard / density).roundToInt().coerceAtLeast(0)
+    val top = (physicalTop / density).roundToInt().coerceAtLeast(0)
+    if (keyboard == lastPublishedKeyboard && top == lastPublishedTop) return
+    lastPublishedKeyboard = keyboard
+    lastPublishedTop = top
     try {
-      nativePublish(cssPixels)
+      nativePublishInsets(keyboard, top)
     } catch (error: Throwable) {
       // The library is gone (process teardown) or Rust is not listening yet; the next
       // layout pass publishes again.

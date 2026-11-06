@@ -582,6 +582,12 @@
   outline-offset: 1px;
 }
 
+/* user:“左上角为什么没有返回键”+(整版界面撤掉标题条时，返回键与页名一起贴在左边；
+   这一行本来是 space-between，多一个按钮会把页名挤到右边缘)。 */
+.core-sidebar-mode-row > .full-area-back + .core-sidebar-mode {
+  flex: 1 1 auto;
+}
+
 .core-sidebar-mode {
   display: inline-flex;
   align-items: center;

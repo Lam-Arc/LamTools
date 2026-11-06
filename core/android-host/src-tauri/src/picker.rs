@@ -53,6 +53,33 @@ unsafe impl Send for BridgeClass {}
 #[cfg(target_os = "android")]
 unsafe impl Sync for BridgeClass {}
 
+/// The Activity class, cached for the same reason as the picker's.
+#[cfg(target_os = "android")]
+static ACTIVITY: OnceLock<BridgeClass> = OnceLock::new();
+
+/// Calls a static method on the Activity.
+///
+/// The only thing the host asks it for is "put the task in the background"; the decision
+/// stays in the interface, which is the only layer that knows what is open.
+#[cfg(target_os = "android")]
+pub fn call_main(method: &str, signature: &str) -> Result<(), String> {
+    let vm = VM.get().ok_or_else(|| "the Android runtime is not ready".to_owned())?;
+    let class = ACTIVITY
+        .get()
+        .ok_or_else(|| "the activity class is not ready".to_owned())?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|error| error.to_string())?;
+    env.call_static_method(&class.0, method, signature, &[])
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn call_main(_method: &str, _signature: &str) -> Result<(), String> {
+    Err("the Android activity only exists on Android".to_owned())
+}
+
 /// Hands the JavaVM and the bridge class over so this module can call Kotlin back.
 ///
 /// Called from every JNI entry point that already receives an `env`; whichever one runs
@@ -69,6 +96,13 @@ pub fn remember(env: &mut jni::JNIEnv) {
         if let Ok(class) = env.find_class("com/lamtools/sunday/core/FilePickerBridge") {
             if let Ok(global) = env.new_global_ref(class) {
                 let _ = BRIDGE.set(BridgeClass(global));
+            }
+        }
+    }
+    if ACTIVITY.get().is_none() {
+        if let Ok(class) = env.find_class("com/lamtools/sunday/core/MainActivity") {
+            if let Ok(global) = env.new_global_ref(class) {
+                let _ = ACTIVITY.set(BridgeClass(global));
             }
         }
     }

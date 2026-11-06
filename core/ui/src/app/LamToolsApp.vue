@@ -42,7 +42,7 @@
     sidebar-title="Sunday"
     :plugin-rpc="requestConfigOperation"
     :class="{ 'workspace-shell--split': splitEnabled }"
-    :style="splitShellStyle"
+    :style="[splitShellStyle, fullAreaMobileHeadStyle]"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
@@ -119,6 +119,19 @@
     <template #primary>
       <div class="core-project-primary-actions">
         <div class="core-sidebar-mode-row">
+          <!-- user:“桌面端也有这个毛病，一起修”+(设置/插件/项目设置撤掉标题条时返回键跟着
+               消失；这里在会话栏页名旁边补一个，动作与标题条里的那个完全一样)。 -->
+          <button
+            v-if="sidebarNavView"
+            type="button"
+            class="full-area-back"
+            data-sidebar-nav-back
+            :title="t('返回会话（Esc）')"
+            :aria-label="t('返回会话')"
+            @click="onFullAreaBack"
+          >
+            <ArrowLeft :size="15" :stroke-width="1.8" aria-hidden="true" />
+          </button>
           <span
             v-if="sidebarNavView"
             class="core-sidebar-mode is-static"
@@ -316,6 +329,18 @@
     </template>
 
     <template #main-content>
+      <!-- 手机没有顶部条：整版界面的返回键浮动在左上角，内容由 --full-area-head-inset 让位。 -->
+      <button
+        v-if="appRuntime.platform === 'mobile' && fullAreaView"
+        type="button"
+        class="full-area-back full-area-mobile-back"
+        :title="t('返回会话')"
+        :aria-label="t('返回会话')"
+        data-full-area-mobile-back
+        @click="onFullAreaBack"
+      >
+        <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+      </button>
       <!-- 整版界面：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出。 -->
       <CoreSplitPluginPage v-if="fullAreaView === 'plugin' && mainPluginTab" :tab="mainPluginTab" :visible="true"
         :work-root="currentWorkRoot()" :request-rpc="requestConfigOperation" @open-page="openRelatedPluginPage" @open-file="openMainPluginFile" />
@@ -1043,6 +1068,21 @@ const projectSettingsRef = ref<{ requestNavigation: (proceed: () => void) => voi
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
 type FullAreaViewId = 'library' | 'search' | 'superagent' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
 const fullAreaView = ref<FullAreaViewId | null>(null)
+// user:“返回不可用，我被困在设置页面了”+(系统返回先关整版界面，界面没得关才交给后台)。
+function handleSystemBack(event: Event): void {
+  if (!fullAreaView.value) return
+  event.preventDefault()
+  onFullAreaBack()
+}
+onMounted(() => window.addEventListener('sunday:back', handleSystemBack))
+onUnmounted(() => window.removeEventListener('sunday:back', handleSystemBack))
+// user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(手机上的整版界面顶上是
+// 浮动的返回键，内容让出这一条，连同状态栏一起让)。
+const fullAreaMobileHeadStyle = computed(() => ({
+  '--full-area-head-inset': appRuntime.platform === 'mobile' && fullAreaView.value
+    ? 'calc(var(--native-safe-area-top, 0px) + 46px)'
+    : '0px',
+}))
 // user:“实现这个插件，也正好实验我们的新插件架构”+(主界面与分屏使用相同的自绘页面加载器；服务不属于页面)。
 const mainPluginPage = ref<PluginPageEntry | null>(null)
 const mainPluginTab = computed<SplitTab | null>(() => mainPluginPage.value ? {

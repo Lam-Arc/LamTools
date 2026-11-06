@@ -146,7 +146,9 @@
   --sidebar-width-full: 232px;
   /* 标题栏高度：原生标题栏存在时由 TitleBar 写入 --titlebar-native-height；
      编辑器布局变量优先，全站统一从这条链读取。 */
-  --titlebar-offset: var(--layout-titlebar-height, var(--titlebar-native-height, 0px));
+  /* user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(窗口是 edge-to-edge 的，
+     系统不会替我们缩；--native-safe-area-top 由宿主报上来，没有它的平台就是 0)。 */
+  --titlebar-offset: calc(var(--layout-titlebar-height, var(--titlebar-native-height, 0px)) + var(--native-safe-area-top, 0px));
   --sidebar-padding-x: 14px;
   --sidebar-padding-y: 0;
   --sidebar-font: 14px;

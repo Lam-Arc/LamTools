@@ -65,10 +65,11 @@ pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativeRegist
 
 #[cfg(target_os = "android")]
 #[no_mangle]
-pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativePublish(
+pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativePublishInsets(
     _env: JNIEnv,
     _class: JClass,
-    inset: jni::sys::jint,
+    keyboard: jni::sys::jint,
+    top: jni::sys::jint,
 ) {
-    crate::publish_keyboard_inset(inset as i64);
+    crate::publish_insets(keyboard as i64, top as i64);
 }

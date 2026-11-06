@@ -91,14 +91,29 @@ async function boot(): Promise<void> {
     capabilities,
   })
   await transport.connect()
-  // The window is edge to edge, so nothing resizes when the keyboard opens. The host
-  // publishes its height and the shared composer layout already knows what to do with it:
-  // the same variable the other mobile surface sets, no second layout engine.
-  await listen<number>('keyboard-inset', (event) => {
-    const height = Number(event.payload)
+  // The window is edge to edge, so nothing resizes when the keyboard opens and nothing
+  // reserves the status bar. The host publishes both heights; the shared layout already
+  // reads these two variables, so there is no second layout engine here.
+  // user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(状态栏那一截由宿主
+  // 报上来，界面自己留位，不再压到系统栏下面)。
+  const applyInsets = (payload: { keyboard?: unknown; top?: unknown } | undefined) => {
     const root = document.documentElement
+    const height = Number(payload?.keyboard ?? 0)
+    const top = Number(payload?.top ?? 0)
     if (!Number.isFinite(height) || height <= 0) root.style.removeProperty('--native-keyboard-inset')
     else root.style.setProperty('--native-keyboard-inset', `${height}px`)
+    if (!Number.isFinite(top) || top <= 0) root.style.removeProperty('--native-safe-area-top')
+    else root.style.setProperty('--native-safe-area-top', `${top}px`)
+  }
+  await listen<{ keyboard?: unknown; top?: unknown }>('insets', (event) => {
+    applyInsets(event.payload)
+  })
+
+  // user:“大问题，返回不可用，我被困在设置页面了”+(系统返回键先问界面：界面能关掉
+  // 当前整版视图就关，关不了才让宿主把任务放到后台。判断只有界面做得出来。
+  await listen('back-request', () => {
+    const handled = !window.dispatchEvent(new CustomEvent('sunday:back', { cancelable: true }))
+    if (!handled) void invoke('app_background')
   })
   createApp(LamToolsApp, { runtime }).mount('#app')
 

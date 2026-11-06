@@ -12,6 +12,16 @@ class MainActivity : TauriActivity() {
     /** The activity, for a bridge that needs a context: opening a file, mostly. */
     fun current(): MainActivity? = alive?.get()
 
+    /**
+     * Puts the task in the background without touching the process.
+     *
+     * Called by the host after the interface reports that it has nothing left to close.
+     */
+    @JvmStatic
+    fun background() {
+      current()?.moveTaskToBack(true)
+    }
+
     init {
       // Rust needs one fact from Android that it cannot read on its own: where the
       // packaged `.so` files were extracted. Since Android 10 a binary in app data
@@ -26,6 +36,14 @@ class MainActivity : TauriActivity() {
 
   /** Hands `filesDir` over: the host keeps its runtime and its database there. */
   private external fun nativeSetFilesDir(path: String)
+
+  /**
+   * Offers the back press to the interface.
+   *
+   * Returns true when the interface took it (it closed a full-area view), false when it
+   * has nowhere to go and the task should simply move to the background.
+   */
+  private external fun nativeBack(): Boolean
 
   override fun onCreate(savedInstanceState: Bundle?) {
     alive = java.lang.ref.WeakReference(this)
@@ -71,7 +89,9 @@ class MainActivity : TauriActivity() {
    */
   @Deprecated("WryActivity still routes back through this method")
   override fun onBackPressed() {
-    moveTaskToBack(true)
+    // user:“大问题，返回不可用，我被困在设置页面了”+(返回先交给界面：它先关掉设置这类
+    // 整版界面，只有真的没处可退时才把任务放到后台，绝不直接结束进程)。
+    if (!nativeBack()) moveTaskToBack(true)
   }
 
   override fun onPause() {
