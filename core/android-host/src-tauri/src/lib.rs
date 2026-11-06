@@ -22,10 +22,28 @@ use tauri::{Manager, State};
 
 mod android_jni;
 mod client;
+mod picker;
 mod runtime;
 
 use client::CoreLink;
 use runtime::Runtime;
+
+/// The one handle the JNI callbacks need, for events the webview must see.
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// Publishes the keyboard height to the shared interface.
+///
+/// Called from Kotlin through JNI. The value lands on `--native-keyboard-inset`, which
+/// `useComposerLayout` already layers over its own `visualViewport` measurement, so the
+/// composer lifts above the keys exactly the way it does on the platforms that report a
+/// resized viewport.
+#[cfg(target_os = "android")]
+fn publish_keyboard_inset(inset: i64) {
+    use tauri::Emitter;
+    if let Some(app) = APP.get() {
+        app.emit("keyboard-inset", inset).ok();
+    }
+}
 
 pub struct HostState {
     inner: Arc<Inner>,
@@ -47,9 +65,9 @@ struct Inner {
 async fn core_start(state: State<'_, HostState>) -> Result<Value, String> {
     let inner = Arc::clone(&state.inner);
     let started = tauri::async_runtime::spawn_blocking(move || {
-        // A guest from a previous image still holds files in the old runtime; stopping
-        // it first is what lets the new one be unpacked without fighting for paths.
-        inner.runtime.stop();
+        // user:“Android 宿主只承担进程存活、启动和必要的连接恢复”+(这条命令会被重复
+        // 调用：界面重载、Activity 重建都会重新进来。已经在跑的 guest 直接复用，只有打包
+        // 的镜像版本变了才在 ensure_started 里换一个新的，绝不因为一次重载杀掉正在执行的回合)。
         let port = inner.runtime.ensure_started()?;
         // The UI renders as soon as this resolves and immediately asks for its
         // project list; returning before uvicorn binds the port made that first
@@ -199,6 +217,19 @@ async fn core_http(
     }
 }
 
+/// The system document picker, answering in-guest paths.
+///
+/// user:“使用 Android SAF 桥接现有 Python Core 附件接口”+(共享 UI 拿到路径后走它本来
+/// 就用的 attachment reference 接口，宿主不解析附件、不保存附件记录)。
+#[tauri::command]
+async fn pick_paths(source: Option<String>, accept: Option<String>) -> Result<Vec<String>, String> {
+    picker::pick_paths(
+        source.unwrap_or_else(|| "file".to_owned()),
+        accept.unwrap_or_default(),
+    )
+    .await
+}
+
 /// Progress and diagnostics for the installing screen.
 #[tauri::command]
 fn runtime_log(state: State<'_, HostState>, lines: Option<usize>) -> String {
@@ -247,9 +278,12 @@ pub extern "system" fn Java_com_lamtools_sunday_core_LifecycleBridge_signal(
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_lamtools_sunday_core_KeystoreBridge_nativeRegister(
-    _env: jni::JNIEnv,
+    mut env: jni::JNIEnv,
     _class: jni::objects::JClass,
 ) {
+    // This is the earliest JNI call the app makes (`MainActivity.onCreate` touches this
+    // object before Tauri starts), so the picker takes the JavaVM from here.
+    picker::remember(&mut env);
     // The keystore is not used: the API key lives in the guest's own provider config,
     // the same place desktop keeps it. Keeping the symbol means the Kotlin initialiser
     // still links; when key sealing moves here, this is where it plugs in.
@@ -267,6 +301,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeSetLibra
 ) {
     if let Ok(text) = env.get_string(&dir) {
         let value: String = text.into();
+        picker::remember(&mut env);
         runtime::set_native_lib_dir(&value);
         println!("[sunday] native library dir: {value}");
     }
@@ -282,6 +317,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeSetFiles
 ) {
     if let Ok(text) = env.get_string(&dir) {
         let value: String = text.into();
+        picker::remember(&mut env);
         runtime::set_files_dir(&value);
         println!("[sunday] files dir: {value}");
     }
@@ -298,6 +334,7 @@ pub fn run() {
             // The runtime directory carries the manifest that ships in assets; copy it
             // out once so every later read is a plain file read.
 
+            let _ = APP.set(handle.clone());
             let link = CoreLink::new(handle.clone());
             let runtime = Runtime::new(handle.clone());
             // Nothing is copied here: staging the packaged archive is Kotlin's job (it
@@ -321,6 +358,7 @@ pub fn run() {
             core_info,
             core_rpc,
             core_http,
+            pick_paths,
             runtime_log,
         ])
         .run(tauri::generate_context!())

@@ -1,6 +1,8 @@
 package com.lamtools.sunday.core
 
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
@@ -27,6 +29,12 @@ class MainActivity : TauriActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     alive = java.lang.ref.WeakReference(this)
+    // Debug builds only: the DevTools socket is what `scripts/android_cdp.py` attaches to,
+    // and it lets a support log show what the interface actually did. A release build must
+    // never expose it, so the debuggable flag decides — not a constant someone can forget.
+    if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+      WebView.setWebContentsDebuggingEnabled(true)
+    }
     enableEdgeToEdge()
     nativeSetLibraryDir(applicationInfo.nativeLibraryDir)
     nativeSetFilesDir(filesDir.absolutePath)

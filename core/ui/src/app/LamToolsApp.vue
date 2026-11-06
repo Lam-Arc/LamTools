@@ -1749,6 +1749,9 @@ async function uploadArtifactFiles(folder: string): Promise<void> {
   if (!projectId) throw new Error(t("先在左侧选择一个项目"))
   const picker = appRuntime.capabilities.files
   if (!picker) throw new Error(t("当前环境不支持文件选择"))
+  // 资料库上传这条要的是字节，安卓的 SAF 选择器只给路径：这条路在安卓上不可用，
+  // 说清楚原因，而不是抛一个 TypeError。
+  if (!picker.pick) throw new Error(t("当前平台暂不支持从资料库上传文件"))
   const files = await picker.pick({ source: 'file', multiple: true })
   if (!files?.length) return
   const query = folder ? `?folder=${encodeURIComponent(folder)}` : ''
@@ -3295,11 +3298,18 @@ async function chooseAttachments(source: RuntimeFileSource = 'file') {
     return
   }
   try {
-    if (picker.pickPaths && appRuntime.platform === 'desktop') {
-      const paths = await picker.pickPaths()
+    // user:“恢复 Android 上桌面已有的附件能力”+(有原文件路径就走同一个 reference 接口，
+    // 不再只限桌面；没有路径的环境才退回字节上传)。
+    if (picker.pickPaths) {
+      const paths = await picker.pickPaths({
+        source,
+        multiple: source !== 'camera',
+        accept: source === 'photos' || source === 'camera' ? 'image/*' : undefined,
+      })
       if (paths?.length) await uploadFiles(paths.map(path => ({ path, name: path.split(/[\\/]/).pop() || path })))
       return
     }
+    if (!picker.pick) throw new Error(t("当前环境没有文件选择通道"))
     const files = await picker.pick({
       source,
       multiple: source !== 'camera',

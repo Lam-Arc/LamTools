@@ -50,6 +50,25 @@ pub fn set_files_dir(path: &str) {
     let _ = FILES_DIR.set(path.to_owned());
 }
 
+/// Where the guest sees this app's shared user data.
+pub const GUEST_USERDATA: &str = "/root/.sunday";
+
+/// The guest path for a file the host wrote into that shared directory.
+///
+/// user:“使用 Android SAF 桥接现有 Python Core 附件接口”+(选择的文件必须落在核心能
+/// 读到的目录：宿主只做路径换算，文件本身仍在应用自己的存储里，由核心按绝对路径登记)。
+///
+/// Anything outside `<filesDir>/runtime/userdata` answers `None`: the core could not read
+/// it, and pretending otherwise would make the attachment fail at send time instead of at
+/// pick time.
+pub fn guest_path(host_path: &str) -> Option<String> {
+    let files = FILES_DIR.get()?;
+    let root = PathBuf::from(files).join("runtime").join("userdata");
+    let prefix = format!("{}/", root.to_string_lossy().trim_end_matches('/'));
+    let rest = host_path.strip_prefix(&prefix)?;
+    Some(format!("{GUEST_USERDATA}/{rest}"))
+}
+
 /// The directory the packaged `.so` files were extracted to. Android gives proot no
 /// other place to live: since Android 10 a binary in app data cannot be executed, but
 /// the same bytes under `nativeLibraryDir` can.
@@ -359,6 +378,8 @@ struct Inner {
     port: u16,
     token: String,
     running: Arc<AtomicBool>,
+    /// The runtime image the running guest was started from.
+    version: String,
 }
 
 impl Runtime {
@@ -370,6 +391,7 @@ impl Runtime {
                 port: 0,
                 token: String::new(),
                 running: Arc::new(AtomicBool::new(false)),
+                version: String::new(),
             }),
         }
     }
@@ -411,12 +433,26 @@ impl Runtime {
     /// traceback when an import fails, so a silent guest is detected by the child
     /// exiting, not only by the deadline.
     pub fn ensure_started(&self) -> Result<u16, String> {
+        // user:“Android 宿主只承担进程存活、启动和必要的连接恢复”+(所以这里先尝试连接
+        // 已经在跑的那个 guest：重载界面、重建 Activity 都不能杀掉用户正在看的回合)。
+        // A restart is only correct when the staged image changed underneath the guest.
+        let installed = read_manifest(&self.app)
+            .map(|manifest| manifest.runtime_version)
+            .unwrap_or_default();
         {
             let inner = self.inner.lock().expect("runtime lock");
             if inner.child.is_some() && inner.port != 0 {
-                return Ok(inner.port);
+                if installed.is_empty() || inner.version == installed {
+                    return Ok(inner.port);
+                }
+                println!(
+                    "[sunday] runtime image changed {} -> {installed}, restarting the guest",
+                    inner.version
+                );
             }
         }
+        // A guest from the previous image still holds files inside the old rootfs.
+        self.stop();
 
         let state = install(&self.app)?;
         if !state.installed {
@@ -521,6 +557,7 @@ impl Runtime {
             inner.port = port;
             inner.token = token.clone();
             inner.running.store(false, Ordering::SeqCst);
+            inner.version = manifest.runtime_version.clone();
         }
 
         let running = {
@@ -587,6 +624,7 @@ impl Runtime {
         }
         inner.port = 0;
         inner.token.clear();
+        inner.version.clear();
         inner.running.store(false, Ordering::SeqCst);
     }
 }

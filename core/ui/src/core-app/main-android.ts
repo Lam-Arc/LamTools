@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 
@@ -22,11 +23,27 @@ import { createIpcTransport } from '@/transport/ipcTransport.ts'
 const transport = createIpcTransport()
 
 const capabilities = {
-  // The picker bridge exists but nothing routes its answer yet, so attachments are
-  // reported unavailable and the UI hides the affordance instead of failing on tap.
+  // No DOM file input on Android: the answer comes from the system document picker.
+  // `files.pickPaths` is the same contract desktop uses; the host copies the chosen
+  // document into the guest's own directory and answers its in-guest path, which the
+  // shared attachment code then registers with the Python core.
+  // user:“使用 Android SAF 桥接现有 Python Core 附件接口”+(所以这里只提供路径来源；
+  // 不虚报字节通道)。
   filePicker: false,
   notifications: false,
   desktopWindow: false,
+  files: {
+    async pickPaths(options: { source?: 'file' | 'photos' | 'camera'; multiple?: boolean; accept?: string } = {}) {
+      // `multiple` is part of the shared contract but the Android picker always allows
+      // several files, so it is not forwarded: an option that does nothing would be a
+      // promise the platform cannot keep.
+      const paths = await invoke<string[]>('pick_paths', {
+        source: options.source ?? 'file',
+        accept: options.accept ?? '',
+      })
+      return paths.length ? paths : null
+    },
+  },
 }
 
 /** The boot screen. First launch unpacks a few hundred megabytes; a blank window there
@@ -74,6 +91,15 @@ async function boot(): Promise<void> {
     capabilities,
   })
   await transport.connect()
+  // The window is edge to edge, so nothing resizes when the keyboard opens. The host
+  // publishes its height and the shared composer layout already knows what to do with it:
+  // the same variable the other mobile surface sets, no second layout engine.
+  await listen<number>('keyboard-inset', (event) => {
+    const height = Number(event.payload)
+    const root = document.documentElement
+    if (!Number.isFinite(height) || height <= 0) root.style.removeProperty('--native-keyboard-inset')
+    else root.style.setProperty('--native-keyboard-inset', `${height}px`)
+  })
   createApp(LamToolsApp, { runtime }).mount('#app')
 
   // A runtime that throws on first render must say why, not leave an empty dark window.

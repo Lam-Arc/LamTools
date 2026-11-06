@@ -6,31 +6,38 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import java.io.File
 import java.lang.ref.WeakReference
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * The system document picker, and the copy that makes its answer usable.
+ * The system document picker, and the copy that makes its answer usable by the core.
  *
- * A `content://` URI is a permission, not a file. It stays readable while this activity
- * lives and not a moment longer unless a persistable grant is taken, and the object
- * behind it belongs to another app that may move or delete it whenever it likes. So the
- * picker copies the bytes into this app's own directory during the grant, and Rust only
- * ever sees real paths. Nothing downstream holds a URI, which is why a session reopened a
- * week later still opens its attachments.
+ * A `content://` URI is a permission, not a file: it belongs to another app that may
+ * move or delete the object whenever it likes, and the guest cannot read it at all. So
+ * the picker copies the bytes into this app's own storage during the grant, under the
+ * one directory the guest sees (`files/runtime/userdata` is mounted at `/root/.sunday`),
+ * and Rust answers the in-guest path. Nothing downstream holds a URI.
  *
- * The copy is also where the size limit is enforced: refusing after copying two gigabytes
- * into the cache is not a limit, it is a delay.
+ * user:“使用 Android SAF 桥接现有 Python Core 附件接口”+(选中的文件落到核心能读到的
+ * 目录，然后交给核心现有的附件登记接口；附件本身仍然由 Python Core 记录和读取，
+ * 这里不实现任何附件业务)。
+ *
+ * The copy is also where the size limit is enforced: refusing after writing two
+ * gigabytes is not a limit, it is a delay. Core applies the same number on its side.
  */
 object FilePickerBridge {
   private const val TAG = "SundayFiles"
   private const val MAX_BYTES = 50L * 1024 * 1024
 
   private var host: WeakReference<MainActivity>? = null
-  private var launcher: ActivityResultLauncher<Array<String>>? = null
+  private var documents: ActivityResultLauncher<Array<String>>? = null
+  private var capture: ActivityResultLauncher<Uri>? = null
   private var pending = ""
+  private var pendingSource = "file"
+  private var pendingCapture: File? = null
 
   init {
     System.loadLibrary("sunday_android_host_lib")
@@ -43,25 +50,28 @@ object FilePickerBridge {
   @JvmStatic external fun nativeDeliver(requestId: String, payload: String)
 
   /**
-   * Registers the result contract. Called from `MainActivity.onCreate`, because the
+   * Registers the result contracts. Called from `MainActivity.onCreate`, because a
    * contract has to be registered before the activity is started.
    */
   @JvmStatic
   fun attach(activity: MainActivity) {
     host = WeakReference(activity)
-    launcher = activity.registerForActivityResult(
+    documents = activity.registerForActivityResult(
       ActivityResultContracts.OpenMultipleDocuments(),
-    ) { uris -> finish(uris) }
+    ) { uris -> finishDocuments(uris) }
+    capture = activity.registerForActivityResult(
+      ActivityResultContracts.TakePicture(),
+    ) { taken -> finishCapture(taken) }
   }
 
   /**
    * Opens the picker. Called over JNI from Rust, so the work moves to the UI thread.
    *
-   * Nothing is launched when a picker is already open: two launchers would share the
-   * `pending` slot and one caller would wait forever.
+   * `source` is the composer's own vocabulary (`file`, `photos`, `camera`), so the one
+   * attachment button keeps behaving like it does on desktop.
    */
   @JvmStatic
-  fun pick(requestId: String) {
+  fun pick(requestId: String, source: String, accept: String) {
     val activity = host?.get()
     if (activity == null) {
       fail(requestId, "应用界面还没有准备好")
@@ -72,22 +82,42 @@ object FilePickerBridge {
       return
     }
     pending = requestId
+    pendingSource = source
     activity.runOnUiThread {
       try {
-        val target = launcher ?: throw IllegalStateException("文件选择器没有注册")
-        // Any type: a session can hold text, images and PDFs, and narrowing here would
-        // make the picker lie about what the app accepts.
-        target.launch(arrayOf("*/*"))
+        when (source) {
+          "camera" -> takePhoto(activity, requestId)
+          "photos" -> launchDocuments(arrayOf("image/*"))
+          else -> launchDocuments(arrayOf(accept.ifEmpty { "*/*" }))
+        }
       } catch (error: Throwable) {
-        Log.e(TAG, "cannot open the document picker", error)
+        Log.e(TAG, "cannot open the file picker", error)
         finishWithError("${error.javaClass.simpleName}: ${error.message}")
       }
     }
   }
 
-  private fun finish(uris: List<Uri>?) {
-    val request = pending
-    pending = ""
+  private fun launchDocuments(mimeTypes: Array<String>) {
+    val launcher = documents ?: throw IllegalStateException("文件选择器没有注册")
+    // Any type: a session can hold text, images and PDFs, and narrowing here would make
+    // the picker lie about what the app accepts.
+    launcher.launch(mimeTypes)
+  }
+
+  /**
+   * One photo into the app's cache, handed to the camera through the provider that is
+   * already declared by the generated manifest. No storage permission is involved.
+   */
+  private fun takePhoto(activity: MainActivity, requestId: String) {
+    val launcher = capture ?: throw IllegalStateException("相机没有注册")
+    val target = File(activity.cacheDir, "capture-$requestId.jpg")
+    val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", target)
+    pendingCapture = target
+    launcher.launch(uri)
+  }
+
+  private fun finishDocuments(uris: List<Uri>?) {
+    val request = takePending()
     if (request.isEmpty()) return
     val activity = host?.get()
     if (activity == null) {
@@ -97,22 +127,23 @@ object FilePickerBridge {
     val chosen = uris ?: emptyList()
     if (chosen.isEmpty()) {
       // Cancelling is a decision, not a failure.
-      deliver(request, JSONObject().put("files", JSONArray()).put("failed", JSONArray()).toString())
+      deliverEmpty(request)
       return
     }
-    val root = File(activity.filesDir, "picked")
-    // Only the latest pick is staged: an imported attachment has its own copy inside the
-    // core, so keeping older staging directories would grow without ever being read.
-    root.deleteRecursively()
-    if (!root.mkdirs() && !root.isDirectory) {
-      finishWithError("无法创建暂存目录")
-      return
-    }
+    val root = inboxFor(activity, request)
     val files = JSONArray()
     val failed = JSONArray()
     for ((index, uri) in chosen.withIndex()) {
       try {
-        files.put(copyOne(activity.contentResolver, uri, root, index))
+        files.put(
+          copyOne(
+            activity.contentResolver,
+            uri,
+            File(root, index.toString()),
+            displayName(activity.contentResolver, uri) ?: "file-$index",
+            activity.contentResolver.getType(uri) ?: "application/octet-stream",
+          ),
+        )
       } catch (error: Throwable) {
         Log.e(TAG, "cannot import $uri", error)
         failed.put(
@@ -122,34 +153,76 @@ object FilePickerBridge {
         )
       }
     }
-    deliver(
-      request,
-      JSONObject().put("files", files).put("failed", failed).toString(),
-    )
+    deliver(request, JSONObject().put("files", files).put("failed", failed).toString())
+  }
+
+  private fun finishCapture(taken: Boolean) {
+    val request = takePending()
+    val temporary = pendingCapture
+    pendingCapture = null
+    if (request.isEmpty()) return
+    val activity = host?.get()
+    if (activity == null) {
+      temporary?.delete()
+      finishWithError("应用界面已经关闭")
+      return
+    }
+    if (!taken || temporary == null || !temporary.isFile) {
+      temporary?.delete()
+      deliverEmpty(request)
+      return
+    }
+    try {
+      val root = inboxFor(activity, request)
+      val file = copyOne(activity.contentResolver, null, root, "photo-${System.currentTimeMillis()}.jpg", "image/jpeg", temporary)
+      deliver(request, JSONObject().put("files", JSONArray().put(file)).put("failed", JSONArray()).toString())
+    } catch (error: Throwable) {
+      Log.e(TAG, "cannot import the captured photo", error)
+      deliver(
+        request,
+        JSONObject()
+          .put("files", JSONArray())
+          .put("failed", JSONArray().put(JSONObject().put("name", "照片").put("reason", "${error.javaClass.simpleName}: ${error.message}")))
+          .toString(),
+      )
+    } finally {
+      temporary.delete()
+    }
+  }
+
+  /**
+   * Where an imported file lives for the rest of its life: the directory the guest
+   * mounts as its own user data. Core only records the path, so deleting this copy
+   * would break the attachment later.
+   */
+  private fun inboxFor(activity: MainActivity, requestId: String): File {
+    val root = File(activity.filesDir, "runtime/userdata/inbox/$requestId")
+    if (!root.mkdirs() && !root.isDirectory) throw IllegalStateException("无法创建暂存目录")
+    return root
   }
 
   private fun copyOne(
     resolver: ContentResolver,
-    uri: Uri,
-    root: File,
-    index: Int,
+    uri: Uri?,
+    directory: File,
+    name: String,
+    mime: String,
+    source: File? = null,
   ): JSONObject {
-    val name = displayName(resolver, uri) ?: "file-$index"
-    val directory = File(root, index.toString())
-    if (!directory.mkdirs() && !directory.isDirectory) {
-      throw IllegalStateException("无法创建目录")
-    }
+    if (!directory.mkdirs() && !directory.isDirectory) throw IllegalStateException("无法创建目录")
     val target = File(directory, safeName(name))
-    resolver.openInputStream(uri).use { input ->
-      if (input == null) throw IllegalStateException("打不开这个文件")
+    val input = source?.inputStream() ?: uri?.let { resolver.openInputStream(it) }
+      ?: throw IllegalStateException("打不开这个文件")
+    input.use { stream ->
       target.outputStream().use { output ->
         val buffer = ByteArray(64 * 1024)
         var total = 0L
         while (true) {
-          val read = input.read(buffer)
+          val read = stream.read(buffer)
           if (read <= 0) break
           total += read
           if (total > MAX_BYTES) {
+            target.delete()
             throw IllegalStateException("超过 ${MAX_BYTES / (1024 * 1024)} MB")
           }
           output.write(buffer, 0, read)
@@ -159,7 +232,7 @@ object FilePickerBridge {
     return JSONObject()
       .put("name", name)
       .put("path", target.absolutePath)
-      .put("mime", resolver.getType(uri) ?: "application/octet-stream")
+      .put("mime", mime)
       .put("size", target.length())
   }
 
@@ -188,6 +261,16 @@ object FilePickerBridge {
       }
     }.joinToString("").trim().trim('.')
     return if (cleaned.isEmpty()) "attachment" else cleaned
+  }
+
+  private fun takePending(): String {
+    val request = pending
+    pending = ""
+    return request
+  }
+
+  private fun deliverEmpty(request: String) {
+    deliver(request, JSONObject().put("files", JSONArray()).put("failed", JSONArray()).toString())
   }
 
   private fun finishWithError(reason: String) {

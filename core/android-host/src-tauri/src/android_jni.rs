@@ -7,11 +7,11 @@
 //! touch — `UnsatisfiedLinkError` at the moment the object is initialised, which for
 //! `MainActivity` means the launcher cannot start.
 //!
-//! Today only two of these carry real behaviour: the library directory (the runtime
-//! cannot start without it) and the lifecycle note. The picker and keyboard bridges are
-//! compiled and called but their results are not consumed yet — that is a known gap, not
-//! a silent no-op that pretends to work: the UI reports file picking as unavailable, so
-//! nothing offers the user a button that does nothing.
+//! Only bridges that carry real behaviour are kept. The keyboard inset and the open-file
+//! request had empty symbols here and nothing calling them: the webview lays itself out
+//! from `visualViewport`, and opening a file with another app is not something the shared
+//! UI asks the host to do. They were deleted rather than registered as a capability that
+//! silently does nothing.
 
 #[cfg(target_os = "android")]
 use jni::objects::{JClass, JString};
@@ -28,15 +28,14 @@ fn read(env: &mut JNIEnv, value: &JString) -> String {
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_lamtools_sunday_core_FilePickerBridge_nativeRegister(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) {
+    crate::picker::remember(&mut env);
     println!("[sunday] file picker bridge registered");
 }
 
-/// The picker's answer. A real implementation will hand this to whatever requested the
-/// file; until attachments are wired through, the payload is logged so a support log can
-/// show whether the picker itself worked.
+/// The picker's answer, handed to the request that opened it.
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_lamtools_sunday_core_FilePickerBridge_nativeDeliver(
@@ -47,35 +46,29 @@ pub extern "system" fn Java_com_lamtools_sunday_core_FilePickerBridge_nativeDeli
 ) {
     let id = read(&mut env, &request_id);
     let body = read(&mut env, &payload);
-    println!("[sunday] picker delivered request={id} bytes={}", body.len());
+    crate::picker::deliver(&id, &body);
 }
 
+/// The keyboard's height in CSS pixels.
+///
+/// The shared interface reads it from `--native-keyboard-inset`; this is the only place
+/// that knows the number, because the window is not resized when the keyboard appears.
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativeRegister(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) {
+    crate::picker::remember(&mut env);
     println!("[sunday] keyboard bridge registered");
 }
 
-/// Keyboard inset changes. The webview lays itself out with `env(safe-area-inset-*)` and
-/// `visualViewport`, so this only needs to be observable in the log.
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativePublish(
     _env: JNIEnv,
     _class: JClass,
-    inset_dp: jni::sys::jint,
+    inset: jni::sys::jint,
 ) {
-    println!("[sunday] keyboard inset {inset_dp}dp");
-}
-
-#[cfg(target_os = "android")]
-#[no_mangle]
-pub extern "system" fn Java_com_lamtools_sunday_core_OpenFileBridge_nativeRegister(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-    println!("[sunday] open-file bridge registered");
+    crate::publish_keyboard_inset(inset as i64);
 }

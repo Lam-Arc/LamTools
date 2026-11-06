@@ -122,7 +122,7 @@ export function useAuxiliaryChat(tab: SplitTab, environment: AuxiliaryEnvironmen
       if (!picker) throw Error('当前环境不支持附件选择')
       const paths = await picker.pickPaths?.()
       if (picker.pickPaths) { if (paths?.length) await uploadFiles(paths.map(path => ({ path, name: path.split(/[\\/]/).pop() || path })), selection) }
-      else { const files = await picker.pick({ multiple: true }); if (files?.length) await uploadFiles(files, selection) }
+      else if (picker.pick) { const files = await picker.pick({ multiple: true }); if (files?.length) await uploadFiles(files, selection) }
     } catch (cause) { error.value = String(cause) }
   }
   async function send() {
