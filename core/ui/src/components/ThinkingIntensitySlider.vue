@@ -373,6 +373,10 @@ watch(
   min-height: 0;
   cursor: ns-resize;
   outline: none;
+  /* user:“思考滑块无法拖动，只能点击切换”+(刻度点铺满轨道，触摸落在它们身上时
+     touch-action 是 auto，浏览器会先当滚动处理并发出 pointercancel，拖动当场结束；
+     整条轨道一起声明 none，手机才能按手指移动)。 */
+  touch-action: none;
 }
 
 .sunday-thinking-slider.is-disabled .sunday-thinking-slider__rail {
@@ -394,6 +398,7 @@ watch(
   width: 26px;
   overflow: hidden;
   border-radius: 999px;
+  touch-action: none;
   background: color-mix(in srgb, var(--theme-composer-text) 7%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-composer-text) 5%, transparent);
   transform: translateX(-50%);

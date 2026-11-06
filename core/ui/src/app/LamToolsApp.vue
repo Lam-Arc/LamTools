@@ -266,27 +266,39 @@
     <template v-if="showSidebarFooter" #sidebar-footer>
       <!-- 手机降级页脚（无 hover 可依赖）：仍是带文字的竖排行，与今天一致。
           桌面账号在竖栏底部，页脚不再渲染。 -->
-      <div class="drawer-footer-stack">
+      <!-- user:“手机模式下左竖栏的内容放在侧栏的最下方一排，不要文字仅图标”+(这一排
+           就是竖栏本身：模式、资料库、定时任务、插件、设置、远程连接，名称只留在悬停提示
+           与读屏标签里)。 -->
+      <div class="drawer-footer-rail" role="toolbar" :aria-label="t('主导航')">
         <button
           v-for="option in mobileModeOptions"
           :key="option.id"
-          class="sidebar-action"
+          class="drawer-footer-rail__btn"
           type="button"
           :aria-pressed="option.id === activeMobileModeId"
           :data-mobile-footer-mode="option.id"
+          :title="option.label"
+          :aria-label="option.label"
           @click="selectAppModeByKey(option.id)"
         >
-          <span aria-hidden="true"><Check v-if="option.id === activeMobileModeId" :size="14" :stroke-width="1.8" /><Blocks v-else :size="14" :stroke-width="1.8" /></span>
-          <span>{{ option.label }}</span>
+          <Check v-if="option.id === activeMobileModeId" :size="17" :stroke-width="1.9" aria-hidden="true" />
+          <Blocks v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="sidebar-action" type="button" data-mobile-footer-account @click="emit('open-account')">
-          <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>{{ t("登录 / 账号") }}</span>
+        <span class="drawer-footer-rail__sep" aria-hidden="true"></span>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-library :title="t('资料库')" :aria-label="t('资料库')" @click="openLibrary()">
+          <Library :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="sidebar-action" type="button" data-mobile-footer-library @click="openLibrary">
-          <span aria-hidden="true"><Library :size="14" :stroke-width="1.8" /></span><span>{{ t("资料库") }}</span>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-arrange :title="t('定时任务')" :aria-label="t('定时任务')" @click="openArrange()">
+          <CalendarClock :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="sidebar-action" type="button" data-mobile-footer-arrange @click="openArrange">
-          <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>{{ t("定时任务") }}</span>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-plugins :title="t('插件')" :aria-label="t('插件')" @click="openPlugins()">
+          <Blocks :size="17" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-settings :title="t('设置')" :aria-label="t('设置')" @click="openSettings()">
+          <Settings :size="17" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-remote :title="t('远程连接')" :aria-label="t('远程连接')" @click="emit('open-account')">
+          <MonitorSmartphone :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
     </template>
@@ -466,11 +478,26 @@
     </template>
 
     <template #modals>
-      <CoreSplitWorkspace v-if="appRuntime.platform !== 'mobile'" :controller="splitWorkspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
+      <!-- user:“手机端内可以将分屏用全屏的方式展示，并在左上角保留返回键”+(同一套分屏，
+           手机上整屏铺开，左上角一个返回键把分屏关掉，回到会话)。 -->
+      <div class="split-slot" :class="{ 'split-slot--mobile': appRuntime.platform === 'mobile' }">
+        <button
+          v-if="appRuntime.platform === 'mobile' && splitEnabled"
+          type="button"
+          class="full-area-back split-slot__back"
+          :title="t('关闭分屏')"
+          :aria-label="t('关闭分屏')"
+          data-mobile-split-back
+          @click="closeMobileSplit()"
+        >
+          <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <CoreSplitWorkspace v-if="splitEnabled" :controller="splitWorkspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
         <template #default="{ tab, pane, visible }">
           <CoreSplitContent :tab="tab" :pane="pane" :visible="visible" :controller="splitWorkspace" :documents="splitDocuments" :bindings="pageBindings" :work-root="splitWorkRoot" :transport="transport" :messages="messages" :active-session-id="activeSessionId || ''" :member-statuses="sessionActivity.memberStatuses" :member-status-records="sessionActivity.memberStatusRecords" :durable-records="effectiveSubAgentRecords" :member-wait-known="sessionActivity.memberWaitKnown" :running-member-names="sessionActivity.runningMemberNames" :main-running="activeTurnRunning" @dirty="setSplitDirty" @decision-select="handlePendingDecisionSelect" />
         </template>
-      </CoreSplitWorkspace>
+        </CoreSplitWorkspace>
+      </div>
       <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
     </template>
 
@@ -1070,9 +1097,19 @@ type FullAreaViewId = 'library' | 'search' | 'superagent' | 'arrange' | 'setting
 const fullAreaView = ref<FullAreaViewId | null>(null)
 // user:“返回不可用，我被困在设置页面了”+(系统返回先关整版界面，界面没得关才交给后台)。
 function handleSystemBack(event: Event): void {
+  // user:“我希望任何时候不存在卡在某个界面退不出去的情况”+(返回按层退：
+  // 分屏 → 整版界面 → 交给宿主退到后台，任何一层都不会把人关住)。
+  if (appRuntime.platform === 'mobile' && splitEnabled.value) {
+    event.preventDefault()
+    closeMobileSplit()
+    return
+  }
   if (!fullAreaView.value) return
   event.preventDefault()
   onFullAreaBack()
+}
+function closeMobileSplit(): void {
+  for (const pane of Object.keys(splitWorkspace.state.panes)) splitWorkspace.closePane(pane)
 }
 onMounted(() => window.addEventListener('sunday:back', handleSystemBack))
 onUnmounted(() => window.removeEventListener('sunday:back', handleSystemBack))
@@ -1169,7 +1206,7 @@ const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
     case 'plugins':
       return { get title() { return t("插件") }, get subtitle() { return t("管理已安装的插件，开关它们带来的界面与工具。") } }
     case 'account':
-      return { get title() { return t("账号") }, get subtitle() { return t("登录状态与已配对的设备。") } }
+      return { get title() { return t("远程连接") }, get subtitle() { return t("手机与本机的连接、已配对设备与任务在哪一端执行。") } }
     case 'project':
       return { get title() { return t("项目") }, get subtitle() { return t("项目作用域的元信息与 AGENTS.md 指令。") } }
     default:
@@ -1831,6 +1868,9 @@ const { pendingAttachments, attachmentInputItems, hasBlockingFailure, addProcess
 watch(attachmentInputItems, (items) => {
   workbench.attachments.value = items
 }, { immediate: true })
+// user:“我怀疑点击附件或者@link 后会出现样式错位的 bug”+(引用是程序插进编辑器的，
+// 不走输入事件；高度不重量就会停在旧值，看起来就是整块错位)。
+watch(pendingAttachments, () => { void nextTick(resizeComposerTextarea) }, { deep: true })
 // user:“输入信息包含待发附件，按会话保存且重启恢复”+(托盘本身在组合式里按会话
 // 落 localStorage；这里只负责把可发送的附件同步给 workbench)。
 watch(workbench.attachments, (items) => {

@@ -1136,3 +1136,68 @@
   .workspace-shell .drawer-right > .drawer-body { transition: none !important; }
   .rail-action__button { transition: none !important; }
 }
+
+/* user:“手机模式下左竖栏的内容放在侧栏的最下方一排，不要文字仅图标”+
+   (一排图标，窄屏可横向滑动；名称只在 title / aria-label 里)。 */
+.drawer-footer-rail {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.drawer-footer-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.drawer-footer-rail__btn {
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  min-width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--sidebar-text-primary, #f2efeb) 68%, transparent);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drawer-footer-rail__btn:hover,
+.drawer-footer-rail__btn[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--sidebar-text-primary, #f2efeb) 10%, transparent);
+  color: var(--sidebar-text-primary, #f2efeb);
+}
+
+.drawer-footer-rail__sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: color-mix(in srgb, var(--sidebar-text-primary, #f2efeb) 14%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-footer-rail__btn { transition: none; }
+}
+
+/* user:“手机端内可以将分屏用全屏的方式展示，并在左上角保留返回键”+
+   (桌面保持原来的分栏几何，手机上整屏铺开并让出状态栏)。 */
+.split-slot--mobile {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 60);
+  background: var(--theme-main-background);
+  padding-top: var(--native-safe-area-top, 0px);
+  box-sizing: border-box;
+}
+
+.split-slot__back {
+  position: absolute;
+  top: calc(var(--native-safe-area-top, 0px) + 6px);
+  left: 10px;
+  z-index: 3;
+}

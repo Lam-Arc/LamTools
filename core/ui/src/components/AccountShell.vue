@@ -4,9 +4,10 @@
           <button class="account-back" type="button" :aria-label="t('返回会话')" :title="t('返回会话')" @click="$emit('close')">
             <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
-          <span class="account-head-title">{{ t("账号") }}</span>
-          <span v-if="accountStatus" class="account-head-state">{{ t("已登录") }}</span>
-          <span v-else class="account-head-state is-off">{{ t("未登录") }}</span>
+          <!-- user:“现在不再需要登录/账号了……改为 Sunday / Sunday M 远程连接功能”+
+               (这一页只说连接：谁在线、配对过哪些设备、任务在哪一端跑)。 -->
+          <span class="account-head-title">{{ t("远程连接") }}</span>
+          <span class="account-head-state" :class="{ 'is-off': !onlineCount }">{{ t('{0} 台在线', { 0: onlineCount }) }}</span>
           <button
             v-if="onRefresh"
             class="account-action"
@@ -22,31 +23,6 @@
           <p v-if="error" class="account-error" role="alert">{{ error }}</p>
 
           <section class="account-section">
-            <div class="account-row">
-              <span class="account-row-label">{{ t("当前账号") }}</span>
-              <span class="account-row-value">{{ accountStatus?.username || t("未登录") }}</span>
-            </div>
-            <div v-if="accountStatus" class="account-row">
-              <span class="account-row-label">{{ t("节点") }}</span>
-              <span class="account-row-value is-mono">{{ accountStatus.nodeId }}</span>
-            </div>
-            <div v-if="accountStatus?.baseUrl" class="account-row">
-              <span class="account-row-label">{{ t("服务器") }}</span>
-              <span class="account-row-value is-mono">{{ accountStatus.baseUrl }}</span>
-            </div>
-            <div class="account-actions">
-              <button
-                v-if="accountStatus"
-                class="account-btn"
-                type="button"
-                :disabled="loading"
-                @click="onLogout()"
-              >{{ t("退出账号") }}</button>
-              <button v-else class="account-btn is-primary" type="button" @click="onOpenSettings()">{{ t("去登录") }}</button>
-            </div>
-          </section>
-
-          <section class="account-section">
             <div class="account-section-title">{{ t("设备") }}<span class="account-section-note">{{ devices.length ? t('{0}/{1} 在线', { 0: onlineCount, 1: devices.length }) : t("暂无") }}</span>
             </div>
             <ul v-if="devices.length" class="account-devices">
@@ -57,7 +33,7 @@
                 <span class="account-device-detail">{{ device.detail }}</span>
               </li>
             </ul>
-            <p v-else class="account-empty">{{ t("登录后在手机上配对，这里会列出已配对的设备。") }}</p>
+            <p v-else class="account-empty">{{ t("在设置里配对一次，这里会列出可以互相连接的设备。") }}</p>
           </section>
 
           <section class="account-section">
@@ -68,7 +44,7 @@
         </main>
 
         <footer class="account-foot">
-          <button class="account-link" type="button" @click="onOpenSettings()">{{ t("打开完整设置（账号与设备）") }}</button>
+          <button class="account-link" type="button" @click="onOpenSettings()">{{ t("打开完整设置（设备与连接）") }}</button>
         </footer>
   </div>
 </template>

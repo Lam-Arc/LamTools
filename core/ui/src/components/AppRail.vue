@@ -82,7 +82,7 @@
     <button
       class="app-rail__button"
       type="button"
-      :aria-label="t('账号')"
+      :aria-label="t('远程连接')"
       :title="t('账号')"
       :aria-pressed="props.active === 'account'"
       data-rail-entry="account"

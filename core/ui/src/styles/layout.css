@@ -3490,3 +3490,18 @@
   max-width: none;
 }
 
+
+/* user:“点击任意控件会出现蓝色判断区，隐藏掉”+(触屏默认的点击高亮，以及鼠标/手指点出来的
+   焦点框；键盘操作仍然保留 :focus-visible 的可见焦点)。 */
+html,
+body {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(button, [role='button'], a, summary, [tabindex]):focus:not(:focus-visible) {
+  outline: none;
+}
+
+:where(button, [role='button'], a, summary) {
+  -webkit-tap-highlight-color: transparent;
+}
