@@ -23,7 +23,6 @@ use tauri::{Manager, State};
 mod android_jni;
 mod client;
 mod runtime;
-mod settings_cmd;
 
 use client::CoreLink;
 use runtime::Runtime;
@@ -230,23 +229,6 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// Lifecycle callbacks from the Activity.
-///
-/// Nothing here decides anything: the guest owns its own turn state, so the host only
-/// records what the OS said and lets the core reconcile on resume. A stop is not a
-/// reason to kill a running turn — Android kills the process when it means it.
-#[tauri::command]
-fn lifecycle_signal(state: State<'_, HostState>, event: String) -> Value {
-    let at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_millis())
-        .unwrap_or(0);
-    let status = state.inner.runtime.status();
-    json!({ "event": event, "at": at, "phase": status.phase })
-}
-
-// ------------------------------------------------------------------ JNI surface
-
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_lamtools_sunday_core_LifecycleBridge_signal(
@@ -340,10 +322,6 @@ pub fn run() {
             core_rpc,
             core_http,
             runtime_log,
-            lifecycle_signal,
-            settings_cmd::model_config,
-            settings_cmd::configure_model,
-            settings_cmd::runtime_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Android host");

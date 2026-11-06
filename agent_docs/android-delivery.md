@@ -14,8 +14,8 @@
 校验和（本次构建）：
 
 ```
-c951cdd2907e5a9080ce5ba577ea94a8e065795310fbb2f666ca475ea8b9349b  sunday-m-arm64-debug.apk
-aff9d4e13d4304ff09ce37904bc2dd32a581d6b4e87437630ba86c403002f215  sunday-m-x86_64-debug.apk
+15b30a9ecd6d872222a72e0d00d202a59ef5af40601093c53db21ada0899102d  sunday-m-arm64-debug.apk
+f1dbd370462b2bd13381184e71273a58cd91c0cb481347cd139fbbf91fb59217  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。一个包只带一个 ABI 的运行时，这是
@@ -35,7 +35,8 @@ adb shell am start -n com.lamtools.sunday.core/.MainActivity
 3. 启动 proot 与其中的 Python Core；
 4. 进入「连接模型」页，填 OpenAI 兼容端点、模型 ID 与 API Key。
 
-保存后核心会重启并读取配置，进入工作台。之后再启动不会重复解压。
+配置走共享 UI 自己的入口：没有供应商时，工作台会弹出「欢迎使用 Sunday」，点「开始配置」
+进入设置里的模型与供应商，与桌面完全一致。Android 不再有独立的首启配置页。之后启动不会重复解压。
 
 应用私有目录布局：
 
@@ -74,8 +75,9 @@ files/runtime/
 
 ## 已知问题
 
-1. 审批通过后，Core 已经产出最终回复，UI 有时仍停留在「正在处理」，需要刷新或重进
-   会话才显示。属事件渲染时序问题，不是业务失败。
+1. 审批通过后最终回复的渲染有延迟，实测那次对话在几十秒内完整出现（Kernel: Linux
+   6.6.66-android15 ... 与 "That's from the single uname -sr command"）。截图取早了会看到
+   「正在处理」，不是失败。
 2. 多客户端并发没有验证：宿主现在一条 socket 承载所有页面，重连时会重新订阅当前会话。
 
 ## 复现构建
