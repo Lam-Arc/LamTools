@@ -5,13 +5,17 @@
  * 所有默认值都来自 config.ts，改完即时生效并落盘（带版本号）。
  */
 import { computed, ref, type PropType } from 'vue'
-import { DEFAULT_PING_PROMPTS, type PingSectorConfig } from '../config.ts'
+import { DEFAULT_PING_PROMPTS, defaultConfig, type PingSectorConfig } from '../config.ts'
 import type { PetRuntime } from './usePetRuntime.ts'
+import PetHotkeyField from './PetHotkeyField.vue'
 
 const props = defineProps<{ runtime: PetRuntime }>()
 const emit = defineEmits<{ close: [] }>()
 
 const sectors = computed(() => props.runtime.config.ping.sectors)
+
+// user:“恢复默认回到 Ctrl+Alt+Space”+(默认值只认 config.ts 一处，界面不再手写 accelerator。)
+const defaultHotkey = defaultConfig().ping.hotkey
 
 // user:“这个内外环半径可调节吗”+(内环=中心盘独立可调；未设置时按外径 42% 自动算，
 // 外环继续由「环半径 + 环身宽度」决定。)
@@ -95,6 +99,8 @@ function resetPrompt(sector: PingSectorConfig): void {
   props.runtime.schedulePingSave()
 }
 
+// user:“点一下、按一下，就绑定好”+(录制控件只产出 accelerator，写配置与重注册仍走这一条：
+// 先落盘，再让桌面端把旧热键换成新的；清空值等于解绑。)
 async function applyHotkey(value: string): Promise<void> {
   props.runtime.config.ping.hotkey = value
   props.runtime.schedulePingSave()
@@ -195,14 +201,14 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
 
         <section class="settings__group">
           <h4>Ping 环</h4>
-          <label class="settings__row">
+          <div class="settings__row">
             <span>快捷键（按住显示，松开执行）</span>
-            <input
-              :value="runtime.config.ping.hotkey"
-              type="text"
-              @change="applyHotkey(($event.target as HTMLInputElement).value)"
-            >
-          </label>
+            <PetHotkeyField
+              :accelerator="runtime.config.ping.hotkey"
+              :fallback="defaultHotkey"
+              @commit="applyHotkey"
+            />
+          </div>
           <label class="settings__row">
             <span>环半径（环带中心）</span>
             <input v-model.number="runtime.config.ping.radius" type="number" min="60" max="420" @change="runtime.schedulePingSave()">
