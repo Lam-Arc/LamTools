@@ -28,19 +28,6 @@
             <RemoteConnectionPanel :platform="props.appRuntime?.platform" />
           </section>
 
-          <section class="account-section">
-            <div class="account-section-title">{{ t("设备") }}<span class="account-section-note">{{ devices.length ? t('{0}/{1} 在线', { 0: onlineCount, 1: devices.length }) : t("暂无") }}</span>
-            </div>
-            <ul v-if="devices.length" class="account-devices">
-              <li v-for="device in devices" :key="device.nodeId" class="account-device">
-                <span class="account-device-dot" :class="{ online: device.online }" aria-hidden="true"></span>
-                <span class="account-device-label">{{ device.label }}</span>
-                <span v-if="device.current" class="account-device-badge">{{ t("本机") }}</span>
-                <span class="account-device-detail">{{ device.detail }}</span>
-              </li>
-            </ul>
-            <p v-else class="account-empty">{{ t("在设置里配对一次，这里会列出可以互相连接的设备。") }}</p>
-          </section>
 
           <section class="account-section">
             <div class="account-section-title">{{ t("方案传输") }}<span class="account-section-note">{{ t("待接入") }}</span>

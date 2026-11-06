@@ -100,9 +100,19 @@ EVENT thread/event {"note":"hello from core","seq":1}
 手机启动时看宿主状态：连着电脑就整条走 `RemoteTransport`，否则用本机 Core 的 IPC。
 连接或断开之后界面重载一次，通道随之切换。本机 Core 一直活着，重开仍是同一个会话。
 
+## 二维码与自定义中继（已接）
+
+- 二维码由 `core/p2p/src/qr.rs` 生成 SVG（`qrcode` crate），两端共用；桌面「远程连接」页
+  出码，票据文本就在旁边，扫码和粘贴是同一张票据。宿主命令 `p2p_qr(ticket)`。
+- 自定义中继：`SUNDAY_P2P_RELAY` 或 `SUNDAY_P2P_RELAYS`（逗号分隔）配了就改用
+  `RelayMode::custom`，只用你配的节点；不配就用 `presets::N0` 的公共 relay（仅回退）。
+  中继只按节点 id 转发加密流量，不需要账号。
+
 ## 还没做
 
-1. 二维码渲染与扫码：票据已经就绪，缺的是把它画成码、以及用相机扫回来。
-2. 自定义 relay 配置入口（现在固定用 `presets::N0` 的公共 relay）。
-3. 删除旧的 `core/desktop/src-tauri/src/remote/`：要等 UI 完全不再引用它的账号/网关绑定。
-4. 实体设备上的整链验收：手机连电脑、看会话、发消息、收审批。
+1. 扫码：二维码已经能画，缺的是用相机扫回来（现在是复制票据粘贴）。
+2. 删除旧的 `core/desktop/src-tauri/src/remote/`：**暂缓，有依赖**。Python CLI 的
+   `cli_commands/server.py` 通过 `lamtools-remote-control.json` 连桌面端的控制端口，
+   而那个端口由 `remote/control.rs` 提供；`core/desktop/src/main.ts` 也还在调
+   `remote_*` 命令。要删得先把 CLI 这条控制路径迁到别处，不能一刀切。
+3. 实体设备上的整链验收：手机连电脑、看会话、发消息、收审批。

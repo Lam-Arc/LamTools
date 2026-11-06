@@ -399,6 +399,7 @@ pub fn run() {
             p2p_bridge::p2p_ticket,
             p2p_bridge::p2p_connect,
             p2p_bridge::p2p_call,
+            p2p_bridge::p2p_qr,
             p2p_bridge::p2p_status,
             p2p_bridge::p2p_disconnect,
             p2p_bridge::p2p_devices,

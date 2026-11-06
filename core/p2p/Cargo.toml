@@ -27,6 +27,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 base64 = "0.22"
+# 票据要能变成二维码；放在 Rust 里，两端共用一份，界面不引第三方 JS。
+qrcode = "0.14"
 # Core 的事件走它自己的 WebSocket；客户端与宿主都用同一条连接搬运。
 tokio-tungstenite = "0.24"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

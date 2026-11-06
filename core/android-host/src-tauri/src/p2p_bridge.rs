@@ -123,6 +123,13 @@ pub async fn p2p_call(
         .map_err(|error| format!("{error:#}"))
 }
 
+/// The ticket as an SVG QR code, so the other device can just scan it.
+#[tauri::command]
+pub async fn p2p_qr(ticket: String) -> Result<Value, String> {
+    let svg = sunday_p2p::ticket_qr_svg(&ticket).map_err(|error| error.to_string())?;
+    Ok(json!({ "svg": svg }))
+}
+
 #[tauri::command]
 pub async fn p2p_status(state: State<'_, Arc<P2pState>>) -> Result<Value, String> {
     let inner = state.inner.lock().await;

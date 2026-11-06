@@ -16,6 +16,7 @@ async fn main() -> Result<()> {
     match args.next().as_deref() {
         Some("serve") => serve(args.collect()).await,
         Some("call") => call(args.collect()).await,
+        Some("qr") => qr(args.collect()),
         _ => {
             println!("{}", USAGE);
             Ok(())
@@ -72,6 +73,19 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "device".to_owned())
 }
 
+/// Prints the ticket as an SVG QR code.
+///
+/// The desktop host does not link this crate: iroh pulls windows crates that clash with the
+/// app's own, so the host asks this same binary for the image instead of growing a second
+/// QR implementation.
+fn qr(args: Vec<String>) -> Result<()> {
+    let flags = parse(args)?;
+    if flags.ticket.trim().is_empty() {
+        bail!("--ticket is required");
+    }
+    print!("{}", sunday_p2p::ticket_qr_svg(&flags.ticket)?);
+    Ok(())
+}
 async fn serve(args: Vec<String>) -> Result<()> {
     let flags = parse(args)?;
     let identity = Identity::load_or_create(&flags.dir)?;

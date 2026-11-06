@@ -13,9 +13,16 @@
     <!-- 电脑：出票据，手机来连 -->
     <template v-if="isDesktop">
       <p class="remote-panel__hint">{{ t("在手机上打开远程连接，粘贴这段票据。第一次连接会自动成为可信设备，之后不用再确认。") }}</p>
-      <div class="remote-panel__row">
-        <code class="remote-panel__ticket" data-remote-ticket>{{ ticket || t("还没有票据，点右边的按钮生成") }}</code>
-        <button class="remote-panel__button" type="button" :disabled="busy" @click="createTicket">{{ ticket ? t("换一张") : t("生成票据") }}</button>
+      <div class="remote-panel__pair">
+        <!-- user:“设备配对：支持二维码、配对码等简单方式”+(二维码和下面那行文本是同一张票据)。 -->
+        <div v-if="qrSvg" class="remote-panel__qr" v-html="qrSvg" aria-hidden="true"></div>
+        <div class="remote-panel__pair-copy">
+          <code class="remote-panel__ticket" data-remote-ticket>{{ ticket || t("还没有票据，点右边的按钮生成") }}</code>
+          <div class="remote-panel__row">
+            <button class="remote-panel__button" type="button" :disabled="busy" @click="createTicket">{{ ticket ? t("换一张") : t("生成票据") }}</button>
+            <button v-if="ticket" class="remote-panel__button" type="button" @click="copyTicket">{{ t("复制票据") }}</button>
+          </div>
+        </div>
       </div>
       <div class="remote-panel__row">
         <button v-if="!serving" class="remote-panel__button is-primary" type="button" :disabled="busy || !ticket" @click="serveStart">{{ t("开始接受连接") }}</button>
@@ -73,6 +80,7 @@ import { computed, onMounted, ref } from 'vue'
 const props = defineProps<{ platform?: 'desktop' | 'mobile' | 'web' }>()
 
 const ticket = ref('')
+const qrSvg = ref('')
 const ticketInput = ref('')
 const serving = ref(false)
 const connected = ref(false)
@@ -109,7 +117,10 @@ async function refresh(): Promise<void> {
       serving.value = status.serving === true
       connected.value = status.connected === true
       peer.value = status.peer ?? ''
-      if (status.ticket) ticket.value = status.ticket
+      if (status.ticket && status.ticket !== ticket.value) {
+        ticket.value = status.ticket
+        await refreshQr(ticket.value)
+      }
     }
     const list = await call<{ devices?: Array<{ id: string; name: string }> }>('p2p_devices')
     devices.value = list?.devices ?? []
@@ -117,6 +128,25 @@ async function refresh(): Promise<void> {
     error.value = String(cause)
   } finally {
     busy.value = false
+  }
+}
+
+async function refreshQr(value: string): Promise<void> {
+  qrSvg.value = ''
+  if (!value) return
+  try {
+    const result = await call<{ svg?: string }>('p2p_qr', { ticket: value })
+    qrSvg.value = result?.svg ?? ''
+  } catch {
+    // A missing QR only costs convenience: the ticket text is right above it.
+  }
+}
+
+async function copyTicket(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(ticket.value)
+  } catch {
+    // Clipboard unavailable: the text is selectable anyway.
   }
 }
 
@@ -131,7 +161,10 @@ async function createTicket(): Promise<void> {
       args.apiBase = apiBase
     }
     const result = await call<{ ticket?: string }>('p2p_ticket', args)
-    if (result?.ticket) ticket.value = result.ticket
+    if (result?.ticket) {
+      ticket.value = result.ticket
+      await refreshQr(ticket.value)
+    }
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -295,6 +328,35 @@ onMounted(refresh)
   background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
   font: 12px/1.5 ui-monospace, monospace;
   overflow-wrap: anywhere;
+}
+
+.remote-panel__pair {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.remote-panel__qr {
+  flex: 0 0 auto;
+  width: 148px;
+  height: 148px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+}
+
+.remote-panel__qr :deep(svg) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.remote-panel__pair-copy {
+  display: grid;
+  flex: 1 1 240px;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .remote-panel__input {

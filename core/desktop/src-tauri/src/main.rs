@@ -960,6 +960,7 @@ fn main() {
             show_main_window,
             quit_app,
             p2p_host::p2p_ticket,
+            p2p_host::p2p_qr,
             p2p_host::p2p_serve_start,
             p2p_host::p2p_serve_stop,
             p2p_host::p2p_status,

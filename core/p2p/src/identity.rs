@@ -59,13 +59,44 @@ impl Identity {
     /// One endpoint per process: iroh keeps a single relay connection and a single hole
     /// punched path per peer, and two endpoints in one app would duplicate both.
     pub async fn endpoint(&self) -> Result<Endpoint> {
-        Endpoint::builder(presets::N0)
+        let relays = extra_relays();
+        let mut builder = Endpoint::builder(presets::N0);
+        if !relays.is_empty() {
+            // user:“允许用户配置自己的中继服务”+(配了就只用配置的 relay，不再依赖公共节点；
+            // 不配则用 presets::N0 自带的公共 relay，公共的只做回退)。
+            let urls: Vec<iroh::RelayUrl> = relays.iter().filter_map(|url| url.parse().ok()).collect();
+            if !urls.is_empty() {
+                println!("[sunday-p2p] using {} custom relay(s)", urls.len());
+                builder = builder.relay_mode(iroh::RelayMode::custom(urls));
+            }
+        }
+        builder
             .alpns(vec![ALPN.to_vec()])
             .secret_key(self.key.clone())
             .bind()
             .await
             .context("cannot bind the p2p endpoint")
     }
+}
+
+/// Relays the user added through the environment.
+///
+/// `SUNDAY_P2P_RELAY` and `SUNDAY_P2P_RELAYS` accept one or more URLs separated by commas.
+/// A self-hosted relay is often the difference between "works at home" and "works anywhere",
+/// and it needs no account: the relay only forwards encrypted traffic addressed by node id.
+fn extra_relays() -> Vec<String> {
+    let mut found = Vec::new();
+    for key in ["SUNDAY_P2P_RELAY", "SUNDAY_P2P_RELAYS"] {
+        if let Ok(value) = std::env::var(key) {
+            for part in value.split(',') {
+                let trimmed = part.trim();
+                if !trimmed.is_empty() {
+                    found.push(trimmed.to_owned());
+                }
+            }
+        }
+    }
+    found
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

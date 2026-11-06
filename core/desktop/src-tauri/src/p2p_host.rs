@@ -167,6 +167,30 @@ pub fn p2p_ticket(
     Ok(json!({ "ticket": ticket, "port": port }))
 }
 
+/// The ticket as an SVG QR code.
+///
+/// The transport binary owns the encoding; the host only passes the ticket through, so the
+/// code the phone scans and the text it pastes are the same string by construction.
+#[tauri::command]
+pub fn p2p_qr(ticket: String) -> Result<Value, String> {
+    // The transport binary owns QR encoding so this host never links the crate: one
+    // implementation, two callers, and no second windows dependency graph.
+    let mut command = Command::new(binary()?);
+    command.arg("qr").arg("--ticket").arg(&ticket);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("生成二维码失败：{error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    Ok(json!({ "svg": String::from_utf8_lossy(&output.stdout) }))
+}
+
 /// Kept for symmetry with the phone side; starting the transport is what actually serves.
 #[tauri::command]
 pub fn p2p_serve_start(
