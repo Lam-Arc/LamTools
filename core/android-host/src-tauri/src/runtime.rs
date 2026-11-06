@@ -69,6 +69,21 @@ pub fn guest_path(host_path: &str) -> Option<String> {
     Some(format!("{GUEST_USERDATA}/{rest}"))
 }
 
+/// The host path behind a guest path in shared user data.
+///
+/// The inverse of [`guest_path`]: the camera writes a photo into the shared directory and
+/// the host has to read the same file back to decode the QR it contains.
+pub fn host_path(guest_path: &str) -> Option<std::path::PathBuf> {
+    let rest = guest_path.strip_prefix(GUEST_USERDATA)?;
+    let files = FILES_DIR.get()?;
+    Some(
+        PathBuf::from(files)
+            .join("runtime")
+            .join("userdata")
+            .join(rest.trim_start_matches('/')),
+    )
+}
+
 /// The directory the packaged `.so` files were extracted to. Android gives proot no
 /// other place to live: since Android 10 a binary in app data cannot be executed, but
 /// the same bytes under `nativeLibraryDir` can.

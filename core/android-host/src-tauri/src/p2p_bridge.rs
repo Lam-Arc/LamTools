@@ -123,6 +123,22 @@ pub async fn p2p_call(
         .map_err(|error| format!("{error:#}"))
 }
 
+/// Takes a photo with the system camera and reads the ticket out of it.
+///
+/// user:“设备配对：支持二维码、配对码等简单方式”+(扫桌面那个码，省掉手打一百多字符)。
+#[tauri::command]
+pub async fn p2p_scan() -> Result<Value, String> {
+    let paths = crate::picker::pick_paths("camera".to_owned(), String::new())
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(guest) = paths.first() else {
+        return Ok(json!({ "ticket": serde_json::Value::Null }));
+    };
+    let host = crate::runtime::host_path(guest).ok_or_else(|| "扫描图片的位置不可用".to_owned())?;
+    let ticket = sunday_p2p::scan_qr_file(&host).map_err(|error| format!("{error:#}"))?;
+    Ok(json!({ "ticket": ticket }))
+}
+
 /// The ticket as an SVG QR code, so the other device can just scan it.
 #[tauri::command]
 pub async fn p2p_qr(ticket: String) -> Result<Value, String> {

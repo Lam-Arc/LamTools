@@ -17,6 +17,7 @@ async fn main() -> Result<()> {
         Some("serve") => serve(args.collect()).await,
         Some("call") => call(args.collect()).await,
         Some("qr") => qr(args.collect()),
+        Some("scan") => scan(args.collect()),
         _ => {
             println!("{}", USAGE);
             Ok(())
@@ -36,6 +37,7 @@ struct Flags {
     core_port: u16,
     core_token: String,
     watch: u64,
+    file: String,
 }
 
 fn parse(args: Vec<String>) -> Result<Flags> {
@@ -48,6 +50,7 @@ fn parse(args: Vec<String>) -> Result<Flags> {
         core_port: 0,
         core_token: String::new(),
         watch: 0,
+        file: String::new(),
     };
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
@@ -61,6 +64,7 @@ fn parse(args: Vec<String>) -> Result<Flags> {
             "--core-port" => flags.core_port = value()?.parse()?,
             "--core-token" => flags.core_token = value()?,
             "--watch" => flags.watch = value()?.parse()?,
+            "--file" => flags.file = value()?,
             other => bail!("unknown flag {other}"),
         }
     }
@@ -86,6 +90,17 @@ fn qr(args: Vec<String>) -> Result<()> {
     print!("{}", sunday_p2p::ticket_qr_svg(&flags.ticket)?);
     Ok(())
 }
+/// Decodes a QR photo into the ticket it carries.
+fn scan(args: Vec<String>) -> Result<()> {
+    let flags = parse(args)?;
+    if flags.file.trim().is_empty() {
+        bail!("--file is required");
+    }
+    let ticket = sunday_p2p::scan_qr_file(std::path::Path::new(&flags.file))?;
+    println!("{ticket}");
+    Ok(())
+}
+
 async fn serve(args: Vec<String>) -> Result<()> {
     let flags = parse(args)?;
     let identity = Identity::load_or_create(&flags.dir)?;

@@ -8,14 +8,14 @@
 
 | 文件 | 用途 | 大小 |
 | --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 294 MB |
-| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 308 MB |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 296 MB |
+| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 310 MB |
 
 校验和：
 
 ```
-bc155a3fcd9e8c7af933baa3d2951845045a05d73f6603c00bc4a6ad023e81ec  sunday-m-arm64-debug.apk
-a33bc0baffc9268dc06f8418c9a6eb19b75f58f2a2d09fb01a2f86fdfe1ed204  sunday-m-x86_64-debug.apk
+6f6d9840920af98c68bd1ce6d3bf2f0043790a055c29c73ec0eb5b2e54e64084  sunday-m-arm64-debug.apk
+01c50755f99c8cc0374adc74130d4ac1d2551ed67d6a24b419378cd900526f68  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
@@ -89,12 +89,16 @@ files/runtime/
 | 附件/引用 | 通过 | 引用 token 固定行高，插入后重新量输入框高度，不再整块错位 |
 | 设备连接（传输层） | 部分 | 两进程直连 + Core 转发 + 事件推送实测通过；手机 App 与 PC 之间的整链未在设备上点过 |
 | 远程模式 | 部分 | 手机会在连着电脑时整条走隧道（RemoteTransport），否则用本机 Core；切换靠重载，未在设备上点过 |
+| 手机扫码（解码） | 通过（逻辑） | `core/p2p/src/scan.rs` 用 `qrcode` 生成 PNG、`rqrr` 读回，字符串逐字节相等；相机取图走 `FilePickerBridge` 的 `camera` 分支：拍照 → 复制进核心能读的目录 → `host_path` 换回宿主路径 |
 | 远程重连 | 通过（逻辑） | 票据记在本机，入口与请求失败时都会按它重连一次；连不上回落本机 Core |
 | 运行位置标记 | 通过（逻辑） | 远端模式下界面右上角常驻「在电脑上运行」 |
 | 界面错位（点图片链接） | 通过 | 根因是分屏状态被持久化后仍套用桌面分栏几何；手机上不再套用，并在启动时清掉遗留状态 |
 
 ## 未验证（不得当作通过）
 
+* **手机扫电脑的二维码**：真实链路（电脑出码 → 手机相机拍 → 解码 → 填入 → 连上）没有
+  在设备上走过。本机验证的是解码器本身（生成的 PNG 读回，字符串完全相等）与相机分支的
+  代码路径，需要真机配一台电脑才算验完。
 * **实体 arm64 设备**：本机只有 x86_64 模拟器。ARM64 APK 已产出并检查了内容（5 个
   `arm64-v8a` 库、`rootfs-aarch64.targz`），但没有在真机上安装运行。
 * **附件端到端对话**：附件已登记到 Core（200 OK），但"带着附件发一条消息、模型用

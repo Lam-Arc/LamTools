@@ -43,6 +43,7 @@
         data-remote-ticket-input
       />
       <div class="remote-panel__row">
+        <button class="remote-panel__button" type="button" :disabled="busy" @click="scan" data-remote-scan>{{ t("扫码") }}</button>
         <button v-if="!connected" class="remote-panel__button is-primary" type="button" :disabled="busy || !ticketInput.trim()" @click="connect">{{ t("连接") }}</button>
         <button v-else class="remote-panel__button" type="button" :disabled="busy" @click="disconnect">{{ t("断开") }}</button>
         <span v-if="peer" class="remote-panel__note">{{ t("已连到 {0}", { 0: shortId(peer) }) }}</span>
@@ -195,6 +196,19 @@ async function serveStop(): Promise<void> {
   try {
     await call('p2p_serve_stop')
     serving.value = false
+  } catch (cause) {
+    error.value = String(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function scan(): Promise<void> {
+  busy.value = true
+  error.value = ''
+  try {
+    const result = await call<{ ticket?: string | null }>('p2p_scan')
+    if (result?.ticket) ticketInput.value = result.ticket
   } catch (cause) {
     error.value = String(cause)
   } finally {
