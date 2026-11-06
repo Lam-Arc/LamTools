@@ -54,6 +54,26 @@ RESULT {"hello":"sunday"}
 
 可信名单落盘后第二次连接不再询问。这次走的是局域网地址直连，没有经过 relay。
 
+## 落地形态（2026-11-05）
+
+桌面端把传输跑在**独立进程** `sunday-p2p` 里，而不是链进桌面应用。原因不是设计偏好，是依赖：
+iroh 的 `netwatch` 在 Windows 拉 `wmi`，与桌面端已有的 windows crate 版本冲突，硬合并会让
+桌面构建直接坏掉（16 个 E0277/E0308/E0599）。独立进程本来就是这套东西的定位，桌面宿主只
+负责起停与转述。
+
+因此也关掉了 iroh 的 `portmapper`（它同样带 wmi）。代价是少了 UPnP/NAT-PMP 端口映射；
+直连、打洞与中继回退都不依赖它，关掉后本机两进程实测仍通。
+
+- 桌面：`p2p_host.rs` 起 `sunday-p2p serve --core-port <get_api_base 的端口> --core-token <env>`，
+  读它的 `TICKET`/`READY` 两行，把票据交给 UI；停止就是杀掉这个进程。
+- 手机：宿主内直接链接 `sunday-p2p`，命令是 `p2p_ticket / p2p_connect / p2p_call / p2p_status /
+  p2p_disconnect / p2p_devices / p2p_revoke`。
+- 桌面命令：`p2p_ticket / p2p_serve_start / p2p_serve_stop / p2p_status / p2p_devices / p2p_revoke`。
+- UI：`RemoteConnectionPanel`，桌面出票据与接受连接，手机粘贴票据连接；两边都能看/撤销可信设备。
+
+传输程序的位置：`SUNDAY_P2P_BIN` 优先，其次应用同目录，最后开发目录
+`core/p2p/target/{release,debug}`。打包版需要把 `sunday-p2p.exe` 放进应用旁边。
+
 ## 还没做
 
 1. 接进两端宿主：桌面（`core/desktop/src-tauri`）与 Android 宿主各暴露一组命令
