@@ -681,6 +681,36 @@ fn install_overlay_panic_safety() {
     }));
 }
 
+/// What a second instance does: hand its command line to the running one.
+///
+/// user:“把桌面端跑起来”+(开发版必须能和正在运行的正式版并存：单实例锁按 bundle
+/// identifier 建全局互斥量，正式版在跑时 dev 实例一启动就被杀掉，窗口永远不会出现。)
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn on_second_instance(app: &tauri::AppHandle, args: Vec<String>, _cwd: String) {
+    // user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”+(第二实例带
+    // `--ping-commit=<扇区id>` 时直接驱动正在运行的实例执行该扇区，测完后退出。)
+    if let Some(sector) = ping_commit_from_args(&args) {
+        pet::simulate_ping_commit(app, &sector);
+        return;
+    }
+    // 隔离测试：冻结截图页心跳，让看门狗把"页面死掉"的整屏窗口收回去。
+    if args.iter().any(|arg| arg == "--capture-freeze-heartbeat") {
+        pet::simulate_capture_heartbeat_stall(app);
+        return;
+    }
+    // 隔离测试：只在本实例打开/收起 Ping 环，不触发正式实例的全局快捷键。
+    if args.iter().any(|arg| arg == "--ping-ring-open") {
+        pet::simulate_ping_ring(app, "down");
+        return;
+    }
+    if args.iter().any(|arg| arg == "--ping-ring-close") {
+        pet::simulate_ping_ring(app, "up");
+        return;
+    }
+    // Focus the existing window instead of starting a second instance.
+    reveal_main_window(app);
+}
+
 fn main() {
     install_overlay_panic_safety();
     // user:“迁移”+(应用标识从 com.lamtools.lamcore 改成 com.lamtools.sunday，
@@ -702,34 +732,16 @@ fn main() {
         quitting: AtomicBool::new(false),
     };
 
-    tauri::Builder::default()
-        // Single-instance guard: two instances would each spawn a backend
-        // writing the same .lam/core.db (SQLite lock storms, config
-        // clobbering) (audit 20 S3).
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”+(第二实例带
-            // `--ping-commit=<扇区id>` 时直接驱动正在运行的实例执行该扇区，测完后退出。)
-            if let Some(sector) = ping_commit_from_args(&args) {
-                pet::simulate_ping_commit(app, &sector);
-                return;
-            }
-            // 隔离测试：冻结截图页心跳，让看门狗把"页面死掉"的整屏窗口收回去。
-            if args.iter().any(|arg| arg == "--capture-freeze-heartbeat") {
-                pet::simulate_capture_heartbeat_stall(app);
-                return;
-            }
-            // 隔离测试：只在本实例打开/收起 Ping 环，不触发正式实例的全局快捷键。
-            if args.iter().any(|arg| arg == "--ping-ring-open") {
-                pet::simulate_ping_ring(app, "down");
-                return;
-            }
-            if args.iter().any(|arg| arg == "--ping-ring-close") {
-                pet::simulate_ping_ring(app, "up");
-                return;
-            }
-            // Focus the existing window instead of starting a second instance.
-            reveal_main_window(app);
-        }))
+    let builder = tauri::Builder::default();
+    // Single-instance guard: two instances would each spawn a backend
+    // writing the same .lam/core.db (SQLite lock storms, config
+    // clobbering) (audit 20 S3).
+    //
+    // user:“把桌面端跑起来”+(只在正式版注册：锁键是 bundle identifier，开发版与
+    // 已安装的正式版相同，正式版在跑时 dev 实例会被直接杀掉，窗口永远不出现。)
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(on_second_instance));
+    builder
         .manage(state)
         // user:“你现在负责在现有 Sunday 项目中实现「Sunday 桌宠 V1.0」”+(桌宠覆盖层状态独立托管，禁用时不注册任何窗口/钩子)
         .manage(pet::PetState::default())
@@ -853,7 +865,7 @@ fn main() {
             p2p_host::p2p_serve_stop,
             p2p_host::p2p_status,
             p2p_host::p2p_devices,
-            p2p_host::p2p_revoke,
+            p2p_host::p2p_revoke,
             ping,
             get_app_info,
             pick_directory,

@@ -25,8 +25,12 @@ async fn main() -> Result<()> {
     }
 }
 
+// user:“验收：打印的 USAGE 里出现 qr 和 scan”+(帮助文本必须列出所有子命令，否则按帮助
+// 判断二进制能力会得出"没有二维码功能"的错误结论)。
 const USAGE: &str = "sunday-p2p serve --dir <dir> --name <name>\n\
-                     sunday-p2p call --dir <dir> --name <name> --ticket <ticket> [--method ping] [--params '{}']";
+                     sunday-p2p call --dir <dir> --name <name> --ticket <ticket> [--method ping] [--params '{}']\n\
+                     sunday-p2p qr --ticket <ticket>\n\
+                     sunday-p2p scan --file <image>";
 
 struct Flags {
     dir: PathBuf,
