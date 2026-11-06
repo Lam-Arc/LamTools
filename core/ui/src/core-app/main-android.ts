@@ -78,7 +78,23 @@ function renderBoot(text: string, options: { error?: boolean; retry?: boolean } 
   node.append(panel)
 }
 
+// user:“重新安装你发的新安装包之后，这个问题仍旧存在”+(分屏几何存在 localStorage 里，
+// 重装 APK 不清应用数据，所以坏状态会一直带下去；启动时直接丢掉它，让分屏回默认)。
+function clearStaleSplitState(): void {
+  try {
+    const doomed: string[] = []
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (key && key.endsWith(':split-workspace')) doomed.push(key)
+    }
+    for (const key of doomed) localStorage.removeItem(key)
+  } catch {
+    // Storage unavailable: there is nothing stale to clear.
+  }
+}
+
 async function boot(): Promise<void> {
+  clearStaleSplitState()
   renderBoot('正在启动核心…\n\n首次打开需要解压随包的 Linux 运行时，可能要等一会儿。')
   try {
     await invoke('core_start')

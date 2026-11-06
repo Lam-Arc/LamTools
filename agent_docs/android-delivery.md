@@ -8,14 +8,14 @@
 
 | 文件 | 用途 | 大小 |
 | --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 290 MB |
-| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 352 MB |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 384 MB |
+| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 304 MB |
 
 校验和：
 
 ```
-454d855abd3d2f86f0f44646f802e90acf853196eee878a70c4aaf1dc4a7ac86  sunday-m-arm64-debug.apk
-2a9ffb8713154ac7c462de841fa7aed6265367ab300253b6c6e30a656347576e  sunday-m-x86_64-debug.apk
+e6f2b8d63cab8ba3b301d557223fb010108ac1f9fdf65fb138859dcef3474ae4  sunday-m-arm64-debug.apk
+a1b2ba1d8840e481907dc0dc3f8c3c4234cb772f4efaa61a5db7d945da75ec98  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
@@ -89,6 +89,7 @@ files/runtime/
 | 附件/引用 | 通过 | 引用 token 固定行高，插入后重新量输入框高度，不再整块错位 |
 | 设备连接（传输层） | 部分 | 两进程直连 + Core 转发 + 事件推送实测通过；手机 App 与 PC 之间的整链未在设备上点过 |
 | 远程模式 | 部分 | 手机会在连着电脑时整条走隧道（RemoteTransport），否则用本机 Core；切换靠重载，未在设备上点过 |
+| 界面错位（点图片链接） | 通过 | 根因是分屏状态被持久化后仍套用桌面分栏几何；手机上不再套用，并在启动时清掉遗留状态 |
 
 ## 未验证（不得当作通过）
 
