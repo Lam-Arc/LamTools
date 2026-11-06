@@ -264,6 +264,27 @@ tar -C "$ROOTFS" -czf "$OUT/$ABI/assets/runtime/$ROOTFS_NAME" --numeric-owner .
 ROOTFS_BYTES="$(stat -c %s "$OUT/$ABI/assets/runtime/$ROOTFS_NAME")"
 ROOTFS_SHA="$(sha_of "$OUT/$ABI/assets/runtime/$ROOTFS_NAME")"
 
+# How many bytes the archive writes when it is unpacked: the sum of its entry sizes.
+# The app's boot screen shows `unpacked / this` as a real percentage, which is why the
+# number is measured from the archive that ships rather than from the build tree (tar
+# can skip a file the tree still contains). python3 is already a hard dependency above.
+ROOTFS_UNPACKED="$(python3 - "$OUT/$ABI/assets/runtime/$ROOTFS_NAME" <<'PY'
+import sys
+import tarfile
+
+total = 0
+with tarfile.open(sys.argv[1], "r:gz") as tar:
+    for member in tar:
+        if member.isfile():
+            total += member.size
+print(total)
+PY
+)"
+case "$ROOTFS_UNPACKED" in
+  ''|*[!0-9]*) die "could not measure the unpacked size of $ROOTFS_NAME (got '$ROOTFS_UNPACKED')" ;;
+esac
+log "rootfs unpacks to $ROOTFS_UNPACKED bytes"
+
 cat > "$OUT/$ABI/assets/runtime/manifest.json" <<JSON
 {
   "runtimeVersion": "$RUNTIME_VERSION",
@@ -271,6 +292,7 @@ cat > "$OUT/$ABI/assets/runtime/manifest.json" <<JSON
   "rootfs": "$ROOTFS_NAME",
   "rootfsBytes": $ROOTFS_BYTES,
   "rootfsSha256": "$ROOTFS_SHA",
+  "rootfsUnpackedBytes": $ROOTFS_UNPACKED,
   "uncompressedBytes": $UNCOMPRESSED,
   "pythonVersion": "$PYTHON_VERSION",
   "coreVersion": "$CORE_VERSION",

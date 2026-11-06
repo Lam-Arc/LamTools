@@ -123,6 +123,13 @@ pub struct Manifest {
     pub rootfs_bytes: u64,
     #[serde(rename = "rootfsSha256", default)]
     pub rootfs_sha256: String,
+    /// Sum of the archive's entry sizes: how many bytes the unpack writes to disk.
+    ///
+    /// The boot layer's percentage is `done / this`. A manifest built before this field
+    /// existed answers 0, and the boot layer then shows an indeterminate bar instead of
+    /// a number it would have had to invent.
+    #[serde(rename = "rootfsUnpackedBytes", default)]
+    pub rootfs_unpacked_bytes: u64,
     #[serde(rename = "pythonVersion", default)]
     pub python_version: String,
     #[serde(rename = "coreVersion", default)]
@@ -191,6 +198,106 @@ fn installed_version(app: &AppHandle) -> Option<String> {
     value.get("runtimeVersion")?.as_str().map(str::to_owned)
 }
 
+/// How far along one cold start is, as the boot layer shows it.
+///
+/// `phase` is the boot layer's state machine and the whole vocabulary it accepts:
+/// `staging` (the archive is still being copied out of the APK), `unpacking` (the tar is
+/// being written to disk), `starting` (proot is being spawned), `waiting` (the guest is
+/// importing Python), `ready`, `failed`.
+///
+/// `total == 0` means "there is no honest number": the boot layer then shows an
+/// indeterminate bar rather than a percentage that would stall or jump around.
+// user:“解压有真实进度：用已解压字节 / 总解压字节，而不是假装转圈”+(所以每一条进度都
+// 带 done/total 两个真实字节数，分母来自 manifest 的 rootfsUnpackedBytes)。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RuntimeProgress {
+    pub phase: String,
+    pub done: u64,
+    pub total: u64,
+    pub message: String,
+}
+
+fn emit_progress(app: &AppHandle, phase: &str, done: u64, total: u64, message: impl Into<String>) {
+    let payload = RuntimeProgress {
+        phase: phase.to_owned(),
+        done,
+        total,
+        message: message.into(),
+    };
+    // stdout as well as the event: `adb logcat` is where a cold start is inspected when
+    // the webview never comes up, and an event nobody can see is not evidence.
+    println!(
+        "[sunday] runtime-progress phase={} done={} total={} {}",
+        payload.phase, payload.done, payload.total, payload.message
+    );
+    app.emit("runtime-progress", payload).ok();
+}
+
+/// Throttled unpack progress.
+///
+/// The tar loop visits tens of thousands of entries, so one event per entry would flood
+/// both the IPC bridge and the webview's event queue. Events go out on whichever clock
+/// fires first — every 500 ms or every 2% of the archive — which looks continuous on
+/// screen and costs nothing measurable.
+// user:“每 500ms 或每 2% 发一次，节流，避免事件洪水”+(两个阈值取先到者)。
+struct UnpackTicker<'a> {
+    app: &'a AppHandle,
+    total: u64,
+    done: u64,
+    entries: u64,
+    last_at: std::time::Instant,
+    last_mark: u64,
+}
+
+impl<'a> UnpackTicker<'a> {
+    fn new(app: &'a AppHandle, total: u64) -> Self {
+        Self {
+            app,
+            total,
+            done: 0,
+            entries: 0,
+            last_at: std::time::Instant::now(),
+            last_mark: 0,
+        }
+    }
+
+    fn note(&mut self, bytes: u64) {
+        self.done = self.done.saturating_add(bytes);
+        self.entries += 1;
+        self.flush(false);
+    }
+
+    fn flush(&mut self, force: bool) {
+        let step = if self.total > 0 {
+            (self.total as f64 * 0.02).max(1.0) as u64
+        } else {
+            u64::MAX
+        };
+        if !force
+            && self.done.saturating_sub(self.last_mark) < step
+            && self.last_at.elapsed() < std::time::Duration::from_millis(500)
+        {
+            return;
+        }
+        self.last_at = std::time::Instant::now();
+        self.last_mark = self.done;
+        let message = if self.total > 0 {
+            format!(
+                "已解压 {} / {}",
+                megabytes(self.done),
+                megabytes(self.total)
+            )
+        } else {
+            format!("已解压 {}（{} 个文件）", megabytes(self.done), self.entries)
+        };
+        emit_progress(self.app, "unpacking", self.done, self.total, message);
+    }
+}
+
+fn megabytes(bytes: u64) -> String {
+    format!("{:.0} MB", bytes as f64 / (1024.0 * 1024.0))
+}
+
 /// Copies the packaged archive out of assets and unpacks it once per runtime version.
 ///
 /// Unpacking dominates cold start (a few hundred megabytes), so it happens in this
@@ -201,6 +308,9 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     // stages it into filesDir/runtime and writes the manifest last; that manifest is the
     // only dependable "the bytes are here" signal, so this waits for it rather than
     // guessing at a delay.
+    // user:“原生窗口底色先挡住白闪，随后 HTML 启动层接管”+(解压之前的那段等待也要有
+    // 阶段文字，否则启动层会停在「准备运行时」不动)。
+    emit_progress(app, "staging", 0, 0, "正在取回随包运行时…");
     wait_for_stage(app)?;
     let manifest = read_manifest(app)?;
     let _guard = INSTALL_LOCK.lock().expect("install lock");
@@ -208,6 +318,9 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     if installed_version(app).as_deref() == Some(manifest.runtime_version.as_str())
         && rootfs_dir(app).join("opt/sunday/start_core.py").exists()
     {
+        // Nothing to unpack: say so, so the boot layer moves on instead of sitting on
+        // the staging line for a wait that is not happening.
+        emit_progress(app, "unpacking", 1, 1, "运行时已解压，直接启动");
         return Ok(InstallState {
             installed: true,
             runtime_version: manifest.runtime_version,
@@ -271,6 +384,10 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
     let mut entries = tar
         .entries()
         .map_err(|error| format!("cannot read the runtime archive: {error}"))?;
+    // user:“解压有真实进度：用已解压字节 / 总解压字节”+(分母来自构建时写进 manifest 的
+    // entry 尺寸之和；旧 manifest 没有这个字段时 total 为 0，启动层退化成不确定进度)。
+    let mut ticker = UnpackTicker::new(app, manifest.rootfs_unpacked_bytes);
+    ticker.flush(true);
     while let Some(next) = entries.next() {
         let mut entry = match next {
             Ok(entry) => entry,
@@ -280,13 +397,21 @@ pub fn install(app: &AppHandle) -> Result<InstallState, String> {
                 continue;
             }
         };
+        // The announced size is what the entry writes, and it is counted even when the
+        // write fails: the bar measures work attempted, and a skipped file is not work
+        // the user will see finished later.
+        let announced = entry.header().size().unwrap_or(0);
         if let Err(error) = entry.unpack_in(&rootfs) {
             skipped += 1;
             if skipped <= 5 {
                 eprintln!("[sunday] skipped {}: {error}", entry.path().map(|p| p.display().to_string()).unwrap_or_default());
             }
         }
+        ticker.note(announced);
     }
+    // The last event may have been throttled away; one final event makes the boot layer's
+    // bar reach 100% before it moves on to the start phase.
+    ticker.flush(true);
     if skipped > 0 {
         println!("[sunday] unpacked the runtime with {skipped} skipped entries");
     }
@@ -448,6 +573,20 @@ impl Runtime {
     /// traceback when an import fails, so a silent guest is detected by the child
     /// exiting, not only by the deadline.
     pub fn ensure_started(&self) -> Result<u16, String> {
+        // user:“失败路径保留：core_start 抛错时启动层显示错误与「重试」按钮”+(所以失败
+        // 也是一条进度事件：界面不必等到 invoke 的返回值才知道该显示错误)。
+        match self.start_guest() {
+            Ok(port) => Ok(port),
+            Err(error) => {
+                emit_progress(&self.app, "failed", 0, 0, error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    /// The body of [`Runtime::ensure_started`], wrapped so that every early return has
+    /// exactly one place to report a failure to the boot layer.
+    fn start_guest(&self) -> Result<u16, String> {
         // user:“Android 宿主只承担进程存活、启动和必要的连接恢复”+(所以这里先尝试连接
         // 已经在跑的那个 guest：重载界面、重建 Activity 都不能杀掉用户正在看的回合)。
         // A restart is only correct when the staged image changed underneath the guest.
@@ -458,7 +597,12 @@ impl Runtime {
             let inner = self.inner.lock().expect("runtime lock");
             if inner.child.is_some() && inner.port != 0 {
                 if installed.is_empty() || inner.version == installed {
-                    return Ok(inner.port);
+                    let port = inner.port;
+                    // Already running: the boot layer only has to wait for its own
+                    // first paint, so report the phase it is actually in.
+                    drop(inner);
+                    emit_progress(&self.app, "waiting", 0, 0, "核心已在运行，正在连接…");
+                    return Ok(port);
                 }
                 println!(
                     "[sunday] runtime image changed {} -> {installed}, restarting the guest",
@@ -473,6 +617,7 @@ impl Runtime {
         if !state.installed {
             return Err(state.message);
         }
+        emit_progress(&self.app, "starting", 0, 0, "正在启动 Linux 运行时…");
         let manifest = read_manifest(&self.app)?;
         let port = pick_port()?;
         let token = random_token();
@@ -580,9 +725,18 @@ impl Runtime {
             Arc::clone(&inner.running)
         };
         let app = self.app.clone();
+        // user:“启动核心 → 正在加载界面”+(proot 起来了但 Python 还在 import，这一段也要有
+        // 文字；否则启动层会停在「启动核心」不动，看起来和卡死一样)。
+        emit_progress(&app, "waiting", 0, 0, "等待核心应答…");
         std::thread::spawn(move || {
             let ready = wait_ready(&app, port, &token);
             running.store(ready, Ordering::SeqCst);
+            if ready {
+                emit_progress(&app, "ready", 1, 1, "核心已就绪");
+            } else {
+                let tail = read_log_tail(&app, 1);
+                emit_progress(&app, "failed", 0, 0, format!("核心未就绪 {tail}"));
+            }
             let payload = serde_json::json!({ "ready": ready, "port": port });
             app.emit("runtime-status", payload).ok();
         });
@@ -607,6 +761,11 @@ impl Runtime {
         }
         let client = blocking_client();
         let deadline = std::time::Instant::now() + timeout;
+        let started = std::time::Instant::now();
+        let mut last_report = std::time::Instant::now();
+        // user:“启动核心 → 正在加载界面”+(等待期间每 3 秒报一次已等待的秒数：截图能证明
+        // 这段时间里界面在动，而不是一片静止)。
+        emit_progress(&self.app, "waiting", 0, 0, "等待核心应答…");
         let mut last = String::new();
         while std::time::Instant::now() < deadline {
             match client
@@ -619,10 +778,21 @@ impl Runtime {
                     if let Ok(mut inner) = self.inner.lock() {
                         inner.running.store(true, Ordering::SeqCst);
                     }
+                    emit_progress(&self.app, "ready", 1, 1, "核心已就绪");
                     return Ok(());
                 }
                 Ok(response) => last = format!("core answered {}", response.status()),
                 Err(error) => last = error.to_string(),
+            }
+            if last_report.elapsed() >= std::time::Duration::from_secs(3) {
+                last_report = std::time::Instant::now();
+                emit_progress(
+                    &self.app,
+                    "waiting",
+                    0,
+                    0,
+                    format!("等待核心应答… 已等待 {}s", started.elapsed().as_secs()),
+                );
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
         }

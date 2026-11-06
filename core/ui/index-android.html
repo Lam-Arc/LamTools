@@ -3,11 +3,214 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#111111" />
+  <meta name="theme-color" content="#14161a" />
   <title>Sunday</title>
+  <!--
+    The boot layer's styles are inline on purpose.
+
+    user:“原生窗口底色先挡住白闪，随后 HTML 启动层接管”+(所以这一段不是由打包出来的
+    CSS 提供：那份 CSS 要等模块脚本下载解析完才生效，而第一个白帧就发生在它之前)。
+    Everything below must work before any bundle is parsed, which is why it is here and
+    not in a stylesheet.
+  -->
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #14161a;
+      color: #e6e8eb;
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      -webkit-text-size-adjust: 100%;
+      overscroll-behavior: none;
+    }
+
+    /* Fixed, and a sibling of #app rather than inside it: Vue's mount() empties #app, which
+       is exactly how the old boot text disappeared before the first real paint. */
+    .sunday-boot {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 24px;
+      box-sizing: border-box;
+      background: #14161a;
+      transition: opacity 0.34s ease;
+      will-change: opacity;
+    }
+
+    .sunday-boot.is-leaving {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .sunday-boot__mark {
+      position: relative;
+      width: 58px;
+      height: 58px;
+      margin-bottom: 4px;
+    }
+
+    .sunday-boot__ring {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 2px solid rgba(230, 232, 235, 0.14);
+      border-top-color: #7aa2ff;
+      animation: sunday-boot-spin 2.4s linear infinite;
+    }
+
+    .sunday-boot__core {
+      position: absolute;
+      inset: 19px;
+      border-radius: 50%;
+      background: #e6e8eb;
+      animation: sunday-boot-breathe 2.4s ease-in-out infinite;
+    }
+
+    .sunday-boot__title {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(230, 232, 235, 0.92);
+    }
+
+    .sunday-boot__phase {
+      min-height: 1.5em;
+      font-size: 15px;
+      color: #e6e8eb;
+      text-align: center;
+    }
+
+    .sunday-boot__track {
+      width: min(232px, 62vw);
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(230, 232, 235, 0.12);
+      overflow: hidden;
+    }
+
+    .sunday-boot__fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #7aa2ff, #b48cff);
+      transition: width 0.35s ease;
+    }
+
+    /* No honest denominator (a manifest from before the unpack size was recorded): a
+       sliding bar says "working" without inventing a number. */
+    .sunday-boot.is-indeterminate .sunday-boot__fill {
+      width: 38%;
+      animation: sunday-boot-slide 1.4s ease-in-out infinite;
+    }
+
+    .sunday-boot__note {
+      min-height: 2.6em;
+      max-width: 78vw;
+      font-size: 12px;
+      line-height: 1.6;
+      text-align: center;
+      color: rgba(230, 232, 235, 0.55);
+      white-space: pre-wrap;
+    }
+
+    .sunday-boot__retry {
+      margin-top: 6px;
+      padding: 11px 20px;
+      border-radius: 10px;
+      border: 1px solid #2f3540;
+      background: #1b1f26;
+      color: #e6e8eb;
+      font: 14px system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }
+
+    .sunday-boot__retry:active {
+      background: #232833;
+    }
+
+    .sunday-boot.is-error .sunday-boot__ring {
+      border-top-color: #f08a8a;
+      animation: none;
+    }
+
+    .sunday-boot.is-error .sunday-boot__core {
+      background: #f08a8a;
+      animation: none;
+    }
+
+    .sunday-boot.is-error .sunday-boot__phase {
+      color: #f08a8a;
+    }
+
+    .sunday-boot.is-error .sunday-boot__track {
+      display: none;
+    }
+
+    .sunday-boot.is-error .sunday-boot__note {
+      color: rgba(240, 138, 138, 0.8);
+    }
+
+    @keyframes sunday-boot-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes sunday-boot-breathe {
+      0%,
+      100% {
+        transform: scale(0.86);
+        opacity: 0.65;
+      }
+      50% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+
+    @keyframes sunday-boot-slide {
+      0% {
+        transform: translateX(-100%);
+      }
+      100% {
+        transform: translateX(280%);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .sunday-boot__ring,
+      .sunday-boot__core,
+      .sunday-boot.is-indeterminate .sunday-boot__fill {
+        animation: none;
+      }
+    }
+  </style>
 </head>
 <body>
   <div id="app"></div>
+  <!--
+    The boot layer lives beside #app, never inside it: Vue empties #app on mount, and the
+    whole point of this node is to survive that until the workspace has painted.
+    user:“启动层独立于 #app，Vue 挂载不会清掉它”+(所以是 body 的兄弟节点，不是子节点)。
+  -->
+  <div id="boot-screen" class="sunday-boot" role="status" aria-live="polite">
+    <div class="sunday-boot__mark" aria-hidden="true">
+      <span class="sunday-boot__ring"></span>
+      <span class="sunday-boot__core"></span>
+    </div>
+    <div class="sunday-boot__title">Sunday</div>
+    <div class="sunday-boot__phase" id="boot-phase">准备运行时</div>
+    <div class="sunday-boot__track"><div class="sunday-boot__fill" id="boot-fill"></div></div>
+    <div class="sunday-boot__note" id="boot-note">正在准备启动环境…</div>
+    <button class="sunday-boot__retry" id="boot-retry" type="button" hidden>重试</button>
+  </div>
   <script type="module" src="/src/core-app/main-android.ts"></script>
 </body>
 </html>
