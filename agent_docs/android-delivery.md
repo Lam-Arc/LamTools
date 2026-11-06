@@ -8,14 +8,14 @@
 
 | 文件 | 用途 | 大小 |
 | --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 384 MB |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 290 MB |
 | `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 304 MB |
 
 校验和：
 
 ```
-e6f2b8d63cab8ba3b301d557223fb010108ac1f9fdf65fb138859dcef3474ae4  sunday-m-arm64-debug.apk
-a1b2ba1d8840e481907dc0dc3f8c3c4234cb772f4efaa61a5db7d945da75ec98  sunday-m-x86_64-debug.apk
+8fbcd28994d3559ee34d021d40deccba243348ca1820c6a203174a700b383ee9  sunday-m-arm64-debug.apk
+4164fe75becc4c85a65bfc44c97cc7d686feb3a35567b2a9bd930d26e3a0dcc7  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
