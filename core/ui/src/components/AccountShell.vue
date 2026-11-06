@@ -23,6 +23,12 @@
           <p v-if="error" class="account-error" role="alert">{{ error }}</p>
 
           <section class="account-section">
+            <!-- user:“改为 Sunday / Sunday M 远程连接功能”+(连接本身就是这一页的主角，
+                 旧的账号行已经在上面删掉)。 -->
+            <RemoteConnectionPanel :platform="props.appRuntime?.platform" />
+          </section>
+
+          <section class="account-section">
             <div class="account-section-title">{{ t("设备") }}<span class="account-section-note">{{ devices.length ? t('{0}/{1} 在线', { 0: onlineCount, 1: devices.length }) : t("暂无") }}</span>
             </div>
             <ul v-if="devices.length" class="account-devices">
@@ -52,6 +58,8 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
+import RemoteConnectionPanel from '@/components/RemoteConnectionPanel.vue'
+
 /**
  * AccountShell — 账号的独立界面。
  *
@@ -77,6 +85,8 @@ const props = defineProps<{
   onLogout: () => void
   onOpenSettings: () => void
   onRefresh?: () => void
+  /** 由页面绑定透传进来：手机上只显示"连到电脑"，桌面上显示"接受连接"。 */
+  appRuntime?: { platform?: 'desktop' | 'mobile' | 'web' }
 }>()
 
 const emit = defineEmits<{ close: [] }>()

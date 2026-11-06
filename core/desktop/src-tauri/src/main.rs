@@ -40,6 +40,7 @@ use tauri::{
 };
 
 mod migration;
+mod p2p_host;
 mod pet;
 mod remote;
 mod split_pane;
@@ -823,6 +824,8 @@ fn main() {
         .manage(state)
         // user:“你现在负责在现有 Sunday 项目中实现「Sunday 桌宠 V1.0」”+(桌宠覆盖层状态独立托管，禁用时不注册任何窗口/钩子)
         .manage(pet::PetState::default())
+        // user:“P2P 作为独立、可复用的传输组件”+(桌面只托管那个进程与它的票据)。
+        .manage(p2p_host::P2pHostState::default())
         .setup(|app| {
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
@@ -956,6 +959,12 @@ fn main() {
             open_plugin_window,
             show_main_window,
             quit_app,
+            p2p_host::p2p_ticket,
+            p2p_host::p2p_serve_start,
+            p2p_host::p2p_serve_stop,
+            p2p_host::p2p_status,
+            p2p_host::p2p_devices,
+            p2p_host::p2p_revoke,
             remote_gateway_start,
             remote_gateway_stop,
             remote_gateway_status,

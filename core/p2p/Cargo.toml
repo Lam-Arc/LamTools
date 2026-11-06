@@ -18,7 +18,10 @@ name = "sunday-p2p"
 path = "src/bin/cli.rs"
 
 [dependencies]
-iroh = "1.4"
+# user:“尽可能免费、无需用户自行部署服务器”+(公共 relay 只做回退)。
+# 关掉 portmapper：它带进来的 wmi 与桌面端已有的 windows crate 版本冲突，
+# 而 UPnP 端口映射只是锦上添花——打洞与中继回退都不依赖它。
+iroh = { version = "1.4", default-features = false, features = ["tls-ring"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
