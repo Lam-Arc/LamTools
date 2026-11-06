@@ -120,36 +120,6 @@ async function init() {
     await invoke('quit_app')
   }
 
-  // Mobile Control bridge.  Core UI keeps these callbacks optional so the
-  // same settings component can render in the website/browser showcase.
-  ;(window as any).__LAMTOOLS_REMOTE_STATUS__ = async (): Promise<unknown> => {
-    return await invoke('remote_gateway_status')
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_START__ = async (): Promise<unknown> => {
-    return await invoke('remote_gateway_start')
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_STOP__ = async (): Promise<unknown> => {
-    return await invoke('remote_gateway_stop')
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_PAIRING_CREATE__ = async (): Promise<unknown> => {
-    return await invoke('remote_pairing_create')
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_REVOKE__ = async (deviceId: string): Promise<boolean> => {
-    return await invoke<boolean>('remote_device_revoke', { deviceId })
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_STATUS__ = async (): Promise<unknown> => {
-    return await invoke('remote_account_status')
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_IDENTITY__ = async (scope?: { serverId: string; username: string }): Promise<unknown> => {
-    return await invoke('remote_account_identity', scope || {})
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_SAVE__ = async (session: unknown): Promise<unknown> => {
-    return await invoke('remote_account_save', { session })
-  }
-  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_LOGOUT__ = async (): Promise<void> => {
-    await invoke('remote_account_logout')
-  }
-
   // Diagnostic: verify custom commands are registered
   try {
     const pong = await invoke<string>('ping');

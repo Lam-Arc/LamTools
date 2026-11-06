@@ -108,11 +108,14 @@ EVENT thread/event {"note":"hello from core","seq":1}
   `RelayMode::custom`，只用你配的节点；不配就用 `presets::N0` 的公共 relay（仅回退）。
   中继只按节点 id 转发加密流量，不需要账号。
 
+## 旧网关已删除
+
+`core/desktop/src-tauri/src/remote/`（gateway / pairing / relay / tunnel / account，
+约 5.8k 行）连同 `main.rs` 里的 9 个 `remote_*` 命令、控制端口、`__LAMTOOLS_REMOTE_*`
+桥接、`sunday mobile` 这组 CLI 一起删掉了。账号与自建 relay 那条路不再存在。
+桌面 `cargo check` 与桌面前端构建都通过。
+
 ## 还没做
 
 1. 扫码：二维码已经能画，缺的是用相机扫回来（现在是复制票据粘贴）。
-2. 删除旧的 `core/desktop/src-tauri/src/remote/`：**暂缓，有依赖**。Python CLI 的
-   `cli_commands/server.py` 通过 `lamtools-remote-control.json` 连桌面端的控制端口，
-   而那个端口由 `remote/control.rs` 提供；`core/desktop/src/main.ts` 也还在调
-   `remote_*` 命令。要删得先把 CLI 这条控制路径迁到别处，不能一刀切。
-3. 实体设备上的整链验收：手机连电脑、看会话、发消息、收审批。
+2. 实体设备上的整链验收：手机连电脑、看会话、发消息、收审批。
