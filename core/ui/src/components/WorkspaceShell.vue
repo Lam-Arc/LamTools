@@ -694,6 +694,12 @@ function onSwipePointerCancel(): void {
   }
 }
 
+// user:“点远程连接后看起来没反应”+(底部图标排开的是整版界面，手机上抽屉还盖在上面；
+// 打开视图时把抽屉收起来，用户才看得到结果)。
+function closeLeftDrawer(): void {
+  leftOpen.value = false
+}
+
 watch(leftOpen, (value) => {
   emit('update:left-open', value)
 }, { immediate: true })
@@ -717,6 +723,7 @@ watch(() => props.contentWidth, (val) => {
 
 defineExpose({
   leftPinned,
+  closeLeftDrawer,
   rightPinned,
   openLeftDrawer,
   toggleLeftPinned,

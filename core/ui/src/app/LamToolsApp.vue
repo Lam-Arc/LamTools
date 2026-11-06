@@ -279,25 +279,25 @@
           :data-mobile-footer-mode="option.id"
           :title="option.label"
           :aria-label="option.label"
-          @click="selectAppModeByKey(option.id)"
+          @click="openFromRail(() => selectAppModeByKey(option.id))"
         >
           <Check v-if="option.id === activeMobileModeId" :size="17" :stroke-width="1.9" aria-hidden="true" />
           <Blocks v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
         <span class="drawer-footer-rail__sep" aria-hidden="true"></span>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-library :title="t('资料库')" :aria-label="t('资料库')" @click="openLibrary()">
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-library :title="t('资料库')" :aria-label="t('资料库')" @click="openFromRail(openLibrary)">
           <Library :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-arrange :title="t('定时任务')" :aria-label="t('定时任务')" @click="openArrange()">
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-arrange :title="t('定时任务')" :aria-label="t('定时任务')" @click="openFromRail(openArrange)">
           <CalendarClock :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-plugins :title="t('插件')" :aria-label="t('插件')" @click="openPlugins()">
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-plugins :title="t('插件')" :aria-label="t('插件')" @click="openFromRail(openPlugins)">
           <Blocks :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-settings :title="t('设置')" :aria-label="t('设置')" @click="openSettings()">
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-settings :title="t('设置')" :aria-label="t('设置')" @click="openFromRail(openSettings)">
           <Settings :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-remote :title="t('远程连接')" :aria-label="t('远程连接')" @click="emit('open-account')">
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-remote :title="t('远程连接')" :aria-label="t('远程连接')" @click="openFromRail(openAccount)">
           <MonitorSmartphone :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
@@ -937,6 +937,12 @@ const emit = defineEmits<{
   }]
   'sync-request': []
 }>()
+
+// user:“点远程连接后看起来没反应”+(手机上的图标排开的是整版界面，打开后先把抽屉收起)。
+function openFromRail(action: () => void): void {
+  action()
+  if (appRuntime.platform === 'mobile') shellRef.value?.closeLeftDrawer?.()
+}
 
 function onLeftDrawerChange(value: boolean): void {
   emit('left-drawer-change', value)
