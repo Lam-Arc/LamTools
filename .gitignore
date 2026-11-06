@@ -228,3 +228,6 @@ AGENTS.md
 # checkout cannot build the Android host at all, which is exactly what the
 # android-apk workflow found.
 !core/android-host/src-tauri/icons/*.png
+
+# Rust build output for the p2p crate
+core/p2p/target/

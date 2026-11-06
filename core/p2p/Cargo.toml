@@ -1,0 +1,26 @@
+[package]
+name = "sunday-p2p"
+version = "0.1.0"
+edition = "2021"
+description = "Sunday device-to-device transport: pairing, trust, and an encrypted tunnel for Core JSON-RPC"
+license = "AGPL-3.0-or-later"
+
+# user:“P2P 作为独立、可复用的传输组件，不绑定 Python 或 Rust Agent Core”+(这个 crate
+# 只知道"把一帧 JSON 送到对面并拿回一帧"，不知道自己搬的是会话、工具还是审批)。
+# user:“优先考虑两端共享同一套 Rust/Iroh 传输实现”+(Windows 与 Android 都用它)。
+
+[lib]
+name = "sunday_p2p"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sunday-p2p"
+path = "src/bin/cli.rs"
+
+[dependencies]
+iroh = "1.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+base64 = "0.22"
