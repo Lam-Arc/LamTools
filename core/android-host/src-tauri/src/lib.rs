@@ -47,6 +47,106 @@ fn publish_insets(keyboard: i64, top: i64) {
     }
 }
 
+/// One sector action from the floating ring, waiting for the interface to ask for it.
+///
+/// A cold start hands the action over before Tauri's setup has run and long before the
+/// webview has a listener, so an event emitted at that moment reaches nobody. The action
+/// is kept here instead and taken by `overlay_take_pending` once the interface is listening.
+static PENDING_OVERLAY_ACTION: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
+/// Publishes one sector action to the interface.
+///
+/// user:“动作通过 Rust emit 到 JS”+(界面拿到 action + text 后把文字填进输入框，不自动发送)。
+fn publish_overlay_action(payload: String) {
+    if payload.trim().is_empty() {
+        return;
+    }
+    let parsed: Value = serde_json::from_str(&payload).unwrap_or_else(|_| json!({ "action": payload }));
+    match APP.get() {
+        Some(app) => {
+            use tauri::Emitter;
+            app.emit("overlay-action", parsed).ok();
+        }
+        None => {
+            *PENDING_OVERLAY_ACTION.lock().expect("overlay pending") = Some(parsed);
+        }
+    }
+}
+
+/// Reports the ring's state: permission, whether the service is alive, whether it is wanted.
+///
+/// user:“回到应用在 onResume 重查并 emit overlay-permission，界面据此刷新状态”+
+/// (所以两种事件都发：`overlay-permission` 只讲权限，`overlay-state` 讲服务活着没)。
+fn publish_overlay_state(granted: bool, running: bool, wanted: bool) {
+    use tauri::Emitter;
+    if let Some(app) = APP.get() {
+        app.emit("overlay-permission", json!({ "granted": granted })).ok();
+        app.emit(
+            "overlay-state",
+            json!({ "granted": granted, "running": running, "wanted": wanted }),
+        )
+        .ok();
+    }
+}
+
+/// The small window opened or closed; the interface narrows itself while it is open.
+fn publish_pip_mode(active: bool) {
+    use tauri::Emitter;
+    if let Some(app) = APP.get() {
+        app.emit("pip-mode", json!({ "active": active })).ok();
+    }
+}
+
+/// Whether the app may draw over other apps.
+#[tauri::command]
+fn overlay_permission() -> bool {
+    android_jni::overlay_call_bool("canDrawOverlays").unwrap_or(false)
+}
+
+/// Opens the system page that owns the "display over other apps" switch.
+#[tauri::command]
+fn overlay_open_settings() -> Result<(), String> {
+    android_jni::overlay_call_unit("openPermissionSettings")
+}
+
+/// Starts the floating button and its foreground service.
+#[tauri::command]
+fn overlay_start() -> Result<(), String> {
+    android_jni::overlay_call_unit("start")
+}
+
+/// Stops them. The service also records that the user no longer wants it.
+#[tauri::command]
+fn overlay_stop() -> Result<(), String> {
+    android_jni::overlay_call_unit("stop")
+}
+
+/// The three facts the settings switch needs to render honestly.
+#[tauri::command]
+fn overlay_state() -> Value {
+    let granted = android_jni::overlay_call_bool("canDrawOverlays").unwrap_or(false);
+    let running = android_jni::overlay_call_bool("running").unwrap_or(false);
+    let wanted = android_jni::overlay_call_bool("wanted").unwrap_or(false);
+    json!({ "granted": granted, "running": running, "wanted": wanted })
+}
+
+/// Takes the action that arrived while the interface was not listening yet.
+#[tauri::command]
+fn overlay_take_pending() -> Value {
+    PENDING_OVERLAY_ACTION
+        .lock()
+        .expect("overlay pending")
+        .take()
+        .unwrap_or(Value::Null)
+}
+
+/// Enters the system small window, answering false when the device refused and the host
+/// brought the app back to the foreground instead.
+#[tauri::command]
+fn pip_enter() -> bool {
+    android_jni::overlay_call_bool("enterPip").unwrap_or(false)
+}
+
 pub struct HostState {
     inner: Arc<Inner>,
 }
@@ -406,6 +506,13 @@ pub fn run() {
             p2p_bridge::p2p_devices,
             p2p_bridge::p2p_revoke,
             runtime_log,
+            overlay_permission,
+            overlay_open_settings,
+            overlay_start,
+            overlay_stop,
+            overlay_state,
+            overlay_take_pending,
+            pip_enter,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Android host");

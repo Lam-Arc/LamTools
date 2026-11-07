@@ -822,6 +822,7 @@ import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import OnboardingWizard from '@/components/OnboardingWizard.vue'
 import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
 import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
+import { installOverlayAction } from '@/core-app/overlayAction.ts'
 import SearchShell, { type SearchCommand, type StudySearchHit } from '@/components/SearchShell.vue'
 import { type PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
 import type {
@@ -4592,6 +4593,10 @@ watch(shellRef, (shell) => {
 function openLeftSidebar(): void {
   shellRef.value?.openLeftDrawer()
 }
+
+// user:"核心/ui/src/app/LamToolsApp.vue（只加一行安装 overlayAction 的调用，必须 mobile 守卫）"+
+// (宿主事件只在手机上有；桌面端没有悬浮环，所以整条安装是 mobile 专属)。
+if (appRuntime.platform === 'mobile') void installOverlayAction({ fillComposer: (text) => { composerText.value = composerText.value.trim() ? `${composerText.value} ${text}` : text; resizeComposerTextarea() }, openSessions: openLeftSidebar })
 
 function handleStudyOpenSearch(): void {
   openSearch()

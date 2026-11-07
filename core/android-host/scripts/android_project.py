@@ -194,7 +194,108 @@ def sync_sources() -> int:
         written += 1
 
     say(f"sync: {written} written, {unchanged} unchanged, into {JAVA_ROOT}")
+    code = sync_manifest()
+    if code != EXIT_OK:
+        return code
     return sync_runtime_gradle()
+
+
+# --------------------------------------------------------------------- manifest
+
+MANIFEST = PROJECT / "app/src/main/AndroidManifest.xml"
+
+# user:"Manifest 与 XML 不会被拷进去，重新 init 会丢。所以权限与 service 声明必须写成脚本里的
+# 幂等注入函数"+(标记即「已经注入过」，重复 sync 不会重复加；verify 再确认它真的进了包)。
+OVERLAY_MARKER = "<!-- >>> Sunday overlay -->"
+
+OVERLAY_PERMISSIONS = (
+    # Drawing over other apps. Not requestable at runtime: it is a special app access.
+    "android.permission.SYSTEM_ALERT_WINDOW",
+    # The ring lives in a foreground service, otherwise the system freezes it.
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+    # Android 13+ hides a foreground notification without it; the service still runs.
+    "android.permission.POST_NOTIFICATIONS",
+)
+
+
+def sync_manifest() -> int:
+    """Injects the overlay declarations and the small-window flag into the manifest.
+
+    `sync` only copies `*.kt`, and `tauri android init` regenerates this file, so nothing
+    else would put these back after a regenerate. Every step is idempotent and marked.
+    """
+    if not MANIFEST.exists():
+        return fail(EXIT_PROJECT, f"{MANIFEST} does not exist: run `ensure` first")
+    text = MANIFEST.read_text(encoding="utf-8")
+    nl = "\r\n" if "\r\n" in text else "\n"
+    original = text
+    text = inject_permissions(text, nl)
+    text = inject_small_window_flag(text, nl)
+    text = inject_overlay_service(text, nl)
+    if text != original:
+        MANIFEST.write_text(text, encoding="utf-8", newline="")
+        say("sync: injected the overlay service, its permissions and the small-window flag")
+    else:
+        say("sync: the manifest already carries the overlay declarations")
+    return EXIT_OK
+
+
+def inject_permissions(text: str, nl: str) -> str:
+    """Adds the permissions the ring needs, above `<application>`."""
+    missing = [name for name in OVERLAY_PERMISSIONS if f'android:name="{name}"' not in text]
+    if not missing:
+        return text
+    anchor = nl + "    <application"
+    if anchor not in text:
+        return text
+    block = nl.join(f'    <uses-permission android:name="{name}" />' for name in missing)
+    return text.replace(anchor, nl + block + nl + nl + "    <application", 1)
+
+
+def inject_small_window_flag(text: str, nl: str) -> str:
+    """Adds `supportsPictureInPicture` to the launcher activity.
+
+    user:"Manifest 的 activity 加 android:supportsPictureInPicture=\"true\""+(没有这一行，
+    enterPictureInPictureMode 直接返回 false，用户只会看到「不支持小窗」)。
+    """
+    if "supportsPictureInPicture" in text:
+        return text
+    name = 'android:name=".MainActivity"'
+    index = text.find(name)
+    if index < 0:
+        return text
+    closing = text.find(">", index)
+    if closing < 0:
+        return text
+    cut = closing - 1 if text[closing - 1] == "/" else closing
+    attribute = 'android:supportsPictureInPicture="true"'
+    return text[:cut] + nl + "            " + attribute + text[cut:]
+
+
+def inject_overlay_service(text: str, nl: str) -> str:
+    """Declares the ring's foreground service, once."""
+    if OVERLAY_MARKER in text:
+        return text
+    anchor = "    </application>"
+    if anchor not in text:
+        return text
+    block = nl.join(
+        [
+            "        " + OVERLAY_MARKER,
+            "        <service",
+            '            android:name=".SundayOverlayService"',
+            '            android:exported="false"',
+            '            android:foregroundServiceType="specialUse">',
+            "            <property",
+            '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"',
+            '                android:value="floating control" />',
+            "        </service>",
+            "        <!-- <<< Sunday overlay -->",
+            "",
+        ]
+    )
+    return text.replace(anchor, block + anchor, 1)
 
 
 # Gradle fragment the app module applies. Kept out of `android-src/com/**` because it
@@ -482,6 +583,9 @@ def verify(apk: Path) -> int:
             "native library": True,
             "class LifecycleBridge (dex)": b"LifecycleBridge" in blob,
             "class MainActivity (dex)": b"MainActivity" in blob,
+            # user:"verify() 里加断言：dex 里必须出现 SundayOverlayService"+(否则构建
+            # 通过但改动没进包，装上手机只会看到「没有悬浮环」)。
+            "class SundayOverlayService (dex)": b"SundayOverlayService" in blob,
         }
 
     for what, found in wanted.items():

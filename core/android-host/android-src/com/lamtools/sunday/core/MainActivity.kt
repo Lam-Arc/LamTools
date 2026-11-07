@@ -1,9 +1,20 @@
 package com.lamtools.sunday.core
 
+import android.app.PictureInPictureParams
+import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.util.Rational
+import android.view.View
+import android.view.ViewGroup
 import android.webkit.WebView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   companion object {
@@ -45,6 +56,17 @@ class MainActivity : TauriActivity() {
    */
   private external fun nativeBack(): Boolean
 
+  /**
+   * One sector action from the floating ring, as JSON: `{"action":"question","text":"？"}`.
+   *
+   * user:“MainActivity 在 onCreate 与 onNewIntent 读取 → 调新 JNI nativeOverlayAction(json)
+   * → Rust emit overlay-action”+(冷启动也走同一条路：进程可能是被悬浮环拉起来的)。
+   */
+  private external fun nativeOverlayAction(payload: String)
+
+  /** 小窗进出：界面据此收窄布局，不再画全屏的头部。 */
+  private external fun nativePipMode(active: Boolean)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     alive = java.lang.ref.WeakReference(this)
     // Debug builds only: the DevTools socket is what `scripts/android_cdp.py` attaches to,
@@ -60,6 +82,9 @@ class MainActivity : TauriActivity() {
     // JavaVM to Rust, and Kotlin only initialises an object when something refers to
     // it: Rust runs its setup inside `super.onCreate`, earlier than any callback.
     KeystoreBridge.register()
+    // The floating ring asks for a context when no activity is guaranteed to exist, and
+    // touching the object runs its initialiser, which is what hands the JavaVM to Rust.
+    OverlayBridge.attach(applicationContext)
     // Staging the packaged runtime takes seconds the first time and does no work after
     // that; it must not delay the first frame, and the host waits for its marker before
     // it tries to install.
@@ -72,6 +97,35 @@ class MainActivity : TauriActivity() {
     // The window does not shrink for the keyboard (edge to edge), so the interface can
     // only learn how much it covers from here.
     KeyboardBridge.watch(this)
+    // The ring was used while this process was gone: the action arrives with the intent
+    // that started the activity, and it has to reach the interface before anything renders.
+    consumeOverlayIntent(intent)
+  }
+
+  /**
+   * The task was already alive: the ring's action arrives here instead of `onCreate`.
+   *
+   * `singleTask` guarantees this, so the activity is not rebuilt and the composer keeps
+   * whatever the user had typed.
+   */
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    consumeOverlayIntent(intent)
+  }
+
+  /** Reads one sector action off the launch intent and hands it to the host. */
+  private fun consumeOverlayIntent(intent: Intent?) {
+    val action = intent?.getStringExtra(OverlayBridge.EXTRA_ACTION) ?: return
+    intent.removeExtra(OverlayBridge.EXTRA_ACTION)
+    val text = intent.getStringExtra(OverlayBridge.EXTRA_TEXT).orEmpty()
+    intent.removeExtra(OverlayBridge.EXTRA_TEXT)
+    try {
+      val payload = JSONObject().put("action", action).put("text", text).toString()
+      nativeOverlayAction(payload)
+    } catch (error: Throwable) {
+      Log.w("SundayOverlay", "cannot hand the overlay action to the host", error)
+    }
   }
 
   /**
@@ -97,6 +151,109 @@ class MainActivity : TauriActivity() {
   override fun onPause() {
     super.onPause()
     LifecycleBridge.signal("pause")
+    // user:“PIP 时 Activity 是 paused，wry 会 webView.onPause()，必须在回调里手动
+    // webView.onResume()，否则小窗是静止画面”+(所以暂停之后补一次 resume：小窗里画面必须动)。
+    if (isInSmallWindow()) {
+      resumeWebViewSoon()
+    }
+  }
+
+  /**
+   * Small window entered or left.
+   *
+   * The interface is told as well: a PiP window is a few centimetres wide and the full
+   * layout (head, drawer, footer) has no room there.
+   */
+  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    if (isInPictureInPictureMode) {
+      resumeWebViewSoon()
+    } else {
+      webView()?.onResume()
+    }
+    try {
+      nativePipMode(isInPictureInPictureMode)
+    } catch (error: Throwable) {
+      Log.w("SundayPip", "cannot report the small window state", error)
+    }
+  }
+
+  /**
+   * Enters the system small window, or brings this activity forward when it cannot.
+   *
+   * user:“优先进入画中画（PiP），进不去时把 Sunday 自身切回前台”+(所以两条路径都要有：
+   * 拒绝时用户必须看到「当前设备不支持小窗」，而不是一个没有任何反应的按钮)。
+   */
+  @Suppress("DEPRECATION")
+  fun enterSmallWindow(): Boolean {
+    val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+      packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+    if (!supported) return fallbackToForeground()
+    val entered = try {
+      enterSmallWindowNow()
+    } catch (error: Throwable) {
+      Log.w("SundayPip", "cannot enter the small window", error)
+      false
+    }
+    if (entered) return true
+    return fallbackToForeground()
+  }
+
+  /**
+   * The platform call itself, with an explicit `Boolean` result.
+   *
+   * API 26+ answers whether the transition started; the deprecated call on 24/25 returns
+   * nothing at all, so it is followed by `true` and the interface learns the real outcome
+   * from [onPictureInPictureModeChanged].
+   */
+  @Suppress("DEPRECATION")
+  private fun enterSmallWindowNow(): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(3, 4)).build())
+    } else {
+      enterPictureInPictureMode()
+      true
+    }
+  }
+
+  private fun fallbackToForeground(): Boolean {
+    // user:“进不去时把 Sunday 自身切回前台”+(回落必须看得见：一句 Toast 加一次前置)。
+    Toast.makeText(this, "当前设备不支持小窗，已切回 Sunday", Toast.LENGTH_SHORT).show()
+    try {
+      startActivity(
+        Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+      )
+    } catch (error: Throwable) {
+      Log.w("SundayPip", "cannot bring the activity forward", error)
+    }
+    return false
+  }
+
+  private fun isInSmallWindow(): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode
+
+  /**
+   * Resumes the webview after the window has settled.
+   *
+   * Immediately after losing focus, wry pauses the webview again during its own lifecycle
+   * pass; a single synchronous `onResume` would be overwritten by that.
+   */
+  private fun resumeWebViewSoon() {
+    val web = webView() ?: return
+    web.postDelayed({ web.onResume() }, 350)
+  }
+
+  /** The only WebView in this window is the interface; wry puts it in the content view. */
+  private fun webView(): WebView? = findViewById<View>(android.R.id.content)?.let { findWebView(it) }
+
+  private fun findWebView(view: View): WebView? {
+    if (view is WebView) return view
+    if (view is ViewGroup) {
+      for (index in 0 until view.childCount) {
+        findWebView(view.getChildAt(index))?.let { return it }
+      }
+    }
+    return null
   }
 
   /**
@@ -114,5 +271,8 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     LifecycleBridge.signal("resume")
+    // user:“回到应用在 onResume 重查并 emit overlay-permission，界面据此刷新状态”+
+    // (权限是在系统设置里改的，只有回到前台才知道结果；服务死没死也一起报)。
+    OverlayBridge.reportState()
   }
 }

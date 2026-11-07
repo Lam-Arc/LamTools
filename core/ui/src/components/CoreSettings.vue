@@ -19,6 +19,41 @@
           <template #default="{ activeSection }">
       <section v-if="activeSection === 'general'" class="settings-panel">
         <CoreGeneralEditor :request-rpc="requestRpc || defaultRequestRpc" :platform="commandShellPlatform" />
+        <!-- user:"加「手机悬浮环」开关与授权入口，必须用 platform === 'mobile' 守卫"+
+             (桌面端没有悬浮窗权限这回事，整块只在手机上出现。) -->
+        <div
+          v-if="commandShellPlatform === 'mobile'"
+          class="mobile-overlay-card"
+          data-ui-id="settings.mobile-overlay"
+        >
+          <div class="mobile-overlay-head">
+            <div class="mobile-overlay-copy">
+              <h3>{{ t("手机悬浮环") }}</h3>
+              <p class="mobile-overlay-hint" data-mobile-overlay-hint>{{ mobileOverlayHint }}</p>
+            </div>
+            <button
+              type="button"
+              class="mobile-overlay-toggle"
+              :class="{ 'is-on': mobileOverlayOn }"
+              data-mobile-overlay-toggle
+              @click="toggleMobileOverlay"
+            >{{ mobileOverlayLabel }}</button>
+          </div>
+          <div class="mobile-overlay-actions">
+            <button
+              type="button"
+              class="mobile-overlay-action"
+              data-mobile-overlay-permission
+              @click="openOverlayPermission"
+            >{{ t("悬浮窗权限") }}</button>
+            <button
+              type="button"
+              class="mobile-overlay-action"
+              data-mobile-pip
+              @click="startSmallWindow"
+            >{{ t("小窗显示") }}</button>
+          </div>
+        </div>
       </section>
 
       <section v-if="activeSection === 'pet'" class="settings-panel">
@@ -1056,6 +1091,14 @@ import { CORE_SETTINGS_SECTIONS, type SettingsSection } from '@/components/setti
 import ThemeEditor from '@/components/ThemeEditor.vue'
 import CoreSubAgentEditor from '@/components/CoreSubAgentEditor.vue'
 import CoreGeneralEditor from '@/components/CoreGeneralEditor.vue'
+import {
+  enterSmallWindow,
+  openOverlayPermission,
+  overlayStateRef,
+  refreshOverlayState,
+  startOverlay,
+  stopOverlay,
+} from '@/core-app/overlayAction.ts'
 import CorePetEditor from '@/components/CorePetEditor.vue'
 import CoreLoadToolsEditor from '@/components/CoreLoadToolsEditor.vue'
 import MobileControlPanel, {
@@ -1230,6 +1273,45 @@ const emit = defineEmits<{
 }>()
 
 const sections = CORE_SETTINGS_SECTIONS
+
+// ── 手机悬浮环与小窗：只有 Android 宿主有这些命令，桌面端整块不渲染 ──────────
+const mobileOverlayOn = computed(() => overlayStateRef.value.running)
+// user:"服务要能被系统杀掉后恢复…下次 App 启动时如果用户开着开关，提示需要重新开启（不要
+// 静默失败）"+(所以提示分三种：没权限、掉线要重开、正常运行)。
+const mobileOverlayHint = computed(() => {
+  const state = overlayStateRef.value
+  if (!state.granted) return t("需要「显示在其他应用上层」权限，点「悬浮窗权限」在系统设置里打开。")
+  if (state.wanted && !state.running) return t("悬浮环已被系统关闭（可能被省电策略杀掉），请重新开启。")
+  if (state.running) return t("已开启：拖动圆点可移动，点一下进入操作态，长按屏幕任意位置打开 Pin 环。")
+  return t("关闭：开启后可以用悬浮圆点随时打开 Pin 环。")
+})
+const mobileOverlayLabel = computed(() => {
+  const state = overlayStateRef.value
+  if (!state.granted) return t("去授权")
+  return state.running ? t("关闭") : t("开启")
+})
+async function toggleMobileOverlay(): Promise<void> {
+  if (props.commandShellPlatform !== 'mobile') return
+  if (!overlayStateRef.value.granted) {
+    await openOverlayPermission()
+    return
+  }
+  if (overlayStateRef.value.running) await stopOverlay()
+  else await startOverlay()
+  // 服务是异步起来的：给它一拍再问状态，否则开关会自己弹回去。
+  await new Promise(resolve => setTimeout(resolve, 350))
+  await refreshOverlayState()
+}
+async function startSmallWindow(): Promise<void> {
+  if (props.commandShellPlatform !== 'mobile') return
+  // user:"返回 false 时把应用拉回前台并 Toast「当前设备不支持小窗，已切回 Sunday」"+
+  // (提示由原生侧给出，这里只发起)。
+  await enterSmallWindow()
+}
+onMounted(() => {
+  if (props.commandShellPlatform !== 'mobile') return
+  void refreshOverlayState()
+})
 const draftGuard = createSettingsDraftGuard()
 const resolvedSection = ref(props.activeSection || props.section || sections[0]?.id || '')
 function beforeSectionChange(_id: string, proceed: () => void) {
@@ -2243,3 +2325,57 @@ onUnmounted(() => {
 <style scoped src="../styles/core-settings-workspace.css"></style>
 <style scoped src="../styles/core-settings-surface.css"></style>
 <style scoped src="../styles/core-settings-permissions.css"></style>
+
+<style scoped>
+/* user:"手机悬浮环开关与授权入口"+(只有手机才有的一块；样式就近放着，不去改共享的设计变量)。 */
+.mobile-overlay-card {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.06);
+}
+.mobile-overlay-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mobile-overlay-copy h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.mobile-overlay-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted, #94a3b8);
+}
+.mobile-overlay-toggle {
+  flex: none;
+  min-width: 72px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+.mobile-overlay-toggle.is-on {
+  border-color: rgba(96, 165, 250, 0.75);
+  background: rgba(59, 130, 246, 0.22);
+}
+.mobile-overlay-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.mobile-overlay-action {
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+</style>
