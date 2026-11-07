@@ -14,8 +14,8 @@
 校验和：
 
 ```
-3025f0ae5e406fa38f8025de3799a469d585e4881f58f468c437d3dfa0eea37f  sunday-m-arm64-debug.apk
-ec425a0149bd03456b279a1ebf219ce11b0319d18ec1b3b51f867d1554279292  sunday-m-x86_64-debug.apk
+687a81282e943bd4ce53929408b654186397cf18e7c4e8b1e7fae4d50d0e3f8a  sunday-m-arm64-debug.apk
+212c715a5d1a0ce09fae2dcd77db92f57f5adfe95ae1d3029707c75caa8995d0  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
