@@ -55,3 +55,37 @@
   .core-app-page .settings-nav button { grid-template-columns: minmax(0, 1fr); }
   .core-app-page .history-time { min-width: 0; flex-basis: 100%; }
 }
+
+/* user:“内容没有为上方标题栏让位”+(手机上的整版界面顶上没有条，浮动返回键占住那一条，
+   内容让位；两个变量都由入口或宿主给出，桌面端恒为 0)。 */
+.core-app-page {
+  padding-top: var(--full-area-head-inset, 0px);
+}
+
+.full-area-mobile-back {
+  position: fixed;
+  top: calc(var(--native-safe-area-top, 0px) + 6px);
+  left: 10px;
+  z-index: var(--z-popover);
+  width: 32px;
+  height: 32px;
+  background: var(--theme-main-background, rgba(27, 29, 34, 0.92));
+}
+
+/* user:“清晰展示当前设备、连接状态和运行位置”+(跟着状态栏下来，不挡内容)。 */
+.core-remote-badge {
+  position: fixed;
+  right: 10px;
+  top: calc(var(--native-safe-area-top, 0px) + 6px);
+  z-index: var(--z-popover);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-main-text) 10%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text) 82%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  pointer-events: none;
+}

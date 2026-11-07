@@ -298,7 +298,7 @@ async def test_plugin_install_refuses_a_wrong_engine_platform(lifecycle, tmp_pat
 
 # ── 依赖缺失占位 handler（toolbox 集成） ──────────────────────────
 
-async def test_toolbox_missing_dependency_placeholder(tmp_path, monkeypatch):
+async def _dependency_toolbox(tmp_path):
     from lamtools_core.plugin_system.capabilities import PluginToolSpec
     from lamtools_core.plugin_system.runtime import _tool_spec
     from lamtools_core.tool.default_toolbox import build_core_toolbox
@@ -306,17 +306,63 @@ async def test_toolbox_missing_dependency_placeholder(tmp_path, monkeypatch):
     spec = _tool_spec(
         PluginToolSpec(
             name="dep_tool",
-            permission="auto_allow",
+            # ask_user: this fixture is about a tool that needs approval, since
+            # the two cases below are "approved" and "never approved". An
+            # auto_allow tool legitimately runs without asking.
+            permission="ask_user",
             handler="x:y",
             plugin="needy",
             plugin_root=str(tmp_path),
         ),
         dependencies=("no-such-pkg-xyz",),
     )
-    toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=[spec])
+    return build_core_toolbox(work_root=tmp_path, plugin_tool_specs=[spec])
+
+
+async def test_toolbox_missing_dependency_placeholder(tmp_path, monkeypatch):
+    """已获合法审批的执行上下文里，缺依赖必须报 blocked 并给出安装提示。
+
+    user:“修复测试夹具，模拟已经获得合法审批的执行上下文，再验证缺失依赖返回
+    blocked，并包含正确的安装提示”+(审批闸门优先是产品语义，夹具用产品自己的
+    prepare_approved_call 走一遍正式审批续跑路径，而不是绕过闸门)。
+    """
+    toolbox = await _dependency_toolbox(tmp_path)
     call = ToolCall(id="c1", name="dep_tool", arguments={})
-    result = await toolbox.execute(call)
+    approved = toolbox.prepare_approved_call(call)
+    assert approved.requires_approval is False
+    result = await toolbox.execute(approved)
+    # 审批通过后走占位处理器：依赖缺失在这里是失败（没有执行任何东西），
+    # blocked 只属于审批闸门那一层。
     assert result.status == "failed"
     assert "missing dependencies" in (result.error or "")
     assert "pip install" in (result.error or "")
     assert "no-such-pkg-xyz" in toolbox._plugin_handler_errors["dep_tool"]
+
+
+async def test_toolbox_missing_dependency_blocked_without_approval(tmp_path, monkeypatch):
+    """未获审批时工具不得执行，也不得尝试安装依赖或产生副作用。
+
+    user:“另外增加未经审批的测试，确认工具无法执行、无法安装依赖，也不会产生副作用”
+    """
+    toolbox = await _dependency_toolbox(tmp_path)
+    call = ToolCall(id="c2", name="dep_tool", arguments={})
+
+    installs: list[object] = []
+
+    def _record_install(*args, **kwargs):
+        installs.append((args, kwargs))
+        raise AssertionError("dependency installation must not be attempted")
+
+    monkeypatch.setattr("subprocess.run", _record_install)
+    monkeypatch.setattr("subprocess.check_call", _record_install)
+
+    result = await toolbox.execute(call)
+
+    assert result.status == "blocked"
+    assert "requires approval" in (result.error or "")
+    # 依赖占位从未被触发：说明工具本体没跑，更没走到安装提示。
+    assert "pip install" not in (result.error or "")
+    assert "missing dependencies" not in (result.error or "")
+    assert installs == []
+
+

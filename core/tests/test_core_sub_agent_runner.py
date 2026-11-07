@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -35,6 +36,21 @@ def _write_project_model(tmp_path, model_id: str, capability: str, display_name:
         "}\n"
     )
     (models_dir / f"{model_id}.jsonc").write_text(content, encoding="utf-8")
+
+
+async def _wait_until(predicate, *, label: str, timeout: float = 15.0) -> None:
+    """Wait for a real precondition instead of a fixed sleep.
+
+    A member runs a whole kernel turn, so a fixed one second budget measured
+    machine load rather than the handoff actually working. The predicate, not a
+    bare "is idle" check, decides when the handoff really happened.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if await predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"timed out after {timeout}s waiting for {label}")
 
 
 class ScriptedSubAgentOnlyLLM:
@@ -313,11 +329,45 @@ class EmptySubAgentResultLLM:
         yield LLMStreamEvent(kind="done")
 
 
-class WritingSubAgentLLM:
+class _ShapeDrivenScript:
+    """Script steps key on the request shape, never on a bare counter.
+
+    A retried request must replay the same answer. A counter would advance on
+    retry and silently change what the double answers, so the handoff under test
+    would never be exercised.
+    """
+
+    def _reset_shape_state(self) -> None:
+        self._parent_step_by_shape: dict[tuple, int] = {}
+        self._child_step_by_shape: dict[tuple, int] = {}
+
+    @staticmethod
+    def _shape(request: LLMRequest, tool_names: set[str]) -> tuple:
+        last = request.messages[-1]
+        return (
+            len(request.messages),
+            last.role,
+            str(last.content)[:48],
+            tuple(sorted(tool_names)),
+        )
+
+    def _parent_step(self, shape: tuple) -> int:
+        return self._parent_step_by_shape.setdefault(
+            shape, len(self._parent_step_by_shape) + 1
+        )
+
+    def _child_step(self, shape: tuple) -> int:
+        return self._child_step_by_shape.setdefault(
+            shape, len(self._child_step_by_shape) + 1
+        )
+
+
+class WritingSubAgentLLM(_ShapeDrivenScript):
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
         self.main_steps = 0
         self.child_steps = 0
+        self._reset_shape_state()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("Core operation should use streaming")
@@ -325,10 +375,11 @@ class WritingSubAgentLLM:
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
         tool_names = {tool["function"]["name"] for tool in request.tools or []}
+        shape = self._shape(request, tool_names)
         if "sub_agent" in tool_names:
-            self.main_steps += 1
+            self.main_steps = self._parent_step(shape)
         else:
-            self.child_steps += 1
+            self.child_steps = self._child_step(shape)
         if self.main_steps == 1 and "sub_agent" in tool_names:
             yield LLMStreamEvent(
                 kind="done",
@@ -372,13 +423,14 @@ class WritingSubAgentLLM:
         raise AssertionError("unexpected writing sub-agent request")
 
 
-class ApprovalSubAgentLLM:
+class ApprovalSubAgentLLM(_ShapeDrivenScript):
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
         self.main_steps = 0
         self.child_steps = 0
         self.child_message_tools: set[str] = set()
         self.parent_received_child_message = False
+        self._reset_shape_state()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("Core operation should use streaming")
@@ -386,8 +438,9 @@ class ApprovalSubAgentLLM:
     async def stream(self, request: LLMRequest):
         self.requests.append(request)
         tool_names = {tool["function"]["name"] for tool in request.tools or []}
+        shape = self._shape(request, tool_names)
         if "sub_agent" in tool_names:
-            self.main_steps += 1
+            self.main_steps = self._parent_step(shape)
             if self.main_steps >= 3:
                 self.parent_received_child_message = any(
                     "approved file is ready" in str(message.content)
@@ -397,7 +450,7 @@ class ApprovalSubAgentLLM:
                 yield LLMStreamEvent(kind="done")
                 return
         else:
-            self.child_steps += 1
+            self.child_steps = self._child_step(shape)
         if self.main_steps == 1 and "sub_agent" in tool_names:
             yield LLMStreamEvent(kind="done", tool_calls=[
                 LLMToolCall(
@@ -425,14 +478,23 @@ class ApprovalSubAgentLLM:
             return
         if self.child_steps == 2:
             self.child_message_tools = tool_names
-            assert request.messages[-1].role == "user"
-            assert str(request.messages[-1].content).startswith(
-                "[Request-local sub-agent context]"
+            # The identity block rides the last user turn of the request. Tail
+            # system messages (a wake or a context change notice) may follow
+            # it, so only the user side of the ordering is contractual.
+            late_index = max(
+                index
+                for index, item in enumerate(request.messages)
+                if item.role == "user"
             )
-            assert "name: writer" in str(request.messages[-1].content)
-            assert "type: execute" in str(request.messages[-1].content)
-            assert "model_id: fake-model" in str(request.messages[-1].content)
-            assert "reasoning_level: high" in str(request.messages[-1].content)
+            late = request.messages[late_index]
+            assert str(late.content).startswith("[Request-local sub-agent context]")
+            assert "name: writer" in str(late.content)
+            assert "type: execute" in str(late.content)
+            assert "model_id: fake-model" in str(late.content)
+            assert "reasoning_level: high" in str(late.content)
+            assert all(
+                item.role == "system" for item in request.messages[late_index + 1:]
+            )
             yield LLMStreamEvent(kind="done", tool_calls=[
                 LLMToolCall(
                     id="call-child-message",
@@ -691,12 +753,19 @@ async def test_core_agent_operation_forwards_sub_agent_file_tool_and_handoff(tmp
         {"thread_id": "thread-writing-sub", "type": "execute", "name": "writer", "prompt": "write a story"},
     )
     assert accepted.status == "ok"
-    for _ in range(100):
-        if (work_root / "story.txt").exists():
-            listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-writing-sub"})
-            if listed.payload["items"][0]["status"] == "idle":
-                break
-        await asyncio.sleep(0.01)
+    async def _story_written() -> bool:
+        if not (work_root / "story.txt").exists():
+            return False
+        current = await catalog.execute(
+            "sub_agent.list", {"thread_id": "thread-writing-sub"}
+        )
+        items = current.payload.get("items") or []
+        return bool(items) and items[0].get("status") == "idle"
+
+    await _wait_until(_story_written, label="the delegated story write")
+    listed = await catalog.execute(
+        "sub_agent.list", {"thread_id": "thread-writing-sub"}
+    )
     assert (work_root / "story.txt").read_text(encoding="utf-8") == "A complete delegated story."
     assert listed.payload["items"][0]["summary"] == "I wrote story.txt with the requested story."
     assert listed.payload["items"][0]["source_message_id"] == f"assistant:{result.payload['turn_id']}"
@@ -733,11 +802,17 @@ async def test_child_approval_pauses_only_sub_agent_not_parent(tmp_path):
         {"thread_id": "thread-child-approval", "type": "execute", "name": "writer", "prompt": "write approved.txt"},
     )
     assert accepted.status == "ok"
-    for _ in range(100):
-        listed = await catalog.execute("sub_agent.list", {"thread_id": "thread-child-approval"})
-        if listed.payload["items"][0]["status"] == "paused":
-            break
-        await asyncio.sleep(0.01)
+    async def _paused() -> bool:
+        current = await catalog.execute(
+            "sub_agent.list", {"thread_id": "thread-child-approval"}
+        )
+        items = current.payload.get("items") or []
+        return bool(items) and items[0].get("status") == "paused"
+
+    await _wait_until(_paused, label="the member to pause on approval")
+    listed = await catalog.execute(
+        "sub_agent.list", {"thread_id": "thread-child-approval"}
+    )
     assert listed.payload["items"][0]["status"] == "paused"
     assert not (work_root / "approved.txt").exists()
 
@@ -1114,13 +1189,14 @@ async def test_sub_agent_runner_forwards_image_attachment_to_multimodal_sub_agen
     )
 
     assert result.succeeded is True
-    # The user message should be a multimodal content list with a text + image block.
+    # Pointer-only contract: even a multimodal child receives the absolute path
+    # and reads the image through read_file, so no image block is uploaded.
     user_msg = llm.requests[0].messages[-1]
     assert user_msg.role == "user"
-    assert isinstance(user_msg.content, list)
-    block_types = [b.get("type") for b in user_msg.content if isinstance(b, dict)]
-    assert "text" in block_types
-    assert "image_url" in block_types
+    assert isinstance(user_msg.content, str)
+    assert "att-img.png" in user_msg.content
+    assert (tmp_path / "test.png").resolve().as_posix() in user_msg.content
+    assert "image_url" not in user_msg.content
 
 
 @pytest.mark.asyncio
@@ -1183,7 +1259,9 @@ async def test_sub_agent_runner_keeps_text_only_attachment_context(tmp_path):
     assert result.succeeded is True
     user_msg = llm.requests[0].messages[-1]
     assert isinstance(user_msg.content, str)
-    assert "attachment evidence survives" in user_msg.content
+    # Pointer-only contract: the child sees the path and reads it with read_file.
+    assert text_path.resolve().as_posix() in user_msg.content
+    assert "attachment evidence survives" not in user_msg.content
 
 
 @pytest.mark.asyncio
@@ -1249,9 +1327,9 @@ async def test_sub_agent_runner_resolves_display_name_for_multimodal(tmp_path, m
 
     assert result.succeeded is True
     user_msg = llm.requests[0].messages[-1]
-    assert isinstance(user_msg.content, list)
-    block_types = [b.get("type") for b in user_msg.content if isinstance(b, dict)]
-    assert "image_url" in block_types
+    assert isinstance(user_msg.content, str)
+    assert "att-img.png" in user_msg.content
+    assert "image_url" not in user_msg.content
 
 
 @pytest.mark.asyncio

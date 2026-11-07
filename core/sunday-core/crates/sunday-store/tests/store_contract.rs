@@ -10,6 +10,7 @@ use sunday_protocol::{
     Command, CommandEnvelope, CommandStatus, CoreError, EventKind, Prepared, SideEffect, ToolCall,
     PROTOCOL_VERSION,
 };
+use sunday_store::ApprovalStatus;
 use sunday_store::Store;
 
 const WORKSPACE: &str = "ws";
@@ -247,6 +248,138 @@ fn s4c_a_finished_call_replays_its_stored_answer_instead_of_running() {
         Prepared::AlreadyDone
     );
     assert_eq!(store.tool_result("c3").unwrap().unwrap()["ok"], true);
+}
+
+/// A denial inside the window must be recorded, not reported as expired.
+///
+/// The caller used to pass milliseconds where this comparison expects seconds, which
+/// made every denial look a thousand times past its deadline: the user pressed Deny
+/// and was told the request had aged out, and the row stayed pending.
+#[test]
+fn denying_inside_the_window_succeeds() {
+    let (_dir, path) = temp_db();
+    let mut store = Store::open(&path).unwrap();
+    let approval = store
+        .request_approval("t1", &call("c1", "a.txt"), 300, 1_000)
+        .unwrap();
+
+    store
+        .respond_approval(&approval.approval_id, &approval.args_digest, 1_010, false)
+        .expect("a denial inside the window must be accepted");
+    assert_eq!(
+        store
+            .approval_status(&approval.approval_id)
+            .unwrap()
+            .as_deref(),
+        Some("denied"),
+    );
+}
+
+/// Recovery asks this before closing a thread: closing one that still waits would
+/// hide a card the user has to answer.
+#[test]
+fn a_thread_reports_whether_it_still_waits_on_a_human() {
+    let (_dir, path) = temp_db();
+    let mut store = Store::open(&path).unwrap();
+    assert!(!store.has_pending_approval("t1").unwrap());
+
+    let approval = store
+        .request_approval("t1", &call("c1", "a.txt"), 300, 1_000)
+        .unwrap();
+    assert!(store.has_pending_approval("t1").unwrap());
+
+    store
+        .respond_approval(&approval.approval_id, &approval.args_digest, 1_010, false)
+        .unwrap();
+    assert!(!store.has_pending_approval("t1").unwrap());
+}
+
+/// The gate the RPC layer asks before it claims a decision was accepted.
+///
+/// `pending_call` cannot answer this: it looks up the call's arguments and ignores
+/// both `status` and `expires_at`. Reading it as permission let an hour-old request
+/// pass the check and only fail later, on another thread, where the screen never saw
+/// it.
+#[test]
+fn the_gate_separates_pending_from_expired_and_answered() {
+    let (_dir, path) = temp_db();
+    let mut store = Store::open(&path).unwrap();
+    let approval = store
+        .request_approval("t1", &call("c1", "a.txt"), 60, 1_000)
+        .unwrap();
+
+    assert_eq!(
+        store.approval_gate(&approval.approval_id, 1_010).unwrap(),
+        Some(ApprovalStatus::Pending),
+    );
+    // Past the deadline the same id may not be treated as consent, even though the
+    // row still says `pending` until somebody sweeps it.
+    assert_eq!(
+        store.approval_gate(&approval.approval_id, 1_061).unwrap(),
+        Some(ApprovalStatus::Expired),
+    );
+
+    store
+        .respond_approval(&approval.approval_id, &approval.args_digest, 1_010, true)
+        .unwrap();
+    assert_eq!(
+        store.approval_gate(&approval.approval_id, 1_011).unwrap(),
+        Some(ApprovalStatus::Answered),
+    );
+    assert_eq!(store.approval_gate("nope", 1_011).unwrap(), None);
+}
+
+/// The sweep that lets a stuck conversation move again.
+#[test]
+fn the_sweep_closes_only_what_is_overdue_and_is_idempotent() {
+    let (_dir, path) = temp_db();
+    let mut store = Store::open(&path).unwrap();
+    let stale = store
+        .request_approval("t1", &call("c1", "a.txt"), 10, 1_000)
+        .unwrap();
+    let fresh = store
+        .request_approval("t1", &call("c2", "b.txt"), 600, 1_000)
+        .unwrap();
+
+    let closed = store.expire_stale_approvals(1_020).unwrap();
+    assert_eq!(closed, vec![stale.approval_id.clone()]);
+    assert_eq!(
+        store
+            .approval_status(&stale.approval_id)
+            .unwrap()
+            .as_deref(),
+        Some("expired"),
+    );
+    assert_eq!(
+        store
+            .approval_status(&fresh.approval_id)
+            .unwrap()
+            .as_deref(),
+        Some("pending"),
+        "a request still inside its window must survive the sweep",
+    );
+
+    // Second sweep finds nothing: the closure is a fact, not a repeated event.
+    assert!(store.expire_stale_approvals(1_030).unwrap().is_empty());
+}
+
+/// A closed approval must never authorise execution afterwards.
+#[test]
+fn a_swept_approval_cannot_be_used() {
+    let (_dir, path) = temp_db();
+    let mut store = Store::open(&path).unwrap();
+    let approval = store
+        .request_approval("t1", &call("c1", "a.txt"), 10, 1_000)
+        .unwrap();
+    store.expire_stale_approvals(2_000).unwrap();
+
+    let error = store
+        .respond_approval(&approval.approval_id, &approval.args_digest, 2_001, true)
+        .unwrap_err();
+    assert!(
+        matches!(error, CoreError::ApprovalExpired { .. }),
+        "got {error:?}",
+    );
 }
 
 // ---------------------------------------------------------------- S5, S6, S7

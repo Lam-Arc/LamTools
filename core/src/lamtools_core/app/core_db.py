@@ -47,6 +47,7 @@ from .persistence_host import AppPersistenceHost
 from .project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from .session_actor import SessionActorRegistry
+from ..superagent.store import SqlAlchemySuperagentStore
 from .sqlite_write import SQLiteWriteCoordinator, configure_sqlite_engine
 
 if TYPE_CHECKING:
@@ -542,11 +543,54 @@ class CoreArrangeJob(CoreDbBase):
     lease_owner: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fencing_token: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # user:“租约 fencing 与旧执行隔离”+(每次领取一个随机执行标识，
+    # 旧执行凭它被拒，审计也能按它串起一次具体执行)。
+    execution_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     checkpoint_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     last_error: Mapped[str] = mapped_column(String, nullable=False, default="")
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoreSuperagentRecord(CoreDbBase):
+    """Super-agent 的通用记录表。
+
+    user:“实现 Source、Policy、Eval、Ticket、Assignment、独立 Worktree 和可靠结果交付”
+    +(inbox / ticket / assignment / effect / audit 都用 (kind, id) 一张表承载，
+    这样去重与幂等直接用主键表达，不必给每类对象单独改既有表结构)。
+    """
+
+    __tablename__ = "core_superagent_records"
+
+    kind: Mapped[str] = mapped_column(String(32), primary_key=True)
+    id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CoreObserverLifecycle(CoreDbBase):
+    """观察器生命周期。
+
+    user:“Observer 正常退出与失败重启策略”+(正常退出必须落成持久终态，
+    否则宿主重启后 reconcile 会把它当 desired 又拉起来，形成热循环)。
+    """
+
+    __tablename__ = "core_observer_lifecycle"
+
+    observer_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    desired_state: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    restart_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="always")
+    last_exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_exit_reason: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    restart_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_retry_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_started_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_stopped_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
 
 class CoreArrangeSignal(CoreDbBase):
@@ -878,6 +922,19 @@ class CoreCheckpointArtifactRef(CoreDbBase):
     checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     revision_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+def _has_pending_decision(payload: Any, pending_payload: Any) -> bool:
+    """Whether a session is parked on something only the user can answer."""
+    sources = [payload.get("metadata") if isinstance(payload, dict) else None, pending_payload]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if source.get("pending_approval"):
+            return True
+        if source.get("pending_waiting_request"):
+            return True
+    return False
 
 
 class SqlAlchemyRuntimeStateStore:
@@ -1317,6 +1374,73 @@ class SqlAlchemyRuntimeStateStore:
                 return await self.get(row.thread_id)
         return None
 
+    async def release_orphaned_owners(self, *, reason: str = "owner_gone") -> int:
+        """Release sessions whose persisted state still claims an in-flight run.
+
+        user:“服务器重启后，应能够识别已死亡的执行进程，安全释放旧任务占用，使用户可以
+        继续或重试”“优先复用现有 revision、fencing 和任务生命周期机制，通过原子状态
+        转移回收失效所有权”“绝不放宽旧 revision 写入限制”
+        +(启动时把「看着还在跑、但跑它的进程已经没了」的会话原子地转成终止态。不清掉它，
+        后续任何写入都会被并发守卫当成「别的进程在写」而拒绝，用户点重试也起不来。
+        整个读改写复用 store.patch 的事务与 revision 条件更新，没有为落后写入开口子；
+        别的进程还活着时一律不动它)。
+        """
+        from lamtools_core.runtime_owner import (
+            LIVE_RUN_STATES,
+            is_own_token,
+            owner_is_live,
+            read_owner,
+        )
+
+        async with self.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(CoreRuntimeSession).where(
+                        func.json_extract(
+                            CoreRuntimeSession.runtime_state_json, "$.status"
+                        ).in_(sorted(LIVE_RUN_STATES))
+                    )
+                )
+            ).scalars().all()
+
+        candidates: list[str] = []
+        for row in rows:
+            payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
+            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+            # user:“人工审批”+(停在用户决定上的会话不算失效占用：审批是持久的，重启之后
+            # 用户还要能回答它。回收它会连审批一起清掉，等于把用户正要点的卡片吞了)。
+            if _has_pending_decision(payload, row.pending_approval_json):
+                continue
+            owner = read_owner(metadata)
+            # 另一个进程还活着并且正握着这个会话：绝不回收。
+            if owner and not is_own_token(owner) and owner_is_live(owner):
+                continue
+            candidates.append(row.thread_id)
+
+        released = 0
+        for thread_id in candidates:
+            def _release(state: Any) -> None:
+                state.status = "cancelled"
+                state.loop_state = "failed"
+                if isinstance(state.metadata, dict):
+                    state.metadata["cancellation_reason"] = reason
+                    state.metadata.pop("pending_approval", None)
+                    state.metadata.pop("pending_waiting_request", None)
+
+            try:
+                await self.patch(thread_id, _release)
+            except BaseException:
+                _logger.exception(
+                    "[runtime-state] failed to release orphaned session=%s", thread_id
+                )
+                continue
+            released += 1
+        if released:
+            _logger.warning(
+                "[runtime-state] released %d orphaned run(s) reason=%s", released, reason
+            )
+        return released
+
     async def _save(
         self, state: RuntimeState, *, history: list[dict[str, Any]] | None,
         append_messages: list[dict[str, Any]] | None = None,
@@ -1330,7 +1454,13 @@ class SqlAlchemyRuntimeStateStore:
         now = datetime.now()
 
         def blocked_by_live_owner(row: Any) -> bool:
-            """Whether the row belongs to a run that is still in flight."""
+            """Whether the row belongs to a run that is still in flight.
+
+            user:“监控、处理异常、恢复任务、验证成果并完成交付”+(这里保持严格：只要
+            这一行看起来还活着，落后 revision 的写入就一律拒绝，不让两个运行时交叉写同
+            一行。强杀之后重试会因此失败一次，那属于运行时的恢复缺口，工单会带原因落到
+            blocked，不拿数据安全去换可用性)。
+            """
             payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
             return state_row_is_live(payload)
 
@@ -1652,6 +1782,7 @@ class SqlAlchemyArrangeStore:
                     next_run_at=claim_time,
                     lease_owner="",
                     lease_expires_at=None,
+                    execution_id="",
                     revision=CoreArrangeJob.revision + 1,
                     updated_at=claim_time,
                 )
@@ -1724,6 +1855,7 @@ class SqlAlchemyArrangeStore:
                     lease_owner=worker_id,
                     lease_expires_at=claim_time + timedelta(seconds=lease_seconds),
                     fencing_token=current.fencing_token + 1,
+                    execution_id=f"exec_{uuid.uuid4().hex}",
                     revision=current.revision + 1,
                     updated_at=claim_time,
                 )
@@ -1750,6 +1882,7 @@ class SqlAlchemyArrangeStore:
         now: datetime,
         lease_seconds: float,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> bool:
         when = _utc_datetime(now)
 
@@ -1760,6 +1893,7 @@ class SqlAlchemyArrangeStore:
                 or row.status != "running"
                 or row.lease_owner != worker_id
                 or (fencing_token is not None and row.fencing_token != fencing_token)
+                or (execution_id is not None and row.execution_id != execution_id)
             ):
                 return False
             statement = update(CoreArrangeJob).where(
@@ -1770,6 +1904,8 @@ class SqlAlchemyArrangeStore:
             )
             if fencing_token is not None:
                 statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
+            if execution_id is not None:
+                statement = statement.where(CoreArrangeJob.execution_id == execution_id)
             result = await db.execute(
                 statement
                 .values(
@@ -1790,6 +1926,7 @@ class SqlAlchemyArrangeStore:
         now: datetime,
         checkpoint: dict[str, Any],
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
@@ -1801,6 +1938,7 @@ class SqlAlchemyArrangeStore:
                 job_id,
                 worker_id,
                 fencing_token=fencing_token,
+                execution_id=execution_id,
             )
             updated = replace(
                 current,
@@ -1816,6 +1954,8 @@ class SqlAlchemyArrangeStore:
             )
             if fencing_token is not None:
                 statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
+            if execution_id is not None:
+                statement = statement.where(CoreArrangeJob.execution_id == execution_id)
             job_update = await db.execute(statement.values(**_arrange_values(updated)))
             if job_update.rowcount != 1:
                 raise RuntimeError(f"Arrange job lease lost: {job_id}")
@@ -1831,6 +1971,7 @@ class SqlAlchemyArrangeStore:
         now: datetime,
         result: dict[str, Any] | None = None,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         when = _utc_datetime(now)
 
@@ -1840,6 +1981,7 @@ class SqlAlchemyArrangeStore:
                 job_id,
                 worker_id,
                 fencing_token=fencing_token,
+                execution_id=execution_id,
             )
             occurrence_row = await db.get(CoreArrangeOccurrence, current.occurrence_id)
             if occurrence_row is not None:
@@ -1881,6 +2023,7 @@ class SqlAlchemyArrangeStore:
                 signal={},
                 lease_owner="",
                 lease_expires_at=None,
+                execution_id="",
                 last_error="",
                 revision=current.revision + 1,
                 updated_at=when,
@@ -1892,6 +2035,8 @@ class SqlAlchemyArrangeStore:
             )
             if fencing_token is not None:
                 statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
+            if execution_id is not None:
+                statement = statement.where(CoreArrangeJob.execution_id == execution_id)
             job_update = await db.execute(statement.values(**_arrange_values(updated)))
             if job_update.rowcount != 1:
                 raise RuntimeError(f"Arrange job lease lost: {job_id}")
@@ -1907,6 +2052,7 @@ class SqlAlchemyArrangeStore:
         now: datetime,
         error: str,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         when = _utc_datetime(now)
 
@@ -1916,6 +2062,7 @@ class SqlAlchemyArrangeStore:
                 job_id,
                 worker_id,
                 fencing_token=fencing_token,
+                execution_id=execution_id,
             )
             occurrence_row = await db.get(CoreArrangeOccurrence, current.occurrence_id)
             retry = False
@@ -1941,6 +2088,7 @@ class SqlAlchemyArrangeStore:
                 signal={},
                 lease_owner="",
                 lease_expires_at=None,
+                execution_id="",
                 last_error=str(error or "arranged operation failed"),
                 revision=current.revision + 1,
                 updated_at=when,
@@ -1952,6 +2100,8 @@ class SqlAlchemyArrangeStore:
             )
             if fencing_token is not None:
                 statement = statement.where(CoreArrangeJob.fencing_token == fencing_token)
+            if execution_id is not None:
+                statement = statement.where(CoreArrangeJob.execution_id == execution_id)
             result = await db.execute(statement.values(**_arrange_values(updated)))
             if result.rowcount != 1:
                 raise RuntimeError(f"Arrange job lease lost: {job_id}")
@@ -1998,6 +2148,7 @@ class SqlAlchemyArrangeStore:
                     next_run_at=when,
                     lease_owner="",
                     lease_expires_at=None,
+                    execution_id="",
                     revision=CoreArrangeJob.revision + 1,
                     updated_at=when,
                 )
@@ -2008,6 +2159,87 @@ class SqlAlchemyArrangeStore:
                 .execution_options(synchronize_session=False)
             )
             return int(result.rowcount or 0)
+
+        return await self.write_coordinator.run(write)
+
+    async def count_queued(self, *, now: datetime) -> int:
+        when = _utc_datetime(now)
+        async with self.session_factory() as db:
+            row = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(CoreArrangeJob)
+                    .where(
+                        CoreArrangeJob.status == "scheduled",
+                        CoreArrangeJob.next_run_at.is_not(None),
+                        CoreArrangeJob.next_run_at <= when,
+                    )
+                )
+            ).scalar_one()
+        return int(row or 0)
+
+    async def atomic_interrupt(
+        self, job_id: str, *, target: Literal["paused", "cancelled"], now: datetime
+    ) -> ArrangeJob:
+        # user:“运行中任务暂停误变取消”+(目标状态、下一代 token 与执行作废
+        # 必须在同一个 BEGIN IMMEDIATE 事务里完成，旧执行随后无法回写)。
+        when = _utc_datetime(now)
+
+        async def write(db):
+            row = await db.get(CoreArrangeJob, job_id)
+            if row is None:
+                raise LookupError(f"Arrange job not found: {job_id}")
+            if row.status == target:
+                return _arrange_from_row(row)
+            if row.status in {"completed", "failed", "cancelled"}:
+                raise ValueError(f"Arrange job is terminal: {job_id}")
+            current = _arrange_from_row(row)
+            occurrence_row = (
+                await db.get(CoreArrangeOccurrence, current.occurrence_id)
+                if current.occurrence_id
+                else None
+            )
+            if occurrence_row is not None:
+                occurrence = _occurrence_from_row(occurrence_row)
+                await db.execute(
+                    update(CoreArrangeOccurrence)
+                    .where(CoreArrangeOccurrence.id == occurrence.id)
+                    .values(**_occurrence_values(replace(
+                        occurrence,
+                        status="pending" if target == "paused" else "cancelled",
+                        started_at=None,
+                        completed_at=None if target == "paused" else when,
+                        updated_at=when,
+                    )))
+                )
+            trigger = dict(current.trigger)
+            if target == "paused":
+                trigger["_paused_from"] = (
+                    "waiting" if current.status == "waiting" else "scheduled"
+                )
+            updated = replace(
+                current,
+                status=target,  # type: ignore[arg-type]
+                trigger=trigger,
+                next_run_at=current.next_run_at if target == "paused" else None,
+                lease_owner="",
+                lease_expires_at=None,
+                execution_id="",
+                fencing_token=current.fencing_token + 1,
+                revision=current.revision + 1,
+                updated_at=when,
+            )
+            result = await db.execute(
+                update(CoreArrangeJob)
+                .where(
+                    CoreArrangeJob.id == job_id,
+                    CoreArrangeJob.revision == current.revision,
+                )
+                .values(**_arrange_values(updated))
+            )
+            if result.rowcount != 1:
+                raise RuntimeError(f"Arrange job changed concurrently: {job_id}")
+            return updated
 
         return await self.write_coordinator.run(write)
 
@@ -2120,6 +2352,7 @@ class SqlAlchemyArrangeStore:
         worker_id: str,
         *,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         row = await db.get(CoreArrangeJob, job_id)
         if row is None:
@@ -2128,9 +2361,65 @@ class SqlAlchemyArrangeStore:
             row.status != "running"
             or row.lease_owner != worker_id
             or (fencing_token is not None and row.fencing_token != fencing_token)
+            or (execution_id is not None and row.execution_id != execution_id)
         ):
             raise RuntimeError(f"Arrange job lease lost: {job_id}")
         return _arrange_from_row(row)
+
+
+class SqlAlchemyObserverLifecycleStore:
+    """ObserverLifecycleStore 的 SQLite 实现（写路径走统一写协调器）。"""
+
+    _FIELDS = (
+        "desired_state",
+        "restart_policy",
+        "last_exit_code",
+        "last_exit_reason",
+        "restart_count",
+        "next_retry_at",
+        "last_started_at",
+        "last_stopped_at",
+        "last_pid",
+    )
+
+    def __init__(self, session_factory: Any, write_coordinator: Any) -> None:
+        self.session_factory = session_factory
+        self.write_coordinator = write_coordinator
+
+    async def get(self, observer_id: str) -> dict[str, Any] | None:
+        key = str(observer_id or "")
+        async with self.session_factory() as db:
+            row = await db.get(CoreObserverLifecycle, key)
+        if row is None:
+            return None
+        payload = {"observer_id": row.observer_id, "updated_at": row.updated_at or ""}
+        for name in self._FIELDS:
+            payload[name] = getattr(row, name)
+        return payload
+
+    async def upsert(self, observer_id: str, **fields: Any) -> dict[str, Any]:
+        key = str(observer_id or "")
+        if not key:
+            raise ValueError("observer_id is required")
+
+        async def write(db):
+            row = await db.get(CoreObserverLifecycle, key)
+            if row is None:
+                row = CoreObserverLifecycle(observer_id=key)
+                db.add(row)
+                await db.flush()
+            for name, value in fields.items():
+                if name in self._FIELDS:
+                    setattr(row, name, value)
+            row.updated_at = datetime.now(timezone.utc).isoformat()
+            await db.flush()
+            return row
+
+        row = await self.write_coordinator.run(write)
+        payload = {"observer_id": row.observer_id, "updated_at": row.updated_at or ""}
+        for name in self._FIELDS:
+            payload[name] = getattr(row, name)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -2148,6 +2437,9 @@ class CoreAppDb:
     sync_journal: Any
     workspace_id: str
     persistence: AppPersistenceHost
+    # user:“Observer 正常退出与失败重启策略”+(生命周期持久化，跨进程重启仍生效)。
+    observer_lifecycle: Any = None
+    superagent_store: Any = None
     member_defaults: dict = field(default_factory=dict)
     session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
     artifact_store: Any = None
@@ -2294,6 +2586,12 @@ async def open_core_app_db(
             ),
             goal_store=SqlAlchemyGoalStore(session_factory, write_coordinator),
             arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
+            observer_lifecycle=SqlAlchemyObserverLifecycleStore(
+                session_factory, write_coordinator
+            ),
+            superagent_store=SqlAlchemySuperagentStore(
+                session_factory, write_coordinator, CoreSuperagentRecord
+            ),
             project_store=CoreProjectStore(
                 session_factory,
                 write_coordinator,
@@ -2436,6 +2734,11 @@ _LATE_COLUMNS: dict[str, dict[str, str]] = {
         "revision": "INTEGER NOT NULL DEFAULT 1",
         "icon_key": "VARCHAR(32) NOT NULL DEFAULT 'folder'",
         "color_key": "VARCHAR(32) NOT NULL DEFAULT 'gray'",
+    },
+    "core_arrange_jobs": {
+        # user:“新增数据库字段必须使用安全、可重复的迁移”+(走 PRAGMA 差集补列，
+        # 不依赖 schema_version 门控，已升级的库再缺列也能补上)。
+        "execution_id": "VARCHAR(64) NOT NULL DEFAULT ''",
     },
     "core_history_entries": {"revision": "INTEGER NOT NULL DEFAULT 0"},
     "core_sync_changes": {
@@ -2937,6 +3240,7 @@ def _arrange_values(job: ArrangeJob) -> dict[str, Any]:
         "lease_owner": job.lease_owner,
         "lease_expires_at": _utc_datetime(job.lease_expires_at) if job.lease_expires_at else None,
         "fencing_token": int(job.fencing_token or 0),
+        "execution_id": str(job.execution_id or ""),
         "checkpoint_json": _json_safe(job.checkpoint),
         "last_error": job.last_error,
         "revision": job.revision,
@@ -2971,6 +3275,7 @@ def _arrange_from_row(row: CoreArrangeJob) -> ArrangeJob:
         lease_owner=row.lease_owner or "",
         lease_expires_at=_utc_datetime(row.lease_expires_at) if row.lease_expires_at else None,
         fencing_token=int(row.fencing_token or 0),
+        execution_id=row.execution_id or "",
         checkpoint=_json_safe(row.checkpoint_json or {}),
         last_error=row.last_error or "",
         revision=int(row.revision or 1),

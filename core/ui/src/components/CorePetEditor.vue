@@ -10,9 +10,12 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { defaultConfig, DEFAULT_PING_PROMPTS, type PetConfigV1, type PingSectorConfig } from '@/pet/config.ts'
 import { hasPetConfigAccess, patchPetConfig, readPetConfig, updatePetConfig } from '@/pet/configFile.ts'
+import PetHotkeyField from '@/pet/ui/PetHotkeyField.vue'
 
 const available = hasPetConfigAccess()
 const config = reactive<PetConfigV1>(defaultConfig())
+// user:“恢复默认回到 Ctrl+Alt+Space”+(默认值只认 config.ts 一处，界面上不手写 accelerator。)
+const defaultHotkey = defaultConfig().ping.hotkey
 const loading = ref(true)
 const saving = ref(false)
 const saved = ref(false)
@@ -317,14 +320,14 @@ onBeforeUnmount(() => {
         <div class="subhead">
           <span class="muted subhead-title">Ping 环</span>
         </div>
-        <label class="pet-settings-row">
+        <div class="pet-settings-row">
           <span>快捷键（按住显示，松开执行）</span>
-          <input
-            type="text"
-            :value="config.ping.hotkey"
-            @change="setPingField('hotkey', ($event.target as HTMLInputElement).value)"
-          >
-        </label>
+          <PetHotkeyField
+            :accelerator="config.ping.hotkey"
+            :fallback="defaultHotkey"
+            @commit="value => setPingField('hotkey', value)"
+          />
+        </div>
         <label class="pet-settings-row">
           <span>环半径</span>
           <input type="number" min="60" max="420" :value="config.ping.radius" @change="setPingField('radius', Number(($event.target as HTMLInputElement).value))">

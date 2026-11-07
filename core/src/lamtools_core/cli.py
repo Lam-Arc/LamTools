@@ -214,11 +214,9 @@ from lamtools_core.cli_commands.server import (
     cmd_maintenance_prune_checkpoints,
     cmd_maintenance_strip_snapshot_images,
     cmd_migrate_projects,
-    cmd_mobile_control,
     cmd_serve,
     cmd_setup,
     cmd_update_check,
-    normalize_remote_server_base_url,
 )
 from lamtools_core.cli_commands.sessions import (
     cmd_session_checkpoints,

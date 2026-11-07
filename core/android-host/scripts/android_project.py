@@ -194,10 +194,319 @@ def sync_sources() -> int:
         written += 1
 
     say(f"sync: {written} written, {unchanged} unchanged, into {JAVA_ROOT}")
+    code = sync_manifest()
+    if code != EXIT_OK:
+        return code
+    code = sync_android_theme()
+    if code != EXIT_OK:
+        return code
+    return sync_runtime_gradle()
+
+
+# --------------------------------------------------------------------- manifest
+
+MANIFEST = PROJECT / "app/src/main/AndroidManifest.xml"
+
+# user:"Manifest 与 XML 不会被拷进去，重新 init 会丢。所以权限与 service 声明必须写成脚本里的
+# 幂等注入函数"+(标记即「已经注入过」，重复 sync 不会重复加；verify 再确认它真的进了包)。
+OVERLAY_MARKER = "<!-- >>> Sunday overlay -->"
+
+OVERLAY_PERMISSIONS = (
+    # Drawing over other apps. Not requestable at runtime: it is a special app access.
+    "android.permission.SYSTEM_ALERT_WINDOW",
+    # The ring lives in a foreground service, otherwise the system freezes it.
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+    # Android 13+ hides a foreground notification without it; the service still runs.
+    "android.permission.POST_NOTIFICATIONS",
+)
+
+
+def sync_manifest() -> int:
+    """Injects the overlay declarations and the small-window flag into the manifest.
+
+    `sync` only copies `*.kt`, and `tauri android init` regenerates this file, so nothing
+    else would put these back after a regenerate. Every step is idempotent and marked.
+    """
+    if not MANIFEST.exists():
+        return fail(EXIT_PROJECT, f"{MANIFEST} does not exist: run `ensure` first")
+    text = MANIFEST.read_text(encoding="utf-8")
+    nl = "\r\n" if "\r\n" in text else "\n"
+    original = text
+    text = inject_permissions(text, nl)
+    text = inject_small_window_flag(text, nl)
+    text = inject_overlay_service(text, nl)
+    if text != original:
+        MANIFEST.write_text(text, encoding="utf-8", newline="")
+        say("sync: injected the overlay service, its permissions and the small-window flag")
+    else:
+        say("sync: the manifest already carries the overlay declarations")
     return EXIT_OK
 
 
-# --------------------------------------------------------------------- ensure
+BOOT_THEME_MARKER = "<!-- >>> Sunday boot screen -->"
+BOOT_DRAWABLE = PROJECT / "app/src/main/res/drawable/sunday_boot_background.xml"
+BOOT_COLORS = PROJECT / "app/src/main/res/values/sunday_boot_colors.xml"
+BOOT_THEMES = (
+    PROJECT / "app/src/main/res/values/themes.xml",
+    PROJECT / "app/src/main/res/values-night/themes.xml",
+)
+
+BOOT_DRAWABLE_XML = """<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/sunday_boot_surface" />
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/ic_launcher" />
+    </item>
+</layer-list>
+"""
+
+BOOT_COLORS_XML = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="sunday_boot_surface">#14161a</color>
+</resources>
+"""
+
+
+def sync_android_theme() -> int:
+    """Writes the boot surface resources the system paints before the webview exists.
+
+    `sync` only copies `*.kt`, and `gen/` is not tracked, so a regenerate or a fresh
+    checkout would silently bring back the white first frame. Everything here is
+    idempotent: the marker is the "already injected" signal, and the two resource files
+    are rewritten only when their content differs.
+    """
+    written = 0
+    for path, content in ((BOOT_DRAWABLE, BOOT_DRAWABLE_XML), (BOOT_COLORS, BOOT_COLORS_XML)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            path.write_text(content, encoding="utf-8", newline="\n")
+            written += 1
+
+    for path in BOOT_THEMES:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        # A previous hand edit may already carry the items without the marker; the
+        # drawable reference is the dependable "this theme is done" signal.
+        if BOOT_THEME_MARKER in text or "sunday_boot_background" in text:
+            continue
+        anchor = text.find('<style name="Theme.sunday_android_host"')
+        if anchor < 0:
+            continue
+        closing = text.find("</style>", anchor)
+        if closing < 0:
+            continue
+        nl = "\r\n" if "\r\n" in text else "\n"
+        block = nl.join([
+            "        " + BOOT_THEME_MARKER,
+            '        <item name="android:windowBackground">@drawable/sunday_boot_background</item>',
+            '        <item name="android:windowDrawsSystemBarBackgrounds">true</item>',
+            '        <item name="android:statusBarColor">@color/sunday_boot_surface</item>',
+            '        <item name="android:navigationBarColor">@color/sunday_boot_surface</item>',
+            '        <item name="android:windowLightStatusBar">false</item>',
+            "        <!-- <<< Sunday boot screen -->",
+            "",
+        ])
+        path.write_text(text[:closing] + block + text[closing:], encoding="utf-8", newline="")
+        written += 1
+
+    if written:
+        say(f"sync: wrote the boot surface ({written} files)")
+    else:
+        say("sync: the boot surface is already in place")
+    return EXIT_OK
+
+
+def inject_permissions(text: str, nl: str) -> str:
+    """Adds the permissions the ring needs, above `<application>`."""
+    missing = [name for name in OVERLAY_PERMISSIONS if f'android:name="{name}"' not in text]
+    if not missing:
+        return text
+    anchor = nl + "    <application"
+    if anchor not in text:
+        return text
+    block = nl.join(f'    <uses-permission android:name="{name}" />' for name in missing)
+    return text.replace(anchor, nl + block + nl + nl + "    <application", 1)
+
+
+def inject_small_window_flag(text: str, nl: str) -> str:
+    """Adds `supportsPictureInPicture` to the launcher activity.
+
+    user:"Manifest 的 activity 加 android:supportsPictureInPicture=\"true\""+(没有这一行，
+    enterPictureInPictureMode 直接返回 false，用户只会看到「不支持小窗」)。
+    """
+    if "supportsPictureInPicture" in text:
+        return text
+    name = 'android:name=".MainActivity"'
+    index = text.find(name)
+    if index < 0:
+        return text
+    closing = text.find(">", index)
+    if closing < 0:
+        return text
+    cut = closing - 1 if text[closing - 1] == "/" else closing
+    attribute = 'android:supportsPictureInPicture="true"'
+    return text[:cut] + nl + "            " + attribute + text[cut:]
+
+
+def inject_overlay_service(text: str, nl: str) -> str:
+    """Declares the ring's foreground service, once."""
+    if OVERLAY_MARKER in text:
+        return text
+    anchor = "    </application>"
+    if anchor not in text:
+        return text
+    block = nl.join(
+        [
+            "        " + OVERLAY_MARKER,
+            "        <service",
+            '            android:name=".SundayOverlayService"',
+            '            android:exported="false"',
+            '            android:foregroundServiceType="specialUse">',
+            "            <property",
+            '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"',
+            '                android:value="floating control" />',
+            "        </service>",
+            "        <!-- <<< Sunday overlay -->",
+            "",
+        ]
+    )
+    return text.replace(anchor, block + anchor, 1)
+
+
+# Gradle fragment the app module applies. Kept out of `android-src/com/**` because it
+# is not Kotlin, and out of the generated project because regenerating would drop it.
+RUNTIME_MARKER = "// >>> Sunday runtime"
+
+
+def sync_runtime_gradle() -> int:
+    """Injects the runtime wiring into the app module's Gradle script, once."""
+    build_gradle = PROJECT / "app" / "build.gradle.kts"
+    build_text = build_gradle.read_text(encoding="utf-8")
+    nl = "\r\n" if "\r\n" in build_text else "\n"
+
+    # An earlier design applied a separate script; that cannot reach the android {}
+    # accessors, so remove the apply line if it is still there.
+    stale = 'apply(from = "sunday-runtime.gradle.kts")'
+    if stale in build_text:
+        build_text = build_text.replace(stale, "").rstrip() + "\n"
+
+    if RUNTIME_MARKER in build_text:
+        build_gradle.write_text(build_text, encoding="utf-8")
+        return EXIT_OK
+
+    anchor = "android {"
+    if anchor not in build_text:
+        return fail(EXIT_PROJECT, "app/build.gradle.kts has no android block to extend")
+
+    injected = nl.join([
+        "",
+        "    // >>> Sunday runtime: filled in by android_project.py, do not edit by hand.",
+        "    // proot and its loader are packaged as lib*.so so Gradle extracts them into",
+        "    // nativeLibraryDir at install time. Without legacy packaging the APK keeps",
+        "    // them compressed and Android refuses to execute a binary from app data.",
+        "    packaging {",
+        "        jniLibs { useLegacyPackaging = true }",
+        "    }",
+        "    // One ABI per APK: the archive carries that ABI's Python, so a universal build",
+        "    // would ship the wrong interpreter to half the devices.",
+        "    defaultConfig {",
+        "        ndk {",
+        "            abiFilters.clear()",
+        '            val rtAbi = System.getenv("SUNDAY_RT_ABI") ?: "x86_64"',
+        '            abiFilters.add(if (rtAbi == "aarch64") "arm64-v8a" else "x86_64")',
+        "        }",
+        "    }",
+        "    // The unpacked runtime (manifest + rootfs archive) ships as an Android asset",
+        "    // and is copied to filesDir on first launch.",
+        '    val sundayRuntimeAssets = System.getenv("SUNDAY_RT_ASSETS")',
+        '        ?: file("../../../../../android-runtime/tools/out/x86_64/assets").absolutePath',
+        '    sourceSets.getByName("main").assets.srcDir(sundayRuntimeAssets)',
+        '    // proot, its loader and the two libraries it needs are packaged as lib*.so so',
+        '    // Gradle extracts them into nativeLibraryDir: the only directory Android still',
+        '    // executes a binary from, and a runtime without them cannot start.',
+        '    val sundayRuntimeJni = File(file(sundayRuntimeAssets).parentFile, "jniLibs")',
+        '    sourceSets.getByName("main").jniLibs.srcDir(sundayRuntimeJni)',
+        "    // <<< Sunday runtime",
+        "",
+    ])
+    build_text = build_text.replace(anchor, anchor + nl + injected, 1)
+    build_gradle.write_text(build_text, encoding="utf-8")
+    say("sync: injected the runtime wiring into app/build.gradle.kts")
+    return EXIT_OK
+
+
+def tauri_cli_js() -> Path | None:
+    """The CLI's own JS entry point, which is what `node` must be given to run it."""
+    explicit = os.environ.get("TAURI_CLI")
+    if explicit:
+        path = Path(explicit)
+        if path.suffix == ".js" and path.exists():
+            return path
+        # `TAURI_CLI` may also name the launcher binary; resolve its js sibling.
+        sibling = path.with_suffix(".js")
+        if sibling.exists():
+            return sibling
+    for candidate in (
+        APP_DIR / "node_modules/@tauri-apps/cli/tauri.js",
+        APP_DIR.parent / "desktop/node_modules/@tauri-apps/cli/tauri.js",
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def fix_generated_node_path() -> None:
+    """Makes the generated Gradle task start, on Windows in particular.
+
+    `tauri android init` writes the node binary and an argv that begins with `tauri`. That
+    works only when `tauri` happens to be resolvable as a module; through `project.exec`
+    it is not, and the task dies with `MODULE_NOT_FOUND` or with a fabricated
+    `node.EXE.bat` path. Both were real failures here.
+
+    The fix is to name both sides explicitly: this machine's node, and the CLI's JS entry
+    point as the first argument.
+    """
+    build_task = PROJECT / "buildSrc/src/main/java/com/lamtools/sunday/core/kotlin/BuildTask.kt"
+    if not build_task.exists():
+        return
+    node = shutil.which("node")
+    if not node:
+        return fail(EXIT_ENV, "node is not on PATH: the Tauri Gradle task cannot run")
+    resolved = Path(node)
+    if os.name == "nt" and resolved.suffix.lower() != ".exe":
+        resolved = resolved.with_suffix(".exe")
+    node_path = str(resolved).replace("\\", "/")
+
+    cli = tauri_cli_js()
+    if cli is None:
+        return fail(EXIT_ENV, "the tauri CLI is not installed: set TAURI_CLI to its tauri.js")
+    cli_path = str(cli).replace("\\", "/")
+
+    text = build_task.read_text(encoding="utf-8")
+    original = text
+
+    marker = 'val executable = """'
+    begin = text.find(marker)
+    if begin >= 0:
+        finish = text.find('"""', begin + len(marker))
+        if finish >= 0:
+            text = text[:begin] + marker + node_path + text[finish:]
+
+    old_args = 'val args = listOf("tauri", "android", "android-studio-script")'
+    if old_args in text:
+        text = text.replace(
+            old_args,
+            'val args = listOf("%s", "android", "android-studio-script")' % cli_path,
+            1,
+        )
+
+    if text != original:
+        build_task.write_text(text, encoding="utf-8")
+        say(f"fixed generated Gradle task (node={node_path}, cli={cli_path})")
 
 
 def ensure_project(env: dict[str, str], timeout: int) -> int:
@@ -261,11 +570,19 @@ def apk_path(debug: bool) -> Path:
 
 
 def build(env: dict[str, str], debug: bool, target: str, timeout: int) -> int:
+    fix_generated_node_path()
     cli = tauri_cli()
     assert cli is not None
     command = cli + ["android", "build", "--apk", "--target", target]
     if debug:
         command.append("--debug")
+    # The CLI refuses to build when the npm `@tauri-apps/api` minor differs from the
+    # Rust `tauri` crate's. A fresh worktree inherits the npm tree from another
+    # checkout, so that comparison can fail for reasons that have nothing to do with
+    # this build. The escape hatch is explicit and off by default: turning it on
+    # silently would hide a real mismatch.
+    if env.get("ANDROID_IGNORE_TAURI_VERSION_MISMATCH") == "1":
+        command.append("--ignore-version-mismatches")
     code = run(command, APP_DIR, env, timeout)
     if code != EXIT_OK:
         return code
@@ -345,6 +662,9 @@ def verify(apk: Path) -> int:
             "native library": True,
             "class LifecycleBridge (dex)": b"LifecycleBridge" in blob,
             "class MainActivity (dex)": b"MainActivity" in blob,
+            # user:"verify() 里加断言：dex 里必须出现 SundayOverlayService"+(否则构建
+            # 通过但改动没进包，装上手机只会看到「没有悬浮环」)。
+            "class SundayOverlayService (dex)": b"SundayOverlayService" in blob,
         }
 
     for what, found in wanted.items():

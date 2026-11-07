@@ -953,7 +953,9 @@ def test_core_cli_returns_nonzero_for_live_command_errors(monkeypatch, capsys) -
         raise RuntimeError("live connection failed")
 
     parser = SimpleNamespace(parse_args=lambda _argv: SimpleNamespace(func=fail))
-    monkeypatch.setattr(core_cli, "build_parser", lambda: parser)
+    # main() imports build_parser from cli_commands.parser at call time; the
+    # alias re-exported by lamtools_core.cli is a different binding.
+    monkeypatch.setattr("lamtools_core.cli_commands.parser.build_parser", lambda: parser)
 
     assert core_cli.main(["cancel", "thread-1"]) == 1
     assert "error: live connection failed" in capsys.readouterr().err
@@ -1097,7 +1099,8 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
         observed["start_result"] = await on_connected(Client())
         return 0
 
-    monkeypatch.setattr(core_cli, "_watch_live_cli", fake_watch)
+    # cmd_run/cmd_start resolve _watch_live_cli from cli_commands.task.
+    monkeypatch.setattr("lamtools_core.cli_commands.task._watch_live_cli", fake_watch)
 
     result = await core_cli.cmd_run(
         SimpleNamespace(
@@ -1156,8 +1159,10 @@ async def test_core_cli_run_serializes_the_default_work_root(monkeypatch, tmp_pa
         await on_connected(Client())
         return 0
 
-    monkeypatch.setattr(core_cli, "_watch_live_cli", fake_watch)
-    monkeypatch.setattr(core_cli, "_default_work_root", lambda: tmp_path)
+    # cmd_run/cmd_start resolve _watch_live_cli from cli_commands.task.
+    monkeypatch.setattr("lamtools_core.cli_commands.task._watch_live_cli", fake_watch)
+    # task.py imports _default_work_root from cli_commands.config at call time.
+    monkeypatch.setattr("lamtools_core.cli_commands.config._default_work_root", lambda: tmp_path)
     args = build_parser().parse_args(["run", "hello", "--raw"])
 
     assert await args.func(args) == 0
@@ -1178,7 +1183,8 @@ async def test_core_cli_start_watch_uses_one_connection_and_binds_started_turn(m
         observed["start_result"] = await on_connected(Client())
         return 0
 
-    monkeypatch.setattr(core_cli, "_watch_live_cli", fake_watch)
+    # cmd_run/cmd_start resolve _watch_live_cli from cli_commands.task.
+    monkeypatch.setattr("lamtools_core.cli_commands.task._watch_live_cli", fake_watch)
     args = build_parser().parse_args(["start", "thread-1", "hello", "--watch", "--raw"])
 
     assert await args.func(args) == 0

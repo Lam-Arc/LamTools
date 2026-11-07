@@ -125,23 +125,3 @@ def register_update(sub: argparse._SubParsersAction) -> None:
     update_check.set_defaults(func=cmd_update_check)
 
 
-def register_mobile(sub: argparse._SubParsersAction) -> None:
-    from .server import cmd_mobile_control
-    mobile = sub.add_parser("mobile", help="Manage desktop mobile control")
-    mobile_sub = mobile.add_subparsers(dest="mobile_command", required=True)
-    for action in ("start", "stop", "status"):
-        command = mobile_sub.add_parser(action, help=f"{action.title()} the desktop mobile-control gateway")
-        command.set_defaults(func=cmd_mobile_control, mobile_action=action)
-    pairing = mobile_sub.add_parser("pairing", help="Create a one-time pairing QR payload")
-    pairing.set_defaults(func=cmd_mobile_control, mobile_action="pairing")
-    devices = mobile_sub.add_parser("devices", help="List trusted mobile devices")
-    devices.set_defaults(func=cmd_mobile_control, mobile_action="devices")
-    revoke = mobile_sub.add_parser("revoke", help="Revoke a trusted mobile device")
-    revoke.add_argument("device_id")
-    revoke.set_defaults(func=cmd_mobile_control, mobile_action="revoke")
-    account = mobile_sub.add_parser("account", help="Bind Sunday desktop to a Relay account")
-    account.add_argument("--mode", choices=("login", "register"), default="login")
-    account.add_argument("--base-url", required=True, help="Relay server base URL")
-    account.add_argument("--username", required=True)
-    account.add_argument("--password", required=True)
-    account.set_defaults(func=cmd_mobile_control, mobile_action="account")

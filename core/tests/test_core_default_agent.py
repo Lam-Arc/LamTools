@@ -709,30 +709,37 @@ async def test_manual_compaction_anchors_boundary_at_first_retained_message():
     saved = await store.get("thread-manual-anchor")
     compaction = saved.metadata["context_compaction"]
     boundary = compaction["summary_seq"]
-    # Default zero-Step retention summarizes the complete durable transcript;
-    # manual compaction leaves durable rows untouched and records the current
-    # high-water mark so a subsequent loader can legitimately return no rows.
+    # Manual compaction leaves durable rows untouched and anchors the boundary
+    # at the last summarized row. The newest rows stay out of the summary and
+    # are retained verbatim, so the boundary sits below the high-water mark and
+    # the loader returns the summary followed by exactly those rows.
     stored_history = await store.get_history("thread-manual-anchor")
-    assert boundary == await store.history_max_seq("thread-manual-anchor")
-    assert boundary == len(stored_history)
     assert stored_history == history
+    assert await store.history_max_seq("thread-manual-anchor") == len(stored_history)
+    compacted_seqs = set(compaction["compacted_history_seqs"])
+    retained_seqs = set(range(1, len(stored_history) + 1)) - compacted_seqs
+    # Zero-Step retention folds every older row into the summary and keeps the
+    # newest row, so the recorded boundary is one row before the first retained
+    # message. That anchoring is what this test is about.
+    assert retained_seqs == {len(stored_history)}
+    assert boundary == min(retained_seqs) - 1
     # Summary rows never leak into persisted history.
     assert all(
         item.get("metadata", {}).get("key") != "context_compaction_summary"
         for item in stored_history
     )
 
-    # An empty incremental tail at the current max sequence is valid; the
-    # effective-history loader must not fall back to the full legacy blob.
-    store.history_requests.clear()
+    # The effective view is the summary followed by exactly the retained rows;
+    # the compacted rows stay on disk but never reach the model again.
     effective = await command_execution._load_effective_compaction_history(
         store,
         "thread-manual-anchor",
         saved.metadata,
     )
-    assert store.history_requests == [boundary]
-    assert len(effective) == 1
     assert effective[0].metadata["key"] == "context_compaction_summary"
+    assert [str(item.content) for item in effective[1:]] == [
+        str(stored_history[seq - 1]["content"]) for seq in sorted(retained_seqs)
+    ]
 
 
 @pytest.mark.asyncio

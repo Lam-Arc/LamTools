@@ -1,0 +1,346 @@
+import { ref } from 'vue'
+import { describe, expect, it } from 'vitest'
+
+import type { CoreAppEvent, CoreAppSnapshot } from '@/appServer/protocol.ts'
+import { applyCoreAppEvent } from '@/appServer/store.ts'
+import { selectCoreWorkbenchMessages } from '@/appServer/workbenchProjection.ts'
+import { selectLatestTurnStatus } from '@/appServer/selectors.ts'
+import { isCoreActiveTurnStatus } from '@/appServer/workbenchActions.ts'
+import { coreDecisionSelectionPlan } from '@/appServer/workbenchActions.ts'
+import { useCoreApprovalController } from '@/composables/useCoreApprovalController.ts'
+
+/**
+ * The approval chain, driven by the projection the Rust host actually emits.
+ *
+ * The events below are copied from `core/android-host/src-tauri/src/projection.rs`,
+ * not written as the shape the UI would like to receive. That distinction is the
+ * point: an earlier fix passed a hand-built object with every field present and
+ * proved nothing, because the real projection did not produce those fields.
+ */
+
+const THREAD = 'th'
+
+function runItem(
+  seq: number,
+  kind: string,
+  itemId: string,
+  body: Record<string, unknown>,
+  status = 'waiting',
+  turnId = 'turn-1',
+): CoreAppEvent {
+  return {
+    event_id: `${THREAD}:${seq}`,
+    thread_id: THREAD,
+    seq,
+    method: 'core/runItem',
+    created_at: '',
+    payload: {
+      kind,
+      thread_id: THREAD,
+      event_id: `${THREAD}:${seq}`,
+      seq,
+      turn_id: turnId,
+      item_id: itemId,
+      status,
+      payload: body,
+      created_at_ms: 0,
+    },
+  } as unknown as CoreAppEvent
+}
+
+function emptySnapshot(): CoreAppSnapshot {
+  return {
+    thread_id: THREAD,
+    snapshot_seq: 0,
+    revision: 0,
+    status: 'running',
+    turns: {},
+    items: {},
+    item_order: [],
+    requests: {},
+    artifacts: {},
+    seen_event_ids: [],
+  } as CoreAppSnapshot
+}
+
+/** What `projection.rs` emits for an approval request, field for field. */
+function approvalEvent(seq: number, callId: string, requestId: string): CoreAppEvent {
+  return runItem(seq, 'approval_request', `${THREAD}:turn-1:${callId}:tool`, {
+    type: 'serverRequest',
+    request_id: requestId,
+    tool_call_id: callId,
+    kind: 'approval',
+    message: '等待确认：write_file',
+    tool_name: 'write_file',
+    tool_args: { path: 'notes.md' },
+    options: [
+      { id: 'approve', label: '批准执行', description: '允许执行', response: 'approve' },
+      { id: 'deny', label: '拒绝执行', description: '不执行', response: 'deny' },
+    ],
+    metadata: {
+      request_id: requestId,
+      tool_call_id: callId,
+      waitingRequest: { request_id: requestId, kind: 'approval' },
+    },
+  })
+}
+
+function decisionParts(snapshot: CoreAppSnapshot) {
+  const messages = selectCoreWorkbenchMessages(snapshot)
+  const parts = messages.flatMap((message) => message.parts ?? [])
+  return { messages, parts }
+}
+
+describe('approval projection chain', () => {
+  it('keeps the request id from the projected event all the way to the click plan', () => {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(
+      snapshot,
+      runItem(5, 'tool_call', `${THREAD}:turn-1:call1:tool`, {
+        type: 'dynamicToolCall',
+        tool_call_id: 'call1',
+        tool_name: 'write_file',
+        tool_args: { path: 'notes.md' },
+      }),
+    )
+    snapshot = applyCoreAppEvent(snapshot, approvalEvent(6, 'call1', 'appr-1'))
+
+    const { parts } = decisionParts(snapshot)
+    const decision = parts.find((part) => part.partType === 'decision')
+    expect(decision, `no decision part among ${parts.map((p) => p.partType).join(',')}`).toBeTruthy()
+
+    const plan = coreDecisionSelectionPlan(decision, {
+      partId: decision!.id,
+      option: { id: 'approve' },
+      response: 'approve',
+    } as never)
+
+    // The failure this test exists for: a plan that degrades to plain text is a
+    // click that never becomes `approval/respond`.
+    expect(plan.status).toBe('approval')
+    expect(plan).toMatchObject({ requestId: 'appr-1', decision: 'approve_once' })
+  })
+})
+
+describe('approval controller', () => {
+  /** A snapshot whose only content is one projected approval request. */
+  function snapshotWithApproval(requestId = 'appr-1') {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(
+      snapshot,
+      runItem(5, 'tool_call', `${THREAD}:turn-1:call1:tool`, {
+        type: 'dynamicToolCall',
+        tool_call_id: 'call1',
+        tool_name: 'write_file',
+        tool_args: { path: 'notes.md' },
+      }),
+    )
+    return applyCoreAppEvent(snapshot, approvalEvent(6, 'call1', requestId))
+  }
+
+  /**
+   * The whole decision path with the real projection as input.
+   *
+   * This is the test that would have caught the shipped bug: the card rendered,
+   * the button existed, and the click became a chat message because the request
+   * id never reached the part.
+   */
+  it('sends approval/respond with the projected request id when approve is pressed', async () => {
+    const snapshot = snapshotWithApproval('appr-live-1')
+    const messages = selectCoreWorkbenchMessages(snapshot)
+    const decision = messages
+      .flatMap((message) => message.parts ?? [])
+      .find((part) => part.partType === 'decision')
+    expect(decision, 'the projection produced no decision part').toBeTruthy()
+
+    const sent: Array<{ requestId: string; decision: string }> = []
+    const controller = useCoreApprovalController({
+      messages: ref(messages),
+      hasActiveThread: ref(true),
+      canRespondApproval: ref(true),
+      respondApproval: async (requestId, decision) => {
+        sent.push({ requestId, decision })
+      },
+      submitText: async () => {
+        throw new Error('an approval must never be sent as chat text')
+      },
+      deferText: () => {
+        throw new Error('an approval must never be deferred as text')
+      },
+    })
+
+    const result = await controller.handleDecision({
+      partId: decision!.id,
+      option: { id: 'approve' },
+      response: 'approve',
+    } as never)
+
+    expect(result).toBe('approval')
+    expect(sent).toEqual([{ requestId: 'appr-live-1', decision: 'approve_once' }])
+  })
+
+  /**
+   * A card that cannot be answered must say so. Silently showing "submitted" was
+   * the behaviour that made a broken chain look like a slow one.
+   */
+  it('reports a missing approval channel instead of pretending to submit', async () => {
+    const snapshot = snapshotWithApproval()
+    const messages = selectCoreWorkbenchMessages(snapshot)
+    const decision = messages
+      .flatMap((message) => message.parts ?? [])
+      .find((part) => part.partType === 'decision')
+
+    const controller = useCoreApprovalController({
+      messages: ref(messages),
+      hasActiveThread: ref(true),
+      canRespondApproval: ref(false),
+      respondApproval: async () => {
+        throw new Error('must not be called')
+      },
+      submitText: async () => undefined,
+      deferText: () => undefined,
+    })
+
+    const result = await controller.handleDecision({
+      partId: decision!.id,
+      option: { id: 'approve' },
+      response: 'approve',
+    } as never)
+
+    expect(result).toBe('deferred')
+    expect(controller.lastError.value).toContain('unavailable')
+  })
+})
+
+describe('expired approvals', () => {
+  /** What the host emits when a sweep closes an overdue approval. */
+  function closureEvent(seq: number, callId: string, requestId: string): CoreAppEvent {
+    return runItem(
+      seq,
+      'approval_response',
+      `${THREAD}:turn-1:${callId}:tool`,
+      {
+        type: 'serverRequest',
+        request_id: requestId,
+        tool_call_id: callId,
+        decision: 'expired',
+        state: 'ending',
+        metadata: { request_id: requestId },
+      },
+      'completed',
+    )
+  }
+
+  /**
+   * An approval that aged out must stop being answerable.
+   *
+   * The session this test protects was unusable: the card kept two live buttons and
+   * the composer stayed taken over by a decision nobody could answer, so no new turn
+   * could start. Closing it is what lets the conversation move again.
+   */
+  it('closes the card instead of leaving it answerable forever', () => {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(
+      snapshot,
+      runItem(5, 'tool_call', `${THREAD}:turn-1:call1:tool`, {
+        type: 'dynamicToolCall',
+        tool_call_id: 'call1',
+        tool_name: 'write_file',
+      }),
+    )
+    snapshot = applyCoreAppEvent(snapshot, approvalEvent(6, 'call1', 'appr-old'))
+
+    const before = selectCoreWorkbenchMessages(snapshot)
+      .flatMap((message) => message.parts ?? [])
+      .find((part) => part.partType === 'decision')
+    expect(before?.status, 'the card should start pending').toBe('pending')
+
+    snapshot = applyCoreAppEvent(snapshot, closureEvent(7, 'call1', 'appr-old'))
+
+    const after = selectCoreWorkbenchMessages(snapshot)
+      .flatMap((message) => message.parts ?? [])
+      .find((part) => part.partType === 'decision')
+    expect(after, 'the closed card should still be visible, just not pending').toBeTruthy()
+    expect(after?.status).not.toBe('pending')
+  })
+})
+
+describe('turn status', () => {
+  /**
+   * The composer decides between Send and Stop from this value. A thread that never
+   * converges to completed keeps offering Stop, and every send is refused — which is
+   * exactly what the device showed after resume.
+   */
+  it('converges to idle after a turn opens and closes', () => {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(snapshot, runItem(2, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'running' }, 'running'))
+    expect(selectLatestTurnStatus(snapshot)).toBe('running')
+    snapshot = applyCoreAppEvent(snapshot, runItem(8, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'completed' }, 'completed'))
+    // The composer decides between Send and Stop on exactly this predicate, not on
+    // the raw status word: 'completed' is a valid resting value as long as it is not
+    // active.
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
+  })
+})
+
+describe('settling a stale card', () => {
+  /**
+   * Settling an aged-out approval must not put its finished turn back in motion.
+   *
+   * The client reads any `approval_response` as "this turn continues", so a closure
+   * that named the finished turn revived it and the composer went back to Stop. The
+   * host now reports closures with an empty turn id, which is what this replays.
+   */
+  it('does not revive a finished turn', () => {
+    let snapshot = emptySnapshot()
+    snapshot = applyCoreAppEvent(snapshot, runItem(2, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'running' }, 'running'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(8, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'completed' }, 'completed'))
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
+
+    // A closure from the host, detached from any turn.
+    const closure = {
+      ...runItem(9, 'approval_response', `${THREAD}::call1:tool`, {
+        type: 'serverRequest',
+        request_id: 'appr-old',
+        tool_call_id: 'call1',
+        decision: 'expired',
+        state: 'ending',
+        metadata: { request_id: 'appr-old' },
+      }, 'completed'),
+    } as unknown as CoreAppEvent
+    ;(closure.payload as Record<string, unknown>).turn_id = ''
+    snapshot = applyCoreAppEvent(snapshot, closure)
+
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(false)
+  })
+})
+
+describe('a second turn in the same thread', () => {
+  /**
+   * The device case: one turn finishes, then a new turn starts on the same thread and
+   * asks for approval. Its card rendered nothing, while a first-turn card renders fine
+   * in the other tests here. The difference has to be the turn, not the card.
+   */
+  it('renders the second turn approval card', () => {
+    let snapshot = emptySnapshot()
+    // turn-1: opens, closes.
+    snapshot = applyCoreAppEvent(snapshot, runItem(2, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'running' }, 'running'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(8, 'status', `${THREAD}:turn-1:status`, { type: 'status', status: 'completed' }, 'completed'))
+    // turn-2: opens, prepares a call, asks for approval.
+    snapshot = applyCoreAppEvent(snapshot, runItem(10, 'status', `${THREAD}:turn-2:status`, { type: 'status', status: 'running' }, 'running', 'turn-2'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(11, 'tool_call', `${THREAD}:turn-2:call9:tool`, { type: 'dynamicToolCall', tool_call_id: 'call9', tool_name: 'write_file' }, 'waiting', 'turn-2'))
+    snapshot = applyCoreAppEvent(snapshot, runItem(12, 'approval_request', `${THREAD}:turn-2:call9:tool`, {
+      type: 'serverRequest',
+      request_id: 'appr-new',
+      tool_call_id: 'call9',
+      options: [{ id: 'approve', label: '批准执行', response: 'approve' }],
+      metadata: { request_id: 'appr-new', waitingRequest: { request_id: 'appr-new' } },
+    }, 'waiting', 'turn-2'))
+
+    const parts = selectCoreWorkbenchMessages(snapshot).flatMap((message) => message.parts ?? [])
+    const decision = parts.find((part) => part.partType === 'decision')
+    expect(decision, `no decision part; parts=${parts.map((p) => p.partType).join(',')}`).toBeTruthy()
+    expect(decision?.status).toBe('pending')
+    expect(isCoreActiveTurnStatus(selectLatestTurnStatus(snapshot))).toBe(true)
+  })
+})

@@ -43,7 +43,16 @@ describe('split pane paths and compact pages', () => {
     expect(source('styles/app-page.css')).toMatch(/container:\s*app-page\s*\/\s*inline-size/)
   })
 
-  it.each(['CoreSettings', 'CoreArrangeManager', 'SearchShell', 'AccountShell'])('%s adapts to its own pane', name => {
+  // user:“手机端的 UI 该适配就适配，但不要增加多余的东西”+(远程连接页没有自己的标题与返回键，
+  // 也不做页内断点：整版条与 CoreAppPage 的局部宽度容器已经把适配做完)。
+  it('AccountShell leaves the header and the breakpoints to the app page shell', () => {
+    const css = source('components/AccountShell.vue')
+    expect(css).toContain('RemoteConnectionPanel')
+    expect(css).not.toMatch(/account-back|account-head/)
+    expect(css).not.toMatch(/@media\s*\((?:min|max)-width:/)
+  })
+
+  it.each(['CoreSettings', 'CoreArrangeManager', 'SearchShell'])('%s adapts to its own pane', name => {
     const css = name === 'CoreSettings' ? settingsCss() : source(`components/${name}.vue`)
     expect(css).toContain('@container app-page')
     expect(css).not.toMatch(/@media\s*\((?:min|max)-width:/)

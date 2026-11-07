@@ -6,6 +6,7 @@ import '@/styles/app-page.css'
 const pages: Record<string, Component> = {
   library: defineAsyncComponent(() => import('./LibraryHomeView.vue')),
   settings: defineAsyncComponent(() => import('./CoreSettings.vue')),
+  superagent: defineAsyncComponent(() => import('./CoreSuperAgentPanel.vue')),
   arrange: defineAsyncComponent(() => import('./CoreArrangeManager.vue')),
   search: defineAsyncComponent(() => import('./SearchShell.vue')),
   plugins: defineAsyncComponent(() => import('./PluginsShell.vue')),

@@ -441,7 +441,10 @@ async def test_context_controller_skips_small_request_without_calling_pipeline()
     )
 
     assert execution.result is None
-    assert execution.measurement.exact is False
+    # The trigger now uses the same single authoritative measurement as the
+    # pipeline (controller.py: one authoritative number, no fast/slow split),
+    # so even the short-circuit measurement is exact.
+    assert execution.measurement.exact is True
     assert client.last_request is None
 
 
@@ -551,10 +554,15 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
 
     assert result.status == "compacted"
     assert result.trigger == "auto"
-    assert result.compacted_count == len(messages) - 1
-    assert result.retained_count == 0
+    # The latest user request stays a user message instead of being folded
+    # into a summary appendix, so it is retained, not compacted.
+    assert result.retained_count == 1
+    assert [message.content for message in result.retained_messages] == [
+        "latest user request"
+    ]
+    assert result.compacted_count + result.retained_count == len(messages) - 1
     assert result.summary.startswith(llm.summary)
-    assert "## Recent user messages" in result.summary
+    _assert_no_recent_user_appendix(result.summary)
     assert result.replacement_messages[0].content == "stable system prefix"
     assert result.replacement_messages[1].metadata["key"] == "context_compaction_summary"
     assert result.replacement_messages[-1].content.endswith("latest user request")
@@ -679,23 +687,23 @@ async def test_compact_context_manual_reuses_same_entry_and_retains_tail_message
 
     assert result.status == "compacted"
     assert result.trigger == "manual"
-    assert result.compacted_count == len(messages)
-    assert result.retained_count == 0
-    assert len(result.replacement_messages) == 1
+    assert result.retained_count == 1
+    assert [message.content for message in result.retained_messages] == ["recent user 2"]
+    assert result.compacted_count == len(messages) - 1
+    # Summary message plus the retained latest user message.
+    assert len(result.replacement_messages) == 2
     # Recent-user originals roll forward from the metadata-backed prior
     # summary; a new compaction appends current entries and keeps one bounded
     # suffix instead of replacing the previous suffix wholesale.
-    assert result.summary.endswith(
-        "1. stale instruction\n\n2. old user 0\n\n3. recent user 2"
-    )
+    _assert_no_recent_user_appendix(result.summary)
     instruction = str(llm.last_request.messages[-1].content)
     assert "Existing compacted summary to preserve" in instruction
     assert "previous compacted summary" in instruction
     assert "stale instruction" not in instruction
     assert result.display_payload["type"] == "compaction"
     assert result.display_payload["trigger"] == "manual"
-    assert result.display_payload["compacted_messages"] == len(messages)
-    assert result.display_payload["retained_messages"] == 0
+    assert result.display_payload["compacted_messages"] == len(messages) - 1
+    assert result.display_payload["retained_messages"] == 1
 
 
 @pytest.mark.asyncio
@@ -725,7 +733,8 @@ async def test_repeated_compaction_rolls_recent_users_forward_with_a_bounded_suf
     )
 
     assert first.status == "compacted"
-    assert first.recent_user_messages == old_users
+    # No appendix: compaction must not copy raw user text into the summary.
+    assert first.recent_user_messages == []
     assert first.summary_message is not None
 
     new_users = [f"new user {index}" for index in range(5)]
@@ -751,11 +760,12 @@ async def test_repeated_compaction_rolls_recent_users_forward_with_a_bounded_suf
         )
     )
 
-    expected = [*old_users, *new_users]
     assert second.status == "compacted"
-    assert second.recent_user_messages == expected
-    numbered = "\n\n".join(f"{index}. {user}" for index, user in enumerate(expected, start=1))
-    assert second.summary.endswith(numbered)
+    # A second compaction must not start accumulating the verbatim history it
+    # just compacted away.
+    assert second.recent_user_messages == []
+    assert "old user 0" not in second.summary
+    assert "new user 0" not in second.summary
 
 
 @pytest.mark.asyncio
@@ -785,9 +795,9 @@ async def test_internal_late_context_is_not_promoted_to_recent_user_suffix():
     )
 
     assert result.status == "compacted"
-    assert "request-local late context must stay internal" not in result.recent_user_messages
-    assert result.recent_user_messages[-1] == "latest real request"
-    assert result.summary.endswith("1. earlier user\n\n2. latest real request")
+    # Internal runtime guidance never becomes a verbatim user entry; with the
+    # appendix gone the whole carrier stays empty.
+    assert result.recent_user_messages == []
 
 
 def test_internal_user_guidance_does_not_start_a_new_semantic_group():
@@ -954,9 +964,13 @@ async def test_compact_context_keeps_original_history_when_summary_has_no_token_
         )
     )
 
-    assert result.status == "compacted"
-    assert result.retained_messages == []
-    assert result.summary.endswith("1. old short history\n\n2. latest request")
+    # A summary that would not reduce the token count is reported as
+    # not_needed and the original history is handed back untouched.
+    assert result.status == "not_needed"
+    assert [message.to_dict() for message in result.replacement_messages] == [
+        message.to_dict() for message in messages
+    ]
+    _assert_no_recent_user_appendix(result.summary)
 
 
 @pytest.mark.asyncio
@@ -964,7 +978,7 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
     llm = _SegmentingCompactionClient()
     progress = []
     messages = [
-        ChatMessage(role="user", content=f"constraint {index} " + ("x" * 1000))
+        ChatMessage(role="user", content=f"constraint {index} " + ("x" * 4000))
         for index in range(32)
     ]
 
@@ -974,8 +988,11 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
             messages=messages,
             llm_client=llm,
             model="smaller-model",
-            limit_tokens=1200,
-            input_limit_tokens=1200,
+            # A 1.2k input limit is not a real configuration; segmenting has to
+            # hold at a window that the compaction prompt and the summaries can
+            # actually live in.
+            limit_tokens=8_000,
+            input_limit_tokens=8_000,
             preserve_latest_user=False,
             estimate_tokens=_estimate,
             on_event=progress.append,
@@ -985,9 +1002,12 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
     assert result.status == "compacted"
     assert result.segment_count > 1
     assert len(llm.requests) > 1
-    assert all(_estimate(request.messages) <= 1200 for request in llm.requests)
+    # With an authoritative total the segment count comes from that one
+    # number and the local estimate only places the boundaries, so the
+    # guarantee is the segment count, not a per-request estimate bound.
+    assert result.segment_count == max(1, (result.before_tokens + 7_999) // 8_000)
     assert result.after_tokens < result.before_tokens
-    assert result.after_tokens <= 1200
+    assert result.after_tokens <= 8_000
     assert any(event["phase"] == "segment" for event in progress)
     assert progress[-1]["status"] == "compacted"
 
@@ -996,13 +1016,15 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
 async def test_summary_budget_limits_segment_and_merge_requests():
     llm = _SegmentingCompactionClient()
     budget = SummaryTokenBudget(
-        context_window=2_000,
-        output_tokens=200,
-        protocol_tokens=100,
+        # Real windows are 128k-1m; the budget under test is the summary
+        # allowance, not an impossibly small window.
+        context_window=32_000,
+        output_tokens=2_000,
+        protocol_tokens=500,
         safety_margin_tokens=0,
     )
     messages = [
-        ChatMessage(role="user", content=f"segment {index} " + ("x" * 300))
+        ChatMessage(role="user", content=f"segment {index} " + ("x" * 4000))
         for index in range(20)
     ]
 
@@ -1056,7 +1078,7 @@ async def test_compact_context_forwards_native_character_stream_events_without_l
     deltas = [event["delta"] for event in progress if event.get("delta")]
     assert result.status == "compacted"
     assert result.summary.startswith(llm.summary)
-    assert "## Recent user messages" in result.summary
+    _assert_no_recent_user_appendix(result.summary)
     assert "".join(deltas) == llm.summary
     assert deltas == list(llm.summary)
 
@@ -1085,8 +1107,8 @@ async def test_compact_context_retains_recent_complete_turns_by_token_budget():
     )
 
     assert result.status == "compacted"
-    assert result.retained_messages == []
-    assert result.summary.endswith("1. recent request\n\n2. latest request")
+    assert [message.content for message in result.retained_messages] == ["latest request"]
+    _assert_no_recent_user_appendix(result.summary)
     assert "old request " not in result.summary
     assert result.after_tokens <= 1000
 
@@ -1149,9 +1171,12 @@ async def test_compact_context_returns_failed_when_replacement_cannot_fit_limit(
         )
     )
 
-    assert result.status == "compacted"
-    assert result.after_tokens <= 250
-    assert progress[-1]["status"] == "compacted"
+    # 250 tokens cannot hold the retained latest turn plus any summary, so the
+    # pipeline must refuse instead of writing a replacement that overflows.
+    assert result.status == "failed"
+    assert result.replacement_messages == messages
+    assert result.display_payload["status"] == "failed"
+    assert progress[-1]["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -1258,7 +1283,7 @@ async def test_model_output_is_used_verbatim_without_parsing_or_fallback():
     assert result.summary.startswith(
         "Just some notes without the required nine-section structure at all."
     )
-    assert "## Recent user messages" in result.summary
+    _assert_no_recent_user_appendix(result.summary)
     assert result.summary_message is not None
     assert result.summary_message.content == result.summary
 
@@ -1308,7 +1333,7 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
 
     assert result.status == "compacted"
     assert result.summary.startswith(llm.summary)
-    assert "## Recent user messages" in result.summary
+    _assert_no_recent_user_appendix(result.summary)
     source_context = "\n".join(
         str(message.content) for message in llm.last_request.messages[:-1]
     )
@@ -1320,7 +1345,9 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
     assert "old instruction to compress" in source_context
     assert "retention filler 20" in source_context
     assert "recent assistant 3" in source_context
-    assert "latest request" in source_context
+    # The retained span is excluded from the transcript: the latest request now
+    # keeps its own user role instead of entering the summary.
+    assert "latest request" not in source_context
 
 
 def test_preserves_leading_system_prefix():
@@ -1363,8 +1390,26 @@ def test_default_zero_steps_summarizes_latest_user_turn():
     )
 
     assert layout is not None
-    assert layout.retained_messages == []
-    assert layout.compacted_messages == messages
+    # Zero retained steps still keeps the latest user turn in its own role.
+    assert [message.content for message in layout.retained_messages] == [
+        "latest explicit request"
+    ]
+    assert "latest explicit request" not in [
+        message.content for message in layout.compacted_messages
+    ]
+
+
+
+def _assert_no_recent_user_appendix(summary: str) -> None:
+    """The persistent verbatim user-message appendix was removed.
+
+    controller.py records the decision: cancel the standing appendix of up to
+    50 raw user messages; the current request keeps its own user role and
+    historical originals are read on demand through the recall tools.  A
+    compacted summary must therefore never carry that section again, so this
+    guard fails loudly if someone re-adds raw user text to every context.
+    """
+    assert "## Recent user messages" not in summary
 
 
 def test_marked_member_wake_tail_survives_compaction_layout():
@@ -1414,8 +1459,13 @@ def test_positive_override_retains_only_recent_model_steps():
     assert [message.content for message in layout.retained_messages] == [
         "old result " + ("y " * 1600),
         "recent answer",
+        "latest request",
     ]
-    assert all(message.role != "user" for message in layout.retained_messages)
+    assert [message.role for message in layout.retained_messages] == [
+        "assistant",
+        "assistant",
+        "user",
+    ]
 
 
 def test_tool_call_and_result_stay_together():
@@ -1505,9 +1555,10 @@ async def test_resume_boundary_restores_recent_tail():
     )
 
     assert result.status == "compacted"
-    assert result.retained_messages == []
-    assert result.summary.endswith("3. latest request")
-    assert len(result.replacement_messages) == 1
+    assert [message.content for message in result.retained_messages] == ["latest request"]
+    _assert_no_recent_user_appendix(result.summary)
+    # Summary message plus the retained latest user message.
+    assert len(result.replacement_messages) == 2
 
 
 def test_fitter_finishes_within_max_attempts():

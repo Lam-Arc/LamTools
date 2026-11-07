@@ -8,15 +8,9 @@
     :mode-title="nextAppModeTitle"
     :can-toggle-mode="appModes.length > 1"
     :session-title="activeSessionTitle"
-    :mobile-pairing-code="remotePairing?.code"
-    :mobile-pairing-expires-at-ms="remotePairing?.expiresAtMs"
-    :mobile-pairing-loading="remoteGatewayLoading"
-    :account-status="effectiveAccountStatus"
-    :account-devices="effectiveAccountDevices"
     @toggle-left-pinned="toggleLeftPinned"
     @toggle-right-pinned="toggleRightPinned"
     @cycle-mode="cycleAppMode"
-    @mobile-pairing-create="createRemotePairing"
   />
   <div v-if="backendCrashed" class="core-status-banner" role="alert" data-backend-crashed-banner>
     <span class="core-status-banner-text">{{ t("后端进程已停止响应（可能已崩溃）。请重启应用以恢复。") }}</span>
@@ -41,19 +35,20 @@
     product-name="Sunday"
     sidebar-title="Sunday"
     :plugin-rpc="requestConfigOperation"
-    :class="{ 'workspace-shell--split': splitEnabled }"
-    :style="splitShellStyle"
+    :class="{ 'workspace-shell--split': splitEnabled && appRuntime.platform !== 'mobile' }"
+    :style="[appRuntime.platform === 'mobile' ? {} : splitShellStyle, fullAreaMobileHeadStyle]"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
-    :show-sidebar-search-action="showMobileFooterFallback"
-    :show-sidebar-plugins-action="showMobileFooterFallback"
-    :show-sidebar-settings-action="showMobileFooterFallback"
+    :show-sidebar-search-action="false"
+    :show-sidebar-plugins-action="false"
+    :show-sidebar-settings-action="false"
     :collapse-left-sidebar="Boolean(fullAreaView && !sidebarNavView)"
     :hide-main-header="Boolean(sidebarNavView)"
+    :show-drawer-toggle="!fullAreaView && !splitEnabled"
     :show-right-panel="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
     :right-panel-hold="rightSidebarHold"
@@ -119,6 +114,19 @@
     <template #primary>
       <div class="core-project-primary-actions">
         <div class="core-sidebar-mode-row">
+          <!-- user:“桌面端也有这个毛病，一起修”+(设置/插件/项目设置撤掉标题条时返回键跟着
+               消失；这里在会话栏页名旁边补一个，动作与标题条里的那个完全一样)。 -->
+          <button
+            v-if="sidebarNavView"
+            type="button"
+            class="full-area-back"
+            data-sidebar-nav-back
+            :title="t('返回会话（Esc）')"
+            :aria-label="t('返回会话')"
+            @click="onFullAreaBack"
+          >
+            <ArrowLeft :size="15" :stroke-width="1.8" aria-hidden="true" />
+          </button>
           <span
             v-if="sidebarNavView"
             class="core-sidebar-mode is-static"
@@ -252,28 +260,31 @@
 
     <template v-if="showSidebarFooter" #sidebar-footer>
       <!-- 手机降级页脚（无 hover 可依赖）：仍是带文字的竖排行，与今天一致。
-          桌面账号在竖栏底部，页脚不再渲染。 -->
-      <div class="drawer-footer-stack">
-        <button
-          v-for="option in mobileModeOptions"
-          :key="option.id"
-          class="sidebar-action"
-          type="button"
-          :aria-pressed="option.id === activeMobileModeId"
-          :data-mobile-footer-mode="option.id"
-          @click="selectAppModeByKey(option.id)"
-        >
-          <span aria-hidden="true"><Check v-if="option.id === activeMobileModeId" :size="14" :stroke-width="1.8" /><Blocks v-else :size="14" :stroke-width="1.8" /></span>
-          <span>{{ option.label }}</span>
+          桌面远程连接在竖栏底部，页脚不再渲染。 -->
+      <!-- user:“手机模式下左竖栏的内容放在侧栏的最下方一排，不要文字仅图标”+(这一排
+           就是竖栏本身：模式、资料库、定时任务、插件、设置、远程连接，名称只留在悬停提示
+           与读屏标签里)。 -->
+      <div class="drawer-footer-rail" role="toolbar" :aria-label="t('主导航')">
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-chat :title="t('聊天')" :aria-label="t('聊天')" @click="openFromRail(() => onRailOpen('chat'))">
+          <House :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="sidebar-action" type="button" data-mobile-footer-account @click="emit('open-account')">
-          <span aria-hidden="true"><UserRound :size="14" :stroke-width="1.8" /></span><span>{{ t("登录 / 账号") }}</span>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-superagent :title="t('Super-agent')" :aria-label="t('Super-agent')" @click="openFromRail(() => onRailOpen('superagent'))">
+          <Bot :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="sidebar-action" type="button" data-mobile-footer-library @click="openLibrary">
-          <span aria-hidden="true"><Library :size="14" :stroke-width="1.8" /></span><span>{{ t("资料库") }}</span>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-arrange :title="t('定时任务')" :aria-label="t('定时任务')" @click="openFromRail(openArrange)">
+          <CalendarClock :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="sidebar-action" type="button" data-mobile-footer-arrange @click="openArrange">
-          <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>{{ t("定时任务") }}</span>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-library :title="t('资料库')" :aria-label="t('资料库')" @click="openFromRail(openLibrary)">
+          <Library :size="17" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-plugins :title="t('插件')" :aria-label="t('插件')" @click="openFromRail(openPlugins)">
+          <Blocks :size="17" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-settings :title="t('设置')" :aria-label="t('设置')" @click="openFromRail(openSettings)">
+          <Settings :size="17" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-remote :title="t('远程连接')" :aria-label="t('远程连接')" @click="openFromRail(openAccount)">
+          <MonitorSmartphone :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
     </template>
@@ -316,6 +327,29 @@
     </template>
 
     <template #main-content>
+      <!-- user:“清晰展示当前设备、连接状态和运行位置”+(连着电脑时钉一个标记，
+           免得用户以为这些操作跑在手机上)。 -->
+      <div
+        v-if="appRuntime.capabilities.remote"
+        class="core-remote-badge"
+        data-remote-badge
+        :title="t('这一步在电脑上执行')"
+      >
+        <MonitorSmartphone :size="13" :stroke-width="1.9" aria-hidden="true" />
+        <span>{{ t("在电脑上运行") }}</span>
+      </div>
+      <!-- 手机没有顶部条：整版界面的返回键浮动在左上角，内容由 --full-area-head-inset 让位。 -->
+      <button
+        v-if="appRuntime.platform === 'mobile' && fullAreaView"
+        type="button"
+        class="full-area-back full-area-mobile-back"
+        :title="t('返回会话')"
+        :aria-label="t('返回会话')"
+        data-full-area-mobile-back
+        @click="onFullAreaBack"
+      >
+        <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+      </button>
       <!-- 整版界面：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出。 -->
       <CoreSplitPluginPage v-if="fullAreaView === 'plugin' && mainPluginTab" :tab="mainPluginTab" :visible="true"
         :work-root="currentWorkRoot()" :request-rpc="requestConfigOperation" @open-page="openRelatedPluginPage" @open-file="openMainPluginFile" />
@@ -441,11 +475,26 @@
     </template>
 
     <template #modals>
-      <CoreSplitWorkspace v-if="appRuntime.platform !== 'mobile'" :controller="splitWorkspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
+      <!-- user:“手机端内可以将分屏用全屏的方式展示，并在左上角保留返回键”+(同一套分屏，
+           手机上整屏铺开，左上角一个返回键把分屏关掉，回到会话)。 -->
+      <div class="split-slot" :class="{ 'split-slot--mobile': appRuntime.platform === 'mobile', 'split-slot--open': splitEnabled }">
+        <button
+          v-if="appRuntime.platform === 'mobile' && splitEnabled"
+          type="button"
+          class="full-area-back split-slot__back"
+          :title="t('关闭分屏')"
+          :aria-label="t('关闭分屏')"
+          data-mobile-split-back
+          @click="closeMobileSplit()"
+        >
+          <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <CoreSplitWorkspace v-if="splitEnabled" :controller="splitWorkspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
         <template #default="{ tab, pane, visible }">
           <CoreSplitContent :tab="tab" :pane="pane" :visible="visible" :controller="splitWorkspace" :documents="splitDocuments" :bindings="pageBindings" :work-root="splitWorkRoot" :transport="transport" :messages="messages" :active-session-id="activeSessionId || ''" :member-statuses="sessionActivity.memberStatuses" :member-status-records="sessionActivity.memberStatusRecords" :durable-records="effectiveSubAgentRecords" :member-wait-known="sessionActivity.memberWaitKnown" :running-member-names="sessionActivity.runningMemberNames" :main-running="activeTurnRunning" @dirty="setSplitDirty" @decision-select="handlePendingDecisionSelect" />
         </template>
-      </CoreSplitWorkspace>
+        </CoreSplitWorkspace>
+      </div>
       <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
     </template>
 
@@ -659,6 +708,8 @@ import {
 import { gsap } from 'gsap'
 import {
   ArrowDown,
+  Bot,
+  House,
   ArrowLeft,
   Blocks,
   CalendarClock,
@@ -759,21 +810,13 @@ import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import OnboardingWizard from '@/components/OnboardingWizard.vue'
 import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
 import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
+import { installOverlayAction } from '@/core-app/overlayAction.ts'
 import SearchShell, { type SearchCommand, type StudySearchHit } from '@/components/SearchShell.vue'
 import { type PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
 import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
 } from '@/components/CoreSettings.vue'
-import type {
-  MobileControlAccountContext,
-  MobileControlAccountDevice,
-  MobileControlAccountPayload,
-  MobileControlAccountStatus,
-  MobileControlGatewayStatus,
-  MobileControlIdentity,
-  MobileControlPairing,
-} from '@/components/MobileControlPanel.vue'
 import SundayLogo from '@/components/SundayLogo.vue'
 import RuntimeChecklistCard from '@/components/RuntimeChecklistCard.vue'
 import SessionSidebar, { type SessionExportFormat } from '@/components/SessionSidebar.vue'
@@ -867,15 +910,10 @@ type RawModelGroup = {
 
 const props = defineProps<{
   runtime: LamToolsRuntime
-  accountContext?: MobileControlAccountContext
-  mobileCommandDockAvailable?: boolean
   showPreviewTitleBar?: boolean
 }>()
 const emit = defineEmits<{
   'left-drawer-change': [value: boolean]
-  'account-submit': [payload: MobileControlAccountPayload]
-  'account-logout': []
-  'open-account': []
   'mobile-mode-state': [payload: {
     label: string
     title: string
@@ -886,6 +924,12 @@ const emit = defineEmits<{
   'sync-request': []
 }>()
 
+// user:“点远程连接后看起来没反应”+(手机上的图标排开的是整版界面，打开后先把抽屉收起)。
+function openFromRail(action: () => void): void {
+  action()
+  if (appRuntime.platform === 'mobile') shellRef.value?.closeLeftDrawer?.()
+}
+
 function onLeftDrawerChange(value: boolean): void {
   emit('left-drawer-change', value)
 }
@@ -893,8 +937,8 @@ const appRuntime = props.runtime
 // Load the shared preference for desktop, mobile and the real-UI showcase.
 // An unavailable backend keeps the existing Simplified Chinese default.
 void loadUiLanguage(appRuntime.requestRpc).catch(() => undefined)
-const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileCommandDockAvailable !== true)
-const showSidebarFooter = computed(() => showMobileFooterFallback.value)
+// 手机上侧栏底部那一排就是导航本体；桌面有最左竖栏，页脚不渲染。
+const showSidebarFooter = computed(() => appRuntime.platform === 'mobile')
 const commandShellPlatform = (() => {
   if (appRuntime.platform === 'mobile') return 'mobile' as const
   if (appRuntime.platform !== 'desktop') return 'web' as const
@@ -1041,8 +1085,33 @@ const settingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requ
 const projectSettingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requestSection: (id: string) => void } | null>(null)
 // 整版界面状态：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
-type FullAreaViewId = 'library' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
+type FullAreaViewId = 'library' | 'search' | 'superagent' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
 const fullAreaView = ref<FullAreaViewId | null>(null)
+// user:“返回不可用，我被困在设置页面了”+(系统返回先关整版界面，界面没得关才交给后台)。
+function handleSystemBack(event: Event): void {
+  // user:“我希望任何时候不存在卡在某个界面退不出去的情况”+(返回按层退：
+  // 分屏 → 整版界面 → 交给宿主退到后台，任何一层都不会把人关住)。
+  if (appRuntime.platform === 'mobile' && splitEnabled.value) {
+    event.preventDefault()
+    closeMobileSplit()
+    return
+  }
+  if (!fullAreaView.value) return
+  event.preventDefault()
+  onFullAreaBack()
+}
+function closeMobileSplit(): void {
+  for (const pane of Object.keys(splitWorkspace.state.panes)) splitWorkspace.closePane(pane)
+}
+onMounted(() => window.addEventListener('sunday:back', handleSystemBack))
+onUnmounted(() => window.removeEventListener('sunday:back', handleSystemBack))
+// user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(手机上的整版界面顶上是
+// 浮动的返回键，内容让出这一条，连同状态栏一起让)。
+const fullAreaMobileHeadStyle = computed(() => ({
+  '--full-area-head-inset': appRuntime.platform === 'mobile' && fullAreaView.value
+    ? 'calc(var(--native-safe-area-top, 0px) + 46px)'
+    : '0px',
+}))
 // user:“实现这个插件，也正好实验我们的新插件架构”+(主界面与分屏使用相同的自绘页面加载器；服务不属于页面)。
 const mainPluginPage = ref<PluginPageEntry | null>(null)
 const mainPluginTab = computed<SplitTab | null>(() => mainPluginPage.value ? {
@@ -1102,6 +1171,7 @@ const sidebarNavTitle = computed(() => {
 const libraryRefreshTick = ref(0)
 // 定时任务 / 资料库的内部子页通过 heading 上报顶部标题；组件卸载即失效，避免残留面包屑。
 const arrangeHeading = ref<{ title: string; subtitle: string } | null>(null)
+const superagentHeading = ref<{ title: string; subtitle: string } | null>(null)
 const arrangeRef = ref<{ handleBack?: () => boolean } | null>(null)
 const libraryHeading = ref<{ title: string; subtitle: string } | null>(null)
 const libraryRef = ref<{ handleBack?: () => boolean } | null>(null)
@@ -1121,12 +1191,14 @@ const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
       return libraryHeading.value ?? { get title() { return t("资料库") }, get subtitle() { return t("资料 / 记忆 / 方案 — 一个入口三块内容。") } }
     case 'arrange':
       return arrangeHeading.value ?? { get title() { return t("定时任务") }, get subtitle() { return t("按计划运行任务，或在需要时随时执行。") } }
+    case 'superagent':
+      return superagentHeading.value ?? { get title() { return t("Super-agent") }, get subtitle() { return t("把复杂目标交给它，自己规划、执行并交付结果。") } }
     case 'settings':
       return { get title() { return t("设置") }, get subtitle() { return t("模型与供应商、外观主题、工具权限等应用配置。") } }
     case 'plugins':
       return { get title() { return t("插件") }, get subtitle() { return t("管理已安装的插件，开关它们带来的界面与工具。") } }
     case 'account':
-      return { get title() { return t("账号") }, get subtitle() { return t("登录状态与已配对的设备。") } }
+      return { get title() { return t("远程连接") }, get subtitle() { return t("手机与本机的连接、已配对设备与任务在哪一端执行。") } }
     case 'project':
       return { get title() { return t("项目") }, get subtitle() { return t("项目作用域的元信息与 AGENTS.md 指令。") } }
     default:
@@ -1162,7 +1234,7 @@ const railActiveView = computed<AppRailView>(() => {
 function openRailSplit(view: AppRailView, edge: 'right' | 'bottom' = 'right') {
   if (view === 'chat') return
   const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
-  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), arrange: t('定时任务'), plugins: t('插件'), account: t('账号') })[view], pane)
+  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), superagent: t('Super-agent'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接') })[view], pane)
 }
 function onRailOpen(view: AppRailView): void {
   if (view === 'chat') {
@@ -1207,325 +1279,6 @@ function openModeMenu(event: MouseEvent): void {
     ariaLabel: '切换模式',
   })
 }
-const remoteGatewayStatus = ref<MobileControlGatewayStatus | null>(null)
-const remotePairing = ref<MobileControlPairing | null>(null)
-const remoteGatewayLoading = ref(false)
-const remoteGatewayError = ref('')
-const remoteAccountStatus = ref<MobileControlAccountStatus | null>(null)
-const remoteAccountIdentity = ref<MobileControlIdentity | null>(null)
-const remoteAccountLoading = ref(false)
-const effectiveAccountStatus = computed(() => props.accountContext === undefined
-  ? remoteAccountStatus.value
-  : props.accountContext.status)
-const effectiveAccountDevices = computed<MobileControlAccountDevice[]>(() => {
-  if (props.accountContext !== undefined) return props.accountContext.devices
-  const devices: MobileControlAccountDevice[] = []
-  if (remoteAccountStatus.value) {
-    devices.push({
-      nodeId: remoteAccountStatus.value.nodeId,
-      label: 'LamTools Desktop',
-      get detail() { return t("当前桌面工作环境") },
-      platform: 'desktop',
-      online: Boolean(remoteGatewayStatus.value?.relayConnected),
-      current: true,
-    })
-  }
-  for (const device of remoteGatewayStatus.value?.trustedDevices || []) {
-    devices.push({
-      nodeId: device.deviceId,
-      label: device.name || device.deviceId,
-      get detail() { return t("已配对移动设备") },
-      platform: device.platform || 'mobile',
-      online: Boolean(device.lastSeenMs && Date.now() - device.lastSeenMs < 60_000),
-    })
-  }
-  return devices
-})
-const effectiveAccountLoading = computed(() => props.accountContext?.loading ?? remoteAccountLoading.value)
-const effectiveAccountError = computed(() => props.accountContext?.error || '')
-
-function submitEffectiveAccount(payload: MobileControlAccountPayload): void {
-  if (props.accountContext !== undefined) emit('account-submit', payload)
-  else void saveRemoteAccount(payload)
-}
-
-function logoutEffectiveAccount(): void {
-  if (props.accountContext !== undefined) emit('account-logout')
-  else void logoutRemoteAccount()
-}
-
-const remoteGatewayAvailable = computed(() => (
-  typeof (window as any).__LAMTOOLS_REMOTE_STATUS__ === 'function'
-))
-
-async function refreshRemoteAccount(): Promise<void> {
-  const status = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_STATUS__ as (() => Promise<MobileControlAccountStatus | null>) | undefined
-  const identity = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_IDENTITY__ as (() => Promise<MobileControlIdentity>) | undefined
-  if (status) {
-    try {
-      remoteAccountStatus.value = await status()
-    } catch (error) {
-      remoteGatewayError.value = messageFromError(error)
-    }
-  }
-  if (identity) {
-    try {
-      remoteAccountIdentity.value = await identity()
-    } catch (error) {
-      remoteGatewayError.value = messageFromError(error)
-    }
-  }
-}
-
-async function saveRemoteAccount(payload: MobileControlAccountPayload): Promise<void> {
-  const save = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_SAVE__ as ((session: Record<string, unknown>) => Promise<MobileControlAccountStatus>) | undefined
-  const identityCall = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_IDENTITY__ as ((scope?: { serverId: string; username: string }) => Promise<MobileControlIdentity>) | undefined
-  if (!save || !identityCall) return
-  remoteAccountLoading.value = true
-  remoteGatewayError.value = ''
-  const restartGateway = Boolean(remoteGatewayStatus.value?.enabled)
-  try {
-    const baseUrl = normalizeRemoteServerBaseUrl(
-      payload.baseUrl || import.meta.env.VITE_LAMTOOLS_RELAY_URL || 'https://47.114.43.99.nip.io',
-    )
-    const auth = await requestRemoteAccountJson(
-      baseUrl,
-      `/v1/auth/${payload.mode}`,
-      { username: payload.username.trim(), password: payload.password },
-    )
-    const authTokens = parseRemoteAccountTokens(auth)
-    if (!authTokens) throw new Error(t("服务器返回了无效的登录凭据"))
-    const identity = await identityCall({ serverId: authTokens.serverId, username: payload.username.trim() })
-    remoteAccountIdentity.value = identity
-    const registration = await requestRemoteAccountJson(
-      baseUrl,
-      '/v1/nodes/register',
-      {
-        nodeId: identity.nodeId,
-        publicKey: identity.publicKey,
-        displayName: 'LamTools Desktop',
-        platform: 'desktop',
-        capabilities: ['workspace_host', 'agent_runtime', 'filesystem', 'terminal'],
-      },
-      authTokens.accessToken,
-    )
-    const node = parseRemoteAccountNode(registration.node)
-    if (!node) throw new Error(t("服务器未返回有效的桌面 Node"))
-    const boundTokens = parseRemoteAccountTokens(registration.tokens) || authTokens
-    const saved = await save({
-      baseUrl,
-      serverId: boundTokens.serverId,
-      username: payload.username.trim(),
-      nodeId: node.nodeId,
-      publicKey: node.publicKey,
-      accessToken: boundTokens.accessToken,
-      refreshToken: boundTokens.refreshToken,
-      accessExpiresAtMs: boundTokens.accessExpiresAtMs,
-      refreshExpiresAtMs: boundTokens.refreshExpiresAtMs,
-    })
-    remoteAccountStatus.value = saved || {
-      baseUrl,
-      serverId: boundTokens.serverId,
-      username: payload.username.trim(),
-      nodeId: node.nodeId,
-      accessExpiresAtMs: boundTokens.accessExpiresAtMs,
-      refreshExpiresAtMs: boundTokens.refreshExpiresAtMs,
-    }
-    // Saving a new account intentionally stops the old Relay connection in
-    // Rust. Restore the user's previous gateway intent after credentials are
-    // safely stored.
-    if (restartGateway) {
-      const start = (window as any).__LAMTOOLS_REMOTE_START__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-      if (start) remoteGatewayStatus.value = await start()
-    }
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteAccountLoading.value = false
-  }
-}
-
-async function logoutRemoteAccount(): Promise<void> {
-  const logout = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_LOGOUT__ as (() => Promise<void>) | undefined
-  if (!logout) return
-  remoteAccountLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    await logout()
-    remoteAccountStatus.value = null
-    remotePairing.value = null
-    remoteGatewayStatus.value = await readRemoteGatewayStatus()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteAccountLoading.value = false
-  }
-}
-
-async function readRemoteGatewayStatus(): Promise<MobileControlGatewayStatus | null> {
-  const status = (window as any).__LAMTOOLS_REMOTE_STATUS__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  return status ? await status() : null
-}
-
-async function requestRemoteAccountJson(
-  baseUrl: string,
-  path: string,
-  body: Record<string, unknown>,
-  accessToken?: string,
-): Promise<Record<string, unknown>> {
-  let response: Response
-  try {
-    response = await fetch(`${baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify(body),
-      cache: 'no-store',
-    })
-  } catch (error) {
-    throw new Error(t("无法连接服务器：{0}", { 0: messageFromError(error) }))
-  }
-  const payload = await response.json().catch(() => null) as unknown
-  const record = isRecordValue(payload) ? payload : {}
-  if (!response.ok) {
-    const message = typeof record.message === 'string'
-      ? record.message
-      : typeof record.error === 'string' ? record.error : t("服务器请求失败（{0}）", { 0: response.status })
-    throw new Error(message)
-  }
-  return record
-}
-
-function normalizeRemoteServerBaseUrl(raw: string): string {
-  let url: URL
-  try {
-    url = new URL(raw.trim())
-  } catch {
-    throw new Error(t("服务器地址格式无效"))
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error(t("服务器地址必须使用 HTTP 或 HTTPS"))
-  const marker = url.pathname.indexOf('/v1/')
-  url.pathname = (marker >= 0 ? url.pathname.slice(0, marker) : url.pathname).replace(/\/+$/, '') || '/'
-  url.search = ''
-  url.hash = ''
-  return url.toString().replace(/\/$/, '')
-}
-
-function parseRemoteAccountTokens(value: unknown): {
-  serverId: string
-  accessToken: string
-  refreshToken: string
-  accessExpiresAtMs: number
-  refreshExpiresAtMs: number
-} | null {
-  const record = isRecordValue(value) ? (isRecordValue(value.tokens) ? value.tokens : value) : {}
-  const serverId = stringValue(record.serverId || record.server_id)
-  const accessToken = stringValue(record.accessToken || record.access_token)
-  const refreshToken = stringValue(record.refreshToken || record.refresh_token)
-  const accessExpiresAtMs = numberValue(record.accessExpiresAtMs || record.access_expires_at_ms)
-  const refreshExpiresAtMs = numberValue(record.refreshExpiresAtMs || record.refresh_expires_at_ms)
-  if (!serverId || !accessToken || !refreshToken || !accessExpiresAtMs || !refreshExpiresAtMs) return null
-  return { serverId, accessToken, refreshToken, accessExpiresAtMs, refreshExpiresAtMs }
-}
-
-function parseRemoteAccountNode(value: unknown): { nodeId: string; publicKey: string } | null {
-  if (!isRecordValue(value)) return null
-  const nodeId = stringValue(value.nodeId || value.node_id)
-  const publicKey = stringValue(value.publicKey || value.public_key)
-  return nodeId && publicKey ? { nodeId, publicKey } : null
-}
-
-function isRecordValue(value: unknown): value is Record<string, any> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function numberValue(value: unknown): number {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : 0
-}
-
-async function refreshRemoteGateway(): Promise<void> {
-  const status = (window as any).__LAMTOOLS_REMOTE_STATUS__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  if (!status) return
-  try {
-    remoteGatewayStatus.value = await status()
-    remoteGatewayError.value = ''
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  }
-}
-
-async function startRemoteGateway(): Promise<void> {
-  const start = (window as any).__LAMTOOLS_REMOTE_START__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  if (!start) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    remoteGatewayStatus.value = await start()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
-async function stopRemoteGateway(): Promise<void> {
-  const stop = (window as any).__LAMTOOLS_REMOTE_STOP__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  if (!stop) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    remoteGatewayStatus.value = await stop()
-    remotePairing.value = null
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
-async function createRemotePairing(): Promise<void> {
-  const create = (window as any).__LAMTOOLS_REMOTE_PAIRING_CREATE__ as (() => Promise<MobileControlPairing>) | undefined
-  if (!create) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    if (!remoteGatewayStatus.value?.enabled) {
-      const start = (window as any).__LAMTOOLS_REMOTE_START__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-      if (!start) throw new Error(t("手机控制命令将在桌面 Tauri 运行时启用"))
-      remoteGatewayStatus.value = await start()
-      if (!remoteGatewayStatus.value?.enabled) throw new Error(t("手机控制未能启动"))
-    }
-    remotePairing.value = await create()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
-async function revokeRemoteDevice(deviceId: string): Promise<void> {
-  const revoke = (window as any).__LAMTOOLS_REMOTE_REVOKE__ as ((id: string) => Promise<boolean>) | undefined
-  if (!revoke) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    await revoke(deviceId)
-    await refreshRemoteGateway()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
 // Ctrl+K 全局搜索：与侧边栏「搜索」按钮一样切 showSearch（同一 SearchShell 入口）。
 // 打开时避免触发浏览器/输入框插件快捷键（旧 SessionSearchDialog 已并入 SearchShell）。
 // Ctrl+N / Ctrl+O / Ctrl+B / Ctrl+J 是搜索弹窗里列出的那四条，标签写出来了就得真的能按。
@@ -1746,6 +1499,9 @@ async function uploadArtifactFiles(folder: string): Promise<void> {
   if (!projectId) throw new Error(t("先在左侧选择一个项目"))
   const picker = appRuntime.capabilities.files
   if (!picker) throw new Error(t("当前环境不支持文件选择"))
+  // 资料库上传这条要的是字节，安卓的 SAF 选择器只给路径：这条路在安卓上不可用，
+  // 说清楚原因，而不是抛一个 TypeError。
+  if (!picker.pick) throw new Error(t("当前平台暂不支持从资料库上传文件"))
   const files = await picker.pick({ source: 'file', multiple: true })
   if (!files?.length) return
   const query = folder ? `?folder=${encodeURIComponent(folder)}` : ''
@@ -1785,6 +1541,9 @@ const { pendingAttachments, attachmentInputItems, hasBlockingFailure, addProcess
 watch(attachmentInputItems, (items) => {
   workbench.attachments.value = items
 }, { immediate: true })
+// user:“我怀疑点击附件或者@link 后会出现样式错位的 bug”+(引用是程序插进编辑器的，
+// 不走输入事件；高度不重量就会停在旧值，看起来就是整块错位)。
+watch(pendingAttachments, () => { void nextTick(resizeComposerTextarea) }, { deep: true })
 // user:“输入信息包含待发附件，按会话保存且重启恢复”+(托盘本身在组合式里按会话
 // 落 localStorage；这里只负责把可发送的附件同步给 workbench)。
 watch(workbench.attachments, (items) => {
@@ -2520,12 +2279,17 @@ async function handleQueuedInputEdit(item: CoreQueuedInput): Promise<void> {
 async function loadInitialData() {
   try {
     loadError.value = null
+    // The project list is what the start screen is built from; a failure in model
+    // discovery or theme preferences must not leave it empty. On a phone that was
+    // exactly the symptom: a 200 with a full list, and a screen saying there is none.
+    await refreshProjects().catch((error) => setLoadError(
+      error instanceof Error ? error.message : String(error),
+    ))
     await Promise.all([
       loadModelOptions(),
       loadModelGroups(),
       loadModelCatalogPreference(),
       loadPermissionMode(),
-      refreshProjects(),
       refreshSessions(),
     ])
     await refreshPluginModes()
@@ -2574,6 +2338,12 @@ async function createProject(payload: CoreProjectCreatePayload) {
     selectedProjectId.value = created.project.id
     rememberRecentProject(created.project)
     showProjectCreate.value = false
+    // The core answers a create with the session it just made. Opening it is what the
+    // user asked for by pressing 创建项目; leaving them on the start screen was the
+    // Android symptom where the project existed but nothing opened.
+    if (created.session) {
+      await selectSession(created.session.id)
+    }
   } catch (error) {
     projectCreateError.value = messageFromError(error)
   } finally {
@@ -3314,11 +3084,18 @@ async function chooseAttachments(source: RuntimeFileSource = 'file') {
     return
   }
   try {
-    if (picker.pickPaths && appRuntime.platform === 'desktop') {
-      const paths = await picker.pickPaths()
+    // user:“恢复 Android 上桌面已有的附件能力”+(有原文件路径就走同一个 reference 接口，
+    // 不再只限桌面；没有路径的环境才退回字节上传)。
+    if (picker.pickPaths) {
+      const paths = await picker.pickPaths({
+        source,
+        multiple: source !== 'camera',
+        accept: source === 'photos' || source === 'camera' ? 'image/*' : undefined,
+      })
       if (paths?.length) await uploadFiles(paths.map(path => ({ path, name: path.split(/[\\/]/).pop() || path })))
       return
     }
+    if (!picker.pick) throw new Error(t("当前环境没有文件选择通道"))
     const files = await picker.pick({
       source,
       multiple: source !== 'camera',
@@ -3934,7 +3711,7 @@ const {
 } = updateState
 
 /**
- * 更新入口住在左侧竖栏（账号上方那一枚圆角图标），所以这里只准备它的
+ * 更新入口住在左侧竖栏（远程连接上方那一枚圆角图标），所以这里只准备它的
  * 说明文字与动作：同一个状态在竖栏里没有多余的地方写句子，全部收进 title；
  * 具体流程仍旧是设置里那张卡片的同一套下载/安装调用。
  */
@@ -4195,27 +3972,12 @@ function openSettings(section?: string): void {
   requestSettingsNavigation(() => {
     settingsSection.value = section
     fullAreaView.value = fullAreaView.value === 'settings' ? null : 'settings'
-    void refreshRemoteGateway()
-    void refreshRemoteAccount()
   })
 }
 
-/** Rail account entry: show the account state, and open settings on it. */
-const accountLabel = computed(() => {
-  const username = remoteAccountStatus.value?.username?.trim()
-  return username || t("登录 / 账号")
-})
-
-/** The account screen is its own surface; the settings section keeps the forms. */
-
+// 竖栏最后那一枚：远程连接是独立整版界面，不再有账号登录。
 function openAccount(): void {
   openFullArea('account')
-  void refreshRemoteAccount()
-}
-
-function openAccountSettings(): void {
-  closeFullArea()
-  openSettings('mobile-control')
 }
 
 function openSearch(): void {
@@ -4505,6 +4267,10 @@ function openLeftSidebar(): void {
   shellRef.value?.openLeftDrawer()
 }
 
+// user:"核心/ui/src/app/LamToolsApp.vue（只加一行安装 overlayAction 的调用，必须 mobile 守卫）"+
+// (宿主事件只在手机上有；桌面端没有悬浮环，所以整条安装是 mobile 专属)。
+if (appRuntime.platform === 'mobile') void installOverlayAction({ fillComposer: (text) => { composerText.value = composerText.value.trim() ? `${composerText.value} ${text}` : text; resizeComposerTextarea() }, openSessions: openLeftSidebar })
+
 function handleStudyOpenSearch(): void {
   openSearch()
 }
@@ -4512,25 +4278,19 @@ function handleStudyOpenSearch(): void {
 
 // user:“将大的前端文件拆分成小块”+(主应用只把共享状态交给页面适配器)。
 const pageBindings = useCorePageBindings({
-  activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading,
-  agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef,
-  availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform,
-  contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider,
-  createRemotePairing, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup,
-  deleteProvider, density, effectiveAccountDevices, effectiveAccountError, effectiveAccountLoading,
-  effectiveAccountStatus, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit,
-  lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, logoutEffectiveAccount,
-  modelCatalogView, modelGroups, openAccountSettings, openFileFromSearch, openPluginsFromSearch,
-  openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading,
-  projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
-  refreshAgentsContent, refreshRemoteAccount, remoteAccountIdentity, remoteAccountLoading, remoteGatewayAvailable,
-  remoteGatewayError, remoteGatewayLoading, remoteGatewayStatus, remotePairing, renameProject,
-  reopenOnboarding, requestConfigOperation, revokeRemoteDevice, saveAgents, searchCommands,
-  selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers,
-  settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway,
-  submitEffectiveAccount, theme, themeMode, themeSchedule, transport,
-  uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
-  updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles,
+  activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving,
+  allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders,
+  closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup,
+  createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup,
+  deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit,
+  lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups,
+  openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError,
+  projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
+  refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands,
+  selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef,
+  settingsSection, startPlanFromLibrary, superagentHeading, theme, themeMode, themeSchedule,
+  transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
+  updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles
 })
 
 defineExpose({
@@ -4578,8 +4338,6 @@ onMounted(() => {
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
   void loadInitialData().then(() => checkOnboarding())
-  void refreshRemoteGateway()
-  void refreshRemoteAccount()
   // External config edits and model substitutions must reach the user even
   // when no settings surface is open.
   startConfigNoticePolling()
@@ -4666,7 +4424,7 @@ onUnmounted(() => {
 }
 
 /* ── 运行状态提示条（fixed 在标题栏下方，36px = --titlebar-offset）──
-   新版本不再走这里：它只在左侧竖栏的账号上方出现（见 AppRail）。这条只留给
+   新版本不再走这里：它只在左侧竖栏的远程连接上方出现（见 AppRail）。这条只留给
    后端崩溃这类必须横跨整个窗口说的状态。 */
 .core-status-banner {
   position: fixed;

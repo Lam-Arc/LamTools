@@ -20,7 +20,6 @@ describe('TitleBar mobile pairing', () => {
 
     expect(wrapper.find('[data-titlebar-sidebar-controls]').exists()).toBe(true)
     expect(wrapper.findAll('[data-titlebar-sidebar-controls] .pin-btn')).toHaveLength(2)
-    expect(wrapper.find('.mobile-pairing-trigger').exists()).toBe(true)
     expect(wrapper.find('.window-controls').exists()).toBe(true)
 
     const source = readFileSync(resolve(process.cwd(), 'src/components/TitleBar.vue'), 'utf8')
@@ -29,48 +28,18 @@ describe('TitleBar mobile pairing', () => {
     wrapper.unmount()
   })
 
-  it('opens the phone card and displays the current six-digit code', async () => {
-    const invoke = vi.fn()
-    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke }
-    const wrapper = mount(TitleBar, {
-      props: {
-        modeLabel: 'Agent',
-        canToggleMode: false,
-        mobilePairingCode: '012345',
-        mobilePairingExpiresAtMs: Date.now() + 300_000,
-      },
-    })
+  it('keeps the wordmark and workflow tabs, with the account bubble gone', () => {
+    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke: vi.fn() }
+    const wrapper = mount(TitleBar, { props: { modeLabel: 'Agent', canToggleMode: false } })
 
-    const trigger = wrapper.get('.mobile-pairing-trigger')
     expect(wrapper.get('.titlebar-left .brand-name').text()).toBe('Sunday')
     expect(wrapper.find('.titlebar-left .brand-tagline').exists()).toBe(false)
     expect(wrapper.find('[data-titlebar-workflow-tabs]').exists()).toBe(true)
     const source = readFileSync(resolve(process.cwd(), 'src/components/TitleBar.vue'), 'utf8')
     expect(source).toContain('var(--titlebar-main-left, 18px)')
     expect(source).toContain('var(--titlebar-main-right, 18px)')
-    expect(source).toContain('var(--radius-xl) + var(--space-6)')
-    await trigger.trigger('click')
-
-    expect(wrapper.get('.mobile-pairing-card').text()).toContain('012345')
-    expect(trigger.attributes('aria-expanded')).toBe('true')
-
-    await wrapper.get('.mobile-pairing-close').trigger('click')
-    expect(wrapper.find('.mobile-pairing-card').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('keeps pairing behind More and requests a code explicitly', async () => {
-    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke: vi.fn() }
-    const wrapper = mount(TitleBar, {
-      props: { modeLabel: 'Agent', canToggleMode: false },
-    })
-
-    await wrapper.get('.mobile-pairing-trigger').trigger('click')
-
-    expect(wrapper.emitted('mobilePairingCreate')).toBeUndefined()
-    expect(wrapper.get('.mobile-pairing-card').text()).toContain('尚未生成配对码')
-    await wrapper.get('.mobile-pairing-action').trigger('click')
-    expect(wrapper.emitted('mobilePairingCreate')).toHaveLength(1)
+    // 账号与配对码气泡属于旧账号体系，已整体删除。
+    expect(source).not.toContain('mobile-pairing')
     wrapper.unmount()
   })
 

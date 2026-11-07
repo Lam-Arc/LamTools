@@ -8,8 +8,24 @@ from lamtools_core.tool.default_toolbox import build_core_toolbox
 
 
 class FakeMCPCaller:
+    """Minimal MCP registry surface.
+
+    The toolbox only needs ``call`` at run time, but grading an
+    ``mcp action=run`` reaches ``resolve`` for the target tool's declared
+    level, so the fake exposes one tool there.
+    """
+
+    class _Tool:
+        permission = "ask_user"
+        level = 2
+
     def __init__(self) -> None:
         self.calls = []
+        self.resolved: list[str] = []
+
+    def resolve(self, tool_name):
+        self.resolved.append(tool_name)
+        return self._Tool()
 
     async def call(self, tool_name, arguments):
         self.calls.append((tool_name, arguments))
@@ -134,7 +150,7 @@ class FakeSkillRegistry:
 
 def test_strict_tool_schema_closes_nullable_object_properties(tmp_path):
     toolbox = build_core_toolbox(work_root=tmp_path)
-    mcp = next(spec for spec in toolbox.tool_specs() if spec.name == "mcp_tool")
+    mcp = next(spec for spec in toolbox.tool_specs() if spec.name == "mcp")
     arguments = mcp.input_schema["properties"]["arguments"]
 
     assert arguments["type"] == ["object", "null"]
@@ -249,7 +265,11 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert "web_search" not in names
     assert "generate_image" not in names
     assert "web_fetch" in names
-    assert "mcp_tool" in names
+    # MCP tools are not individual tools any more: the ``mcp`` entry is the
+    # only MCP surface (test_mcp_command_migration pins the same contract).
+    assert "mcp" in names
+    assert "mcp_tool" not in names
+    assert "mcp_activate" not in names
     assert "load_skill" in names
     assert "sub_agent" in names
     sub_agent_schema = specs["sub_agent"].input_schema
@@ -281,14 +301,17 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
 
 
 def test_core_toolbox_only_advertises_mcp_gateways_when_caller_is_available(tmp_path):
+    """The ``mcp`` entry is advertised only when a caller is configured, and
+    the retired per-server gateways stay unavailable either way."""
     without_mcp = build_core_toolbox(work_root=tmp_path)
     without_names = {tool["function"]["name"] for tool in without_mcp.model_tools()}
-    assert "mcp_activate" not in without_names
-    assert "mcp_tool" not in without_names
+    assert "mcp" not in without_names
+    assert not ({"mcp_activate", "mcp_tool"} & without_names)
 
     with_mcp = build_core_toolbox(work_root=tmp_path, mcp_caller=FakeMCPCaller())
     with_names = {tool["function"]["name"] for tool in with_mcp.model_tools()}
-    assert {"mcp_activate", "mcp_tool"} <= with_names
+    assert "mcp" in with_names
+    assert not ({"mcp_activate", "mcp_tool"} & with_names)
 
 
 def test_write_checklist_description_covers_optional_planning_contract(tmp_path):
@@ -371,8 +394,14 @@ def test_core_toolbox_marks_approval_required_tools(tmp_path):
     write_call = toolbox.prepare_call(
         ToolCall(id="write-1", name="write_file", arguments={"path": "out.txt", "content": "hello"})
     )
+    # An MCP run is graded by the target tool's declaration, so the entry
+    # tool stays level 1 while the run needs confirmation.
     mcp_call = toolbox.prepare_call(
-        ToolCall(id="mcp-1", name="mcp_tool", arguments={"tool_name": "server.tool", "arguments": {}})
+        ToolCall(
+            id="mcp-1",
+            name="mcp",
+            arguments={"action": "run", "tool_name": "mcp__server__tool", "arguments": {}},
+        )
     )
     command_call = toolbox.prepare_call(
         ToolCall(id="edit-1", name="edit_file", arguments={"path": "a.txt", "old_string": "x", "new_string": "y"})
@@ -687,8 +716,8 @@ async def test_core_toolbox_executes_injected_mcp_caller(tmp_path):
     call = toolbox.prepare_call(
         ToolCall(
             id="mcp-1",
-            name="mcp_tool",
-            arguments={"tool_name": "server.echo", "arguments": {"value": "ok"}},
+            name="mcp",
+            arguments={"action": "run", "tool_name": "server.echo", "arguments": {"value": "ok"}},
         )
     )
     result = await toolbox.execute(call)
@@ -962,9 +991,6 @@ async def test_core_toolbox_accepts_custom_skill_registry(tmp_path):
 # loadtools mode enforcement at execution time
 # ---------------------------------------------------------------------------
 
-MODE_BLOCK_SUFFIX = "Please make the plan prepared and ask user to switch mode."
-
-
 def _consider_toolbox(tmp_path):
     from lamtools_core.tool.loadtools import default_load_tools
 
@@ -976,17 +1002,35 @@ def _consider_toolbox(tmp_path):
 
 
 def test_core_toolbox_mode_enforcement_blocks_write_in_consider(tmp_path):
+    """Visibility and enforcement must agree.
+
+    The consider whitelist hides write tools from the model, and a write that
+    still arrives (stale context, direct execute) is refused with the mode
+    reason.  ``run_command`` stays advertised on purpose: one tool, graded per
+    command, so read-only commands remain usable while dangerous ones are
+    refused by the operation level.
+    """
     toolbox = _consider_toolbox(tmp_path)
 
-    for name in ("write_file", "edit_file", "run_command"):
+    for name in ("write_file", "edit_file"):
         call = toolbox.prepare_call(ToolCall(id=f"mode-{name}", name=name, arguments={}))
 
         approval = call.metadata["approval"]
         assert approval["blocked"] is True
         assert call.requires_approval is False
-        assert approval["reason"] == (
-            f"You are in the consider mode, you can't use {name}. {MODE_BLOCK_SUFFIX}"
-        )
+        assert "consider mode" in approval["reason"]
+
+    # An empty command cannot be graded and is refused by the level cap.
+    empty_command = toolbox.prepare_call(
+        ToolCall(id="mode-cmd-empty", name="run_command", arguments={})
+    )
+    assert empty_command.metadata["approval"]["blocked"] is True
+    assert empty_command.metadata["approval"]["available_level"] == 1
+
+    read_only_command = toolbox.prepare_call(
+        ToolCall(id="mode-cmd", name="run_command", arguments={"command": "git status"})
+    )
+    assert read_only_command.metadata["approval"]["blocked"] is False
 
 
 def test_core_toolbox_mode_enforcement_allows_read_in_consider(tmp_path):
@@ -1009,10 +1053,38 @@ async def test_core_toolbox_mode_blocked_call_returns_error_to_model(tmp_path):
     result = await toolbox.execute(call)
 
     assert result.status == "blocked"
-    assert result.error == (
-        "You are in the consider mode, you can't use write_file. "
-        "Please make the plan prepared and ask user to switch mode."
-    )
+    # The model is told the mode refuses the write, which matches what the mode
+    # failed to advertise.
+    assert "consider mode" in result.error
+
+
+def test_core_toolbox_consider_command_grading_blocks_dangerous_and_wrapping(tmp_path):
+    """consider keeps run_command, so the per-command level is the whole boundary.
+
+    Visibility hides the write tools, and this guards the other half: read-only
+    commands still work, while a destructive command or one that hides behind a
+    shell wrapper is refused by the level cap.  A wrapper must not become a
+    permission bypass.
+    """
+    toolbox = _consider_toolbox(tmp_path)
+
+    for command in ("git status", "ls -la", "cat notes.txt"):
+        call = toolbox.prepare_call(
+            ToolCall(id=f"ok-{command}", name="run_command", arguments={"command": command})
+        )
+        assert call.metadata["approval"]["blocked"] is False, command
+
+    for command in (
+        "rm -rf build",
+        "git reset --hard",
+        "bash -c \"rm -rf build\"",
+        "echo ok > out.txt",
+        "cat notes.txt && rm notes.txt",
+    ):
+        call = toolbox.prepare_call(
+            ToolCall(id=f"no-{command}", name="run_command", arguments={"command": command})
+        )
+        assert call.metadata["approval"]["blocked"] is True, command
 
 
 def test_core_toolbox_mode_execute_mode_is_full_access(tmp_path):
@@ -1045,12 +1117,14 @@ def test_core_toolbox_mode_unknown_mode_does_not_block(tmp_path):
     assert call.metadata["approval"]["blocked"] is False
 
 
-def test_core_toolbox_mode_without_loadtools_does_not_block(tmp_path):
+def test_core_toolbox_consider_mode_caps_writes_without_loadtools(tmp_path):
+    """consider's read-only cap does not depend on load_tools being loaded."""
     toolbox = build_core_toolbox(work_root=tmp_path, active_mode="consider")
 
     call = toolbox.prepare_call(ToolCall(id="mode-noload", name="write_file", arguments={}))
 
-    assert call.metadata["approval"]["blocked"] is False
+    assert call.metadata["approval"]["blocked"] is True
+    assert call.metadata["approval"]["available_level"] == 1
 
 
 def test_core_toolbox_workflow_mode_allows_dynamic_workflow_tools(tmp_path):
@@ -1210,7 +1284,11 @@ def test_generate_image_requires_approval(tmp_path):
 
 @pytest.mark.asyncio
 async def test_generate_image_missing_provider(tmp_path):
-    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=None)
+    # generate_image is a level-2 operation; declare the preset so the case
+    # tests the missing-provider error rather than the approval gate.
+    toolbox = build_core_toolbox(
+        work_root=tmp_path, imagegen_config=None, approval_policy="auto_approve"
+    )
 
     result = await toolbox.execute(ToolCall(id="img-1", name="generate_image", arguments={"prompt": "a cat"}))
 
@@ -1326,3 +1404,57 @@ async def test_generate_image_timeout_returns_failed(tmp_path, monkeypatch):
 
     assert result.status == "failed"
     assert "超时" in result.error
+
+
+def test_declared_tool_permissions_agree_with_operation_levels():
+    """A tool's declared permission tier and its operation level must agree.
+
+    They are two views of one decision: ``auto_allow`` means "never asks" and
+    ``ask_user`` means "asks once", which the level table expresses as 1 and 2.
+    When they disagree the gate silently follows the level table and the
+    declared tier becomes dead data, so a tool can ask (or be blocked by the
+    capability cap) while its own declaration says it never asks.  Tools whose
+    level is computed per call (``run_command``, ``mcp``) or that the gate
+    special-cases before grading (``question``) are absent from this table.
+    """
+    from lamtools_core.tool.default_toolbox import DEFAULT_TOOL_PERMISSIONS
+    from lamtools_core.tool.operation_levels import OPERATION_LEVELS
+
+    expected_level = {"auto_allow": 1, "ask_user": 2}
+    conflicts = [
+        (name, tier, OPERATION_LEVELS[name])
+        for name, tier in sorted(DEFAULT_TOOL_PERMISSIONS.items())
+        if tier in expected_level
+        and name in OPERATION_LEVELS
+        and OPERATION_LEVELS[name] != expected_level[tier]
+    ]
+
+    assert conflicts == []
+
+
+def test_core_toolbox_sub_agent_spawn_needs_no_approval(tmp_path):
+    """Spawning a sub-agent is not itself a write.
+
+    The child is built with the same approval policy, preset and capability
+    tier, so every operation it attempts is graded again by its own gate.  A
+    spawn-time prompt therefore protects nothing and only asks the user to
+    confirm work whose actual writes will still be graded.
+    """
+    toolbox = build_core_toolbox(work_root=tmp_path)
+    call = toolbox.prepare_call(
+        ToolCall(id="sub-gate", name="sub_agent", arguments={"task": "inspect", "agent": "reader"})
+    )
+
+    assert call.metadata["approval"]["level"] == 1
+    assert call.metadata["approval"]["blocked"] is False
+    assert call.requires_approval is False
+
+    # ``access_tools.jsonc`` grants sub_agent to the read_only capability, so
+    # the capability cap must not turn that grant into a hard block.
+    read_only = build_core_toolbox(work_root=tmp_path, active_tier="read_only")
+    read_only_call = read_only.prepare_call(
+        ToolCall(id="sub-ro", name="sub_agent", arguments={"task": "inspect", "agent": "reader"})
+    )
+
+    assert read_only_call.metadata["approval"]["blocked"] is False
+    assert read_only_call.metadata["approval"]["level"] == 1

@@ -2604,16 +2604,21 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   /* Drawers become bottom-sheet-style slide-overs with a dimmed backdrop
      (restored from the dropped mobile block — audit 19). */
   .workspace-main {
-    top: var(--titlebar-offset, 0px);
+    /* The surface starts at the physical top so the background continues behind the
+       status bar; only its content gives way. The 1px card border becomes a white line
+       on the left edge of a phone, so it goes too. */
+    top: 0;
     right: 0;
     bottom: 0;
     left: 0;
     width: auto;
-    height: calc(100vh - var(--titlebar-offset, 0px));
-    height: calc(100dvh - var(--titlebar-offset, 0px));
+    height: 100vh;
+    height: 100dvh;
     min-height: 0;
-    padding-top: calc(var(--space-5) + env(safe-area-inset-top, 0px));
+    padding-top: calc(var(--space-5) + var(--native-safe-area-top, 0px));
+    border: 0;
     border-radius: 0;
+    box-shadow: none;
   }
   .workspace-shell--full-bleed .workspace-main {
     padding: 0;
@@ -3527,3 +3532,18 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   max-width: none;
 }
 
+
+/* user:“点击任意控件会出现蓝色判断区，隐藏掉”+(触屏默认的点击高亮，以及鼠标/手指点出来的
+   焦点框；键盘操作仍然保留 :focus-visible 的可见焦点)。 */
+html,
+body {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(button, [role='button'], a, summary, [tabindex]):focus:not(:focus-visible) {
+  outline: none;
+}
+
+:where(button, [role='button'], a, summary) {
+  -webkit-tap-highlight-color: transparent;
+}

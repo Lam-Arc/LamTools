@@ -176,7 +176,9 @@ defineExpose({
 /* user:“范围不对，光标出格了”+(共享编辑器本身提供输入留白，让提示、选区和光标在主区与分屏中都避开卡片圆角)。 */
 .inline-file-composer { position: relative; box-sizing: border-box; width: 100%; min-width: 0; padding: var(--space-1) var(--space-4) 0; --text: var(--theme-composer-text); }
 :deep(.cm-placeholder) { pointer-events: none; user-select: none; }
-:deep(.composer-file-token) { display: inline-flex; align-items: center; gap: 3px; border-radius: var(--radius-sm); padding: 0 var(--space-1); background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--text) 85%, transparent); font: inherit; cursor: pointer; vertical-align: bottom; }
+/* user:“我怀疑点击附件或者@link 后会出现样式错位的 bug”+(token 之前是 inline-block 加内边距，
+   插进编辑器后行盒高度跟着变，正文与光标一起跳；固定高度与行高，超长名省略)。 */
+:deep(.composer-file-token) { display: inline-flex; align-items: center; gap: 3px; height: 18px; line-height: 18px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--radius-sm); padding: 0 var(--space-1); background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--text) 85%, transparent); font: inherit; vertical-align: -2px; cursor: pointer; }
 :deep(.composer-file-badge) { display: inline-grid; flex: 0 0 auto; place-items: center; width: 14px; height: 14px; border-radius: 30%; overflow: hidden; font-family: var(--font-sans); font-size: 6.5px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
 :deep(.composer-file-badge::before) { content: attr(data-label); }
 :deep(.composer-file-name) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

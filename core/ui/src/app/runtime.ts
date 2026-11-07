@@ -14,8 +14,15 @@ export type RuntimeFileSource = 'file' | 'photos' | 'camera'
 
 export interface RuntimeFileCapabilities {
   // user:“若此附件真实存在于计算机则添加绝对路径”+(桌面选择器直接返回原件路径)。
-  pickPaths?(): Promise<string[] | null>
-  pick(options?: {
+  // user:“使用 Android SAF 桥接现有 Python Core 附件接口”+(安卓走同一条：宿主把 SAF
+  // 选中的文件落到核心可读的目录并返回路径，由同一个 reference 接口登记，不新建一套附件业务)。
+  pickPaths?(options?: {
+    multiple?: boolean
+    accept?: string
+    source?: RuntimeFileSource
+  }): Promise<string[] | null>
+  // user:“没有原文件路径的环境才发字节”+(浏览器与网页版保留 DOM 选择器；安卓只提供路径，不虚报)。
+  pick?(options?: {
     multiple?: boolean
     accept?: string
     source?: RuntimeFileSource
@@ -26,6 +33,16 @@ export interface RuntimeSessionExportCapabilities {
   saveFullArchive(sessionId: string, suggestedFilename: string): Promise<string | null>
 }
 
+/**
+ * Which device is actually running the work.
+ *
+ * user:“清晰展示当前设备、连接状态和运行位置”+(手机连着电脑时，界面顶上要能看出来
+ * 这一步是在电脑上执行的；本机模式就没有这个标记)。
+ */
+export interface RuntimeRemoteInfo {
+  peer: string
+}
+
 export interface RuntimeCapabilities {
   filePicker: boolean
   notifications: boolean
@@ -33,6 +50,7 @@ export interface RuntimeCapabilities {
   files?: RuntimeFileCapabilities
   sessionExports?: RuntimeSessionExportCapabilities
   localProjects?: Readonly<Ref<boolean>>
+  remote?: RuntimeRemoteInfo
 }
 
 export interface RuntimeWorkspaceOption {

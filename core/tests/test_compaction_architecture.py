@@ -328,7 +328,13 @@ async def test_complete_manual_pipeline_reuses_saved_view_without_deleting_sourc
     saved = await store.get(state.session_id)
     assert not saved.metadata['runtime_context_metrics'].get('context_usage_prompt_tokens')
     view = await _load_effective_compaction_history(store, state.session_id, saved.metadata)
-    assert len(view) == 1
+    # The saved view is the summary plus whatever tail the planner retained; the
+    # source transcript above is untouched either way.
+    compaction = saved.metadata["context_compaction"]
+    compacted = set(compaction["compacted_history_seqs"])
+    retained = [seq for seq in range(1, 41) if seq not in compacted]
+    assert view[0].metadata["key"] == "context_compaction_summary"
+    assert len(view) == 1 + len(retained)
 
 
 @pytest.mark.asyncio

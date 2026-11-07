@@ -149,11 +149,19 @@ impl<'a> Env<'a> {
                     let mut store = self.store.lock().unwrap();
                     store.prepare_tool_once(thread, call, tool.spec().side_effect)?
                 };
+                // The name and arguments travel with the event because a screen that
+                // shows "approve this call" has to say which call it is. Without them
+                // the card can only offer an id, and the user cannot consent to
+                // something they are not allowed to read.
                 self.emit(
                     thread,
                     &format!("{thread}:{}:prepared", call.id),
                     EventKind::ToolPrepared,
-                    serde_json::json!({"tool_call_id": call.id}),
+                    serde_json::json!({
+                        "tool_call_id": call.id,
+                        "name": call.name,
+                        "arguments": call.args,
+                    }),
                 );
                 if matches!(prepared, sunday_protocol::Prepared::MustReconcile) {
                     return Ok(Step::MustReconcile {
@@ -217,7 +225,7 @@ impl<'a> Env<'a> {
             thread,
             &format!("{thread}:{}:dispatched", call.id),
             EventKind::ToolDispatched,
-            serde_json::json!({"tool_call_id": call.id}),
+            serde_json::json!({"tool_call_id": call.id, "name": call.name}),
         );
 
         let ctx = ToolCtx {
@@ -236,6 +244,9 @@ impl<'a> Env<'a> {
             let mut store = self.store.lock().unwrap();
             store.finish_tool_call(&call.id, &payload, ok)?;
         }
+        // The result body rides along: the caller has already persisted it, and a
+        // client that had to re-read the store to render one line would be a second
+        // source of truth for the same fact.
         self.emit(
             thread,
             &format!("{thread}:{}:result", call.id),
@@ -244,7 +255,24 @@ impl<'a> Env<'a> {
             } else {
                 EventKind::ToolFailed
             },
-            serde_json::json!({"tool_call_id": call.id}),
+            {
+                let mut body = serde_json::json!({
+                    "tool_call_id": call.id,
+                    "name": call.name,
+                });
+                if let Some(object) = body.as_object_mut() {
+                    match &outcome {
+                        Ok(out) => {
+                            object.insert("content".into(), serde_json::json!(out.content));
+                            object.insert("is_error".into(), serde_json::json!(out.is_error));
+                        }
+                        Err(err) => {
+                            object.insert("error".into(), serde_json::json!(format!("{err}")));
+                        }
+                    }
+                }
+                body
+            },
         );
         Ok(Step::Done)
     }
@@ -489,11 +517,18 @@ async fn drive(
             }
         };
 
+        // The model's own words, so a client can render the reply without waiting for
+        // the turn to close. `streamed` is the fallback for providers that only send
+        // deltas and no assembled text.
         env.emit(
             thread,
             &format!("{thread}:{turn_id}:{phase}:{round}:model_done"),
             EventKind::ModelCompleted,
-            serde_json::json!({}),
+            serde_json::json!({
+                "round": round,
+                "text": turn.text.clone().unwrap_or_else(|| streamed.clone()),
+                "tool_call_count": turn.tool_calls.len(),
+            }),
         );
 
         if turn.tool_calls.is_empty() {

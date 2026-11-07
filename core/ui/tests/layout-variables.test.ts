@@ -44,7 +44,7 @@ describe('布局规则变量统一', () => {
   })
   it('侧栏宽度与标题栏高度都经过 --layout-* 覆盖链', () => {
     expect(variablesCss).toContain('--sidebar-width: var(--layout-sidebar-width')
-    expect(variablesCss).toContain('--titlebar-offset: var(--layout-titlebar-height, var(--titlebar-native-height')
+    expect(variablesCss).toContain('--titlebar-offset: calc(var(--layout-titlebar-height, var(--titlebar-native-height, 0px))')
     // 断点档位同样被覆盖链包住，任何窗口宽度下编辑器变量都优先。
     expect(shellCss).toContain('--sidebar-width: var(--layout-sidebar-width, var(--sidebar-width-mid))')
     expect(shellCss).toContain('--sidebar-width: var(--layout-sidebar-width, var(--sidebar-width-full))')

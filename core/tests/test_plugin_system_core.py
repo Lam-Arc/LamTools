@@ -169,8 +169,20 @@ def test_uninstall_keeps_data_when_asked(tmp_path: Path) -> None:
     host.uninstall("diary", keep_data=True)
 
     assert not (directory / "plugin.json").exists()
-    assert (directory / "data" / "entry.txt").read_text(encoding="utf-8") == "kept"
+    assert not directory.exists()
+    assert (host.data_path("diary") / "entry.txt").read_text(encoding="utf-8") == "kept"
     assert host.discover() == []
+
+    # Reinstalling the same plugin must find the kept data again: that is the
+    # whole point of keeping it.
+    reinstall = write_plugin(
+        host.state.path.parent / "staging" / "diary",
+        manifest={"name": "diary", "version": "1.1.0"},
+    )
+    host.install_from_directory(reinstall)
+    reinstalled = host.get("diary")
+    assert reinstalled is not None
+    assert (reinstalled.root / "data" / "entry.txt").read_text(encoding="utf-8") == "kept"
 
 
 def test_uninstall_removes_directory_when_asked(tmp_path: Path) -> None:

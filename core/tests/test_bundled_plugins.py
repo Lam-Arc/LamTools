@@ -45,10 +45,12 @@ def test_plan_skills_load_through_the_v2_assembly(tmp_path):
 def test_bundled_core_tool_specs_four_tools():
     names = {spec.name for spec in bundled_core_tool_specs()}
     assert names == {"git_status", "git_diff", "web_search", "generate_image"}
-    # Includes the existing mcp_activate tool in the current base set.
+    # MCP execution moved to run_command: the base set carries the single `mcp`
+    # entry tool instead of the retired mcp_activate.
     base = {spec.name for spec in default_core_tool_specs()}
-    assert len(base) == 20
-    assert 'mcp_activate' in base
+    assert len(base) == 21
+    assert "mcp" in base
+    assert "mcp_activate" not in base
     assert 'memory' in base
     assert 'library' in base
     assert not (base & names)  # 互斥
@@ -198,12 +200,12 @@ def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
         plugin_tool_specs=list(assembly["plugin_runtime_specs"]),
     )
     names = {spec.name for spec in toolbox.tool_specs()}
-    # 20 个基础工具，加 Study、Workflow、管道校验、搜索和生图。
-    assert len(names) == 33
+    # 21 个基础工具，加 Study、Workflow、管道校验、搜索、生图和网络下载。
+    assert len(names) == 35
     assert "git_status" not in names
     assert "git_diff" not in names
     assert {"get_knowledge_net", "build_knowledge_net", "exam", "sign", "notes"} <= names
-    assert {"web_search", "generate_image", "check_exports"} <= names
+    assert {"web_search", "generate_image", "check_exports", "network_download"} <= names
     assert "plan_package" not in names
     assert {
         "workflow_graph",

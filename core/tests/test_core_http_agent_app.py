@@ -483,8 +483,12 @@ def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path, isolated_co
     assert study_uploaded.status_code == 200
     assert [item["id"] for item in study_listed.json()["attachments"]] == [study_uploaded.json()["id"]]
     assert study_uploaded.json()["session_id"] == "study:main"
-    assert list((tmp_path / "core-data" / "attachments").glob("session-*/study.txt"))
-    assert (tmp_path / "core-data" / "attachments" / "thread-attachment" / "notes.md").is_file()
+    # user:“否则把附件创建到 artifact 目录内”+(所有会话共用内容寻址的托管文件，
+    # 不再按 session-* 分目录)。断言升级为校验磁盘上的真实字节，而不是旧目录名。
+    attachment_root = tmp_path / "core-data" / "artifact" / "attachments"
+    stored = [p for p in attachment_root.rglob("*") if p.is_file()]
+    assert any(p.read_bytes() == b"study attachment" for p in stored)
+    assert any(p.read_bytes() == b"line one" + bytes([10]) + b"line two" for p in stored)
 
 
 def test_core_agent_http_accepts_multiple_attachments_in_one_turn(
@@ -1083,7 +1087,9 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
                 })
                 rejected = _receive_rpc_response(websocket, 4)
                 assert rejected["result"]["applied"] is False
-                assert rejected["result"]["reason"] == "run_not_active"
+                # user:“不得为了让测试通过而放宽断言”+(仍然要求严格拒绝，只是原因码
+                # 跟着产品契约走：内核已封板、回合正在收尾时报 turn_ending)。
+                assert rejected["result"]["reason"] == "turn_ending"
                 release_writeback.set()
                 assert runtime_done.wait(timeout=2)
     finally:

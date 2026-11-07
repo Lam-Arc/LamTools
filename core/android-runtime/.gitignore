@@ -1,0 +1,3 @@
+# Build output: the rootfs archives are hundreds of megabytes and are produced
+# from build-runtime.sh, so they never belong in git.
+out/

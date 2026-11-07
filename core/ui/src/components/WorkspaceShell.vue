@@ -39,6 +39,20 @@
       @click="closeDrawers"
     ></button>
 
+    <!-- Phones have no hover edge: one visible control opens the drawer, and it leaves
+         as soon as the drawer is open. -->
+    <button
+      v-if="showDrawerToggle && isNarrowViewport && !leftOpen"
+      class="mobile-drawer-toggle"
+      type="button"
+      data-mobile-drawer-toggle
+      :aria-label="t('打开左侧栏')"
+      :title="t('打开左侧栏')"
+      @click="openLeftDrawer"
+    >
+      <PanelLeft :size="18" :stroke-width="1.8" aria-hidden="true" />
+    </button>
+
     <!-- Edge hover triggers -->
     <div
       class="edge edge-left"
@@ -266,6 +280,7 @@ import { t } from '@/i18n/index.ts'
  */
 import { gsap } from 'gsap'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, useId, watch } from 'vue'
+import { PanelLeft } from 'lucide-vue-next'
 import { useComposerLayout } from '@/composables/useComposerLayout.ts'
 import { useShellLayout } from '@/composables/useShellLayout.ts'
 import type { ThemeData } from '@/composables/useShellLayout.ts'
@@ -315,6 +330,8 @@ const props = withDefaults(
      * 顶部那条留给标题条的高度随之收回，内容独占整页。
      */
     hideMainHeader?: boolean
+    /** Set false while a full-area view or split owns the surface. */
+    showDrawerToggle?: boolean
     /** Host-controlled layout state for a Core session with no messages yet. */
     emptySession?: boolean
     /** Stable host session identity used to retain working-state placement. */
@@ -353,6 +370,7 @@ const props = withDefaults(
     composerHoldEnabled: true,
     showRightPanel: true,
     hideMainHeader: false,
+    showDrawerToggle: true,
     emptySession: false,
     composerSessionKey: null,
     composerSessionReady: true,
@@ -694,6 +712,12 @@ function onSwipePointerCancel(): void {
   }
 }
 
+// user:“点远程连接后看起来没反应”+(底部图标排开的是整版界面，手机上抽屉还盖在上面；
+// 打开视图时把抽屉收起来，用户才看得到结果)。
+function closeLeftDrawer(): void {
+  leftOpen.value = false
+}
+
 watch(leftOpen, (value) => {
   emit('update:left-open', value)
 }, { immediate: true })
@@ -717,6 +741,7 @@ watch(() => props.contentWidth, (val) => {
 
 defineExpose({
   leftPinned,
+  closeLeftDrawer,
   rightPinned,
   openLeftDrawer,
   toggleLeftPinned,

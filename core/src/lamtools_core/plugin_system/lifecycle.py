@@ -478,15 +478,43 @@ async def _start_managed(handle: PluginRuntimeHandle, context: PluginContext) ->
         raise
 
 
+def _task_loop(task: Any) -> asyncio.AbstractEventLoop | None:
+    try:
+        return task.get_loop()
+    except RuntimeError:
+        return None
+
+
 async def await_plugin_backends(handles: list[PluginRuntimeHandle]) -> None:
-    """Join isolated, bounded startups before the host reports readiness."""
+    """Join isolated, bounded startups before the host reports readiness.
+
+    user:“事件循环级资源：不得跨循环复用”+(startup_task 是 Task，属于创建它的
+    那个事件循环。宿主在同一进程里重建时，旧循环的 Task 仍挂在 handle 上，
+    新循环去 gather 它会直接抛 ValueError: The future belongs to a different
+    loop。这里显式丢弃跨循环的残留 Task 并重新调度，而不是复用它)。
+    """
+    loop = asyncio.get_running_loop()
     tasks = []
     for handle in handles:
-        if handle.managed and handle.state in {"loaded", "starting"} and handle.startup_task is None:
+        task = handle.startup_task
+        if task is not None and _task_loop(task) is not loop:
+            # 上一个循环留下的 Task：结果对当前循环无意义，清掉后重新启动。
+            # cancel() 只是标记，不依赖旧循环还能调度；失败也不能挡住重启。
+            try:
+                task.cancel()
+            except RuntimeError:
+                pass
+            handle.startup_task = None
+            task = None
+            if handle.state == "starting":
+                handle.state = "loaded"
+        if handle.managed and handle.state in {"loaded", "starting"} and task is None:
             _schedule_start(handle, handle.context)
-        if handle.startup_task is not None:
-            tasks.append(handle.startup_task)
-    await asyncio.gather(*tasks, return_exceptions=True)
+            task = handle.startup_task
+        if task is not None and _task_loop(task) is loop:
+            tasks.append(task)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _accepts_context(func: Any) -> bool:

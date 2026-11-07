@@ -41,6 +41,7 @@ from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arrange
 from lamtools_core.runtime.background_processes import default_background_process_registry
 from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.observer import ObserverSupervisor
+from lamtools_core.runtime.single_instance import SchedulerLease
 from lamtools_core.runtime.persistent_process_store import PersistentProcessStore
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
@@ -67,6 +68,7 @@ from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from lamtools_core.artifact import ArtifactRegistry, ArtifactStore, kind_from_mime
 from lamtools_core.tool.command_runner import warm_command_shell
 from .live_router import create_core_live_router
+from .superagent_operations import register_superagent_operations
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
 
@@ -206,6 +208,75 @@ class _MemberDefaultsHooks(DefaultCoreLiveMemberHooks):
                 turn_payload_extra={**materialized.turn_payload_extra, **session_defaults},
             )
         return materialized
+
+
+
+def _arrange_max_active_jobs() -> int:
+    """同时执行的任务上限。
+
+    user:“全局并发限制（单实例运行）”+(上限必须可配、有安全默认值，
+    改配置不能要求改代码)。
+    """
+    raw = str(os.environ.get("LAMTOOLS_ARRANGE_MAX_ACTIVE_JOBS") or "").strip()
+    if not raw:
+        return 3
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    return max(1, value)
+
+
+def _arrange_job_timeout_seconds() -> float | None:
+    """单次执行的最长时长，超时吊销执行并杀进程树。
+
+    user:“确保取消、超时、租约失效后，旧执行不能继续修改工作区”
+    +(默认 3600 秒；设成 0 表示关闭超时)。
+    """
+    raw = str(os.environ.get("LAMTOOLS_ARRANGE_JOB_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return 3600.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 3600.0
+    return value if value > 0 else None
+
+
+def _runtime_health(app_state: dict[str, Any]) -> dict[str, Any]:
+    """把后台循环的真实存活状态暴露到 /api/health。
+
+    user:“后台调度器异常自愈及健康检查”+(ready / degraded / failed 必须能区分，
+    并且能读到在跑数、容量、队列深度与最近错误)。
+    """
+    runner = app_state.get("arrange_runner")
+    observer = app_state.get("observer_supervisor")
+    arrange = runner.health() if runner is not None and hasattr(runner, "health") else {}
+    watch = observer.health() if observer is not None and hasattr(observer, "health") else {}
+    alive = True
+    if arrange:
+        alive = alive and bool(arrange.get("alive"))
+    if watch:
+        alive = alive and bool(watch.get("alive"))
+    failing = bool(arrange.get("consecutive_failures")) or bool(watch.get("consecutive_failures"))
+    lease = app_state.get("scheduler_lease")
+    lease_state = (
+        "acquired"
+        if lease is not None and getattr(lease, "acquired", False)
+        else "held-by-another-process"
+        if lease is not None
+        else "unknown"
+    )
+    if lease_state == "held-by-another-process":
+        status = "failed" if not alive else "degraded"
+    else:
+        status = "failed" if not alive else "degraded" if failing else "ok"
+    return {
+        "status": status,
+        "arrange": arrange,
+        "observer": watch,
+        "scheduler_lease": lease_state,
+    }
 
 
 def create_core_agent_http_app(
@@ -534,6 +605,58 @@ def create_core_agent_http_app(
         _register_missing_operations(agent_operations, build_config_operation_catalog(work_root=resolved_work_root, data_dir=resolved_data_dir))
         _register_missing_operations(agent_operations, build_update_operation_catalog())
 
+        async def _record_superagent_result(job: Any, payload: dict[str, Any], result: Any) -> None:
+            """把一次工单执行的结果写回工单。
+
+            user:“监控、处理异常、恢复任务、验证成果并完成交付”+(执行完必须把结果落到工单上，
+            否则用户看到的永远是一个停在 running 的工单；这里只做回写，不改执行本身)。
+            """
+            ticket_id = str(payload.get("superagent_ticket_id") or "").strip()
+            if not ticket_id:
+                return
+            service = app_state.get("superagent_service")
+            if service is None:
+                return
+            try:
+                status = str(getattr(result, "status", "") or "")
+                body = dict(getattr(result, "payload", {}) or {})
+                error = str(body.get("error") or "")
+                completed = status == "ok" and not error
+                await service.record_execution_result(
+                    ticket_id,
+                    status="completed" if completed else "failed",
+                    summary=str(body.get("message") or ""),
+                    error=error,
+                    report={
+                        "decision": body.get("decision"),
+                        "thread_id": body.get("thread_id"),
+                        "turn_id": body.get("turn_id"),
+                        "job_id": job.id,
+                    },
+                )
+            except Exception:
+                _logger.exception("[superagent] failed to record result for %s", ticket_id)
+
+        async def _record_superagent_failure(job: Any, payload: dict[str, Any], exc: BaseException) -> None:
+            """执行抛异常时把失败落到工单上，别让工单永远停在 running。"""
+            ticket_id = str(payload.get("superagent_ticket_id") or "").strip()
+            if not ticket_id:
+                return
+            service = app_state.get("superagent_service")
+            if service is None:
+                return
+            try:
+                await service.record_execution_result(
+                    ticket_id,
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    report={"job_id": job.id},
+                )
+            except Exception:
+                _logger.exception(
+                    "[superagent] failed to record failure for %s", ticket_id
+                )
+
         async def execute_arranged_job(job: Any) -> OperationResult:
             payload = arranged_operation_payload(job)
             if job.operation == "turn.start":
@@ -613,26 +736,41 @@ def create_core_agent_http_app(
                         await live_hub.publish(user_envelope)
                     except Exception:
                         pass  # best-effort; never block arrange execution
-            return await agent_operations.execute(
-                job.operation,
-                payload,
-                metadata={
-                    "source": "arrange",
-                    "arrange_job_id": job.id,
-                    "occurrence_id": job.occurrence_id,
-                    **({"arrange_signal": job.signal} if job.signal else {}),
-                },
-            )
+            try:
+                result = await agent_operations.execute(
+                    job.operation,
+                    payload,
+                    metadata={
+                        "source": "arrange",
+                        "arrange_job_id": job.id,
+                        "occurrence_id": job.occurrence_id,
+                        **({"arrange_signal": job.signal} if job.signal else {}),
+                    },
+                )
+            except BaseException as exc:
+                # user:“监控、处理异常、恢复任务、验证成果并完成交付”+(执行抛异常也必须把
+                # 失败写回工单：否则用户看到的是一个永远停在 running 的工单，连失败原因都没有)。
+                await _record_superagent_failure(job, payload, exc)
+                raise
+            await _record_superagent_result(job, payload, result)
+            return result
 
         arrange_runner = ArrangeRunner(
             core_db_handle.arrange_store,
             execute_arranged_job,
+            # user:“全局并发限制（单实例运行）”+(同时最多跑几个任务，
+            # 与每轮领取批量分开配置；默认 3，可用环境变量覆盖)。
+            max_active_jobs=_arrange_max_active_jobs(),
+            job_timeout_seconds=_arrange_job_timeout_seconds(),
             new_thread_factory=lambda _job: f"arrange_thread_{uuid.uuid4().hex}",
         )
         observer_supervisor = ObserverSupervisor(
             core_db_handle.arrange_store,
             data_dir=resolved_data_dir,
             wake_runner=arrange_runner.wake,
+            # user:“Observer 正常退出与失败重启策略”+(生命周期要持久化，
+            # 否则重启 Sunday 之后正常退出的观察器又会被拉起来)。
+            lifecycle_store=getattr(core_db_handle, "observer_lifecycle", None),
         )
         register_durable_operations(
             agent_operations,
@@ -640,9 +778,103 @@ def create_core_agent_http_app(
             arrange_manager=arrange_manager,
             wake_runner=arrange_runner.wake,
             cancel_running=arrange_runner.cancel,
+            interrupt_running=arrange_runner.interrupt,
             wake_observers=observer_supervisor.wake,
             observer_status=observer_supervisor.status,
+            observer_health=observer_supervisor.health,
+            observer_rearm=observer_supervisor.rearm,
+            arrange_health=arrange_runner.health,
         )
+        # user:“实现 Source、Policy、Eval、Ticket、Assignment、独立 Worktree 和可靠结果交付”
+        # +(排期仍由 Arrange 负责：这里注入的 scheduler 就是 arrange_manager.create，
+        # 不另外造一套调度器；权限边界由宿主 env 决定，事件正文无法扩权)。
+        from lamtools_core.superagent import (
+            EffectOutbox,
+            GithubCliAdapter,
+            InMemorySuperagentStore,
+            PolicyConfig,
+            PolicyGate,
+            SuperagentService,
+            WorktreeManager,
+        )
+
+        def _split_env(name: str) -> frozenset[str]:
+            raw = str(os.environ.get(name) or "")
+            return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+        async def _superagent_model_id() -> str:
+            # 工单必须跑在一个确定的模型上：委派时模型要能把这个 id 直接交给 sub_agent，
+            # 不能让模型自己猜一个不存在的名字。
+            try:
+                from lamtools_core.config.model_store import ModelStore
+
+                return str(
+                    await ModelStore().default_model_id(work_root=str(resolved_work_root)) or ""
+                )
+            except Exception:
+                return ""
+
+        async def _schedule_superagent_ticket(ticket):
+            # user:“让用户能够直接交付复杂目标，由 Super-agent 自主规划、拆解、委派、执行、
+            # 监控、处理异常、恢复任务、验证成果并完成交付”+(排期前先把执行现场备好：
+            # 独立工作树、分支、指令；排期本身仍然交给 Arrange，不另造调度器)。
+            model_id = await _superagent_model_id()
+            plan = await superagent_service.begin_execution(
+                ticket.ticket_id, model_id=model_id
+            )
+            job = await arrange_manager.create(
+                thread_id=plan.thread_id,
+                work_root=plan.work_root,
+                kind="focus",
+                operation="turn.start",
+                payload={
+                    "message": plan.prompt,
+                    "superagent_ticket_id": ticket.ticket_id,
+                    "superagent_assignment_id": plan.assignment_id,
+                    # 无人值守的工单自带权限档：auto 让写文件和跑命令不必等人点头，
+                    # ask 则把每一步写入都留成待审批，供用户现场盯着。
+                    "runtime_snapshot": {
+                        "permission_preset": plan.permission_preset,
+                    },
+                },
+                trigger={"type": "once"},
+                title=ticket.title or f"ticket {ticket.ticket_id}",
+                session_strategy="new",
+                model_id=model_id,
+            )
+            arrange_runner.wake()
+            return job.id
+
+        # user:“将推送分支和创建 PR 变成可控、可追踪、可重试的确定性操作”+(发布复用
+        # 同一个 superagent store 里的 effect outbox：幂等键与先查后建都在库里，
+        # 认证交给本机 gh，不建第二套 GitHub 客户端)。
+        superagent_store = getattr(core_db_handle, "superagent_store", None) or (
+            InMemorySuperagentStore()
+        )
+        superagent_service = SuperagentService(
+            store=superagent_store,
+            policy=PolicyGate(
+                PolicyConfig(
+                    allowed_sources=_split_env("LAMTOOLS_SUPERAGENT_SOURCES"),
+                    allowed_event_types=_split_env("LAMTOOLS_SUPERAGENT_EVENTS"),
+                    trusted_actors=_split_env("LAMTOOLS_SUPERAGENT_ACTORS"),
+                    allowed_repos=_split_env("LAMTOOLS_SUPERAGENT_REPOS"),
+                    allowed_tools=tuple(sorted(_split_env("LAMTOOLS_SUPERAGENT_TOOLS"))),
+                    allow_create_pr=_env_bool("LAMTOOLS_SUPERAGENT_ALLOW_PR", default=False),
+                    version="policy.v1",
+                )
+            ),
+            scheduler=_schedule_superagent_ticket,
+            job_canceller=arrange_runner.cancel,
+            outbox=EffectOutbox(superagent_store),
+            github=GithubCliAdapter(),
+            worktree_manager=WorktreeManager(
+                resolved_data_dir / "superagent",
+                allowed_repo_roots=tuple(sorted(_split_env("LAMTOOLS_SUPERAGENT_REPOS"))),
+            ),
+        )
+        register_superagent_operations(agent_operations, service=superagent_service)
+        app_state["superagent_service"] = superagent_service
         app_state["operations"] = agent_operations
         # Plugins that inject messages into a desktop session must use the live
         # turn path, not the agent-operation turn.start: only the former writes
@@ -664,6 +896,15 @@ def create_core_agent_http_app(
         app_state["plugin_system_host"] = getattr(agent_operations, "plugin_system_host", None)
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
+        # user:“服务器重启后，应能够识别已死亡的执行进程，安全释放旧任务占用，使用户
+        # 可以继续或重试”+(必须先回收失效所有权，再让下面的 reaper 收尾快照：顺序反了的话，
+        # 被死进程占着的会话会被 reaper 当成「别的进程还在跑」直接跳过，用户重试也起不来)。
+        try:
+            released = await core_db_handle.runtime_state_store.release_orphaned_owners()
+            if released:
+                _logger.warning("[startup] released %d orphaned run(s)", released)
+        except BaseException:
+            _logger.exception("[startup] orphaned run release failed (non-fatal)")
         # Reap turns left durably "running"/"waiting"/"interrupting" by an
         # unexpected shutdown, mirroring arrange job recovery. Without this the
         # durable-snapshot guard in turn.start blocks the thread with
@@ -710,8 +951,19 @@ def create_core_agent_http_app(
             )
         except Exception:
             _logger.exception("[startup] sub-agent state reconciliation failed; watchdog will retry")
-        await arrange_runner.start()
-        await observer_supervisor.start()
+        # user:“全局并发限制（单实例运行）”+(同一份数据目录只能有一个调度器在跑；
+        # 第二个进程照常提供接口，但不再领任务，避免并发上限被进程数放大)。
+        scheduler_lease = SchedulerLease(resolved_data_dir / "arrange-scheduler.lock")
+        app_state["scheduler_lease"] = scheduler_lease
+        if scheduler_lease.acquire():
+            await arrange_runner.start()
+            await observer_supervisor.start()
+        else:
+            _logger.warning(
+                "[startup] arrange scheduler disabled: another instance holds %s (pid=%s)",
+                scheduler_lease.path,
+                scheduler_lease.holder_pid(),
+            )
         # Watches host memory so a turn stopped by memory exhaustion continues by
         # itself once the machine can afford it, and closes the turns whose
         # recorded ending never reached the snapshot (a memory crash usually
@@ -771,6 +1023,10 @@ def create_core_agent_http_app(
         arrange_runner = app_state.get("arrange_runner")
         if arrange_runner is not None:
             await arrange_runner.stop()
+        scheduler_lease = app_state.get("scheduler_lease")
+        if scheduler_lease is not None:
+            scheduler_lease.release()
+            app_state["scheduler_lease"] = None
         await runtime_task_registry.shutdown()
         core_db_handle = app_state.get("core_db")
         if core_db_handle is not None:
@@ -811,7 +1067,10 @@ def create_core_agent_http_app(
         enable_core_routes=False,
         frontend_dir=frontend_dir,
         health_payload=lambda: {
-            "status": "ok",
+            # user:“后台调度器异常自愈及健康检查”+(不能只看 HTTP 是否活着：
+            # 调度循环死掉时接口必须自己说出来)。
+            "status": _runtime_health(app_state)["status"],
+            "runtime": _runtime_health(app_state),
             "agent": runtime_spec.member_id,
             "agent_id": runtime_spec.id,
             "agent_name": runtime_spec.name,

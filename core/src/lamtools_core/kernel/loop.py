@@ -32,8 +32,6 @@ from lamtools_core.context_compaction import (
     ContextCompactionController,
     ContextCompactionError,
     ContextCompactionResult,
-    RECENT_USER_MESSAGES_METADATA_KEY,
-    extract_recent_user_messages,
 )
 from lamtools_core.context_compaction.state import load_compaction_history, persist_compaction
 from lamtools_core.context_compaction_budget import (
@@ -76,7 +74,7 @@ from lamtools_core.prompt.movable import (
     is_movable_context_notice,
 )
 from lamtools_core.runtime.context_delta import is_runtime_context_delta, RUNTIME_CONTEXT_METADATA_KEY
-from lamtools_core.app.tool_freeze import reset_session_tool_freeze
+from lamtools_core.runtime.tool_freeze import reset_session_tool_freeze
 from lamtools_core.runtime.goal_continuation import (
     GOAL_CONTINUATION_KEY,
     goal_continuation_message,
@@ -298,15 +296,6 @@ def _history_seq_set(value: Any) -> set[int]:
         if parsed > 0:
             result.add(parsed)
     return result
-
-
-def _summary_recent_user_messages(
-    compaction: dict[str, Any], summary_text: str
-) -> list[str]:
-    raw = compaction.get(RECENT_USER_MESSAGES_METADATA_KEY)
-    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
-        return list(raw)
-    return extract_recent_user_messages(summary_text)
 
 
 _INTERNAL_MESSAGE_METADATA_KEYS = ("history_seq", "lam_compaction_resume")
@@ -4322,9 +4311,21 @@ class CoreLoopKernel:
         if result is None:
             return
         if result.status == "failed":
-            raise ContextCompactionError(
-                str(result.display_payload.get("message") or "Context compaction failed")
+            # user:“无法生成满足模型窗口约束的合法请求时，停止本次调用并明确
+            # 报告原因，保留历史与任务状态，支持后续重试”+(拟合器已经把摘要压到
+            # 截断/最小档仍然装不进预算，说明请求本身已超窗：不发送超窗请求，
+            # 也不假装成功，直接以明确原因结束本次调用)。
+            message = str(
+                result.display_payload.get("message") or "Context compaction failed"
             )
+            if str(result.display_payload.get("reason") or "") == "over_limit":
+                # Only the budget outcome gets the retry note; a model failure
+                # keeps its own message so callers can tell them apart.
+                message = (
+                    f"{message} The turn stopped without sending an oversized request; "
+                    "history and task state are preserved for a retry."
+                )
+            raise ContextCompactionError(message)
         if result.status != "compacted":
             request.metadata["context_compaction_status"] = result.status
             state.metadata["runtime_context_metrics"] = {
@@ -4368,8 +4369,11 @@ class CoreLoopKernel:
             # user:“去重构吧”+(历史只接收保留的原始消息；系统前缀不落入历史，完整快照单独追加一次)。
             retained = _retained_history_messages(history, result.retained_messages, request_only_ids)
             history[:] = [*([result.summary_message] if result.summary_message is not None else []), *retained]
-            # The view changed, but every source row was flushed before the
-            # signal. New work continues as ordinary append-only checkpoints.
+            # The source rows stay on disk: compaction is a view over them
+            # (summary + boundary in state metadata), so recall, rollback and
+            # crash recovery keep working and only the model-facing list is
+            # shortened. The alignment counter therefore still describes the row
+            # table after appending the retained snapshot row.
             if snapshot_row is not None:
                 history.append(snapshot_row)
             self._persisted_len = len(history)

@@ -15,6 +15,7 @@ def build_parser(*, plugin_roots: list[Path | str] | tuple[Path | str, ...] | No
     from .parse_settings import register_context_compaction, register_imagegen, register_loadtools, register_models, register_permissions, register_providers
     from .parse_turns import register_approval, register_cancel, register_pause, register_process, register_queue, register_resume, register_run, register_run_local, register_start, register_steer, register_terminate, register_watch
     from .parse_workspace import register_arrange, register_goal, register_plan_library, register_project, register_session, register_subagent
+    from .parse_superagent import register_superagent
     parser = argparse.ArgumentParser(prog="core", description="Sunday AI software CLI")
     sub = parser.add_subparsers(dest="command", required=True)
     # user:“通过 command 运行”+(提供与代理命令一致的真实 CLI 入口)。
@@ -43,13 +44,13 @@ def build_parser(*, plugin_roots: list[Path | str] | tuple[Path | str, ...] | No
     register_imagegen(sub)
     register_update(sub)
     register_office(sub)
-    register_mobile(sub)
     register_artifact(sub)
     register_session(sub)
     register_project(sub)
     register_goal(sub)
     register_plan_library(sub)
     register_arrange(sub)
+    register_superagent(sub)
     register_subagent(sub)
     register_models(sub)
     register_providers(sub)

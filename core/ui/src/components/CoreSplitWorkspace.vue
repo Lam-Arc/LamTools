@@ -63,6 +63,7 @@ function openMenu(event: MouseEvent, pane: string) {
     { label: t('辅助对话'), action: () => { auxiliary?.open(undefined, pane) } },
     { label: t('资料库'), icon: BookOpen, action: add('page', 'library', t('资料库')) },
     { label: t('设置'), action: add('page', 'settings', t('设置')) },
+    { label: t('Super-agent'), action: add('page', 'superagent', t('Super-agent')) },
     { label: t('定时任务'), action: add('page', 'arrange', t('定时任务')) },
     { label: t('插件'), action: add('page', 'plugins', t('插件')) },
     ...pluginItems,
@@ -83,6 +84,7 @@ function splitContentItems(pane: string, edge: SplitEdge): ContextMenuEntry[] {
     { label: t('辅助对话'), action: () => { const target = props.controller.splitAt(pane, edge); if (target) auxiliary?.open(undefined, target) } },
     { label: t('资料库'), icon: BookOpen, action: create('page', 'library', t('资料库')) },
     { label: t('设置'), action: create('page', 'settings', t('设置')) },
+    { label: t('Super-agent'), action: create('page', 'superagent', t('Super-agent')) },
     { label: t('定时任务'), action: create('page', 'arrange', t('定时任务')) },
     { label: t('插件'), action: create('page', 'plugins', t('插件')) },
     ...(pages.length ? [{ type: 'submenu' as const, label: t('插件页面'), children: pages.map(page => ({

@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.config.settings_store import get_setting
+from lamtools_core.runtime.execution_guard import (
+    ensure_spawn_allowed,
+    register_process,
+)
 
 from lamtools_core.tool.command import (
     CommandExecution as _CommandExecution,
@@ -84,6 +88,8 @@ def _run_background_subprocess_blocking(
     creationflags = 0
     if sys.platform == "win32":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    # user:“旧执行不能继续产生未经授权的副作用”+(后台命令同样受代际守卫约束)。
+    ensure_spawn_allowed()
     stdout_handle = stdout_path.open("w", encoding="utf-8", errors="replace")
     stderr_handle = stderr_path.open("w", encoding="utf-8", errors="replace")
     try:
@@ -114,6 +120,7 @@ def _run_background_subprocess_blocking(
         finally:
             stderr_handle.close()
 
+    register_process(process, label=command[:200])
     if cancel_event is not None and cancel_event.wait(0.5):
         _terminate_process_tree(process)
         return _CommandExecution(

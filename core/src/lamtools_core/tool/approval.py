@@ -284,9 +284,22 @@ class ApprovalGate:
         approved_mcp = bool(mcp_target and mcp_target in self.mcp_approved_tools)
         blocked = level == 0 or level > cap
         ask = not blocked and not approved_mcp and level > threshold
+        # user:“auto_approve 就是不等人回答”+(审批策略是 auto_approve 时，
+        # 超过免问线的调用自动批准；硬拦截、能力上限、敏感路径仍然照旧拦截，
+        # 这里只是把"要不要问人"变成"不问"，不是放宽允许范围)。
+        # auto_approve 只覆盖普通操作：免问上限取 auto 档（2 级），3 级是
+        # 破坏性操作，仍需用户确认——“auto”档本身也不能隐式授予 3 级。
+        auto_answered = (
+            ask
+            and self.approval_policy == "auto_approve"
+            and level <= AUTO_APPROVE_LEVELS["auto"]
+        )
+        if auto_answered:
+            ask = False
         allowed = not blocked and not ask
         reason = (f"操作等级 {level} 超过当前能力上限 {cap}" if blocked else
                   f"操作等级 {level}，运行档已授权" if approved_mcp else
+                  f"操作等级 {level} 超过免问线 {threshold}，自动批准" if auto_answered else
                   f"操作等级 {level} 超过免问线 {threshold}，需要确认" if ask else f"操作等级 {level}，自动放行")
         return ToolApprovalDecision(allowed, reason, HARD_BLOCK if blocked else ASK_USER if ask else AUTO_ALLOW,
                                     requires_approval=ask, blocked=blocked, auto_approved=allowed,

@@ -58,7 +58,19 @@ class PluginWorkingDirectoryService:
     async def runtime_path(self, session_id, project_root):
         # user:“继续”+(每次模型请求读取持久目录；原目录消失时按修订恢复原项目，不静默重绑配置)。
         for attempt in range(3):
-            record, revision = await self._read(session_id)
+            try:
+                record, revision = await self._read(session_id)
+            except WorkingDirectoryError as exc:
+                if exc.code == "working-directory/not-found":
+                    # 会话还没有目录记录：不接管执行目录，沿用宿主 work_root。
+                    return None
+                raise
+            raw_root = record.metadata.get("work_root")
+            if type(raw_root) is not str or not raw_root.strip():
+                # user:“Session project or execution directory is invalid”+
+                # (没有绑定项目的普通线程不该被判非法：缺席≠非法。存在但为相对路径、
+                # 含 .. 或越界的值仍然走下面的严格校验并报错)。
+                return None
             state = self._state(None, record, revision)
             if Path(state.project_root) != Path(project_root).resolve():
                 raise WorkingDirectoryError("working-directory/project-mismatch", "Runtime project does not match session project")

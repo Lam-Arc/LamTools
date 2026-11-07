@@ -83,6 +83,36 @@ pub trait TurnRunner: Send + Sync {
         client_message_id: &str,
         sink: EventSink<'_>,
     ) -> Result<(), String>;
+    /// Refuses an approval the runner cannot honour, before the caller reports
+    /// success.
+    ///
+    /// Without this gate a resolved or expired request still answered `{}`, the
+    /// screen marked the card as submitted, and the real failure only surfaced as
+    /// an orphan event nobody was waiting for. The user saw a spinner that never
+    /// ended and a tool that never ran.
+    fn check_approval(&self, _request_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Closes approvals whose deadline passed, returning the ids that closed.
+    ///
+    /// A conversation whose approval aged out used to stay unusable: its card kept
+    /// two live buttons, the composer stayed taken over by a decision nobody could
+    /// answer, and no new turn could start. Reporting the closure lets the caller
+    /// tell the screen that the card is dead.
+    fn settled_approvals(
+        &self,
+        _thread_id: &str,
+        _now_epoch: u64,
+    ) -> Result<Vec<(String, String)>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Whether the thread still waits on a human decision.
+    fn has_pending_approval(&self, _thread_id: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// Resolves a pending approval. `decision` is already normalised to
     /// approve|deny|guide|skip|trust.
     fn respond(
@@ -227,6 +257,12 @@ pub struct BridgeEvent {
     pub seq: u64,
     pub payload: serde_json::Value,
     pub client_message_id: Option<String>,
+    /// When the journal wrote this fact, in epoch milliseconds.
+    ///
+    /// `None` for an event the runner synthesises rather than reads from the journal. A
+    /// synthesised fact has no row, and stamping it with the replay time is exactly the
+    /// mistake this field exists to stop making for rows that do have one.
+    pub created_at_ms: Option<i64>,
 }
 
 pub struct AppServer {
@@ -606,7 +642,86 @@ fn dispatch(
                 return Err((-32602, "thread_id is required".into(), None));
             }
             state.thread_id = thread.clone();
-            let events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
+            // Close anything that aged out before replaying the thread, so a dead
+            // card cannot keep the composer taken over for another session.
+            let settled = runner
+                .settled_approvals(&thread, crate::runner::now_epoch())
+                .unwrap_or_default();
+            let mut events = runner.open_thread(&thread).map_err(|e| (-32000, e, None))?;
+            // Recovery: close every turn that opened and never closed.
+            //
+            // Older runs recorded an approval decision without ending its turn, and
+            // nothing else ever closed it, so the replayed transcript carried turns
+            // that read "running" forever — the composer offered Stop on a
+            // conversation with nothing left to do. Closing only the newest turn was
+            // not enough: a thread accumulates several.
+            //
+            // This is skipped entirely while something is still pending, because a
+            // genuine wait must keep its card answerable.
+            let still_waiting = runner.has_pending_approval(&thread).unwrap_or(true);
+            if !still_waiting {
+                let mut opened: Vec<String> = Vec::new();
+                let mut closed: Vec<String> = Vec::new();
+                for event in &events {
+                    let turn = event
+                        .payload
+                        .get("turn_id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    if turn.is_empty() {
+                        continue;
+                    }
+                    match event.method.as_str() {
+                        "turn/started" => opened.push(turn),
+                        "turn/completed" | "turn/cancelled" => closed.push(turn),
+                        _ => {}
+                    }
+                }
+                for turn in opened {
+                    if closed.contains(&turn) {
+                        continue;
+                    }
+                    events.push(BridgeEvent {
+                        method: "turn/completed".into(),
+                        seq: 0,
+                        client_message_id: None,
+                        // Synthesised at resume: no row, so no time to report.
+                        created_at_ms: None,
+                        payload: serde_json::json!({
+                            "text": "",
+                            "recovered": true,
+                            // Names the turn this closes, so the client updates that
+                            // turn rather than inventing another.
+                            "turn_id": turn,
+                        }),
+                    });
+                }
+            }
+            for (approval_id, status) in settled {
+                events.push(BridgeEvent {
+                    // Derived from the approval id, so a second resume reports the
+                    // same closure once and the client's seen-set drops the repeat.
+                    method: "item/approval_resolved".into(),
+                    seq: 0,
+                    client_message_id: None,
+                    created_at_ms: None,
+                    payload: serde_json::json!({
+                        "approval_id": approval_id,
+                        "request_id": approval_id,
+                        // Settling an aged-out card is not resuming its turn. Naming
+                        // the finished turn here made the client revive it.
+                        "turn_id": "",
+                        // The status the row actually carries, so a denied or
+                        // approved card is reported as what it was, not as expired.
+                        "decision": status,
+                        // `applyDecisionLifecycle` closes a card on `ending`; any
+                        // other word leaves it open, which is the bug this line
+                        // exists to avoid.
+                        "state": "ending",
+                    }),
+                });
+            }
             let history: Vec<serde_json::Value> =
                 events.iter().map(|e| event_json(&thread, e)).collect();
             // The client rebuilds a conversation from `snapshot` plus `events`: it
@@ -953,6 +1068,14 @@ fn dispatch(
             }))
         }
         "approval/respond" => {
+            // Print before any validation: "the button did nothing" and "the request
+            // was refused" look identical from the screen, and the difference decides
+            // which layer to fix.
+            #[cfg(debug_assertions)]
+            println!(
+                "approval/respond entry params={}",
+                params.to_string().chars().take(240).collect::<String>()
+            );
             let request_id = params
                 .get("request_id")
                 .or_else(|| params.get("requestId"))
@@ -992,7 +1115,21 @@ fn dispatch(
             let sink_sender = Arc::clone(tx);
             let error_sender = Arc::clone(tx);
             let thread_for_run = thread.clone();
+            // Answer the truth synchronously: an approval that can no longer be
+            // honoured must fail here, where the RPC reply still reaches the screen.
+            if let Err(reason) = runner.check_approval(&request_id) {
+                return Err((-32000, reason, None));
+            }
             let decision_owned = decision.to_owned();
+            // Debug-only: an approval that never resumes the agent looks identical
+            // from the screen whether the call never arrived, was refused, or failed
+            // inside the runner. One line at the entry and one at the failure makes
+            // the difference visible without a debugger.
+            #[cfg(debug_assertions)]
+            println!(
+                "approval/respond request_id={request_id} decision={decision_owned} thread={thread} guidance_len={}",
+                guidance.len()
+            );
             std::thread::spawn(move || {
                 let sink = move |event: BridgeEvent| {
                     sink_sender.event(event_json(&thread_for_run, &event));
@@ -1000,6 +1137,8 @@ fn dispatch(
                 if let Err(error) =
                     worker.respond(&thread, &request_id, &decision_owned, &guidance, &sink)
                 {
+                    #[cfg(debug_assertions)]
+                    println!("approval/respond failed request_id={request_id} error={error}");
                     error_sender.orphan_error(-32000, error);
                 }
             });
@@ -1070,17 +1209,61 @@ fn prompt_param(params: &serde_json::Value) -> String {
         .to_owned()
 }
 
-fn event_json(thread: &str, event: &BridgeEvent) -> serde_json::Value {
-    serde_json::json!({
+/// One journal event as the client receives it.
+///
+/// Public because a host that drives the runner itself has to frame events the same
+/// way this server does: two framings of one fact would be two dialects of the client
+/// protocol. `event_id` is derived from the journal position, so a replayed fact keeps
+/// its identity and the client's seen-set drops the copy.
+pub fn event_json(thread: &str, event: &BridgeEvent) -> serde_json::Value {
+    let mut frame = serde_json::json!({
         "event_id": format!("{thread}:{}", event.seq),
         "protocol_version": APP_SERVER_PROTOCOL,
         "seq": event.seq,
         "thread_id": thread,
         "method": event.method,
         "payload": event.payload,
-        "created_at": "",
         "client_message_id": event.client_message_id,
-    })
+    });
+    // Omitted rather than empty when unknown. `created_at: ""` is a string to the client,
+    // which then formats it and shows an invalid date; a missing key falls back to the
+    // turn's own time instead.
+    if let Some(ms) = event.created_at_ms {
+        frame["created_at"] = serde_json::Value::String(iso_utc(ms));
+        // The same instant as a number, for a host that stamps its projected item with
+        // this time instead of its own clock. Without it the client-facing string is the
+        // only copy, and the only way back to a number is parsing it again.
+        frame["created_at_ms"] = serde_json::Value::from(ms);
+    }
+    frame
+}
+
+/// RFC-3339 in UTC, millisecond precision.
+///
+/// Hand-written because nothing here carries a date crate for one field. Howard
+/// Hinnant's days-from-civil, exact for every instant this can see.
+pub fn iso_utc(ms: i64) -> String {
+    let seconds = ms.div_euclid(1000);
+    let millis = ms.rem_euclid(1000);
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = if month_part < 10 {
+        month_part + 3
+    } else {
+        month_part - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 /// Used by tests and by hosts that need to shove a raw frame at a socket.

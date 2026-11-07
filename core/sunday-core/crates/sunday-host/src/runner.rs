@@ -31,6 +31,16 @@ use crate::app_server::{
 };
 use crate::policy::GrantPolicy;
 
+/// Seconds since the epoch. Approvals store `expires_at` in seconds while event
+/// timestamps are milliseconds; keeping the two named apart is the only thing that
+/// stops one being compared against the other.
+pub(crate) fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -117,6 +127,11 @@ pub struct CoreRunner {
     /// Ordering for events this runner synthesises (stop acknowledgements). All
     /// journal-backed events use the journal's own seq.
     seq: AtomicU64,
+    /// Names each turn once. Using `seq` for this made every turn `turn-0`,
+    /// because that counter is advanced elsewhere and the id was read, not
+    /// claimed — so a second turn inherited the finished one's identity and its
+    /// approval card arrived already looking closed.
+    turn_seq: AtomicU64,
     buffer: EventBuffer,
     /// One token per thread, so stopping one conversation cannot stop another.
     cancel: Mutex<HashMap<String, CancelToken>>,
@@ -136,6 +151,7 @@ impl CoreRunner {
             policy: std::sync::Arc::new(crate::policy::LivePolicy::new(options.policy)),
             system: options.system,
             seq: AtomicU64::new(0),
+            turn_seq: AtomicU64::new(0),
             buffer: EventBuffer::default(),
             cancel: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
@@ -178,6 +194,9 @@ impl CoreRunner {
                 seq: event.seq,
                 payload,
                 client_message_id: None,
+                // Read from the journal row, so a replay reports when the fact happened
+                // rather than when it was replayed.
+                created_at_ms: Some(event.created_at),
             };
             self.buffer.push(thread, bridge.clone());
             sink(bridge);
@@ -302,6 +321,7 @@ impl TurnRunner for CoreRunner {
                     seq: accept_seq,
                     payload,
                     client_message_id: Some(client_message_id.to_owned()),
+                    created_at_ms: Some(event.created_at),
                 });
             }
         }
@@ -325,7 +345,15 @@ impl TurnRunner for CoreRunner {
         };
         let input = TurnInput {
             thread_id: thread_id.to_owned(),
-            turn_id: format!("turn-{}", self.seq.load(Ordering::SeqCst)),
+            // Unique across restarts, not just within this process. A counter that
+            // resets to zero hands the first turn after a relaunch the same name as a
+            // finished turn from the previous run; the client then treats the new
+            // turn's items as belonging to the closed one and drops their cards.
+            turn_id: format!(
+                "turn-{}-{}",
+                now_ms(),
+                self.turn_seq.fetch_add(1, Ordering::SeqCst) + 1
+            ),
             model_id: self.model_id.clone(),
             system: self.system.clone(),
             prompt: prompt.to_owned(),
@@ -354,6 +382,47 @@ impl TurnRunner for CoreRunner {
         }
     }
 
+    fn check_approval(&self, request_id: &str) -> Result<(), String> {
+        let store = self.store.lock().unwrap();
+        // `pending_call` answers "which call is this", not "may it still run", so the
+        // gate has to ask for the lifecycle explicitly. Without this an approval an
+        // hour past its deadline still looked answerable and the click was accepted.
+        match store.approval_gate(request_id, now_epoch()) {
+            Ok(Some(sunday_store::ApprovalStatus::Pending)) => Ok(()),
+            Ok(Some(sunday_store::ApprovalStatus::Expired)) => {
+                Err(format!("该审批已过期，不能再授权执行：{request_id}"))
+            }
+            Ok(Some(sunday_store::ApprovalStatus::Answered)) => {
+                Err(format!("该审批已被处理过：{request_id}"))
+            }
+            Ok(None) => Err(format!("找不到这个审批：{request_id}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn has_pending_approval(&self, thread_id: &str) -> Result<bool, String> {
+        let store = self.store.lock().unwrap();
+        store
+            .has_pending_approval(thread_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn settled_approvals(
+        &self,
+        thread_id: &str,
+        now_epoch: u64,
+    ) -> Result<Vec<(String, String)>, String> {
+        let mut store = self.store.lock().unwrap();
+        // Close what just aged out, then report everything that is already settled so
+        // a card from an earlier run cannot come back as answerable.
+        store
+            .expire_stale_approvals(now_epoch)
+            .map_err(|error| error.to_string())?;
+        store
+            .settled_approvals(thread_id)
+            .map_err(|error| error.to_string())
+    }
+
     fn respond(
         &self,
         thread_id: &str,
@@ -366,8 +435,49 @@ impl TurnRunner for CoreRunner {
             "approve" | "trust" => {}
             "deny" | "skip" => {
                 let mut store = self.store.lock().unwrap();
+                // The digest is what binds the decision to the arguments the user was
+                // shown. Sending an empty one made every denial fail as "arguments
+                // changed", so the row stayed pending and the card could not close.
+                let (call, digest) = match store.pending_call(request_id) {
+                    Ok(Some(found)) => found,
+                    Ok(None) => return Err("that approval has no pending call".into()),
+                    Err(error) => return Err(error.to_string()),
+                };
                 store
-                    .respond_approval(request_id, "", now_ms(), false)
+                    // `respond_approval` compares against `expires_at`, which is in
+                    // seconds. Passing milliseconds made every denial instantly
+                    // "expired": the timestamp was a thousand times past the deadline,
+                    // so a user who pressed Deny was told the request had aged out.
+                    .respond_approval(request_id, &digest, now_epoch(), false)
+                    .map_err(|e| e.to_string())?;
+                // The journal is what a resumed screen replays. A decision recorded
+                // only in the approvals table vanished on restart: the transcript
+                // brought the card back as if nobody had answered it, and the turn
+                // stayed open forever.
+                store
+                    .append_event(
+                        "local",
+                        thread_id,
+                        &format!("{thread_id}:{request_id}:resolved"),
+                        sunday_protocol::EventKind::ApprovalResolved,
+                        serde_json::json!({
+                            "approval_id": request_id,
+                            "tool_call_id": call.id,
+                            "decision": "deny",
+                        }),
+                    )
+                    .map_err(|e| e.to_string())?;
+                // A denial ends the turn. Without this the thread kept its last status
+                // at "running", so after a restart the composer still offered Stop on
+                // a conversation with nothing left to do.
+                store
+                    .append_event(
+                        "local",
+                        thread_id,
+                        &format!("{thread_id}:{request_id}:closed"),
+                        sunday_protocol::EventKind::RunCompleted,
+                        serde_json::json!({"text": "", "denied": true}),
+                    )
                     .map_err(|e| e.to_string())?;
                 drop(store);
                 self.emit_journal(thread_id, sink, 0);
@@ -421,6 +531,23 @@ impl TurnRunner for CoreRunner {
             &digest,
             RunBudget::default(),
         ));
+        // Record the approval itself, not only its consequences: a resumed screen
+        // needs to know the card was answered even if the tool produced nothing.
+        if run.is_ok() {
+            let mut store = self.store.lock().unwrap();
+            store
+                .append_event(
+                    "local",
+                    thread_id,
+                    &format!("{thread_id}:{request_id}:resolved"),
+                    sunday_protocol::EventKind::ApprovalResolved,
+                    serde_json::json!({
+                        "approval_id": request_id,
+                        "decision": "approve",
+                    }),
+                )
+                .map_err(|error| error.to_string())?;
+        }
         self.emit_journal(thread_id, sink, 0);
         match run {
             Ok(_) => Ok(()),
@@ -447,6 +574,7 @@ impl TurnRunner for CoreRunner {
                     seq: event.seq,
                     payload,
                     client_message_id: None,
+                    created_at_ms: Some(event.created_at),
                 }
             })
             .collect();
@@ -474,6 +602,7 @@ impl TurnRunner for CoreRunner {
                     seq: event.seq,
                     payload,
                     client_message_id: None,
+                    created_at_ms: Some(event.created_at),
                 }
             })
             .collect())
@@ -500,6 +629,7 @@ impl TurnRunner for CoreRunner {
                         seq: event.seq,
                         payload,
                         client_message_id: None,
+                        created_at_ms: Some(event.created_at),
                     }
                 })
                 .collect(),
@@ -635,6 +765,8 @@ impl TurnRunner for CoreRunner {
                 "mode": format!("{mode:?}"),
             }),
             client_message_id: None,
+            // A stop acknowledgement is this runner speaking, not a journal row.
+            created_at_ms: None,
         });
         Ok(())
     }

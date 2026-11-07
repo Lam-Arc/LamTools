@@ -76,7 +76,7 @@ async def test_workflow_cli_is_manifest_mounted_and_executes_run(
 
 
 def test_disabled_workflow_cli_is_not_mounted(tmp_path: Path) -> None:
-    from lamtools_core.plugins.registry import PluginStateStore
+    from lamtools_core.plugin_system.state import PluginStateStore
 
     state_path = tmp_path / "plugins.jsonc"
     PluginStateStore(state_path).set_enabled("workflow", False)

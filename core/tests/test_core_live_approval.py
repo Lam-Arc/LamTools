@@ -149,7 +149,7 @@ async def test_resolve_turn_policy_applies_global_switch_to_existing_session() -
     assert resolved["allow_access_outside_workdir"] is True
 
 
-def test_full_access_preset_expands_to_full_edit_auto_approve_and_outside_access() -> None:
+def test_full_access_preset_keeps_the_mode_tier_and_silences_prompts() -> None:
     from lamtools_core.app.runtime_permissions import resolve_permission_preset
 
     resolved = resolve_permission_preset(
@@ -159,7 +159,10 @@ def test_full_access_preset_expands_to_full_edit_auto_approve_and_outside_access
         tier_tools={"read_only": {"read_file"}, "limited_edit": set(), "full_edit": set()},
     )
 
-    assert resolved.active_tier == "full_edit"
+    # The preset silences prompts and opens outside access. The capability tier
+    # belongs to the session permission mode, which the global switch carries
+    # alongside the preset, so a per-turn preset cannot raise it on its own.
+    assert resolved.active_tier == "read_only"
     assert resolved.approval_policy == "auto_approve"
     assert resolved.allow_access_outside_workdir is True
 

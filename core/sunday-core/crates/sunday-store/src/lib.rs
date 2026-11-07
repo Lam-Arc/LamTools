@@ -175,6 +175,17 @@ pub struct Continuation {
     pub pending_call_id: Option<String>,
 }
 
+/// The three things an approval id can mean to a caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalStatus {
+    /// Still answerable.
+    Pending,
+    /// Its deadline passed; it may never authorise anything again.
+    Expired,
+    /// A human already answered it, one way or the other.
+    Answered,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -427,7 +438,18 @@ impl Store {
                 seq as i64,
                 format!("{}:accepted", env.request_id),
                 EventKind::CommandAccepted.as_str(),
-                json!({"kind": env.payload.kind()}).to_string(),
+                {
+                    // The instruction's text belongs in the journal: it is what the
+                    // user asked, and a resumed screen must be able to show it
+                    // without a second lookup that does not survive a restart.
+                    let mut payload = json!({"kind": env.payload.kind()});
+                    if let sunday_protocol::Command::TurnStart { text } = &env.payload {
+                        if let Some(object) = payload.as_object_mut() {
+                            object.insert("text".into(), json!(text));
+                        }
+                    }
+                    payload.to_string()
+                },
                 now
             ],
         )
@@ -906,7 +928,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT thread_id, seq, event_id, kind, payload FROM journal_events \
+                "SELECT thread_id, seq, event_id, kind, payload, created_at FROM journal_events \
                  WHERE thread_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(CoreError::storage)?;
@@ -918,12 +940,14 @@ impl Store {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             })
             .map_err(CoreError::storage)?;
         let mut collected = Vec::new();
         for row in rows {
-            let (thread_id, seq, event_id, kind, payload) = row.map_err(CoreError::storage)?;
+            let (thread_id, seq, event_id, kind, payload, created_at) =
+                row.map_err(CoreError::storage)?;
             collected.push(Event {
                 thread_id,
                 seq,
@@ -932,6 +956,7 @@ impl Store {
                     reason: format!("unknown event kind {kind}"),
                 })?,
                 payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                created_at,
             });
         }
         let has_more = collected.len() > limit;
@@ -1182,6 +1207,117 @@ impl Store {
         })
     }
 
+    /// Whether this thread is still waiting on a human decision.
+    ///
+    /// A turn may only be closed on recovery when nothing is pending: closing one
+    /// that is genuinely waiting would hide a card the user still has to answer.
+    pub fn has_pending_approval(&self, thread: &str) -> Result<bool, CoreError> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM approvals WHERE thread_id = ?1 AND status = 'pending'",
+                params![thread],
+                |row| row.get(0),
+            )
+            .map_err(CoreError::storage)?;
+        Ok(count > 0)
+    }
+
+    /// Every approval on this thread that is no longer pending, with its status.
+    ///
+    /// A resumed transcript replays the original `approval_request` events, so a card
+    /// whose approval ended on an earlier run comes back looking answerable and holds
+    /// the conversation hostage. Reporting every settled approval — not only the ones
+    /// this call closed — is what lets the screen retire those cards.
+    pub fn settled_approvals(&self, thread: &str) -> Result<Vec<(String, String)>, CoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT approval_id, status FROM approvals \
+                 WHERE thread_id = ?1 AND status != 'pending' ORDER BY rowid",
+            )
+            .map_err(CoreError::storage)?;
+        let rows: Vec<(String, String)> = statement
+            .query_map(params![thread], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(CoreError::storage)?
+            .collect::<Result<Vec<(String, String)>, _>>()
+            .map_err(CoreError::storage)?;
+        Ok(rows)
+    }
+
+    /// What an approval id currently means, without consuming it.
+    ///
+    /// `pending_call` answers "which call is this", not "may it still run": it joins
+    /// the stage table and ignores both `status` and `expires_at`. Any caller that
+    /// treated it as a permission check would happily approve an hour-old request.
+    ///
+    /// `expires_at` is seconds since the epoch while `created_at` is milliseconds, so
+    /// this comparison is in seconds. Mixing the two makes a request look eternally
+    /// fresh or eternally stale depending on which side is used.
+    pub fn approval_gate(
+        &self,
+        approval_id: &str,
+        now_epoch: u64,
+    ) -> Result<Option<ApprovalStatus>, CoreError> {
+        let row: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT status, expires_at FROM approvals WHERE approval_id = ?1",
+                params![approval_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(CoreError::storage)?;
+        let Some((status, expires_at)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(match status.as_str() {
+            "pending" if now_epoch as i64 >= expires_at => ApprovalStatus::Expired,
+            "pending" => ApprovalStatus::Pending,
+            "expired" => ApprovalStatus::Expired,
+            _ => ApprovalStatus::Answered,
+        }))
+    }
+
+    /// Closes every pending approval past its deadline, and reports which ones closed.
+    ///
+    /// Without this a session whose approval aged out stayed unusable forever: the
+    /// card kept its two buttons, the composer stayed taken over by a decision nobody
+    /// could answer, and no new turn could start in that conversation.
+    ///
+    /// The update is conditional on `status = 'pending'` so a concurrent answer wins
+    /// instead of being overwritten by an expiry sweep.
+    pub fn expire_stale_approvals(&mut self, now_epoch: u64) -> Result<Vec<String>, CoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT approval_id FROM approvals WHERE status = 'pending' AND expires_at <= ?1",
+            )
+            .map_err(CoreError::storage)?;
+        let ids: Vec<String> = statement
+            .query_map(params![now_epoch as i64], |row| row.get(0))
+            .map_err(CoreError::storage)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(CoreError::storage)?;
+        drop(statement);
+        if ids.is_empty() {
+            return Ok(ids);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(CoreError::storage)?;
+        for id in &ids {
+            tx.execute(
+                "UPDATE approvals SET status = 'expired' WHERE approval_id = ?1 AND status = 'pending'",
+                params![id],
+            )
+            .map_err(CoreError::storage)?;
+        }
+        tx.commit().map_err(CoreError::storage)?;
+        Ok(ids)
+    }
+
     /// Consumes an approval. The caller must pass the digest of the arguments it
     /// is about to run, so an approval cannot be pointed at a different call.
     pub fn respond_approval(
@@ -1269,7 +1405,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT thread_id, seq, event_id, kind, payload FROM journal_events \
+                "SELECT thread_id, seq, event_id, kind, payload, created_at FROM journal_events \
                  WHERE thread_id = ?1 AND seq > ?2 ORDER BY seq",
             )
             .map_err(CoreError::storage)?;
@@ -1281,12 +1417,14 @@ impl Store {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             })
             .map_err(CoreError::storage)?;
         let mut out = Vec::new();
         for row in rows {
-            let (thread_id, seq, event_id, kind, payload) = row.map_err(CoreError::storage)?;
+            let (thread_id, seq, event_id, kind, payload, created_at) =
+                row.map_err(CoreError::storage)?;
             out.push(Event {
                 thread_id,
                 seq,
@@ -1295,6 +1433,7 @@ impl Store {
                     reason: format!("unknown event kind {kind}"),
                 })?,
                 payload: serde_json::from_str(&payload).unwrap_or(Value::Null),
+                created_at,
             });
         }
         Ok(out)

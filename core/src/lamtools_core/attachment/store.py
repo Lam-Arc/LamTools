@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -15,14 +14,6 @@ from .service import AttachmentRecord, AttachmentService, AttachmentSession, att
 # as directory names; every other accepted id gets a stable filesystem-safe
 # key. Path separators and control characters remain invalid.
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
-_PLAIN_STORAGE_KEY_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-
-
-def _session_storage_key(session_id: str) -> str:
-    if _PLAIN_STORAGE_KEY_RE.fullmatch(session_id) and ".." not in session_id:
-        return session_id
-    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:32]
-    return f"session-{digest}"
 
 
 class _CoreAttachmentRepository:

@@ -1,14 +1,16 @@
 [package]
 name = "sunday-android-host"
 version = "0.1.0"
-description = "Minimal Tauri host that runs the Rust core inside an Android app"
+description = "Android host that runs the shipping Python core inside PRoot"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
-# This host exists to answer one question: does the same Rust core run inside a
-# real Android app sandbox, with a WebView UI talking to it? It deliberately does
-# not include the desktop shell's tray icon, pet overlay or window management:
-# those are desktop concerns and would not compile or make sense here.
+# This host does not contain business logic. It unpacks the Linux runtime that
+# `core/android-runtime/build-runtime.sh` produces, starts proot on it, waits for the
+# Python core to answer, and forwards the shared UI's IPC traffic to that core. Every
+# turn, tool call, approval and database write happens in the same Python code the
+# desktop app ships — a second implementation in Rust is exactly what this design
+# exists to avoid.
 
 [lib]
 name = "sunday_android_host_lib"
@@ -21,28 +23,26 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# The core, linked in-process rather than spawned as a binary. On Android a
-# separate executable would need its own packaging and would not share the app
-# sandbox path in the way a user's data actually lives.
-sunday-protocol = { path = "../../sunday-core/crates/sunday-protocol" }
-sunday-store = { path = "../../sunday-core/crates/sunday-store" }
-sunday-agent = { path = "../../sunday-core/crates/sunday-agent" }
-sunday-platform = { path = "../../sunday-core/crates/sunday-platform" }
-sunday-tools = { path = "../../sunday-core/crates/sunday-tools" }
-sunday-llm = { path = "../../sunday-core/crates/sunday-llm" }
-sunday-host = { path = "../../sunday-core/crates/sunday-host" }
-# Same crate the protocol trait is written with, so the desugared signature matches.
-async-trait = "0.1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "process"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# HTTP only ever goes to 127.0.0.1, never to a public host, so plain HTTP is enough
+# and TLS is not compiled in: fewer native dependencies to cross-build.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking"] }
+flate2 = "1"
+# user:“优先考虑两端共享同一套 Rust/Iroh 传输实现”+(手机端只做客户端，
+# 全部协议与身份逻辑都在 core/p2p 里，Windows 用的是同一份)。
+sunday-p2p = { path = "../../p2p" }
+tar = "0.4"
 
 # The Activity callbacks reach Rust directly. Tauri exposes onPause and onResume as
 # window events, but not onStop, and onStop is the one that means "not visible".
 [target.'cfg(target_os = "android")'.dependencies]
 # 0.21 rather than 0.22: the 0.22 native-method API wraps the raw pointer in
-# `EnvUnowned`, which buys nothing for a function that only reads one string. The
-# JNI ABI is C, so coexisting with the 0.22 copy tauri uses is not a conflict.
+# `EnvUnowned`, which buys nothing for a function that only reads one string. The JNI
+# ABI is C, so coexisting with the 0.22 copy tauri uses is not a conflict.
 jni = "0.21"
 
 [dev-dependencies]
-# The host's tests use real temporary directories, not mocks.
 tempfile = "3"

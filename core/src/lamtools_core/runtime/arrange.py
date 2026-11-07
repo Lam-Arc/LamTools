@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -13,6 +14,16 @@ import logging
 from typing import Any, Literal, Protocol, runtime_checkable
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from .execution_guard import (
+    ExecutionGuard,
+    REVOKE_CANCELLED,
+    REVOKE_LEASE_LOST,
+    REVOKE_STOPPED,
+    REVOKE_TIMEOUT,
+    bind_guard,
+    reset_guard,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -141,6 +152,9 @@ class ArrangeJob:
     # a new token so an old worker cannot mutate a job after lease takeover,
     # even when the worker id is reused.
     fencing_token: int = 0
+    # user:“租约 fencing 与旧执行隔离”+(每次领取再给一个随机执行标识，
+    # 让审计能串起 Signal→Occurrence→Execution，并让旧执行无法借用新代际)。
+    execution_id: str = ""
     # Last durable execution checkpoint.  A reclaimed run keeps this value so
     # an executor can resume from its confirmed progress.
     checkpoint: dict[str, Any] = field(default_factory=dict)
@@ -168,6 +182,7 @@ class ArrangeJob:
             "lease_owner": self.lease_owner,
             "lease_expires_at": self.lease_expires_at.isoformat() if self.lease_expires_at else None,
             "fencing_token": self.fencing_token,
+            "execution_id": self.execution_id,
             "checkpoint": deepcopy(self.checkpoint),
             "last_error": self.last_error,
             "revision": self.revision,
@@ -243,6 +258,7 @@ class ArrangeStore(Protocol):
         now: datetime,
         lease_seconds: float,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> bool: ...
 
     async def checkpoint_run(
@@ -253,6 +269,7 @@ class ArrangeStore(Protocol):
         now: datetime,
         checkpoint: dict[str, Any],
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob: ...
     async def complete_run(
         self,
@@ -262,6 +279,7 @@ class ArrangeStore(Protocol):
         now: datetime,
         result: dict[str, Any] | None = None,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob: ...
     async def fail_run(
         self,
@@ -271,8 +289,13 @@ class ArrangeStore(Protocol):
         now: datetime,
         error: str,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob: ...
     async def recover_running(self, *, now: datetime) -> int: ...
+    async def count_queued(self, *, now: datetime) -> int: ...
+    async def atomic_interrupt(
+        self, job_id: str, *, target: Literal["paused", "cancelled"], now: datetime
+    ) -> ArrangeJob: ...
     async def emit_signal(
         self,
         signal: dict[str, Any],
@@ -373,6 +396,7 @@ class InMemoryArrangeStore:
                         next_run_at=now,
                         lease_owner="",
                         lease_expires_at=None,
+                        execution_id="",
                         revision=current.revision + 1,
                         updated_at=now,
                     )
@@ -407,6 +431,7 @@ class InMemoryArrangeStore:
                     lease_owner=worker_id,
                     lease_expires_at=now + timedelta(seconds=lease_seconds),
                     fencing_token=current.fencing_token + 1,
+                    execution_id=f"exec_{uuid.uuid4().hex}",
                     revision=current.revision + 1,
                     updated_at=now,
                 )
@@ -422,6 +447,7 @@ class InMemoryArrangeStore:
         now: datetime,
         lease_seconds: float,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> bool:
         async with self._lock:
             current = self._jobs.get(job_id)
@@ -430,6 +456,7 @@ class InMemoryArrangeStore:
                 or current.status != "running"
                 or current.lease_owner != worker_id
                 or (fencing_token is not None and current.fencing_token != fencing_token)
+                or (execution_id is not None and current.execution_id != execution_id)
             ):
                 return False
             self._jobs[job_id] = replace(
@@ -448,6 +475,7 @@ class InMemoryArrangeStore:
         now: datetime,
         checkpoint: dict[str, Any],
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         if not isinstance(checkpoint, dict):
             raise ValueError("checkpoint must be an object")
@@ -456,6 +484,7 @@ class InMemoryArrangeStore:
                 job_id,
                 worker_id,
                 fencing_token=fencing_token,
+                execution_id=execution_id,
             )
             updated = replace(
                 current,
@@ -474,12 +503,14 @@ class InMemoryArrangeStore:
         now: datetime,
         result: dict[str, Any] | None = None,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         async with self._lock:
             current = self._owned_running(
                 job_id,
                 worker_id,
                 fencing_token=fencing_token,
+                execution_id=execution_id,
             )
             occurrence = self._occurrences.get(current.occurrence_id)
             if occurrence is not None:
@@ -513,6 +544,7 @@ class InMemoryArrangeStore:
                 signal={},
                 lease_owner="",
                 lease_expires_at=None,
+                execution_id="",
                 last_error="",
                 revision=current.revision + 1,
                 updated_at=now,
@@ -528,12 +560,14 @@ class InMemoryArrangeStore:
         now: datetime,
         error: str,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         async with self._lock:
             current = self._owned_running(
                 job_id,
                 worker_id,
                 fencing_token=fencing_token,
+                execution_id=execution_id,
             )
             occurrence = self._occurrences.get(current.occurrence_id)
             retry = occurrence is not None and occurrence.attempt_count < 3
@@ -553,6 +587,7 @@ class InMemoryArrangeStore:
                 signal={},
                 lease_owner="",
                 lease_expires_at=None,
+                execution_id="",
                 last_error=str(error or "arranged operation failed"),
                 revision=current.revision + 1,
                 updated_at=now,
@@ -586,11 +621,63 @@ class InMemoryArrangeStore:
                     next_run_at=now,
                     lease_owner="",
                     lease_expires_at=None,
+                    execution_id="",
                     revision=current.revision + 1,
                     updated_at=now,
                 )
                 recovered += 1
         return recovered
+
+    async def count_queued(self, *, now: datetime) -> int:
+        async with self._lock:
+            return sum(
+                1
+                for job in self._jobs.values()
+                if job.status == "scheduled"
+                and (job.next_run_at is None or job.next_run_at <= now)
+            )
+
+    async def atomic_interrupt(
+        self, job_id: str, *, target: Literal["paused", "cancelled"], now: datetime
+    ) -> ArrangeJob:
+        # user:“运行中任务暂停误变取消”+(目标状态与新一代 token 必须在同一把锁里落地，
+        # 旧执行随后因为 token 与 execution_id 不匹配而无法回写)。
+        async with self._lock:
+            current = self._jobs.get(job_id)
+            if current is None:
+                raise LookupError(f"Arrange job not found: {job_id}")
+            if current.status == target:
+                return deepcopy(current)
+            if current.status in _TERMINAL_STATUSES:
+                raise ValueError(f"Arrange job is terminal: {job_id}")
+            occurrence = self._occurrences.get(current.occurrence_id)
+            if occurrence is not None:
+                self._occurrences[occurrence.id] = replace(
+                    occurrence,
+                    status="pending" if target == "paused" else "cancelled",
+                    started_at=None,
+                    completed_at=None if target == "paused" else now,
+                    updated_at=now,
+                )
+            trigger = deepcopy(current.trigger)
+            if target == "paused":
+                trigger["_paused_from"] = (
+                    "waiting" if current.status == "waiting" else "scheduled"
+                )
+            updated = replace(
+                current,
+                status=target,
+                trigger=trigger,
+                next_run_at=current.next_run_at if target == "paused" else None,
+                lease_owner="",
+                lease_expires_at=None,
+                execution_id="",
+                fencing_token=current.fencing_token + 1,
+                revision=current.revision + 1,
+                updated_at=now,
+            )
+            self._jobs[job_id] = updated
+            return deepcopy(updated)
 
     async def emit_signal(
         self,
@@ -687,6 +774,7 @@ class InMemoryArrangeStore:
         worker_id: str,
         *,
         fencing_token: int | None = None,
+        execution_id: str | None = None,
     ) -> ArrangeJob:
         current = self._jobs.get(job_id)
         if current is None:
@@ -695,6 +783,7 @@ class InMemoryArrangeStore:
             current.status != "running"
             or current.lease_owner != worker_id
             or (fencing_token is not None and current.fencing_token != fencing_token)
+            or (execution_id is not None and current.execution_id != execution_id)
         ):
             raise RuntimeError(f"Arrange job lease lost: {job_id}")
         return current
@@ -867,6 +956,33 @@ class ArrangeManager:
         )
         return await self.store.replace(updated, expected_revision=current.revision)
 
+    async def request_interrupt(
+        self,
+        job_id: str,
+        target: Literal["paused", "cancelled"],
+        *,
+        now: datetime | None = None,
+    ) -> ArrangeJob:
+        """把任务原子地转成 target，并让当前执行立即失效。
+
+        user:“运行中任务暂停误变取消”+(先落库目标状态与新一代 token，
+        再停执行；顺序反过来就会把暂停写成取消，而且旧执行还能回写结果)。
+        """
+        if target not in {"paused", "cancelled"}:
+            raise ValueError("target must be paused or cancelled")
+        clean = str(job_id or "").strip()
+        if not clean:
+            raise ValueError("job_id is required")
+        when = now or _utcnow()
+        current = await self.store.get(clean)
+        if current is None:
+            raise LookupError(f"Arrange job not found: {clean}")
+        if current.status == target:
+            return current
+        if current.status != "running":
+            return await self.update_status(clean, target, now=when)
+        return await self.store.atomic_interrupt(clean, target=target, now=when)
+
     async def emit_signal(
         self,
         signal: dict[str, Any],
@@ -1032,6 +1148,19 @@ def arranged_operation_payload(job: ArrangeJob) -> dict[str, Any]:
     return payload
 
 
+@dataclass
+class _RunningExecution:
+    """一次已领取执行的现场，用于容量核算、fencing 与健康快照。"""
+
+    job_id: str
+    execution_id: str
+    fencing_token: int
+    occurrence_id: str
+    task: asyncio.Task[None] | None = None
+    # user:“引入受管执行进程与进程组”+(每次执行都有属主，吊销后立刻杀掉其进程树)。
+    guard: ExecutionGuard | None = None
+
+
 class ArrangeRunner:
     """Claims durable jobs, renews their leases, and records terminal outcomes."""
 
@@ -1045,7 +1174,10 @@ class ArrangeRunner:
         poll_interval: float = 1.0,
         lease_seconds: float = 30.0,
         claim_limit: int = 4,
+        max_active_jobs: int = 4,
         new_thread_factory: Callable[[ArrangeJob], str | Awaitable[str]] | None = None,
+        max_backoff: float = 30.0,
+        job_timeout_seconds: float | None = None,
     ) -> None:
         self.store = store
         self.executor = executor
@@ -1053,13 +1185,30 @@ class ArrangeRunner:
         self.clock = clock
         self.poll_interval = max(0.01, poll_interval)
         self.lease_seconds = max(1.0, lease_seconds)
+        # user:“全局并发限制（单实例运行）”+(领取批量与同时在跑数是两个独立概念：
+        # claim_limit 只是每轮领取上限，max_active_jobs 才是真正的并发闸门)。
         self.claim_limit = max(1, claim_limit)
+        self.max_active_jobs = max(1, max_active_jobs)
+        self.max_backoff = max(self.poll_interval, max_backoff)
+        # user:“超时后旧执行不能继续跑”+(超时是吊销执行、杀进程树，
+        # 而不是只把协程丢掉让它继续在后台写文件)。
+        self.job_timeout_seconds = job_timeout_seconds
         self.new_thread_factory = new_thread_factory
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
-        self._active_tasks: dict[str, asyncio.Task[None]] = {}
-        self._active_fences: dict[str, int] = {}
+        # 以 execution_id 为键：同一 job 的旧执行与新执行必须能同时被看见，
+        # 否则取消/停止只能触达最新一个，旧的变成无人管理的孤儿任务。
+        self._active: dict[str, _RunningExecution] = {}
+        self._dispatch_lock = asyncio.Lock()
+        self._current_execution: contextvars.ContextVar[_RunningExecution | None] = (
+            contextvars.ContextVar("lamtools_arrange_execution", default=None)
+        )
+        self._queued = 0
+        self._consecutive_failures = 0
+        self._last_error = ""
+        self._last_error_at: datetime | None = None
+        self._stale_execution_rejected = 0
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -1073,27 +1222,71 @@ class ArrangeRunner:
         self._task = None
         self._stopping.set()
         self._wake.set()
-        active = list(self._active_tasks.values())
+        for handle in list(self._active.values()):
+            self._revoke(handle, REVOKE_STOPPED)
+        await self._terminate_all(list(self._active.values()))
+        active = [handle.task for handle in self._active.values() if handle.task is not None]
         for active_task in active:
             active_task.cancel()
         if active:
             await asyncio.gather(*active, return_exceptions=True)
-        self._active_tasks.clear()
-        self._active_fences.clear()
+        self._active.clear()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
 
+    def health(self) -> dict[str, Any]:
+        """后台调度循环的可查询健康快照。
+
+        user:“后台调度器异常自愈及健康检查”+(HTTP 活着不等于调度器活着，
+        必须能直接读到循环存活、容量、在跑数、队列长度和最近错误)。
+        """
+        task = self._task
+        return {
+            "alive": bool(task is not None and not task.done() and not self._stopping.is_set()),
+            "active": len(self._active),
+            "capacity": self.max_active_jobs,
+            "queued": self._queued,
+            "worker_id": self.worker_id,
+            "consecutive_failures": self._consecutive_failures,
+            "last_error": self._last_error,
+            "last_error_at": self._last_error_at.isoformat() if self._last_error_at else None,
+            "stale_execution_rejected": self._stale_execution_rejected,
+            "job_timeout_seconds": self.job_timeout_seconds,
+            "live_processes": sum(
+                handle.guard.live_processes()
+                for handle in self._active.values()
+                if handle.guard is not None
+            ),
+            "revoked_executions": sum(
+                1
+                for handle in self._active.values()
+                if handle.guard is not None and handle.guard.revoked
+            ),
+            "executions": [
+                {
+                    "job_id": handle.job_id,
+                    "execution_id": handle.execution_id,
+                    "fencing_token": handle.fencing_token,
+                    "occurrence_id": handle.occurrence_id,
+                }
+                for handle in self._active.values()
+            ],
+        }
+
     async def cancel(self, job_id: str) -> bool:
-        task = self._active_tasks.get(str(job_id or ""))
-        if task is None or task.done():
+        """停止本 Runner 内的执行并把任务落成 cancelled。
+
+        保留旧语义供既有调用方使用；暂停走 ``interrupt``，不在这里改库。
+        """
+        clean_job_id = str(job_id or "")
+        stopped = await self.interrupt(clean_job_id)
+        if not stopped:
             return False
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
         # Persist the cancellation: without this the job stays ``running`` in
         # the store and gets re-claimed (and re-executed) once its lease
         # expires (audit 07 S2 — cancelled jobs were silently re-run).
         try:
-            current = await self.store.get(str(job_id or ""))
+            current = await self.store.get(clean_job_id)
             if current is not None and current.status == "running":
                 await self.store.replace(
                     replace(
@@ -1101,6 +1294,7 @@ class ArrangeRunner:
                         status="cancelled",
                         lease_owner="",
                         lease_expires_at=None,
+                        execution_id="",
                         fencing_token=current.fencing_token + 1,
                         revision=current.revision + 1,
                         updated_at=self.clock(),
@@ -1108,64 +1302,148 @@ class ArrangeRunner:
                     expected_revision=current.revision,
                 )
         except Exception:  # noqa: BLE001 — 取消失败必须留痕，否则任务会一直 running
-            # 这里静默吞掉正是它要防的场景：落库失败后任务仍是 running，
-            # 租约到期会被重新领取（2026-09-25 审计 P3）。
-            _logger.warning("arrange cancel could not be persisted for %s", job.id, exc_info=True)
+            _logger.warning(
+                "arrange cancel could not be persisted for %s", clean_job_id, exc_info=True
+            )
             return False
+        return True
+
+    async def interrupt(self, job_id: str) -> bool:
+        """只停止本 Runner 内该任务正在跑的协程，不动数据库状态。
+
+        user:“运行中任务暂停误变取消”+(暂停的正确做法是先原子落库目标状态，
+        再停执行；如果这里顺手把库改成 cancelled，用户点暂停就会变成取消)。
+        """
+        clean_job_id = str(job_id or "")
+        handles = [item for item in self._active.values() if item.job_id == clean_job_id]
+        if not handles:
+            return False
+        # 先吊销再杀进程树，最后才取消协程：顺序反了会让正在跑的命令
+        # 继续写完工作区才被发现（to_thread 里的代码根本收不到 cancel）。
+        for handle in handles:
+            self._revoke(handle, REVOKE_CANCELLED)
+        await self._terminate_all(handles)
+        tasks = [item.task for item in handles if item.task is not None]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         return True
 
     def wake(self) -> None:
         self._wake.set()
 
-    async def run_due_once(self) -> int:
-        now = self.clock()
-        jobs = await self.store.claim_due(
-            now=now,
-            worker_id=self.worker_id,
-            lease_seconds=self.lease_seconds,
-            limit=self.claim_limit,
-        )
-        # Do NOT await the spawned tasks here: a long-running job would block
-        # the poll loop and newly due jobs could not be claimed until it
-        # finished (audit 07 S3).  Done-callbacks clean up _active_tasks.
-        for job in jobs:
-            self._active_fences[job.id] = job.fencing_token
-            task = asyncio.create_task(self._execute(job), name=f"arrange-job:{job.id}")
-            self._active_tasks[job.id] = task
-            def _note_task_result(finished: asyncio.Task, *, job_id: str = job.id) -> None:
-                self._active_tasks.pop(job_id, None)
-                self._active_fences.pop(job_id, None)
-                if finished.cancelled():
-                    return
-                # 取回异常：否则 asyncio 只打一行 "Task exception was never
-                # retrieved"，失败在日志里不可见（2026-09-25 审计 P3）。
-                error = finished.exception()
-                if error is not None:
-                    _logger.warning("arrange job %s failed: %s", job_id, error, exc_info=error)
+    @property
+    def _active_tasks(self) -> dict[str, asyncio.Task[None]]:
+        # 兼容视图：历史调用方（测试、子 agent 回收）按 job_id 取当前执行的 Task。
+        # 内部仍以 execution_id 为准，避免同名覆盖导致旧执行变孤儿。
+        return {
+            handle.job_id: handle.task
+            for handle in self._active.values()
+            if handle.task is not None
+        }
 
-            task.add_done_callback(_note_task_result)
-        return len(jobs)
+    @property
+    def active_executions(self) -> list[dict[str, Any]]:
+        """当前在跑的执行（只读视图，供 CLI / 健康检查 / 测试断言）。"""
+        return [
+            {
+                "job_id": handle.job_id,
+                "execution_id": handle.execution_id,
+                "fencing_token": handle.fencing_token,
+                "occurrence_id": handle.occurrence_id,
+                "task": handle.task,
+            }
+            for handle in self._active.values()
+        ]
+
+    async def run_due_once(self) -> int:
+        async with self._dispatch_lock:
+            # 容量核算必须在领取之前完成：先算空槽再 claim，
+            # 否则轮询越快并发越高，上限形同虚设。
+            available = max(0, self.max_active_jobs - len(self._active))
+            if available == 0:
+                return 0
+            now = self.clock()
+            jobs = await self.store.claim_due(
+                now=now,
+                worker_id=self.worker_id,
+                lease_seconds=self.lease_seconds,
+                limit=min(available, self.claim_limit),
+            )
+            for job in jobs:
+                self._spawn(job)
+            await self._refresh_queue_depth(now)
+            return len(jobs)
+
+    def _spawn(self, job: ArrangeJob) -> None:
+        handle = _RunningExecution(
+            job_id=job.id,
+            execution_id=job.execution_id or f"exec_legacy_{job.fencing_token}",
+            fencing_token=job.fencing_token,
+            occurrence_id=job.occurrence_id,
+            guard=ExecutionGuard(
+                execution_id=job.execution_id or f"exec_legacy_{job.fencing_token}",
+                job_id=job.id,
+                fencing_token=job.fencing_token,
+                worker_id=self.worker_id,
+            ),
+        )
+        self._active[handle.execution_id] = handle
+        task = asyncio.create_task(
+            self._execute(job, handle),
+            name=f"arrange-job:{job.id}:{handle.execution_id}",
+        )
+        handle.task = task
+
+        def _note_task_result(finished: asyncio.Task, *, execution_id: str = handle.execution_id) -> None:
+            self._active.pop(execution_id, None)
+            if finished.cancelled():
+                return
+            # 取回异常：否则 asyncio 只打一行 "Task exception was never
+            # retrieved"，失败在日志里不可见（2026-09-25 审计 P3）。
+            error = finished.exception()
+            if error is not None:
+                _logger.warning("arrange job %s failed: %s", execution_id, error, exc_info=error)
+
+        task.add_done_callback(_note_task_result)
+
+    async def _refresh_queue_depth(self, now: datetime) -> None:
+        counter = getattr(self.store, "count_queued", None)
+        if counter is None:
+            return
+        try:
+            self._queued = int(await counter(now=now))
+        except Exception:  # noqa: BLE001 — 指标读取失败不能影响调度
+            _logger.debug("arrange queue depth probe failed", exc_info=True)
 
     async def checkpoint(self, job_id: str, checkpoint: dict[str, Any]) -> ArrangeJob:
-        """Persist progress for the runner's currently claimed execution.
+        """Persist progress for the execution that is calling right now.
 
-        The helper deliberately obtains the fence captured at claim time rather
-        than re-reading the job.  Re-reading would let a stale task adopt a
-        newer lease after takeover and defeat the fencing contract.
+        user:“租约 fencing 与旧执行隔离”+(不能按 job_id 去读"当前"fence：
+        租约过期被重新领取后，那个值已经是新执行的了，旧执行会借用它写进检查点)。
         """
         clean_job_id = str(job_id or "").strip()
         if not clean_job_id:
             raise ValueError("job_id is required")
-        fencing_token = self._active_fences.get(clean_job_id)
-        if fencing_token is None:
-            raise RuntimeError(f"Arrange job is not active: {clean_job_id}")
+        handle = self._resolve_execution(clean_job_id)
         return await self.store.checkpoint_run(
             job_id=clean_job_id,
             worker_id=self.worker_id,
             now=self.clock(),
             checkpoint=checkpoint,
-            fencing_token=fencing_token,
+            fencing_token=handle.fencing_token,
+            execution_id=handle.execution_id,
         )
+
+    def _resolve_execution(self, job_id: str) -> _RunningExecution:
+        current = self._current_execution.get()
+        if current is not None and current.job_id == job_id:
+            return current
+        matches = [item for item in self._active.values() if item.job_id == job_id]
+        if len(matches) != 1:
+            raise RuntimeError(f"Arrange job is not active: {job_id}")
+        return matches[0]
 
     async def checkpoint_run(self, job_id: str, checkpoint: dict[str, Any]) -> ArrangeJob:
         """Compatibility alias for callers that use the store operation name."""
@@ -1173,7 +1451,32 @@ class ArrangeRunner:
 
     async def _run(self) -> None:
         while not self._stopping.is_set():
-            await self.run_due_once()
+            try:
+                await self.run_due_once()
+                self._consecutive_failures = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 循环级自愈
+                # user:“后台调度器异常自愈及健康检查”+(一次 SQLite busy 就让
+                # 调度循环永久停摆、而 HTTP 还报 ok，是最危险的一种静默失败)。
+                self._consecutive_failures += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._last_error_at = self.clock()
+                delay = min(
+                    self.max_backoff,
+                    self.poll_interval * float(2 ** min(self._consecutive_failures - 1, 5)),
+                )
+                _logger.warning(
+                    "arrange dispatch failed (%s in a row), retrying in %.2fs: %s",
+                    self._consecutive_failures,
+                    delay,
+                    exc,
+                )
+                try:
+                    await asyncio.wait_for(self._stopping.wait(), timeout=delay)
+                except TimeoutError:
+                    pass
+                continue
             if self._stopping.is_set():
                 return
             self._wake.clear()
@@ -1182,81 +1485,154 @@ class ArrangeRunner:
             except TimeoutError:
                 pass
 
-    async def _execute(self, job: ArrangeJob) -> None:
-        effective_job = job
-        if job.session_strategy == "new" and self.new_thread_factory is not None:
-            try:
-                new_id = self.new_thread_factory(job)
-                if inspect.isawaitable(new_id):
-                    new_id = await new_id
-                new_thread = str(new_id or "").strip()
-                if new_thread:
-                    effective_job = replace(job, thread_id=new_thread, updated_at=self.clock())
-            except Exception:
-                pass  # fall through with original thread_id
-        renewer = asyncio.create_task(self._renew(effective_job.id, job.fencing_token))
+    @staticmethod
+    def _revoke(handle: _RunningExecution, reason: str) -> None:
+        if handle.guard is not None:
+            handle.guard.revoke(reason)
+
+    @staticmethod
+    async def _terminate_all(handles: list[_RunningExecution]) -> int:
+        guards = [handle.guard for handle in handles if handle.guard is not None]
+        if not guards:
+            return 0
+
+        def _kill() -> int:
+            return sum(guard.terminate_all() for guard in guards)
+
+        # 杀进程树会同步调用 taskkill/killpg，放到线程里做，别卡住调度循环。
         try:
-            # Run the executor off the event loop: a blocking executor would
-            # starve the lease renewer, the lease would expire mid-run and the
-            # job would be re-claimed (and re-executed) by this or another
-            # worker (audit 07 S2).  Async executors still work — their
-            # coroutine is awaited here on the loop.
-            result = await asyncio.to_thread(self.executor, effective_job)
+            return await asyncio.to_thread(_kill)
+        except Exception:  # noqa: BLE001 — 杀不掉必须是可见的失败
+            _logger.warning("arrange execution terminate failed", exc_info=True)
+            return 0
+
+    async def _invoke_executor(self, job: ArrangeJob) -> Any:
+        async def _call() -> Any:
+            result = await asyncio.to_thread(self.executor, job)
             if inspect.isawaitable(result):
                 result = await result
-            status = (
-                result.get("status", "ok")
-                if isinstance(result, dict)
-                else getattr(result, "status", "ok")
-            )
-            if status == "error":
-                payload = (
-                    result.get("payload", {})
+            return result
+
+        if not self.job_timeout_seconds:
+            return await _call()
+        # user:“超时后旧执行不能继续跑”+(到点吊销并杀进程树，
+        # 不是丢下 to_thread 里的线程继续跑)。
+        return await asyncio.wait_for(_call(), timeout=self.job_timeout_seconds)
+
+    async def _execute(self, job: ArrangeJob, handle: _RunningExecution) -> None:
+        context_token = self._current_execution.set(handle)
+        guard_token = bind_guard(handle.guard)
+        effective_job = job
+        try:
+            if job.session_strategy == "new" and self.new_thread_factory is not None:
+                try:
+                    new_id = self.new_thread_factory(job)
+                    if inspect.isawaitable(new_id):
+                        new_id = await new_id
+                    new_thread = str(new_id or "").strip()
+                    if new_thread:
+                        effective_job = replace(job, thread_id=new_thread, updated_at=self.clock())
+                except Exception:
+                    pass  # fall through with original thread_id
+            renewer = asyncio.create_task(self._renew(handle))
+            try:
+                # Run the executor off the event loop: a blocking executor would
+                # starve the lease renewer, the lease would expire mid-run and
+                # the job would be re-claimed (and re-executed) by this or
+                # another worker (audit 07 S2).  Async executors still work —
+                # their coroutine is awaited here on the loop.
+                result = await self._invoke_executor(effective_job)
+                status = (
+                    result.get("status", "ok")
                     if isinstance(result, dict)
-                    else getattr(result, "payload", {})
+                    else getattr(result, "status", "ok")
                 )
-                message = payload.get("error") if isinstance(payload, dict) else "arranged operation failed"
-                raise RuntimeError(str(message or "arranged operation failed"))
-            await self.store.complete_run(
-                job_id=effective_job.id,
-                worker_id=self.worker_id,
-                now=self.clock(),
-                result=_execution_result(result),
-                fencing_token=job.fencing_token,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # A lease takeover is a normal recovery boundary.  The stale
-            # worker must not turn its rejected completion into a second
-            # failure (or an unhandled task exception).
-            if not _is_lease_lost(exc):
+                if status == "error":
+                    payload = (
+                        result.get("payload", {})
+                        if isinstance(result, dict)
+                        else getattr(result, "payload", {})
+                    )
+                    message = payload.get("error") if isinstance(payload, dict) else "arranged operation failed"
+                    raise RuntimeError(str(message or "arranged operation failed"))
+                await self.store.complete_run(
+                    job_id=effective_job.id,
+                    worker_id=self.worker_id,
+                    now=self.clock(),
+                    result=_execution_result(result),
+                    fencing_token=handle.fencing_token,
+                    execution_id=handle.execution_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError as exc:
+                # 超时：先吊销、杀进程树，再按失败记账（可重试）。
+                self._revoke(handle, REVOKE_TIMEOUT)
+                await self._terminate_all([handle])
                 try:
                     await self.store.fail_run(
                         job_id=effective_job.id,
                         worker_id=self.worker_id,
                         now=self.clock(),
-                        error=str(exc) or type(exc).__name__,
-                        fencing_token=job.fencing_token,
+                        error=(
+                            f"arranged operation timed out after "
+                            f"{self.job_timeout_seconds}s"
+                        ),
+                        fencing_token=handle.fencing_token,
+                        execution_id=handle.execution_id,
                     )
                 except Exception as failure_exc:
-                    if not _is_lease_lost(failure_exc):
+                    if _is_lease_lost(failure_exc):
+                        self._stale_execution_rejected += 1
+                    else:
                         raise
+                del exc
+            except Exception as exc:
+                # A lease takeover is a normal recovery boundary.  The stale
+                # worker must not turn its rejected completion into a second
+                # failure (or an unhandled task exception).
+                if _is_lease_lost(exc):
+                    self._stale_execution_rejected += 1
+                else:
+                    try:
+                        await self.store.fail_run(
+                            job_id=effective_job.id,
+                            worker_id=self.worker_id,
+                            now=self.clock(),
+                            error=str(exc) or type(exc).__name__,
+                            fencing_token=handle.fencing_token,
+                            execution_id=handle.execution_id,
+                        )
+                    except Exception as failure_exc:
+                        if _is_lease_lost(failure_exc):
+                            self._stale_execution_rejected += 1
+                        else:
+                            raise
+            finally:
+                renewer.cancel()
+                await asyncio.gather(renewer, return_exceptions=True)
         finally:
-            renewer.cancel()
-            await asyncio.gather(renewer, return_exceptions=True)
+            reset_guard(guard_token)
+            self._current_execution.reset(context_token)
 
-    async def _renew(self, job_id: str, fencing_token: int) -> None:
+    async def _renew(self, handle: _RunningExecution) -> None:
         while True:
             await asyncio.sleep(max(0.5, self.lease_seconds / 3))
             renewed = await self.store.renew_lease(
-                job_id=job_id,
+                job_id=handle.job_id,
                 worker_id=self.worker_id,
                 now=self.clock(),
                 lease_seconds=self.lease_seconds,
-                fencing_token=fencing_token,
+                fencing_token=handle.fencing_token,
+                execution_id=handle.execution_id,
             )
             if not renewed:
+                # user:“租约失效后旧执行不能继续修改工作区”+(续租失败不是静默返回，
+                # 而是立刻吊销这次执行、杀掉它的进程树、并停掉协程)。
+                self._revoke(handle, REVOKE_LEASE_LOST)
+                await self._terminate_all([handle])
+                if handle.task is not None and not handle.task.done():
+                    handle.task.cancel()
                 return
 
 

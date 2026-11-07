@@ -47,6 +47,7 @@ fn event(method: &str, seq: u64) -> BridgeEvent {
         seq,
         payload: serde_json::json!({}),
         client_message_id: None,
+        created_at_ms: None,
     }
 }
 
@@ -88,6 +89,7 @@ impl TurnRunner for Spy {
             seq: 1,
             payload: serde_json::json!({"content": "SECRET TRANSCRIPT"}),
             client_message_id: None,
+            created_at_ms: None,
         }])
     }
 
@@ -98,6 +100,7 @@ impl TurnRunner for Spy {
             seq: 1,
             payload: serde_json::json!({"content": "SECRET TRANSCRIPT"}),
             client_message_id: None,
+            created_at_ms: None,
         }])
     }
 

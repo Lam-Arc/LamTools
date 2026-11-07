@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from pathlib import Path
 
 from lamtools_core.app.base_agent import assemble_core_agent_plugins
@@ -104,22 +106,31 @@ def test_backend_handlers_reach_the_agent_assembly(tmp_path: Path) -> None:
 
 async def test_operation_handler_receives_the_plugin_context(tmp_path: Path) -> None:
     from lamtools_core.app import OperationCatalog
-    from lamtools_core.plugin_system import PluginHost
+    from lamtools_core.plugin_system import PluginContext, PluginHost
+    from lamtools_core.plugin_system.backend_runtime import register_manager
+    from lamtools_core.plugin_system.lifecycle import load_enabled_plugin_backends
     from lamtools_core.plugin_system.operations import register_plugin_system_operations
 
     plugin_root = tmp_path / "plugins"
     make_plugin(plugin_root)
-    assemble_core_agent_plugins(
-        data_dir=tmp_path / "data",
-        work_root=tmp_path,
-        plugin_roots=[plugin_root],
-    )
     host = PluginHost(
         roots=[plugin_root],
         state_path=tmp_path / "data" / "plugin-system.jsonc",
     )
+    context = PluginContext(work_root=tmp_path, data_dir=tmp_path / "data")
+    # A backend plugin operation is only available while its backend is hosted,
+    # so the test hosts this plugin the same way production does instead of
+    # asserting against a bare catalog with no backend manager.
+    handles = load_enabled_plugin_backends(host.discover(), context, start=True)
+    register_manager(host, handles, context)
     catalog = OperationCatalog()
     register_plugin_system_operations(catalog, host)
+
+    deadline = time.monotonic() + 10.0
+    while not host.available("demo"):
+        if time.monotonic() > deadline:
+            raise AssertionError("demo backend never became available")
+        await asyncio.sleep(0.02)
 
     result = await catalog.execute("demo.op", {"work_root": str(tmp_path)})
 

@@ -40,19 +40,13 @@ use tauri::{
 };
 
 mod migration;
+mod p2p_host;
 mod pet;
-mod remote;
 mod split_pane;
 #[cfg(windows)]
 mod windows_close_request;
 #[cfg(windows)]
 mod windows_snap_layout;
-use remote::{
-    start_local_control_server, ControlServer, DesktopAccountSession, DesktopAccountStatus,
-    GatewayStartOptions, GatewayStatus, NodeIdentityStatus, PairingCodePayload,
-    RemoteGatewayManager,
-};
-
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const TRAY_ID: &str = "lamtools-tray";
@@ -82,8 +76,6 @@ struct BackendState {
     child: Mutex<Option<Child>>,
     #[cfg(windows)]
     backend_job: Mutex<Option<usize>>,
-    remote_gateway: RemoteGatewayManager,
-    control_server: Mutex<Option<ControlServer>>,
     quitting: AtomicBool,
 }
 
@@ -254,93 +246,15 @@ fn show_main_window(app: tauri::AppHandle) {
 pub(crate) fn request_quit(app: &tauri::AppHandle) {
     let state = app.state::<BackendState>();
     state.quitting.store(true, Ordering::SeqCst);
-    let _ = state.remote_gateway.shutdown();
-    stop_local_control_server(state.inner());
     stop_backend(state.inner());
+    // user:“把这台电脑上的桌面端跑起来”+(传输进程同为子进程，退出路径也要一起收掉)。
+    p2p_host::stop(app.state::<p2p_host::P2pHostState>().inner());
     app.exit(0);
 }
 
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     request_quit(&app);
-}
-
-/// Start the desktop-only RemoteGateway.  Core itself remains on the
-/// loopback address returned by `get_api_base`; no caller can supply a remote
-/// Core URL through this command.
-#[tauri::command]
-fn remote_gateway_start(
-    state: tauri::State<'_, BackendState>,
-    options: Option<GatewayStartOptions>,
-) -> Result<GatewayStatus, String> {
-    let api_base = state
-        .api_base
-        .lock()
-        .map_err(|_| "backend state lock failed".to_string())?
-        .clone()
-        .ok_or_else(|| "backend not yet started".to_string())?;
-    state
-        .remote_gateway
-        .start(&api_base, options.unwrap_or_default())
-}
-
-#[tauri::command]
-fn remote_gateway_stop(state: tauri::State<'_, BackendState>) -> Result<GatewayStatus, String> {
-    state.remote_gateway.stop()
-}
-
-#[tauri::command]
-fn remote_gateway_status(state: tauri::State<'_, BackendState>) -> Result<GatewayStatus, String> {
-    state.remote_gateway.status()
-}
-
-#[tauri::command]
-fn remote_pairing_create(
-    state: tauri::State<'_, BackendState>,
-) -> Result<PairingCodePayload, String> {
-    state.remote_gateway.pairing_create()
-}
-
-#[tauri::command]
-fn remote_device_revoke(
-    state: tauri::State<'_, BackendState>,
-    device_id: String,
-) -> Result<bool, String> {
-    state.remote_gateway.revoke_device(&device_id)
-}
-
-#[tauri::command]
-fn remote_account_status(
-    state: tauri::State<'_, BackendState>,
-) -> Result<Option<DesktopAccountStatus>, String> {
-    state.remote_gateway.account_status()
-}
-
-#[tauri::command]
-fn remote_account_identity(
-    state: tauri::State<'_, BackendState>,
-    server_id: Option<String>,
-    username: Option<String>,
-) -> Result<NodeIdentityStatus, String> {
-    match (server_id, username) {
-        (Some(server_id), Some(username)) => state
-            .remote_gateway
-            .node_identity_for_account(&server_id, &username),
-        _ => state.remote_gateway.node_identity(),
-    }
-}
-
-#[tauri::command]
-fn remote_account_save(
-    state: tauri::State<'_, BackendState>,
-    session: DesktopAccountSession,
-) -> Result<DesktopAccountStatus, String> {
-    state.remote_gateway.save_account_session(session)
-}
-
-#[tauri::command]
-fn remote_account_logout(state: tauri::State<'_, BackendState>) -> Result<(), String> {
-    state.remote_gateway.account_logout()
 }
 
 #[tauri::command]
@@ -769,6 +683,36 @@ fn install_overlay_panic_safety() {
     }));
 }
 
+/// What a second instance does: hand its command line to the running one.
+///
+/// user:“把桌面端跑起来”+(开发版必须能和正在运行的正式版并存：单实例锁按 bundle
+/// identifier 建全局互斥量，正式版在跑时 dev 实例一启动就被杀掉，窗口永远不会出现。)
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn on_second_instance(app: &tauri::AppHandle, args: Vec<String>, _cwd: String) {
+    // user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”+(第二实例带
+    // `--ping-commit=<扇区id>` 时直接驱动正在运行的实例执行该扇区，测完后退出。)
+    if let Some(sector) = ping_commit_from_args(&args) {
+        pet::simulate_ping_commit(app, &sector);
+        return;
+    }
+    // 隔离测试：冻结截图页心跳，让看门狗把"页面死掉"的整屏窗口收回去。
+    if args.iter().any(|arg| arg == "--capture-freeze-heartbeat") {
+        pet::simulate_capture_heartbeat_stall(app);
+        return;
+    }
+    // 隔离测试：只在本实例打开/收起 Ping 环，不触发正式实例的全局快捷键。
+    if args.iter().any(|arg| arg == "--ping-ring-open") {
+        pet::simulate_ping_ring(app, "down");
+        return;
+    }
+    if args.iter().any(|arg| arg == "--ping-ring-close") {
+        pet::simulate_ping_ring(app, "up");
+        return;
+    }
+    // Focus the existing window instead of starting a second instance.
+    reveal_main_window(app);
+}
+
 fn main() {
     install_overlay_panic_safety();
     // user:“迁移”+(应用标识从 com.lamtools.lamcore 改成 com.lamtools.sunday，
@@ -787,42 +731,24 @@ fn main() {
         child: Mutex::new(None),
         #[cfg(windows)]
         backend_job: Mutex::new(None),
-        remote_gateway: RemoteGatewayManager::default(),
-        control_server: Mutex::new(None),
         quitting: AtomicBool::new(false),
     };
 
-    tauri::Builder::default()
-        // Single-instance guard: two instances would each spawn a backend
-        // writing the same .lam/core.db (SQLite lock storms, config
-        // clobbering) (audit 20 S3).
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // user:“你为什么不CLI先行用CLI直接执行 ping 环内的操作”+(第二实例带
-            // `--ping-commit=<扇区id>` 时直接驱动正在运行的实例执行该扇区，测完后退出。)
-            if let Some(sector) = ping_commit_from_args(&args) {
-                pet::simulate_ping_commit(app, &sector);
-                return;
-            }
-            // 隔离测试：冻结截图页心跳，让看门狗把"页面死掉"的整屏窗口收回去。
-            if args.iter().any(|arg| arg == "--capture-freeze-heartbeat") {
-                pet::simulate_capture_heartbeat_stall(app);
-                return;
-            }
-            // 隔离测试：只在本实例打开/收起 Ping 环，不触发正式实例的全局快捷键。
-            if args.iter().any(|arg| arg == "--ping-ring-open") {
-                pet::simulate_ping_ring(app, "down");
-                return;
-            }
-            if args.iter().any(|arg| arg == "--ping-ring-close") {
-                pet::simulate_ping_ring(app, "up");
-                return;
-            }
-            // Focus the existing window instead of starting a second instance.
-            reveal_main_window(app);
-        }))
+    let builder = tauri::Builder::default();
+    // Single-instance guard: two instances would each spawn a backend
+    // writing the same .lam/core.db (SQLite lock storms, config
+    // clobbering) (audit 20 S3).
+    //
+    // user:“把桌面端跑起来”+(只在正式版注册：锁键是 bundle identifier，开发版与
+    // 已安装的正式版相同，正式版在跑时 dev 实例会被直接杀掉，窗口永远不出现。)
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(on_second_instance));
+    builder
         .manage(state)
         // user:“你现在负责在现有 Sunday 项目中实现「Sunday 桌宠 V1.0」”+(桌宠覆盖层状态独立托管，禁用时不注册任何窗口/钩子)
         .manage(pet::PetState::default())
+        // user:“P2P 作为独立、可复用的传输组件”+(桌面只托管那个进程与它的票据)。
+        .manage(p2p_host::P2pHostState::default())
         .setup(|app| {
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
@@ -862,27 +788,6 @@ fn main() {
                         };
                         *api_slot = Some(api_base.clone());
                         drop(api_slot);
-                        match start_local_control_server(
-                            state.remote_gateway.clone(),
-                            api_base.clone(),
-                        ) {
-                            Ok(server) => {
-                                if let Ok(mut slot) = state.control_server.lock() {
-                                    slot.replace(server);
-                                }
-                            }
-                            Err(error) => {
-                                eprintln!("[sunday] remote CLI control server failed: {error}")
-                            }
-                        }
-                        if state.remote_gateway.auto_start_enabled().unwrap_or(false) {
-                            if let Err(error) = state
-                                .remote_gateway
-                                .start(&api_base, GatewayStartOptions::default())
-                            {
-                                eprintln!("[sunday] remote gateway auto-start failed: {error}");
-                            }
-                        }
                         // Watch the backend process: if it dies mid-run (panic,
                         // fatal Python exception) the frontend gets an event and
                         // can show a recovery banner instead of silently failing
@@ -956,15 +861,13 @@ fn main() {
             open_plugin_window,
             show_main_window,
             quit_app,
-            remote_gateway_start,
-            remote_gateway_stop,
-            remote_gateway_status,
-            remote_pairing_create,
-            remote_device_revoke,
-            remote_account_status,
-            remote_account_identity,
-            remote_account_save,
-            remote_account_logout,
+            p2p_host::p2p_ticket,
+            p2p_host::p2p_qr,
+            p2p_host::p2p_serve_start,
+            p2p_host::p2p_serve_stop,
+            p2p_host::p2p_status,
+            p2p_host::p2p_devices,
+            p2p_host::p2p_revoke,
             ping,
             get_app_info,
             pick_directory,
@@ -1027,9 +930,8 @@ fn main() {
                     let _ = window.hide();
                 }
                 tauri::WindowEvent::Destroyed if window.label() == "main" => {
-                    let _ = state.remote_gateway.shutdown();
-                    stop_local_control_server(state.inner());
                     stop_backend(state.inner());
+                    p2p_host::stop(window.state::<p2p_host::P2pHostState>().inner());
                 }
                 _ => {}
             }
@@ -1368,14 +1270,6 @@ fn wait_for_health(port: u16, state: &BackendState) -> Result<(), Box<dyn std::e
         thread::sleep(Duration::from_millis(250));
     }
     Err("backend health check timed out after 90s".into())
-}
-
-fn stop_local_control_server(state: &BackendState) {
-    if let Ok(mut slot) = state.control_server.lock() {
-        if let Some(server) = slot.take() {
-            server.stop();
-        }
-    }
 }
 
 fn stop_backend(state: &BackendState) {

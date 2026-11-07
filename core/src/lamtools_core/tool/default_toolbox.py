@@ -1307,6 +1307,22 @@ class CoreToolbox:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for spec in self.plugin_tool_specs:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+            # user:“插件后端被错误阻断”+(清单声明 auto_allow 却没写操作等级时，
+            # 不能落进“未注册操作=3 级破坏性”的默认：那会让只读类插件工具在只读档
+            # 被能力上限直接拦掉、在其它档每次都要用户点确认，声明形同废纸。
+            # 只有「声明 auto_allow 且未显式声明等级」的插件工具按 1 级登记；
+            # 显式等级优先（含更严格值），ask_user 与 hard_block 仍走原默认)。
+            if (
+                spec.permission in {"auto_allow", "ask_user"}
+                and "operation_level" not in (spec.metadata or {})
+                and spec.name not in self._native_operation_levels
+            ):
+                # ask_user maps to 2: it keeps asking under the default preset,
+                # and only the user's explicit auto mode stops asking. Level 3
+                # stays reserved for genuinely destructive operations.
+                self._native_operation_levels[spec.name] = (
+                    1 if spec.permission == "auto_allow" else 2
+                )
         from lamtools_core.plugin_system.manager_tools import plugin_manager_tool_specs
 
         plugin_manager_specs = (
@@ -1709,6 +1725,24 @@ class CoreToolbox:
         return replace(call, arguments=args)
 
     def prepare_call(self, call: ToolCall) -> ToolCall:
+        # user:“确保取消、超时、租约失效后，旧执行不能继续修改工作区
+        # 或产生未经授权的副作用”+(工具调用是 Agent Loop 唯一的动作出口，
+        # 在这里硬拒比指望模型自己停手可靠得多；不改循环本身)。
+        from lamtools_core.runtime.execution_guard import (
+            execution_revoked_reason as _execution_revoked_reason,
+        )
+
+        revoked = _execution_revoked_reason()
+        if revoked:
+            return replace(call, requires_approval=False, metadata={
+                **dict(call.metadata or {}),
+                "approval": {
+                    "tier": HARD_BLOCK,
+                    "blocked": True,
+                    "requires_approval": False,
+                    "reason": f"Execution revoked: {revoked}",
+                },
+            })
         call = self._pin_execution_arguments(call)
         self._refresh_runtime_permissions()
         self._dynamic_plugin_specs(work_root=self._call_work_root(call, self.work_root))
@@ -1742,9 +1776,19 @@ class CoreToolbox:
                 call.name,
                 call.arguments if isinstance(call.arguments, dict) else {},
             )
+            # user:“策略设为禁止委派时，直接执行要报禁用，不能报放行”
+            # +(这个分支是禁用/硬拦截的兜底，它强制 blocked；若沿用网关的理由，
+            # 一个本该放行的等级判定（“操作等级 1，自动放行”）就会被贴到阻断结果
+            # 上，模型和日志都会误以为这是许可。禁用类阻断给出自己的原因，硬拦截
+            # 才使用网关的理由)。
+            reason = (
+                f"Tool disabled: {call.name}"
+                if call.name in self.disabled_tools
+                else (decision.reason or f"Tool '{call.name}' is hard-blocked")
+            )
             approval = {
                 "tier": decision.permission_tier,
-                "reason": decision.reason,
+                "reason": reason,
                 "blocked": True,
                 "requires_approval": False,
             }

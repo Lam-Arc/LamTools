@@ -17,7 +17,7 @@ const DIVIDER_HANDLE = 10
 const DIVIDER_END_GUARD = 18
 // user:“审查分屏代码，并优化”+(标签栏高度只有一个来源，内容区与空状态不再各自硬编码 36px)。
 export const SPLIT_TAB_BAR_HEIGHT = 36
-// user:“审查分屏代码，并优化”+(同一份内容、同一项目范围才算同一个标签；设置/搜索/插件/账号与项目无关，切换项目后仍复用原标签)。
+// user:“审查分屏代码，并优化”+(同一份内容、同一项目范围才算同一个标签；设置/搜索/插件/远程连接与项目无关，切换项目后仍复用原标签)。
 const GLOBAL_PAGES = new Set(['settings', 'search', 'plugins', 'account'])
 export function sameTab(a: SplitTab, b: SplitTab): boolean {
   const sharedScope = a.kind === 'page' && GLOBAL_PAGES.has(a.resource)

@@ -54,9 +54,15 @@ async def test_attachment_only_turn_reaches_model(tmp_path, monkeypatch, text):
     assert result.status == "ok"
     assert result.payload["snapshot"]["status"] == "completed"
     user_message = next(message for message in llm.requests[0].messages if message.role == "user")
+    # Pointer-only contract: the prompt carries the absolute path, and the model
+    # reads the body through read_file when it actually needs it.
+    # Pointer-only contract: the prompt carries the absolute path in a text
+    # block, and the model reads the body through read_file when it needs it.
     assert isinstance(user_message.content, list)
-    assert "Attachment-only evidence" in user_message.content[0]["text"]
-    assert "note.txt" in user_message.content[0]["text"]
+    pointer_text = user_message.content[0]["text"]
+    assert "note.txt" in pointer_text
+    assert path.resolve().as_posix() in pointer_text
+    assert "Attachment-only evidence" not in pointer_text
 
 
 @pytest.mark.asyncio

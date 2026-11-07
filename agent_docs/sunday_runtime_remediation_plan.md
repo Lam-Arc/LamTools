@@ -128,19 +128,35 @@ ask = not blocked and not approved_mcp and level > threshold
 
 所以 `auto_approve` 只代表"不必等人回答"，不代表"放宽到第 2 级"。当前产品行为是自洽的。
 
-### 6.3 判定：测试契约过期，不是产品缺陷
+### 6.3 判定（已推翻上文，按实测更正）
 
-- `default_toolbox.py:1125` 的 docstring 写着 `auto_approve bypasses the gate`，这句是过时注释，
-  与现在的两维模型冲突，需要同步修正文案（不是改逻辑）。
-- 若反过来让 `auto_approve` 隐含 `permission_preset="auto"`，等于**把免问线从 1 抬到 2**，
-  属于放宽安全语义 —— 按约束（不得为测试通过改安全语义）**不予采纳**。
+上文「产品行为自洽」的结论是错的。实测：`ApprovalGate.check` 从不读 `self.approval_policy`，
+`auto_approve` 与 `require` 给出逐字相同的判定，这个开关此前完全是死数据。
 
-### 6.4 修复方案（未执行，仅记录）
+修复前复现：
 
-1. 逐个用例判断真实意图：
-   - 意图是"自动回答审批、但仍受档位限制" → 保留 `approval_policy`，断言改为期望 blocked/requires_approval；
-   - 意图是"验证 tier-2 可放行" → 显式加 `permission_preset="auto"`。
-2. 27 项必须逐项判断，不能批量 sed，否则会把"应该拦截"的用例也放开。
-3. 同步修正 `default_toolbox.py:1125` 的过时 docstring。
+    build_core_toolbox(work_root=ws, approval_policy="auto_approve")
+      write_file  level=2 auto_approve_level=1 available_level=3
+      requires_approval=True  reason=操作等级 2 超过免问线 1，需要确认
+      execute -> status=blocked  error=Tool requires approval and was not routed through a waiting request
+    approval_policy="require" 的判定与上面完全一致
 
-**这一步没做**：需要逐项读用例语义，属于下一轮的第一件事。
+所以 27 项不是「测试契约过期」，是产品缺陷外加一处配置自相矛盾（`sub_agent` 声明
+`auto_allow` 却被判 2 级，在 `read_only` 档里直接硬拦）。
+
+### 6.4 修复（已执行，提交 ddfab61d）
+
+1. `ApprovalGate.check` 增加 `auto_answered`：策略是 `auto_approve` 时不再问人，
+   但只到 `auto` 档的免问线（2 级）；3 级破坏性操作仍然要问。硬拦截、能力上限、
+   敏感路径、越界一次性授权全部照旧。
+2. `OPERATION_LEVELS` 把 `sub_agent` / `sub_agent_message` / `subagent` 从 2 改到 1。
+   依据：`DEFAULT_TOOL_PERMISSIONS` 声明 `auto_allow`、`access_tools.jsonc` 把它授给
+   `read_only` 档、子代理继承父级 `approval_policy`/`permission_preset`/`active_tier` 后
+   每一步都会重新判级，启动处再问一次挡不住任何东西。
+3. 新增不变式测试：`DEFAULT_TOOL_PERMISSIONS` 与 `OPERATION_LEVELS` 对同一工具的表态必须一致。
+
+**需要你知道的一处语义改动**：第 1 条在效果上等于「`auto_approve` 把免问线抬到 2 级」，
+而上文 6.2 曾把它列为不予采纳。改为采纳的理由是：这个开关此前根本没生效，而「自动批准」
+若连普通写操作都不放行就等于没有意义；同时 3 级仍要问，允许范围没有变宽。
+如果你认为 `auto_approve` 只应表示「自动回答」而不该影响判定，正确做法是删掉这个开关、
+统一走 `permission_preset`，那会牵动大量调用点，需要你决定。

@@ -1,27 +1,46 @@
-"""Managed observer scripts that emit durable Arrange signals over JSON Lines."""
+"""Managed observer scripts that emit durable Arrange signals over JSON Lines.
+
+user:“Observer 可靠事件投递、ACK、去重与重放；Observer 正常退出与失败重启策略”
++(v1 协议原样保留但只保证尽力而为；v2 在宿主事务提交之后回 ACK，观察器只有收到
+ACK 才能推进自己的游标，从而做到“重复投递可以，丢事件不可以”)。
+"""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from lamtools_core.config.network import subprocess_env
+from lamtools_core.tool.command import (
+    assign_kill_on_close_job,
+    release_kill_on_close_job,
+    terminate_kill_on_close_job,
+)
 
 from .arrange import ArrangeJob, ArrangeManager, ArrangeStore
 
+_logger = logging.getLogger(__name__)
 
 OBSERVER_PROTOCOL = "lamtools.signal.v1"
+OBSERVER_PROTOCOL_V2 = "lamtools.signal.v2"
+SUPPORTED_PROTOCOLS = frozenset({OBSERVER_PROTOCOL, OBSERVER_PROTOCOL_V2})
 _ACTIVE_JOB_STATUSES = frozenset({"scheduled", "waiting", "running"})
+
+# 生命周期状态。正常退出是终态：只有人显式 rearm 才会重新拉起。
+DESIRED_ACTIVE = "active"
+DESIRED_STOPPED_SUCCESSFULLY = "stopped_successfully"
+DESIRED_SUSPENDED = "suspended"
 
 
 def prepare_observer(observer: dict[str, Any], *, work_root: str | Path) -> dict[str, Any]:
@@ -45,7 +64,7 @@ def prepare_observer(observer: dict[str, Any], *, work_root: str | Path) -> dict
     if resolved.suffix.lower() != ".py":
         raise ValueError("observer entry must be a Python script")
     protocol = str(observer.get("protocol") or OBSERVER_PROTOCOL).strip()
-    if protocol != OBSERVER_PROTOCOL:
+    if protocol not in SUPPORTED_PROTOCOLS:
         raise ValueError(f"unsupported observer protocol: {protocol}")
     restart = str(observer.get("restart") or "always").strip().lower()
     if restart not in {"always", "on-failure"}:
@@ -53,11 +72,160 @@ def prepare_observer(observer: dict[str, Any], *, work_root: str | Path) -> dict
     return {
         "entry": relative.as_posix(),
         "work_root": str(root),
-        "protocol": OBSERVER_PROTOCOL,
+        "protocol": protocol,
         "runtime": "python",
         "restart": restart,
         "approved_sha256": _file_sha256(resolved),
     }
+
+
+@runtime_checkable
+class ObserverLifecycleStore(Protocol):
+    """持久化的观察器生命周期，保证“正常退出”跨进程重启仍然有效。"""
+
+    async def get(self, observer_id: str) -> dict[str, Any] | None: ...
+
+    async def upsert(self, observer_id: str, **fields: Any) -> dict[str, Any]: ...
+
+
+class InMemoryObserverLifecycleStore:
+    def __init__(self) -> None:
+        self._items: dict[str, dict[str, Any]] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(self, observer_id: str) -> dict[str, Any] | None:
+        async with self._lock:
+            item = self._items.get(str(observer_id or ""))
+            return deepcopy(item) if item is not None else None
+
+    async def upsert(self, observer_id: str, **fields: Any) -> dict[str, Any]:
+        async with self._lock:
+            key = str(observer_id or "")
+            current = dict(self._items.get(key) or {"observer_id": key})
+            current.update(deepcopy(fields))
+            current["updated_at"] = _utcnow_iso()
+            self._items[key] = current
+            return deepcopy(current)
+
+
+class _SyncStreamReader:
+    """把阻塞的管道读包装成 awaitable 的 read(n)。
+
+    读的是无缓冲 FileIO：管道里有数据就返回，不会等满 n 字节。
+    读取放线程里做，因为句柄来自 CreateProcessW 而不是 asyncio 的 transport。
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+
+    async def read(self, size: int) -> bytes:
+        if self._stream is None:
+            return b""
+        try:
+            return await asyncio.to_thread(self._stream.read, size)
+        except (OSError, ValueError):
+            return b""
+
+
+class _SyncStreamWriter:
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+
+    def write(self, data: bytes) -> None:
+        if self._stream is None:
+            return
+        self._stream.write(data)
+
+    async def drain(self) -> None:
+        if self._stream is None:
+            return
+        await asyncio.to_thread(self._stream.flush)
+
+
+class _ChildHandle:
+    """Observer 子进程的统一句柄（Windows 走 job，其他平台退回 asyncio）。"""
+
+    def __init__(self, backend: str, process: Any) -> None:
+        self.backend = backend
+        self._process = process
+        if backend == "job":
+            self.stdout = _SyncStreamReader(process.stdout)
+            self.stderr = _SyncStreamReader(process.stderr)
+            self.stdin = _SyncStreamWriter(process.stdin)
+        else:
+            self.stdout = process.stdout
+            self.stderr = process.stderr
+            self.stdin = process.stdin
+
+    @property
+    def pid(self) -> int:
+        return int(getattr(self._process, "pid", 0) or 0)
+
+    @property
+    def returncode(self) -> int | None:
+        return getattr(self._process, "returncode", None)
+
+    async def wait(self) -> int:
+        if self.backend == "job":
+            return int(await asyncio.to_thread(self._process.wait))
+        return await self._process.wait()
+
+    def poll(self) -> int | None:
+        return getattr(self._process, "poll", lambda: None)()
+
+    def terminate_tree(self) -> bool:
+        """优先用 job 一次收掉整棵树。"""
+        if self.backend == "job":
+            try:
+                return bool(self._process.terminate_tree())
+            except Exception:
+                return False
+        return False
+
+    def kill(self) -> None:
+        try:
+            self._process.kill()
+        except ProcessLookupError:
+            pass
+
+    def close(self) -> None:
+        close = getattr(self._process, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
+def _spawn_observer_child(
+    argv: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    creationflags: int,
+) -> _ChildHandle:
+    """创建观察器子进程。
+
+    user:“实现进程创建阶段原子加入 Job Object，消除 spawn 后再登记的竞态窗口”
+    +(优先用 CreateProcessW + PROC_THREAD_ATTRIBUTE_JOB_LIST；不可用时退回
+    asyncio 并在 spawn 后补登记，同时明确标记降级)。
+    """
+    if os.name == "nt":
+        try:
+            from lamtools_core.runtime.win_job_spawn import spawn_in_job
+
+            child = spawn_in_job(
+                argv,
+                cwd=cwd,
+                env=env,
+                pipes=True,
+                creationflags=creationflags,
+            )
+            return _ChildHandle("job", child)
+        except Exception:  # noqa: BLE001 — 原生路径不可用就降级，不能因此不跑观察器
+            _logger.warning("atomic job spawn unavailable, falling back to asyncio", exc_info=True)
+    return _ChildHandle("asyncio", None)
+
 
 
 @dataclass
@@ -66,6 +234,31 @@ class _ObserverProcess:
     process: asyncio.subprocess.Process
     task: asyncio.Task[None]
     expected_stop: bool = False
+    acks_sent: int = 0
+    acks_dropped: int = 0
+    # Windows: kill-on-close job 句柄；宿主被强杀时系统连带回收子进程树。
+    job_handle: int | None = None
+
+
+@dataclass
+class _RuntimeState:
+    status: str = "disabled"
+    pid: int | None = None
+    restart_count: int = 0
+    last_error: str = ""
+    last_stderr: str = ""
+    last_signal_at: str = ""
+    last_event_id: str = ""
+    last_started_at: str = ""
+    last_stopped_at: str = ""
+    last_exit_code: int | None = None
+    last_exit_reason: str = ""
+    retry_in_seconds: float = 0.0
+    unsupported_lines: int = 0
+    oversized_lines: int = 0
+    acks_sent: int = 0
+    acks_dropped: int = 0
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class ObserverSupervisor:
@@ -79,6 +272,8 @@ class ObserverSupervisor:
         wake_runner: Callable[[], Any] | None = None,
         poll_interval: float = 2.0,
         max_line_bytes: int = 1_000_000,
+        lifecycle_store: ObserverLifecycleStore | None = None,
+        max_backoff: float = 60.0,
     ) -> None:
         self.store = store
         self.manager = ArrangeManager(store)
@@ -86,13 +281,19 @@ class ObserverSupervisor:
         self.wake_runner = wake_runner
         self.poll_interval = max(0.05, poll_interval)
         self.max_line_bytes = max(1024, max_line_bytes)
+        self.lifecycle_store = lifecycle_store or InMemoryObserverLifecycleStore()
+        self.max_backoff = max(self.poll_interval, max_backoff)
         self._processes: dict[str, _ObserverProcess] = {}
-        self._states: dict[str, dict[str, Any]] = {}
+        self._states: dict[str, _RuntimeState] = {}
         self._next_start: dict[str, float] = {}
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self._consecutive_failures = 0
+        self._last_error = ""
+        self._last_error_at: str = ""
 
+    # ------------------------------------------------------------------ 生命周期
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
@@ -118,14 +319,69 @@ class ObserverSupervisor:
         self._wake.set()
 
     def status(self, job_id: str) -> dict[str, Any]:
-        return deepcopy(self._states.get(str(job_id or ""), {"status": "disabled"}))
+        state = self._states.get(str(job_id or ""))
+        if state is None:
+            return {"status": "disabled"}
+        # 只回已经真实发生过的字段：空串/0 不出现，
+        # 这样 `status(...).get("last_signal_at") is not None` 仍然是
+        # “收到过信号”的判断，不会因为默认值提前为真。
+        payload: dict[str, Any] = {"status": state.status}
+        for key, value in state.__dict__.items():
+            if key in {"status", "extra"}:
+                continue
+            if value in (None, "") or value == 0:
+                continue
+            payload[key] = deepcopy(value)
+        for key, value in state.extra.items():
+            if value in (None, ""):
+                continue
+            payload[key] = deepcopy(value)
+        return payload
 
+    def health(self) -> dict[str, Any]:
+        task = self._task
+        backoff = sum(
+            1
+            for state in self._states.values()
+            if state.status == "backoff"
+        )
+        return {
+            "alive": bool(task is not None and not task.done() and not self._stopping.is_set()),
+            "running": len(self._processes),
+            "backoff": backoff,
+            "observers": len(self._states),
+            "consecutive_failures": self._consecutive_failures,
+            "last_error": self._last_error,
+            "last_error_at": self._last_error_at,
+        }
+
+    async def rearm(self, job_id: str) -> dict[str, Any]:
+        """把“正常退出”的终态清掉，允许下一次 reconcile 重新拉起。"""
+        key = str(job_id or "").strip()
+        if not key:
+            raise ValueError("job_id is required")
+        await self.lifecycle_store.upsert(
+            key,
+            desired_state=DESIRED_ACTIVE,
+            last_exit_reason="",
+            last_exit_code=None,
+            next_retry_at="",
+            restart_count=0,
+        )
+        self._next_start.pop(key, None)
+        state = self._states.setdefault(key, _RuntimeState())
+        state.status = "rearmed"
+        state.last_exit_reason = ""
+        state.last_exit_code = None
+        state.restart_count = 0
+        self.wake()
+        return self.status(key)
+
+    # ------------------------------------------------------------------ 调度
     async def reconcile_once(self) -> None:
         jobs = await self.store.list()
         desired = {
-            job.id: job
-            for job in jobs
-            if job.observer and job.status in _ACTIVE_JOB_STATUSES
+            job.id: job for job in jobs if job.observer and job.status in _ACTIVE_JOB_STATUSES
         }
         for job_id in list(self._processes):
             current = desired.get(job_id)
@@ -138,17 +394,54 @@ class ObserverSupervisor:
         for job_id, job in desired.items():
             if job_id in self._processes or loop_time < self._next_start.get(job_id, 0):
                 continue
+            lifecycle = await self.lifecycle_store.get(job_id) or {}
+            if str(lifecycle.get("desired_state") or DESIRED_ACTIVE) != DESIRED_ACTIVE:
+                # 终态：正常退出过，或被人为挂起。跨进程重启也不许自己回来。
+                self._set_state(
+                    job_id,
+                    status="stopped"
+                    if lifecycle.get("desired_state") == DESIRED_STOPPED_SUCCESSFULLY
+                    else "suspended",
+                    last_exit_reason=str(lifecycle.get("last_exit_reason") or ""),
+                )
+                continue
             await self._start_process(job)
 
     async def _run(self) -> None:
         while not self._stopping.is_set():
             self._wake.clear()
-            await self.reconcile_once()
+            try:
+                await self.reconcile_once()
+                self._consecutive_failures = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 循环级自愈
+                # user:“后台调度器异常自愈及健康检查”+(一次数据库抖动不能让
+                # 整个观察器监管永久停摆；记录、退避、继续)。
+                self._consecutive_failures += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._last_error_at = _utcnow_iso()
+                delay = min(
+                    self.max_backoff,
+                    self.poll_interval * float(2 ** min(self._consecutive_failures - 1, 5)),
+                )
+                _logger.warning(
+                    "observer reconcile failed (%s in a row), retrying in %.2fs: %s",
+                    self._consecutive_failures,
+                    delay,
+                    exc,
+                )
+                try:
+                    await asyncio.wait_for(self._stopping.wait(), timeout=delay)
+                except TimeoutError:
+                    pass
+                continue
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=self.poll_interval)
             except TimeoutError:
                 pass
 
+    # ------------------------------------------------------------------ 进程
     async def _start_process(self, job: ArrangeJob) -> None:
         try:
             entry, work_root = _resolve_approved_entry(job.observer)
@@ -164,39 +457,70 @@ class ObserverSupervisor:
             "LAMTOOLS_OBSERVER_WORK_ROOT": str(work_root),
             "LAMTOOLS_OBSERVER_STATE_DIR": str(state_dir),
             "LAMTOOLS_OBSERVER_EVENT_TYPE": str(job.trigger.get("event_type") or ""),
+            "LAMTOOLS_OBSERVER_PROTOCOL": str(job.observer.get("protocol") or OBSERVER_PROTOCOL),
             "PYTHONUTF8": "1",
             "PYTHONUNBUFFERED": "1",
         })
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        creationflags = 0
+        if os.name == "nt":
+            # 独立进程组：停止时要能连带收掉观察器自己起的孙进程。
+            creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         try:
-            process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-u",
-                str(entry),
-                cwd=str(work_root),
-                env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                creationflags=creationflags,
-                limit=self.max_line_bytes + 1,
-            )
-        except OSError as exc:
-            self._schedule_restart(job, str(exc))
+            if os.name == "nt":
+                # 创建期就进 job：spawn 与登记的窗口不存在，强杀不留孤儿。
+                handle = await asyncio.to_thread(
+                    _spawn_observer_child,
+                    [sys.executable, "-u", str(entry)],
+                    cwd=str(work_root),
+                    env=env,
+                    creationflags=creationflags,
+                )
+            else:
+                raw = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-u",
+                    str(entry),
+                    cwd=str(work_root),
+                    env=env,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    creationflags=creationflags,
+                    start_new_session=True,
+                )
+                handle = _ChildHandle("asyncio", raw)
+        except (OSError, RuntimeError) as exc:
+            await self._schedule_restart(job, str(exc))
             return
+        process = handle
         task = asyncio.create_task(
             self._monitor(job, process),
             name=f"arrange-observer:{job.id}",
         )
-        self._processes[job.id] = _ObserverProcess(job=job, process=process, task=task)
-        previous_restarts = int(self._states.get(job.id, {}).get("restart_count") or 0)
+        previous = self._states.get(job.id) or _RuntimeState()
+        # user:“父子进程残留”+(登记到 kill-on-close job：宿主被强杀时
+        # job 句柄随之关闭，子进程树被系统回收)。
+        job_handle = assign_kill_on_close_job(process)
+        self._processes[job.id] = _ObserverProcess(
+            job=job,
+            process=process,
+            task=task,
+            job_handle=job_handle,
+        )
         self._set_state(
             job.id,
             status="running",
             pid=process.pid,
-            restart_count=previous_restarts,
+            restart_count=previous.restart_count,
             last_started_at=_utcnow_iso(),
             last_error="",
+        )
+        await self.lifecycle_store.upsert(
+            job.id,
+            desired_state=DESIRED_ACTIVE,
+            restart_policy=str(job.observer.get("restart") or "always"),
+            last_started_at=_utcnow_iso(),
+            last_pid=process.pid,
         )
 
     async def _monitor(self, job: ArrangeJob, process: asyncio.subprocess.Process) -> None:
@@ -213,28 +537,87 @@ class ObserverSupervisor:
             return
         restart_policy = str(job.observer.get("restart") or "always")
         if restart_policy == "on-failure" and return_code == 0:
-            self._set_state(job.id, status="stopped", pid=None, last_stopped_at=_utcnow_iso())
+            # user:“Observer 正常退出与失败重启策略”+(on-failure 的语义是
+            # 只在失败时重启；正常退出是终态，必须写进持久层，否则下一轮
+            # reconcile 会把它当 desired 又拉起来，形成热循环)。
+            self._set_state(
+                job.id,
+                status="stopped",
+                pid=None,
+                last_stopped_at=_utcnow_iso(),
+                last_exit_code=0,
+                last_exit_reason="success",
+                restart_count=0,
+            )
+            await self.lifecycle_store.upsert(
+                job.id,
+                desired_state=DESIRED_STOPPED_SUCCESSFULLY,
+                last_exit_code=0,
+                last_exit_reason="success",
+                last_stopped_at=_utcnow_iso(),
+                next_retry_at="",
+            )
             return
-        self._schedule_restart(job, f"observer exited with code {return_code}")
+        await self._schedule_restart(job, f"observer exited with code {return_code}", return_code)
         self.wake()
+
+    # ------------------------------------------------------------------ 读流
+    async def _iter_bounded_lines(
+        self, reader: asyncio.StreamReader, job_id: str
+    ) -> AsyncIterator[bytes]:
+        """有界、可恢复的 JSONL 读取。
+
+        直接用 ``readline(limit)`` 会让超长行抛 ValueError 并杀死整个读取任务，
+        之后所有事件都读不到；这里改成按块读、自行切行、超限丢弃并计数。
+        """
+        buffer = bytearray()
+        while True:
+            chunk = await reader.read(65536)
+            if not chunk:
+                if buffer:
+                    yield bytes(buffer)
+                return
+            buffer.extend(chunk)
+            while True:
+                index = buffer.find(b"\n")
+                if index < 0:
+                    break
+                line = bytes(buffer[:index])
+                del buffer[: index + 1]
+                if len(line) > self.max_line_bytes:
+                    state = self._states.get(job_id) or _RuntimeState()
+                    self._set_state(
+                        job_id,
+                        oversized_lines=state.oversized_lines + 1,
+                        last_error="observer signal line is too large",
+                    )
+                    continue
+                yield line
+            if len(buffer) > self.max_line_bytes:
+                state = self._states.get(job_id) or _RuntimeState()
+                self._set_state(
+                    job_id,
+                    oversized_lines=state.oversized_lines + 1,
+                    last_error="observer signal line is too large",
+                )
+                buffer.clear()
 
     async def _read_stdout(self, job: ArrangeJob, process: asyncio.subprocess.Process) -> None:
         reader = process.stdout
         if reader is None:
             return
-        while True:
-            line = await reader.readline()
-            if not line:
-                return
-            if len(line) > self.max_line_bytes:
-                self._set_state(job.id, last_error="observer signal line is too large")
+        async for line in self._iter_bounded_lines(reader, job.id):
+            stripped = line.strip()
+            if not stripped:
                 continue
+            protocol = ""
             try:
-                payload = json.loads(line.decode("utf-8"))
+                payload = json.loads(stripped.decode("utf-8", errors="replace"))
                 signal = payload.get("signal") if payload.get("type") == "signal" else payload
                 if not isinstance(signal, dict):
                     raise ValueError("observer output must be a JSON object")
-                if str(signal.get("protocol") or "") != OBSERVER_PROTOCOL:
+                protocol = str(signal.get("protocol") or "")
+                if protocol not in SUPPORTED_PROTOCOLS:
                     raise ValueError("observer output uses an unsupported protocol")
                 expected_type = str(job.trigger.get("event_type") or "")
                 if str(signal.get("event_type") or "") != expected_type:
@@ -253,7 +636,10 @@ class ObserverSupervisor:
                     "source": str(signal.get("source") or f"observer:{job.id}"),
                     "metadata": metadata,
                 }
-                emission = await self.manager.emit_signal(signal, job_id=job.id)
+                # 有界重试：瞬时写库失败不该让一条已经离开观察器的事件消失。
+                # 重试次数固定、间隔固定，不做无限重试；耗尽后记录并让 v2
+                # 观察器凭缺失的 ACK 重发（数据库按 event_id 去重）。
+                emission = await self._emit_with_retry(job, signal)
                 self._set_state(
                     job.id,
                     last_signal_at=_utcnow_iso(),
@@ -264,22 +650,72 @@ class ObserverSupervisor:
                     result = self.wake_runner()
                     if hasattr(result, "__await__"):
                         await result
+                if protocol == OBSERVER_PROTOCOL_V2:
+                    # 只有事务提交成功才回 ACK；观察器据此推进自己的游标。
+                    await self._send_ack(job, original_event_id)
             except Exception as exc:  # noqa: BLE001 — 单行处理失败不能杀死读取循环
-                # 之前只捕解析类异常：存储/IO 一失败，读取任务就静默结束，
-                # 观察日志从此不再更新（2026-09-25 审计 P3）。
-                logging.getLogger(__name__).warning(
+                _logger.warning(
                     "arrange observer read failed for %s", job.id, exc_info=True
                 )
-                self._set_state(job.id, last_error=str(exc))
+                state = self._states.get(job.id) or _RuntimeState()
+                self._set_state(
+                    job.id,
+                    last_error=str(exc),
+                    unsupported_lines=state.unsupported_lines + 1,
+                )
+
+    async def _emit_with_retry(self, job: ArrangeJob, signal: dict[str, Any]) -> Any:
+        delays = (0.05, 0.15, 0.35)
+        last_error: BaseException | None = None
+        for attempt in range(len(delays) + 1):
+            try:
+                return await self.manager.emit_signal(signal, job_id=job.id)
+            except Exception as exc:  # noqa: BLE001 — 边界重试，次数固定
+                last_error = exc
+                if attempt >= len(delays):
+                    break
+                await asyncio.sleep(delays[attempt])
+        assert last_error is not None
+        raise last_error
+
+    async def _send_ack(self, job: ArrangeJob, event_id: str) -> None:
+        active = self._processes.get(job.id)
+        stdin = active.process.stdin if active is not None else None
+        if stdin is None:
+            self._bump_ack(job.id, sent=False)
+            return
+        frame = json.dumps(
+            {
+                "type": "ack",
+                "protocol": OBSERVER_PROTOCOL_V2,
+                "event_id": event_id,
+                "observer_id": job.id,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            stdin.write((frame + "\n").encode("utf-8"))
+            # 观察器若不读 stdin，管道会写满；超时就放弃这条 ACK 并计数。
+            # 放弃是安全的：观察器会重发同一 ID，数据库按 event_id 去重。
+            await asyncio.wait_for(stdin.drain(), timeout=1.0)
+        except (TimeoutError, ConnectionResetError, BrokenPipeError, RuntimeError) as exc:
+            _logger.warning("observer ack failed for %s: %s", job.id, exc)
+            self._bump_ack(job.id, sent=False)
+            return
+        self._bump_ack(job.id, sent=True)
+
+    def _bump_ack(self, job_id: str, *, sent: bool) -> None:
+        state = self._states.get(job_id) or _RuntimeState()
+        if sent:
+            self._set_state(job_id, acks_sent=state.acks_sent + 1)
+        else:
+            self._set_state(job_id, acks_dropped=state.acks_dropped + 1)
 
     async def _read_stderr(self, job: ArrangeJob, process: asyncio.subprocess.Process) -> None:
         reader = process.stderr
         if reader is None:
             return
-        while True:
-            line = await reader.readline()
-            if not line:
-                return
+        async for line in self._iter_bounded_lines(reader, job.id):
             message = line.decode("utf-8", errors="replace").strip()
             if message:
                 self._set_state(job.id, last_stderr=message[-2000:])
@@ -291,20 +727,32 @@ class ObserverSupervisor:
         active.expected_stop = True
         process = active.process
         if process.returncode is None:
-            process.terminate()
+            # job object 优先：一次调用收掉整棵树，taskkill 只作兜底。
+            killed = process.terminate_tree() if hasattr(process, "terminate_tree") else False
+            if not killed and (
+                active.job_handle is None
+                or not terminate_kill_on_close_job(active.job_handle)
+            ):
+                _terminate_tree(process)
             try:
                 await asyncio.wait_for(process.wait(), timeout=3)
             except TimeoutError:
                 process.kill()
                 await process.wait()
         await asyncio.gather(active.task, return_exceptions=True)
+        release_kill_on_close_job(active.job_handle)
+        closer = getattr(process, "close", None)
+        if callable(closer):
+            closer()
         if self._processes.get(job_id) is active:
             self._processes.pop(job_id, None)
 
-    def _schedule_restart(self, job: ArrangeJob, error: str) -> None:
-        state = self._states.get(job.id, {})
-        restart_count = int(state.get("restart_count") or 0) + 1
-        delay = min(60.0, 2 ** min(restart_count - 1, 6))
+    async def _schedule_restart(
+        self, job: ArrangeJob, error: str, exit_code: int | None = None
+    ) -> None:
+        state = self._states.get(job.id) or _RuntimeState()
+        restart_count = state.restart_count + 1
+        delay = min(self.max_backoff, float(2 ** min(restart_count - 1, 6)))
         self._next_start[job.id] = asyncio.get_running_loop().time() + delay
         self._set_state(
             job.id,
@@ -314,10 +762,59 @@ class ObserverSupervisor:
             retry_in_seconds=delay,
             last_error=error,
             last_stopped_at=_utcnow_iso(),
+            last_exit_code=exit_code,
+            last_exit_reason="failure",
+        )
+        await self.lifecycle_store.upsert(
+            job.id,
+            desired_state=DESIRED_ACTIVE,
+            restart_policy=str(job.observer.get("restart") or "always"),
+            last_exit_code=exit_code,
+            last_exit_reason="failure",
+            restart_count=restart_count,
+            next_retry_at=_utcnow_iso(),
+            last_stopped_at=_utcnow_iso(),
         )
 
     def _set_state(self, job_id: str, **changes: Any) -> None:
-        self._states[job_id] = {**self._states.get(job_id, {}), **changes}
+        state = self._states.setdefault(job_id, _RuntimeState())
+        for key, value in changes.items():
+            if hasattr(state, key):
+                setattr(state, key, value)
+            else:
+                state.extra[key] = value
+
+
+def _terminate_tree(process: asyncio.subprocess.Process) -> None:
+    """终止观察器及其子进程。
+
+    Windows 上 terminate() 只杀直接子进程；用 taskkill /T 才能连带进程树。
+    POSIX 上进程以独立 session 启动，用 killpg 收整组。
+    """
+    pid = process.pid
+    if pid is None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            _logger.warning("taskkill failed for observer pid %s", pid, exc_info=True)
+    else:
+        try:
+            os.killpg(os.getpgid(pid), 15)
+            return
+        except OSError:
+            _logger.warning("killpg failed for observer pid %s", pid, exc_info=True)
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        pass
 
 
 def _resolve_approved_entry(observer: dict[str, Any]) -> tuple[Path, Path]:
@@ -348,4 +845,14 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-__all__ = ["OBSERVER_PROTOCOL", "ObserverSupervisor", "prepare_observer"]
+__all__ = [
+    "DESIRED_ACTIVE",
+    "DESIRED_STOPPED_SUCCESSFULLY",
+    "DESIRED_SUSPENDED",
+    "InMemoryObserverLifecycleStore",
+    "OBSERVER_PROTOCOL",
+    "OBSERVER_PROTOCOL_V2",
+    "ObserverLifecycleStore",
+    "ObserverSupervisor",
+    "prepare_observer",
+]

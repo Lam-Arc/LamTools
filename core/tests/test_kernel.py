@@ -3538,9 +3538,15 @@ class TestKernelContextCompaction:
             state_store=store,  # type: ignore[arg-type]
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                # The compacted context measures ~3.1k here, so the trigger must
+                # sit above it or the same turn immediately compacts again.
+                compact_trigger_tokens=4_000,
+                compact_limit_tokens=3_000,
             ),
         )
 
@@ -3559,18 +3565,34 @@ class TestKernelContextCompaction:
         assert "1. Current Objective And Done Criteria" in str(
             compaction_meta.get("summary", "")
         )
-        assert compaction_meta.get("summary_seq") == 0
-        # Persisted history holds the compacted view after the loop exit:
-        # compacted rows are replaced by the retained span + new messages,
-        # and the summary message never leaks into history rows.
+        # The full rewrite keeps only the retained span as rows and re-anchors
+        # the boundary, because the summary itself lives in metadata and never
+        # becomes a history row.
+        # Compaction is a view over the source rows, not a delete: the raw
+        # messages stay on disk (recall, rollback, crash recovery) and this
+        # boundary is what shortens the model-facing history.
+        assert compaction_meta.get("summary_seq") == 10
         assert len(store.history) > 0
         persisted_content = "\n".join(str(item.get("content") or "") for item in store.history)
         # Default zero-Step retention removes the complete old raw history.
-        assert "old user 4" not in persisted_content
-        assert "old assistant 4" not in persisted_content
-        assert "current task" not in persisted_content
-        assert str(compaction_meta["summary"]).endswith("6. current task")
-        assert "old user 0" not in persisted_content
+        assert "old user 4" in persisted_content
+        assert "old assistant 4" in persisted_content
+        # The retained latest turn survives the rewrite on purpose.
+        assert "current task" in persisted_content
+
+        # The summary is the structured nine-section text; no user appendix is
+        # appended to it any more.
+        assert "## Recent user messages" not in str(compaction_meta["summary"])
+        assert str(compaction_meta["summary"]).startswith("1. Current Objective")
+        raw_old_body = "x" * 500
+        assert raw_old_body in persisted_content
+        model_facing = "\n".join(
+            str(message.content) for message in history_kit.context_histories[-1]
+        )
+        # The summary may name the old message, but its raw row must not be part
+        # of the model-facing history any more.
+        assert raw_old_body not in model_facing
+        assert "current task" in model_facing
         assert all(
             item.get("metadata", {}).get("key") != "context_compaction_summary"
             for item in store.history
@@ -3606,32 +3628,32 @@ class TestKernelContextCompaction:
             [
                 {
                     "role": "user",
-                    "content": "old user 0",
+                    "content": "old user 0 " + ("x" * 2000),
                     "metadata": {"history_seq": 1},
                 },
                 {
                     "role": "assistant",
-                    "content": "dropped assistant step",
+                    "content": "dropped assistant step " + ("y" * 2000),
                     "metadata": {"history_seq": 2},
                 },
                 {
                     "role": "tool",
-                    "content": "dropped tool result",
+                    "content": "dropped tool result " + ("z" * 2000),
                     "metadata": {"history_seq": 3},
                 },
                 {
                     "role": "user",
-                    "content": "old user 1",
+                    "content": "old user 1 " + ("x" * 2000),
                     "metadata": {"history_seq": 4},
                 },
                 {
                     "role": "assistant",
-                    "content": "retained assistant step",
+                    "content": "retained assistant step " + ("y" * 2000),
                     "metadata": {"history_seq": 5},
                 },
                 {
                     "role": "tool",
-                    "content": "retained tool result",
+                    "content": "retained tool result " + ("z" * 2000),
                     "metadata": {"history_seq": 6},
                 },
             ],
@@ -3718,9 +3740,12 @@ class TestKernelContextCompaction:
         )
         llm = CapturingLLMClient()
         policy = LoopPolicy(
-            context_window_tokens=100,
-            compact_trigger_tokens=1,
-            compact_limit_tokens=1,
+            # The seeded transcript clears the trigger, and the target sits
+            # above the request overhead floor: the kernel re-checks the final
+            # assembly, so a target below that floor can never be met.
+            context_window_tokens=128_000,
+            compact_trigger_tokens=4_000,
+            compact_limit_tokens=3_000,
             compact_retained_steps=2,
             model_retries=1,
         )
@@ -3805,9 +3830,13 @@ class TestKernelContextCompaction:
             SwitchedModelKit(steps=[MockKitStep(decision="done")]),
             llm_client=llm,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -3865,9 +3894,11 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real-sized window with absolute thresholds: the old pairs fit
+                # above the trigger and the compacted view fits under 2_400.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=2_000,
+                compact_limit_tokens=2_400,
                 model_retries=1,
             ),
         )
@@ -3915,9 +3946,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -3929,7 +3964,7 @@ class TestKernelContextCompaction:
         assert llm.last_request.metadata["context_compacted"] is True
         assert llm.last_request.metadata["context_compaction_mode"] == "structured_summary"
         assert llm.last_request.metadata["context_tokens_before_compaction"] >= 1_600
-        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 1_200
+        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 2_400
         assert llm.last_request.messages[0].role == "system"
         summary_messages = [
             message
@@ -3939,22 +3974,30 @@ class TestKernelContextCompaction:
         assert len(summary_messages) == 1
         assert "Current Objective And Done Criteria" in summary_messages[0].content
         assert "Active User Instructions" in summary_messages[0].content
-        assert "## Recent user messages" in summary_messages[0].content
-        assert summary_messages[0].content.endswith("6. current task")
-        assert "1. old user 0 " in summary_messages[0].content
+        # The standing verbatim user appendix is gone (controller.py), and the
+        # latest user turn now keeps its own role instead of being appended as
+        # a numbered entry.
+        assert "## Recent user messages" not in summary_messages[0].content
+        assert "6. current task" not in summary_messages[0].content
+        assert any(
+            message.role == "user" and str(message.content) == "current task"
+            for message in llm.last_request.messages
+        )
         raw_messages = [
             str(m.content)
             for m in llm.last_request.messages
             if m.metadata.get("key") != "context_compaction_summary"
         ]
         assert "old user 0" not in "\n".join(raw_messages)
-        assert llm.last_request.messages[-1].role == "system"
-        assert llm.last_request.messages[-1].content.endswith("6. current task")
+        # The latest user turn keeps its own role instead of trailing the
+        # summary as a numbered appendix entry.
+        assert llm.last_request.messages[-1].role == "user"
+        assert llm.last_request.messages[-1].content == "current task"
 
         events = [event for event in sink.events if event.name == "runtime.context_compacted"]
         assert len(events) == 1
-        assert events[0].payload["trigger_tokens"] == 1_600
-        assert events[0].payload["limit_tokens"] == 1_200
+        assert events[0].payload["trigger_tokens"] == 3_000
+        assert events[0].payload["limit_tokens"] == 2_400
         assert events[0].payload["removed"] > 0
         assert events[0].payload["compacted_message_ids"][:2] == ["user-0", "assistant-0"]
         assert len(events[0].payload["compacted_message_ids"]) >= 2
@@ -3993,9 +4036,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4005,7 +4052,7 @@ class TestKernelContextCompaction:
         assert llm.last_request is not None
         assert llm.last_request.metadata["context_compacted"] is True
         assert any(
-            event.payload["runtime_metrics"]["estimated_prompt_tokens"] >= 1_600
+            event.payload["runtime_metrics"]["estimated_prompt_tokens"] >= 3_000
             for event in sink.events
             if event.name == "runtime.metrics"
             and "runtime_metrics" in event.payload
@@ -4030,9 +4077,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4040,15 +4091,14 @@ class TestKernelContextCompaction:
 
         assert result.decision == "done"
         assert llm.last_request is not None
-        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 1_200
+        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 2_400
         summary_messages = [
             message
             for message in llm.last_request.messages
             if message.metadata.get("key") == "context_compaction_summary"
         ]
         assert len(summary_messages) == 1
-        assert "## Recent user messages" in summary_messages[0].content
-        assert summary_messages[0].content.endswith("6. current task")
+        assert "## Recent user messages" not in summary_messages[0].content
         assert "tool output " not in summary_messages[0].content
 
     @pytest.mark.asyncio
@@ -4069,9 +4119,12 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # A 2k window cannot hold the request overhead plus a summary,
+                # so the fixture uses real-sized windows with absolute
+                # thresholds: it triggers at 1800 and targets 1700.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=1_800,
+                compact_limit_tokens=1_700,
                 model_retries=3,
             ),
             retry_policy=RetryPolicy(
@@ -4194,9 +4247,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4234,9 +4291,13 @@ class TestKernelContextCompaction:
             llm_client=llm,
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
-                compact_trigger_ratio=0.8,
-                compact_limit_ratio=0.6,
+                # Real windows are 128k-1m.  A 2k window is not a supported
+                # configuration (the compaction prompt alone is ~1.3k tokens),
+                # so the window is realistic and the absolute thresholds are
+                # explicit policy values that keep the fixture payload small.
+                context_window_tokens=128_000,
+                compact_trigger_tokens=3_000,
+                compact_limit_tokens=2_400,
             ),
         )
 
@@ -4245,7 +4306,7 @@ class TestKernelContextCompaction:
         assert result.decision == "done"
         assert llm.last_request is not None
         assert llm.last_request.metadata["context_compacted"] is True
-        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 1_200
+        assert llm.last_request.metadata["context_tokens_after_compaction"] <= 2_400
         summary_context = "\n".join(str(message.content) for message in llm.requests[0].messages)
         assert "CURRENT_TOOL_RESULT_SENTINEL" in summary_context
         raw_messages = [
@@ -4254,9 +4315,11 @@ class TestKernelContextCompaction:
             if message.metadata.get("key") != "context_compaction_summary"
         ]
         assert "CURRENT_TOOL_RESULT_SENTINEL" not in "\n".join(raw_messages)
-        assert llm.last_request.messages[-1].role == "system"
-        assert llm.last_request.messages[-1].content.endswith(
-            "1. current long task with exact acceptance criteria"
+        # The latest user turn is retained as its own message, so it is last
+        # and unambiguous rather than being a numbered line inside the summary.
+        assert llm.last_request.messages[-1].role == "user"
+        assert llm.last_request.messages[-1].content == (
+            "current long task with exact acceptance criteria"
         )
         metrics_events = [event for event in sink.events if event.name == "runtime.metrics"]
         assert len(metrics_events) >= 2
@@ -4388,7 +4451,10 @@ class TestKernelContextCompaction:
         ]
         assert len(summaries) == 1
         text = "\n".join(str(message.content) for message in final_request.messages)
-        assert "old user 4" in text
+        # Older raw user messages stay summarized away: the appendix that used
+        # to carry them verbatim no longer exists, so only the retained span and
+        # the new turn may appear outside the summary.
+        assert "old user 4" not in text
         assert "current task" in text
         # The compacted raw messages must not resurface; the summary may still
         # reference them by content, so only inspect non-summary messages.
@@ -4646,9 +4712,12 @@ class TestKernelContextCompaction:
             event.name for event in anchored_sink.events if event.name == "runtime.context_compacted"
         ] == ["runtime.context_compacted"]
         anchored_metrics = anchored_state.metadata["runtime_context_metrics"]
-        assert anchored_metrics["context_measurement_source"] == "usage"
-        assert anchored_metrics["context_usage_prompt_tokens"] == 900_000
         assert anchored_metrics["context_compacted"] is True
+        # After compaction the recorded metrics describe the new, smaller
+        # request: the provider count belonged to the request that was just
+        # replaced, so it is dropped and the fresh estimate becomes the source.
+        assert anchored_metrics["context_measurement_source"] == "estimate"
+        assert "context_usage_prompt_tokens" not in anchored_metrics
 
         # Same messages, same policy, no provider usage: the local estimate sees
         # a small prompt and leaves the context alone.
@@ -5997,7 +6066,7 @@ class TestKernelRuntimeSettings:
 
     @pytest.mark.asyncio
     async def test_mode_change_resets_the_frozen_tool_array(self):
-        from lamtools_core.app.tool_freeze import (
+        from lamtools_core.runtime.tool_freeze import (
             freeze_tool_specs,
             frozen_tool_names,
             reset_tool_freeze_cache,
