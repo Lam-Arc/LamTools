@@ -166,13 +166,20 @@ class MainActivity : TauriActivity() {
    */
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-    if (isInPictureInPictureMode) {
-      resumeWebViewSoon()
-    } else {
-      webView()?.onResume()
-    }
+    applySmallWindowState(isInPictureInPictureMode)
+  }
+
+  /** API 24 and 25 only call the one-argument form. */
+  @Deprecated("The two-argument form is used from API 26")
+  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode)
+    applySmallWindowState(isInPictureInPictureMode)
+  }
+
+  private fun applySmallWindowState(active: Boolean) {
+    if (active) resumeWebViewSoon() else webView()?.onResume()
     try {
-      nativePipMode(isInPictureInPictureMode)
+      nativePipMode(active)
     } catch (error: Throwable) {
       Log.w("SundayPip", "cannot report the small window state", error)
     }

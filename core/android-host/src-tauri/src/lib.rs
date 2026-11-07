@@ -47,14 +47,15 @@ fn publish_insets(keyboard: i64, top: i64) {
     }
 }
 
-/// One sector action from the floating ring, waiting for the interface to ask for it.
+/// Sector actions from the floating ring, waiting for the interface to take them.
 ///
-/// A cold start hands the action over before Tauri's setup has run and long before the
-/// webview has a listener, so an event emitted at that moment reaches nobody. The action
-/// is kept here instead and taken by `overlay_take_pending` once the interface is listening.
-static PENDING_OVERLAY_ACTION: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+/// A cold start can hand an action over before the webview has a listener, and Tauri's
+/// setup already runs inside `super.onCreate`, so "is APP set" is not a usable signal for
+/// "is the interface listening". Actions are always queued; the event only tells the
+/// interface that there is something to take.
+static PENDING_OVERLAY_ACTIONS: std::sync::Mutex<Vec<Value>> = std::sync::Mutex::new(Vec::new());
 
-/// Publishes one sector action to the interface.
+/// Queues one sector action and nudges the interface to take it.
 ///
 /// user:“动作通过 Rust emit 到 JS”+(界面拿到 action + text 后把文字填进输入框，不自动发送)。
 fn publish_overlay_action(payload: String) {
@@ -62,14 +63,15 @@ fn publish_overlay_action(payload: String) {
         return;
     }
     let parsed: Value = serde_json::from_str(&payload).unwrap_or_else(|_| json!({ "action": payload }));
-    match APP.get() {
-        Some(app) => {
-            use tauri::Emitter;
-            app.emit("overlay-action", parsed).ok();
-        }
-        None => {
-            *PENDING_OVERLAY_ACTION.lock().expect("overlay pending") = Some(parsed);
-        }
+    PENDING_OVERLAY_ACTIONS
+        .lock()
+        .expect("overlay pending")
+        .push(parsed);
+    if let Some(app) = APP.get() {
+        use tauri::Emitter;
+        // The payload is deliberately empty: the action is taken atomically below, so a
+        // listener never sees a copy that another listener could also act on.
+        app.emit("overlay-action", json!({})).ok();
     }
 }
 
@@ -130,14 +132,16 @@ fn overlay_state() -> Value {
     json!({ "granted": granted, "running": running, "wanted": wanted })
 }
 
-/// Takes the action that arrived while the interface was not listening yet.
+/// Takes every queued action. One element is returned bare; several come back as an
+/// array, so a burst (two taps before the webview reacted) is not silently collapsed.
 #[tauri::command]
 fn overlay_take_pending() -> Value {
-    PENDING_OVERLAY_ACTION
-        .lock()
-        .expect("overlay pending")
-        .take()
-        .unwrap_or(Value::Null)
+    let actions = std::mem::take(&mut *PENDING_OVERLAY_ACTIONS.lock().expect("overlay pending"));
+    match actions.len() {
+        0 => Value::Null,
+        1 => actions.into_iter().next().unwrap_or(Value::Null),
+        _ => Value::Array(actions),
+    }
 }
 
 /// Enters the system small window, answering false when the device refused and the host

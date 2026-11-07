@@ -197,6 +197,9 @@ def sync_sources() -> int:
     code = sync_manifest()
     if code != EXIT_OK:
         return code
+    code = sync_android_theme()
+    if code != EXIT_OK:
+        return code
     return sync_runtime_gradle()
 
 
@@ -238,6 +241,82 @@ def sync_manifest() -> int:
         say("sync: injected the overlay service, its permissions and the small-window flag")
     else:
         say("sync: the manifest already carries the overlay declarations")
+    return EXIT_OK
+
+
+BOOT_THEME_MARKER = "<!-- >>> Sunday boot screen -->"
+BOOT_DRAWABLE = PROJECT / "app/src/main/res/drawable/sunday_boot_background.xml"
+BOOT_COLORS = PROJECT / "app/src/main/res/values/sunday_boot_colors.xml"
+BOOT_THEMES = (
+    PROJECT / "app/src/main/res/values/themes.xml",
+    PROJECT / "app/src/main/res/values-night/themes.xml",
+)
+
+BOOT_DRAWABLE_XML = """<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/sunday_boot_surface" />
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/ic_launcher" />
+    </item>
+</layer-list>
+"""
+
+BOOT_COLORS_XML = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="sunday_boot_surface">#14161a</color>
+</resources>
+"""
+
+
+def sync_android_theme() -> int:
+    """Writes the boot surface resources the system paints before the webview exists.
+
+    `sync` only copies `*.kt`, and `gen/` is not tracked, so a regenerate or a fresh
+    checkout would silently bring back the white first frame. Everything here is
+    idempotent: the marker is the "already injected" signal, and the two resource files
+    are rewritten only when their content differs.
+    """
+    written = 0
+    for path, content in ((BOOT_DRAWABLE, BOOT_DRAWABLE_XML), (BOOT_COLORS, BOOT_COLORS_XML)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            path.write_text(content, encoding="utf-8", newline="\n")
+            written += 1
+
+    for path in BOOT_THEMES:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        # A previous hand edit may already carry the items without the marker; the
+        # drawable reference is the dependable "this theme is done" signal.
+        if BOOT_THEME_MARKER in text or "sunday_boot_background" in text:
+            continue
+        anchor = text.find('<style name="Theme.sunday_android_host"')
+        if anchor < 0:
+            continue
+        closing = text.find("</style>", anchor)
+        if closing < 0:
+            continue
+        nl = "\r\n" if "\r\n" in text else "\n"
+        block = nl.join([
+            "        " + BOOT_THEME_MARKER,
+            '        <item name="android:windowBackground">@drawable/sunday_boot_background</item>',
+            '        <item name="android:windowDrawsSystemBarBackgrounds">true</item>',
+            '        <item name="android:statusBarColor">@color/sunday_boot_surface</item>',
+            '        <item name="android:navigationBarColor">@color/sunday_boot_surface</item>',
+            '        <item name="android:windowLightStatusBar">false</item>',
+            "        <!-- <<< Sunday boot screen -->",
+            "",
+        ])
+        path.write_text(text[:closing] + block + text[closing:], encoding="utf-8", newline="")
+        written += 1
+
+    if written:
+        say(f"sync: wrote the boot surface ({written} files)")
+    else:
+        say("sync: the boot surface is already in place")
     return EXIT_OK
 
 

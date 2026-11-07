@@ -122,6 +122,15 @@ export function applyOverlayAction(payload: unknown, host: OverlayActionHost): v
   }
 }
 
+/** 取回的动作可能是单个对象，也可能是一批；空值表示没有待处理项。 */
+function applyPendingActions(value: unknown, host: OverlayActionHost): void {
+  if (Array.isArray(value)) {
+    for (const item of value) applyOverlayAction(item, host)
+    return
+  }
+  if (value && typeof value === 'object') applyOverlayAction(value, host)
+}
+
 /**
  * 安装宿主事件。
  *
@@ -132,8 +141,13 @@ export async function installOverlayAction(host: OverlayActionHost): Promise<() 
 
   try {
     offs.push(
-      await listen<unknown>('overlay-action', ({ payload }) => {
-        applyOverlayAction(payload, host)
+      // 事件只是一声提示：真正的动作要主动来取，冷启动时也不会漏掉。
+      await listen('overlay-action', async () => {
+        try {
+          applyPendingActions(await invoke<unknown>('overlay_take_pending'), host)
+        } catch (error) {
+          console.warn('[sunday] overlay: cannot take the pending action', error)
+        }
       }),
     )
   } catch (error) {
@@ -167,8 +181,7 @@ export async function installOverlayAction(host: OverlayActionHost): Promise<() 
   // user:“冷启动也要能拿到…如果拿不到就记录待处理，setup 后 emit”+(宿主改了做法：启动早期
   // emit 的事件没人听得到，所以它留在 Rust 侧，这里主动取一次，取到就当作刚发生)。
   try {
-    const pending = await invoke<unknown>('overlay_take_pending')
-    if (pending && typeof pending === 'object') applyOverlayAction(pending, host)
+    applyPendingActions(await invoke<unknown>('overlay_take_pending'), host)
   } catch (error) {
     console.warn('[sunday] overlay: cannot take the pending action', error)
   }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 
@@ -101,6 +102,12 @@ object OverlayBridge {
   @JvmStatic
   fun enterPip(): Boolean {
     val activity = MainActivity.current() ?: return false
+    // The Tauri command that reaches this runs on a worker thread; Activity calls must
+    // happen on the main thread, so the answer here means "accepted", not "entered".
+    if (Looper.myLooper() != Looper.getMainLooper()) {
+      activity.runOnUiThread { activity.enterSmallWindow() }
+      return true
+    }
     return activity.enterSmallWindow()
   }
 

@@ -145,14 +145,26 @@ async function boot(): Promise<void> {
       const handled = !window.dispatchEvent(new CustomEvent('sunday:back', { cancelable: true }))
       if (!handled) void invoke('app_background')
     })
-    createApp(LamToolsApp, { runtime }).mount('#app')
-
-    // A runtime that throws on first render must say why, not leave an empty dark window.
-    window.addEventListener('error', (event) => {
+    const app = createApp(LamToolsApp, { runtime })
+    const reportPaintError = (message: string) => {
       if (!document.getElementById('app')?.textContent?.trim()) {
-        screen.fail(`界面加载失败。\n\n${event.message}`)
+        screen.fail(`界面加载失败。
+
+${message}`)
       }
+    }
+    // Registered before mount: an async render error after a successful mount would
+    // otherwise only reach the console, and the boot layer would fade onto a blank page.
+    window.addEventListener('error', (event) => reportPaintError(event.message))
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event.reason
+      reportPaintError(reason instanceof Error ? reason.message : String(reason))
     })
+    app.config.errorHandler = (error) => {
+      reportPaintError(error instanceof Error ? error.message : String(error))
+    }
+    app.mount('#app')
+
 
     // Not awaited: the boot layer leaves when the interface has painted, and nothing
     // after this point should wait for a fade.

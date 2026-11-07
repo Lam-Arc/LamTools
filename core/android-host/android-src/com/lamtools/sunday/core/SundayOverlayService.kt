@@ -98,6 +98,9 @@ class SundayOverlayService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    // The system gives a foreground service five seconds to call startForeground; do it
+    // before the permission check so a revoked permission cannot turn into a crash.
+    startAsForeground()
     if (!canDrawOverlays()) {
       // 权限被撤销过：不能什么都不做地退出，否则用户只看到开关开着而屏幕上没有环。
       Log.w(TAG, "overlay permission is missing")
@@ -106,7 +109,6 @@ class SundayOverlayService : Service() {
       stopSelf()
       return START_NOT_STICKY
     }
-    startAsForeground()
     if (buttonView == null) addButton()
     running = true
     return START_NOT_STICKY
@@ -375,7 +377,9 @@ class SundayOverlayService : Service() {
 
   private fun maxButtonX(width: Int): Int = (screenWidth() - width - dp(10)).coerceAtLeast(0)
 
-  private fun maxButtonY(height: Int): Int = (screenHeight() - height - dp(10)).coerceAtLeast(0)
+  // Leaves room for the navigation bar or gesture area: a bubble tucked under it cannot
+  // be grabbed back.
+  private fun maxButtonY(height: Int): Int = (screenHeight() - height - dp(10) - dp(48)).coerceAtLeast(0)
 
   private fun dp(value: Int): Int = (value * density).toInt()
 }
