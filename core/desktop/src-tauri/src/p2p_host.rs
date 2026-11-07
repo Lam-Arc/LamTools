@@ -201,14 +201,26 @@ pub fn p2p_serve_start(
     Ok(json!({ "serving": true, "ticket": ticket, "port": port }))
 }
 
+/// Stops the transport process and forgets its ticket.
+///
+/// user:“把这台电脑上的桌面端跑起来”+(传输进程是独立子进程，宿主退出时必须显式收掉：
+/// 进程句柄被丢弃不会终止子进程，实测窗口关掉后 sunday-p2p 仍在监听旧票据，
+/// 下一次启动又拉起第二个，旧的那个永远指着已经死掉的 Core 端口。)
+pub fn stop(state: &P2pHostState) {
+    if let Ok(mut guard) = state.child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    if let Ok(mut ticket) = state.ticket.lock() {
+        ticket.clear();
+    }
+}
+
 #[tauri::command]
 pub fn p2p_serve_stop(state: tauri::State<'_, P2pHostState>) -> Result<Value, String> {
-    let mut guard = state.child.lock().map_err(|_| "传输进程状态不可用".to_string())?;
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    state.ticket.lock().map(|mut ticket| ticket.clear()).ok();
+    stop(state.inner());
     Ok(json!({ "serving": false }))
 }
 

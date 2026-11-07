@@ -247,6 +247,8 @@ pub(crate) fn request_quit(app: &tauri::AppHandle) {
     let state = app.state::<BackendState>();
     state.quitting.store(true, Ordering::SeqCst);
     stop_backend(state.inner());
+    // user:“把这台电脑上的桌面端跑起来”+(传输进程同为子进程，退出路径也要一起收掉)。
+    p2p_host::stop(app.state::<p2p_host::P2pHostState>().inner());
     app.exit(0);
 }
 
@@ -865,7 +867,7 @@ fn main() {
             p2p_host::p2p_serve_stop,
             p2p_host::p2p_status,
             p2p_host::p2p_devices,
-            p2p_host::p2p_revoke,
+            p2p_host::p2p_revoke,
             ping,
             get_app_info,
             pick_directory,
@@ -928,9 +930,8 @@ fn main() {
                     let _ = window.hide();
                 }
                 tauri::WindowEvent::Destroyed if window.label() == "main" => {
-                    
-                    
                     stop_backend(state.inner());
+                    p2p_host::stop(window.state::<p2p_host::P2pHostState>().inner());
                 }
                 _ => {}
             }
