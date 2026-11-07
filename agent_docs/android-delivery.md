@@ -14,8 +14,8 @@
 校验和：
 
 ```
-930bb9db43e9fc02b587c7a70179b5e98631e36e755c985eefdacff568f2a465  sunday-m-arm64-debug.apk
-b5f93375a6c0a6a2982e016b7328370b3329c2652bd7a6992f88a8fdf0d9dfcf  sunday-m-x86_64-debug.apk
+b45c01f3622deb90d608c9b6bcccce7dbab09aedcc88154edc0d99f599cbb0ac  sunday-m-arm64-debug.apk
+10659f6834d06f7209483c77c1708a7b9773a82baef90f76c7f965a345332dd2  sunday-m-x86_64-debug.apk
 ```
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
@@ -118,7 +118,7 @@ files/runtime/
 | 设备连接（传输层） | 部分 | 两进程直连 + Core 转发 + 事件推送实测通过；手机 App 与 PC 之间的整链未在设备上点过 |
 | 电脑出码（桌面端） | 通过 | 2026-11-06，dev 实例里点「生成票据」得到 `sunday1:` 票据（159 字符，含本机局域网地址 `192.168.31.220:57788`）与 61×61 的真 SVG 二维码（93,715 字节、1,491 个 rect）；点「开始接受连接」后状态变为「正在接受连接」，`sunday-p2p` 进程由桌面宿主拉起 |
 | 远程模式 | 部分 | 手机会在连着电脑时整条走隧道（RemoteTransport），否则用本机 Core；切换靠重载，未在设备上点过 |
-| 手机扫码（解码） | 通过（逻辑） | `core/p2p/src/scan.rs` 用 `qrcode` 生成 PNG、`rqrr` 读回，字符串逐字节相等；相机取图走 `FilePickerBridge` 的 `camera` 分支：拍照 → 复制进核心能读的目录 → `host_path` 换回宿主路径 |
+| 手机扫码（入口与解码） | 通过 | 侧栏「远程连接」→「设备连接」里有「扫码」，点开拉起系统相机；解码逻辑用生成 PNG 读回验证，字符串逐字节相等 | `core/p2p/src/scan.rs` 用 `qrcode` 生成 PNG、`rqrr` 读回，字符串逐字节相等；相机取图走 `FilePickerBridge` 的 `camera` 分支：拍照 → 复制进核心能读的目录 → `host_path` 换回宿主路径 |
 | 远程重连 | 通过（逻辑） | 票据记在本机，入口与请求失败时都会按它重连一次；连不上回落本机 Core |
 | 运行位置标记 | 通过（逻辑） | 远端模式下界面右上角常驻「在电脑上运行」 |
 | 界面错位（点图片链接） | 通过 | 根因是分屏状态被持久化后仍套用桌面分栏几何；手机上不再套用，并在启动时清掉遗留状态 |
