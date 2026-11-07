@@ -241,6 +241,9 @@ export function useCorePageBindings(context: {
   },
   account: {
     'class': 'full-area-view',
+    // AccountShell hands this to RemoteConnectionPanel; without it the phone falls back
+    // to the desktop branch and loses the scan button.
+    'appRuntime': appRuntime,
     'bandActions': appRuntime.platform !== 'mobile',
     'accountStatus': unref(effectiveAccountStatus),
     'devices': unref(effectiveAccountDevices),
