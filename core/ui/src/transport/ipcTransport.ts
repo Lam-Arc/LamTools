@@ -92,9 +92,7 @@ export class IpcTransport implements LamToolsTransport {
     // immediately would stream into a channel nobody is listening on.
     this.unlisten = await this.listen('core-event', (event) => {
       const payload = event.payload as Record<string, unknown> | undefined
-      if (!payload) return
-      const method = typeof payload.method === 'string' ? payload.method : undefined
-      this.emit({ type: 'notification', channel: 'rpc', method, params: payload })
+      if (payload) this.emit(normalizeCoreEvent(payload))
     })
     this.setState('connected')
   }
@@ -201,6 +199,32 @@ function decodeBase64(text: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index)
   }
   return bytes
+}
+
+/**
+ * user:“手机版发一条消息之后它不会回我……等一段时间把软件退出再重进才行”+
+ * (宿主转发的是核心 WebSocket 的整帧 `{ method, params }`。直连通道把 `params`
+ * 拆出来交给界面，这里必须做同一件事：整帧塞进 `params` 时事件里没有 thread_id、
+ * seq 和 payload，投影会把每条直播事件都当成无关数据丢掉，只有重启后 HTTP 拉
+ * 历史才看得到回复。)
+ */
+function normalizeCoreEvent(frame: Record<string, unknown>): TransportMessage {
+  const id = typeof frame.id === 'string' || typeof frame.id === 'number' ? frame.id : undefined
+  const method = typeof frame.method === 'string' ? frame.method : undefined
+  const params = frame.params && typeof frame.params === 'object' && !Array.isArray(frame.params)
+    ? frame.params as Record<string, unknown>
+    : undefined
+  const type = method
+    ? (id === undefined ? 'notification' : 'request')
+    : (id === undefined ? 'event' : 'response')
+  return {
+    type,
+    channel: 'rpc',
+    ...(id === undefined ? {} : { id }),
+    ...(method ? { method } : {}),
+    ...(params ? { params } : {}),
+    payload: frame,
+  }
 }
 
 /**
