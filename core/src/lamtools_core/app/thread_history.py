@@ -206,6 +206,8 @@ def _character_page_snapshot(
     char_limit: int,
     turn_limit: int | None = None,
     byte_limit: int = DEFAULT_THREAD_HISTORY_PAGE_BYTES,
+    anchor_item_id: str | None = None,
+    anchor_seq: int | None = None,
 ) -> dict[str, Any]:
     """Keep snapshot metadata but include only one newest-first, byte-bounded page.
 
@@ -240,16 +242,35 @@ def _character_page_snapshot(
         if isinstance(snapshot.get("item_order"), list)
         else list(raw_top_items)
     )
-    turn_id_by_item: dict[str, str] = {}
-    for raw_turns in (snapshot.get("turns"), core.get("turns")):
-        if not isinstance(raw_turns, dict):
-            continue
-        for raw_turn_id, raw_turn in raw_turns.items():
-            if not isinstance(raw_turn, dict):
-                continue
-            turn_id = str(raw_turn.get("turn_id") or raw_turn_id)
-            for raw_item_id in raw_turn.get("items") or []:
-                turn_id_by_item.setdefault(str(raw_item_id), turn_id)
+    # Item -> turn id. Built only when a materialized item has no ``turn_id`` of
+    # its own: the row projection always stores one (``slice_of_turn``), while a
+    # legacy row or a top-level item may not. Building the reverse index eagerly
+    # walks every item of every turn, which on a 100k-item thread is the single
+    # most expensive step of a page build — and it is pure waste when every
+    # loaded item already answers the question.
+    _turn_index: dict[str, str] | None = None
+
+    def _turn_id_index() -> dict[str, str]:
+        nonlocal _turn_index
+        if _turn_index is None:
+            index: dict[str, str] = {}
+            for raw_turns in (snapshot.get("turns"), core.get("turns")):
+                if not isinstance(raw_turns, dict):
+                    continue
+                for raw_turn_id, raw_turn in raw_turns.items():
+                    if not isinstance(raw_turn, dict):
+                        continue
+                    turn_id = str(raw_turn.get("turn_id") or raw_turn_id)
+                    for raw_item_id in raw_turn.get("items") or []:
+                        index.setdefault(str(raw_item_id), turn_id)
+            _turn_index = index
+        return _turn_index
+
+    def _turn_id_of(item_id: str, item: dict[str, Any]) -> str:
+        direct = item.get("turn_id")
+        if direct:
+            return str(direct)
+        return _turn_id_index().get(item_id, "")
 
     char_sizes: dict[str, int] = {}
     byte_sizes: dict[str, int] = {}
@@ -304,28 +325,53 @@ def _character_page_snapshot(
     # large turn unreachable: its id could never become a history cursor.
     # Build one thread-global timeline, matching the UI's seq-based merge.
     ordered_by_id: dict[str, tuple[int, int, int, str, str]] = {}
-    for source_rank, (raw_order, raw_items) in enumerate(
-        ((raw_top_order, raw_top_items), (raw_core_order, raw_core_items))
-    ):
-        for index, raw_id in enumerate(raw_order, 1):
-            item_id = str(raw_id)
-            item = raw_items.get(item_id)
-            if not isinstance(item, dict):
-                continue
-            seq = _int_param(item.get("seq") or item.get("last_seq"), default=index)
-            turn_id = str(item.get("turn_id") or turn_id_by_item.get(item_id) or "")
-            previous = ordered_by_id.get(item_id)
-            if previous is None:
-                ordered_by_id[item_id] = (seq, source_rank, index, item_id, turn_id)
-            else:
-                ordered_by_id[item_id] = (*previous[:4], previous[4] or turn_id)
+    # Fast path: a bounded read materializes only this page's rows, every one of
+    # which carries its thread-global seq. Walking the full stored order lists
+    # (one id per item of the whole thread) only exists to give an item without a
+    # seq its position as a fallback anchor; when nothing needs that fallback the
+    # whole scan is skipped and the page build is O(page) instead of O(thread).
+    has_seqless_item = any(
+        isinstance(item, dict) and not (item.get("seq") or item.get("last_seq"))
+        for source in (raw_top_items, raw_core_items)
+        for item in source.values()
+    )
+    if has_seqless_item:
+        for source_rank, (raw_order, raw_items) in enumerate(
+            ((raw_top_order, raw_top_items), (raw_core_order, raw_core_items))
+        ):
+            for index, raw_id in enumerate(raw_order, 1):
+                item_id = str(raw_id)
+                item = raw_items.get(item_id)
+                if not isinstance(item, dict):
+                    continue
+                seq = _int_param(item.get("seq") or item.get("last_seq"), default=index)
+                turn_id = _turn_id_of(item_id, item)
+                previous = ordered_by_id.get(item_id)
+                if previous is None:
+                    ordered_by_id[item_id] = (seq, source_rank, index, item_id, turn_id)
+                else:
+                    ordered_by_id[item_id] = (*previous[:4], previous[4] or turn_id)
+    else:
+        for source_rank, raw_items in enumerate((raw_top_items, raw_core_items)):
+            for raw_id, item in raw_items.items():
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(raw_id)
+                seq = _int_param(item.get("seq") or item.get("last_seq"), default=0)
+                ordered_by_id[item_id] = (seq, source_rank, 0, item_id, _turn_id_of(item_id, item))
     full_order = sorted(ordered_by_id.values(), key=lambda entry: entry[:4])
     # How many items the thread actually has. A bounded read materializes only
-    # the newest page of conversation rows, so the envelope must come from the
-    # metadata's item orders rather than from the loaded items — otherwise a
-    # thread with thousands of items would report has_more=false after the first
-    # page and the older turns would become unreachable.
-    total_items = len(set(raw_top_order) | set(raw_core_order) | set(ordered_by_id))
+    # the newest page of conversation rows, so the envelope must come from a
+    # count rather than from the loaded items — otherwise a thread with
+    # thousands of items would report has_more=false after the first page and
+    # the older turns would become unreachable. ``_page_total_items`` is the item
+    # row count the store already ran; top-level (user) items live in the
+    # metadata row and never get an item row, so they add to it.
+    page_total_items = core.get("_page_total_items")
+    if isinstance(page_total_items, int):
+        total_items = page_total_items + len(raw_top_order)
+    else:
+        total_items = len(set(raw_top_order) | set(raw_core_order) | set(ordered_by_id))
 
     before_index = None
     if before_item_id:
@@ -405,31 +451,47 @@ def _character_page_snapshot(
         for item_id in context_user_ids - selected_ids
     )
 
-    def filtered_turns(value: Any) -> dict[str, Any]:
+    def filtered_turns(value: Any, keep_turn_ids: set[str]) -> dict[str, Any]:
         if not isinstance(value, dict):
             return {}
         result: dict[str, Any] = {}
         for turn_id, raw_turn in value.items():
             if not isinstance(raw_turn, dict):
                 continue
-            turn_items = [str(item_id) for item_id in raw_turn.get("items") or []]
-            kept = [item_id for item_id in turn_items if item_id in visible_ids]
-            if kept or str(raw_turn.get("status") or "") in ACTIVE_TURN_STATUSES:
-                result[str(turn_id)] = {**raw_turn, "items": kept}
+            if str(turn_id) in keep_turn_ids:
+                turn_items = [str(item_id) for item_id in raw_turn.get("items") or []]
+                result[str(turn_id)] = {
+                    **raw_turn,
+                    "items": [item_id for item_id in turn_items if item_id in visible_ids],
+                }
+                continue
+            # A turn this page does not show is still worth carrying while it is
+            # active: the interface needs the running turn even when its items
+            # fall outside the page.
+            if str(raw_turn.get("status") or "") in ACTIVE_TURN_STATUSES:
+                result[str(turn_id)] = {**raw_turn, "items": []}
         return result
 
+    # Only turns this page actually shows (plus active ones) ride along. The
+    # stored turn map holds one entry per turn of the whole thread, so filtering
+    # by membership instead of scanning-and-testing keeps this O(page).
+    visible_turn_ids = {entry[4] for entry in selected if entry[4]}
+    for item_id in context_user_ids:
+        item = raw_top_items.get(item_id)
+        turn_id = str(item.get("turn_id") or "") if isinstance(item, dict) else ""
+        if turn_id:
+            visible_turn_ids.add(turn_id)
+
     page_core = dict(core)
-    # Private store hint for the paging envelope; never part of the wire page.
+    # Private store hints for the paging envelope; never part of the wire page.
     page_core.pop("_page_has_older_items", None)
+    page_core.pop("_page_total_items", None)
     page_core["items"] = {
         item_id: _wire(item_id, raw_core_items, wired_core)
         for item_id in selected_ids
         if isinstance(raw_core_items.get(item_id), dict)
     }
-    page_core["item_order"] = [
-        str(item_id) for item_id in raw_core_order if str(item_id) in selected_ids
-    ]
-    page_core["turns"] = filtered_turns(core.get("turns"))
+    page_core["turns"] = filtered_turns(core.get("turns"), visible_turn_ids)
     page_core["artifacts"] = {}
     page_core["seen_event_ids"] = []
     page = dict(snapshot)
@@ -439,12 +501,17 @@ def _character_page_snapshot(
         for item_id in visible_ids
         if isinstance(raw_top_items.get(item_id), dict)
     }
-    page["item_order"] = [
-        str(item_id) for item_id in raw_top_order if str(item_id) in visible_ids
-    ]
-    page["turns"] = filtered_turns(snapshot.get("turns"))
+    page["turns"] = filtered_turns(snapshot.get("turns"), visible_turn_ids)
     page["artifacts"] = {}
     page["seen_event_ids"] = []
+    # Order the page from what it actually carries (already seq-ascending), so
+    # building it never walks the thread-wide order lists.
+    page_core["item_order"] = [
+        entry[3] for entry in full_order if entry[3] in page_core["items"]
+    ]
+    page["item_order"] = [
+        entry[3] for entry in full_order if entry[3] in page["items"]
+    ]
     # Serialized bytes of the selected items, the quantity the budget bounds. The
     # page also carries a few metadata keys, so this under-reports the exact wire
     # size; the budget leaves ample headroom under the client cap for them.
@@ -461,15 +528,25 @@ def _character_page_snapshot(
         "has_more": has_more,
         "next_before_item_id": selected[0][3] if has_more and selected else None,
         "next_before_seq": earliest_seq if has_more else None,
+        # Locating: which item this page was anchored on, and the newest seq it
+        # carries. A client that jumped here from a search hit compares
+        # ``page_max_seq`` with the oldest seq it already holds to know whether
+        # the transcript it now has is contiguous.
+        "anchor_item_id": anchor_item_id,
+        "anchor_seq": anchor_seq,
+        "page_min_seq": earliest_seq,
+        "page_max_seq": selected[-1][0] if selected else None,
     }
     return page
 
 
 def _page_item_byte_budget(page_bytes: int) -> int:
-    """Read budget for one conversation page: a small multiple of its wire cap.
+    """Read budget for one conversation page: a little over its wire cap.
 
-    The page itself is capped at ``page_bytes``, so reading a few times that is
-    enough to fill it (the extra absorbs items the selector skips) while keeping
-    the read bounded no matter how long the thread is.
+    The page is capped at ``page_bytes``, so reading much more than that only
+    decodes rows the page builder then throws away. 1.5x covers the items the
+    selector skips (oversized artifact bodies are swapped for references, so a
+    single huge item does not eat the budget) while keeping the read bounded no
+    matter how long the thread is.
     """
-    return max(2 * 1024 * 1024, min(16 * 1024 * 1024, int(page_bytes) * 3))
+    return max(1024 * 1024, min(8 * 1024 * 1024, int(page_bytes * 3 // 2)))

@@ -13,6 +13,26 @@ import {
 } from '../src/composer/execution'
 
 describe('core composer execution helpers', () => {
+  // user:“停用的在前端输入框里选择的时候就不显示了”+(停用模型不进选择器，两种视图都一样。)
+  it('drops disabled models from the selectable options', () => {
+    const models = [
+      { id: 'model-on', provider_id: 'provider-1', model_id: 'on', display_name: 'On' },
+      { id: 'model-off', provider_id: 'provider-1', model_id: 'off', display_name: 'Off', enabled: false },
+    ]
+    const providers = [{ id: 'provider-1', name: 'Provider One' }]
+
+    const providerOptions = coreModelSelectOptions({ models, providers })
+    const groupOptions = coreModelSelectOptions({
+      models,
+      view: 'group',
+      groups: [{ id: 'free', name: 'Free', model_ids: ['model-on', 'model-off'] }],
+    })
+
+    expect(providerOptions.map(option => option.value)).toContain('model-on')
+    expect(providerOptions.map(option => option.value)).not.toContain('model-off')
+    expect(groupOptions.map(option => option.value)).not.toContain('model-off')
+  })
+
   it('builds grouped model options and resolves the active execution model', () => {
     const providers = [{ id: 'provider-1', name: 'Provider One' }]
     const models = [

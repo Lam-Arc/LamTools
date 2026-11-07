@@ -10,6 +10,7 @@
     "package:linux": "bash ../../scripts/package-linux.sh",
     "package:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../../scripts/package.ps1",
     "tauri": "tauri",
+    "pretauri": "node scripts/prepare-network-controller.mjs",
     "pet:dev": "node scripts/pet-dev.mjs",
     "pet:verify": "npm --prefix ../ui run pet:test",
     "dev:pet": "vite --host 127.0.0.1 --port 5299 --strictPort",

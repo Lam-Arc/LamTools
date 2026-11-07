@@ -24,13 +24,32 @@ def register_imagegen(sub: argparse._SubParsersAction) -> None:
     imagegen_config.set_defaults(func=cmd_imagegen_config)
 
 
+def register_providers(sub: argparse._SubParsersAction) -> None:
+    from .settings import cmd_providers_list, cmd_providers_probe, cmd_providers_status
+
+    providers = sub.add_parser("providers", help="Inspect provider connections and connectivity")
+    providers_sub = providers.add_subparsers(dest="providers_command", required=True)
+    providers_list = providers_sub.add_parser("list", help="List configured providers")
+    providers_list.add_argument("--work-root", default="")
+    providers_list.set_defaults(func=cmd_providers_list)
+    providers_status = providers_sub.add_parser("status", help="Show the last known connection state")
+    providers_status.set_defaults(func=cmd_providers_status)
+    providers_probe = providers_sub.add_parser("probe", help="Probe provider endpoints now")
+    providers_probe.add_argument("--provider-id", action="append", default=[])
+    providers_probe.add_argument("--force", action="store_true", help="Ignore the cached result")
+    providers_probe.set_defaults(func=cmd_providers_probe)
+
+
 def register_models(sub: argparse._SubParsersAction) -> None:
-    from .settings import cmd_model_group_members_set, cmd_model_groups_create, cmd_model_groups_delete, cmd_model_groups_list, cmd_model_groups_rename, cmd_model_groups_reorder, cmd_models_create, cmd_models_default, cmd_models_list, cmd_models_set, cmd_models_show
+    from .settings import cmd_model_group_members_set, cmd_model_groups_create, cmd_model_groups_delete, cmd_model_groups_list, cmd_model_groups_rename, cmd_model_groups_reorder, cmd_models_create, cmd_models_default, cmd_models_list, cmd_models_set, cmd_models_show, cmd_models_usage
     models = sub.add_parser("models", help="Manage model definitions (jsonc-backed)")
     models_sub = models.add_subparsers(dest="models_command", required=True)
     models_list = models_sub.add_parser("list", help="List configured models")
     models_list.add_argument("--work-root", default="")
     models_list.set_defaults(func=cmd_models_list)
+    models_usage = models_sub.add_parser("usage", help="Show aggregated model usage and cost")
+    models_usage.add_argument("--range", choices=("24h", "7d", "30d", "all"), default="30d")
+    models_usage.set_defaults(func=cmd_models_usage)
     models_show = models_sub.add_parser("show", help="Show a model definition")
     models_show.add_argument("model_id")
     models_show.add_argument("--work-root", default="")

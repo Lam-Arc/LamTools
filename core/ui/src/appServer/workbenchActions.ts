@@ -15,10 +15,13 @@ export interface CoreStartTurnOutcome {
 
 /** Outcome of a steer attempt. `queued` marks the refusals where the runtime
  *  already put the message into the queue for the next turn, so the composer
- *  reports it as queued without issuing a second queue write. */
+ *  reports it as queued without issuing a second queue write. `submitted` marks
+ *  the refusals where the runtime already opened a NEW turn whose user message is
+ *  that text: the composer must neither queue it again nor claim it was guidance. */
 export interface CoreSteerAttempt {
   ok: boolean
   queued?: boolean
+  submitted?: boolean
 }
 
 export interface SubmitCoreComposerTaskOptions {
@@ -57,6 +60,8 @@ export type SubmitCoreComposerTaskResult =
   | { status: 'command'; command: string; arguments?: string; ok: boolean }
   | { status: 'guided'; inputItems: CoreInputItem[] }
   | { status: 'queued'; inputItems: CoreInputItem[] }
+  /** The refused steer already became a real user message in a NEW turn. */
+  | { status: 'submitted'; inputItems: CoreInputItem[]; ok: true }
   | { status: 'started'; inputItems: CoreInputItem[]; ok: boolean }
 
 export interface CoreComposerSubmissionEffectOptions {
@@ -166,6 +171,10 @@ export async function submitCoreComposerTask(
     const steered = await options.steerTurn(options.threadId, options.activeTurnId, inputItems, options.clientMessageId)
     const steerOutcome = typeof steered === 'boolean' ? { ok: steered } : steered
     if (steerOutcome.ok) return { status: 'guided', inputItems }
+    // user:“引导在结束边界之后被接收：原回合结束，创建一条真实用户消息并开启新
+    // 回合”+(后端已经把这条文字建成新回合里的用户消息：这里既不能再排一次队，
+    // 也不能显示成"已引导/已排队"，否则界面和真实执行对不上)。
+    if (steerOutcome.submitted) return { status: 'submitted', inputItems, ok: true }
     // A refusal is a success response with `applied: false` (or a failed call).
     // There is no live run to steer in that moment, so the message waits in the
     // queue for the next turn. If the runtime already queued it, do not write a
@@ -236,6 +245,13 @@ export function coreComposerSubmissionEffects(
     return _clearablePlan(options, {
       clearAttachments: false,
       statusText: options.guidedStatusText || 'Guidance sent',
+    })
+  }
+  if (result.status === 'submitted') {
+    // user:“新回合必须与用户正常发送消息的行为完全一致”+(引导转成新回合时，
+    // 输入框、附件与提示都按一次正常发送处理：这条用户消息已经由后端落库)。
+    return _clearablePlan(options, {
+      clearAttachments: true,
     })
   }
   if (result.ok) {

@@ -1,5 +1,11 @@
 # DSH 插件兼容：分阶段实施与公开契约
 
+第二阶段固定71/71项非前端Python近似契约及已发现缺陷已收尾，现按用户要求直接推进[第三阶段原20项](dsh_phase3_completion.md)的非前端部分；不表示全部DSH方法或JS/TS运行协议等价。差异、依赖和并行阻塞见完成清单及plugin_phase2_public_ports.md。
+
+第三阶段会话文件SDK已接通base_file同根关联读取及原FileWatch轮询合并变化流，22项新增验收通过；监听取消/停用实际回收。接续remoteGateway v3明确ndjson服务端JSON流，另22项新增验收包含原处理器/真实文件变化到HTTP及断连回收；DSH精确流wire/双向流仍未完成。
+
+持续代码审查另修复7处真实接线、准入、参数、取消和agent交接缺陷，10项新增验收通过；文件引用取消边界已同步机器清单、迁移报告和交接文档。固定71项范围与近似等级保持不变。
+
 逐项完成状态与后续待办见 [验收清单](dsh_compatibility_checklist.md)。仅经过相关测试与文档核对的子集勾选完成。
 
 user:“我希望每一个地方 sunday 都有等价或者近似接口，能够脚本自动兼容 dsh 插件，分步做，宿主能力补齐和接口完善与文档更新，自动化兼容脚本，脚本不必能处理所有问题，剩下问题交给 agent 来移植”+(先建立完整能力基线，再逐项实现行为兼容，自动化负责确定性迁移，agent 负责剩余语义移植)。
@@ -25,7 +31,7 @@ user:“我希望每一个地方 sunday 都有等价或者近似接口，能够�
 - [扩展手册](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/cookbook/extension-cookbook.zh.md)。
 - [Remote 契约](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/api-gateway.zh.md)。
 
-[完整对照表](dsh_compatibility_matrix.md)覆盖官方目录全部 107 个服务键。51 项找到可复用的 Sunday 候选位置，56 项尚无已核实的等价公开契约。这些数字表示调查结果，**不是已兼容数量**。额外收录了核心钩子、四组已核对 Remote 方法和常用 UI 插槽；事件、方法和插槽的穷尽枚举还需在对应阶段按包补充。
+[完整对照表](dsh_compatibility_matrix.md)覆盖官方目录全部 107 个服务键。初始调查时51项找到可复用的Sunday候选位置，56项尚无已核实的等价公开契约；当前候选与缺口以机器目录及生成矩阵为准。这些数字表示调查结果，**不是已兼容数量**。额外收录了核心钩子、四组已核对 Remote 方法和常用 UI 插槽；事件、方法和插槽的穷尽枚举还需在对应阶段按包补充。
 
 `core/src/lamtools_core/plugin_system/dsh_compat/surface.json` 是对照表的机器可读来源，随 Python 包交付。107 项服务状态仍只有 `candidate` 和 `gap`：前者仍需契约、适配和行为验收，后者仍需核实或新增接口。额外的 `hostContracts` 单独记录已验收的 Sunday 基础契约，不计为 DSH 服务已完全兼容。不能在只有候选实现时标记 compatible。升级上游时重新核对服务、方法签名和语义，并记录新提交，不能悄悄跟随 master。
 
@@ -34,8 +40,8 @@ user:“我希望每一个地方 sunday 都有等价或者近似接口，能够�
 | 阶段 | 工作 | 完成条件 | 当前状态 |
 | --- | --- | --- | --- |
 | 1：基线与迁移准备 | 固定上游、107 项服务对照、能力发现、静态资源迁移、agent 交接 | 新测试验证真实 Sunday 解析器能读取生成资源；未移植源码显式保留待办；不改原插件 | 本次完成，见验收记录 |
-| 2：核心宿主契约 | 服务依赖和作用域、注册与撤回、会话/Agent、消息/流、工具/钩子、提示词、存储、配置、凭据、权限和运行能力 | 每项先写验收测试，再接到现有宿主；参数、返回、错误、取消、持久化和卸载均有记录 | 进行中：2a–2p 及 2q–2v 运行、恢复与成员控制子集已验收；完整 71 项仍逐项推进，见完成清单 |
-| 3：前端与 Remote | 类型化远程调用、访问控制、二进制/双向流、事件名单、Vue UI 扩展与 DSH slot 对照 | 四组已列 Remote 和补充枚举逐项验收；UI 各位置具备注册、撤回和会话隔离 | 待实施 |
+| 2：核心宿主契约 | 服务依赖和作用域、注册与撤回、会话/Agent、消息/流、工具/钩子、提示词、存储、配置、凭据、权限和运行能力 | 每项先写验收测试，再接到现有宿主；参数、返回、错误、取消、持久化和卸载均有记录 | 固定71项近似契约已验收，前端除外；方法/协议差异仍交agent移植，详见完成清单 |
+| 3：前端与 Remote | 类型化远程调用、访问控制、二进制/双向流、事件名单、Vue UI 扩展与 DSH slot 对照 | 四组已列 Remote 和补充枚举逐项验收；UI 各位置具备注册、撤回和会话隔离 | 非前端部分已开始；纯前端/UI保留排除边界，见第三阶段清单 |
 | 4：转换与真实插件 | 在已验收契约之上增加 JS/TS 兼容层、自动改写、可选/实验提供方；逐类移植真实插件 | 工具、钩子、MCP/技能、会话、UI 各有真实上游插件；原功能差异和剩余工作可回溯 | 待实施 |
 
 阶段 2 优先顺序：
@@ -212,14 +218,14 @@ python -m lamtools_core.plugin_system.dsh_compat E:/sources/dsh-example
 | --- | --- |
 | `plugin.json` | Sunday 名称/版本、已迁移静态资源、迁移状态；默认停用 |
 | `upstream/` | 原插件源码、包信息、许可证和资源，保留原相对结构 |
-| `migration-report.json` | 固定基线、服务使用位置、事件、Remote、slot、未解决问题与分析范围 |
+| `migration-report.json` | 固定基线、服务使用位置、事件、Remote、slot、未解决问题、分析范围及已使用服务的 `hostApproximationNotes` 机器边界快照 |
 | `PORTING.md` | 给 agent 的逐项待办及验收要求 |
 
 当前自动处理：npm scoped 名称转单段 Sunday 名称，登记可识别的静态技能目录，登记根目录 `mcp.json` / `.mcp.json`，保留其资源。使用 Sunday 真正的 manifest/capability 解析器验证，并检查技能没有因重名等原因丢失。MCP 仅转换声明；路径、依赖、变量和外部服务必须在目标运行环境核验。
 
 当前只分析并交给 agent：JS/TS 后端、Cordis 生命周期、动态工具/服务注册、钩子、YAML 组合、React 界面、Remote、动态 Context 属性、未知服务和嵌套包。不会自动把 `@deepseek-ai/*` 替换成一个未经实现的 Sunday 包，也不会自动声明原 JS 工具已经可执行。
 
-扫描默认限 4000 文件、32 MiB。跳过 `.git`、`node_modules`、`.venv`、`__pycache__`、`.env` 等已声明排除项；拒绝符号链接和 Windows junction。未知本地代码仍保留给 agent。它是保守静态扫描，不是完整 TypeScript 分析器：注释/字符串可能误报，计算属性、复杂别名和跨函数 Context 传递可能漏检。`runtimeVerified` 始终为 false。
+扫描默认限 4000 文件、32 MiB。实际导出也逐块执行同一源文件总字节上限；扫描后源文件增长导致超限时，拒绝发布目标并清理暂存目录。该上限不包含脚本生成的报告，扫描和复制不是原子快照，同限额内的源变更仍需人工复核。跳过 `.git`、`node_modules`、`.venv`、`__pycache__`、`.env` 和 `.env.*` 等已声明排除项；匹配目录会剪枝整个后代树，不扫描、不计入预算、不导出；其他目录读取失败会明确报错，分析/导出不以遗漏源码后的不完整结果返回成功；拒绝符号链接和 Windows junction。未知本地代码仍保留给 agent。它是保守静态扫描，不是完整 TypeScript 分析器：注释/字符串可能误报，计算属性、复杂别名和跨函数 Context 传递可能漏检。`runtimeVerified` 始终为 false。
 
 退出码：0 表示只发现可登记的静态资源，**仍未运行验证**；2 表示报告/目录已生成，但需 agent 移植；1 表示输入、限额或导出验证失败。所有生成插件都默认停用，不安装到正在运行的 Sunday。
 
@@ -304,3 +310,15 @@ user:“继续，把 2 阶段都做完”+(从基础读取推进至真实执行�
 自动迁移报告新增实际方法候选，保持 agent-required 和 runtimeVerified=false；没有盲改 JS/TS，也没有标记任何 DSH 服务 compatible。文件监听只轮询、进程存在启动到Job分配窗口，后台回调须配合取消，session标签不构成授权，保存或审计不绕过原工具审批。终端/沙箱/远程/完整日志及会话恢复等仍见未勾选清单。
 
 机器清单 filesystem 升为v5，新增 shell、jobs、spill 等已验收Python契约。此前联合验收383项通过，本批新增及受影响的15个兼容测试模块190项通过（两组重叠，不相加）。未修改前端文件。
+
+
+迁移交接同步补充：PORTING.md使用报告内hostApproximationNotes列出实际扫描到服务的同版phase2Acceptance边界，包含状态、契约和近似差异；宿主接口证据不代表被移植插件通过运行验收。通用待办已纠正领域表/全局槽、设置校验/默认重置/保密投影的旧缺口措辞，仍保留DSH兼容迁移、远程后端、继承重置等真实差异。
+
+
+第三阶段已接通[明确Remote一元映射](plugin_phase3_remote.md)：原Core及插件认证、清单方法与精确扁平参数、原操作归属/审批和取消传播经17项新增验收。迁移报告公开契约但不盲生成映射；DSH角色/资源lookup、生成codec、精确二进制wire和双向流仍未实现，不标记完整Gateway完成。
+
+
+第三阶段新增[会话文件控制器](plugin_workspace_files.md)：context.workspace_files按原可见会话执行目录提供行页、字节窗口、目录与元数据，16项新增SQLite/文件/HTTP/迁移验收通过；不接受请求授权根。更严格限根和限额、Python bytes需显式multipart出口、无baseFile/changes流及DSH精确二进制wire等差异明确保留。
+
+
+Remote一元结果已升级v2：显式resultEncoding=multipart以有界原始字节附件返回，18项本批新增验收包含真实会话文件HTTP往返、隐藏会话拒绝及各类结果限制。默认/普通结果仍JSON；附件路径相对Sunday envelope，不声称DSH rpcId/生成codec或流兼容。

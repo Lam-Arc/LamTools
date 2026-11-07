@@ -535,6 +535,13 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       })
       if (result.status === 'started' && !result.ok) {
         fail(startError)
+      } else if (result.status === 'submitted') {
+        // user:“引导在结束边界之后被接收：原回合结束，创建一条真实用户消息并开启
+        // 新回合”+(这条发送的落点已经是新回合里的一条用户消息：按"已开始"收尾，
+        // 不做排队提示、不显示引导成功、也不再补发一次队列写入)。
+        attempt.state = 'accepted'
+        if (!attempt.acknowledged) acceptSubmission(attempt)
+        notifyTurnStarted()
       } else if (result.status !== 'ignored') {
         attempt.state = result.status === 'queued' ? 'queued' : result.status === 'guided' ? 'guided' : 'accepted'
         // Preserve fallback intent on retry: never start a second turn for a queued write.

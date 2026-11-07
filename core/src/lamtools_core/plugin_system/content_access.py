@@ -3,11 +3,13 @@ import asyncio
 import copy
 import json
 import os
+import threading
 from collections import deque
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from lamtools_core.tool import ToolCall
+from lamtools_core.async_tasks import finish_on_cancel
 from .filesystem_access import PluginFilesystemAPI
 
 
@@ -79,13 +81,16 @@ class PluginFileReferencesAPI:
             if type(query) is not str or len(query) > 512 or "\x00" in query or type(limit) is not int or not 1 <= limit <= 1000:
                 raise ValueError("Use a query up to 512 characters and limit 1–1000")
             root = PluginFilesystemAPI(self._root, self._scope).resolve(".")
+            stop = threading.Event()
             def scan():
                 queue, matches, seen, truncated = deque([(root, 0)]), [], 0, False
-                while queue and seen < 5000:
+                while queue and seen < 5000 and not stop.is_set():
                     directory, depth = queue.popleft()
                     try:
                         with os.scandir(directory) as entries:
                             for entry in entries:
+                                if stop.is_set():
+                                    break
                                 seen += 1
                                 if seen > 5000:
                                     truncated = True
@@ -107,7 +112,16 @@ class PluginFileReferencesAPI:
                 matches.sort(key=lambda row: row["path"])
                 return {"items": matches[:limit], "truncated": truncated or bool(queue) or len(matches) > limit,
                         "scanned": min(seen, 5000)}
-            result = await asyncio.to_thread(scan)
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(取消线程等待不会终止扫描；先请求协作停止并等待真实线程，再释放原作用域租约)。
+            worker = asyncio.create_task(asyncio.to_thread(scan), name="plugin-file-reference-scan")
+            try:
+                result = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                stop.set()
+                async def settle():
+                    await asyncio.gather(worker, return_exceptions=True)
+                await finish_on_cancel(settle(), name="plugin-file-reference-scan-stop")
+                raise
             self._scope.check_open()
             return result
         finally:
@@ -125,6 +139,8 @@ class PluginWebAPI:
             handler = make_web_fetch_handler(self._root) if kind == "fetch" else make_web_search_handler(self._root)
             async with asyncio.timeout(90):
                 result = await handler(ToolCall(id="plugin-web", name="web_" + kind, arguments=arguments))
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(Web等待后发布成功或失败结果前复核原启动代，不撤销已发生的网络请求)。
+            self._scope.check_open()
             return _bounded(result.to_dict())
         finally:
             self._scope.release()
@@ -147,7 +163,8 @@ class PluginWebAPI:
 
 class PluginPlanModeAPI:
     # An epoch-local restrictive mode; this list cannot grant tools or bypass normal permissions.
-    READ_TOOLS = frozenset({"read_file", "list_directory", "list_files", "search_files", "search_text", "glob", "grep",
+    # user:“审查当前代码，然后继续”+(白名单覆盖宿主真实目录/内容搜索名称，不能误禁用只读工具)。
+    READ_TOOLS = frozenset({"read_file", "list_dir", "search_content", "list_directory", "list_files", "search_files", "search_text", "glob", "grep",
                             "web_fetch", "web_search", "git_status", "git_diff"})
 
     def __init__(self, context, scope):

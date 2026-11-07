@@ -16,6 +16,7 @@ from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from lamtools_core.config.model_store import ModelStore
 from lamtools_core.llm import REASONING_LEVELS
@@ -39,6 +40,8 @@ SUB_AGENT_MAX_RUN_SECONDS = 2 * 60 * 60
 #: many idle supervisors (each with a runner and MCP registry) stay resident.
 SUB_AGENT_MAX_CONCURRENT_RUNS = 8
 SUB_AGENT_MAX_SUPERVISORS = 64
+# 成员库的同步 sqlite3 忙等上限：默认 5 秒会把事件循环（以及连接池超时计时）冻住。
+SUB_AGENT_SQLITE_TIMEOUT_SECONDS = 2.0
 
 SUB_AGENT_TYPES = ("consider", "execute")
 # 允许中文名字（例如「张前端」这类稳定称呼），仍须以小写拉丁字母或汉字开头。
@@ -371,7 +374,12 @@ class SubAgentSupervisor:
         )
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
+        # user:“覆盖异常中断、任务取消、超时、并发竞争、数据库断连及应用退出等场景”+(成员库是同步 sqlite3，
+        # 默认忙等 5 秒且跑在事件循环线程上，一次锁等待会把整个应用连同连接池计时一起冻住)。
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=SUB_AGENT_SQLITE_TIMEOUT_SECONDS,
+        )
         connection.row_factory = sqlite3.Row
         return connection
 
@@ -1496,9 +1504,17 @@ class SubAgentSupervisor:
 
     async def list(self) -> list[dict[str, Any]]:
         async with self._lock:
-            with self._connection() as db:
-                rows = db.execute("SELECT payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name", (self.parent_thread_id,)).fetchall()
-            return [json.loads(row["payload"]) for row in rows]
+            # user:“QueuePool limit of size 4 overflow 4 reached, connection timed out, timeout 30.00”+
+            # (列表是被界面高频轮询的读操作：同步 sqlite 读放线程里，锁等待不再阻塞事件循环)。
+            return await asyncio.to_thread(self._list_rows)
+
+    def _list_rows(self) -> list[dict[str, Any]]:
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name",
+                (self.parent_thread_id,),
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
 
     async def request_local_context(self, name: str) -> str:
         async with self._lock:
@@ -2030,6 +2046,30 @@ class SubAgentSupervisor:
 
 _SUPERVISORS: dict[tuple[str, str], SubAgentSupervisor] = {}
 
+# Creating a supervisor is slow (runner construction, plugin assembly, recovery
+# scan) and the UI polls `sub_agent.list`, so a cold thread can receive several
+# concurrent first calls. Without serialization each of them builds its own
+# runner and opens its own database access. The lock is per (event loop, key):
+# asyncio locks bind to the loop that first contends on them, and embedding
+# hosts can drive one process from more than one loop.
+_CREATE_LOCKS: "WeakKeyDictionary[asyncio.AbstractEventLoop, WeakValueDictionary[str, asyncio.Lock]]" = (
+    WeakKeyDictionary()
+)
+
+
+def _create_lock(key: tuple[str, str]) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    locks = _CREATE_LOCKS.get(loop)
+    if locks is None:
+        locks = WeakValueDictionary()
+        _CREATE_LOCKS[loop] = locks
+    identity = "\x00".join(key)
+    lock = locks.get(identity)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[identity] = lock
+    return lock
+
 
 def _remember_supervisor(supervisor: "SubAgentSupervisor") -> None:
     """Adopt a supervisor as this process's owner of one parent session.
@@ -2087,25 +2127,33 @@ async def get_sub_agent_supervisor(
     key = (str(Path(data_dir).resolve()), str(parent_thread_id))
     supervisor = _SUPERVISORS.get(key)
     if supervisor is None:
-        if len(_SUPERVISORS) >= SUB_AGENT_MAX_SUPERVISORS:
-            # Bound the resident set: every supervisor owns a runner and an
-            # independent MCP registry, so a long-lived process that visits
-            # many sessions would otherwise accumulate them forever.
-            for candidate_key, candidate in list(_SUPERVISORS.items()):
-                if candidate_key == key or candidate.has_active_work():
-                    continue
-                _SUPERVISORS.pop(candidate_key, None)
-                try:
-                    await candidate.shutdown()
-                except BaseException:
-                    _logger.exception("[sub-agent] failed to shut down an idle supervisor")
-                break
-        supervisor = SubAgentSupervisor(
-            parent_thread_id=parent_thread_id, runner=runner,
-            database_path=Path(data_dir) / "sub_agents.sqlite3",
-        )
-        _SUPERVISORS[key] = supervisor
-        await supervisor.recover()
+        # user:“并发竞争”+(冷会话的第一批轮询会并发地各建一个监督器：锁内建只付一次插件装配与恢复扫描)。
+        async with _create_lock(key):
+            supervisor = _SUPERVISORS.get(key)
+            if supervisor is not None:
+                if update_existing_runner:
+                    supervisor.update_runner(runner)
+                return supervisor
+            if len(_SUPERVISORS) >= SUB_AGENT_MAX_SUPERVISORS:
+                # Bound the resident set: every supervisor owns a runner and an
+                # independent MCP registry, so a long-lived process that visits
+                # many sessions would otherwise accumulate them forever.
+                for candidate_key, candidate in list(_SUPERVISORS.items()):
+                    if candidate_key == key or candidate.has_active_work():
+                        continue
+                    _SUPERVISORS.pop(candidate_key, None)
+                    try:
+                        await candidate.shutdown()
+                    except BaseException:
+                        _logger.exception("[sub-agent] failed to shut down an idle supervisor")
+                    break
+            supervisor = SubAgentSupervisor(
+                parent_thread_id=parent_thread_id,
+                runner=runner,
+                database_path=Path(data_dir) / "sub_agents.sqlite3",
+            )
+            _SUPERVISORS[key] = supervisor
+            await supervisor.recover()
     elif update_existing_runner:
         supervisor.update_runner(runner)
     return supervisor
@@ -2127,6 +2175,12 @@ def register_sub_agent_lifecycle_operations(
         ).strip()
         if not thread_id:
             raise ValueError("thread_id is required")
+        # user:“QueuePool limit of size 4 overflow 4 reached, connection timed out, timeout 30.00”+
+        # (界面每 220ms 轮询一次 sub_agent.list，每条都重建一次 runner、装配一次插件、
+        #  再读一次核心库；已有监督器时这些成本全是白付，并且一直占着连接池)。
+        existing = find_sub_agent_supervisor(thread_id, data_dir=data_dir)
+        if existing is not None:
+            return existing
         runner = runner_factory()
         if inspect.isawaitable(runner):
             runner = await runner

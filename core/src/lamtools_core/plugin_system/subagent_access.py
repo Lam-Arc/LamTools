@@ -47,6 +47,21 @@ class PluginSubagentAPI:
             raise SubagentAccessError("subagent/foreign-member", "Native response is outside this plugin namespace", may_have_changed=True)
         return {key: value for key, value in row.items() if key in _PUBLIC} | {"name": name[len(self._prefix):], "native_name": name}
 
+    def _current_host(self, expected=None):
+        # user:“复用原宿主权威”+(父会话可见性、模型准入及列表发布前后复用同一原目录/会话/宿主/存储检查)。
+        self._scope.check_open()
+        if self._catalog is not self._context.resolved_operation_catalog() or self._sessions is not self._context.service("sessions"):
+            raise SubagentAccessError("subagent/host-changed", "Subagent host changed")
+        if self._sessions is None:
+            raise SubagentAccessError("subagent/unavailable", "Native session service is unavailable")
+        host = self._sessions._context().host
+        store = getattr(host, "session_store", None)
+        if self._store is None:
+            self._store = store
+        if store is not self._store or expected is not None and host is not expected:
+            raise SubagentAccessError("subagent/host-changed", "Parent session host or store changed")
+        return host
+
     async def _call(self, action, parent, **fields):
         self._scope.acquire()
         mutation = action != "list"
@@ -54,17 +69,11 @@ class PluginSubagentAPI:
             parent = _identifier(parent)
             if ":sub:" in parent:
                 raise SubagentAccessError("subagent/invalid-parent", "This facade controls members of a root session only")
-            if self._catalog is not self._context.resolved_operation_catalog() or self._sessions is not self._context.service("sessions"):
-                raise SubagentAccessError("subagent/host-changed", "Subagent host changed")
+            host = self._current_host()
             operation = "sub_agent." + action
             if self._catalog is None or not self._catalog.has(operation) or self._sessions is None:
                 raise SubagentAccessError("subagent/unavailable", "Required native subagent operation is unavailable")
-            host = self._sessions._context().host
             store = getattr(host, "session_store", None)
-            if self._store is None:
-                self._store = store
-            if store is not self._store:
-                raise SubagentAccessError("subagent/host-changed", "Parent session store changed")
             read = getattr(store, "get_readonly", None)
             if not callable(read):
                 raise SubagentAccessError("subagent/unavailable", "Host has no read-only parent visibility check")
@@ -72,18 +81,27 @@ class PluginSubagentAPI:
                 record = await read(parent)
             except Exception:
                 raise SubagentAccessError("subagent/read-failed", "Parent visibility read failed") from None
+            self._current_host(host)
             if record is None:
                 raise SubagentAccessError("subagent/not-found", "Parent session is unknown or unavailable")
             root = record.metadata.get("work_root")
             if type(root) is not str or Path(root).resolve() != self._root:
                 raise SubagentAccessError("subagent/project-mismatch", "Parent belongs to another project")
             self._scope.check_open()
+            if action == "create":
+                # user:“审查当前代码，然后继续”+(实际原生创建前执行持久模型准入；未配置政策保留显式模型旧行为)。
+                from .subagent_models import PluginSubagentModelsAPI
+                selected = await PluginSubagentModelsAPI(self._context, self._scope).select(parent, fields.get("model"), _legacy=True)
+                fields["model"] = selected["id"]
+            self._current_host(host)
             work = self._catalog.execute(operation, {"thread_id": parent, "work_root": str(self._root), **fields},
                 metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
             try:
                 result = await finish_on_cancel(work, name="plugin-subagent-operation") if mutation else await work
             except Exception:
                 raise SubagentAccessError("subagent/operation-failed", "Native subagent operation failed; inspect member state before retrying", may_have_changed=mutation) from None
+            if not mutation:
+                self._current_host(host)
             if result.status != "ok":
                 try:
                     details = _json(result.payload)
@@ -120,13 +138,13 @@ class PluginSubagentAPI:
             raise SubagentAccessError("subagent/not-found", "No member in this plugin namespace")
         return row
 
-    async def create(self, parent_session_id, name, *, kind, model, reasoning_level):
+    async def create(self, parent_session_id, name, *, kind, reasoning_level, model=None):
         # user:“给我把 2 阶段做完，前端除外”+(创建时捕获父会话持久执行目录，已有成员由原监督器保留原目录)。
         directory = await self._context.working_directory.get(parent_session_id)
         if not directory.exists:
             raise SubagentAccessError("subagent/missing-directory", "Parent execution directory is unavailable")
         return await self._call("create", parent_session_id, name=self._name(name), type=_identifier(kind),
-                                model=_identifier(model), reasoning_level=_identifier(reasoning_level), execution_directory=directory.path)
+                                model=None if model is None else _identifier(model), reasoning_level=_identifier(reasoning_level), execution_directory=directory.path)
 
     async def message(self, parent_session_id, name, *, request_id, text):
         self._scope.check_open()
@@ -137,6 +155,8 @@ class PluginSubagentAPI:
         except (ValueError, UnicodeError):
             raise SubagentAccessError("subagent/invalid-message", "Message must be nonempty UTF-8 text up to64KiB") from None
         row = await self.get(parent_session_id, name)
+        from .subagent_models import PluginSubagentModelsAPI
+        await PluginSubagentModelsAPI(self._context, self._scope).select(parent_session_id, row["model_id"], _legacy=True)
         call_id = "plugin_" + hashlib.sha256(json.dumps([self._prefix, parent_session_id, name, request_id]).encode()).hexdigest()
         return await self._call("message", parent_session_id, name=row["native_name"], type=row["type"], prompt=text, call_id=call_id)
 
@@ -164,4 +184,6 @@ class PluginSubagentAPI:
         # user:“继续”+(恢复仅针对已中断成员，实际的历史和运行身份继续由原监督器验证)。
         self._scope.check_open()
         row = await self.get(parent_session_id, name)
+        from .subagent_models import PluginSubagentModelsAPI
+        await PluginSubagentModelsAPI(self._context, self._scope).select(parent_session_id, row["model_id"], _legacy=True)
         return await self._call("resume_member", parent_session_id, name=row["native_name"])

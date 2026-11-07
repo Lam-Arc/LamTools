@@ -54,3 +54,78 @@ async def test_dynamic_definitions_are_immutable_and_runs_are_owned_jobs(ctx):
     with pytest.raises(LookupError):
         api.run(definition["id"], input=4)
     await ctx._registration_scope.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["stop", "undefine"])
+async def test_dynamic_cleanup_failure_still_joins_other_jobs_and_can_retry(ctx, monkeypatch, operation):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(单个作业清理失败也须尝试其余原作业，保留失败记录供重试，撤回失败不能删除定义)。
+    api, jobs = ctx.dynamic_runner, ctx.jobs
+    definition = api.define("def main(value): return value")
+    entered = [asyncio.Event(), asyncio.Event()]
+    cleaned = [asyncio.Event(), asyncio.Event()]
+    def work(index):
+        async def execute(job):
+            entered[index].set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaned[index].set()
+        return execute
+    records = [jobs.start("dynamic", "Cleanup failure", work(index)) for index in range(2)]
+    api._runs[definition["id"]] = {record.id for record in records}
+    await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered)), 3)
+    original = jobs.kill
+    attempts, failed = [], []
+    async def flaky_kill(job_id):
+        attempts.append(job_id)
+        if not failed:
+            failed.append(job_id)
+            raise RuntimeError("controlled cleanup failure")
+        return await original(job_id)
+    monkeypatch.setattr(jobs, "kill", flaky_kill)
+    try:
+        with pytest.raises(Exception):
+            await getattr(api, operation)(definition["id"])
+        assert set(attempts) == {record.id for record in records}
+        assert sum(event.is_set() for event in cleaned) == 1
+        assert definition["id"] in api._definitions
+        assert api._runs[definition["id"]] == set(failed)
+        assert not ctx._registration_scope._calls
+        monkeypatch.setattr(jobs, "kill", original)
+        await getattr(api, operation)(definition["id"])
+        assert all(event.is_set() for event in cleaned)
+        assert all(record._task.done() for record in records)
+        assert definition["id"] not in api._runs
+        assert (definition["id"] in api._definitions) == (operation == "stop")
+    finally:
+        await ctx._registration_scope.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_stop_closes_admission_and_joins_after_cancellation(ctx, monkeypatch):
+    # user:“审查当前代码，然后继续”+(停止期间不能增添成员，调用者取消也须排空已接收任务)。
+    api = ctx.dynamic_runner
+    definition = api.define("def main(value): return value")
+    jobs = ctx.jobs
+    entered, release = asyncio.Event(), asyncio.Event()
+    killed = []
+    async def kill(job_id):
+        entered.set()
+        await release.wait()
+        killed.append(job_id)
+    monkeypatch.setattr(jobs, "kill", kill)
+    api._runs[definition["id"]] = {"first", "second"}
+    task = asyncio.create_task(api.stop(definition["id"]))
+    await asyncio.wait_for(entered.wait(), 3)
+    try:
+        with pytest.raises(RuntimeError):
+            api.run(definition["id"])
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await ctx._registration_scope.dispose()
+    assert set(killed) == {"first", "second"}

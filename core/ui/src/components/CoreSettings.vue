@@ -1,7 +1,7 @@
 <template>
   <div
     ref="settingsRootEl"
-    class="full-area-column full-area-surface" data-ui-id="settings.root"
+    class="full-area-column full-area-surface settings-root" data-ui-id="settings.root"
     :class="{ 'settings-surface--narrow': narrowSurface }"
     :style="settingsThemeStyle"
   >
@@ -26,263 +26,30 @@
       </section>
 
       <section v-if="activeSection === 'models'" class="settings-panel models-panel">
-        <header class="settings-title models-title">
-          <div class="models-title-copy">
-            <h1>{{ t("模型与供应商") }}</h1>
-            <p>{{ t("管理模型接入、供应商配置与默认模型选择。") }}</p>
-          </div>
-          <CoreModelCatalogViewToggle
-            :model-value="catalogView"
-            @update:model-value="$emit('update:catalogView', $event)"
-          />
-        </header>
-
-        <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
-
-        <div v-if="catalogView === 'group' || providers.length" class="models-workspace settings-surface">
-          <div class="models-workspace-body">
-          <aside v-if="catalogView === 'provider'" class="provider-rail" :aria-label="t('供应商列表')">
-            <div class="provider-rail-head">
-              <div class="provider-rail-title">
-                <strong>{{ t("供应商") }}</strong>
-                <span>{{ providerCount }}</span>
-              </div>
-            </div>
-
-            <label class="resource-search provider-search">
-              <span class="sr-only">{{ t("搜索供应商") }}</span>
-              <input v-model.trim="providerQuery" type="search" :placeholder="t('搜索供应商')" />
-            </label>
-
-            <div class="provider-picker" role="listbox" :aria-label="t('选择供应商')">
-              <button
-                v-for="provider in filteredProviders"
-                :key="provider.id"
-                class="provider-picker-item"
-                :class="{ 'is-selected': selectedProvider?.id === provider.id }"
-                type="button"
-                role="option"
-                :aria-selected="selectedProvider?.id === provider.id ? 'true' : 'false'"
-                @click="selectProvider(provider.id)"
-              >
-                <span class="provider-picker-mark" aria-hidden="true">{{ (provider.name || provider.id).slice(0, 1).toUpperCase() }}</span>
-                <span class="provider-picker-copy">
-                  <strong>{{ provider.name || provider.id }}</strong>
-                  <span>{{ modelsForProvider(provider.id).length }}{{ t("个模型") }}</span>
-                </span>
-                <span class="provider-picker-state" :class="{ 'is-configured': provider.has_api_key }">
-                  <span class="provider-picker-state-dot" aria-hidden="true" />
-                  <span>{{ provider.has_api_key ? t("已就绪") : t("待配置") }}</span>
-                </span>
-              </button>
-              <div v-if="!filteredProviders.length" class="provider-rail-empty">
-                <strong>{{ t("没有匹配的供应商") }}</strong>
-                <small>{{ t("换个关键词试试") }}</small>
-              </div>
-            </div>
-
-            <div class="provider-rail-footer">
-              <button class="provider-create-btn" type="button" data-provider-create @click="startProviderCreate">
-                <span aria-hidden="true">＋</span>
-                <span>{{ t("新增供应商") }}</span>
-              </button>
-              <div class="provider-rail-links">
-                <button v-if="allowEnvironmentImport" class="btn btn--ghost" type="button" @click="$emit('import-environment')">{{ t("从当前环境导入") }}</button>
-                <button class="btn btn--ghost" type="button" data-reopen-onboarding @click="$emit('reopen-onboarding')">{{ t("重新显示首次引导") }}</button>
-              </div>
-            </div>
-          </aside>
-
-          <aside v-else class="provider-rail" :aria-label="t('模型组列表')">
-            <div class="provider-rail-head">
-              <div class="provider-rail-title">
-                <strong>{{ t("模型组") }}</strong>
-                <span>{{ modelGroups.length }}</span>
-              </div>
-            </div>
-            <label class="resource-search provider-search">
-              <span class="sr-only">{{ t("搜索模型组") }}</span>
-              <input v-model.trim="groupQuery" type="search" :placeholder="t('搜索模型组')" />
-            </label>
-            <div class="provider-picker" role="listbox" :aria-label="t('选择模型组')">
-              <button
-                v-for="group in filteredModelGroups"
-                :key="group.id"
-                class="provider-picker-item"
-                :class="{ 'is-selected': selectedModelGroup?.id === group.id }"
-                type="button"
-                role="option"
-                :aria-selected="selectedModelGroup?.id === group.id ? 'true' : 'false'"
-                :data-model-group="group.id"
-                @click="selectModelGroup(group.id)"
-              >
-                <span class="provider-picker-mark" aria-hidden="true">{{ (group.name || group.id).slice(0, 1).toUpperCase() }}</span>
-                <span class="provider-picker-copy">
-                  <strong>{{ group.name || group.id }}</strong>
-                  <span>{{ group.model_ids.length }}{{ t("个模型") }}</span>
-                </span>
-              </button>
-              <div v-if="!filteredModelGroups.length" class="provider-rail-empty">
-                <strong>{{ groupQuery ? t("没有匹配的模型组") : t("还没有模型组") }}</strong>
-                <small>{{ groupQuery ? t("换个关键词试试") : t("创建分组来整理常用模型") }}</small>
-              </div>
-            </div>
-            <div class="provider-rail-footer">
-              <button class="provider-create-btn" type="button" data-model-group-create @click="startModelGroupCreate">
-                <span aria-hidden="true">＋</span>
-                <span>{{ t("新建模型组") }}</span>
-              </button>
-            </div>
-          </aside>
-
-          <section v-if="catalogView === 'provider' && selectedProvider" class="provider-detail" :aria-label="t('供应商详情')">
-            <header class="provider-detail-head">
-              <div class="provider-detail-identity">
-                <span class="provider-detail-context">{{ t("当前供应商") }}</span>
-                <div class="provider-name-line">
-                  <h2>{{ selectedProvider.name || selectedProvider.id }}</h2>
-                  <span class="provider-type">{{ providerTypeLabel(selectedProvider.api_type) }}</span>
-                </div>
-                <div class="provider-meta">
-                  <span class="provider-url" :title="selectedProvider.base_url || selectedProvider.id">{{ selectedProvider.base_url || selectedProvider.id }}</span>
-                  <span class="provider-state" :class="{ 'is-configured': selectedProvider.has_api_key }">
-                    <span class="provider-state-dot" aria-hidden="true" />
-                    {{ selectedProvider.has_api_key ? t("已就绪 · 已配置密钥") : t("待配置 · 缺少 API Key") }}
-                  </span>
-                </div>
-              </div>
-              <div class="provider-head-actions">
-                <button class="btn btn--ghost" type="button" :data-provider-edit="selectedProvider.id" @click="startProviderUpdate(selectedProvider)">{{ t("编辑") }}</button>
-                <button class="btn btn--ghost btn--danger" type="button" :data-provider-delete="selectedProvider.id" @click="$emit('delete-provider', selectedProvider.id)">{{ t("删除") }}</button>
-              </div>
-            </header>
-
-            <section class="model-section">
-              <header class="model-section-head">
-                <div class="model-section-title">
-                  <h2>{{ t("模型") }}</h2>
-                  <span>{{ selectedProviderModels.length }}{{ t("个模型") }}</span>
-                </div>
-                <div class="model-section-tools">
-                  <label class="resource-search model-search">
-                    <span class="sr-only">{{ t("搜索模型") }}</span>
-                    <input v-model.trim="modelQuery" type="search" :placeholder="t('搜索模型')" />
-                  </label>
-                  <button class="btn btn--primary" type="button" data-model-create @click="startSelectedModelCreate">{{ t("＋ 新增模型") }}</button>
-                </div>
-              </header>
-              <div class="model-list">
-                <div v-for="model in filteredSelectedProviderModels" :key="model.id" class="model-row" :class="{ 'is-default': model.is_default }">
-                  <div class="model-leading">
-                    <div class="model-identity">
-                      <div class="model-name-line">
-                        <strong>{{ model.display_name || model.model_id || model.id }}</strong>
-                        <span v-if="model.is_default" class="model-default-badge">{{ t("预设首选") }}</span>
-                      </div>
-                      <span class="model-meta">
-                        <span class="model-id">{{ model.model_id || model.id }}</span>
-                      </span>
-                    </div>
-                  </div>
-                  <div class="model-capabilities" :aria-label="t('模型能力')">
-                    <span class="model-capability">{{ t("聊天") }}</span>
-                    <span v-if="model.thinking_supported" class="model-capability">{{ t("推理") }}</span>
-                    <span v-if="model.capability === 'multimodal'" class="model-capability">{{ t("视觉") }}</span>
-                    <span v-else-if="model.capability === 'text'" class="model-capability">{{ t("文本") }}</span>
-                  </div>
-                  <div class="row-actions">
-                    <button v-if="!model.is_default" class="btn btn--ghost model-default-btn" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">{{ t("设为预设首选") }}</button>
-                    <button class="btn btn--ghost" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">{{ t("编辑") }}</button>
-                    <button class="btn btn--ghost btn--danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">{{ t("删除") }}</button>
-                  </div>
-                </div>
-                <div v-if="!filteredSelectedProviderModels.length" class="model-empty">
-                  <div>
-                    <strong>{{ modelQuery ? t("没有匹配的模型") : t("该供应商下还没有模型") }}</strong>
-                    <span>{{ modelQuery ? t("换个关键词试试") : t('为 {0} 添加第一个模型', { 0: selectedProvider.name || selectedProvider.id }) }}</span>
-                  </div>
-                  <button v-if="!modelQuery" class="btn btn--quiet" type="button" @click="startSelectedModelCreate">{{ t("新增模型") }}</button>
-                </div>
-              </div>
-            </section>
-          </section>
-
-          <section v-else-if="catalogView === 'group' && selectedModelGroup" class="provider-detail" :aria-label="t('模型组详情')">
-            <header class="provider-detail-head">
-              <div class="provider-detail-identity">
-                <span class="provider-detail-context">{{ t("当前模型组") }}</span>
-                <div class="provider-name-line"><h2>{{ selectedModelGroup.name }}</h2></div>
-                <div class="provider-meta"><span>{{ selectedGroupModels.length }}{{ t("个模型，可来自多个供应商") }}</span></div>
-              </div>
-              <div class="provider-head-actions">
-                <button class="btn btn--ghost" type="button" :data-model-group-edit="selectedModelGroup.id" @click="startModelGroupUpdate(selectedModelGroup)">{{ t("重命名") }}</button>
-                <button class="btn btn--ghost btn--danger" type="button" :data-model-group-delete="selectedModelGroup.id" @click="$emit('delete-model-group', selectedModelGroup.id)">{{ t("删除组") }}</button>
-              </div>
-            </header>
-            <section class="model-section">
-              <header class="model-section-head">
-                <div class="model-section-title">
-                  <h2>{{ t("模型") }}</h2><span>{{ selectedGroupModels.length }}{{ t("个模型") }}</span>
-                </div>
-                <div class="model-section-tools">
-                  <label class="resource-search model-search">
-                    <span class="sr-only">{{ t("搜索模型") }}</span>
-                    <input v-model.trim="modelQuery" type="search" :placeholder="t('搜索模型')" />
-                  </label>
-                  <button class="btn btn--quiet" type="button" data-model-group-members @click="startGroupMembersEdit">{{ t("添加已有模型") }}</button>
-                  <button class="btn btn--primary" type="button" data-group-model-create @click="startGroupModelCreate">{{ t("＋ 新增模型") }}</button>
-                </div>
-              </header>
-              <div class="model-list">
-                <div v-for="model in filteredSelectedGroupModels" :key="model.id" class="model-row" :class="{ 'is-default': model.is_default }">
-                  <div class="model-leading">
-                    <div class="model-identity">
-                      <div class="model-name-line">
-                        <strong>{{ model.display_name || model.model_id || model.id }}</strong>
-                        <span v-if="model.is_default" class="model-default-badge">{{ t("预设首选") }}</span>
-                      </div>
-                      <span class="model-meta">{{ modelProviderName(model) }} · {{ model.model_id || model.id }}</span>
-                    </div>
-                  </div>
-                  <div class="row-actions">
-                    <button v-if="!model.is_default" class="btn btn--ghost model-default-btn" type="button" @click="$emit('set-default-model', model.id)">{{ t("设为预设首选") }}</button>
-                    <button class="btn btn--ghost" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">{{ t("编辑") }}</button>
-                    <button class="btn btn--ghost btn--danger" type="button" :data-model-group-remove="model.id" @click="removeModelFromSelectedGroup(model.id)">{{ t("移出组") }}</button>
-                  </div>
-                </div>
-                <div v-if="!filteredSelectedGroupModels.length" class="model-empty">
-                  <div>
-                    <strong>{{ modelQuery ? t("没有匹配的模型") : t("该组还没有模型") }}</strong>
-                    <span>{{ modelQuery ? t("换个关键词试试") : t("添加现有模型，或创建一个新模型") }}</span>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </section>
-
-          <section v-else-if="catalogView === 'provider'" class="models-empty-state models-empty-state--main" :aria-label="t('供应商空状态')">
-            <div class="models-empty-mark" aria-hidden="true"><span>+</span></div>
-            <div class="models-empty-copy">
-              <h2>{{ t("还没有供应商") }}</h2>
-              <p>{{ t("从左侧添加一个模型供应商，开始使用 Sunday。") }}</p>
-            </div>
-          </section>
-          <section v-else class="models-empty-state models-empty-state--main" :aria-label="t('模型组空状态')">
-            <div class="models-empty-mark" aria-hidden="true"><span>+</span></div>
-            <div class="models-empty-copy"><h2>{{ t("还没有模型组") }}</h2><p>{{ t("创建一个模型组来整理所有供应商下的模型。") }}</p></div>
-            <button class="btn btn--primary" type="button" data-model-group-create @click="startModelGroupCreate">{{ t("新建模型组") }}</button>
-          </section>
-          </div>
-        </div>
-
-        <section v-else class="models-empty-state models-empty-state--full settings-surface" :aria-label="t('供应商空状态')">
-          <div class="models-empty-mark" aria-hidden="true"><span>＋</span></div>
-          <div class="models-empty-copy">
-            <h2>{{ t("还没有供应商") }}</h2>
-            <p>{{ t("添加一个 OpenAI Compatible 或其他模型供应商") }}</p>
-          </div>
-          <button class="btn btn--primary" type="button" data-provider-create @click="startProviderCreate">{{ t("新增供应商") }}</button>
-        </section>
+        <CoreModelCatalog
+          :models="models"
+          :providers="providers"
+          :model-groups="modelGroups"
+          :catalog-view="catalogView"
+          :request-rpc="requestRpc"
+          :persist-catalog="persistCatalog"
+          :draft-guard="draftGuard"
+          :allow-environment-import="allowEnvironmentImport"
+          @update:catalog-view="(value) => $emit('update:catalogView', value)"
+          @create-provider="(payload) => $emit('create-provider', payload)"
+          @update-provider="(payload) => $emit('update-provider', payload)"
+          @delete-provider="(id) => $emit('delete-provider', id)"
+          @create-model="(payload) => $emit('create-model', payload)"
+          @update-model="(payload) => $emit('update-model', payload)"
+          @delete-model="(id) => $emit('delete-model', id)"
+          @set-default-model="(id) => $emit('set-default-model', id)"
+          @create-model-group="(payload) => $emit('create-model-group', payload)"
+          @update-model-group="(payload) => $emit('update-model-group', payload)"
+          @delete-model-group="(id) => $emit('delete-model-group', id)"
+          @set-model-group-members="(payload) => $emit('set-model-group-members', payload)"
+          @create-model-with-provider="(payload) => $emit('create-model-with-provider', payload)"
+          @import-environment="$emit('import-environment')"
+        />
       </section>
 
       <section v-if="activeSection === 'appearance'" class="settings-panel settings-panel--appearance">
@@ -747,259 +514,6 @@
     </template>
   </SettingsShell>
 
-      <!-- 提供方 / 模型编辑表单的浮层：就在设置的版面内联呈现（整版界面里
-           没有更大的遮罩层，浮层只盖住这一栏内容）。 -->
-      <div v-if="providerEditor || modelEditor || modelGroupEditor || groupMembersEditor" ref="editorOverlayEl" class="editor-overlay">
-          <div ref="editorPopoverEl" class="editor-popover" :class="{ 'editor-popover--model': Boolean(modelEditor) }">
-            <fieldset class="settings-editor-fields" :disabled="catalogSaving">
-            <!-- Validation errors must render INSIDE the popover — the outer
-                 noticeText sits behind the overlay's dim/blur and was
-                 invisible to the user (audit 17 S3). -->
-            <p v-if="editorError" class="skill-error editor-error" role="alert">{{ editorError }}</p>
-            <form v-if="modelGroupEditor" data-model-group-form class="config-form" @submit.prevent="submitModelGroup">
-              <div class="editor-popover-head field-wide">
-                <div>
-                  <span class="editor-overline">{{ t("模型组") }}</span>
-                  <h3>{{ modelGroupEditor.mode === 'create' ? t("新建模型组") : t("重命名模型组") }}</h3>
-                  <p>{{ t("模型可同时存在于多个组；删除组不会删除模型。") }}</p>
-                </div>
-                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
-                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-              </div>
-              <label class="field field-wide">{{ t("名称") }}<input v-model.trim="modelGroupEditor.name" data-model-group-name required maxlength="80" :placeholder="t('例如：Free')" />
-              </label>
-              <div class="editor-actions field-wide">
-                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="btn btn--primary" type="submit">{{ t("保存") }}</button>
-              </div>
-            </form>
-
-            <form v-else-if="groupMembersEditor" data-model-group-members-form class="config-form" @submit.prevent="submitGroupMembers">
-              <div class="editor-popover-head field-wide">
-                <div>
-                  <span class="editor-overline">{{ t("模型组成员") }}</span>
-                  <h3>{{ t("添加已有模型") }}</h3>
-                  <p>{{ t("选择要放入") }}{{ selectedModelGroup?.name || t("当前组") }}{{ t("的模型。") }}</p>
-                </div>
-                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
-                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-              </div>
-              <div class="group-member-list field-wide">
-                <label v-for="model in models" :key="model.id" class="group-member-option">
-                  <input v-model="groupMembersEditor.model_ids" type="checkbox" :value="model.id" />
-                  <span><strong>{{ model.display_name || model.model_id || model.id }}</strong><small>{{ modelProviderName(model) }}</small></span>
-                </label>
-                <span v-if="!models.length" class="muted">{{ t("暂无可添加的模型") }}</span>
-              </div>
-              <div class="editor-actions field-wide">
-                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="btn btn--primary" type="submit">{{ t("保存成员") }}</button>
-              </div>
-            </form>
-
-            <!-- Provider editor -->
-            <form v-else-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
-              <div class="editor-popover-head field-wide">
-                <div>
-                  <span class="editor-overline">{{ t("供应商配置") }}</span>
-                  <h3>{{ providerEditor.mode === 'create' ? t("新增供应商") : t("编辑供应商") }}</h3>
-                  <p>{{ providerEditor.mode === 'create' ? t("连接一个可用的模型服务。") : t("更新连接信息，已有密钥不会被覆盖。") }}</p>
-                </div>
-                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
-                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-              </div>
-              <section v-if="providerEditor.mode === 'create'" class="editor-section field-wide">
-                <div class="editor-section-heading">
-                  <strong>{{ t("快速开始") }}</strong>
-                  <span>{{ t("使用官方模板自动填充连接信息和模型。") }}</span>
-                </div>
-                <label class="field">{{ t("官方模板") }}<UiSelect
-                    :model-value="providerEditor.preset_id"
-                    :options="providerPresetOptions"
-                    data-provider-preset
-                    :placeholder="t('自定义')"
-                    :aria-label="t('官方模板')"
-                    @update:model-value="onProviderPresetChange"
-                  />
-                </label>
-                <div v-if="providerEditor.preset_id" class="preset-summary">
-                  <strong>{{ providerEditor.name }}</strong>
-                  <span>{{ providerEditor.base_url }}{{ t("· 将自动添加模板内模型") }}</span>
-                  <button
-                    v-if="selectedProviderPreset?.apiKeyUrl"
-                    class="btn btn--ghost"
-                    type="button"
-                    data-provider-api-key-link
-                    @click="openProviderApiKeyPage"
-                  >{{ t("点此申请 API key") }}</button>
-                </div>
-              </section>
-
-              <section class="editor-section editor-section--grid field-wide">
-                <div class="editor-section-heading field-wide">
-                  <strong>{{ t("连接信息") }}</strong>
-                  <span>{{ t("这些信息用于连接模型服务。") }}</span>
-                </div>
-                <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">{{ t("名称") }}<input v-model.trim="providerEditor.name" data-provider-name required />
-                </label>
-                <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id || selectedProviderPreset?.baseUrlEditable" class="field">{{ t("服务地址") }}<input v-model.trim="providerEditor.base_url" data-provider-base-url type="url" required />
-                </label>
-                <label class="field field-wide">API Key
-                  <input
-                    v-model="providerEditor.api_key"
-                    data-provider-api-key
-                    type="password"
-                    autocomplete="new-password"
-                    :required="providerEditor.mode === 'create'"
-                    :placeholder="providerEditor.mode === 'update' ? t('留空以保留现有密钥') : ''"
-                  />
-                </label>
-              </section>
-
-              <details class="settings-advanced editor-section field-wide">
-                <summary>
-                  <span>
-                    <strong>{{ t("高级设置") }}</strong>
-                    <small>{{ t("接口类型与适配参数") }}</small>
-                  </span>
-                </summary>
-                <div class="advanced-fields">
-                  <label class="field">{{ t("接口类型") }}<UiSelect
-                      :model-value="providerEditor.api_type"
-                      :options="apiTypeOptions"
-                      data-provider-api-type
-                      direction="up"
-                      :aria-label="t('接口类型')"
-                      @update:model-value="providerEditor!.api_type = $event"
-                    />
-                  </label>
-                  <label class="field field-wide">{{ t("高级适配 JSON") }}<textarea v-model="providerEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
-                  </label>
-                </div>
-              </details>
-              <div class="editor-actions field-wide">
-                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="btn btn--primary" type="submit">{{ providerEditor.mode === 'create' ? t("添加供应商") : t("保存供应商") }}</button>
-              </div>
-            </form>
-
-            <!-- Model editor -->
-            <form v-else-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form model-editor-form" @submit.prevent="submitModel">
-              <div class="editor-popover-head field-wide">
-                <div>
-                  <span class="editor-overline">{{ t("模型配置") }}</span>
-                  <h3>{{ modelEditor.mode === 'create' ? t("新增模型") : t("编辑模型") }}</h3>
-                  <p>{{ modelEditor.mode === 'create' ? t("为供应商添加一个可调用的模型。") : t("更新模型标识、能力和运行参数。") }}</p>
-                </div>
-                <button type="button" class="editor-popover-close" @click="requestCloseEditors">
-                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-              </div>
-              <section class="editor-section model-editor-basics field-wide">
-                <div class="model-editor-provider">
-                  <span>{{ modelEditor.origin_group_id ? t("供应商") : t("添加到") }}</span>
-                  <UiSelect
-                    :model-value="modelEditor.provider_id"
-                    :options="modelEditor.origin_group_id ? groupModelProviderOptions : providerOptions"
-                    data-model-provider-id
-                    :aria-label="t('供应商')"
-                    @update:model-value="onModelProviderChange"
-                  />
-                </div>
-                <template v-if="modelEditor.origin_group_id">
-                  <label class="field field-wide">{{ t("API 基础 URL") }}<input v-model.trim="modelEditor.base_url" data-model-base-url type="url" required placeholder="https://api.example.com/v1" />
-                    <small v-if="modelEditor.provider_mode === 'existing'">{{ t("必须与所选供应商的 API 基础 URL 一致。") }}</small>
-                  </label>
-                  <div v-if="modelEditor.provider_mode === 'new'" class="model-editor-secondary field-wide">
-                    <label class="field">{{ t("供应商名称") }}<input v-model.trim="modelEditor.new_provider_name" data-model-new-provider-name required :placeholder="t('例如：我的供应商')" />
-                    </label>
-                    <label class="field">{{ t("接口类型") }}<UiSelect
-                        :model-value="modelEditor.new_provider_api_type ?? 'openai'"
-                        :options="apiTypeOptions"
-                        data-model-new-provider-api-type
-                        @update:model-value="modelEditor!.new_provider_api_type = $event"
-                      />
-                    </label>
-                    <label class="field field-wide">API Key
-                      <input v-model="modelEditor.new_provider_api_key" data-model-new-provider-api-key type="password" autocomplete="new-password" required />
-                    </label>
-                  </div>
-                </template>
-                <label class="field model-editor-id">{{ t("模型 ID") }}<input v-model.trim="modelEditor.model_id" data-model-id required :placeholder="t('例如 deepseek-v4-flash')" />
-                  <small>{{ t("向供应商 API 发送的模型标识。") }}</small>
-                </label>
-                <div class="model-editor-secondary">
-                  <label class="field">{{ t("显示名称") }}<input v-model.trim="modelEditor.display_name" data-model-display-name :placeholder="t('选填，留空时使用模型 ID')" />
-                  </label>
-                  <label class="field">{{ t("备注") }}<textarea v-model.trim="modelEditor.notes" rows="2" spellcheck="false" :placeholder="t('选填，如限速、用途、注意事项等')"></textarea>
-                  </label>
-                </div>
-              </section>
-              <section class="editor-section model-editor-capabilities field-wide">
-                <div class="editor-section-heading">
-                  <strong>{{ t("能力") }}</strong>
-                  <span>{{ t("决定模型是否接收图片，以及是否启用推理参数。") }}</span>
-                </div>
-                <div class="model-editor-capability-controls">
-                  <label class="field">{{ t("能力分类") }}<UiSelect
-                      :model-value="modelEditor.capability ?? ''"
-                      :options="capabilityOptions"
-                      direction="up"
-                      :aria-label="t('能力分类')"
-                      @update:model-value="modelEditor!.capability = $event ?? ''"
-                    />
-                  </label>
-                  <div class="model-reasoning-control">
-                    <div>
-                      <strong>{{ t("支持推理") }}</strong>
-                      <span>{{ t("启用推理预算") }}</span>
-                    </div>
-                    <button
-                      type="button"
-                      class="toggle-btn"
-                      :class="{ 'is-on': modelEditor.thinking_supported }"
-                      :aria-label="t('支持推理')"
-                      :aria-pressed="modelEditor.thinking_supported ? 'true' : 'false'"
-                      @click="modelEditor.thinking_supported = !modelEditor.thinking_supported"
-                    >
-                      <ToggleRight v-if="modelEditor.thinking_supported" :size="18" :stroke-width="1.8" aria-hidden="true" />
-                      <ToggleLeft v-else :size="18" :stroke-width="1.8" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              </section>
-              <details class="settings-advanced model-editor-runtime field-wide">
-                <summary>
-                  <span>
-                    <strong>{{ t("运行与适配") }}</strong>
-                    <small>{{ t("上下文、输出、Temperature 与高级适配") }}</small>
-                  </span>
-                </summary>
-                <div class="advanced-fields model-advanced-fields">
-                  <label class="field">{{ t("上下文窗口") }}<input v-model.number="modelEditor.context_window" type="number" min="1" />
-                  </label>
-                  <label class="field">{{ t("最大输出") }}<input v-model.number="modelEditor.max_output_tokens" type="number" min="1" />
-                  </label>
-                  <label class="field">Temperature
-                    <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
-                  </label>
-                  <label class="field">{{ t("推理预算") }}<input v-model.number="modelEditor.thinking_budget" type="number" min="0" />
-                  </label>
-                  <label class="field field-wide">{{ t("高级适配 JSON") }}<textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
-                  </label>
-                </div>
-              </details>
-              <div class="editor-actions field-wide">
-                <button type="button" class="btn btn--quiet" @click="requestCloseEditors">{{ t("取消") }}</button>
-                <button class="btn btn--primary" type="submit">{{ modelEditor.mode === 'create' ? t("添加模型") : t("保存模型") }}</button>
-              </div>
-            </form>
-            </fieldset>
-          </div>
-        </div>
       <!-- 必须留在根节点内部：整版界面把 full-area-view / full-area-wide 挂在
            这个组件的根元素上，多出一个并列根节点 Vue 会静默丢弃这些属性，
            设置页就再也铺不满主卡、也滚不动（0.3.11 起的回归）。 -->
@@ -1016,11 +530,9 @@ const splitKeyboardActive = useSplitKeyboardScope()
 import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 import { useThemeStudio } from '@/composables/useThemeStudio.ts'
 import { createSettingsDraftGuard, useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
-import { PROVIDER_PRESETS, PROVIDER_PRESET_GROUP_LABELS, providerPresetModelExtra } from '@/data/provider-presets.ts'
 import { THEME_PRESETS } from '@/data/theme-presets.ts'
 import {
   CORE_PERMISSION_PRESET_DESCRIPTIONS,
@@ -1050,8 +562,8 @@ import {
   type ThemeStop,
 } from '@/helpers/theme.ts'
 import { openUpdatePage } from '@/helpers/update.ts'
-import { openExternalUrl } from '@/helpers/openUrl.ts'
 import SettingsShell from '@/components/SettingsShell.vue'
+import CoreModelCatalog from '@/components/CoreModelCatalog.vue'
 import { CORE_SETTINGS_SECTIONS, type SettingsSection } from '@/components/settingsSections.ts'
 import ThemeEditor from '@/components/ThemeEditor.vue'
 import CoreSubAgentEditor from '@/components/CoreSubAgentEditor.vue'
@@ -1067,7 +579,6 @@ import MobileControlPanel, {
   type MobileControlPairing,
 } from '@/components/MobileControlPanel.vue'
 import UiSelect from '@/components/UiSelect.vue'
-import CoreModelCatalogViewToggle from '@/components/CoreModelCatalogViewToggle.vue'
 import SettingsDraftDialog from '@/components/SettingsDraftDialog.vue'
 import {
   readUpdateAutoCheck,
@@ -1077,70 +588,24 @@ import {
 } from '@/composables/index.ts'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
-export type SettingsCatalogMutation = 'create-provider' | 'update-provider' | 'create-model' | 'update-model' | 'create-model-group' | 'update-model-group' | 'set-model-group-members' | 'create-model-with-provider'
 
-export interface CoreSettingsModel {
-  id: string
-  provider_id?: string
-  provider_name?: string
-  model_id?: string
-  display_name?: string
-  context_window?: number
-  max_output_tokens?: number
-  thinking_supported?: boolean
-  thinking_budget?: number
-  temperature?: number
-  is_default?: boolean
-  capability?: string
-  notes?: string
-  extra?: Record<string, unknown> | null
-}
+import type {
+  CoreSettingsModel,
+  CoreSettingsModelGroup,
+  CoreSettingsModelPayload,
+  CoreSettingsProvider,
+  CoreSettingsProviderPayload,
+  SettingsCatalogMutation,
+} from '@/components/model-catalog/types.ts'
 
-export interface CoreSettingsProvider {
-  id: string
-  name?: string
-  api_type?: string
-  base_url?: string
-  has_api_key?: boolean
-  extra?: Record<string, unknown> | null
-}
-
-export interface CoreSettingsProviderPayload {
-  provider_id?: string
-  preset_id?: string
-  name: string
-  api_type: string
-  base_url: string
-  api_key?: string
-  extra?: Record<string, unknown>
-  models?: CoreSettingsModelPayload[]
-  model_group_name?: string
-}
-
-export interface CoreSettingsModelGroup {
-  id: string
-  name: string
-  model_ids: string[]
-  revision?: number
-  is_system?: boolean
-}
-
-export interface CoreSettingsModelPayload {
-  model_record_id?: string
-  provider_id: string
-  provider_name?: string
-  model_id: string
-  display_name: string
-  context_window: number
-  max_output_tokens: number
-  thinking_supported: boolean
-  thinking_budget: number
-  temperature: number
-  is_default?: boolean
-  capability?: string
-  notes?: string
-  extra?: Record<string, unknown>
-}
+export type {
+  CoreSettingsModel,
+  CoreSettingsModelGroup,
+  CoreSettingsModelPayload,
+  CoreSettingsProvider,
+  CoreSettingsProviderPayload,
+  SettingsCatalogMutation,
+} from '@/components/model-catalog/types.ts'
 
 const props = withDefaults(defineProps<{
   models: CoreSettingsModel[]
@@ -1236,7 +701,6 @@ function beforeSectionChange(_id: string, proceed: () => void) {
   draftGuard.requestNavigation(proceed, { section: resolvedSection.value })
 }
 function onSectionChange(id: string) {
-  if (resolvedSection.value === 'models' && id !== 'models') closeEditors()
   resolvedSection.value = id
   emit('section-change', id)
 }
@@ -1245,6 +709,12 @@ function requestSection(id: string) {
   beforeSectionChange(id, () => onSectionChange(id))
 }
 watch(() => props.activeSection, id => { if (id) requestSection(id) })
+
+// All exits share actual draft comparisons, including the host's rail.
+function requestCloseSettings() {
+  draftGuard.requestNavigation(() => emit('close'))
+}
+defineExpose({ requestNavigation: draftGuard.requestNavigation, requestSection })
 
 // ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
 const updateAutoCheck = ref(readUpdateAutoCheck())
@@ -1257,6 +727,11 @@ async function openUpdateReleasePage() {
     await openUpdatePage(updateReleaseUrl.value)
   }
 }
+
+const lcKindOptions = [
+  { value: 'system', label: 'system' },
+  { value: 'memory', label: 'memory' },
+]
 
 const densityOptions: Array<{ value: CoreSettingsDensity; label: string }> = [
   { value: 'compact', get label() { return t("紧凑") } },
@@ -1324,84 +799,6 @@ async function updateCommandShellPreference(rawPreference: string) {
   }
 }
 
-type ProviderEditor = Required<Omit<CoreSettingsProviderPayload, 'provider_id' | 'model_group_name'>> & {
-  mode: 'create' | 'update'
-  provider_id?: string
-  model_group_name?: string
-  api_key: string
-  extra_json: string
-}
-
-type ModelEditor = CoreSettingsModelPayload & {
-  mode: 'create' | 'update'
-  extra_json: string
-  origin_group_id?: string
-  provider_mode?: 'existing' | 'new'
-  base_url?: string
-  new_provider_name?: string
-  new_provider_api_type?: string
-  new_provider_api_key?: string
-}
-
-const providerEditor = ref<ProviderEditor | null>(null)
-const modelEditor = ref<ModelEditor | null>(null)
-const modelGroupEditor = ref<{ mode: 'create' | 'update'; group_id?: string; name: string } | null>(null)
-const groupMembersEditor = ref<{ group_id: string; model_ids: string[] } | null>(null)
-const noticeText = ref('')
-// Validation feedback shown INSIDE the editor overlay — noticeText renders
-// behind the overlay and was invisible while editing (audit 17 S3).
-const editorError = ref('')
-const catalogSaving = ref(false)
-const catalogDraft = useSettingsDraft({
-  guard: draftGuard,
-  section: 'models', label: () => t('模型与供应商'),
-  read: () => ({ provider: providerEditor.value, model: modelEditor.value, group: modelGroupEditor.value,
-    members: groupMembersEditor.value ? { ...groupMembersEditor.value, model_ids: [...groupMembersEditor.value.model_ids].sort() } : null }),
-  restore: saved => {
-    providerEditor.value = saved.provider
-    modelEditor.value = saved.model
-    modelGroupEditor.value = saved.group
-    groupMembersEditor.value = saved.members
-    editorError.value = ''
-  },
-  busy: catalogSaving,
-  error: editorError,
-  save: async () => {
-    const form = editorPopoverEl.value?.querySelector('form')
-    if (form && !form.reportValidity()) {
-      editorError.value = t('请填写必填项并检查输入格式。')
-      return false
-    }
-    if (providerEditor.value) return submitProvider()
-    if (modelEditor.value) return submitModel()
-    if (modelGroupEditor.value) return submitModelGroup()
-    if (groupMembersEditor.value) return submitGroupMembers()
-    return true
-  },
-})
-watch([providerEditor, modelEditor, modelGroupEditor, groupMembersEditor], () => catalogDraft.accept(), { flush: 'sync' })
-
-async function persistCatalog(operation: SettingsCatalogMutation, payload: object): Promise<boolean> {
-  if (catalogSaving.value) return false
-  catalogSaving.value = true
-  editorError.value = ''
-  try {
-    if (props.persistCatalog) await props.persistCatalog(operation, payload as Record<string, unknown>)
-    else {
-      // Compatibility for event-driven embedders. The application supplies
-      // persistCatalog so a failed write never dismisses its editor.
-      const notify = emit as (event: SettingsCatalogMutation, payload: object) => void
-      notify(operation, payload)
-    }
-    closeEditors()
-    return true
-  } catch (cause) {
-    editorError.value = cause instanceof Error ? cause.message : String(cause)
-    return false
-  } finally {
-    catalogSaving.value = false
-  }
-}
 // ── Global AGENTS.md (项目规则) editor state ──
 const agentsDraft = ref('')
 const agentsLoading = ref(false)
@@ -1592,14 +989,6 @@ async function saveContextCompactionSettings() {
   }
 }
 
-function closeEditors() {
-  providerEditor.value = null
-  modelEditor.value = null
-  modelGroupEditor.value = null
-  groupMembersEditor.value = null
-  editorError.value = ''
-}
-
 const defaultRequestRpc = async (_method: string, _params?: Record<string, unknown>) => {
   throw new Error('requestRpc not provided — connect CoreSettings to a CoreAppServerClient')
 }
@@ -1652,122 +1041,6 @@ const permissionPresetOptions = (['ask', 'auto', 'full_access'] as CorePermissio
 function selectPermissionPreset(preset: CorePermissionPreset) {
   emit('update-permission-preset', preset)
 }
-const providerPresets = PROVIDER_PRESETS
-
-const providerCount = computed(() => props.providers.length)
-const selectedProviderId = ref<string | null>(null)
-const selectedModelGroupId = ref<string | null>(null)
-const providerQuery = ref('')
-const groupQuery = ref('')
-const modelQuery = ref('')
-const selectedProvider = computed(() =>
-  props.providers.find(provider => provider.id === selectedProviderId.value) || props.providers[0] || null,
-)
-const selectedProviderModels = computed(() =>
-  selectedProvider.value
-    ? props.models.filter(model => model.provider_id === selectedProvider.value?.id)
-    : [],
-)
-const selectedModelGroup = computed(() =>
-  props.modelGroups.find(group => group.id === selectedModelGroupId.value) || props.modelGroups[0] || null,
-)
-const selectedGroupModels = computed(() => {
-  const ids = new Set(selectedModelGroup.value?.model_ids || [])
-  return props.models.filter(model => ids.has(model.id))
-})
-const filteredModelGroups = computed(() => {
-  const query = groupQuery.value.toLocaleLowerCase()
-  if (!query) return props.modelGroups
-  return props.modelGroups.filter(group => [group.name, group.id]
-    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
-})
-const filteredProviders = computed(() => {
-  const query = providerQuery.value.toLocaleLowerCase()
-  if (!query) return props.providers
-  return props.providers.filter(provider => [provider.name, provider.id, provider.api_type]
-    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
-})
-const filteredSelectedProviderModels = computed(() => {
-  const query = modelQuery.value.toLocaleLowerCase()
-  if (!query) return selectedProviderModels.value
-  return selectedProviderModels.value.filter(model => [model.display_name, model.model_id, model.id, model.capability]
-    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
-})
-const filteredSelectedGroupModels = computed(() => {
-  const query = modelQuery.value.toLocaleLowerCase()
-  if (!query) return selectedGroupModels.value
-  return selectedGroupModels.value.filter(model => [model.display_name, model.model_id, model.id, model.capability]
-    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
-})
-
-function providerTypeLabel(apiType?: string): string {
-  if (apiType === 'anthropic') return 'Anthropic'
-  if (apiType === 'openai') return 'OpenAI compatible'
-  return apiType || t("自定义接口")
-}
-
-function selectProvider(providerId: string) {
-  selectedProviderId.value = providerId
-  modelQuery.value = ''
-}
-
-function selectModelGroup(groupId: string) {
-  selectedModelGroupId.value = groupId
-  modelQuery.value = ''
-}
-
-function modelProviderName(model: CoreSettingsModel): string {
-  return props.providers.find(provider => provider.id === model.provider_id)?.name
-    || model.provider_name
-    || model.provider_id
-    || t("未关联供应商")
-}
-
-// ── UiSelect option lists for provider/model editors ──
-const providerPresetOptions = computed(() => [
-  { value: '', get label() { return t("自定义") } },
-  ...PROVIDER_PRESETS.map(preset => ({
-    value: preset.id,
-    label: preset.label,
-    group: PROVIDER_PRESET_GROUP_LABELS[preset.group],
-  })),
-])
-const selectedProviderPreset = computed(() => (
-  providerPresets.find(preset => preset.id === providerEditor.value?.preset_id) || null
-))
-
-function openProviderApiKeyPage() {
-  const url = selectedProviderPreset.value?.apiKeyUrl
-  if (url) void openExternalUrl(url)
-}
-const apiTypeOptions = [
-  { value: 'openai', label: 'OpenAI compatible' },
-  { value: 'anthropic', label: 'Anthropic' },
-]
-const lcKindOptions = [
-  { value: 'system', label: 'system' },
-  { value: 'memory', label: 'memory' },
-]
-const capabilityOptions = [
-  { value: '', get label() { return t("自动（内置声明）") } },
-  { value: 'text', get label() { return t("文本（不支持图片）") } },
-  { value: 'multimodal', get label() { return t("多模态（支持图片）") } },
-]
-const providerOptions = computed(() =>
-  props.providers.map(p => ({ value: p.id, label: p.name || p.id })),
-)
-const groupModelProviderOptions = computed(() => [
-  ...providerOptions.value,
-  { value: '__new__', get label() { return t("＋ 新建供应商") } },
-])
-
-function onProviderPresetChange(value: string) {
-  const editor = providerEditor.value
-  if (!editor) return
-  editor.preset_id = value
-  applyProviderPreset()
-}
-
 const settingsThemeStyle = computed(() => {
   const lightMain = relativeLuminance(props.theme.mainText) < 0.45
   return {
@@ -1806,335 +1079,6 @@ const themePreviewStyle = computed(() => previewStyleFor('backdrop', props.theme
 const themePreviewMainStyle = computed(() => previewStyleFor('main', props.theme.mainText))
 const themePreviewComposerStyle = computed(() => previewStyleFor('composer', props.theme.composerText))
 const themePreviewControlStyle = computed(() => previewStyleFor('control', props.theme.controlText))
-
-function modelsForProvider(providerId: string): CoreSettingsModel[] {
-  return props.models.filter((model) => model.provider_id === providerId)
-}
-
-function startProviderCreate() {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    providerEditor.value = {
-      mode: 'create',
-      preset_id: '',
-      name: '',
-      api_type: 'openai',
-      base_url: '',
-      api_key: '',
-      extra: {},
-      extra_json: '{}',
-      models: [],
-    }
-  })
-}
-
-function startProviderUpdate(provider: CoreSettingsProvider) {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    providerEditor.value = {
-      mode: 'update',
-      preset_id: '',
-      provider_id: provider.id,
-      name: provider.name || '',
-      api_type: provider.api_type || 'openai',
-      base_url: provider.base_url || '',
-      api_key: '',
-      extra: provider.extra || {},
-      extra_json: JSON.stringify(provider.extra || {}, null, 2),
-      models: [],
-    }
-  })
-}
-
-async function submitProvider() {
-  const editor = providerEditor.value
-  if (!editor) return
-  const extra = parseExtraJson(editor.extra_json)
-  if (!extra) return
-  const payload: CoreSettingsProviderPayload = {
-    ...(editor.provider_id ? { provider_id: editor.provider_id } : {}),
-    ...(editor.preset_id ? { preset_id: editor.preset_id } : {}),
-    name: editor.name,
-    api_type: editor.api_type,
-    base_url: editor.base_url,
-    ...(editor.api_key.trim() ? { api_key: editor.api_key.trim() } : {}),
-    extra,
-  }
-  if (editor.mode === 'create' && editor.preset_id) {
-    const preset = providerPresets.find(candidate => candidate.id === editor.preset_id)
-    if (preset) {
-      if ((preset as typeof preset & { group?: string }).group === 'free') payload.model_group_name = 'Free'
-      payload.models = preset.models.map(model => ({
-        provider_id: '',
-        model_id: model.modelId,
-        display_name: model.displayName,
-        context_window: model.contextWindow,
-        max_output_tokens: model.maxOutputTokens,
-        thinking_supported: model.thinkingSupported,
-        thinking_budget: model.thinkingBudget,
-        temperature: model.temperature,
-        // NOT a global default: the backend only uses this to seed the
-        // main-chat scene when no model has ever been used there. Adding a
-        // provider must never change the model a running session uses.
-        is_default: model.modelId === preset.defaultModelId,
-        extra: providerPresetModelExtra(model),
-      }))
-    }
-  }
-  return persistCatalog(editor.mode === 'create' ? 'create-provider' : 'update-provider', payload)
-}
-
-function applyProviderPreset() {
-  const editor = providerEditor.value
-  if (!editor) return
-  const preset = providerPresets.find(candidate => candidate.id === editor.preset_id)
-  if (!preset) return
-  editor.name = preset.name
-  editor.api_type = preset.apiType
-  editor.base_url = preset.baseUrl
-  // 模板可预置 API Key；免费模型也可能要求用户申请真实凭据。
-  editor.api_key = preset.defaultApiKey || ''
-  editor.extra = { ...(preset.extra || {}), adapter_profile_id: preset.adapterProfile }
-  editor.extra_json = JSON.stringify(editor.extra, null, 2)
-}
-
-function startSelectedModelCreate() {
-  const provider = selectedProvider.value
-  if (!provider) {
-    noticeText.value = t("请先新增供应商，再添加模型")
-    return
-  }
-  startModelCreateForProvider(provider)
-}
-
-function startModelCreateForProvider(provider: CoreSettingsProvider) {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    modelEditor.value = {
-      mode: 'create',
-      provider_id: provider?.id || '',
-      provider_name: provider?.name || '',
-      model_id: '',
-      display_name: '',
-      context_window: 128000,
-      max_output_tokens: 16384,
-      thinking_supported: false,
-      thinking_budget: 10000,
-      temperature: 0.7,
-      capability: '',
-      notes: '',
-      extra: {},
-      extra_json: '{}',
-    }
-  })
-}
-
-function startModelGroupCreate() {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    modelGroupEditor.value = { mode: 'create', name: '' }
-  })
-}
-
-function startModelGroupUpdate(group: CoreSettingsModelGroup) {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    modelGroupEditor.value = { mode: 'update', group_id: group.id, name: group.name }
-  })
-}
-
-async function submitModelGroup() {
-  const editor = modelGroupEditor.value
-  if (!editor?.name.trim()) return
-  return persistCatalog(editor.mode === 'create' ? 'create-model-group' : 'update-model-group',
-    editor.mode === 'create' ? { name: editor.name.trim() } : { group_id: editor.group_id || '', name: editor.name.trim() })
-}
-
-function startGroupMembersEdit() {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    const group = selectedModelGroup.value
-    if (!group) return
-    groupMembersEditor.value = { group_id: group.id, model_ids: [...group.model_ids] }
-  })
-}
-
-async function submitGroupMembers() {
-  const editor = groupMembersEditor.value
-  if (!editor) return
-  return persistCatalog('set-model-group-members', { group_id: editor.group_id, model_ids: [...new Set(editor.model_ids)] })
-}
-
-function removeModelFromSelectedGroup(modelId: string) {
-  const group = selectedModelGroup.value
-  if (!group) return
-  emit('set-model-group-members', {
-    group_id: group.id,
-    model_ids: group.model_ids.filter(id => id !== modelId),
-  })
-}
-
-function startGroupModelCreate() {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    const group = selectedModelGroup.value
-    if (!group) return
-    const provider = props.providers[0]
-    modelEditor.value = {
-      mode: 'create',
-      origin_group_id: group.id,
-      provider_mode: provider ? 'existing' : 'new',
-      provider_id: provider?.id || '__new__',
-      provider_name: provider?.name || '',
-      base_url: provider?.base_url || '',
-      new_provider_name: '',
-      new_provider_api_type: 'openai',
-      new_provider_api_key: '',
-      model_id: '',
-      display_name: '',
-      context_window: 128000,
-      max_output_tokens: 16384,
-      thinking_supported: false,
-      thinking_budget: 10000,
-      temperature: 0.7,
-      capability: '',
-      notes: '',
-      extra: {},
-      extra_json: '{}',
-    }
-  })
-}
-
-function onModelProviderChange(providerId: string) {
-  const editor = modelEditor.value
-  if (!editor) return
-  editor.provider_id = providerId
-  if (!editor.origin_group_id) return
-  if (providerId === '__new__') {
-    editor.provider_mode = 'new'
-    editor.provider_name = ''
-    editor.base_url = ''
-    return
-  }
-  const provider = props.providers.find(item => item.id === providerId)
-  editor.provider_mode = 'existing'
-  editor.provider_name = provider?.name || ''
-  editor.base_url = provider?.base_url || ''
-}
-
-function startModelUpdate(model: CoreSettingsModel) {
-  catalogDraft.requestReplace(() => {
-    closeEditors()
-    modelEditor.value = {
-      mode: 'update',
-      model_record_id: model.id,
-      provider_id: model.provider_id || '',
-      provider_name: model.provider_name || '',
-      model_id: model.model_id || '',
-      display_name: model.display_name || '',
-      // `??` — a legitimate 0 (e.g. thinking_budget=0 disables the reasoning
-      // budget) must round-trip instead of silently becoming the default
-      // (audit 17 S3).
-      context_window: model.context_window ?? 128000,
-      max_output_tokens: model.max_output_tokens ?? 16384,
-      thinking_supported: model.thinking_supported === true,
-      thinking_budget: model.thinking_budget ?? 10000,
-      temperature: model.temperature ?? 0.7,
-      capability: model.capability || '',
-      notes: model.notes || '',
-      extra: model.extra || {},
-      extra_json: JSON.stringify(model.extra || {}, null, 2),
-    }
-  })
-}
-
-async function submitModel() {
-  const editor = modelEditor.value
-  if (!editor) return
-  editorError.value = ''
-  if (!editor.provider_id) {
-    editorError.value = t("请先选择供应商")
-    return
-  }
-  const extra = parseExtraJson(editor.extra_json)
-  if (!extra) return
-  const payload: CoreSettingsModelPayload = {
-    ...(editor.model_record_id ? { model_record_id: editor.model_record_id } : {}),
-    provider_id: editor.provider_id,
-    provider_name: editor.provider_name,
-    model_id: editor.model_id,
-    display_name: editor.display_name,
-    context_window: editor.context_window,
-    max_output_tokens: editor.max_output_tokens,
-    thinking_supported: editor.thinking_supported,
-    thinking_budget: editor.thinking_budget,
-    temperature: editor.temperature,
-    capability: editor.capability,
-    notes: editor.notes,
-    extra,
-  }
-  if (editor.origin_group_id) {
-    if (!editor.base_url?.trim()) {
-      editorError.value = t("按组新增模型时必须填写 API 基础 URL")
-      return
-    }
-    const existingProvider = props.providers.find(item => item.id === editor.provider_id)
-    if (
-      editor.provider_mode === 'existing'
-      && existingProvider?.base_url?.replace(/\/$/, '') !== editor.base_url.replace(/\/$/, '')
-    ) {
-      editorError.value = t("API 基础 URL 必须与所选供应商一致")
-      return
-    }
-    if (editor.provider_mode === 'new' && (!editor.new_provider_name?.trim() || !editor.new_provider_api_key?.trim())) {
-      editorError.value = t("新供应商需要填写名称和 API Key")
-      return
-    }
-    return persistCatalog('create-model-with-provider', {
-      group_id: editor.origin_group_id,
-      model: {
-        model_id: editor.model_id,
-        display_name: editor.display_name,
-        context_window: editor.context_window,
-        max_output_tokens: editor.max_output_tokens,
-        temperature: editor.temperature,
-        thinking_supported: editor.thinking_supported,
-        thinking_budget: editor.thinking_budget,
-        capability: editor.capability,
-        notes: editor.notes,
-        adapter_profile_id: String(extra.adapter_profile_id || ''),
-        request_body: extra.request_body && typeof extra.request_body === 'object' ? extra.request_body : {},
-      },
-      provider: editor.provider_mode === 'new'
-        ? {
-            mode: 'new',
-            name: editor.new_provider_name?.trim(),
-            base_url: editor.base_url.trim(),
-            api_type: editor.new_provider_api_type || 'openai',
-            api_key: editor.new_provider_api_key,
-          }
-        : {
-            mode: 'existing',
-            provider_id: editor.provider_id,
-            base_url: editor.base_url.trim(),
-          },
-    })
-  }
-  return persistCatalog(editor.mode === 'create' ? 'create-model' : 'update-model', payload)
-}
-
-function parseExtraJson(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value || '{}')
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
-    noticeText.value = ''
-    editorError.value = ''
-    return parsed as Record<string, unknown>
-  } catch {
-    editorError.value = t("高级适配 JSON 必须是对象")
-    return null
-  }
-}
 
 function getStops(area: ThemeArea): ThemeStop[] {
   return props.theme[`${area}Stops` as keyof ThemeData] as ThemeStop[]
@@ -2176,26 +1120,6 @@ const { studioOpen } = useThemeStudio()
 function openThemeStudio(): void {
   studioOpen.value = true
 }
-
-// All exits share actual draft comparisons, including the host's rail.
-const editorOverlayEl = ref<HTMLElement | null>(null)
-const editorPopoverEl = ref<HTMLElement | null>(null)
-
-function requestCloseSettings() {
-  draftGuard.requestNavigation(() => emit('close'))
-}
-function requestCloseEditors() {
-  catalogDraft.requestReplace(closeEditors)
-}
-
-defineExpose({ requestNavigation: draftGuard.requestNavigation, requestSection })
-
-useOutsidePointerDismiss({
-  overlay: editorOverlayEl,
-  card: editorPopoverEl,
-  isActive: () => !draftGuard.open.value && Boolean(providerEditor.value || modelEditor.value || modelGroupEditor.value || groupMembersEditor.value),
-  onDismiss: requestCloseEditors,
-})
 
 // 就地渲染后设置只有主卡宽：窗口宽度与这一栏的可用宽度不是一回事，而 WebView
 // 又不支持容器查询。用 ResizeObserver 按实际宽度折叠工作台，两栏装不下时改单栏。

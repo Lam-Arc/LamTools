@@ -8,6 +8,66 @@ from lamtools_core.plugin_system import PluginContext
 from .test_plugin_session_control import host, append
 
 
+@pytest.mark.asyncio
+async def test_approval_context_refresh_with_same_host_remains_valid(env):
+    # user:“复用原宿主权威”+(宿主相同的上下文刷新仍可正常批准，不能把临时上下文对象身份当作授权权威)。
+    from copy import copy
+    requester, answerer, live, sessions = env
+    answerer.approvals.answer(lambda request: "allowed-once")
+    answerer._registration_scope.publish(set())
+    original = sessions._factory
+    sessions._factory = lambda: copy(live)
+    try:
+        result = await requester.approvals.request("s",tool_name="write_file",call_id="same-host")
+        assert result.allowed
+        audit = [row for row in (await sessions.events("s")).events if row["method"].startswith("plugin/approval")]
+        assert len(audit) == 2 and audit[-1]["payload"]["outcome"] == "allowed-once"
+    finally:
+        sessions._factory = original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change",["shutdown","host"])
+async def test_approval_host_invalidated_before_decision_commit_never_grants(env,monkeypatch,change):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(回答已允许但提交决定前宿主失效，仍须持久记录取消，不能发出批准)。
+    from types import SimpleNamespace
+    from lamtools_core.app.plugin_sessions import PluginSessionService
+    requester, answerer, live, sessions = env
+    answerer.approvals.answer(lambda request: "allowed-once")
+    answerer._registration_scope.publish(set())
+    original = live.persistence.write
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def gated(callback):
+        if callback.__name__ == "decided":
+            entered.set()
+            await release.wait()
+        return await original(callback)
+    monkeypatch.setattr(live.persistence,"write",gated)
+    task = asyncio.create_task(requester.approvals.request("s",tool_name="write_file",call_id="late-host"))
+    factory = sessions._factory
+    reader = PluginSessionService(lambda: live)
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        else:
+            sessions._factory = lambda: SimpleNamespace(persistence=live.persistence,host=SimpleNamespace())
+        release.set()
+        result = await asyncio.wait_for(task,3)
+        assert not result.allowed and result.outcome == "cancelled"
+        events = (await reader.events("s")).events
+        audit = [row for row in events if row["method"].startswith("plugin/approval")]
+        assert len(audit) == 2 and audit[-1]["payload"]["outcome"] == "cancelled"
+        assert audit[-1]["payload"]["request_id"] == result.request_id
+    finally:
+        sessions._factory = factory
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+        reader.shutdown()
+
+
 @pytest.fixture
 async def env(host, tmp_path):
     live, _ = host

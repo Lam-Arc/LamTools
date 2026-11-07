@@ -70,5 +70,17 @@ class PluginCredentials:
     def unset(self, key: str) -> None:
         self._call("delete", self._key(key))
 
+    def compare_exchange(self, key: str, *, expected: str | None, value: str | None) -> bool:
+        # user:“接口完善与文档更新”+(明确值条件更新沿原加密凭据与所有者范围，不提供任意回调或DSH record转换)。
+        key = self._key(key)
+        for item in (expected, value):
+            try:
+                valid = item is None or (isinstance(item, str) and bool(item.strip()) and len(item.encode("utf8")) <= 65536)
+            except UnicodeError:
+                valid = False
+            if not valid:
+                raise CredentialError("credentials/invalid-value", "Use None or a nonblank bounded credential value")
+        return self._call("compare_exchange", key, expected, value)
+
 
 __all__ = ["CredentialError", "CredentialInfo", "ResolvedCredential", "PluginCredentials"]

@@ -22,23 +22,34 @@ class PluginCheckpointAPI:
         self._catalog = context.resolved_operation_catalog()
         self._sessions = context.service("sessions")
 
+    def _current_host(self, expected=None):
+        # user:“复用原宿主权威”+(可见性读取后和只读发布前复用同一目录/会话/宿主/存储检查，不向失效的旧权威继续派发)。
+        if self._context.resolved_operation_catalog() is not self._catalog or self._context.service("sessions") is not self._sessions:
+            raise CheckpointAccessError("checkpoint/host-changed", "Checkpoint host changed")
+        if self._sessions is None:
+            raise CheckpointAccessError("checkpoint/unavailable", "Native session service is unavailable")
+        host = self._sessions._context().host
+        if expected is not None and (host is not expected[0] or getattr(host, "session_store", None) is not expected[1]):
+            raise CheckpointAccessError("checkpoint/host-changed", "Checkpoint host or session store changed")
+        return host
+
     async def _call(self, name, session_id, **fields):
         self._scope.acquire()
         mutation = name != "session.checkpoints.list"
         try:
             session_id = _id(session_id)
-            if self._context.resolved_operation_catalog() is not self._catalog or self._context.service("sessions") is not self._sessions:
-                raise CheckpointAccessError("checkpoint/host-changed", "Checkpoint host changed")
+            host = self._current_host()
             if self._sessions is None or self._catalog is None or not self._catalog.has(name):
                 raise CheckpointAccessError("checkpoint/unavailable", "Required native checkpoint operation is unavailable")
-            host = self._sessions._context().host
-            read = getattr(getattr(host, "session_store", None), "get_readonly", None)
+            store = getattr(host, "session_store", None)
+            read = getattr(store, "get_readonly", None)
             if not callable(read):
                 raise CheckpointAccessError("checkpoint/unavailable", "Host has no read-only session visibility check")
             try:
                 record = await read(session_id)
             except Exception:
                 raise CheckpointAccessError("checkpoint/read-failed", "Session visibility read failed") from None
+            self._current_host((host, store))
             if record is None:
                 raise CheckpointAccessError("checkpoint/not-found", "Session is unknown or unavailable")
             registry = getattr(host, "runtime_task_registry", None)
@@ -52,6 +63,9 @@ class PluginCheckpointAPI:
                 result = await finish_on_cancel(work, name="plugin-checkpoint-operation") if mutation else await work
             except Exception:
                 raise CheckpointAccessError("checkpoint/operation-failed", "Native checkpoint operation failed; inspect current state before retrying", may_have_changed=mutation) from None
+            if not mutation:
+                self._scope.check_open()
+                self._current_host((host, store))
             try:
                 payload = _json(result.payload)
             except Exception:

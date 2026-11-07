@@ -38,6 +38,7 @@ from .operation_bridge import read_operations
 VALID_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 VALID_AUTH = ("token", "none")
 MAX_ROUTES = 32
+MAX_REQUEST_BODY_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ def read_http_routes(manifest: PluginManifest) -> list[PluginHttpRoute]:
     return routes
 
 
-def plugin_http_token(host: Any, plugin: str) -> str:
+def plugin_http_token(host: Any, plugin: str, *, create: bool = True) -> str:
     """Return the plugin's HTTP bearer token, creating it on first use."""
     manager = getattr(host, "backend_manager", None)
     context = getattr(manager, "context", None)
@@ -112,6 +113,9 @@ def plugin_http_token(host: Any, plugin: str) -> str:
     token = str(view.get("httpToken") or "").strip()
     if token:
         return token
+    # user:“第二阶段结束后 就继续开展第三阶段”+(流存续校验只读取现有令牌；撤销后不能由后台检查重新生成凭据)。
+    if not create:
+        return ""
     token = secrets.token_urlsafe(32)
     view.set("httpToken", token)
     return token
@@ -128,7 +132,8 @@ def _provided_token(headers: dict[str, str]) -> str:
 
 
 def _safe_headers(headers: dict[str, str]) -> dict[str, str]:
-    hidden = {"authorization", "cookie", "set-cookie", "proxy-authorization"}
+    # user:“第二阶段结束后 就继续开展第三阶段”+(Remote接入层的插件令牌与其他认证头一样只用于认证，不进入操作负载或回显)。
+    hidden = {"authorization", "x-plugin-token", "cookie", "set-cookie", "proxy-authorization"}
     return {str(key).lower(): str(value) for key, value in headers.items() if str(key).lower() not in hidden}
 
 
@@ -176,7 +181,8 @@ async def dispatch_http_request(
     if route.auth == "token":
         expected = plugin_http_token(host, plugin)
         provided = _provided_token(raw_headers)
-        if not expected or not provided or not hmac.compare_digest(expected, provided):
+        # user:“第二阶段结束后 就继续开展第三阶段”+(原URL安全令牌为ASCII；非ASCII请求明确拒绝，不让compare_digest抛出未处理异常)。
+        if not expected or not provided or not expected.isascii() or not provided.isascii() or not hmac.compare_digest(expected, provided):
             return 401, {"error": "invalid plugin token"}
 
     try:
@@ -209,25 +215,50 @@ async def dispatch_http_request(
     return status_code, {"name": result.name, "status": result.status, "payload": result.payload}
 
 
+async def _read_request_body(request: Request):
+    # user:“第二阶段结束后 就继续开展第三阶段”+(HTTP和明确Remote入口共用同一有界请求读取，不缓冲无界请求体)。
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            length = int(declared)
+        except ValueError:
+            raise HTTPException(400, "invalid content length") from None
+        if length < 0:
+            raise HTTPException(400, "invalid content length")
+        if length > MAX_REQUEST_BODY_BYTES:
+            raise HTTPException(413, "plugin HTTP request body exceeds 1 MiB")
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > MAX_REQUEST_BODY_BYTES:
+            raise HTTPException(413, "plugin HTTP request body exceeds 1 MiB")
+        raw.extend(chunk)
+    body: Any = None
+    if raw:
+        content_type = str(request.headers.get("content-type") or "")
+        if "application/json" in content_type:
+            try:
+                body = json.loads(raw)
+            except (ValueError, RecursionError):
+                raise HTTPException(400, "request body is not valid JSON") from None
+        else:
+            body = raw.decode("utf-8", errors="replace")
+    return body
+
+
 def create_plugin_http_router(host_provider, catalog_provider) -> APIRouter:
     router = APIRouter()
 
-    @router.api_route(
-        "/plugin-http/{plugin}/{path:path}",
-        methods=list(VALID_METHODS),
-    )
+    @router.post("/plugin-remote/{plugin}/{namespace}/{method}")
+    async def plugin_remote(plugin: str, namespace: str, method: str, request: Request):
+        from .remote_gateway import dispatch_remote_request, remote_response
+        status, payload = await dispatch_remote_request(host=host_provider(), catalog=catalog_provider(),
+            plugin=plugin, namespace=namespace, method=method, body=await _read_request_body(request),
+            headers=dict(request.headers), remote=str(request.client.host if request.client else ""))
+        return remote_response(status, payload)
+
+    @router.api_route("/plugin-http/{plugin}/{path:path}", methods=list(VALID_METHODS))
     async def plugin_http(plugin: str, path: str, request: Request):
-        raw = await request.body()
-        body: Any = None
-        if raw:
-            content_type = str(request.headers.get("content-type") or "")
-            if "application/json" in content_type:
-                try:
-                    body = json.loads(raw)
-                except ValueError:
-                    raise HTTPException(400, "request body is not valid JSON") from None
-            else:
-                body = raw.decode("utf-8", errors="replace")
+        body = await _read_request_body(request)
         status_code, payload = await dispatch_http_request(
             host=host_provider(),
             catalog=catalog_provider(),

@@ -24,7 +24,11 @@ class PluginSessionDataAPI:
             work = self._host.call(self._scope, self._root, self._kind, method, identifier(session_id), **kwargs)
             if method in {"create", "reference", "set", "put", "delete", "record"}:
                 return await finish_on_cancel(work, name="plugin-session-data-write")
-            return await work
+            result = await work
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(只读结果返回前复核原启动代与宿主，写入仍沿原已接收短提交收尾规则)。
+            self._scope.check_open()
+            self._host._context()
+            return result
         finally:
             self._scope.release()
 
@@ -80,7 +84,14 @@ class PluginFeedbackAPI(PluginSessionDataAPI):
             raise SessionDataError("session-data/invalid-version", "Use the feedback version, or None for first creation")
 
     def _text(self, value, maximum):
-        if type(value) is not str or len(value) > maximum or "\x00" in value:
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(反馈文本在进入原持久化前校验UTF-8，不能把参数错误误报成存储失败)。
+        try:
+            valid = type(value) is str and len(value) <= maximum and "\x00" not in value
+            if valid:
+                value.encode("utf8")
+        except UnicodeError:
+            valid = False
+        if not valid:
             raise SessionDataError("session-data/invalid-feedback", "Feedback fields exceed the text limit")
         return value
 
@@ -89,7 +100,7 @@ class PluginFeedbackAPI(PluginSessionDataAPI):
 
     async def put(self, session_id, message_id, *, rating, if_version, note="", category=""):
         self._version(if_version)
-        if rating not in {"positive", "negative"}:
+        if type(rating) is not str or rating not in {"positive", "negative"}:
             raise SessionDataError("session-data/invalid-rating", "rating must be positive or negative")
         return await self._call("put", session_id, message_id=identifier(message_id), rating=rating, if_version=if_version,
                                 note=self._text(note, 4000), category=self._text(category, 100))

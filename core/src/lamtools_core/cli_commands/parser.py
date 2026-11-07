@@ -12,7 +12,7 @@ def build_parser(*, plugin_roots: list[Path | str] | tuple[Path | str, ...] | No
     from .parse_preferences import register_ask_auto_continue, register_command_shell, register_keep_awake, register_language, register_load_context, register_memory, register_memory_resume, register_network, register_onboarding
     from .parse_resources import register_artifact, register_attachment, register_command, register_office, register_plugin, register_skill
     from .parse_server import register_maintenance, register_migrate_projects, register_mobile, register_serve, register_setup, register_update
-    from .parse_settings import register_context_compaction, register_imagegen, register_loadtools, register_models, register_permissions
+    from .parse_settings import register_context_compaction, register_imagegen, register_loadtools, register_models, register_permissions, register_providers
     from .parse_turns import register_approval, register_cancel, register_pause, register_process, register_queue, register_resume, register_run, register_run_local, register_start, register_steer, register_terminate, register_watch
     from .parse_workspace import register_arrange, register_goal, register_plan_library, register_project, register_session, register_subagent
     parser = argparse.ArgumentParser(prog="core", description="Sunday AI software CLI")
@@ -52,6 +52,7 @@ def build_parser(*, plugin_roots: list[Path | str] | tuple[Path | str, ...] | No
     register_arrange(sub)
     register_subagent(sub)
     register_models(sub)
+    register_providers(sub)
     register_permissions(sub)
     register_context_compaction(sub)
     register_command_shell(sub)

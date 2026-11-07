@@ -593,7 +593,11 @@
 .floating-composer textarea::placeholder {
   color: color-mix(in srgb, var(--theme-composer-text) 52%, transparent);
 }
-/* user:“修复输入框缩窄时 @ 标签溢出的问题”+(@ 文件标签是可点击的原子块，窄容器里必须能收缩换行，不能按文件名原样撑破输入框；编辑区自身也不许被内容反推变宽，窄窗口和分屏都沿容器宽度收窄)。 */
+/* user:“修复输入框缩窄时 @ 标签溢出的问题”+(@ 文件标签是可点击的原子块，编辑区
+   自身不许被内容反推变宽，窄窗口和分屏都沿容器宽度收窄)。
+   user:“上传附件之后，附件的标签没有做长度限制，容易把输入区撑满，导致难以点击
+   继续输入，请把附件限制在 32px-64px 内，超出部分文字隐藏”+(每个文件标签固定为
+   32–64px 的小胶囊，长文件名只显示省略号，完整名称留在 title 里，不再铺满整行)。 */
 .inline-file-composer,
 .inline-file-composer .cm-editor,
 .inline-file-composer .cm-scroller,
@@ -602,13 +606,46 @@
   max-width: 100%;
 }
 .inline-file-composer .cm-scroller {
+  /* user:“在复制进去一长段文本的时候，会把输入栏撑至巨大”+(静态样式也兜住 8 行上限，
+     不依赖 CodeMirror 运行时注入的主题；变量由组件按 editorHeight.ts 写入)。 */
+  max-height: var(--composer-editor-max-height, calc(8 * 1.6em + 2 * 8px));
   overflow-x: hidden;
 }
 .inline-file-composer .composer-file-token {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  box-sizing: border-box;
+  min-width: 32px;
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+/* user:“把那个@的符号去掉 换成对应的文件图标”+(消息正文里的文件引用也统一用
+   30% 圆角的类型徽标；徽标文字由 CSS content 提供，复制时仍只有文件名)。 */
+.file-reference-badge {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 15px;
+  height: 15px;
+  overflow: hidden;
+  border-radius: 30%;
+  font-family: var(--font-sans);
+  font-size: 6.5px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.file-reference-badge::before {
+  content: attr(data-label);
+}
+/* 显式链接（非自动识别）核实失败时仍保留错误态；自动识别的路径在
+   canonicalize 里直接退回原文，不生成这个红色链接。 */
+a.file-reference-link[data-reference-error='true'] {
+  color: var(--red);
+}
+a.file-reference-link[data-reference-error='true'] .file-reference-badge {
+  background: var(--red) !important;
 }
 .composer-input-wrap {
   position: relative;

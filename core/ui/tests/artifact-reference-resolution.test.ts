@@ -70,15 +70,42 @@ describe('artifact-backed file references', () => {
     delete (navigator as { clipboard?: unknown }).clipboard
   })
 
-  it('also resolves paths when opening a preview without visible outcome icons', async () => {
-    URL.createObjectURL = vi.fn(() => 'blob:reference-test')
-    URL.revokeObjectURL = vi.fn()
-    const request = vi.fn(async input => ({ status: 200, headers: { 'content-type': 'image/png' }, body: input.path.startsWith('/files/resolve-reference') ? bytes({ path: actual }) : new Uint8Array([137, 80, 78, 71]) }))
+  it('leaves a missing auto file reference as its original text instead of a link', async () => {
+    // user:“在自动渲染成 文件 link 的时候，如果找不到就不渲染，显示原文即可”+
+    // (模型输出不完整路径时不再出现“文件不存在”的红色链接)。
+    const request = vi.fn(async () => ({ status: 404, headers: {}, body: bytes({ detail: '原文件不存在' }) }))
+    const wrapper = mount(MarkdownRenderer, { props: { content: `@"${wrong}"` }, global: { provide: { 'lamtools-reference-transport': { request }, 'lamtools-reference-root': () => root } } })
+    mounted.push(wrapper)
+    await flushPromises()
+    expect(wrapper.find('a').exists()).toBe(false)
+    expect(wrapper.text()).toContain(`@"${wrong}"`)
+  })
+
+  it('leaves a missing Markdown file link as its label text', async () => {
+    // user:“只渲染两种……且有文件”+(显式 Markdown 链接也要核实存在，失败就退回链接文字)。
+    const request = vi.fn(async () => ({ status: 404, headers: {}, body: bytes({ detail: '原文件不存在' }) }))
+    const wrapper = mount(MarkdownRenderer, { props: { content: `[缺失](${wrong})` }, global: { provide: { 'lamtools-reference-transport': { request }, 'lamtools-reference-root': () => root } } })
+    mounted.push(wrapper)
+    await flushPromises()
+    expect(wrapper.find('a').exists()).toBe(false)
+    expect(wrapper.text()).toContain('缺失')
+    expect(wrapper.text()).not.toContain('原文件不存在')
+  })
+
+  it('falls back to the default app when split preview is unavailable', async () => {
+    // user:“没有浮窗预览这一说，砍掉”+(分屏不可用时直接交给系统默认应用，不再弹居中预览浮层)。
+    const request = vi.fn(async input => ({
+      status: 200,
+      headers: {},
+      body: input.path.startsWith('/files/resolve-reference') ? bytes({ path: actual }) : bytes({ ok: true }),
+    }))
     const wrapper = mount(ReferenceItems, { props: { previewOnly: true, artifacts: [{ kind: 'image', uri: wrong }], transport: { request } as never, workRoot: root } })
     mounted.push(wrapper)
     ;(wrapper.vm as unknown as { previewPath(path: string): void }).previewPath(wrong)
     await flushPromises()
-    expect(document.querySelector('.reference-preview header span')?.getAttribute('title')).toBe(actual)
-    expect(document.querySelector('.reference-preview img')?.getAttribute('src')).toBe('blob:reference-test')
+    expect(document.querySelector('.reference-preview')).toBeNull()
+    const openCall = request.mock.calls.find(([input]) => input.path === '/files/open-reference')?.[0]
+    expect(openCall).toBeTruthy()
+    expect(JSON.parse(new TextDecoder().decode(openCall!.body)).path).toBe(actual)
   })
 })

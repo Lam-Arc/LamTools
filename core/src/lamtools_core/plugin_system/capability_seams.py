@@ -143,7 +143,8 @@ class PluginLspAPI:
     async def query(self, operation, file_path, *, line, character, timeout=30):
         self._scope.acquire()
         try:
-            if operation not in {"goToDefinition", "findReferences", "goToImplementation", "hover"} or not _position({"line": line, "character": character}):
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(先验证操作名类型再匹配枚举，使数组/对象同样返回约定的参数错误)。
+            if type(operation) is not str or operation not in {"goToDefinition", "findReferences", "goToImplementation", "hover"} or not _position({"line": line, "character": character}):
                 raise CapabilityError("capability/invalid-query", "Use a supported operation and nonnegative zero-based UTF-16 coordinates")
             if type(timeout) not in {int, float} or not math.isfinite(timeout) or not 0 < timeout <= 120:
                 raise CapabilityError("capability/invalid-query", "timeout must be in (0, 120] seconds")
@@ -165,6 +166,9 @@ class PluginLspAPI:
                     result = await ref.call("query", request)
             except TimeoutError:
                 raise CapabilityError("capability/timeout", "LSP query exceeded its deadline") from None
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(只读语言查询等待后复核原请求启动代和同一提供方，撤回后不发布迟到结果)。
+            self._scope.check_open()
+            ref.get()
             return _lsp_result(result, operation)
         finally:
             self._scope.release()

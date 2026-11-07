@@ -56,7 +56,16 @@ export interface CoreAppServerThreadSwitchOptions {
  */
 export interface CoreSteerOutcome {
   applied: boolean
+  /** The runtime itself filed the text for the next turn, so it must not be queued twice. */
   queued: boolean
+  /**
+   * The text already became a real user message in a new turn (the steer hit the
+   * turn's end boundary). Nothing is left to queue or retry: the new turn's user
+   * message arrives through the normal event stream.
+   */
+  submitted: boolean
+  /** Turn the submitted message opened (empty unless `submitted`). */
+  turnId: string
   reason: string
   /** Human-readable failure text (empty when applied). */
   message: string
@@ -817,20 +826,40 @@ export function createCoreAppServerRuntimeController<
     // 后端拒绝时返回的是成功响应 + applied:false + reason，不是错误。调用方据此
     // 决定是否显示"已发送引导"，并把无处可引导的这条落到队列（不丢文本、不报错）。
     if (response.applied === true) {
-      return { applied: true, queued: false, reason: '', message: '' }
+      return { applied: true, queued: false, submitted: false, turnId, reason: '', message: '' }
     }
     const reason = String(response.reason || '')
+    // user:“引导遇上结束阶段：当前回合正常结束，引导转为一条新的用户消息，自动开启
+    // 新回合”+(结束边界之后的引导已经是新回合里的一条真实用户消息：前端既不能再
+    // 排一次队，也不能报"引导已发送"或"已排队"，否则界面与实际执行对不上)。
+    if (response.submitted === true) {
+      return {
+        applied: false,
+        queued: false,
+        submitted: true,
+        turnId: String(response.turn_id || ''),
+        reason,
+        message: '',
+      }
+    }
     // 本机（手机原生宿主）不支持运行中引导：它把这条降级成"本轮结束后发送"。
     // 内容已经在队列里，调用方不能再写一份。
     if (response.queued === true || reason === 'native_turn_cannot_steer_live') {
-      return { applied: false, queued: true, reason, message: '本机不支持运行中引导，已改为这一轮结束后发送' }
+      return {
+        applied: false,
+        queued: true,
+        submitted: false,
+        turnId: '',
+        reason,
+        message: '本机不支持运行中引导，已改为这一轮结束后发送',
+      }
     }
     const message = reason === 'run_not_active'
       ? '这一轮已经结束，引导没有生效'
       : reason === 'active_turn_mismatch'
         ? '当前轮次已经变化，引导没有生效'
         : '引导没有生效'
-    return { applied: false, queued: false, reason, message }
+    return { applied: false, queued: false, submitted: false, turnId: '', reason, message }
   }
 
   /** Pause the session's live turn. Single click on the stop button. */

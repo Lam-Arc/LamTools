@@ -63,44 +63,40 @@ async function selectUiOption(wrapper: ReturnType<typeof mountSettings>, selecto
 }
 
 describe('CoreSettings', () => {
-  it('shows Core model and provider state without exposing an API key', () => {
+  it('shows the model catalog without exposing an API key', () => {
     const wrapper = mountSettings()
 
-    expect(wrapper.text()).toContain(t('模型与供应商'))
     expect(wrapper.text()).toContain('GPT Test')
     expect(wrapper.text()).toContain('OpenAI')
-    expect(wrapper.text()).toContain('已配置密钥')
+    expect(wrapper.text()).toContain('未检测')
     expect(wrapper.text()).not.toContain('sk...live')
     expect(wrapper.text()).not.toContain('Writer')
   })
 
-  it('keeps contextual create actions and filters providers and models', async () => {
+  it('filters the catalog from one search field and keeps create actions', async () => {
     const wrapper = mountSettings()
 
-    expect(wrapper.find('.models-overview-bar').exists()).toBe(false)
-    expect(wrapper.find('.provider-rail-footer [data-provider-create]').exists()).toBe(true)
-    expect(wrapper.find('.model-section-head [data-model-create]').exists()).toBe(true)
+    expect(wrapper.find('[data-provider-create]').exists()).toBe(true)
+    expect(wrapper.find('[data-shelf-add-model="provider-1"]').exists()).toBe(true)
 
-    await wrapper.get('.provider-search input').setValue('missing')
-    expect(wrapper.text()).toContain('没有匹配的供应商')
-    await wrapper.get('.provider-search input').setValue('open')
-    expect(wrapper.text()).not.toContain('没有匹配的供应商')
-
-    await wrapper.get('.model-search input').setValue('missing')
-    expect(wrapper.text()).toContain('没有匹配的模型')
+    await wrapper.get('[data-model-catalog-search]').setValue('missing')
+    expect(wrapper.text()).toContain('没有匹配的结果')
+    await wrapper.get('[data-model-catalog-search]').setValue('gpt')
+    expect(wrapper.text()).toContain('GPT Test')
+    expect(wrapper.text()).not.toContain('没有匹配的结果')
   })
 
-  it('keeps provider and model empty-state create actions', () => {
+  it('offers a first-run preset picker and keeps the empty-provider add action', () => {
     const emptyProviders = mountSettings(undefined, { providers: [] })
-    expect(emptyProviders.find('.models-overview-bar').exists()).toBe(false)
-    expect(emptyProviders.find('.models-empty-state--full [data-provider-create]').exists()).toBe(true)
+    expect(emptyProviders.find('.mc-first-run').exists()).toBe(true)
+    expect(emptyProviders.find('[data-provider-preset-card]').exists()).toBe(true)
+    expect(emptyProviders.find('[data-provider-create]').exists()).toBe(true)
     emptyProviders.unmount()
 
     const emptyModels = mountSettings(undefined, { models: [] })
-    expect(emptyModels.find('.models-overview-bar').exists()).toBe(false)
-    expect(emptyModels.find('.provider-rail-footer [data-provider-create]').exists()).toBe(true)
-    expect(emptyModels.find('.model-section-head [data-model-create]').exists()).toBe(true)
-    expect(emptyModels.find('.model-empty .btn').exists()).toBe(true)
+    expect(emptyModels.find('.mc-shelf-empty').exists()).toBe(true)
+    expect(emptyModels.text()).toContain('还没有模型')
+    expect(emptyModels.find('[data-provider-add-model="provider-1"]').exists()).toBe(true)
     emptyModels.unmount()
   })
 
@@ -109,61 +105,58 @@ describe('CoreSettings', () => {
 
     await wrapper.get('[data-provider-create]').trigger('click')
     await wrapper.get('[data-provider-name]').setValue('New provider')
-    await selectUiOption(wrapper, '[data-provider-api-type]', 'Anthropic')
     await wrapper.get('[data-provider-base-url]').setValue('https://api.anthropic.com/v1')
     await wrapper.get('[data-provider-api-key]').setValue('new-secret')
-    await wrapper.get('[data-provider-form="create"]').trigger('submit')
+    await wrapper.get('[data-provider-form]').trigger('submit')
 
-    expect(wrapper.emitted('create-provider')).toEqual([[
-      {
-        name: 'New provider',
-        api_type: 'anthropic',
-        base_url: 'https://api.anthropic.com/v1',
-        api_key: 'new-secret',
-        extra: {},
-      },
-    ]])
+    expect(wrapper.emitted('create-provider')?.[0]?.[0]).toMatchObject({
+      name: 'New provider',
+      api_type: 'openai',
+      base_url: 'https://api.anthropic.com/v1',
+      api_key: 'new-secret',
+      extra: {},
+    })
 
     await wrapper.get('[data-provider-edit="provider-1"]').trigger('click')
     expect((wrapper.get('[data-provider-api-key]').element as HTMLInputElement).value).toBe('')
     await wrapper.get('[data-provider-name]').setValue('Renamed provider')
-    await wrapper.get('[data-provider-form="update"]').trigger('submit')
+    await wrapper.get('[data-provider-form]').trigger('submit')
 
-    expect(wrapper.emitted('update-provider')).toEqual([[
-      {
-        provider_id: 'provider-1',
-        name: 'Renamed provider',
-        api_type: 'openai',
-        base_url: 'https://api.openai.com/v1',
-        extra: {},
-      },
-    ]])
+    expect(wrapper.emitted('update-provider')?.[0]?.[0]).toMatchObject({
+      provider_id: 'provider-1',
+      name: 'Renamed provider',
+      api_type: 'openai',
+      base_url: 'https://api.openai.com/v1',
+    })
   })
 
-  it('emits model create, update, and delete contracts', async () => {
+  it('emits model create, update, and delete contracts with pricing', async () => {
     const wrapper = mountSettings()
 
-    await wrapper.get('[data-model-create]').trigger('click')
-    await selectUiOption(wrapper, '[data-model-provider-id]', 'OpenAI')
+    await wrapper.get('[data-shelf-add-model="provider-1"]').trigger('click')
     await wrapper.get('[data-model-id]').setValue('gpt-new')
     await wrapper.get('[data-model-display-name]').setValue('GPT New')
-    await wrapper.get('[data-model-form="create"]').trigger('submit')
+    await wrapper.get('[data-model-price-input]').setValue('0.5')
+    await wrapper.get('[data-model-form]').trigger('submit')
 
-    expect(wrapper.emitted('create-model')?.[0]).toEqual([expect.objectContaining({
+    expect(wrapper.emitted('create-model')?.[0]?.[0]).toMatchObject({
       provider_id: 'provider-1',
       model_id: 'gpt-new',
       display_name: 'GPT New',
-    })])
+      capability: 'text',
+      pricing: { input_per_1m: 0.5, currency: 'USD' },
+    })
 
-    await wrapper.get('[data-model-edit="model-1"]').trigger('click')
+    await wrapper.get('[data-model-card="model-1"]').trigger('click')
+    await wrapper.get('[data-model-edit]').trigger('click')
     await wrapper.get('[data-model-display-name]').setValue('GPT Renamed')
-    await wrapper.get('[data-model-form="update"]').trigger('submit')
-    await wrapper.get('[data-model-delete="model-1"]').trigger('click')
+    await wrapper.get('[data-model-form]').trigger('submit')
+    await wrapper.get('[data-model-delete]').trigger('click')
 
-    expect(wrapper.emitted('update-model')?.[0]).toEqual([expect.objectContaining({
+    expect(wrapper.emitted('update-model')?.[0]?.[0]).toMatchObject({
       model_record_id: 'model-1',
       display_name: 'GPT Renamed',
-    })])
+    })
     expect(wrapper.emitted('delete-model')).toEqual([['model-1']])
   })
 
@@ -240,45 +233,64 @@ describe('CoreSettings', () => {
     await wrapper.get('[data-provider-api-key-link]').trigger('click')
     expect(openUrl).toHaveBeenCalledWith('https://opencode.ai/auth')
     await wrapper.get('[data-provider-api-key]').setValue('test-key')
-    await wrapper.get('[data-provider-form="create"]').trigger('submit')
+    await wrapper.get('[data-provider-form]').trigger('submit')
     expect(wrapper.emitted('create-provider')?.[0]?.[0]).toMatchObject({ model_group_name: 'Free' })
     delete window.__LAMTOOLS_OPEN_URL__
   })
 
-  it('manages group membership and creates a grouped model with a required provider URL', async () => {
+  it('toggles model group membership from the model inspector', async () => {
+    const wrapper = mountSettings(undefined, {
+      catalogView: 'group',
+      modelGroups: [{ id: 'free', name: 'Free', model_ids: [] }],
+    })
+
+    expect(wrapper.text()).toContain('Free')
+    expect(wrapper.text()).toContain('GPT Test')
+    await wrapper.get('[data-model-card="model-1"]').trigger('click')
+    await wrapper.get('[data-model-group-toggle="free"]').trigger('click')
+    expect(wrapper.emitted('set-model-group-members')).toContainEqual([{ group_id: 'free', model_ids: ['model-1'] }])
+  })
+
+  // user:“停用和启用在卡片上搞个开关”+(卡片右上角的开关直接改启停，且不打开检查器。)
+  it('toggles a model from the card switch without opening the inspector', async () => {
+    const wrapper = mountSettings()
+
+    await wrapper.get('[data-model-tile-toggle="model-1"] input[type="checkbox"]').setValue(false)
+
+    expect(wrapper.emitted('update-model')?.[0]?.[0]).toMatchObject({
+      model_record_id: 'model-1',
+      enabled: false,
+      is_default: false,
+    })
+    expect(wrapper.find('.mc-inspector').exists()).toBe(false)
+  })
+
+  it('toggles a model enabled state from the inspector', async () => {
+    const wrapper = mountSettings()
+
+    await wrapper.get('[data-model-card="model-1"]').trigger('click')
+    await wrapper.get('[data-model-enabled-toggle] input[type="checkbox"]').setValue(false)
+
+    expect(wrapper.emitted('update-model')?.[0]?.[0]).toMatchObject({
+      model_record_id: 'model-1',
+      enabled: false,
+      is_default: false,
+    })
+  })
+
+  it('manages group members, creates a group, and switches the catalog view', async () => {
     const wrapper = mountSettings(undefined, {
       catalogView: 'group',
       modelGroups: [{ id: 'free', name: 'Free', model_ids: ['model-1'] }],
     })
 
-    expect(wrapper.get('[data-model-catalog-view="group"]').attributes('aria-pressed')).toBe('true')
-    expect(wrapper.text()).toContain('Free')
-    expect(wrapper.text()).toContain('GPT Test')
-
-    await wrapper.get('[data-model-group-remove="model-1"]').trigger('click')
-    expect(wrapper.emitted('set-model-group-members')).toContainEqual([{ group_id: 'free', model_ids: [] }])
-
-    await wrapper.get('[data-model-group-members]').trigger('click')
-    expect(wrapper.find('[data-model-group-members-form]').exists()).toBe(true)
-    await wrapper.get('[data-model-group-members-form]').trigger('submit')
-    expect(wrapper.emitted('set-model-group-members')).toContainEqual([{ group_id: 'free', model_ids: ['model-1'] }])
-
-    await wrapper.get('[data-group-model-create]').trigger('click')
-    expect((wrapper.get('[data-model-base-url]').element as HTMLInputElement).value).toBe('https://api.openai.com/v1')
-    await wrapper.get('[data-model-id]').setValue('upstream/new')
-    await wrapper.get('[data-model-display-name]').setValue('New')
-    await wrapper.get('[data-model-form="create"]').trigger('submit')
-    expect(wrapper.emitted('create-model-with-provider')?.[0]?.[0]).toMatchObject({
-      group_id: 'free',
-      model: { model_id: 'upstream/new' },
-      provider: { mode: 'existing', provider_id: 'provider-1', base_url: 'https://api.openai.com/v1' },
-    })
-  })
-
-  it('emits group CRUD and catalog classification changes', async () => {
-    const wrapper = mountSettings(undefined, { catalogView: 'group' })
     await wrapper.get('[data-model-catalog-view="provider"]').trigger('click')
     expect(wrapper.emitted('update:catalogView')).toEqual([['provider']])
+
+    await wrapper.get('[data-model-group-members="free"]').trigger('click')
+    expect((wrapper.get('[data-model-group-name]').element as HTMLInputElement).value).toBe('Free')
+    await wrapper.get('[data-model-group-members-save]').trigger('click')
+    expect(wrapper.emitted('set-model-group-members')).toContainEqual([{ group_id: 'free', model_ids: ['model-1'] }])
 
     await wrapper.get('[data-model-group-create]').trigger('click')
     await wrapper.get('[data-model-group-name]').setValue('Coding')
@@ -623,9 +635,9 @@ describe('Shared Core App settings entry', () => {
   })
 
   it('keeps account-specific preset URLs editable', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/CoreSettings.vue'), 'utf8')
-    expect(source).toContain("selectedProviderPreset?.baseUrlEditable")
+    const source = readFileSync(resolve(process.cwd(), 'src/components/CoreModelCatalog.vue'), 'utf8')
     expect(source).toContain('data-provider-base-url')
+    expect(source).toContain('draftPreset')
   })
 
   it('passes the host command-shell platform to CoreSettings', () => {

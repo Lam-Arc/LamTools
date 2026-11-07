@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Compile the repository-owned Sunday Windows installer with Inno Setup.
 .DESCRIPTION
@@ -66,6 +66,27 @@ function Resolve-IsccPath {
         }
     }
     throw 'Inno Setup 6 compiler (ISCC.exe) was not found. Install Inno Setup 6 or pass -IsccPath.'
+}
+
+function Resolve-CscPath {
+    # The Restart Manager bridge is compiled here, at build time: doing it at
+    # install time (PowerShell Add-Type) needs csc.exe on the user's machine,
+    # which locked-down machines block.
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:WINDIR)) {
+        $candidates += (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe')
+        $candidates += (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+    }
+    $command = Get-Command csc.exe -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        $candidates += $command.Source
+    }
+    foreach ($candidate in $candidates | Select-Object -Unique) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+    throw 'The .NET Framework C# compiler (csc.exe) was not found. Install .NET Framework 4 or pass a machine that has it.'
 }
 
 function Test-PeFile {
@@ -154,6 +175,22 @@ if (-not (Test-PeFile $webView2)) {
     throw "WebView2 bootstrapper is missing or invalid: $webView2"
 }
 
+# The setup asks the Windows Restart Manager which programs use the files it is
+# about to replace; this assembly is that question, compiled once here.
+$supportDir = Join-Path $output 'support'
+New-Item -ItemType Directory -Path $supportDir -Force | Out-Null
+$restartManagerSource = Join-Path $PSScriptRoot 'SundayRestartManager.cs'
+$restartManagerDll = Join-Path $supportDir 'SundayRestartManager.dll'
+$csc = Resolve-CscPath
+Write-Host "Compiling the Restart Manager bridge with $csc"
+& $csc /nologo /target:library /optimize+ "/out:$restartManagerDll" $restartManagerSource
+if ($LASTEXITCODE -ne 0) {
+    throw "Compiling SundayRestartManager.dll failed with exit code $LASTEXITCODE."
+}
+if (-not (Test-Path -LiteralPath $restartManagerDll -PathType Leaf)) {
+    throw "The Restart Manager bridge was not produced: $restartManagerDll"
+}
+
 # Inno's VersionInfoVersion must be numeric, so beta/rc spellings keep their
 # display form in AppVersion while the file version drops the suffix.
 $VersionInfoVersion = ($Version -replace '[^0-9.].*$', '').TrimEnd('.')
@@ -168,6 +205,7 @@ $arguments = @(
     "/DOutputDir=$output",
     "/DAppIcon=$icon",
     "/DWebView2Bootstrapper=$webView2",
+    "/DRestartManagerDll=$restartManagerDll",
     $scriptPath
 )
 
@@ -189,5 +227,6 @@ if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
     compiler = $compiler
     source_root = $source
     output_path = $installerPath
+    restart_manager_dll = $restartManagerDll
     size_bytes = (Get-Item -LiteralPath $installerPath).Length
 } | ConvertTo-Json -Depth 2

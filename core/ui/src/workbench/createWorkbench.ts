@@ -412,6 +412,30 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       .catch(() => { /* Background history prefetch is best-effort; foreground loading can retry. */ })
   }
 
+  /**
+   * Jump straight to the window that contains one message.
+   *
+   * user:“高效搜索跳转：根据消息索引直接定位目标窗口，避免循环扩大历史窗口”
+   * Walking ``loadMoreHistory`` until the target appears costs one round trip per
+   * page — a hit thousands of turns back is hundreds of pages. The server can
+   * resolve the message's seq, so this is a single bounded read. The merged view
+   * keeps every message already loaded; only the range between the jumped page
+   * and the current window stays unloaded, and ``loadMoreHistory`` continues to
+   * fill it from the older side.
+   */
+  async function loadHistoryAround(threadId: string, itemId: string): Promise<boolean> {
+    if (!threadId || !itemId) return false
+    const response = await requestRpc('thread.pageAround', {
+      thread_id: threadId,
+      item_id: itemId,
+    }, 60_000)
+    if (response.found !== true) return false
+    const page = response.snapshot_page
+    if (!isCoreSnapshot(page)) return false
+    if (activeSessionId.value !== threadId) return false
+    return runtimeController.mergeSnapshotPage(page)
+  }
+
   async function loadMoreHistory(): Promise<void> {
     const threadId = activeSessionId.value
     if (!threadId) return
@@ -485,8 +509,9 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       }
       // A refusal is a success response with `applied: false`: there is nothing
       // live to steer, so the caller queues the message. `queued` means the
-      // runtime already filed it and it must not be queued twice.
-      return { ok: false, queued: outcome.queued }
+      // runtime already filed it and it must not be queued twice; `submitted`
+      // means it already opened a new turn with this text as its user message.
+      return { ok: false, queued: outcome.queued, submitted: outcome.submitted }
     },
     queueInput: (threadId, input, turnOptions, clientMessageId) => (
       runtimeController.queueInput(threadId, input, turnOptions, clientMessageId)
@@ -682,7 +707,12 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
       throw new Error(liveComposerController.lastError.value || '连接不可用')
     }
     const outcome = await runtimeController.steerTurn(threadId, activeTurnId.value, text.trim())
-    if (!outcome.applied) throw new Error(outcome.message || '引导没有生效')
+    // user:“引导在结束边界之后被接收：原回合结束，创建一条真实用户消息并开启新
+    // 回合”+(这段文字已经成为新回合里的用户消息：对外调用不能再当成失败，也不能
+    // 让调用方以为需要再发一次)。
+    if (!outcome.applied && !outcome.submitted && !outcome.queued) {
+      throw new Error(outcome.message || '引导没有生效')
+    }
   }
 
   async function queueInput(text: string): Promise<void> {
@@ -735,6 +765,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     historyBuffered,
     totalMessages,
     loadMoreHistory,
+    loadHistoryAround,
     lastEvent,
     approval: approvalController,
     queue,

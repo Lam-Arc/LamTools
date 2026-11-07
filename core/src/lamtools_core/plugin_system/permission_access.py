@@ -49,7 +49,10 @@ class PluginPermissionAPI:
         try:
             if not isinstance(session_id, str) or not session_id.strip() or len(session_id) > 256:
                 raise PermissionAccessError("permissions/invalid-session", "session_id must be a nonblank string of at most 256 characters")
-            return await self._host.read(session_id.strip())
+            result = await self._host.read(session_id.strip())
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(调用租约排空不等于撤回后仍能返回结果，返回前复核原启动代)。
+            self._scope.check_open()
+            return result
         finally:
             self._scope.release()
 

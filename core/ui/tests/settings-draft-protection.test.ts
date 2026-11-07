@@ -157,17 +157,15 @@ describe('settings draft protection', () => {
 
   it('tracks custom select changes and closes an unchanged model editor without prompting', async () => {
     const wrapper = await settings()
-    await wrapper.get('[data-model-edit="m1"]').trigger('click')
-    const capability = wrapper.get('[data-model-form="update"]').findAllComponents(UiSelect).find((select: VueWrapper) => {
-      const props = select.props() as { options: Array<{ value: string }> }
-      return props.options.some(option => option.value === 'multimodal')
-    })!
-    capability.vm.$emit('update:modelValue', 'text')
+    await wrapper.get('[data-model-card="m1"]').trigger('click')
+    await wrapper.get('[data-model-edit]').trigger('click')
+    const providerSelect = wrapper.get('[data-model-form="update"]').findComponent(UiSelect)
+    providerSelect.vm.$emit('update:modelValue', 'p2')
     await flushPromises()
     await wrapper.get('.editor-popover-close').trigger('click')
     expect(decision(wrapper).props('open')).toBe(true)
     await choose(wrapper, 'cancel')
-    capability.vm.$emit('update:modelValue', 'multimodal')
+    providerSelect.vm.$emit('update:modelValue', 'p1')
     await flushPromises()
     await wrapper.get('.editor-popover-close').trigger('click')
     expect(wrapper.find('.editor-overlay').exists()).toBe(false)
@@ -344,7 +342,8 @@ describe('settings draft protection', () => {
   it('retains a model editor after direct persistence failure and validates advanced JSON before saving', async () => {
     const persist = vi.fn().mockRejectedValue(new Error('Model write failed'))
     const wrapper = await settings({ persistCatalog: persist })
-    await wrapper.get('[data-model-edit="m1"]').trigger('click')
+    await wrapper.get('[data-model-card="m1"]').trigger('click')
+    await wrapper.get('[data-model-edit]').trigger('click')
     await wrapper.get('[data-model-display-name]').setValue('Draft model')
     await wrapper.get('[data-model-form="update"]').trigger('submit')
     await flushPromises()
@@ -357,7 +356,7 @@ describe('settings draft protection', () => {
     await choose(wrapper, 'save')
     expect(navigate).not.toHaveBeenCalled()
     expect(persist).toHaveBeenCalledOnce()
-    expect(decision(wrapper).props('error')).toContain('JSON 必须是对象')
+    expect(decision(wrapper).props('error')).toContain('JSON 对象')
   })
 
   it('keeps an invalid memory threshold and network draft when saving fails', async () => {

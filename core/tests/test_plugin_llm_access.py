@@ -9,6 +9,90 @@ from lamtools_core.plugin_system.model_catalog import ModelCatalogService
 from .test_plugin_model_access import store
 
 
+@pytest.mark.asyncio
+async def test_cancelled_stream_close_waits_for_provider_cleanup_then_preserves_cancellation(env,monkeypatch):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(关闭调用者重复取消也要等真实清理，结束后保留取消结果)。
+    ctx, client, _ = env
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Source:
+        closed = False
+        async def aclose(self):
+            entered.set()
+            await release.wait()
+            self.closed = True
+    source = Source()
+    monkeypatch.setattr(client,"stream",lambda request: source)
+    stream = await ctx.llm.stream(LLMRequest(),ref="route-one").__aenter__()
+    task = asyncio.create_task(stream.aclose())
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and not source.closed
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task,3)
+    assert source.closed and stream not in stream._api._streams
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage",["initialization","read"])
+@pytest.mark.parametrize("suppress_cancel",[False,True])
+async def test_close_joins_pending_provider_operation_without_leaking_stream(env,monkeypatch,stage,suppress_cancel):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(并发关闭必须排空初始化或读取，提供方处理取消后也不能发布迟到事件)。
+    ctx, client, _ = env
+    entered, released = asyncio.Event(), asyncio.Event()
+    sources = []
+    class Source:
+        def __init__(self):
+            self.closed = False
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            if stage == "read":
+                entered.set()
+                try:
+                    await released.wait()
+                except asyncio.CancelledError:
+                    if not suppress_cancel:
+                        raise
+            return LLMStreamEvent(kind="content_delta",content="late")
+        async def aclose(self):
+            self.closed = True
+    async def initialize(request):
+        if stage == "initialization":
+            entered.set()
+            try:
+                await released.wait()
+            except asyncio.CancelledError:
+                if not suppress_cancel:
+                    raise
+        source = Source()
+        sources.append(source)
+        return source
+    monkeypatch.setattr(client,"stream",initialize)
+    stream = ctx.llm.stream(LLMRequest(),ref="route-one")
+    if stage == "read":
+        await stream.__aenter__()
+    operation = asyncio.create_task(stream.__aenter__() if stage == "initialization" else anext(stream))
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        await asyncio.wait_for(stream.aclose(),3)
+        outcome = (await asyncio.wait_for(asyncio.gather(operation,return_exceptions=True),3))[0]
+        assert isinstance(outcome,BaseException)
+        assert all(source.closed for source in sources)
+        assert stream not in stream._api._streams
+    finally:
+        released.set()
+        if not operation.done():
+            operation.cancel()
+        await asyncio.gather(operation,return_exceptions=True)
+        await stream.aclose()
+
+
 @pytest.fixture
 async def env(tmp_path, store):
     class Client:

@@ -8,6 +8,96 @@ from .test_plugin_working_directory import env
 from .test_sub_agent_supervisor import seed_model
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change",["shutdown","scope"])
+async def test_already_dispatched_subagent_creation_keeps_native_commit(setup,monkeypatch,change):
+    # user:“复用原宿主权威”+(原监督器已经接收的创建按真实提交收尾，不把新增派发检查当作提交后的回滚)。
+    ctx, _, _, sessions, project = setup
+    api, catalog = ctx.subagents, ctx.operation_catalog
+    original = catalog.execute
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def gated(name,*args,**kwargs):
+        if name == "sub_agent.create":
+            entered.set()
+            await release.wait()
+        return await original(name,*args,**kwargs)
+    monkeypatch.setattr(catalog,"execute",gated)
+    task = asyncio.create_task(api.create("s","accepted",kind="consider",model="test-model",reasoning_level="high"))
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        else:
+            ctx._registration_scope.revoke()
+        release.set()
+        result = await asyncio.wait_for(task,3)
+        actual = await original("sub_agent.list",{"thread_id":"s","work_root":str(project)})
+        assert any(row["name"] == result["native_name"] for row in actual.payload["items"])
+        assert result["name"] == "accepted" and result["status"] == "idle"
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase,operation",[("visibility","list"),("visibility","create"),("policy","create"),("result","list")])
+@pytest.mark.parametrize("change",["shutdown","catalog","store","scope"])
+async def test_subagent_dispatch_and_read_results_recheck_native_authority(setup,monkeypatch,phase,operation,change):
+    # user:“复用原宿主权威”+(父会话可见性/模型准入等待后和列表返回前复核原权威，失效时不向旧监督器继续派发)。
+    from lamtools_core.app.operation_catalog import OperationCatalog
+    from lamtools_core.plugin_system.subagent_access import SubagentAccessError
+    from lamtools_core.plugin_system.services import ServiceError
+    from lamtools_core.plugin_system.subagent_models import PluginSubagentModelsAPI
+    ctx, store, _, sessions, _ = setup
+    api, catalog = ctx.subagents, ctx.operation_catalog
+    host = sessions._context().host
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    execute = catalog.execute
+    async def observed(*args,**kwargs):
+        calls.append(args[0])
+        return await execute(*args,**kwargs)
+    monkeypatch.setattr(catalog,"execute",observed)
+    if phase == "visibility":
+        target, name, original = store, "get_readonly", store.get_readonly
+    elif phase == "policy":
+        target, name, original = PluginSubagentModelsAPI, "select", PluginSubagentModelsAPI.select
+    else:
+        target, name, original = catalog, "execute", observed
+    async def gated(*args,**kwargs):
+        result = await original(*args,**kwargs)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(target,name,gated)
+    work = api.list("s") if operation == "list" else api.create("s","late",kind="consider",model="test-model",reasoning_level="high")
+    task = asyncio.create_task(work)
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        elif change == "catalog":
+            ctx.operation_catalog = OperationCatalog()
+        elif change == "store":
+            host.session_store = object()
+        else:
+            ctx._registration_scope.revoke()
+        release.set()
+        with pytest.raises(ServiceError if change == "scope" else SubagentAccessError) as error:
+            await asyncio.wait_for(task,3)
+        assert error.value.code == ("service/scope-closed" if change == "scope" else "subagent/closed" if change == "shutdown" else "subagent/host-changed")
+        assert calls == (["sub_agent.list"] if phase == "result" else [])
+    finally:
+        ctx.operation_catalog = catalog
+        host.session_store = store
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
 class Runner:
     def __init__(self, root):
         self.work_root = root

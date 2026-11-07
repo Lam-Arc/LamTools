@@ -1,5 +1,5 @@
 <template>
-  <div ref="root" class="inline-file-composer" @pointerdown="focusEmptyEditor" @contextmenu="$emit('contextmenu', $event)">
+  <div ref="root" class="inline-file-composer" :style="{ '--composer-editor-max-height': composerEditorMaxHeight() }" @pointerdown="focusEmptyEditor" @contextmenu="$emit('contextmenu', $event)">
     <CommandPalette v-if="completionItems.length && !dismissed" :commands="completionItems" :active-index="activeIndex" @select="selectCompletion" />
     <div ref="editorHost" />
 
@@ -13,6 +13,7 @@ import { EditorView, Decoration, WidgetType, ViewPlugin, keymap, placeholder as 
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { activeCompletion, referenceSpans } from '@/composer/fileReferences'
 import { composerEditorMaxHeight } from '@/composer/editorHeight'
+import { fileTypeBadge } from '@/helpers/fileTypeBadge'
 import type { CoreAttachment, CoreCommandCatalogItem } from '@/types'
 import CommandPalette from './CommandPalette.vue'
 import { useReferenceActions } from '@/helpers/referenceActions'
@@ -64,7 +65,18 @@ class FileWidget extends WidgetType {
     span.dataset.filePath = this.path
     span.title = this.path.startsWith('pending://') ? `${this.name} · ${this.status === 'failed' ? '处理失败，可移除后重新添加' : '正在处理'}` : `${this.name}\n${this.path}`
     span.setAttribute('aria-label', span.title)
-    span.textContent = `${this.status === 'uploading' ? '◌' : this.status === 'failed' ? '⚠' : /\.(png|jpe?g|webp|gif|bmp)$/i.test(this.name) ? '▧' : '▤'} @${this.name}`
+    // user:“把那个@的符号去掉 换成对应的文件图标”+(引用不再显示 @，改成
+    // 按扩展名取色的文件类型徽标 + 文件名；失败/上传中仍用红色 ! 或 … 标出状态)。
+    const badgeData = fileTypeBadge(this.name, this.status === 'failed')
+    const badge = document.createElement('span')
+    badge.className = 'composer-file-badge'
+    badge.dataset.label = this.status === 'failed' ? '!' : this.status === 'uploading' ? '…' : badgeData.label
+    badge.style.background = this.status === 'failed' ? '#F5555D' : badgeData.background
+    badge.style.color = this.status === 'failed' ? '#FFFFFF' : badgeData.color
+    const label = document.createElement('span')
+    label.className = 'composer-file-name'
+    label.textContent = this.name
+    span.replaceChildren(badge, label)
     span.dataset.status = this.status
     if (this.status === 'uploading') span.setAttribute('aria-busy', 'true')
     span.addEventListener('mousedown', e => { e.preventDefault(); if (this.status === 'failed') emit('retry-file', this.path); else if (!this.path.startsWith('pending://')) emit('preview-file', this.path) })
@@ -136,10 +148,16 @@ onMounted(() => {
     })),
     // user:“修复输入栏高度无上限的 bug，多行时可达 8 行高即为极限”+(编辑器最高
     // 8 行，超出在框内滚动；高度公式统一在 composer/editorHeight.ts 维护)。
+    // user:“我看那都超出屏幕了”+(主题样式在个别 WebView 里可能没吃到，限高再直接写到
+    // 滚动容器自身的内联样式上，任何样式加载顺序都不能让它继续长高)。
     // user:“修复输入栏中向 Sunday 提出问题的文字颜色过亮的问题”+(正文在主题色
     // 基础上降到 85%，占位符维持 45% 更淡，保持文字层级)。
     EditorView.theme({ '&': { color: 'color-mix(in srgb, var(--theme-composer-text) 85%, transparent)', backgroundColor: 'transparent' }, '&.cm-focused': { outline: 'none' }, '.cm-content': { padding: '8px 0', fontFamily: 'var(--font-sans)', minHeight: '38px', caretColor: 'color-mix(in srgb, var(--theme-composer-text) 85%, transparent)' }, '.cm-scroller': { maxHeight: composerEditorMaxHeight(), overflow: 'auto', fontFamily: 'inherit', lineHeight: '1.6' }, '.cm-line': { padding: '0' }, '.cm-placeholder': { color: 'color-mix(in srgb,var(--theme-composer-text) 45%,transparent)' } }),
   ] }) })
+  // user:“我看那都超出屏幕了”+(限高不依赖 CodeMirror 注入的主题样式：内联写入
+  // 滚动容器，粘贴再长的文本也只能在 8 行高度内滚动)。
+  view.scrollDOM.style.maxHeight = composerEditorMaxHeight()
+  view.scrollDOM.style.overflowY = 'auto'
 })
 onBeforeUnmount(() => view?.destroy())
 defineExpose({
@@ -158,7 +176,10 @@ defineExpose({
 /* user:“范围不对，光标出格了”+(共享编辑器本身提供输入留白，让提示、选区和光标在主区与分屏中都避开卡片圆角)。 */
 .inline-file-composer { position: relative; box-sizing: border-box; width: 100%; min-width: 0; padding: var(--space-1) var(--space-4) 0; --text: var(--theme-composer-text); }
 :deep(.cm-placeholder) { pointer-events: none; user-select: none; }
-:deep(.composer-file-token) { display: inline-block; border-radius: var(--radius-sm); padding: 0 var(--space-1); background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--text) 85%, transparent); font: inherit; cursor: pointer; }
+:deep(.composer-file-token) { display: inline-flex; align-items: center; gap: 3px; border-radius: var(--radius-sm); padding: 0 var(--space-1); background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--text) 85%, transparent); font: inherit; cursor: pointer; vertical-align: bottom; }
+:deep(.composer-file-badge) { display: inline-grid; flex: 0 0 auto; place-items: center; width: 14px; height: 14px; border-radius: 30%; overflow: hidden; font-family: var(--font-sans); font-size: 6.5px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
+:deep(.composer-file-badge::before) { content: attr(data-label); }
+:deep(.composer-file-name) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :deep(.composer-file-token:hover) { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
 :deep(.composer-file-token[data-status=failed]) { color: var(--red); }
 </style>

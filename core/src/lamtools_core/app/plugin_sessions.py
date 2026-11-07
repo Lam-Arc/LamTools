@@ -24,7 +24,10 @@ from .queue_state import (
     queue_order_key,
 )
 
-RECEIPT_METHODS = {"queue/itemAccepted", "turn/steered"}
+# user:“引导在结束边界之后被接收：原回合结束，创建一条真实用户消息并开启新回合”
+# +(被结束边界拒掉的引导可能直接开出一个新回合，那枚 turn/accepted 同样是这次
+#   发送的接收回执；只看 turn/steered 会把已经送达的消息报成"没有接收凭据")。
+RECEIPT_METHODS = {"queue/itemAccepted", "turn/steered", "turn/accepted", "turn/started"}
 
 
 def _identifier(value: str, name: str) -> str:
@@ -46,7 +49,10 @@ class PluginSessionService:
         self._factory = context_factory
         self._poll_interval = poll_interval
         self._closed = asyncio.Event()
-        self._persistence = context_factory().persistence
+        context = context_factory()
+        self._persistence = context.persistence
+        # user:“复用原宿主权威”+(会话读取绑定同一原存储；等待可见性/数据库后不能发布已替换宿主的结果)。
+        self._store = getattr(context.host, "session_store", None)
 
     def shutdown(self) -> None:
         """Owned by application shutdown; wakes readers before closing SQLite."""
@@ -56,17 +62,19 @@ class PluginSessionService:
         if self._closed.is_set():
             raise SessionError("session/closed", "", "host session service is closed")
         context = self._factory()
-        if context.persistence is not self._persistence:
-            raise SessionError("session/host-changed", "", "host persistence changed; obtain the new service")
+        if context.persistence is not self._persistence or getattr(context.host, "session_store", None) is not self._store:
+            raise SessionError("session/host-changed", "", "host persistence or session store changed; obtain the new service")
         return context
 
     async def _snapshot(self, context, session_id: str) -> dict:
         store = getattr(context.host, "session_store", None)
         exists = await store.get(session_id) is not None if store is not None else False
+        self._context()
         if store is not None and not exists:
             raise SessionError("session/not-found", session_id, "session is unknown or unavailable")
         async with context.session_factory() as db:
             snapshot = await context.persistence.load_metadata(db, session_id)
+        self._context()
         if not exists and not snapshot.get("snapshot_seq"):
             raise SessionError("session/not-found", session_id, "session does not exist")
         return snapshot
@@ -174,8 +182,15 @@ class PluginSessionService:
                     result = await self._execute(context, session_id, "turn.steer", {**params, "turn_id": active})
                     # A live owner can change between the passive read and
                     # steering. Preserve the input as a next-turn message
-                    # only when the shared handler explicitly refused it.
-                    if result.get("applied") is False and not result.get("queued") and result.get("reason") in {"active_turn_mismatch", "run_not_active"}:
+                    # only when the shared handler explicitly refused it: a
+                    # refusal that already opened a new turn with this text
+                    # (`submitted`) or filed it (`queued`) must not be doubled.
+                    if (
+                        result.get("applied") is False
+                        and not result.get("queued")
+                        and not result.get("submitted")
+                        and result.get("reason") in {"active_turn_mismatch", "run_not_active"}
+                    ):
                         await self._execute(context, session_id, "queue.create", {**params, "queue_item_id": "queue:" + digest, "mode": "next_turn"})
                 else:
                     await self._execute(context, session_id, "queue.create", {**params, "queue_item_id": "queue:" + digest, "mode": "next_turn"})
@@ -231,6 +246,7 @@ class PluginSessionService:
             raise SessionError("session/invalid-cursor", session_id, "cursor is ahead of durable history")
         async with context.session_factory() as db:
             records = await context.persistence.list_after(db, thread_id=session_id, after_seq=after_seq, limit=limit + 1)
+        self._context()
         cursor, size, items = after_seq, 0, []
         for record in records[:limit]:
             if record.seq != cursor + 1:

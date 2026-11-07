@@ -26,7 +26,7 @@ from lamtools_core.context_compaction_budget import (
 
 from .automation import ASK_AUTO_CONTINUE_NAMESPACE, merge_ask_auto_continue
 from .imagegen_store import IMAGEGEN_NAMESPACE, load_imagegen_config, save_imagegen_config
-from .model_store import ModelConfig, ModelStore, make_model_record_id
+from .model_store import ModelConfig, ModelStore, make_model_record_id, normalize_pricing
 from .model_group_store import ModelGroupRevisionConflict, ModelGroupStore
 from .network import NETWORK_NAMESPACE, merge_network
 from .provider_store import (
@@ -94,6 +94,9 @@ def build_config_operation_catalog(
             "temperature": model.temperature,
             "capability": model.capability,
             "notes": model.notes,
+            "is_default": model.is_default,
+            "enabled": model.enabled,
+            "pricing": dict(model.pricing),
             "extra": model.to_extra(),
         }
 
@@ -108,6 +111,159 @@ def build_config_operation_catalog(
         return OperationResult(
             name=request.name,
             payload={"providers": [_provider_response(p) for p in providers[:limit]]},
+        )
+
+    async def providers_status(request: OperationRequest) -> OperationResult:
+        """Return the last known connection state of every provider."""
+        from .provider_probe import load_cached_status
+
+        cached = load_cached_status()
+        records: dict[str, Any] = {}
+        for provider in _providers().list_sync(work_root=root):
+            record = cached["providers"].get(provider.id) if isinstance(cached.get("providers"), dict) else None
+            if not isinstance(record, dict):
+                record = {}
+            state = str(record.get("state") or ("missing_key" if not provider.api_key else "unknown"))
+            if not provider.api_key:
+                # A cached "ok" from before the key was removed is not a fact
+                # about the provider any more.
+                state = "missing_key"
+            records[provider.id] = {
+                "state": state,
+                "detail": str(record.get("detail") or ""),
+                "latency_ms": int(record.get("latency_ms") or 0),
+                "http_status": int(record.get("http_status") or 0),
+                "model_count": int(record.get("model_count") or 0),
+                "checked_at": str(record.get("checked_at") or ""),
+            }
+        return OperationResult(
+            name=request.name,
+            payload={"providers": records, "updated_at": str(cached.get("updated_at") or "")},
+        )
+
+    async def providers_probe(request: OperationRequest) -> OperationResult:
+        """Actively probe providers (cached results are reused unless forced)."""
+        from .provider_probe import probe_providers
+
+        raw_ids = request.payload.get("provider_ids")
+        wanted = {str(item) for item in raw_ids} if isinstance(raw_ids, list) else None
+        providers = [
+            provider for provider in _providers().list_sync(work_root=root)
+            if wanted is None or provider.id in wanted
+        ]
+        result = await probe_providers(providers, force=bool(request.payload.get("force")))
+        return OperationResult(name=request.name, payload=result)
+
+    async def models_usage(request: OperationRequest) -> OperationResult:
+        """Aggregate ledger usage and fold in per-model pricing."""
+        import asyncio
+
+        from lamtools_core.usage.ledger import read_usage
+
+        raw_range = str(request.payload.get("range") or "30d").strip().lower()
+        days = {"24h": 1, "7d": 7, "30d": 30, "all": None}.get(raw_range, 30)
+        summary = await asyncio.to_thread(read_usage, days=days)
+        model_map = {model.id: model for model in _models().list_sync(work_root=root)}
+        provider_list = _providers().list_sync(work_root=root)
+        provider_map = {provider.id: provider for provider in provider_list}
+        provider_by_name = {provider.name: provider for provider in provider_list}
+
+        def provider_key(bucket: dict[str, Any]) -> str:
+            if bucket.get("provider_id"):
+                return str(bucket["provider_id"])
+            by_name = provider_by_name.get(str(bucket.get("provider_name") or ""))
+            if by_name is not None:
+                return by_name.id
+            return str(bucket.get("provider_name") or "unknown")
+
+        def cost_of(model: ModelConfig | None, bucket: dict[str, Any]) -> float | None:
+            pricing = dict(getattr(model, "pricing", {}) or {}) if model is not None else {}
+            if not pricing or str(pricing.get("currency") or "USD").upper() != "USD":
+                return None
+            in_price = float(pricing.get("input_per_1m") or 0)
+            out_price = float(pricing.get("output_per_1m") or 0)
+            cache_price = pricing.get("cache_read_per_1m")
+            if not in_price and not out_price and cache_price is None:
+                return None
+            cached = int(bucket.get("cached_tokens") or 0)
+            billable_input = max(0, int(bucket.get("input_tokens") or 0) - (cached if cache_price is not None else 0))
+            total = billable_input / 1_000_000 * in_price
+            total += int(bucket.get("output_tokens") or 0) / 1_000_000 * out_price
+            if cache_price is not None:
+                total += cached / 1_000_000 * float(cache_price)
+            return round(total, 6)
+
+        by_model: list[dict[str, Any]] = []
+        provider_acc: dict[str, dict[str, Any]] = {}
+        total_cost = 0.0
+        unpriced_tokens = 0
+        for bucket in summary.get("by_model", []):
+            cost = cost_of(model_map.get(str(bucket.get("model_record_id") or "")), bucket)
+            entry = {**bucket, "cost": cost, "priced": cost is not None}
+            by_model.append(entry)
+            if cost is None:
+                unpriced_tokens += int(entry.get("tokens") or 0)
+            else:
+                total_cost += cost
+            key = provider_key(entry)
+            acc = provider_acc.setdefault(key, {
+                "provider_id": entry.get("provider_id") or "",
+                "provider_name": entry.get("provider_name") or "",
+                "calls": 0, "input_tokens": 0, "output_tokens": 0,
+                "cached_tokens": 0, "tokens": 0, "cost": 0.0, "priced_tokens": 0,
+                "unpriced_tokens": 0,
+            })
+            for field in ("calls", "input_tokens", "output_tokens", "cached_tokens", "tokens"):
+                acc[field] += int(entry.get(field) or 0)
+            if cost is None:
+                acc["unpriced_tokens"] += int(entry.get("tokens") or 0)
+            else:
+                acc["cost"] = round(float(acc["cost"]) + cost, 6)
+                acc["priced_tokens"] += int(entry.get("tokens") or 0)
+
+        month_cost: dict[str, float] = {}
+        month_tokens: dict[str, int] = {}
+        for bucket in summary.get("month_by_model", []):
+            key = provider_key(bucket)
+            month_tokens[key] = month_tokens.get(key, 0) + int(bucket.get("tokens") or 0)
+            cost = cost_of(model_map.get(str(bucket.get("model_record_id") or "")), bucket)
+            if cost is not None:
+                month_cost[key] = round(month_cost.get(key, 0.0) + cost, 6)
+
+        by_provider: list[dict[str, Any]] = []
+        for key, acc in provider_acc.items():
+            provider = provider_map.get(str(acc.get("provider_id") or "")) or provider_by_name.get(str(acc.get("provider_name") or ""))
+            extra = dict(provider.to_extra()) if provider is not None else {}
+            raw_budget = extra.get("monthly_budget_usd")
+            budget: float | None = None
+            try:
+                if raw_budget not in (None, ""):
+                    parsed = float(raw_budget)
+                    budget = parsed if parsed > 0 else None
+            except (TypeError, ValueError):
+                budget = None
+            acc["budget_usd"] = budget
+            acc["month_cost"] = month_cost.get(key, 0.0)
+            acc["month_tokens"] = month_tokens.get(key, 0)
+            by_provider.append(acc)
+
+        totals = dict(summary.get("totals") or {})
+        totals["cost"] = round(total_cost, 6)
+        totals["unpriced_tokens"] = unpriced_tokens
+        totals["currency"] = "USD"
+        return OperationResult(
+            name=request.name,
+            payload={
+                "range": raw_range,
+                "days": days,
+                "totals": totals,
+                "by_model": by_model,
+                "by_provider": by_provider,
+                "daily": summary.get("daily") or [],
+                "series": summary.get("series") or {},
+                "tracking_since": summary.get("tracking_since") or "",
+                "since": summary.get("since") or "",
+            },
         )
 
     async def provider_create(request: OperationRequest) -> OperationResult:
@@ -706,6 +862,9 @@ def build_config_operation_catalog(
 
     for name, handler in {
         "config.providers.list": providers_list,
+        "config.providers.status": providers_status,
+        "config.providers.probe": providers_probe,
+        "config.models.usage": models_usage,
         "config.provider.create": provider_create,
         "config.provider.update": provider_update,
         "config.notices.drain": config_notices_drain,
@@ -831,7 +990,11 @@ def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: Pro
         provider_name = fallback_provider.name
     thinking = params.get("thinking")
     thinking_supported = bool(thinking.get("supported", params.get("thinking_supported") or False)) if isinstance(thinking, dict) else bool(params.get("thinking_supported") or False)
-    thinking_budget = int(thinking.get("budget", params.get("thinking_budget") or 10000)) if isinstance(thinking, dict) else int(params.get("thinking_budget") or 10000)
+    # user:“推理预算填 0 要真的关掉预算”+(0 是合法值，不能被 `or 10000` 吞掉。)
+    raw_budget = thinking.get("budget") if isinstance(thinking, dict) else None
+    if raw_budget is None:
+        raw_budget = params.get("thinking_budget")
+    thinking_budget = 10000 if raw_budget in (None, "") else int(raw_budget)
     return ModelConfig(
         id=str(params.get("id") or params.get("model_record_id") or "").strip(),
         model_id=str(params.get("model_id") or "").strip(),
@@ -840,7 +1003,10 @@ def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: Pro
         provider_id=provider_id,
         context_window=int(params.get("context_window") or 0),
         max_output_tokens=int(params.get("max_output_tokens") or 4096),
-        temperature=float(params.get("temperature") or 0.2),
+        # user:“温度填 0 要能保存”+(0 是合法温度，默认值只在缺省时生效。)
+        temperature=(
+            0.2 if params.get("temperature") in (None, "") else float(params.get("temperature"))
+        ),
         thinking_supported=thinking_supported,
         thinking_budget=thinking_budget,
         reasoning_effort=str(params.get("reasoning_effort") or "").strip(),
@@ -863,6 +1029,8 @@ def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: Pro
         capability=str(extra.get("capability") or params.get("capability") or "").strip().lower(),
         notes=str(params.get("notes") or "").strip(),
         is_default=bool(params.get("is_default") or False),
+        enabled=bool(params.get("enabled", True)),
+        pricing=normalize_pricing(params.get("pricing") or extra.get("pricing")),
     )
 
 

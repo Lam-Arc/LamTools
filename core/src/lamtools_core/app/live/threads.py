@@ -34,7 +34,7 @@ async def handle_thread_resume_operation(
     after_seq = _int_param(params.get("last_seen_seq") or params.get("lastSeenSeq"), default=0)
     host = getattr(context, "host", None)
     session_store = getattr(host, "session_store", None)
-    if session_store is not None and await session_store.get(thread_id) is None:
+    if not await _thread_is_reachable(session_store, thread_id):
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
@@ -144,7 +144,7 @@ async def handle_thread_read_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
         )
     session_store = getattr(getattr(context, "host", None), "session_store", None)
-    if session_store is not None and await session_store.get(thread_id) is None:
+    if not await _thread_is_reachable(session_store, thread_id):
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
@@ -203,7 +203,7 @@ async def handle_thread_history_operation(
             )
         )
     session_store = getattr(getattr(context, "host", None), "session_store", None)
-    if session_store is not None and await session_store.get(thread_id) is None:
+    if not await _thread_is_reachable(session_store, thread_id):
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
@@ -233,6 +233,94 @@ async def handle_thread_history_operation(
     )
 
 
+async def _thread_is_reachable(session_store: Any, thread_id: str) -> bool:
+    """Existence check behind "thread not found", without loading the thread.
+
+    ``session_store.exists`` answers it from SQLite's JSON extractor; hosts that
+    do not implement it keep the full record read.
+    """
+    if session_store is None:
+        return True
+    exists = getattr(session_store, "exists", None)
+    if callable(exists):
+        return bool(await exists(thread_id))
+    return (await session_store.get(thread_id)) is not None
+
+
+async def handle_thread_page_around_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    """Return the one history window that contains ``item_id``.
+
+    user:“高效搜索跳转：根据消息索引直接定位目标窗口，避免循环扩大历史窗口”
+    The client used to walk ``thread.history`` page by page until the searched
+    message landed in the DOM, which is one round trip per page and loads every
+    page in between. The store can resolve the message's thread-global seq, so
+    the page that ends at it is a single bounded read.
+    """
+    thread_id = str(params.get("thread_id") or params.get("threadId") or "").strip()
+    item_id = str(params.get("item_id") or params.get("itemId") or "").strip()
+    if not thread_id or not item_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="thread_id and item_id are required",
+            )
+        )
+    session_store = getattr(getattr(context, "host", None), "session_store", None)
+    if not await _thread_is_reachable(session_store, thread_id):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
+        )
+    loader = getattr(context.persistence, "load_page_around", None)
+    if not callable(loader):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="direct history locate is unavailable",
+            )
+        )
+    page_bytes = _history_byte_budget(params)
+    async with context.session_factory() as db:
+        anchor_seq, snapshot = await loader(
+            db,
+            thread_id,
+            item_id=item_id,
+            item_byte_budget=_page_item_byte_budget(page_bytes),
+        )
+    if anchor_seq is None:
+        # Not in this thread: an honest "not found" beats an empty page the
+        # client would mistake for "the message is at the very beginning".
+        return CoreLiveOperationOutcome(
+            response=rpc_result(
+                request_id,
+                {"thread": {"id": thread_id}, "found": False, "snapshot_page": None},
+            )
+        )
+    page = _character_page_snapshot(
+        snapshot,
+        before_item_id=None,
+        # Exclusive upper bound: end the page at the target item itself.
+        before_seq=anchor_seq + 1,
+        char_limit=_history_char_limit(params),
+        turn_limit=_history_turn_limit(params),
+        byte_limit=page_bytes,
+        anchor_item_id=item_id,
+        anchor_seq=anchor_seq,
+    )
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {"thread": {"id": thread_id}, "found": True, "snapshot_page": page},
+        )
+    )
+
+
 async def handle_thread_outline_operation(
     *,
     request_id: int | str | None,
@@ -250,7 +338,7 @@ async def handle_thread_outline_operation(
     # the production host the session store is the authoritative thread
     # namespace; focused operation tests may construct a host without one.
     session_store = getattr(getattr(context, "host", None), "session_store", None)
-    if session_store is not None and await session_store.get(thread_id) is None:
+    if not await _thread_is_reachable(session_store, thread_id):
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
@@ -260,10 +348,17 @@ async def handle_thread_outline_operation(
     async with context.session_factory() as db:
         # The outline needs each turn's own closing assistant body, which can sit
         # arbitrarily deep inside a turn that ends with child output (measured:
-        # 200 items deep on the longest development thread). A bounded read
-        # cannot reproduce it, and a wrong or empty excerpt is worse than a slow
-        # panel, so this one read stays complete.
-        snapshot = await context.persistence.load(db, thread_id)
+        # 200 items deep on the longest development thread), so every assistant
+        # message of the thread has to be considered — but nothing else does.
+        # Reading the whole thread here meant JSON-decoding every tool result:
+        # 561MB / 4.2s on the 48k-item benchmark thread. The store can return the
+        # metadata row plus only the rows whose JSON mentions an agent message,
+        # which is the same answer for a fraction of the bytes.
+        loader = getattr(context.persistence, "load_items_by_kind", None)
+        if callable(loader):
+            snapshot = await loader(db, thread_id, text_marker="agentMessage")
+        else:
+            snapshot = await context.persistence.load(db, thread_id)
     outline = build_thread_outline(
         snapshot,
         thread_id=thread_id,

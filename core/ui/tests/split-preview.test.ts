@@ -95,7 +95,7 @@ describe('split file preview routing', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview')
   })
 
-  it('routes Markdown artifact chips to the split preview instead of the centered overlay', async () => {
+  it('routes Markdown artifact chips to the split preview without a floating preview', async () => {
     const add = vi.fn(() => 'tab-1')
     const request = vi.fn(async () => ({ status: 200, headers: {}, body: new TextEncoder().encode(JSON.stringify({ path: 'E:/p/README.md' })) }))
     const wrapper = mount(ReferenceItems, {

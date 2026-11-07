@@ -160,10 +160,21 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
   和旧 `lamcore-backend/` 也在锁检测范围内，同样会先被结束。
   `CloseApplicationsFilter` 是**逗号分隔**的通配列表；写成分号会让它匹配不到任何
   文件、整条保护静默失效。
-- Restart Manager 对这一对进程并不可靠（它关不掉「隐藏而不退出」的窗口应用，也
-  关不掉无窗口的后端，却仍报告已处理），所以安装步骤开始时会自行结束安装目录内的
-  Sunday 进程：只匹配可执行文件路径位于 `{app}` 下的进程，不会误伤同名但装在别处的
-  程序。
+- 结束进程这一步由 `installer/sunday-release-files.ps1` 完成（安装包内的
+  `[Code]` 在准备阶段解压执行），它回答的是「谁在用这些文件」，而不是「谁的可执行
+  文件在这个目录里」：
+  - 用 Windows Restart Manager 逐个文件查询持有者（`SundayRestartManager.cs` 在
+    **打包时**编译成 `SundayRestartManager.dll`，安装时只加载）。之所以不在安装时
+    用 PowerShell 的 `Add-Type`：那要调用用户机器上的 `csc.exe`，而被策略/杀软锁住的
+    机器直接拒绝执行，诊断会退化成「查不到持有者」。
+  - 只结束属于 Sunday 的进程：可执行文件在 `{app}` 下、加载了 `{app}` 内的模块
+    （典型就是开发模式留在后台的 `python.exe` 占着
+    `lamcore-backend\_internal\msvcp140.dll`），或命令行指向本目录的旧卸载器。
+    其它进程即使占着目录里的数据文件也只报告、不结束——0.3.38 之前「只按可执行
+    文件路径匹配」漏掉了前一类，锁检测只能中止安装，静默安装里就表现为安装窗口
+    自己消失。
+  - Restart Manager 不可用时（程序集缺失、查询报错）退化为 `tasklist /m` 找到持有
+    同名模块的进程，再逐个核对模块真实路径，仍只结束确认属于 Sunday 的 PID。
 - 应用内更新（`update.install`）连两点一起做：安装程序以脱离后端作业对象的方式启动
   （`JOB_OBJECT_LIMIT_BREAKAWAY_OK` + `CREATE_BREAKAWAY_FROM_JOB`，否则它会随应用退出
   被作业对象一起结束），随后应用经 `quit_app` 走一次真正的退出，而不是只收进托盘。
@@ -177,13 +188,29 @@ CI 固定使用 Inno Setup 6.6.1，避免编译器版本漂移导致产物或
 - 应用收到系统级关闭请求（注销、关机）时走完整退出流程，不再只收进托盘，随后由
   后端作业对象保证不留孤儿进程（`windows_close_request`）。普通关闭窗口仍只收进
   托盘。
-- 结束进程后确认 Sunday.exe 与 sunday-backend/ 内所有文件都能独占打开；仍被占用
-  （例如扫描器持有一个数据文件）则拒绝本次安装并保持既有安装完整（`CurStepChanged`
-  守卫）。删除动作在该守卫之后，所以拒绝时不会留下半残安装。静默安装不弹窗，以非零
-  退出码和 `Refusing to install:` 日志行体现。
+- 结束进程后确认 Sunday.exe 与 sunday-backend/ 内所有文件都能独占打开，并把三种
+  失败分开：句柄占用（win32 32/33）、只读属性（就地清掉，不算失败）、权限不足
+  （ACL 或安全软件，结束进程没用）。仍被占用则拒绝本次安装并保持既有安装完整
+  （`CurStepChanged` 守卫在删除动作之前），拒绝时不会留下半残安装。
+- 拒绝不能是静默的：安装程序会把「阶段、持有进程名与 PID、阻塞文件、完整日志路径」
+  写进失败报告（应用内更新经 `/FAILREPORT=` 指到更新目录的
+  `install-failure.txt`，手动安装写到 `%LOCALAPPDATA%\Temp\sunday-update\`），
+  `/SILENT`（应用内更新那一档，用户就在机器前）还会弹出可读的说明框，然后把旧版本
+  重新拉起来，用户面对的是「弹窗 + 应用还在」。只有 `/VERYSILENT` 这种真无人值守
+  的组合才不弹窗，靠非零退出码、失败报告与 `Refusing to install:` 日志行留痕。
+  脚本弹窗要用 `SuppressibleMsgBox`，普通 `MsgBox` 不认
+  `/SUPPRESSMSGBOXES`，会把无人值守安装挂在那里。
+- 应用侧对应的是「启动之后确认它真的活着」：安装程序以脱离后端作业对象的方式启动
+  后，`update/installer.py` 会问一句 `IsProcessInJob`——如果它还在某个作业对象里
+  （脱离只对最内层作业生效），就换成 shell 交接重新启动；启动后立刻退出（退出码非
+  零）也会被判为失败，应用不退出、报错保留。启动参数、PID、日志与失败报告路径都会
+  写进更新目录的 `install-launch.json`，供不可复现的机器排查。
 - 验收：`scripts/verify-desktop-lifecycle.ps1` 覆盖安装、系统关闭请求、运行中升级、
   拒绝升级不损坏、卸载保留数据；release.yml 的安装冒烟步骤调用它，也可本地对任意
   安装包运行（机器上不要另有一个 Sunday 实例在跑）。
+  `scripts/verify-installer-file-release.ps1` 专门守着「文件放行」这一层：外部
+  `python.exe` 持有安装目录 DLL、无关进程只持有数据文件（必须拒绝且不结束对方）、
+  只读文件、权限不足、全新安装，用两个真实安装包（旧版 + 待测版）跑一遍。
 
 ## 旧 NSIS 安装迁移与用户数据
 

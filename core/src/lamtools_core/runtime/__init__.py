@@ -86,6 +86,11 @@ class RuntimeTurnInput:
     guidance_source: Callable[[], list[Any]] | None = field(default=None, repr=False, compare=False)
     guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = field(default=None, repr=False, compare=False)
     guidance_acknowledger: Callable[[list[str]], Any] | None = field(default=None, repr=False, compare=False)
+    # Closes guidance intake for this run, atomically, at every terminal exit.
+    # user:“引导遇上结束阶段：当前回合正常结束，引导转为一条新的用户消息”
+    # +(非正常收尾（等待输入/失败/暂停/取消）也要越过同一条结束边界：之后到达
+    #   的引导一律改走新回合，而不是先被登记表收下、再随任务退出悄悄丢掉)。
+    guidance_sealer: Callable[[], Any] | None = field(default=None, repr=False, compare=False)
     # Pulls the latest composer parameter group for the next kernel step.
     # The callable returns ``(generation, patch)`` or ``None`` when nothing
     # newer than the caller's applied generation exists.
@@ -748,6 +753,33 @@ class RuntimeTaskRegistry:
             include_metadata=include_metadata,
         )
 
+    def guidance_is_open(self, thread_id: str, *, run_id: str) -> bool:
+        """Whether the run still takes guidance (its end boundary is not crossed)."""
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        return bool(
+            entry is not None
+            and normalize_run_id(thread_id, entry.run_id) == normalize_run_id(thread_id, run_id)
+            and entry.task is not None
+            and entry.guidance_open
+        )
+
+    def seal_guidance(self, thread_id: str, *, run_id: str) -> bool:
+        """Close guidance intake for this run; later input becomes the next turn.
+
+        user:“引导遇上结束阶段：当前回合正常结束，引导转为一条新的用户消息”
+        +(回合一旦越过结束边界就不再接收引导。封口是一次同步的原子状态转换：
+          它之后的 accept_guidance 一律返回 "closed"，调用方据此把这段文字交给
+          普通发送链路开新回合，而不是写一条永远不会被模型读到的 turn/steered)。
+        """
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id):
+            return False
+        entry.guidance_open = False
+        entry.guidance_changed.set()
+        return True
+
     def retract_guidance(self, thread_id: str, *, run_id: str, guidance_id: str) -> None:
         entry = self._entries.get(thread_id)
         if entry is None or normalize_run_id(thread_id, entry.run_id) != normalize_run_id(thread_id, run_id) or not guidance_id:
@@ -764,6 +796,10 @@ class RuntimeTaskRegistry:
     def release_run(self, thread_id: str, *, run_id: str) -> None:
         entry = self._entries.get(thread_id)
         if entry is not None and entry.run_id == run_id:
+            # The run is over: nothing can consume guidance any more. Sealing
+            # before the entry disappears keeps a late accept from being
+            # recorded as delivered (the caller routes it to the next turn).
+            entry.guidance_open = False
             entry.guidance_changed.set()
             self._entries.pop(thread_id, None)
             self._background_process_registry.cleanup_session(thread_id)

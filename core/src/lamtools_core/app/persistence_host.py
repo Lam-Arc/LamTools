@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import time as _time
 from collections.abc import Awaitable, Callable
 from typing import Any, Iterable, TypeVar
 
@@ -16,6 +19,11 @@ from .sqlite_write import SQLiteWriteCoordinator, database_identity
 
 T = TypeVar("T")
 WriteCoordinatorFactory = Callable[[Any], SQLiteWriteCoordinator]
+
+# 写入链路的细粒度追踪：默认关闭，LAMTOOLS_PERF_TRACE=1 时每次投影打一行，
+# 用来判断长会话的写入耗时落在事件追加、投影还是元数据行回写上。
+_TRACE = os.environ.get("LAMTOOLS_PERF_TRACE") == "1"
+_trace_logger = logging.getLogger("lamtools_core.app.persistence_host")
 
 
 class RevisionConflictError(RuntimeError):
@@ -156,6 +164,7 @@ class AppPersistenceHost:
             if return_state:
                 return [], None
             return []
+        _trace_started = _time.perf_counter()
         async with db.begin_nested():
             if expected_revision is not None:
                 target_thread_id = revision_thread_id or (
@@ -169,6 +178,14 @@ class AppPersistenceHost:
             for item in run_item_list:
                 envelope = await self.event_store.append_run_item_event(db, item)
                 envelopes.append(envelope)
+            if _TRACE:
+                _trace_logger.info(
+                    "[PERF:append_batch] events=%.3fs app=%d run=%d thread_id=%s",
+                    _time.perf_counter() - _trace_started,
+                    len(app_event_list),
+                    len(run_item_list),
+                    envelopes[0].thread_id if envelopes else "",
+                )
             if not project_snapshot:
                 return await self._refresh_envelopes(db, envelopes)
             by_thread: dict[str, list[AppEventEnvelope]] = {}
@@ -268,6 +285,43 @@ class AppPersistenceHost:
         if item_byte_budget is not None:
             kwargs["item_byte_budget"] = int(item_byte_budget)
         return await self.snapshot_store.load_page(db, thread_id, **kwargs)
+
+    async def load_items_by_kind(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        *,
+        text_marker: str,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Metadata plus only the item rows matching a text marker.
+
+        See ``SqlAlchemyThreadSnapshotStore.load_items_by_kind``; the outline uses
+        it to read the transcript's assistant bodies without materializing the
+        thread's tool traffic.
+        """
+        kwargs: dict[str, Any] = {"text_marker": text_marker}
+        if limit is not None:
+            kwargs["limit"] = int(limit)
+        return await self.snapshot_store.load_items_by_kind(db, thread_id, **kwargs)
+
+    async def load_page_around(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        *,
+        item_id: str,
+        item_byte_budget: int | None = None,
+    ) -> tuple[int | None, dict[str, Any]]:
+        """Load the one page whose newest item is ``item_id`` (search jump).
+
+        Directly locating a message replaces walking the history cursor page by
+        page; see ``SqlAlchemyThreadSnapshotStore.load_page_around``.
+        """
+        kwargs: dict[str, Any] = {"item_id": item_id}
+        if item_byte_budget is not None:
+            kwargs["item_byte_budget"] = int(item_byte_budget)
+        return await self.snapshot_store.load_page_around(db, thread_id, **kwargs)
 
 
     async def list_thread_ids(self, db: AsyncSession) -> list[str]:

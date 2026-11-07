@@ -9,6 +9,8 @@ import math
 from dataclasses import dataclass
 
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent
+from lamtools_core.async_tasks import finish_on_cancel
+from lamtools_core.llm.request_extensions import current_extensions
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
 
@@ -40,9 +42,10 @@ def _bounded(value, maximum, code):
 
 
 class PluginLLMAPI:
-    def __init__(self, scope, work_root, client, models, bound_model=""):
+    def __init__(self, scope, work_root, client, models, bound_model="", *, extensions=None):
         self._scope, self._root, self._client, self._models = scope, str(work_root), client, models
         self._bound_model = bound_model
+        self._extensions = extensions
         self._streams = set()
         self._cleanup_registered = False
 
@@ -82,6 +85,9 @@ class PluginLLMAPI:
         else:
             raise LLMAccessError("llm/route-unavailable", "This direct client is not explicitly bound to the selected model")
         value.timeout = timeout
+        # user:“审查当前代码，然后继续”+(未知客户端不能静默丢弃已注册字段；实际HTTP边界须明确支持后才派发)。
+        if self._extensions is not None and self._extensions.has_providers() and not getattr(client, "supports_request_extensions", False):
+            raise LLMAccessError("llm/extensions-unavailable", "Configured client cannot dispatch registered request extensions")
         return client, value, timeout
 
     def estimate(self, request: LLMRequest) -> TokenEstimate:
@@ -92,6 +98,7 @@ class PluginLLMAPI:
 
     async def complete(self, request: LLMRequest, *, scene="background", ref=None) -> LLMResponse:
         self._scope.acquire()
+        extension_token = current_extensions.set(self._extensions.prepare_from_http if self._extensions is not None else None)
         try:
             client, value, timeout = self._prepare(request, scene, ref)
             try:
@@ -107,6 +114,7 @@ class PluginLLMAPI:
             except Exception:
                 raise LLMAccessError("llm/provider-error", "Configured model provider failed") from None
         finally:
+            current_extensions.reset(extension_token)
             self._scope.release()
 
     def stream(self, request: LLMRequest, *, scene="background", ref=None):
@@ -127,12 +135,14 @@ class PluginLLMStream:
         self._terminal = False
         self._bytes = 0
         self._pulling = False
+        self._source_task = self._read_task = None
 
     async def __aenter__(self):
         scope = self._api._scope
         scope.acquire()
+        extension_token = current_extensions.set(self._api._extensions.prepare_from_http if self._api._extensions is not None else None)
         try:
-            if self._source is not None or self._closed:
+            if self._source_task is not None or self._closed:
                 raise LLMAccessError("llm/invalid-stream", "Stream context can only be entered once")
             if len(self._api._streams) >= 8:
                 raise LLMAccessError("llm/busy", "At most 8 open model streams per view")
@@ -141,9 +151,15 @@ class PluginLLMStream:
                 self._api._cleanup_registered = True
             self._deadline = asyncio.get_running_loop().time() + self._timeout
             self._api._streams.add(self)
-            async with asyncio.timeout(self._timeout):
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(初始化和读取由独立受管任务持有，关闭先取消并排空，不能遗弃迟到来源或事件)。
+            async def initialize():
                 source = self._client.stream(self._request)
                 self._source = await source if inspect.isawaitable(source) else source
+            async with asyncio.timeout(self._timeout):
+                self._source_task = asyncio.create_task(initialize(), name="plugin-llm-stream-source")
+                await self._source_task
+            if self._closed:
+                raise LLMAccessError("llm/invalid-stream", "Stream was closed during initialization")
             return self
         except TimeoutError:
             await self.aclose()
@@ -158,6 +174,7 @@ class PluginLLMStream:
             await self.aclose()
             raise
         finally:
+            current_extensions.reset(extension_token)
             scope.release()
 
     def __aiter__(self):
@@ -169,13 +186,19 @@ class PluginLLMStream:
             self._api._scope.release()
             raise LLMAccessError("llm/busy", "Only one pending read is allowed per stream")
         self._pulling = True
+        extension_token = current_extensions.set(self._api._extensions.prepare_from_http if self._api._extensions is not None else None)
         try:
             if self._closed:
                 raise StopAsyncIteration
             if self._source is None:
                 raise LLMAccessError("llm/invalid-stream", "Enter the stream with async with before reading")
+            async def read():
+                return await anext(self._source)
             async with asyncio.timeout_at(self._deadline):
-                event = await anext(self._source)
+                self._read_task = asyncio.create_task(read(), name="plugin-llm-stream-read")
+                event = await self._read_task
+            if self._closed:
+                raise StopAsyncIteration
             if not isinstance(event, LLMStreamEvent) or event.kind == "error":
                 raise LLMAccessError("llm/provider-error", "Model stream returned an error or invalid event")
             event = _bounded(event, 8388608, "llm/invalid-response")
@@ -186,8 +209,9 @@ class PluginLLMStream:
                 self._terminal = True
             return event
         except StopAsyncIteration:
+            already_closed = self._closed
             await self.aclose()
-            if not self._terminal:
+            if not self._terminal and not already_closed:
                 raise LLMAccessError("llm/incomplete-stream", "Stream ended without a terminal event") from None
             raise
         except TimeoutError:
@@ -203,21 +227,25 @@ class PluginLLMStream:
             await self.aclose()
             raise
         finally:
+            current_extensions.reset(extension_token)
             self._pulling = False
             self._api._scope.release()
 
     async def aclose(self):
-        if self._close_task is None or (self._close_task.done() and self._close_task.exception() is not None):
+        if asyncio.current_task() in {self._source_task, self._read_task}:
+            raise LLMAccessError("llm/invalid-stream", "A provider operation cannot join its own stream")
+        if self._close_task is None or (self._close_task.done() and (self._close_task.cancelled() or self._close_task.exception() is not None)):
             self._close_task = asyncio.create_task(self._close(), name="plugin-llm-stream-close")
-        while not self._close_task.done():
-            try:
-                await asyncio.shield(self._close_task)
-            except asyncio.CancelledError:
-                continue
-        self._close_task.result()
+        async def join():
+            return await asyncio.shield(self._close_task)
+        await finish_on_cancel(join(), name="plugin-llm-stream-close-join")
 
     async def _close(self):
         self._closed = True
+        pending = [task for task in (self._source_task, self._read_task) if task is not None and not task.done()]
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         if self._source is not None:
             close = getattr(self._source, "aclose", None)
             if callable(close):

@@ -1,46 +1,31 @@
 <template>
   <div v-if="!previewOnly" v-bind="$attrs" class="reference-items" :class="{ 'reference-items--icons': compact }" :aria-label="compact ? '消息附件' : '本轮成果'">
-    <button v-for="item in items" :key="item.id" type="button" class="reference-item" :class="{ 'reference-item--link': item.link, 'reference-item--failed': errors[item.id] }" :title="[item.name, resolvedPaths[item.id] || item.path, errors[item.id]].filter(Boolean).join('\n')" :aria-label="[item.name, errors[item.id]].filter(Boolean).join('：')" @click="preview(item)" @contextmenu.stop="item.path && !item.path.startsWith('data:') ? actions.menu($event, resolvedPaths[item.id] || item.path) : $event.preventDefault()">
+    <button v-for="item in visibleItems" :key="item.id" type="button" class="reference-item" :class="{ 'reference-item--link': item.link, 'reference-item--failed': errors[item.id] }" :title="[item.name, resolvedPaths[item.id] || item.path, errors[item.id]].filter(Boolean).join('\n')" :aria-label="[item.name, errors[item.id]].filter(Boolean).join('：')" @click="preview(item)" @contextmenu.stop="item.path && !item.path.startsWith('data:') ? actions.menu($event, resolvedPaths[item.id] || item.path) : $event.preventDefault()">
       <img v-if="thumbnails[item.id] && !errors[item.id]" :src="thumbnails[item.id]" alt="" @error="errors[item.id] = '图片解码失败'">
-      <component :is="item.link ? Link2 : item.memory ? BookOpen : kindIcon(item.kind, item.name)" v-else :size="compact ? 18 : 15" :stroke-width="1.6" />
-      <span v-if="!compact">{{ item.link ? item.name : '@' + item.name }}</span>
+      <component :is="item.link ? Link2 : BookOpen" v-else-if="item.link || item.memory" :size="compact ? 18 : 16" :stroke-width="1.6" />
+      <FileTypeBadge v-else :name="item.name" :failed="Boolean(errors[item.id])" :size="compact ? 20 : 18" />
+      <span v-if="!compact" class="reference-item-name">{{ item.name }}</span>
       <span v-if="errors[item.id]" class="reference-item-error" aria-hidden="true">!</span>
     </button>
+    <button
+      v-if="showToggle"
+      type="button"
+      class="reference-item reference-item--more"
+      data-reference-toggle
+      :aria-expanded="expanded"
+      :title="hiddenErrorCount ? t('部分文件不存在') : undefined"
+      @click="expanded = !expanded"
+    >
+      <span class="reference-item-name">{{ expanded ? t('收起') : t('展开其余 {0} 项', { 0: items.length - COLLAPSED_LIMIT }) }}</span>
+      <span v-if="hiddenErrorCount" class="reference-item-error" aria-hidden="true">!</span>
+    </button>
   </div>
-  <Teleport to="body">
-    <div v-if="selected" class="reference-preview-overlay" @click.self="close" @keydown.esc="close">
-      <section ref="dialog" class="reference-preview" role="dialog" aria-modal="true" :aria-label="selected.name" tabindex="-1" @keydown="onPreviewKeydown">
-        <header>
-          <span :title="selected.path">{{ selected.name }}</span>
-          <span v-if="selected.kind === 'image' && previewUrl" class="reference-preview-zoom" role="group" aria-label="调整预览大小">
-            <button type="button" aria-label="缩小预览" title="缩小" @click="zoomBy(-25)">−</button>
-            <span class="reference-preview-zoom-value" aria-live="polite">{{ previewZoom }}%</span>
-            <button type="button" aria-label="放大预览" title="放大" @click="zoomBy(25)">+</button>
-            <button type="button" aria-label="适应预览大小" title="适应窗口" @click="fitPreview">适应</button>
-          </span>
-          <button type="button" @click="actions.menu($event, selected.path)">操作</button>
-          <button type="button" aria-label="关闭预览" @click="close">×</button>
-        </header>
-        <p v-if="loading" role="status">正在读取…</p>
-        <p v-else-if="previewError" role="alert">{{ previewError }}</p>
-        <div v-else-if="selected.kind === 'image' && previewUrl" class="reference-preview-stage">
-          <img
-            :src="previewUrl"
-            :alt="selected.name"
-            :style="{ width: `${previewZoom}%` }"
-            @error="previewError = '图片解码失败，原文件可能格式不受支持或内容已损坏'"
-          >
-        </div>
-        <pre v-else-if="previewText !== null">{{ previewText }}</pre>
-        <button v-else type="button" @click="actions.open(selected.path)">使用默认应用打开</button>
-      </section>
-    </div>
-  </Teleport>
 </template>
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { BookOpen, Link2 } from 'lucide-vue-next'
-import { kindIcon } from '@/artifacts/model'
+import FileTypeBadge from '@/components/FileTypeBadge.vue'
+import { t } from '@/i18n/index.ts'
 import { useReferenceActions } from '@/helpers/referenceActions'
 import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
 import { openFileInSplit } from '@/split/openFile'
@@ -63,26 +48,26 @@ const items = computed<Item[]>(() => [
 ])
 const resolvedPaths = reactive<Record<string, string>>({})
 const errors = reactive<Record<string, string>>({}), thumbnails = reactive<Record<string, string>>({})
-const selected = ref<Item | null>(null), dialog = ref<HTMLElement>(), loading = ref(false), previewError = ref(''), previewText = ref<string | null>(null), previewUrl = ref('')
+// user:“底下跟的那一堆成果文件默认折叠一下，正常显示 6 个，多余 6 个的就折叠进去”+
+// (本轮成果/附件列表默认只显示前 6 项，其余收进“展开其余 N 项”按钮；新的一批成果
+// 到达时重新折叠，避免上一轮展开状态串到下一轮)。
+const COLLAPSED_LIMIT = 6
+const expanded = ref(false)
+const visibleItems = computed(() => (
+  props.compact || expanded.value ? items.value : items.value.slice(0, COLLAPSED_LIMIT)
+))
+const showToggle = computed(() => !props.compact && items.value.length > COLLAPSED_LIMIT)
+const hiddenErrorCount = computed(() => (
+  showToggle.value && !expanded.value
+    ? items.value.slice(COLLAPSED_LIMIT).filter(item => Boolean(errors[item.id])).length
+    : 0
+))
+watch(
+  () => items.value.map(item => item.id).join('\u0000'),
+  () => { expanded.value = false },
+)
 const owned = new Set<string>()
-let generation = 0, previewGeneration = 0, previousFocus: HTMLElement | null = null
-// user:“图片按比例展示，支持调整预览大小”+(图片宽度按百分比缩放、高度自适应保持比例，
-// 用户可用按钮或 +/- 键调整预览大小，0 键回到适应窗口)。
-const previewZoom = ref(100)
-const PREVIEW_ZOOM_STEP = 25
-const PREVIEW_ZOOM_MIN = 25
-const PREVIEW_ZOOM_MAX = 400
-function zoomBy(delta: number) {
-  previewZoom.value = Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, previewZoom.value + delta))
-}
-function fitPreview() {
-  previewZoom.value = 100
-}
-function onPreviewKeydown(event: KeyboardEvent) {
-  if (event.key === '+' || event.key === '=') { event.preventDefault(); zoomBy(PREVIEW_ZOOM_STEP) }
-  else if (event.key === '-' || event.key === '_') { event.preventDefault(); zoomBy(-PREVIEW_ZOOM_STEP) }
-  else if (event.key === '0') { event.preventDefault(); fitPreview() }
-}
+let generation = 0
 function binaryPath(item: Item) {
   if (item.attachment) return `/attachments/${encodeURIComponent(item.attachment)}/download`
   if (item.artifactId && props.projectId) return `/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(item.artifactId)}/file?path=${encodeURIComponent(item.path)}`
@@ -105,7 +90,7 @@ function blobUrl(response: TransportHttpResponse, mime: string) {
   owned.add(url); return url
 }
 // user:“点击文件优先在分屏中预览”+(分屏工作区可用时，点击文件先在分屏里按类型打开：
-// 图片、音视频、PDF、Office、Markdown 用预览器，其他文本用编辑器；分屏用不了才回落到弹窗预览)。
+// 图片、音视频、PDF、Office、Markdown 用预览器，其他文本用编辑器)。
 // user:“Markdown 还是弹中间的浮层”+(记忆/方案类 Markdown 也带真实路径，同样进分屏，不再单独弹浮层)。
 function previewInSplit(item: Item): boolean {
   if (!splitWorkspace || !item.path || item.link || item.inline) return false
@@ -157,7 +142,7 @@ async function preview(item: Item) {
   item.path = resolvedPaths[item.id] || item.path
   if (item.link) { await actions.open(item.path); return }
   if (previewInSplit(item)) return
-  // 点击可能早于后台路径核实完成：先补一次核实，再决定是否进分屏，避免 Markdown 抢先弹浮层。
+  // 点击可能早于后台路径核实完成：先补一次核实，再决定是否进分屏。
   if (item.attachment && !resolvedPaths[item.id] && props.transport) {
     try {
       const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path: `/attachments/${encodeURIComponent(item.attachment)}/preview` })
@@ -165,40 +150,19 @@ async function preview(item: Item) {
         const meta = JSON.parse(new TextDecoder().decode(response.body))
         if (typeof meta.path === 'string' && meta.path) { item.path = meta.path; resolvedPaths[item.id] = meta.path }
       }
-    } catch { /* Keep the existing preview fallback. */ }
+    } catch { /* The default-app fallback below reports the failure. */ }
   } else if (!item.attachment && item.path && !item.inline && !resolvedPaths[item.id]) {
     try {
       const actual = await actions.resolve(item.path)
       item.path = actual; resolvedPaths[item.id] = actual
-    } catch { /* The preview fallback shows the failure. */ }
+    } catch { /* The default-app fallback below reports the failure. */ }
   }
   if (previewInSplit(item)) return
-  previousFocus = document.activeElement as HTMLElement
-  selected.value = item; loading.value = true; previewError.value = errors[item.id] || ''; previewText.value = null; previewUrl.value = ''; previewZoom.value = 100
-  const run = ++previewGeneration
-  await nextTick(); dialog.value?.focus()
-  try {
-    previewError.value = ''
-    delete errors[item.id]
-    if (!item.attachment && item.path && !item.inline && !resolvedPaths[item.id]) {
-      const actual = await actions.resolve(item.path)
-      if (run !== previewGeneration) return
-      item.path = actual; resolvedPaths[item.id] = actual
-    }
-    if (item.kind === 'image' && item.inline) previewUrl.value = item.inline
-    else if (item.kind === 'image') { const response = await bytes(item); if (run === previewGeneration) previewUrl.value = blobUrl(response, item.mime) }
-    else if (/^(?:text\/|application\/(?:json|xml))/.test(item.mime) || /\.(md|txt|log|jsonc?|ya?ml|csv|py|rs|ts|js)$/i.test(item.name)) {
-      const response = await bytes(item); if (run === previewGeneration) previewText.value = new TextDecoder().decode(response.body.slice(0, 200000))
-    }
-  } catch (error) { if (run === previewGeneration) previewError.value = error instanceof Error ? error.message : '预览失败' }
-  finally { if (run === previewGeneration) loading.value = false }
+  // user:“没有浮窗预览这一说，砍掉”+(分屏不可用或预览开关关闭时，直接交给系统默认应用，
+  // 不再弹出居中预览浮层；复制/打开文件夹仍走右键菜单)。
+  if (item.path) await actions.open(item.path)
 }
-function close() {
-  ++previewGeneration; selected.value = null
-  if (owned.delete(previewUrl.value)) URL.revokeObjectURL(previewUrl.value)
-  previewUrl.value = ''; previousFocus?.focus()
-}
-onBeforeUnmount(() => { ++generation; ++previewGeneration; for (const url of owned) URL.revokeObjectURL(url) })
+onBeforeUnmount(() => { ++generation; for (const url of owned) URL.revokeObjectURL(url) })
 defineExpose({ previewPath(path: string) {
   const item = items.value.find(item => actions.absolute(item.path) === actions.absolute(path))
   if (item) void preview(item)
@@ -213,20 +177,13 @@ defineExpose({ previewPath(path: string) {
 .reference-item:active { background: color-mix(in srgb,var(--text) var(--alpha-active),transparent); }
 .reference-item { color: var(--blue); }
 .reference-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reference-item-name { min-width: 0; }
+/* user:“底下跟的那一堆成果文件默认折叠一下……多余 6 个的就折叠进去”+(
+   “展开其余 N 项/收起”与普通条目同排，虚线边界表明它是操作而不是文件)。 */
+.reference-item--more { color: color-mix(in srgb, var(--text) 65%, transparent); background: transparent; border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent); }
+.reference-item--more:hover { color: var(--text); background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
 .reference-item img { width: 20px; height: 20px; object-fit: cover; border-radius: var(--radius-sm); }
 .reference-items--icons .reference-item { width: 32px; height: 32px; justify-content: center; padding: var(--space-1); }
 .reference-items--icons .reference-item img { width: 24px; height: 24px; }
 .reference-item-error { position: absolute; right: 0; top: 0; color: var(--red); font-weight: 700; }
-.reference-preview-overlay { position: fixed; inset: 0; z-index: var(--z-modal); background: color-mix(in srgb,var(--theme-backdrop-text) 20%,transparent); display: grid; place-items: center; padding: var(--space-4); }
-/* user:“图片预览默认放大”+(预览面板默认就按更大尺寸打开，图片不再挤在小窗里)。 */
-.reference-preview { display: flex; flex-direction: column; width: min(1280px,94vw); max-height: 90vh; padding: var(--space-3); gap: var(--space-2); border-radius: var(--radius); background: var(--theme-main-background); color: var(--theme-main-text); box-shadow: var(--shadow-lg); overflow: auto; }
-.reference-preview header { display: flex; gap: var(--space-2); align-items: center; }
-.reference-preview header span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reference-preview button { border: 0; border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); background: var(--theme-control-background); color: var(--theme-control-text); }
-.reference-preview-zoom { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-1); }
-.reference-preview-zoom-value { flex: 0 0 auto; min-width: 42px; color: color-mix(in srgb,var(--theme-main-text) 70%,transparent); font-size: 12px; text-align: center; }
-.reference-preview-stage { display: block; flex: 1 1 auto; min-height: 0; max-height: 78vh; overflow: auto; }
-/* user:“图片按比例展示，支持调整预览大小”+(宽度由缩放比例决定，高度自动，保持原始比例)。 */
-.reference-preview-stage img { display: block; max-width: none; min-height: 0; height: auto; margin: 0 auto; object-fit: contain; }
-.reference-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--font-mono); }
 </style>

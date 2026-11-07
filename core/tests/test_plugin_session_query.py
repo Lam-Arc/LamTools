@@ -1,4 +1,5 @@
 """user:“继续，把 2 阶段都做完”+(会话查询要有扫描限额、隐藏资源隔离和只读语义，不能直接公开全量元数据)。"""
+import asyncio
 import pytest
 
 from lamtools_core.app.core_db import open_core_app_db
@@ -9,6 +10,44 @@ from lamtools_core.app.operation_catalog import OperationCatalog
 from lamtools_core.app.plugin_sessions import install_plugin_session_services
 from lamtools_core.plugin_system import PluginContext
 from lamtools_core.session import SessionRecord
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change",["shutdown","store","scope"])
+async def test_query_rechecks_host_and_scope_after_real_scan(env,monkeypatch,change):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(扫描期间宿主关闭、更换或启动代撤回，不得仍返回旧会话结果)。
+    from lamtools_core.plugin_system import SessionQueryError
+    from lamtools_core.plugin_system.services import ServiceError
+    ctx, store, sessions = env
+    api = ctx.session_query
+    host = sessions._context().host
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = store.scan_readonly
+    async def gated(**kwargs):
+        result = await original(**kwargs)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(store,"scan_readonly",gated)
+    task = asyncio.create_task(api.query(limit=1))
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        elif change == "store":
+            host.session_store = object()
+        else:
+            ctx._registration_scope.revoke()
+        release.set()
+        with pytest.raises(ServiceError if change == "scope" else SessionQueryError) as error:
+            await asyncio.wait_for(task,3)
+        assert error.value.code == {"shutdown":"session-query/closed","store":"session-query/host-changed","scope":"service/scope-closed"}[change]
+    finally:
+        host.session_store = store
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
 
 
 @pytest.fixture

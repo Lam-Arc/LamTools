@@ -37,6 +37,40 @@ async def cmd_models_list(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_models_usage(args: argparse.Namespace) -> int:
+    """Print aggregated model usage (tokens, calls, cost, budget)."""
+    code, _ = await _run_config_cli_operation("config.models.usage", {"range": args.range})
+    return code
+
+
+async def cmd_providers_list(args: argparse.Namespace) -> int:
+    from lamtools_core.config.provider_store import ProviderStore, mask_api_key
+
+    providers = ProviderStore().list_sync(work_root=args.work_root or None)
+    if not providers:
+        print("[providers] none configured")
+        return 0
+    for provider in providers:
+        print(
+            f"{provider.id}  {provider.name}  {provider.api_type}  {provider.base_url}"
+            f"  key={mask_api_key(provider.api_key) or '(none)'}"
+        )
+    return 0
+
+
+async def cmd_providers_status(args: argparse.Namespace) -> int:
+    code, _ = await _run_config_cli_operation("config.providers.status", {})
+    return code
+
+
+async def cmd_providers_probe(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {"force": bool(args.force)}
+    if args.provider_id:
+        payload["provider_ids"] = list(args.provider_id)
+    code, _ = await _run_config_cli_operation("config.providers.probe", payload)
+    return code
+
+
 async def cmd_models_show(args: argparse.Namespace) -> int:
 
     from .config import _get_model_store, list_llm_model_configs

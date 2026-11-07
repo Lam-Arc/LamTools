@@ -1789,6 +1789,11 @@ class CoreLoopKernel:
 
                 # Completion verification can continue the run. Seal guidance
                 # only after it passes, and catch input arriving while it awaits.
+                #
+                # user:“建立明确的回合结束边界”+(这一步就是结束边界本身：边界之前
+                # 收下的引导属于本回合，内核继续；边界处没有待处理引导时当场封口，
+                # 之后到达的引导一律改走新回合，绝不再用一次强制 continue 去延长
+                # 一个正在结束的回合)。
                 if decision == "done" and not turn.tool_calls:
                     if await self._consume_guidance(state, turn_input, history, index, finalize=True):
                         decision = "continue"
@@ -1881,6 +1886,12 @@ class CoreLoopKernel:
                     decision=step.decision,
                 )
 
+        # user:“建立明确的回合结束边界，使用原子状态转换解决并发竞争”+(不管这一轮
+        # 是正常答完、等你输入、失败、暂停还是被取消，运行一旦停下来就不再消费
+        # 引导：在这里统一封口。晚到的引导因此拿到 "closed" 而不是被登记表收下、
+        # 再随任务退出悄悄丢掉；调用方据 "closed" 把这段文字交给普通发送链路开新
+        # 回合。封口是同步状态转换，与 accept 之间没有可插入的 await)。
+        self._seal_guidance(turn_input)
         # Update final status
         state.status = _status_from_decision(final_decision)
         # Cancelled is a distinct RuntimeStatus even though it flows through
@@ -2982,6 +2993,21 @@ class CoreLoopKernel:
             result = acknowledger(ids)
             if inspect.isawaitable(result):
                 await result
+
+    def _seal_guidance(self, turn_input: RuntimeTurnInput) -> None:
+        """Close guidance intake once this run can no longer consume it.
+
+        Called at every terminal exit of the loop (wait/失败/暂停/取消), i.e.
+        the same boundary the final answer already crosses. It never raises:
+        a sealer failure must not rewrite the turn's outcome.
+        """
+        sealer = turn_input.guidance_sealer
+        if sealer is None:
+            return
+        try:
+            sealer()
+        except BaseException:  # noqa: BLE001 — sealing is best effort bookkeeping
+            _logger.exception("[kernel:_run] failed to seal guidance intake")
 
     async def _consume_guidance(
         self,

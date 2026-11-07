@@ -43,6 +43,8 @@ class PluginPermissionService:
             raise PermissionAccessError("permissions/unavailable", "Host provides no read-only session store")
         try:
             record = await reader(session_id)
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(等待原存储后再核对同一宿主，不能发布失效的权限偏好快照)。
+            self._context()
             if record is None:
                 raise PermissionAccessError("permissions/not-found", "Session is unknown or unavailable")
             preferences = rules.session_runtime_preferences(record.metadata)

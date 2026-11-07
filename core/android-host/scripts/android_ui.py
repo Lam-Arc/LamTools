@@ -244,6 +244,11 @@ class Ui:
         # The sidebar search box is also an EditText and comes first in tree order, so
         # "the composer" has to be the largest field rather than the first one.
         element = max(fields, key=lambda field: (field.right - field.left) * (field.bottom - field.top))
+        # A webview sometimes publishes the value on the EditText itself and sometimes
+        # on an overlapping TextView. Reading only the sibling reported an empty box
+        # while the field was full, which made every input check a coin toss.
+        if element.text:
+            return element.text
         if True:
             for other in elements:
                 if other is element or not other.text or other.kind.endswith("EditText"):

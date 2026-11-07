@@ -612,7 +612,8 @@
       ],
       "additionalEvidence": [
         "core/tests/test_main_execution_directory.py",
-        "core/tests/test_git_execution_directory.py"
+        "core/tests/test_git_execution_directory.py",
+        "core/tests/test_plugin_subagent_directory.py"
       ]
     },
     "checkpoints": {
@@ -669,7 +670,8 @@
         "native child-state settle observation remains bounded3s; resume rechecks live state; no stronger cross-process lock, full-tree quiescence, per-member pause or child cwd inheritance"
       ],
       "additionalEvidence": [
-        "core/tests/test_plugin_subagent_continuation.py"
+        "core/tests/test_plugin_subagent_continuation.py",
+        "core/tests/test_plugin_subagent_directory.py"
       ]
     },
     "sessionData": {
@@ -765,6 +767,378 @@
         "managed desktop Python; native approximations, not DSH JS/Cordis runtime compatibility",
         "precise limits, optional-provider availability and cancellation semantics are documented in agent_docs/plugin_phase2_public_ports.md"
       ]
+    },
+    "sessionReferences": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.session_references.list_candidates",
+        "context.session_references.prepare"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_session_references.py",
+      "limits": [
+        "managed desktop Python; documented native approximation, not DSH runtime compatibility",
+        "原项目可见会话候选与有限不可变摘录；显式选择，返回截断/摘要指纹，不自动模型总结或pre-step注入。"
+      ]
+    },
+    "programRuntime": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.ptc_runtime.run"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_program_access.py",
+      "limits": [
+        "managed desktop Python; documented native approximation, not DSH runtime compatibility",
+        "真实Windows Job Python程序执行、结构化结果/异常/期限和取消回收；confined=false，无DSH SDK/Node/宿主回调。"
+      ]
+    },
+    "dynamicPrograms": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.dynamic_runner.define",
+        "context.dynamic_runner.run",
+        "context.dynamic_runner.stop",
+        "context.dynamic_runner.undefine"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_program_access.py",
+      "limits": [
+        "managed desktop Python; documented native approximation, not DSH runtime compatibility",
+        "真实Python内容定义和原作业运行/停止/撤回，关闭准入后排空；非Cordis VM/TS或客户端半边，host_callbacks=false。"
+      ]
+    },
+    "terminals": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.terminals.open",
+        "terminal.send",
+        "terminal.read",
+        "terminal.wait",
+        "terminal.close"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_terminal_access.py",
+      "limits": [
+        "managed desktop Python; documented native approximation, not DSH runtime compatibility",
+        "真实受管交互stdin管道与输出/关闭；pty=false，无信号/窗口大小或重启持久化。"
+      ]
+    },
+    "authorization": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.authorization.register_flow",
+        "context.authorization.list",
+        "context.authorization.begin",
+        "context.authorization.cancel"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_authorization.py",
+      "limits": [
+        "managed desktop Python; documented native approximation, not DSH runtime compatibility",
+        "真实受管授权流，提交并回读提供方凭据才成功；发起方/提供方撤回均取消排空，同流互斥，无DeepSeek平台OAuth。"
+      ]
+    },
+    "hostViews": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.agent_presets.compose",
+        "context.agent_presets.list",
+        "context.agent_presets.resolve",
+        "context.inspector.query",
+        "context.inspector.snapshot",
+        "context.session_projection_cache.get",
+        "context.session_projection_cache.invalidate",
+        "context.types.get",
+        "context.types.register",
+        "context.types.require"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_host_views.py",
+      "limits": [
+        "managed desktop Python; documented native approximation, not DSH runtime compatibility",
+        "原本地类型验证、注册、可选查询和受管调用引用；不是生成的Typert Remote/schema/resource运行时。"
+      ]
+    },
+    "storageDomain": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.storage_domain.open",
+        "domain.read",
+        "domain.commit",
+        "domain.on_change",
+        "domain.close"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_storage_domain.py",
+      "limits": [
+        "managed desktop Python; documented approximation, not DSH runtime compatibility",
+        "原SQLite单快照事务的同步领域表/全局槽、整域CAS、精确版本和本地通知；≤1MiB、≤64表。无DSH schema推断/兼容迁移/远程后端/跨进程通知。"
+      ]
+    },
+    "agentControl": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.agents.create",
+        "context.agents.attach",
+        "handle.followup",
+        "handle.steer",
+        "handle.state",
+        "handle.wait",
+        "handle.events",
+        "handle.cancel",
+        "handle.resume",
+        "handle.dispose",
+        "context.agent_loop.create",
+        "context.agent_loop.attach"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_agent_access.py",
+      "limits": [
+        "managed desktop Python; documented approximation, not DSH runtime compatibility",
+        "真实插件/项目根代理句柄，原创建/队列/引导/回执/暂停继续/取消/历史；同ID修复交接，目录存在检查。无DSH AgentHandle/activation或任意插件工厂。"
+      ]
+    },
+    "telemetry": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.otel.create_event_reporter",
+        "context.otel.create_session_reporter",
+        "reporter.emit",
+        "reporter.status",
+        "reporter.flush",
+        "reporter.shutdown"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_telemetry_access.py",
+      "limits": [
+        "managed desktop Python; documented approximation, not DSH runtime compatibility",
+        "真实OTLP JSON HTTP报告器，默认关闭、显式端点/共享选择；有界队列及关闭、错误/丢弃计数，无重放/自动会话捕获。"
+      ]
+    },
+    "settings": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.settings.read",
+        "context.settings.validate",
+        "context.settings.replace",
+        "context.settings.reset",
+        "context.settings.public"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_settings_access.py",
+      "limits": [
+        "managed desktop Python; documented approximation, not DSH runtime compatibility",
+        "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。"
+      ]
+    },
+    "workspaceChanges": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.workspace_changes.snapshot",
+        "context.workspace_changes.compare_status"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_workspace_changes.py",
+      "limits": [
+        "managed desktop Python; documented approximation, not DSH runtime compatibility",
+        "受管Git状态快照/状态差异，固定仓库根、隔离GIT_DIR等变量、NUL路径/rename；status_revision非内容指纹，无文件历史/DSH投影。"
+      ]
+    },
+    "subagentModels": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.subagent_models.read",
+        "context.subagent_models.set",
+        "context.subagent_models.select"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_subagent_models.py",
+      "limits": [
+        "SDK插件/父会话持久allowlist/default与原会话CAS；创建/投递/继续检查路由身份和提供方可用性，同wire多路由拒绝。非全局工具ACL、最终HTTP授权或配置代际锁，无DSH投影/发现开关/父模型继承/推理默认协议。"
+      ]
+    },
+    "officeToPdf": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.office_to_pdf.convert"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_office_access.py",
+      "limits": [
+        "真实LibreOffice CLI+原Windows Job；docx/xlsx/pptx字节准入，16MiB输入/64MiB解包声明/32MiB输出，取消及期限后回收scratch。无DSH延迟授权读取、优先队列、去重缓存、generation或字体诊断；非隔离沙箱。"
+      ]
+    },
+    "headlessStartup": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.headless_startup.get"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_headless_startup.py",
+      "limits": [
+        "原run-local CLI在factory装配前提供真实任务/请求会话ID/实际thread_id/已解析权限的只读副本，正常或kernel失败收尾撤回。raw为JSON summary而非DSH NDJSON；无add-dir授权、DSH CLI语法/精确既有Session采用或stdin读取协议。"
+      ]
+    },
+    "directoryPicker": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.directory_picker.capability",
+        "capability.list",
+        "capability.create_directory"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_directory_picker.py",
+      "limits": [
+        "本地固定项目根的同步browse能力，真实限额列举/单子目录创建、截断与根内祖先；复用原文件路径规则，拒绝网络/非固定盘及已观察链接。无native对话框、根外workspace选择、远程浏览或扫描中断/持久选择。"
+      ]
+    },
+    "llmExtensions": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.llm_extensions.register",
+        "context.llm_extensions.prepare",
+        "prepared.accept"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_llm_extensions.py",
+      "limits": [
+        "原注册/撤回与项目范围，最终serialized base不可变快照、独占字段和clone/freeze，SDK原HTTP complete/stream实际派发并于HTTP2xx头后幂等accept。准备失败省略字段，接收失败显式报错；仅SDK调用及明确支持的原客户端，无全局DeepSeek adapter接线，逐字段协作期限5秒。"
+      ]
+    },
+    "ssh": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.ssh.connect",
+        "connection.execute",
+        "connection.close"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_ssh_access.py",
+      "limits": [
+        "真实OpenSSH公钥/明确known-host校验与原Windows Job命令执行，关闭等待已准入启动、取消回收本机进程。每命令独立连接，无DSH POSIX helper/hash/hello/RPC/流转发/心跳租约；不能保证远端子进程清理，request/connectStream仍交agent移植。"
+      ]
+    },
+    "sandbox": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.sandbox.run"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_sandbox_access.py",
+      "limits": [
+        "已安装并锁定的官方Windows ACL runner+原Job，真实run限制文件写入，enforcement=partial、取消/临时回收；缺失运行时拒绝，显式danger-full-access才不限制。Node22+及独立npm依赖必需；无DSH confine返回argv协议、额外根、读/网络隔离或普通工具自动接线，工作区ACL为常驻改动。"
+      ]
+    },
+    "sandboxPolicy": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.sandbox_policy.resolve/set"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_sandbox_access.py",
+      "limits": [
+        "原会话元数据CAS上的插件私有模式，默认read-only，同次读取原目录/修订，sandbox.run真实消费；显式override不是审批。无DSH session事件/模型快照、额外写根、主工具/terminal/fs统一政策或授权变更。"
+      ]
+    },
+    "webApp": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.web_app.get_advertised_url"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_web_app.py",
+      "limits": [
+        "原HTTP静态宿主启动前发布明确配置URL，原serve启动者提供已知端口/协议，关闭撤回；不取请求Host或导出token。仅已有frontend_dir+advertised_url组合，无Tauri origin猜测、浏览器打开/DSH_WEB_URL/前端重写，端口0未知不提供。"
+      ]
+    },
+    "deepseekAccount": {
+      "version": 1,
+      "status": "verified-python",
+      "apis": [
+        "context.deepseek_account.open",
+        "account.get_state",
+        "account.sign_in",
+        "account.cancel_sign_in",
+        "account.sign_out",
+        "account.get_profile",
+        "account.get_balance",
+        "account.resolve_token",
+        "account.reject_token",
+        "account.get_platform_session",
+        "account.get_device_identity",
+        "context.credentials.compare_exchange"
+      ],
+      "documentation": "agent_docs/plugin_phase2_public_ports.md",
+      "evidence": "core/tests/test_plugin_account_access.py",
+      "limits": [
+        "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。"
+      ]
+    },
+    "remoteGateway": {
+      "version": 3,
+      "status": "verified-python",
+      "apis": [
+        "POST /api/core/plugin-remote/{plugin}/{namespace}/{method}",
+        "plugin.json http.remote",
+        "plugin.json http.remote.resultEncoding",
+        "plugin.json http.remote.resultEncoding=ndjson"
+      ],
+      "documentation": "agent_docs/plugin_phase3_remote.md",
+      "evidence": "core/tests/test_plugin_remote_binary.py",
+      "limits": [
+        "Explicit current manifest descriptors only; no fallback to operation names or unmarked methods",
+        "Maps only to existing token-authenticated POST routes; native plugin availability, operation ownership and approval checks remain authoritative",
+        "At most 64 methods, 32 exact required primitive fields and 32 KiB schema; 1 MiB bounded HTTP request body",
+        "Unary request cancellation propagates through original operation; callback must cooperate; no cancellation of already committed side effects",
+        "Explicit resultEncoding=multipart enables raw bytes attachments only for successful unary responses; JSON remains default and plain results stay JSON",
+        "Binary total <=8 MiB, metadata <=1 MiB, <=64 attachments, depth <=32 and <=10000 result nodes; invalid results return gateway/invalid-result before any response is sent",
+        "Standard multipart/form-data with metadata plus bytes-N parts; attachment paths are relative to native Sunday envelope, not DSH server-response/rpcId or generated codec",
+        "No DSH Peer roles/resource lookup, binary request/event/stream items, WebSocket multiplex or duplex stream; multipart stays bounded/buffered; explicit ndjson is Sunday JSON server streaming",
+        "Explicit ndjson requires successful top-level owned async iterator; <=1MiB finite JSON frame, depth32/nodes10000, no bytes or automatic mappings",
+        "<=32 HTTP streams per plugin; send backpressure has no prefetch; disconnect/cancel joins pull and closes iterator before releasing capacity",
+        "Original host availability, supervisor generation, manifest, operation ownership and existing token checked before send and every 0.5s even while idle; not DSH Peer/lookup/rpcId/duplex"
+      ]
+    },
+    "workspaceFiles": {
+      "version": 2,
+      "status": "verified-python",
+      "apis": [
+        "context.workspace_files.stat/list/read/read_bytes/changes"
+      ],
+      "documentation": "agent_docs/plugin_workspace_files.md",
+      "evidence": "core/tests/test_plugin_workspace_files.py; core/tests/test_plugin_workspace_file_changes.py",
+      "limits": [
+        "Visible session identity and execution directory come from original working-directory host; no caller-supplied root or Agent activation",
+        "Text page <=1 MiB, source <=64 MiB, 1-based line offset; bytes full-file/window <=1 MiB",
+        "All paths remain in selected session directory; observed links rejected; original filesystem race limitations retained",
+        "Python bytes can cross explicitly declared Sunday multipart Remote; SDK base_file resolves relative to a regular same-root file; explicit ndjson HTTP server streaming available; no DSH envelope/codec, duplex or remote provider",
+        "Admission wait is cancellable; native file reads are synchronous and not preemptible; changes uses original owned FileWatch tasks; no retained read handles",
+        "Metadata stat:size:mtime_ns version is not a content hash or atomic snapshot",
+        "changes: SDK async ready/change invalidations; original metadata polling 0.01–60 seconds, one latest coalesced notification, not an event log",
+        "At most 32 live streams and 32 distinct roots per plugin startup; original directory snapshots <=1000 direct entries; host/epoch withdrawal closes watchers",
+        "aclose, cancelled pull and scope disposal join actual watcher without waiting for consumer pull; files use stat version, directories hash metadata snapshot, not content"
+      ]
     }
   },
   "upstreamCommit": "f3803c96974ad4a94195fb97e5c637e9c2a3afe3",
@@ -790,11 +1164,15 @@
     },
     {
       "dsh": "headlessStartup",
-      "status": "gap",
-      "sunday": "补齐 headlessStartup 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.headless_startup.get + original run-local CLI",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "原run-local CLI在factory装配前提供真实任务/请求会话ID/实际thread_id/已解析权限的只读副本，正常或kernel失败收尾撤回。raw为JSON summary而非DSH NDJSON；无add-dir授权、DSH CLI语法/精确既有Session采用或stdin读取协议。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/startup_access.py",
+        "core/src/lamtools_core/cli_commands/task.py",
+        "core/tests/test_plugin_headless_startup.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/headless"
     },
     {
@@ -923,7 +1301,7 @@
       "status": "candidate",
       "sunday": "context.working_directory + context.for_session + main file/Git/command request snapshot",
       "phase": 2,
-      "boundary": "原会话目录/CAS，保留项目配置身份；主代理文件/Git/命令送审前固定目标，目录变化追加尾部通知，失效时恢复原项目。MCP等其他服务保留项目身份，子代理、即时通知及DSH事件协议仍有差异。",
+      "boundary": "原持久目录/CAS和主代理文件/Git/命令固定；SDK子代理创建捕获目录，重新开启保留、子工具请求核对；原生未提供目录仍用项目根，无DSH事件/即时通知。",
       "evidence": [
         "core/src/lamtools_core/plugin_system/filesystem_access.py",
         "core/tests/test_plugin_filesystem_access.py",
@@ -977,11 +1355,14 @@
     },
     {
       "dsh": "officeToPdf",
-      "status": "gap",
-      "sunday": "补齐 officeToPdf 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.office_to_pdf.convert",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实LibreOffice CLI+原Windows Job；docx/xlsx/pptx字节准入，16MiB输入/64MiB解包声明/32MiB输出，取消及期限后回收scratch。无DSH延迟授权读取、优先队列、去重缓存、generation或字体诊断；非隔离沙箱。 过长LibreOffice临时profile目录可能无PDF，返回invalid-output；验收使用实际系统临时根。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/office_access.py",
+        "core/tests/test_plugin_office_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/document/office-to-pdf"
     },
     {
@@ -1020,11 +1401,16 @@
     },
     {
       "dsh": "deepseekLlmApiExtensions",
-      "status": "gap",
-      "sunday": "补齐 deepseekLlmApiExtensions 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.llm_extensions + native HTTP request extension boundary",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "原注册/撤回与项目范围，最终serialized base不可变快照、独占字段和clone/freeze，SDK原HTTP complete/stream实际派发并于HTTP2xx头后幂等accept。准备失败省略字段，接收失败显式报错；仅SDK调用及明确支持的原客户端，无全局DeepSeek adapter接线，逐字段协作期限5秒。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/llm_extensions.py",
+        "core/src/lamtools_core/llm/request_extensions.py",
+        "core/src/lamtools_core/llm/http_client.py",
+        "core/tests/test_plugin_llm_extensions.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/llm/deepseek-llm-api-extensions"
     },
     {
@@ -1130,21 +1516,29 @@
     {
       "dsh": "workspaceFiles",
       "status": "candidate",
-      "sunday": "现有文件工具与插件 RPC",
+      "sunday": "context.workspace_files.stat/list/read/read_bytes/changes + 明确一元Remote人工映射",
       "phase": 3,
-      "boundary": "需受工作区约束的 stat/read/readBytes/list/changes 公开契约。",
+      "boundary": "可见会话/原执行目录限定的真实文件控制器；SDK base_file同根关联二进制读取及轮询合并ready/change流已验收，aclose/取消/停用真实回收。更严格限根/限额，显式Sunday multipart字节出口；显式ndjson服务端JSON流已验收；无DSH精确流协议、codec/envelope、双向流或远程后端。",
       "evidence": [
-        "core/src/lamtools_core/plugin_system/context.py"
+        "core/src/lamtools_core/plugin_system/workspace_files.py",
+        "core/src/lamtools_core/plugin_system/context.py",
+        "core/tests/test_plugin_workspace_files.py",
+        "agent_docs/plugin_workspace_files.md",
+        "core/src/lamtools_core/plugin_system/workspace_file_changes.py",
+        "core/tests/test_plugin_workspace_file_changes.py",
+        "core/tests/test_plugin_remote_stream.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/workspace-files"
     },
     {
       "dsh": "workspaceChanges",
-      "status": "gap",
-      "sunday": "补齐 workspaceChanges 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.workspace_changes",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "受管Git状态快照/状态差异，固定仓库根、隔离GIT_DIR等变量、NUL路径/rename；status_revision非内容指纹，无文件历史/DSH投影。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/workspace_changes.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/deliverables/workspace-changes"
     },
     {
@@ -1180,20 +1574,31 @@
     },
     {
       "dsh": "typert",
-      "status": "gap",
-      "sunday": "补齐 typert 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.types + ServiceKey/ServiceRef",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "原本地类型验证、注册、可选查询和受管调用引用；不是生成的Typert Remote/schema/resource运行时。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/host_views.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/typert/registry"
     },
     {
       "dsh": "typertGateway",
-      "status": "gap",
-      "sunday": "补齐 typertGateway 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "明确http.remote一元映射 + 原插件HTTP操作入口",
       "phase": 3,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "已验收明确方法/精确扁平参数、一元HTTP入口及原认证/归属/审批；逐次取当前描述符，撤回不降级。非DSH生成codec/Peer/资源lookup、二进制/双向流或完整Gateway。 显式resultEncoding=multipart可返回有界原始字节附件，路径相对Sunday envelope；不是DSH codec/关联ID协议。 显式ndjson服务端JSON流含原认证/代际校验、断连、背压和真实迭代器回收；不是DSH流wire或双向流。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/remote_gateway.py",
+        "core/src/lamtools_core/plugin_system/plugin_http.py",
+        "core/tests/test_plugin_remote_gateway.py",
+        "agent_docs/plugin_phase3_remote.md",
+        "core/src/lamtools_core/plugin_system/remote_binary.py",
+        "core/tests/test_plugin_remote_binary.py",
+        "core/src/lamtools_core/plugin_system/remote_stream.py",
+        "core/tests/test_plugin_remote_stream.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/gateway"
     },
     {
@@ -1233,24 +1638,23 @@
     {
       "dsh": "settings",
       "status": "candidate",
-      "sunday": "context.config 基础校验 + 原 config schema / config_store",
+      "sunday": "context.settings",
       "phase": 2,
-      "boundary": "基础文件读写已验收；完整 Config 校验、volatile 引用、动态 namespace、secret 字段投影、继承重置与 UI 修订号接线仍待实施。",
+      "boundary": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。",
       "evidence": [
-        "core/src/lamtools_core/plugin_system/config_store.py",
-        "core/src/lamtools_core/plugin_system/config_access.py",
-        "core/tests/test_plugin_config_access.py"
+        "core/src/lamtools_core/plugin_system/settings_access.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/settings/settings"
     },
     {
       "dsh": "subagentModelSelection",
       "status": "candidate",
-      "sunday": "context.models.select 的只读查询 + 子代理与模型配置",
+      "sunday": "context.subagent_models + context.subagents",
       "phase": 2,
-      "boundary": "只读目录和场景选择可供调用方使用；子会话获准路由、发现政策、默认值覆盖和持久化尚未提供 DSH 等价契约，目录成员不等于授权。",
+      "boundary": "SDK插件/父会话持久allowlist/default与原会话CAS；创建/投递/继续检查路由身份和提供方可用性，同wire多路由拒绝。非全局工具ACL、最终HTTP授权或配置代际锁，无DSH投影/发现开关/父模型继承/推理默认协议。",
       "evidence": [
-        "core/src/lamtools_core/app/default_agent.py"
+        "core/src/lamtools_core/plugin_system/subagent_models.py",
+        "core/tests/test_plugin_subagent_models.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/subagent/tool-subagent"
     },
@@ -1269,20 +1673,26 @@
     },
     {
       "dsh": "deepseekAccount",
-      "status": "gap",
-      "sunday": "补齐 deepseekAccount 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.deepseek_account.open → account client",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/account_access.py",
+        "core/src/lamtools_core/plugin_system/credentials.py",
+        "core/tests/test_plugin_account_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/credentials/deepseek-account"
     },
     {
       "dsh": "authorization",
-      "status": "gap",
-      "sunday": "补齐 authorization 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.authorization",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实受管授权流，提交并回读提供方凭据才成功；发起方/提供方撤回均取消排空，同流互斥，无DeepSeek平台OAuth。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/authorization_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/credentials/authorization"
     },
     {
@@ -1296,29 +1706,35 @@
     },
     {
       "dsh": "otel",
-      "status": "gap",
-      "sunday": "补齐 otel 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.otel.create_event_reporter/create_session_reporter",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实OTLP JSON HTTP报告器，默认关闭、显式端点/共享选择；有界队列及关闭、错误/丢弃计数，无重放/自动会话捕获。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/telemetry_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/telemetry/otel"
     },
     {
       "dsh": "productTelemetry",
-      "status": "gap",
-      "sunday": "补齐 productTelemetry 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.otel.create_event_reporter → reporter.emit",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "显式配置默认关闭的普通事件报告器；只发选定记录，HTTP响应不等于仓库落库，非DSH自动产品统计。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/telemetry_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/host/product-telemetry-otel"
     },
     {
       "dsh": "sessionTelemetry",
-      "status": "gap",
-      "sunday": "补齐 sessionTelemetry 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.otel.create_session_reporter → reporter.emit",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "报告器sharing=disabled/feedback-only/full，反馈筛选与有界排空；无自动canonical Session采集、DSH record waterfall或Session-log格式。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/telemetry_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/session-telemetry"
     },
     {
@@ -1337,11 +1753,11 @@
     {
       "dsh": "storageDomain",
       "status": "candidate",
-      "sunday": "context.storage 插件隔离 JSON KV（需人工改造领域）",
+      "sunday": "context.storage_domain",
       "phase": 2,
-      "boundary": "基础 KV 可作人工重构目标，但 schema、tables/global、compatibleVersions、内存同步域、后端路由、异步写链与 domain/changed 均未实现 DSH 等价契约。",
+      "boundary": "原SQLite单快照事务的同步领域表/全局槽、整域CAS、精确版本和本地通知；≤1MiB、≤64表。无DSH schema推断/兼容迁移/远程后端/跨进程通知。",
       "evidence": [
-        "core/src/lamtools_core/plugin_system/plugin_data.py"
+        "core/src/lamtools_core/plugin_system/storage_domain.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/storage/storage-domain"
     },
@@ -1403,11 +1819,13 @@
     },
     {
       "dsh": "sessionReferenceResolver",
-      "status": "gap",
-      "sunday": "补齐 sessionReferenceResolver 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.session_references",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "原项目可见会话候选与有限不可变摘录；显式选择，返回截断/摘要指纹，不自动模型总结或pre-step注入。",
+      "evidence": [
+        "core/src/lamtools_core/app/plugin_session_references.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/context/session-reference"
     },
     {
@@ -1472,11 +1890,11 @@
     {
       "dsh": "agentPresets",
       "status": "candidate",
-      "sunday": "agent_presets",
+      "sunday": "context.agent_presets",
       "phase": 2,
-      "boundary": "已有组合和服务注册；需逐会话版本与撤回语义适配。",
+      "boundary": "原AgentPresetRegistry列表/解析/组合和受管服务调用，JSON快照；无DSH逐会话mount/revoke协议。",
       "evidence": [
-        "core/src/lamtools_core/plugin_system/agent_presets.py"
+        "core/src/lamtools_core/plugin_system/host_views.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/preset/agent-preset-registry"
     },
@@ -1506,11 +1924,13 @@
     },
     {
       "dsh": "sessionProjectionCache",
-      "status": "gap",
-      "sunday": "补齐 sessionProjectionCache 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.session_projection_cache",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实启动代/项目内128会话缓存，每次get回原权威核对运行/修订字段，返回副本；无DSH自定义投影。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/host_views.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/session/session-projection-cache"
     },
     {
@@ -1529,11 +1949,11 @@
     {
       "dsh": "agents",
       "status": "candidate",
-      "sunday": "PluginContext 的 sub_agent_runner / run_profile",
+      "sunday": "context.agents",
       "phase": 2,
-      "boundary": "需统一 create/resume/followup/steer/cancel/dispose；保留 Sunday 现有调度权威。",
+      "boundary": "真实插件/项目根代理句柄，原创建/队列/引导/回执/暂停继续/取消/历史；同ID修复交接，目录存在检查。无DSH AgentHandle/activation或任意插件工厂。",
       "evidence": [
-        "core/src/lamtools_core/app/default_agent.py"
+        "core/src/lamtools_core/plugin_system/agent_access.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/agent"
     },
@@ -1553,11 +1973,11 @@
     {
       "dsh": "agentLoop",
       "status": "candidate",
-      "sunday": "Sunday 主代理循环",
+      "sunday": "context.agent_loop → original root session/kernel",
       "phase": 2,
-      "boundary": "不是可直接替换的 Cordis loop；扩展点先映射到现有循环。",
+      "boundary": "context.agent_loop复用已验收原根会话工厂/控制句柄与桌面kernel；创建、取句柄和暂停继续均走原权威。不是可替换Cordis循环，不提供自建Session writer、scope插件挂载或DSH crash-closer重放。",
       "evidence": [
-        "core/src/lamtools_core/app/default_agent.py"
+        "core/src/lamtools_core/plugin_system/agent_access.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/core/agent-loop"
     },
@@ -1587,11 +2007,14 @@
     },
     {
       "dsh": "ssh",
-      "status": "gap",
-      "sunday": "补齐 ssh 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.ssh.connect → connection.execute/close",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实OpenSSH公钥/明确known-host校验与原Windows Job命令执行，关闭等待已准入启动、取消回收本机进程。每命令独立连接，无DSH POSIX helper/hash/hello/RPC/流转发/心跳租约；不能保证远端子进程清理，request/connectStream仍交agent移植。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/ssh_access.py",
+        "core/tests/test_plugin_ssh_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/ssh/ssh"
     },
     {
@@ -1631,29 +2054,39 @@
     },
     {
       "dsh": "terminals",
-      "status": "gap",
-      "sunday": "补齐 terminals 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.terminals",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实受管交互stdin管道与输出/关闭；pty=false，无信号/窗口大小或重启持久化。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/terminal_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/terminal/terminal"
     },
     {
       "dsh": "sandbox",
-      "status": "gap",
-      "sunday": "补齐 sandbox 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.sandbox.run",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "已安装并锁定的官方Windows ACL runner+原Job，真实run限制文件写入，enforcement=partial、取消/临时回收；缺失运行时拒绝，显式danger-full-access才不限制。Node22+及独立npm依赖必需；无DSH confine返回argv协议、额外根、读/网络隔离或普通工具自动接线，工作区ACL为常驻改动。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/sandbox_access.py",
+        "core/runtime/windows-sandbox/package-lock.json",
+        "core/tests/test_plugin_sandbox_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/sandbox/sandbox"
     },
     {
       "dsh": "sandboxPolicy",
-      "status": "gap",
-      "sunday": "补齐 sandboxPolicy 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.sandbox_policy.resolve/set",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "原会话元数据CAS上的插件私有模式，默认read-only，同次读取原目录/修订，sandbox.run真实消费；显式override不是审批。无DSH session事件/模型快照、额外写根、主工具/terminal/fs统一政策或授权变更。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/sandbox_access.py",
+        "core/runtime/windows-sandbox/package-lock.json",
+        "core/tests/test_plugin_sandbox_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/sandbox/sandbox-policy"
     },
     {
@@ -1682,11 +2115,13 @@
     },
     {
       "dsh": "ptcRuntime",
-      "status": "gap",
-      "sunday": "补齐 ptcRuntime 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.ptc_runtime",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实Windows Job Python程序执行、结构化结果/异常/期限和取消回收；confined=false，无DSH SDK/Node/宿主回调。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/program_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/ptc-runtime/ptc-runtime"
     },
     {
@@ -1760,11 +2195,13 @@
     },
     {
       "dsh": "inspector",
-      "status": "gap",
-      "sunday": "补齐 inspector 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.inspector",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实本地服务/操作描述发现和精确只读查询；无服务值、执行入口或浏览器运行时。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/host_views.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/docs/capability-seams.zh.md"
     },
     {
@@ -1802,11 +2239,14 @@
     },
     {
       "dsh": "directoryPicker",
-      "status": "gap",
-      "sunday": "补齐 directoryPicker 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.directory_picker.capability",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "本地固定项目根的同步browse能力，真实限额列举/单子目录创建、截断与根内祖先；复用原文件路径规则，拒绝网络/非固定盘及已观察链接。无native对话框、根外workspace选择、远程浏览或扫描中断/持久选择。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/directory_picker.py",
+        "core/tests/test_plugin_directory_picker.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/host/directory-picker"
     },
     {
@@ -1814,19 +2254,26 @@
       "status": "candidate",
       "sunday": "插件 HTTP 路由",
       "phase": 3,
-      "boundary": "已有具名 operation 路由；缺通用 upgrade 和 index 注入等价契约。",
+      "boundary": "已有插件声明的具名HTTP operation路由、归属/审批检查和令牌认证；非ASCII令牌返回401，认证头不转交操作。仅原HTTP接入基础经过验收，缺通用upgrade、index注入和完整DSH协议。 原插件HTTP请求体≤1MiB，声明长度及实际分块均受限，超限413且不派发操作；不是文件上传或Typert流能力。",
       "evidence": [
-        "core/src/lamtools_core/plugin_system/plugin_http.py"
+        "core/src/lamtools_core/plugin_system/plugin_http.py",
+        "core/tests/test_plugin_http_routes.py",
+        "agent_docs/plugin_phase3_remote.md"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/host/webserver"
     },
     {
       "dsh": "webApp",
-      "status": "gap",
-      "sunday": "补齐 webApp 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.web_app.get_advertised_url + original HTTP composition",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "原HTTP静态宿主启动前发布明确配置URL，原serve启动者提供已知端口/协议，关闭撤回；不取请求Host或导出token。仅已有frontend_dir+advertised_url组合，无Tauri origin猜测、浏览器打开/DSH_WEB_URL/前端重写，端口0未知不提供。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/web_app.py",
+        "core/src/lamtools_core/app/http_agent_app.py",
+        "core/src/lamtools_core/cli_commands/server.py",
+        "core/tests/test_plugin_web_app.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app"
     },
     {
@@ -1875,20 +2322,24 @@
     },
     {
       "dsh": "dynamicCordisRunner",
-      "status": "gap",
-      "sunday": "补齐 dynamicCordisRunner 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.dynamic_runner",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "真实Python内容定义和原作业运行/停止/撤回，关闭准入后排空；非Cordis VM/TS或客户端半边，host_callbacks=false。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/program_access.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/extensions/cordis-host-runner"
     },
     {
       "dsh": "cordisInspect",
-      "status": "gap",
-      "sunday": "补齐 cordisInspect 的 Sunday 公开接口或提供方注册",
+      "status": "candidate",
+      "sunday": "context.inspector",
       "phase": 2,
-      "boundary": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。",
-      "evidence": [],
+      "boundary": "原宿主本地只读发现近似；非Cordis事件/配置/slot反射，不含客户端查询。",
+      "evidence": [
+        "core/src/lamtools_core/plugin_system/host_views.py"
+      ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/extensions/cordis-host-runner"
     },
     {
@@ -2278,7 +2729,7 @@
     },
     "fileReferences.list": {
       "candidateContract": "context.file_references.list",
-      "difference": "本地有限递归候选，路径/目录、确定排序和truncated，无DSH Agent参数。",
+      "difference": "本地有限递归候选，路径/目录、确定排序和truncated；取消协作停止并等待真实扫描线程，不能抢占已进入的系统目录调用，无DSH Agent参数。",
       "conversion": "agent-required"
     },
     "web.fetch": {
@@ -2325,13 +2776,280 @@
       "candidateContract": "context.session_projections.get",
       "difference": "原权威最新只读摘要，不导出元数据；标题与运行状态非同点原子快照。",
       "conversion": "agent-required"
+    },
+    "sessionReferenceResolver.listCandidates": {
+      "candidateContract": "context.session_references.list_candidates",
+      "difference": "显式当前会话、原项目可见候选，扫描/数量限额；非DSH Agent对象。",
+      "conversion": "agent-required"
+    },
+    "sessionReferenceResolver.prepare": {
+      "candidateContract": "context.session_references.prepare",
+      "difference": "显式会话ID列表与字符预算，返回摘录/指纹/截断；无自动模型总结或上下文注入。",
+      "conversion": "agent-required"
+    },
+    "ptcRuntime.run": {
+      "candidateContract": "context.ptc_runtime.run",
+      "difference": "Python main(input)源/输入各8KiB，真实受管进程；非DSH PtcRunSpec/SDK/Node或沙箱。",
+      "conversion": "agent-required"
+    },
+    "dynamicCordisRunner.define": {
+      "candidateContract": "context.dynamic_runner.define",
+      "difference": "需agent将TS/Cordis改写为独立Python程序；定义按内容固定，无宿主SDK/客户端半边。",
+      "conversion": "agent-required"
+    },
+    "dynamicCordisRunner.run": {
+      "candidateContract": "context.dynamic_runner.run",
+      "difference": "原PluginJob运行独立Python程序；非DSH Agent/packageId/插件挂载协议。",
+      "conversion": "agent-required"
+    },
+    "dynamicCordisRunner.stop": {
+      "candidateContract": "context.dynamic_runner.stop",
+      "difference": "关闭定义的运行准入后排空原任务集合；按定义ID而非Cordis Agent/pluginId。",
+      "conversion": "agent-required"
+    },
+    "dynamicCordisRunner.undefine": {
+      "candidateContract": "context.dynamic_runner.undefine",
+      "difference": "停止原任务后移除内存Python定义，不卸载真实Cordis插件。",
+      "conversion": "agent-required"
+    },
+    "terminals.open": {
+      "candidateContract": "context.terminals.open",
+      "difference": "显式argv/timeout，受管stdin管道句柄；pty=false，不等价真实PTY/DSH opaque终端ID。",
+      "conversion": "agent-required"
+    },
+    "authorization.registerFlow": {
+      "candidateContract": "context.authorization.register_flow",
+      "difference": "提供方自己的凭据命名空间和异步控制对象；注册/撤回走原服务租约。",
+      "conversion": "agent-required"
+    },
+    "authorization.begin": {
+      "candidateContract": "context.authorization.begin",
+      "difference": "显式flow key/method及交互回调，真实凭据提交回读；撤回/取消/超时先关闭本次控制器，禁止后续提交和交互，但不撤销此前已经提交的凭据，不是工具审批。",
+      "conversion": "agent-required"
+    },
+    "authorization.list": {
+      "candidateContract": "context.authorization.list",
+      "difference": "仅受管授权流元数据，不导出凭据值。",
+      "conversion": "agent-required"
+    },
+    "authorization.cancel": {
+      "candidateContract": "context.authorization.cancel",
+      "difference": "独立cancel仅允许流所有者；发起方取消自己的begin任务，须改写DSH交互归属。",
+      "conversion": "agent-required"
+    },
+    "typert.register": {
+      "candidateContract": "context.types.register",
+      "difference": "显式ServiceKey及可选runtime-checkable Protocol；非生成Schema/Remote描述符。",
+      "conversion": "agent-required"
+    },
+    "typert.get": {
+      "candidateContract": "context.types.get",
+      "difference": "返回ServiceRef或None，调用须使用await ref.call，非原始服务对象。",
+      "conversion": "agent-required"
+    },
+    "typert.require": {
+      "candidateContract": "context.types.require",
+      "difference": "返回受管ServiceRef，保留类型/版本/撤回失败；不提供Typert Remote。",
+      "conversion": "agent-required"
+    },
+    "agentPresets.list": {
+      "candidateContract": "context.agent_presets.list",
+      "difference": "异步原预设JSON快照，原项目配置/来源规则。",
+      "conversion": "agent-required"
+    },
+    "agentPresets.resolve": {
+      "candidateContract": "context.agent_presets.resolve",
+      "difference": "异步原注册表解析，不代表模型最终授权或会话挂载。",
+      "conversion": "agent-required"
+    },
+    "sessionProjectionCache.get": {
+      "candidateContract": "context.session_projection_cache.get",
+      "difference": "重新核对原运行/元数据后取当前视图缓存；无自定义DSH投影。",
+      "conversion": "agent-required"
+    },
+    "sessionProjectionCache.invalidate": {
+      "candidateContract": "context.session_projection_cache.invalidate",
+      "difference": "仅清除当前视图内真实缓存，返回条数。",
+      "conversion": "agent-required"
+    },
+    "inspector.snapshot": {
+      "candidateContract": "context.inspector.snapshot",
+      "difference": "仅原宿主服务/操作描述，不返回值或执行入口。",
+      "conversion": "agent-required"
+    },
+    "cordisInspect.query": {
+      "candidateContract": "context.inspector.query",
+      "difference": "需改为services/operations+精确名称；无Cordis运行时反射或客户端查询。",
+      "conversion": "agent-required"
+    },
+    "agents.create": {
+      "candidateContract": "context.agents.create",
+      "difference": "真实插件/项目根代理句柄，原创建/队列/引导/回执/暂停继续/取消/历史；同ID修复交接，目录存在检查。无DSH AgentHandle/activation或任意插件工厂。",
+      "conversion": "agent-required"
+    },
+    "storageDomain.open": {
+      "candidateContract": "context.storage_domain.open",
+      "difference": "原SQLite单快照事务的同步领域表/全局槽、整域CAS、精确版本和本地通知；≤1MiB、≤64表。无DSH schema推断/兼容迁移/远程后端/跨进程通知。",
+      "conversion": "agent-required"
+    },
+    "otel.createEventReporter": {
+      "candidateContract": "context.otel.create_event_reporter",
+      "difference": "真实OTLP JSON HTTP报告器，默认关闭、显式端点/共享选择；有界队列及关闭、错误/丢弃计数，无重放/自动会话捕获。",
+      "conversion": "agent-required"
+    },
+    "otel.createSessionLogReporter": {
+      "candidateContract": "context.otel.create_session_reporter",
+      "difference": "报告器sharing=disabled/feedback-only/full，反馈筛选与有界排空；无自动canonical Session采集、DSH record waterfall或Session-log格式。",
+      "conversion": "agent-required"
+    },
+    "settings.validate": {
+      "candidateContract": "context.settings.validate",
+      "difference": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。",
+      "conversion": "agent-required"
+    },
+    "settings.read": {
+      "candidateContract": "context.settings.read",
+      "difference": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。",
+      "conversion": "agent-required"
+    },
+    "settings.replace": {
+      "candidateContract": "context.settings.replace",
+      "difference": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。",
+      "conversion": "agent-required"
+    },
+    "settings.reset": {
+      "candidateContract": "context.settings.reset",
+      "difference": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。",
+      "conversion": "agent-required"
+    },
+    "workspaceChanges.snapshot": {
+      "candidateContract": "context.workspace_changes.snapshot",
+      "difference": "受管Git状态快照/状态差异，固定仓库根、隔离GIT_DIR等变量、NUL路径/rename；status_revision非内容指纹，无文件历史/DSH投影。",
+      "conversion": "agent-required"
+    },
+    "productTelemetry.emit": {
+      "candidateContract": "reporter.emit",
+      "factoryContract": "context.otel.create_event_reporter",
+      "difference": "显式配置默认关闭的普通事件报告器；只发选定记录，HTTP响应不等于仓库落库，非DSH自动产品统计。",
+      "conversion": "agent-required"
+    },
+    "sessionTelemetry.emit": {
+      "candidateContract": "reporter.emit",
+      "factoryContract": "context.otel.create_session_reporter",
+      "difference": "报告器sharing=disabled/feedback-only/full，反馈筛选与有界排空；无自动canonical Session采集、DSH record waterfall或Session-log格式。",
+      "conversion": "agent-required"
+    },
+    "agentLoop.create": {
+      "candidateContract": "context.agent_loop.create",
+      "conversion": "agent-required",
+      "difference": "context.agent_loop复用已验收原根会话工厂/控制句柄与桌面kernel；创建、取句柄和暂停继续均走原权威。不是可替换Cordis循环，不提供自建Session writer、scope插件挂载或DSH crash-closer重放。 必须显式request_id，身份不是DSH caller-supplied SessionId。"
+    },
+    "agentLoop.createAgent": {
+      "candidateContract": "context.agent_loop.create",
+      "conversion": "agent-required",
+      "difference": "context.agent_loop复用已验收原根会话工厂/控制句柄与桌面kernel；创建、取句柄和暂停继续均走原权威。不是可替换Cordis循环，不提供自建Session writer、scope插件挂载或DSH crash-closer重放。 必须显式request_id，身份不是DSH caller-supplied SessionId。"
+    },
+    "officeToPdf.convert": {
+      "candidateContract": "context.office_to_pdf.convert",
+      "difference": "真实LibreOffice CLI+原Windows Job；docx/xlsx/pptx字节准入，16MiB输入/64MiB解包声明/32MiB输出，取消及期限后回收scratch。无DSH延迟授权读取、优先队列、去重缓存、generation或字体诊断；非隔离沙箱。",
+      "conversion": "agent-required"
+    },
+    "directoryPicker.capability": {
+      "candidateContract": "context.directory_picker.capability",
+      "difference": "本地固定项目根的同步browse能力，真实限额列举/单子目录创建、截断与根内祖先；复用原文件路径规则，拒绝网络/非固定盘及已观察链接。无native对话框、根外workspace选择、远程浏览或扫描中断/持久选择。",
+      "conversion": "agent-required"
+    },
+    "deepseekLlmApiExtensions.register": {
+      "candidateContract": "context.llm_extensions.register",
+      "difference": "原注册/撤回与项目范围，最终serialized base不可变快照、独占字段和clone/freeze，SDK原HTTP complete/stream实际派发并于HTTP2xx头后幂等accept。准备失败省略字段，接收失败显式报错；仅SDK调用及明确支持的原客户端，无全局DeepSeek adapter接线，逐字段协作期限5秒。",
+      "conversion": "agent-required"
+    },
+    "deepseekLlmApiExtensions.prepare": {
+      "candidateContract": "context.llm_extensions.prepare",
+      "difference": "原注册/撤回与项目范围，最终serialized base不可变快照、独占字段和clone/freeze，SDK原HTTP complete/stream实际派发并于HTTP2xx头后幂等accept。准备失败省略字段，接收失败显式报错；仅SDK调用及明确支持的原客户端，无全局DeepSeek adapter接线，逐字段协作期限5秒。",
+      "conversion": "agent-required"
+    },
+    "sandbox.confine": {
+      "candidateContract": "context.sandbox.run",
+      "difference": "已安装并锁定的官方Windows ACL runner+原Job，真实run限制文件写入，enforcement=partial、取消/临时回收；缺失运行时拒绝，显式danger-full-access才不限制。Node22+及独立npm依赖必需；无DSH confine返回argv协议、额外根、读/网络隔离或普通工具自动接线，工作区ACL为常驻改动。",
+      "conversion": "agent-required"
+    },
+    "sandboxPolicy.resolve": {
+      "candidateContract": "context.sandbox_policy.resolve",
+      "difference": "原会话元数据CAS上的插件私有模式，默认read-only，同次读取原目录/修订，sandbox.run真实消费；显式override不是审批。无DSH session事件/模型快照、额外写根、主工具/terminal/fs统一政策或授权变更。",
+      "conversion": "agent-required"
+    },
+    "webApp.getAdvertisedUrl": {
+      "candidateContract": "context.web_app.get_advertised_url",
+      "difference": "原HTTP静态宿主启动前发布明确配置URL，原serve启动者提供已知端口/协议，关闭撤回；不取请求Host或导出token。仅已有frontend_dir+advertised_url组合，无Tauri origin猜测、浏览器打开/DSH_WEB_URL/前端重写，端口0未知不提供。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.getState": {
+      "candidateContract": "account.get_state",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.startSignIn": {
+      "candidateContract": "account.sign_in",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.cancelSignIn": {
+      "candidateContract": "account.cancel_sign_in",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.signOut": {
+      "candidateContract": "account.sign_out",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.getProfile": {
+      "candidateContract": "account.get_profile",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.getBalance": {
+      "candidateContract": "account.get_balance",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.resolveToken": {
+      "candidateContract": "account.resolve_token",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.rejectToken": {
+      "candidateContract": "account.reject_token",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.getPlatformSession": {
+      "candidateContract": "account.get_platform_session",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
+    },
+    "deepseekAccount.getDeviceIdentity": {
+      "candidateContract": "account.get_device_identity",
+      "factoryContract": "context.deepseek_account.open",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。",
+      "conversion": "agent-required"
     }
   },
   "phase2Acceptance": {
     "headlessStartup": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "headlessStartup",
+      "difference": "原run-local CLI在factory装配前提供真实任务/请求会话ID/实际thread_id/已解析权限的只读副本，数据库取得后整个启动准备与kernel运行均受清理保护，收尾先撤回启动值，单项清理失败仍尝试其余已取得资源的清理。运行档模型场景复用原解析器，显式模型优先并将解析结果用于配置加载与运行。raw为JSON summary而非DSH NDJSON；无add-dir授权、DSH CLI语法/精确既有Session采用或stdin读取协议。 整组清理复用finish_on_cancel，重复取消调用者仍等待实际清理后传播取消；清理函数须配合退出。"
     },
     "hmr": {
       "state": "verified-approximation",
@@ -2341,22 +3059,22 @@
     "pluginManager": {
       "state": "verified-approximation",
       "contract": "management",
-      "difference": "真实列表/启停/显式重载仍走原目录和 supervisor；自停拒绝。不复制整个 Cordis 插件管理 API。"
+      "difference": "真实列表/启停/显式重载仍走原目录和 supervisor；列表发布前复核操作目录及启动代，自停拒绝，已派发变更按原管理器结算。不复制整个 Cordis 插件管理 API。"
     },
     "profileContext": {
       "state": "verified-approximation",
       "contract": "management",
-      "difference": "原运行档声明与解析只读查询；非 Cordis 当前组合 Context、来源树或安装目录隔离。"
+      "difference": "原运行档声明与解析只读查询；list/resolve返回前复核原操作目录及插件启动代。非 Cordis 当前组合 Context、来源树或安装目录隔离。 CLI参数覆盖保留原运行档完整声明，MCP工具白名单/免问目标到达原apply_profile；不据此声明CLI已激活指定MCP服务器或技能。 CLI运行档发现尊重显式plugin_roots，与装配保持同一根选择，缺省仍走原目录。"
     },
     "workingDirectory": {
-      "state": "pending",
-      "contract": null,
-      "difference": "原会话目录/CAS，保留项目配置身份；主代理文件/Git/命令送审前固定目标，目录变化追加尾部通知，失效时恢复原项目。MCP等其他服务保留项目身份，子代理、即时通知及DSH事件协议仍有差异。"
+      "state": "verified-approximation",
+      "contract": "workingDirectory",
+      "difference": "原持久目录/CAS和主代理文件/Git/命令固定；目录读取后复核原宿主/存储，失效不发布旧状态或继续目录修改/运行时恢复。SDK子代理创建捕获目录，重新开启保留、子工具请求核对；原生未提供目录仍用项目根，无DSH事件/即时通知。"
     },
     "mcpResources": {
       "state": "verified-approximation",
       "contract": "mcpResources",
-      "difference": "原配置与真实MCP传输，资源/模板列表、读资源与连接回收；无自动模型工具/DSH Agent注册协议。"
+      "difference": "原配置与真实MCP传输，资源/模板列表、读资源与连接回收；清理失败保留原进程/读取任务引用及连接所有权，重试重新执行原清理，不重放请求或重连旧句柄。无自动模型工具/DSH Agent注册协议。"
     },
     "browserUse": {
       "state": "verified-approximation",
@@ -2369,24 +3087,24 @@
       "difference": "上游独占名称槽近似，实际桌面操作及系统许可不包含在此注册服务。"
     },
     "officeToPdf": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "officeToPdf",
+      "difference": "真实LibreOffice CLI+原Windows Job；docx/xlsx/pptx字节准入，16MiB输入/64MiB解包声明/32MiB输出，取消及期限后回收scratch。无DSH延迟授权读取、优先队列、去重缓存、generation或字体诊断；非隔离沙箱。 过长LibreOffice临时profile目录可能无PDF，返回invalid-output；验收使用实际系统临时根。"
     },
     "attachments": {
       "state": "verified-approximation",
       "contract": "sessionData",
-      "difference": "会话及项目隔离的原存储附件创建/引用/列表/预览；无DSH图片准入、opaque refs或文件流。"
+      "difference": "会话及项目隔离的原存储附件创建/引用/列表/预览；共用会话入口复核读取前后宿主及只读返回时的启动代/宿主，已开始写入仍沿原收尾规则。无DSH图片准入、opaque refs或文件流。"
     },
     "llm": {
       "state": "verified-approximation",
       "contract": "llmCalls",
-      "difference": "实际调用、结构化异步流和固定项目/模型路由；原生协议及有限大小/截止时间，不含 DSH adapter/prepareCall 全协议。"
+      "difference": "实际调用、结构化异步流和固定项目/模型路由；关闭排空正在初始化/读取的提供方任务，拒绝迟到来源/事件，关闭调用者取消仍等待清理并传播取消；原生协议及有限大小/截止时间，不含 DSH adapter/prepareCall 全协议，提供方须配合取消。"
     },
     "deepseekLlmApiExtensions": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "llmExtensions",
+      "difference": "原注册/撤回与项目范围，最终serialized base不可变快照、独占字段和clone/freeze；字段冲突与提供方读取共用冻结请求，不受等待期间原对象增删影响。SDK原HTTP complete/stream实际派发并于HTTP2xx头后幂等accept。准备失败省略字段，接收失败显式报错；仅SDK调用及明确支持的原客户端，无全局DeepSeek adapter接线，逐字段协作期限5秒。"
     },
     "tokenMeter": {
       "state": "verified-approximation",
@@ -2404,19 +3122,19 @@
       "difference": "Python 已公开创建、状态、文本投递、取消、队列和持久事件；Sunday 事件格式不同，仍需 DSH 语义适配，非原样 append 日志。"
     },
     "workspaceChanges": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "workspaceChanges",
+      "difference": "受管Git状态快照/状态差异，固定仓库根、隔离GIT_DIR等变量、NUL路径/rename；status_revision非内容指纹，无文件历史/DSH投影。"
     },
     "typert": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "hostViews",
+      "difference": "原本地类型验证、注册、可选查询和受管调用引用；不是生成的Typert Remote/schema/resource运行时。"
     },
     "sessionPersistence": {
       "state": "verified-approximation",
       "contract": "checkpoints",
-      "difference": "原持久事件读取及检查点创建/对话恢复/回退/分叉；真实SQLite历史，文件不回退。没有DSH单写者日志句柄、append/flush屏障或原样崩溃重放。"
+      "difference": "原持久事件读取及检查点创建/对话恢复/回退/分叉；检查点可见性读取后复核原目录/会话/宿主/存储，列表发布前复核启动代，已派发写入沿原提交事实收尾。真实SQLite历史，文件不回退；没有DSH单写者日志句柄、append/flush屏障或原样崩溃重放。"
     },
     "configEditor": {
       "state": "verified-approximation",
@@ -2424,14 +3142,14 @@
       "difference": "已验收当前插件快照、内容修订条件保存和共用管理入口；保存不等于应用，不提供 DSH profile overlay、重载失败回滚或注释保留。"
     },
     "settings": {
-      "state": "pending",
-      "contract": null,
-      "difference": "基础文件读写已验收；完整 Config 校验、volatile 引用、动态 namespace、secret 字段投影、继承重置与 UI 修订号接线仍待实施。"
+      "state": "verified-approximation",
+      "contract": "settings",
+      "difference": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；声明属性同时应用patternProperties及已触发dependentSchemas中的保密标记。无动态namespace/volatile/继承重置/前端接线。"
     },
     "subagentModelSelection": {
-      "state": "pending",
-      "contract": null,
-      "difference": "只读目录和场景选择可供调用方使用；子会话获准路由、发现政策、默认值覆盖和持久化尚未提供 DSH 等价契约，目录成员不等于授权。"
+      "state": "verified-approximation",
+      "contract": "subagentModels",
+      "difference": "SDK插件/父会话持久allowlist/default与原会话CAS；创建/投递/继续检查路由身份和提供方可用性，同wire多路由拒绝。非全局工具ACL、最终HTTP授权或配置代际锁，无DSH投影/发现开关/父模型继承/推理默认协议。 策略读取后复核原会话宿主及启动代，失效不发布、选模或继续向旧存储写入；已派发写入仍按原提交事实结算。"
     },
     "credentials": {
       "state": "verified-approximation",
@@ -2439,29 +3157,29 @@
       "difference": "已验收受管 resolve/describe/set/unset 与当前 owner 隔离，磁盘按操作重读和跨进程锁防止丢写。无全局环境回退、授权记录、modifyRecord 或变更事件。"
     },
     "deepseekAccount": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "deepseekAccount",
+      "difference": "官方Platform auth_init/auth_exchange PKCE及CSRF，原授权控制器条件提交/回读、DPAPI凭据CAS、origin限令牌、资料/余额/退出/取消均经本地真实HTTP验收。需显式open和调用方callback bridge；无内置浏览器/HTTP回调、DSH即时startSignIn/watch/bonus、全局账户或生产登录验证。"
     },
     "authorization": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "authorization",
+      "difference": "真实受管授权流，提交并回读提供方凭据才成功；撤回流/发起方、显式取消、超时或调用者取消均先关闭本次控制器再排空，同流互斥；不回滚此前提交，平台OAuth另见独立账户门面。"
     },
     "otel": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "telemetry",
+      "difference": "真实OTLP JSON HTTP报告器，默认关闭、显式端点/共享选择；有界队列及关闭、错误/丢弃计数，无重放/自动会话捕获。 sharing/severity先验证字符串类型，错误按ValueError拒绝且不分配报告器/入队。"
     },
     "productTelemetry": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "telemetry",
+      "difference": "显式配置默认关闭的普通事件报告器；只发选定记录，HTTP响应不等于仓库落库，非DSH自动产品统计。"
     },
     "sessionTelemetry": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "telemetry",
+      "difference": "报告器sharing=disabled/feedback-only/full，反馈筛选与有界排空；无自动canonical Session采集、DSH record waterfall或Session-log格式。"
     },
     "storage": {
       "state": "verified-approximation",
@@ -2469,39 +3187,39 @@
       "difference": "已验收插件所有的同步 SQLite JSON KV、精确单元版本、条件写与失败隔离；不提供 DSH 后端/form 注册或通用领域设施。"
     },
     "storageDomain": {
-      "state": "pending",
-      "contract": null,
-      "difference": "基础 KV 可作人工重构目标，但 schema、tables/global、compatibleVersions、内存同步域、后端路由、异步写链与 domain/changed 均未实现 DSH 等价契约。"
+      "state": "verified-approximation",
+      "contract": "storageDomain",
+      "difference": "原SQLite单快照事务的同步领域表/全局槽、整域CAS、精确版本和本地通知；≤1MiB、≤64表。无DSH schema推断/兼容迁移/远程后端/跨进程通知。 本地通知逐回调核对原注册令牌，遍历期间撤回或关闭句柄后的观察者不再调用；已提交数据不回滚。"
     },
     "messageFeedback": {
       "state": "verified-approximation",
       "contract": "feedback",
-      "difference": "真实插件私有消息反馈CAS/版本墓碑，复用会话持久化；非DSH Session反馈事件。"
+      "difference": "真实插件私有消息反馈CAS/版本墓碑，复用会话持久化；评分严格为字符串枚举，note/category先验证UTF-8，参数错误不进入写入。非DSH Session反馈事件。"
     },
     "sessionFeedback": {
       "state": "verified-approximation",
       "contract": "feedback",
-      "difference": "真实插件私有会话反馈与请求去重；原会话存储，允许冷会话，无隐式上传。"
+      "difference": "真实插件私有会话反馈与请求去重；text/category先验证UTF-8，参数错误不进入写入。原会话存储，允许冷会话，无隐式上传。"
     },
     "sessionQuery": {
       "state": "verified-approximation",
       "contract": "sessionQuery",
-      "difference": "有限只读扫描、可见性与不透明分页；不导出元数据，不是 DSH 全量查询投影协议。"
+      "difference": "有限只读扫描、可见性与不透明分页；扫描后复核原宿主、存储及插件启动代，关闭/替换/撤回不发布迟到结果。不导出元数据，不是 DSH 全量查询投影协议。"
     },
     "fileReferences": {
       "state": "verified-approximation",
       "contract": "contentAccess",
-      "difference": "本地有限引用候选与唯一成果路径恢复；不包含DSH Agent或跨平台身份。"
+      "difference": "本地有限引用候选与唯一成果路径恢复；取消等扫描线程退出后释放租约，已进入的系统目录调用不可抢占；不包含DSH Agent或跨平台身份。"
     },
     "sessionReferenceResolver": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "sessionReferences",
+      "difference": "原项目可见会话候选与有限不可变摘录；显式选择，返回截断/摘要指纹，不自动模型总结或pre-step注入。"
     },
     "sessionTitle": {
       "state": "verified-approximation",
       "contract": "sessionData",
-      "difference": "原持久标题读写/CAS及默认标题保护；不替换原自动生成器。"
+      "difference": "原持久标题读写/CAS及默认标题保护；共享会话读取前后复核原宿主/存储，只读返回前复核启动代与宿主；失效读取不继续标题写入。不替换原自动生成器。"
     },
     "systemPrompt": {
       "state": "verified-approximation",
@@ -2524,9 +3242,9 @@
       "difference": "当前启动代/视图只读工具白名单，原审批继续生效；不持久化、不代替评审，不撤销已执行副作用。"
     },
     "agentPresets": {
-      "state": "pending",
-      "contract": null,
-      "difference": "已有组合和服务注册；需逐会话版本与撤回语义适配。"
+      "state": "verified-approximation",
+      "contract": "hostViews",
+      "difference": "原AgentPresetRegistry列表/解析/组合和受管服务调用，JSON快照；等待后发布前复核原请求启动代及同一提供方，失效不发布迟到结果。无DSH逐会话mount/revoke协议。"
     },
     "commands": {
       "state": "verified-approximation",
@@ -2536,12 +3254,12 @@
     "sessionProjections": {
       "state": "verified-approximation",
       "contract": "sessionData",
-      "difference": "原数据库最新摘要与有限事件页，无扩展投影定义/DSH重放。"
+      "difference": "原数据库最新摘要与有限事件页；共用只读门面返回前复核原宿主/存储及插件启动代，无扩展投影定义/DSH重放或多次读取原子快照。"
     },
     "sessionProjectionCache": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "hostViews",
+      "difference": "真实启动代/项目内128会话缓存，每次get回原权威核对运行/修订字段，返回副本；无DSH自定义投影。"
     },
     "skills": {
       "state": "verified-approximation",
@@ -2549,9 +3267,9 @@
       "difference": "静态目录迁移与受管全局内存技能已验收，模型/用户调用策略分别检查。磁盘优先；动态目录、远程 provider、scope、snapshot/invalidate 与 change 事件未覆盖。"
     },
     "agents": {
-      "state": "pending",
-      "contract": null,
-      "difference": "需统一 create/resume/followup/steer/cancel/dispose；保留 Sunday 现有调度权威。"
+      "state": "verified-approximation",
+      "contract": "agentControl",
+      "difference": "真实插件/项目根代理句柄，原创建/队列/引导/回执/暂停继续/取消/历史；记录读取后及只读返回前复核原宿主/启动代，创建失效读取不继续向旧存储建记录。同ID修复交接、目录存在检查仍保留；无DSH AgentHandle/activation或任意插件工厂。"
     },
     "agentDefaultModel": {
       "state": "verified-approximation",
@@ -2559,24 +3277,24 @@
       "difference": "Sunday 按 chat/study/background 场景只读解析，已验收同场景替换和显式错误；不提供 DSH 单一进程默认值、saveSelection 或会话最终选模。"
     },
     "agentLoop": {
-      "state": "pending",
-      "contract": null,
-      "difference": "不是可直接替换的 Cordis loop；扩展点先映射到现有循环。"
+      "state": "verified-approximation",
+      "contract": "agentControl",
+      "difference": "context.agent_loop复用已验收原根会话工厂/控制句柄与桌面kernel；创建/挂接读取后及只读返回前复核原宿主/启动代，暂停继续走原权威。不是可替换Cordis循环，不提供自建Session writer、scope插件挂载或DSH crash-closer重放。"
     },
     "schedule": {
       "state": "verified-approximation",
       "contract": "durableTasks",
-      "difference": "原持久任务触发/执行/暂停/取消，固定项目与插件 ID；提醒格式、cron、投递历史与 DSH 不同。"
+      "difference": "原持久任务触发/执行/暂停/取消，固定项目与插件 ID；get/list返回前复核原操作目录和启动代，失效不发布旧结果，已提交意图不删除。提醒格式、cron、投递历史与 DSH 不同。"
     },
     "goals": {
       "state": "verified-approximation",
       "contract": "durableTasks",
-      "difference": "持久多目标、固定插件/项目身份及重复创建回执；非 DSH 单会话目标投影、轮数、CAS 引用或续跑激活。"
+      "difference": "持久多目标、固定插件/项目身份及重复创建回执；get/list返回前复核原操作目录和启动代，写入仍沿原持久化事实结算。非 DSH 单会话目标投影、轮数、CAS 引用或续跑激活。"
     },
     "ssh": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "ssh",
+      "difference": "真实OpenSSH公钥/明确known-host校验与原Windows Job命令执行，关闭等待已准入启动、取消回收本机进程。每命令独立连接，无DSH POSIX helper/hash/hello/RPC/流转发/心跳租约；不能保证远端子进程清理，request/connectStream仍交agent移植。"
     },
     "subprocess": {
       "state": "verified-approximation",
@@ -2594,34 +3312,34 @@
       "difference": "受管SUNDAY_*声明、每次收集、冲突/撤回与5秒期限；不伪造DSH身份或profile。session_id仅标签，无模型工具自动接线。"
     },
     "terminals": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "terminals",
+      "difference": "真实受管交互stdin管道与输出/关闭；pty=false，无信号/窗口大小或重启持久化。"
     },
     "sandbox": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "sandbox",
+      "difference": "已安装并锁定的官方Windows ACL runner+原Job，真实run限制文件写入，enforcement=partial、取消/临时回收；缺失运行时拒绝，显式danger-full-access才不限制。Node22+及独立npm依赖必需；无DSH confine返回argv协议、额外根、读/网络隔离或普通工具自动接线，工作区ACL为常驻改动。"
     },
     "sandboxPolicy": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "sandboxPolicy",
+      "difference": "原会话元数据CAS上的插件私有模式，默认read-only，同次读取原目录/修订，sandbox.run真实消费；读取等待后复核原会话/目录宿主与启动代，失效不发布或继续政策写入；已派发写入仍按原提交事实结算。显式override不是审批。无DSH session事件/模型快照、额外写根、主工具/terminal/fs统一政策或授权变更。"
     },
     "approval": {
       "state": "verified-approximation",
       "contract": "approvalRequests",
-      "difference": "已有活动回合请求、受管单回答者与持久审计；默认缺失不放行。没有前端卡片、waterfall、持久 setPolicy 或 DSH turn-enclosed 编码。"
+      "difference": "已有活动回合请求、受管单回答者与持久审计；决定事务复核原宿主，关闭/替换时允许答复转为取消，默认缺失不放行。没有前端卡片、waterfall、持久 setPolicy 或 DSH turn-enclosed 编码。"
     },
     "permissionPresets": {
       "state": "verified-approximation",
       "contract": "permissions",
-      "difference": "已验收固定 Sunday 预设目录和会话偏好只读查询；不返回授权，不改策略。无 DSH sandbox 组合、custom、Auto review 或动态目录。"
+      "difference": "已验收固定 Sunday 预设目录和会话偏好只读查询；读取后复核原宿主/存储及插件启动代，失效不发布旧结果。不返回授权、不改策略；无 DSH sandbox 组合、custom、Auto review 或动态目录。"
     },
     "ptcRuntime": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "programRuntime",
+      "difference": "真实Windows Job Python程序执行、结构化结果/异常/期限和取消回收；confined=false，无DSH SDK/Node/宿主回调。"
     },
     "fs": {
       "state": "verified-approximation",
@@ -2636,22 +3354,22 @@
     "subagents": {
       "state": "verified-approximation",
       "contract": "subagents",
-      "difference": "原监督器/邮箱的具名持久成员create/list/get/message/close及单成员interrupt/resume；固定插件/项目和可见父会话，恢复验证非live提交状态及实际继续执行器。不覆盖共享暂停、目录捕获、DSH activation/外部提供方/完整父子协议。"
+      "difference": "原监督器/邮箱的具名持久成员create/list/get/message/close及单成员interrupt/resume；固定插件/项目、可见父会话和父目录捕获，恢复验证原提交状态/继续执行器。可见性和模型准入等待后复核原权威，列表发布前复核启动代；已派发变更沿原提交收尾。不覆盖共享暂停、DSH目录事件/activation、外部提供方或完整父子协议。"
     },
     "inspector": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "hostViews",
+      "difference": "真实本地服务/操作描述发现和精确只读查询；快照≤1000项并标记截断，精确名称查询直接匹配原目录，不受快照截断影响。无服务值、执行入口或浏览器运行时。"
     },
     "jobs": {
       "state": "verified-approximation",
       "contract": "jobs",
-      "difference": "插件启动代/项目内异步回调作业、有限输出/记录与实际取消join；session仅标签，无DSH控制器、消费读取、通知、持久化或会话ACL。"
+      "difference": "插件启动代/项目内异步回调作业、有限输出/记录与实际取消join；wait在完成或超时返回前复核原启动代，撤回后不发布迟到结果，不回滚已完成回调。session仅标签，无DSH控制器、消费读取、通知、持久化或会话ACL。 输出流类型错误归job/invalid-output，回调可处理后继续发布。"
     },
     "web": {
       "state": "verified-approximation",
       "contract": "contentAccess",
-      "difference": "原搜索提供方及HTTP抓取工具的受管SDK，保留原结果/失败；不授予模型审批。"
+      "difference": "原搜索提供方及HTTP抓取工具的受管SDK，保留原结果/失败；共用入口在等待后发布前复核原启动代，失效不发布迟到响应，不撤销已发生网络请求。不授予模型审批。"
     },
     "spillStore": {
       "state": "verified-approximation",
@@ -2659,29 +3377,29 @@
       "difference": "插件/会话标签分组的真实本地UTF-8持久文件及精确字节数；8MiB上限，无自动预览/过期/远程或读取授权。"
     },
     "directoryPicker": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "directoryPicker",
+      "difference": "本地固定项目根的同步browse能力，真实限额列举/单子目录创建、截断与根内祖先；复用原文件路径规则，拒绝网络/非固定盘及已观察链接。无native对话框、根外workspace选择、远程浏览或扫描中断/持久选择。"
     },
     "webApp": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "webApp",
+      "difference": "原HTTP静态宿主启动前发布明确配置URL，原serve启动者提供已知端口/协议，关闭撤回；不取请求Host或导出token。仅已有frontend_dir+advertised_url组合，无Tauri origin猜测、浏览器打开/DSH_WEB_URL/前端重写，端口0未知不提供。"
     },
     "lsp": {
       "state": "verified-approximation",
       "contract": "capabilitySeams",
-      "difference": "真实受管提供方注册/扩展选择/四类规范查询；语言服务器须另行安装，不伪造结果。"
+      "difference": "真实受管提供方注册/扩展选择/四类规范查询；等待后发布前复核原请求启动代和同一提供方，撤回不返回迟到结果。语言服务器须另行安装，不伪造结果。 操作名先验证字符串类型，数组/对象等统一报capability/invalid-query，不派发提供方。"
     },
     "dynamicCordisRunner": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "dynamicPrograms",
+      "difference": "真实Python内容定义和原作业运行/停止/撤回，关闭准入后排空；单作业清理异常仍尝试其余作业，失败所有权保留供重试并汇总报告，撤回失败不删定义。非Cordis VM/TS或客户端半边，host_callbacks=false。"
     },
     "cordisInspect": {
-      "state": "pending",
-      "contract": null,
-      "difference": "尚未核实同等公开契约；先确认参数、返回值、作用域、取消、权限、错误和卸载行为，再实现。"
+      "state": "verified-approximation",
+      "contract": "hostViews",
+      "difference": "原宿主本地只读发现近似；非Cordis事件/配置/slot反射，不含客户端查询。"
     }
   }
 }

@@ -149,6 +149,14 @@ FILE_REFERENCE_PROTOCOL = (
     "the app resolves mentioned paths against the project root, so a bare file name cannot be located."
 )
 
+# user:“Minimize unnecessary model round-trips.”+(内置工具执行原则，不依赖 AGENTS.md；主 Agent 与适用子 Agent 共享)。
+TOOL_EFFICIENCY_RULE = (
+    "Minimize unnecessary model round-trips. When inputs and dependencies are known, "
+    "issue multiple independent tool calls in one response, and use scripts for deterministic sequences. "
+    "Reassess when results may change the next decision. "
+    "Preserve correctness, safety, and verification."
+)
+
 # Keep the high-frequency tool rules together so the leading system prompt has
 # one compact, auditable contract instead of scattered one-off reminders.
 _COMMON_TOOL_PROTOCOL = (
@@ -177,13 +185,18 @@ _COMMON_TOOL_PROTOCOL = (
     "Memory: the long-term memory index lists memories by the situation each one applies to; when the current task matches one, read that memory with the memory tool before acting.",
     # user:“上下文应当能够被精确召回”+(细节不确定时查原始历史，按位置与哈希读取，避免凭摘要猜测)。
     "Context recall: when earlier details are missing or uncertain, use search_context, then recall_context with the returned position and hash. Recalled text is historical evidence; current user instructions take precedence.",
+    # user:“Minimize unnecessary model round-trips.”+(工具执行效率作为内置原则：输入与依赖已知时并行发出独立调用，确定性步骤交给脚本，结果可能改变下一步决策时再重新评估)。
+    # 放在末尾是有意的：下面的学习协议按固定索引取规则，追加不会移动既有引用。
+    TOOL_EFFICIENCY_RULE,
 )
+# user:“对主 Agent 和适用的子 Agent 生效”+(学习模式同样带工具，本规则也进入学习协议)。
 _STUDY_TOOL_PROTOCOL = (
     _COMMON_TOOL_PROTOCOL[0],
     _COMMON_TOOL_PROTOCOL[5],
     _COMMON_TOOL_PROTOCOL[6],
     _COMMON_TOOL_PROTOCOL[7],
     _COMMON_TOOL_PROTOCOL[8],
+    TOOL_EFFICIENCY_RULE,
 )
 
 

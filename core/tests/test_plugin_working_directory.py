@@ -14,6 +14,55 @@ from lamtools_core.plugin_system import PluginContext
 from lamtools_core.session import SessionRecord
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation",["get","set","runtime"])
+@pytest.mark.parametrize("change",["shutdown","store"])
+async def test_directory_read_wait_cannot_cross_invalidated_host_or_write_old_store(env,monkeypatch,operation,change):
+    # user:“复用原宿主权威”+(目录读取、修改和运行时恢复都必须在读取后复核宿主，不能写回已替换的旧存储)。
+    from lamtools_core.plugin_system.working_directory import WorkingDirectoryError
+    from lamtools_core.plugin_system.sessions import SessionError
+    ctx, store, sessions, project = env
+    api = ctx.working_directory
+    host = sessions._context().host
+    original = store.get_readonly_revision
+    if operation == "runtime":
+        record, revision = await original("s")
+        await store.patch("s",metadata={**record.metadata,"execution_directory":str(project / "missing")},expected_revision=revision)
+    before = await original("s")
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def gated(session_id):
+        result = await original(session_id)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(store,"get_readonly_revision",gated)
+    if operation == "get":
+        work = api.get("s")
+    elif operation == "set":
+        work = api.set("s","one",expected_revision=before[1])
+    else:
+        work = api._host.runtime_path("s",project)
+    task = asyncio.create_task(work)
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        else:
+            host.session_store = object()
+        release.set()
+        with pytest.raises((WorkingDirectoryError,SessionError)) as error:
+            await asyncio.wait_for(task,3)
+        expected = "session/closed" if operation == "runtime" and change == "shutdown" else "working-directory/" + ("closed" if change == "shutdown" else "host-changed")
+        assert error.value.code == expected
+        assert await original("s") == before
+    finally:
+        host.session_store = store
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
 @pytest.fixture
 async def env(tmp_path):
     project = tmp_path / "project"

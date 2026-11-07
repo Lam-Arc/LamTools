@@ -108,10 +108,11 @@
           @click="openArtifactInStage(item)"
         >
           <span class="artifact-kind" :title="kindLabel(item.kind)">
-            <component :is="kindIcon(item.kind, item.name)" :size="14" :stroke-width="1.8" aria-hidden="true" />
+            <FileTypeBadge v-if="item.kind !== 'link'" :name="item.name" :failed="item.missing" :size="16" />
+            <ExternalLink v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
           </span>
           <span class="artifact-item-copy">
-            <span class="artifact-name" :title="item.path || item.uri || item.name">{{ item.kind === 'link' ? item.name : '@' + item.name }}</span>
+            <span class="artifact-name" :title="item.path || item.uri || item.name">{{ item.name }}</span>
             <span class="artifact-item-meta">
               {{ roleLabel(item.role) }} · {{ kindLabel(item.kind, item.name) }}
             </span>
@@ -206,27 +207,18 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   Copy,
   ExternalLink,
-  File,
-  FileCode2,
-  FileSpreadsheet,
-  FileText,
-  Film,
-  Image as ImageIcon,
   Info,
   LoaderCircle,
-  Music,
-  Package,
-  Presentation,
   RefreshCw,
   RotateCcw,
   Search,
   Trash2,
-  type LucideIcon,
 } from 'lucide-vue-next'
 import type { ArtifactRole, ProjectArtifact } from '@/types.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
 import { copyText } from '@/helpers/clipboard.ts'
 import { isNativeContextTarget, openContextMenu } from '@/components/context-menu/context-menu.ts'
+import FileTypeBadge from '@/components/FileTypeBadge.vue'
 import UiSelect from '@/components/UiSelect.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 
@@ -308,19 +300,6 @@ const visibleArtifacts = computed(() => {
 })
 const selected = computed(() => Array.from(selectedSet.value))
 
-const KIND_ICONS: Record<string, LucideIcon> = {
-  image: ImageIcon,
-  video: Film,
-  audio: Music,
-  pdf: FileText,
-  document: File,
-  code: FileCode2,
-  spreadsheet: FileSpreadsheet,
-  presentation: Presentation,
-  file: Package,
-  file_change: FileText,
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
@@ -390,10 +369,6 @@ function inferredKind(kind: string, name = ''): string {
   if (['pptx', 'ppt', 'odp'].includes(ext)) return 'presentation'
   if (['ts', 'tsx', 'js', 'jsx', 'vue', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp', 'cs', 'rb', 'php', 'sh', 'ps1', 'sql', 'html', 'css', 'scss', 'json', 'jsonc', 'yaml', 'yml', 'toml', 'xml'].includes(ext)) return 'code'
   return kind
-}
-
-function kindIcon(kind: string, name = ''): LucideIcon {
-  return KIND_ICONS[inferredKind(kind, name)] || File
 }
 
 function kindLabel(kind: string, name = ''): string {

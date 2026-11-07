@@ -13,7 +13,9 @@ describe('file references in the real interface', () => {
   it('renders the full path as an atomic filename and keeps selection and undo available', async () => {
     const wrapper = mount(InlineFileComposer, { attachTo: document.body, props: { modelValue: 'check @"C:/资料/a.png" please' } })
     mounted.push(wrapper)
-    expect(wrapper.find('.composer-file-token').text()).toContain('@a.png')
+    expect(wrapper.find('.composer-file-token').text()).toContain('a.png')
+    expect(wrapper.find('.composer-file-token').text()).not.toContain('@')
+    expect(wrapper.find('.composer-file-token .composer-file-badge').exists()).toBe(true)
     expect(wrapper.find('.composer-file-token').attributes('title')).toContain('C:/资料/a.png')
     const handle = wrapper.vm as unknown as { setSelectionRange(a: number, b: number): void; selectionStart: number; select(): void; selectionEnd: number }
     handle.setSelectionRange(0, 5)
@@ -22,7 +24,8 @@ describe('file references in the real interface', () => {
     handle.select()
     expect(handle.selectionEnd).toBe('check @"C:/资料/a.png" please'.length)
     await wrapper.setProps({ modelValue: 'check @"C:/资料/b.png" please' })
-    expect(wrapper.find('.composer-file-token').text()).toContain('@b.png')
+    expect(wrapper.find('.composer-file-token').text()).toContain('b.png')
+    expect(wrapper.find('.composer-file-token').text()).not.toContain('@')
   })
   it('confirms file completion without sending the message on Enter or its keyup', async () => {
     const wrapper = mount(InlineFileComposer, { attachTo: document.body, props: { modelValue: '@a', suggestions: [{ name: 'a.png', path: 'C:/a.png' }] } })
@@ -45,7 +48,7 @@ describe('file references in the real interface', () => {
     expect(wrapper.find('.reference-item').attributes('title')).toContain('原文件不存在')
     expect(wrapper.text()).not.toContain('gone.png')
   })
-  it('does not refetch previews on each parent render and can read restored path-only icons', async () => {
+  it('does not refetch previews on each parent render and opens restored path-only icons with the default app', async () => {
     const request = vi.fn(async (input: { path: string }) => input.path.startsWith('/files/resolve-reference')
       ? { status: 200, headers: {}, body: new TextEncoder().encode(JSON.stringify({ path: 'C:/note.txt' })) }
       : { status: 200, headers: { 'content-type': 'text/plain' }, body: new TextEncoder().encode('note') })
@@ -60,7 +63,10 @@ describe('file references in the real interface', () => {
     await wrapper.setProps({ attachments: [{ ...file, id: 'path:C:/note.txt' }] })
     await wrapper.find('.reference-item').trigger('click')
     await flushPromises()
-    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ path: '/files/read-reference?path=C%3A%2Fnote.txt' }))
+    // user:“没有浮窗预览这一说，砍掉”+(没有分屏时直接交给默认应用，不再读取到居中浮层)。
+    const openCall = request.mock.calls.find(([input]) => input.path === '/files/open-reference')?.[0]
+    expect(openCall).toBeTruthy()
+    expect(JSON.parse(new TextDecoder().decode((openCall as { body: Uint8Array }).body)).path).toBe('C:/note.txt')
   })
   it('uses identical file menus in Markdown and outcomes, with a distinct link menu', async () => {
     const actions = useReferenceActions({ request: vi.fn() } as never, () => 'C:/project')
@@ -69,15 +75,28 @@ describe('file references in the real interface', () => {
     actions.menu(new MouseEvent('contextmenu'), 'example.com')
     expect(contextMenuState.items.map(i => 'label' in i ? i.label : '')).toEqual(['使用默认浏览器打开', '复制链接'])
     const host = document.createElement('div')
-    host.innerHTML = '<p>@"C:/资料/a.png" and report.md</p><pre><code>report.md</code></pre>'
+    host.innerHTML = '<p>@"C:/资料/a.png" and docs/report.md</p><pre><code>report.md</code></pre>'
     renderFileReferenceNodes(host, 'C:/project')
-    // user:“渲染的@改为对应文件图标”+(引用开头的 @ 字符换成按扩展名选择的文件图标，文件名保留)。
+    // user:“把那个@的符号去掉 换成对应的文件图标”+(引用文本只留文件名，
+    // 文件类型徽标用 data-label 由 CSS 绘制，不进入复制的文本内容)。
     expect([...host.querySelectorAll('a')].map(a => a.textContent)).toEqual(['a.png', 'report.md'])
-    const icons = [...host.querySelectorAll('a svg')]
-    expect(icons).toHaveLength(2)
-    expect(icons[0]!.classList.contains('lucide-image')).toBe(true)
-    expect(icons[1]!.classList.contains('lucide-file-text')).toBe(true)
+    const badges = [...host.querySelectorAll('a .file-reference-badge')] as HTMLElement[]
+    expect(badges).toHaveLength(2)
+    expect(badges[0]!.dataset.label).toBe('IMG')
+    expect(badges[1]!.dataset.label).toBe('MD')
     expect(host.querySelector('a')?.title).toBe('C:/资料/a.png')
     expect(host.querySelector('pre')?.textContent).toBe('report.md')
+  })
+  it('only auto-links drive-absolute and project-relative paths, leaving ambiguous paths as text', () => {
+    // user:“只渲染两种：从盘符开始的绝对路径且有文件，从项目路径开始的相对路径且有文件”+
+    // (裸文件名、Unix 绝对路径、越过项目根的相对路径都不自动变成文件链接)。
+    const host = document.createElement('div')
+    host.innerHTML = '<p>report.md /tmp/photo.png ../outside.md foo/../../outside.md src/inside.ts</p>'
+    renderFileReferenceNodes(host, 'C:/project')
+    expect([...host.querySelectorAll('a')].map(a => a.textContent)).toEqual(['inside.ts'])
+    expect(host.textContent).toContain('report.md')
+    expect(host.textContent).toContain('/tmp/photo.png')
+    expect(host.textContent).toContain('../outside.md')
+    expect(host.textContent).toContain('foo/../../outside.md')
   })
 })

@@ -81,7 +81,8 @@ class PluginMcpResourceConnection:
 
     async def aclose(self):
         self._closed = True
-        if self._close_task is None:
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(失败或被取消的关闭任务只保留诊断，后续重试必须重新执行原传输清理)。
+        if self._close_task is None or (self._close_task.done() and (self._close_task.cancelled() or self._close_task.exception() is not None)):
             self._close_task = asyncio.create_task(self._client.close(), name="plugin-mcp-resources-close")
             self._close_task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
         async def join():
@@ -96,7 +97,7 @@ class PluginMcpResourceConnection:
             if not self._entered or self._closed:
                 raise McpResourceError("mcp-resource/invalid-state", "Enter an open resource connection before reading")
             try:
-                result = await self._client.request(method, params)
+                result = await self._client.request_current(method, params)
             except MCPError:
                 raise McpResourceError("mcp-resource/request-failed", "MCP resource request failed; no request was replayed") from None
             try:

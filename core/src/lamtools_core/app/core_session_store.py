@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from lamtools_core.session import MessageRecord, SessionRecord
 
@@ -41,6 +41,7 @@ class CoreDbSessionStore:
         fallback_work_root: Path | str | None = None,
     ) -> None:
         self._db_provider = db_provider
+        self._default_visibility = session_visible is None
         self._session_visible = session_visible or (lambda _session_id, _metadata: True)
         self._sync_journal: Any = None
         self._sync_publisher = sync_publisher
@@ -147,6 +148,36 @@ class CoreDbSessionStore:
         self._remember_runtime_preferences(session)
         await self._publish_sync_changes(change_ids)
         return session
+
+    async def exists(self, session_id: str) -> bool:
+        """Whether this session is reachable, without materializing it.
+
+        Every thread RPC starts with an existence check, and ``get`` answers it
+        by loading the row's whole ``snapshot_json`` (24MB / 120k events on the
+        longest test thread) and running the read-time turn repair — measured
+        at ~320ms per call, dwarfing the page read it guards.
+
+        The default visibility rule only looks at ``owner_plugin``, so it can be
+        answered by SQLite's JSON extractor without decoding the blob in Python.
+        A host that installed its own resolver keeps the full read, because only
+        it knows what its rule needs.
+        """
+        if not self._default_visibility:
+            return (await self.get(session_id)) is not None
+        db = self._db_provider()
+        model = CoreThreadSnapshot
+        async with db.session_factory() as connection:
+            result = await connection.execute(
+                select(
+                    func.json_extract(
+                        model.snapshot_json, "$.session.metadata.owner_plugin"
+                    )
+                ).where(model.thread_id == session_id)
+            )
+            row = result.first()
+        if row is None:
+            return False
+        return self._is_visible(session_id, {"owner_plugin": str(row[0] or "")})
 
     async def get(self, session_id: str) -> SessionRecord | None:
         db = self._db_provider()
@@ -713,7 +744,15 @@ def session_record_from_snapshot(row: CoreThreadSnapshot) -> SessionRecord:
     # read-time repair has to run here too. Without it a session whose snapshot
     # carried an invented turn kept showing as running in the sidebar long after
     # the thread itself read completed (2026-10-14).
-    state = prune_orphan_turns(dict(row.snapshot_json or {}))
+    #
+    # The repair is skipped when it provably cannot change anything: no open turn
+    # (``active_turn_id`` is derived on every write) and a settled status. It
+    # walks every turn of the thread, and the session list converts every row, so
+    # an idle long session used to pay tens of milliseconds per sidebar refresh.
+    raw = dict(row.snapshot_json or {})
+    if _session_needs_repair(raw, getattr(row, "active_turn_id", "") or ""):
+        raw = prune_orphan_turns(raw)
+    state = raw
     session = state.get("session") if isinstance(state.get("session"), dict) else {}
     updated_at = row.updated_at or datetime.now()
     return SessionRecord(
@@ -727,6 +766,23 @@ def session_record_from_snapshot(row: CoreThreadSnapshot) -> SessionRecord:
         created_at=_datetime(session.get("created_at"), fallback=updated_at),
         updated_at=updated_at,
     )
+
+
+_REPAIR_STATUSES = frozenset({"running", "waiting", "interrupting", "paused"})
+
+
+def _session_needs_repair(state: dict[str, Any], active_turn_id: str) -> bool:
+    """Mirror of the snapshot store's repair gate for the session list.
+
+    A row with no open turn and a settled thread status has nothing to repair;
+    running the turn-table walk for it is pure cost on every list refresh.
+    """
+    if active_turn_id:
+        return True
+    core = state.get("core") if isinstance(state.get("core"), dict) else {}
+    core_status = core.get("status") if isinstance(core, dict) else None
+    status = str(core_status or "") if core_status and core_status != "idle" else str(state.get("status") or "")
+    return status in _REPAIR_STATUSES
 
 
 def _snapshot_revision(row: CoreThreadSnapshot) -> int:

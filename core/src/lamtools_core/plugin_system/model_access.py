@@ -120,7 +120,7 @@ class PluginModelAPI:
         except Exception as error:
             raise ModelAccessError("model/store-error", "Unable to read model provider configuration") from error
         if not usable:
-            raise ModelAccessError("model/unavailable", "Selected model provider is missing or has an invalid endpoint")
+            raise ModelAccessError("model/unavailable", "Selected model is disabled, or its provider is missing or has an invalid endpoint")
         return ModelSelection(scene=scene, model=self._descriptor(record), replaced_from=replaced_from, notice=notice)
 
 

@@ -444,3 +444,9 @@
 /* user:“编辑布局是实验性功能”+(入口与通用设置使用同一种“实验性”标记样式) */
 .studio-entry-title { display: flex; align-items: center; gap: var(--space-2); }
 .studio-entry-badge { flex: 0 0 auto; padding: 1px var(--space-2); border-radius: 999px; background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 65%, transparent); font-size: 10px; line-height: 1.6; }
+
+/* user:“重新设计模型与供应商界面”+(设置页铺满整版界面，目录才能像工作台一样占住窗口。) */
+.settings-root {
+  height: 100%;
+  min-height: 0;
+}

@@ -56,6 +56,7 @@ class PluginApprovalService:
         caller = asyncio.current_task()
         cancelling = caller.cancelling()
         context = self._sessions._context()
+        original_host = context.host
         await self._sessions._snapshot(context, session_id)
         request_id = "approval_" + uuid.uuid4().hex
         async def asked(db):
@@ -101,7 +102,12 @@ class PluginApprovalService:
             async def decided(db):
                 actual = outcome
                 state = self._sessions._state(context, session_id, await context.persistence.load_metadata(db, session_id))
-                if actual == "allowed-once" and (not scope.accepting or not self._live(record) or not state.running or state.active_turn_id != turn_id):
+                # user:“完成真实接口、参数/错误、作用域、取消/清理”+(决定落盘前复核原宿主；迟到允许不能跨越宿主关闭/替换，原数据库仍负责取消审计收尾)。
+                try:
+                    host_current = getattr(self._sessions._context(), "host", None) is original_host
+                except SessionError:
+                    host_current = False
+                if actual == "allowed-once" and (not host_current or not scope.accepting or not self._live(record) or not state.running or state.active_turn_id != turn_id):
                     actual = "cancelled"
                 event = await context.persistence.append(db, AppEventInput(thread_id=session_id, turn_id=turn_id,
                     method="plugin/approvalDecided", payload={"request_id": request_id, "outcome": actual, "plugin": scope.owner}))

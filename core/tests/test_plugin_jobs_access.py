@@ -13,6 +13,64 @@ def context(tmp_path, owner="caller"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [[], {}])
+async def test_job_output_stream_shape_errors_do_not_break_callback(tmp_path, stream):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(输出流类型错误归invalid-output，回调可处理后继续正常发布)。
+    from lamtools_core.plugin_system.jobs_access import JobAccessError
+    ctx = context(tmp_path)
+    async def work(job):
+        with pytest.raises(JobAccessError) as error:
+            job.emit(stream, "rejected")
+        assert error.value.code == "job/invalid-output"
+        job.emit("stdout", "accepted")
+        return {"continued": True}
+    try:
+        job = ctx.jobs.start("worker", "Invalid stream", work)
+        result = await ctx.jobs.wait(job.id, timeout=3)
+        assert result.status == "completed" and result.result == {"continued": True}
+        assert ctx.jobs.read(job.id).stdout == b"accepted"
+    finally:
+        await ctx._registration_scope.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoke", [False, True])
+async def test_wait_publication_rechecks_original_scope_after_actual_job_settles(tmp_path, monkeypatch, revoke):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(真实回调完成后只读等待结果不能越过已撤回启动代，正常等待仍返回原结果)。
+    from lamtools_core.plugin_system.services import ServiceError
+    ctx = context(tmp_path)
+    api = ctx.jobs
+    release, waiting = asyncio.Event(), asyncio.Event()
+    async def work(job):
+        await release.wait()
+        return {"actual": "result"}
+    record = api.start("worker", "Scope boundary", work)
+    original_wait = record._done.wait
+    async def observed_wait():
+        waiting.set()
+        return await original_wait()
+    monkeypatch.setattr(record._done, "wait", observed_wait)
+    pending = asyncio.create_task(api.wait(record.id, timeout=3))
+    try:
+        await asyncio.wait_for(waiting.wait(), 3)
+        if revoke:
+            ctx._registration_scope.revoke()
+        release.set()
+        if revoke:
+            with pytest.raises(ServiceError) as error:
+                await pending
+            assert error.value.code == "service/scope-closed"
+        else:
+            result = await pending
+            assert result.status == "completed" and result.result == {"actual": "result"}
+        assert record._task.done() and record.view().status == "completed"
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await ctx._registration_scope.dispose()
+
+
+@pytest.mark.asyncio
 async def test_real_job_progress_output_result_and_observer_offsets(tmp_path):
     ctx = context(tmp_path)
     release = asyncio.Event()

@@ -291,6 +291,35 @@ class PluginSecretStore:
             if data["plugins"].get(str(plugin), {}).pop(str(key), None) is not None:
                 self._save(data)
 
+    def compare_exchange(self, plugin: str, key: str, expected: str | None, value: str | None) -> bool:
+        # user:“复用现有宿主权威”+(账户令牌更新/拒绝必须在原跨进程凭据锁内比较并提交，不能删除另一次登录)。
+        with self._locked():
+            data = self._load()
+            bucket = self._plugin_bucket(data, plugin)
+            entry = bucket.get(key)
+            current = None
+            if entry is not None:
+                if not isinstance(entry, dict) or not entry.get("value"):
+                    raise SecretStoreError("Invalid credential record", code="credentials/schema")
+                try:
+                    current = _decode(str(entry["value"]))
+                except Exception:
+                    raise SecretStoreError("Cannot decrypt credential", code="credentials/decrypt") from None
+            if current != expected:
+                return False
+            if value is None:
+                if key in bucket:
+                    bucket.pop(key)
+                    self._save(data)
+                return True
+            try:
+                encoded = _encode(value)
+            except Exception:
+                raise SecretStoreError("Cannot protect credential", code="credentials/protect") from None
+            bucket[key] = {"value": encoded, "updatedAt": datetime.now(timezone.utc).isoformat()}
+            self._save(data)
+            return True
+
     def keys(self, plugin: str) -> list[str]:
         with self._locked():
             return sorted(self._load()["plugins"].get(str(plugin), {}).keys())

@@ -116,7 +116,10 @@ def forward(port: int = 9222) -> None:
     names = [line.rsplit(" ", 1)[-1] for line in listing.splitlines() if "webview_devtools_remote" in line]
     if not names:
         raise SystemExit("no webview devtools socket: is the app running and debuggable?")
-    name = names[-1].strip()
+    # The listing prints the abstract socket with a leading "@"; adb wants the name
+    # without it, and forwarding to "localabstract:@name" silently accepts the
+    # forward and then drops every connection.
+    name = names[-1].strip().lstrip("@")
     subprocess.run([adb, "forward", f"tcp:{port}", f"localabstract:{name}"], check=True, timeout=60)
     print(f"tcp:{port} -> {name}")
 

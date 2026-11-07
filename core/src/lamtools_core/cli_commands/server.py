@@ -62,6 +62,11 @@ async def cmd_serve(args: argparse.Namespace) -> int:
     reasoning_level = getattr(args, "reasoning_level", "")
     if reasoning_level:
         app_kwargs["reasoning_level"] = reasoning_level
+    # user:“给我把 2 阶段做完，前端除外”+(已有HTTP前端启动者提供真实配置地址；端口0尚未知，不生成虚假广告地址)。
+    if args.frontend_dir and 0 < args.port <= 65535:
+        public_host = "127.0.0.1" if bind_host == "0.0.0.0" else "::1" if bind_host == "::" else bind_host
+        public_host = f"[{public_host}]" if ":" in public_host else public_host
+        app_kwargs["advertised_url"] = f"{'https' if certfile else 'http'}://{public_host}:{args.port}/"
     app = create_core_agent_http_app(**app_kwargs)
     url_host = f"[{bind_host}]" if ":" in bind_host else bind_host
     url = f"{'https' if certfile else 'http'}://{url_host}:{args.port}"

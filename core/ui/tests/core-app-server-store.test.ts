@@ -174,6 +174,36 @@ describe('core appServer runtime store', () => {
     expect(outcome.queued).toBe(true)
   })
 
+  it('reports a steer the runtime turned into a new turn instead of faking guidance', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method) => {
+        if (method === 'thread/resume') return { snapshot: snapshot(1, 'running') }
+        if (method === 'turn/steer') {
+          return {
+            applied: false,
+            submitted: true,
+            queued: false,
+            turn_id: 'turn-2',
+            reason: 'run_not_active',
+          }
+        }
+        return {}
+      }),
+      scheduleFrame: () => undefined,
+    })
+    await controller.connect('thread-1')
+
+    // user:“引导在结束边界之后被接收：原回合结束，创建一条真实用户消息并开启新回合”
+    // +(这段文字已经是新回合里的用户消息：界面既不能报"引导没有生效"，也不能报"已排队")。
+    const outcome = await controller.steerTurn('thread-1', 'turn-1', '继续写')
+    expect(outcome.applied).toBe(false)
+    expect(outcome.submitted).toBe(true)
+    expect(outcome.queued).toBe(false)
+    expect(outcome.turnId).toBe('turn-2')
+    expect(outcome.message).toBe('')
+  })
+
   it('does not let an older snapshot or event roll a terminal turn back to running', async () => {
     const runtime = createCoreAppServerRuntimeState()
     const frames: Array<() => void> = []

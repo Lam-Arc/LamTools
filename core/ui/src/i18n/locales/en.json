@@ -2515,5 +2515,7 @@
   "会话「{0}」已完成，点击打开": "Session \"{0}\" completed — click to open",
   "会话「{0}」执行失败，点击打开": "Session \"{0}\" failed — click to open",
   "打开会话": "Open session",
-  "桌宠": "Desktop Pet"
+  "桌宠": "Desktop Pet",
+  "展开其余 {0} 项": "Show {0} more",
+  "部分文件不存在": "Some files are missing"
 }

@@ -18,14 +18,20 @@ class PluginWorkingDirectoryService:
         scope.check_open()
         return PluginWorkingDirectoryAPI(self, scope)
 
-    async def _read(self, session_id):
+    def _context(self):
+        # user:“复用原宿主权威”+(目录读写及运行时恢复共用同一宿主检查，读取等待之后也不得越过关闭或存储替换)。
         context = self._sessions._context()
         if context.host.session_store is not self._store:
             raise WorkingDirectoryError("working-directory/host-changed", "Session store changed")
+        return context
+
+    async def _read(self, session_id):
+        self._context()
         read = getattr(self._store, "get_readonly_revision", None)
         if not callable(read):
             raise WorkingDirectoryError("working-directory/unavailable", "Host has no coherent session revision reader")
         result = await read(session_id)
+        self._context()
         if result is None:
             raise WorkingDirectoryError("working-directory/not-found", "Session is unknown or unavailable")
         return result

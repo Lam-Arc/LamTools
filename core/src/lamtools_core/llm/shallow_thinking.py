@@ -89,7 +89,13 @@ class ShallowThinkingClient:
         self.enabled = bool(enabled)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+        value = getattr(self._inner, name)
+        if name == "with_runtime_options" and callable(value):
+            # user:“继续，只在交互轮停下”+(SDK固定项目/模型时必须保留已有浅层思考包装，不能只克隆内部路由器而丢失行为)。
+            def routed(*args: Any, **kwargs: Any):
+                return ShallowThinkingClient(value(*args, **kwargs), enabled=self.enabled)
+            return routed
+        return value
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         if not self.enabled:

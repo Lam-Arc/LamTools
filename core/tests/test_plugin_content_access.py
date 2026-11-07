@@ -1,5 +1,6 @@
 """user:“给我把 2 阶段做完，前端除外”+(本地引用、内容裁剪、Web和计划限制验证实际行为)。"""
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,93 @@ async def test_file_reference_search_is_deterministic_scoped_and_reports_scan_li
 
 
 @pytest.mark.asyncio
+async def test_cancelled_reference_scan_keeps_scope_until_real_worker_stops(ctx,monkeypatch):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(取消不能留下仍访问项目的扫描线程并提前放掉启动代租约)。
+    from lamtools_core.plugin_system import content_access
+    entered, release = threading.Event(), threading.Event()
+    (ctx.work_root / "nested").mkdir()
+    visited = []
+    original = content_access.os.scandir
+    def gated(path):
+        visited.append(Path(path))
+        entered.set()
+        assert release.wait(3), "test must release the actual directory worker"
+        return original(path)
+    monkeypatch.setattr(content_access.os,"scandir",gated)
+    task = asyncio.create_task(ctx.file_references.list())
+    disposal = None
+    try:
+        assert await asyncio.to_thread(entered.wait,2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and task in ctx._registration_scope._calls
+        disposal = asyncio.create_task(ctx._registration_scope.dispose())
+        await asyncio.sleep(0)
+        assert not disposal.done()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.gather(task,return_exceptions=True)
+        if disposal is not None:
+            await asyncio.wait_for(disposal,3)
+        else:
+            await ctx._registration_scope.dispose()
+    assert task.cancelled() and not ctx._registration_scope._calls
+    assert visited == [ctx.work_root]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 503])
+@pytest.mark.parametrize("revoke", [False, True])
+async def test_web_fetch_rechecks_scope_after_actual_http_response(ctx, monkeypatch, status, revoke):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(真实HTTP等待后，成功和失败结果均不得越过撤回启动代发布，原返回语义保留)。
+    import httpx
+    from lamtools_core.tool import web_tools
+    from lamtools_core.plugin_system.services import ServiceError
+    entered, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def serve(reader, writer):
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            entered.set()
+            await release.wait()
+            body = b"native http result"
+            writer.write(f"HTTP/1.1 {status} Test\r\nContent-Type: text/plain\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            finished.set()
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    async with httpx.AsyncClient(trust_env=False) as client:
+        monkeypatch.setattr(web_tools, "_HTTP_CLIENT", client)
+        task = asyncio.create_task(ctx.web.fetch(f"http://127.0.0.1:{port}/result"))
+        try:
+            await asyncio.wait_for(entered.wait(), 3)
+            if revoke:
+                ctx._registration_scope.revoke()
+            release.set()
+            if revoke:
+                with pytest.raises(ServiceError) as error:
+                    await task
+                assert error.value.code == "service/scope-closed"
+            else:
+                result = await task
+                assert result["status"] == ("ok" if status == 200 else "failed")
+                assert "native http result" in result["content"]
+            assert not ctx._registration_scope._calls
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            server.close()
+            await server.wait_closed()
+            await asyncio.wait_for(finished.wait(), 3)
+            await ctx._registration_scope.dispose()
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_uses_native_transport_and_preserves_result_error(ctx, monkeypatch):
     import httpx
     from lamtools_core.tool import web_tools
@@ -67,6 +155,8 @@ async def test_plan_mode_actually_restricts_tools_and_cleanup_restores(ctx):
     ctx.plan_mode.enter("s")
     assert ctx.plan_mode.get("s")["active"]
     assert host.allows("read_file", "s")
+    assert host.allows("list_dir", "s")
+    assert host.allows("search_content", "s")
     assert not host.allows("write_file", "s")
     assert not host.allows("run_command", "s")
     assert host.allows("write_file", "other")

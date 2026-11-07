@@ -120,22 +120,59 @@ def test_run_installer_refuses_when_nothing_was_downloaded() -> None:
         run_installer()
 
 
+class FakeSetup:
+    """A spawned setup that keeps running outside any job unless told otherwise."""
+
+    def __init__(self, exit_code: int | None = None) -> None:
+        self.pid = 4321
+        self._exit_code = exit_code
+        self.terminated = False
+        self.closed = False
+        self.returncode = exit_code
+
+    def poll(self) -> int | None:
+        return self._exit_code
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        self._exit_code = 1
+        self.returncode = 1
+        return 1
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def fast_launch_confirmation(monkeypatch: pytest.MonkeyPatch):
+    """The real wait is 1.5s of proving the setup survived; tests do not need it."""
+    monkeypatch.setattr(installer, "LAUNCH_CONFIRM_SECONDS", 0.05)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
 def test_run_installer_launches_the_verified_file(
     artifact_server: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = download_update(artifact_server, DIGEST)
     spawned: list[dict] = []
+    fake = FakeSetup()
+    monkeypatch.setattr(installer, "_process_is_in_a_job", lambda pid: False)
     monkeypatch.setattr(
         installer.subprocess,
         "Popen",
-        lambda argv, **kwargs: spawned.append({"argv": argv, **kwargs}),
+        lambda argv, **kwargs: (spawned.append({"argv": argv, **kwargs}), fake)[1],
     )
 
     outcome = run_installer()
 
+    expected_arguments = installer.installer_arguments(
+        installer.download_dir() / "install-last.log",
+        installer.download_dir() / "install-failure.txt",
+    )
     assert spawned == [{
-        "argv": [result["path"], *installer.installer_arguments(installer.download_dir() / "install-last.log")],
+        "argv": [result["path"], *expected_arguments],
         "cwd": str(Path(result["path"]).parent),
         "creationflags": installer.INSTALLER_SPAWN_FLAGS,
         "close_fds": True,
@@ -161,6 +198,21 @@ def test_the_in_app_install_runs_quietly_and_brings_the_app_back() -> None:
     assert "/AUTORESTART=1" in arguments
     assert "/LOG=C:\\tmp\\sunday-update\\install-last.log" in arguments or \
         "/LOG=C:/tmp/sunday-update/install-last.log" in arguments
+
+
+def test_the_launch_names_the_failure_report_it_wants_written() -> None:
+    """A refusal has to leave its reason where the app can still read it.
+
+    The setup writes process names, PIDs and files to this path; without it the
+    reason only exists in a log nobody looks at.
+    """
+    arguments = installer.installer_arguments(
+        Path("C:/tmp/sunday-update/install-last.log"),
+        Path("C:/tmp/sunday-update/install-failure.txt"),
+    )
+
+    assert "/FAILREPORT=C:\\tmp\\sunday-update\\install-failure.txt" in arguments or \
+        "/FAILREPORT=C:/tmp/sunday-update/install-failure.txt" in arguments
 
 
 def test_a_cancelled_download_stops_and_leaves_nothing_behind(artifact_server: str) -> None:
@@ -206,12 +258,92 @@ def test_run_installer_leaves_the_backend_job_so_the_installer_survives(
     app quits to let it work, so the flags are part of the contract, not a detail.
     """
     download_update(artifact_server, DIGEST)
-    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: FakeSetup())
+    monkeypatch.setattr(installer, "_process_is_in_a_job", lambda pid: False)
 
     run_installer()
 
     assert installer.INSTALLER_SPAWN_FLAGS & installer.CREATE_BREAKAWAY_FROM_JOB
     assert installer.INSTALLER_SPAWN_FLAGS & installer.DETACHED_PROCESS
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_a_setup_still_inside_a_job_is_handed_to_the_shell_instead(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A setup that is still a job member dies with the app, so it must not be used.
+
+    Breaking away only leaves the innermost job; an outer one (a launcher, a
+    terminal, another installer) still kills the setup when this process exits.
+    The check is real, and the fallback is what keeps that machine updating.
+    """
+    download_update(artifact_server, DIGEST)
+    fake = FakeSetup()
+    launched: list[str] = []
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: fake)
+    monkeypatch.setattr(installer, "_process_is_in_a_job", lambda pid: True)
+    monkeypatch.setattr(installer.os, "startfile", lambda path, *a, **k: launched.append(path), raising=False)
+
+    outcome = run_installer()
+
+    assert fake.terminated, "the doomed setup must be ended before the hand-off"
+    assert launched, "the shell hand-off has to start the installer"
+    assert outcome["quit"] is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_a_setup_that_exits_at_once_keeps_the_app_running(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quitting for an installer that already died leaves no app and no update.
+
+    A blocked executable, a refused command line or a broken artifact all show up
+    as an immediate exit code; the app must stay up and say so instead of closing.
+    """
+    download_update(artifact_server, DIGEST)
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: FakeSetup(exit_code=5))
+    monkeypatch.setattr(installer, "_process_is_in_a_job", lambda pid: False)
+
+    with pytest.raises(UpdateInstallError, match="退出码 5"):
+        run_installer()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_the_launch_is_recorded_for_support(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The app is gone while the setup works: this file is what is left to read."""
+    import json
+
+    result = download_update(artifact_server, DIGEST)
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: FakeSetup())
+    monkeypatch.setattr(installer, "_process_is_in_a_job", lambda pid: False)
+
+    run_installer()
+
+    record = json.loads((installer.download_dir() / "install-launch.json").read_text(encoding="utf-8"))
+    assert record["installer"] == result["path"]
+    assert record["process_id"] == 4321
+    assert record["mode"] == "detached"
+    assert record["log"].endswith("install-last.log")
+    assert record["failure_report"].endswith("install-failure.txt")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_a_stale_failure_report_is_cleared_before_the_launch(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Yesterday's refusal must not be read as this attempt's verdict."""
+    stale = installer.download_dir() / "install-failure.txt"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("old failure", encoding="utf-8")
+    download_update(artifact_server, DIGEST)
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: FakeSetup())
+    monkeypatch.setattr(installer, "_process_is_in_a_job", lambda pid: False)
+
+    run_installer()
+
+    assert not stale.exists()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
@@ -333,7 +465,7 @@ def test_a_second_start_watches_instead_of_downloading_twice(monkeypatch: pytest
     release = threading.Event()
     calls: list[str] = []
 
-    def fake_worker(url: str, sha256: str, file_name: str) -> None:  # noqa: ARG001
+    def fake_worker(url: str, sha256: str, file_name: str, fallback_url: str = "") -> None:  # noqa: ARG001
         calls.append(url)
         started.set()
         release.wait(timeout=5)

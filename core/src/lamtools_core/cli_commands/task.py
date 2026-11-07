@@ -8,7 +8,8 @@ import asyncio
 import json
 import sys
 import uuid
-from dataclasses import dataclass, field
+from contextlib import AsyncExitStack
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from lamtools_core.app.base_agent import (
@@ -117,13 +118,16 @@ async def run_core_cli_task(
     run_dir.mkdir(parents=True, exist_ok=True)
     work_root.mkdir(parents=True, exist_ok=True)
 
+    # user:“复用现有宿主权威”+(先保留显式模型，缺省才解析运行档场景；同一结果用于后续配置加载与运行)。
+    resolved_model_id = options.model_id
     profile_spec = None
     if getattr(options, "profile", ""):
         from lamtools_core.plugin_system import PluginHost, resolve_profile
         from lamtools_core.plugin_system.paths import default_plugin_roots
 
         host = PluginHost(
-            roots=default_plugin_roots(work_root),
+            # user:“复用现有宿主权威”+(运行档发现沿用实际装配的显式插件根，缺省才取原默认目录)。
+            roots=list(options.plugin_roots) if options.plugin_roots else default_plugin_roots(work_root),
             state_path=run_dir / "plugin-system.jsonc",
         )
         profile_spec = resolve_profile(host.discover(), options.profile)
@@ -163,17 +167,15 @@ async def run_core_cli_task(
                     else (base.budget.max_tokens if base is not None else None)
                 ),
             )
-            profile_spec = ProfileSpec(
-                full_name=(base.full_name if base is not None else "cli:adhoc"),
-                plugin=(base.plugin if base is not None else "cli"),
-                profile=(base.profile if base is not None else "adhoc"),
-                title=(base.title if base is not None else "CLI ad-hoc run profile"),
+            # user:“复用现有宿主权威”+(覆盖指定CLI参数时保留原运行档的MCP限制等完整声明，避免手工重建遗漏字段)。
+            profile_spec = replace(
+                base if base is not None else ProfileSpec(
+                    full_name="cli:adhoc", plugin="cli", profile="adhoc", title="CLI ad-hoc run profile",
+                ),
                 tools=tools,
                 approval=approval,
-                model_scene=(base.model_scene if base is not None else ""),
                 budget=budget,
             )
-    resolved_model_id = options.model_id
     context_window_tokens: int | None = None
     max_output_tokens = options.max_tokens
     model_context: dict[str, Any] = {"model_id": resolved_model_id}
@@ -183,7 +185,7 @@ async def run_core_cli_task(
         fallback="high" if options.thinking_enabled else "off",
     )
     if llm_client is None:
-        config = load_llm_config(model_ref=options.model_id)
+        config = load_llm_config(model_ref=resolved_model_id)
         profile = _resolve_adapter_profile(config, options.adapter_dirs)
         resolved_model_id = config.model_id
         context_window_tokens = config.context_window or None
@@ -227,227 +229,150 @@ async def run_core_cli_task(
 
     tier_tools = load_access_tools(core_config_file("access_tools.jsonc"))
     core_db = await open_core_app_db(core_db_path)
+    plugin_context = None
+    plugin_assembly = {}
+    runtime_task_registry = None
+    mcp_registry = None
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(数据库取得后整个原CLI初始化进入同一清理范围，不能只保护kernel运行阶段)。
+    try:
 
-    # Establish/read the Session before resolving runtime permissions.  Global
-    # runtimeControls initialize new Sessions only; an existing Session owns
-    # its persisted preference until the caller explicitly changes it.
-    _, session, _ = await core_db.project_store.ensure_session(
-        work_root,
-        thread_id,
-        title=options.message,
-    )
-    # One session has one runtime; a second process writing the same row would
-    # interleave two runs.  Refuse when another live process owns it, and let a
-    # row left behind by a crashed run be adopted (the kernel marks the takeover
-    # in state metadata on its first save).
-    live_owner = await core_db.runtime_state_store.live_owner(thread_id)
-    if live_owner:
-        raise RuntimeError(
-            f"会话 {thread_id} 正被另一个进程运行（pid={live_owner.get('pid')}，"
-            f"主机={live_owner.get('host')}）；请等它结束，或换一个 --thread-id。"
+        # Establish/read the Session before resolving runtime permissions.  Global
+        # runtimeControls initialize new Sessions only; an existing Session owns
+        # its persisted preference until the caller explicitly changes it.
+        _, session, _ = await core_db.project_store.ensure_session(
+            work_root,
+            thread_id,
+            title=options.message,
         )
-    session_preferences = session_runtime_preferences(
-        session.metadata,
-        global_controls=global_controls,
-    )
-    if options.allow_outside_workdir is None:
-        base_allow_outside = bool(session_preferences["base_allow_access_outside_workdir"])
-    else:
-        base_allow_outside = bool(options.allow_outside_workdir)
-    if options.permission_preset is not None:
-        requested_preset = options.permission_preset
-    elif options.approval_policy == "auto_approve":
-        requested_preset = "auto"
-    else:
-        requested_preset = str(session_preferences["permission_preset"])
-    resolved_permissions = resolve_session_permissions(
-        preset=requested_preset,
-        base_tier=session_preferences["base_tier"],
-        base_allow_access_outside_workdir=base_allow_outside,
-        tier_tools=tier_tools,
-        global_controls=global_controls,
-    )
-    allow_outside_workdir = resolved_permissions.allow_access_outside_workdir
-
-    from lamtools_core.plugin_system.context import PluginContext
-    from lamtools_core.runtime import RuntimeTaskRegistry
-    from lamtools_core.tool.approval import ApprovalGate
-    from lamtools_core.tool.permission import ASK_USER
-
-    runtime_task_registry = RuntimeTaskRegistry()
-    plugin_permission_service = ApprovalGate(
-        work_root=work_root,
-        tool_permissions={"run_command": ASK_USER},
-        allow_access_outside_workdir=allow_outside_workdir,
-    )
-
-    plugin_context = PluginContext(
-        work_root=work_root,
-        data_dir=run_dir,
-        permission_service=plugin_permission_service,
-        runtime_task_registry=runtime_task_registry,
-        services=dict(options.plugin_services),
-    )
-    plugin_assembly = assemble_core_agent_plugins(
-        data_dir=run_dir,
-        work_root=work_root,
-        plugin_roots=options.plugin_roots or None,
-        context=plugin_context,
-    )
-    from lamtools_core.mcp import MCPToolRegistry
-
-    mcp_registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [])
-    # user:“通过 command 运行”+(本地 CLI 代理也不预加载和注入 MCP 协议工具)。
-    from lamtools_core.mcp.command_service import MCPCommandService
-    mcp_service = MCPCommandService(mcp_registry)
-    if plugin_assembly["hook_engine"] is not None:
-        plugin_assembly["hook_engine"].set_mcp_caller(mcp_service)
-    from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
-    from lamtools_core.skill_runtime import create_skill_runtime
-
-    skill_runtime = create_skill_runtime(
-        plugin_skill_roots=plugin_assembly.get("skill_roots") or []
-    )
-    skill_roots = set(skill_runtime.roots)
-
-    async def capture_model_context(state: Any, request: Any) -> None:
-        payload = build_handoff_context(getattr(request, "messages", []))
-        await core_db.handoff_context_store.save(state.session_id, payload)
-
-    run_id = uuid.uuid4().hex[:12]
-    turn_id = f"{thread_id}:turn:{run_id}"
-    await persist_core_run_items(
-        core_db,
-        [
-            RunItemEvent(
-                kind="message",
-                thread_id=thread_id,
-                event_id=f"{run_id}:user",
-                run_id=run_id,
-                turn_id=turn_id,
-                item_id=f"{turn_id}:user",
-                status="completed",
-                payload={
-                    "type": "userMessage",
-                    "status": "completed",
-                    "content": [{"type": "text", "text": options.message}],
-                },
-                source="core.cli",
+        # One session has one runtime; a second process writing the same row would
+        # interleave two runs.  Refuse when another live process owns it, and let a
+        # row left behind by a crashed run be adopted (the kernel marks the takeover
+        # in state metadata on its first save).
+        live_owner = await core_db.runtime_state_store.live_owner(thread_id)
+        if live_owner:
+            raise RuntimeError(
+                f"会话 {thread_id} 正被另一个进程运行（pid={live_owner.get('pid')}，"
+                f"主机={live_owner.get('host')}）；请等它结束，或换一个 --thread-id。"
             )
-        ],
-    )
-    core_instructions = DEFAULT_CORE_INSTRUCTIONS
-    if options.instructions:
-        core_instructions = options.instructions
-    context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens
-    runtime_snapshot = build_runtime_snapshot(
-        permissions=resolved_permissions,
-        active_mode=options.active_mode or None,
-        model_id=resolved_model_id,
-        reasoning_level=effective_reasoning_level,
-        thinking_enabled=options.thinking_enabled,
-        thinking_budget=options.thinking_budget,
-        shallow_thinking_enabled=options.shallow_thinking_enabled,
-        context_window_tokens=context_window_tokens,
-        max_tokens=max_output_tokens,
-        temperature=options.temperature,
-        compact_trigger_tokens=options.compact_trigger_tokens,
-        compact_limit_tokens=options.compact_limit_tokens,
-    )
+        session_preferences = session_runtime_preferences(
+            session.metadata,
+            global_controls=global_controls,
+        )
+        if options.allow_outside_workdir is None:
+            base_allow_outside = bool(session_preferences["base_allow_access_outside_workdir"])
+        else:
+            base_allow_outside = bool(options.allow_outside_workdir)
+        if options.permission_preset is not None:
+            requested_preset = options.permission_preset
+        elif options.approval_policy == "auto_approve":
+            requested_preset = "auto"
+        else:
+            requested_preset = str(session_preferences["permission_preset"])
+        resolved_permissions = resolve_session_permissions(
+            preset=requested_preset,
+            base_tier=session_preferences["base_tier"],
+            base_allow_access_outside_workdir=base_allow_outside,
+            tier_tools=tier_tools,
+            global_controls=global_controls,
+        )
+        allow_outside_workdir = resolved_permissions.allow_access_outside_workdir
 
-    sub_agent_runner = KernelSubAgentRunner(
-        work_root=work_root,
-        llm_client=llm_client,
-        model_id=resolved_model_id,
-        instructions=core_instructions,
-        temperature=options.temperature,
-        max_tokens=max_output_tokens,
-        reasoning_level=effective_reasoning_level,
-        thinking_enabled=options.thinking_enabled,
-        thinking_budget=options.thinking_budget,
-        approval_policy=resolved_permissions.approval_policy,
-        permission_preset=resolved_permissions.permission_preset,
-        active_tier=resolved_permissions.active_tier,
-        tier_tools=resolved_permissions.tier_tools,
-        runtime_snapshot=runtime_snapshot,
-        loaded_skill_roots=skill_roots,
-        skill_registry=skill_runtime.registry,
-        mcp_config_files=plugin_assembly.get("mcp_files") or [],
-        context_window_tokens=context_window_tokens,
-        compact_trigger_tokens=options.compact_trigger_tokens,
-        compact_limit_tokens=options.compact_limit_tokens,
-        state_store=core_db.runtime_state_store,
-        session_prefix=thread_id,
-        parent_event_sink=sink,
-        model_context_sink=capture_model_context,
-    )
+        from lamtools_core.plugin_system.context import PluginContext
+        from lamtools_core.runtime import RuntimeTaskRegistry
+        from lamtools_core.tool.approval import ApprovalGate
+        from lamtools_core.tool.permission import ASK_USER
 
-    # Every local run uses the same plugin operation loader as the HTTP app.
-    # Reuse the already-loaded backend handles so one plugin owns one runtime
-    # instance (and one store) for the whole task.
-    operation_catalog = options.operation_catalog
-    if operation_catalog is None:
-        from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+        runtime_task_registry = RuntimeTaskRegistry()
+        plugin_permission_service = ApprovalGate(
+            work_root=work_root,
+            tool_permissions={"run_command": ASK_USER},
+            allow_access_outside_workdir=allow_outside_workdir,
+        )
 
-        operation_catalog = build_core_plugin_operation_catalog(
+        plugin_context = PluginContext(
+            work_root=work_root,
+            data_dir=run_dir,
+            permission_service=plugin_permission_service,
+            runtime_task_registry=runtime_task_registry,
+            services=dict(options.plugin_services),
+        )
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(原无界面入口在插件启动前公开实际任务/身份/已解析权限；快照不授予额外目录)。
+        from lamtools_core.plugin_system.startup_access import HeadlessStartupValues
+        plugin_context.set_service("headless_startup", HeadlessStartupValues(
+            task=options.message, thread_id=thread_id, requested_session_id=options.thread_id or None,
+            json_summary=options.raw, permission_preset=resolved_permissions.permission_preset,
+            approval_policy=resolved_permissions.approval_policy, work_root=str(work_root.resolve()),
+        ))
+        plugin_assembly = assemble_core_agent_plugins(
             data_dir=run_dir,
             work_root=work_root,
             plugin_roots=options.plugin_roots or None,
             context=plugin_context,
-            plugin_runtimes=plugin_assembly.get("plugin_runtimes") or [],
         )
-    plugin_context.operation_catalog = operation_catalog
-    plugin_context.llm_client = llm_client
-    plugin_context.set_service("sub_agent_runner", sub_agent_runner)
-    plugin_context.set_service("sub_agent_runner_factory", lambda: sub_agent_runner)
-    for runtime_handle in plugin_assembly.get("plugin_runtimes") or []:
-        runner = getattr(runtime_handle.value, "runner", None)
-        if runner is not None:
-            runner.sub_agent_runner = sub_agent_runner
+        from lamtools_core.mcp import MCPToolRegistry
 
-    load_tools_obj = None
-    active_mode = options.active_mode or None
-    if active_mode:
-        from lamtools_core.tool.loadtools import default_load_tools
+        mcp_registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [])
+        # user:“通过 command 运行”+(本地 CLI 代理也不预加载和注入 MCP 协议工具)。
+        from lamtools_core.mcp.command_service import MCPCommandService
+        mcp_service = MCPCommandService(mcp_registry)
+        if plugin_assembly["hook_engine"] is not None:
+            plugin_assembly["hook_engine"].set_mcp_caller(mcp_service)
+        from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
+        from lamtools_core.skill_runtime import create_skill_runtime
 
-        load_tools_obj = default_load_tools()
+        skill_runtime = create_skill_runtime(
+            plugin_skill_roots=plugin_assembly.get("skill_roots") or []
+        )
+        skill_roots = set(skill_runtime.roots)
 
-    async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
-        if operation_catalog is None:
-            raise RuntimeError("operation catalog is not configured")
-        return await operation_catalog.execute(name, payload, metadata=metadata)
+        async def capture_model_context(state: Any, request: Any) -> None:
+            payload = build_handoff_context(getattr(request, "messages", []))
+            await core_db.handoff_context_store.save(state.session_id, payload)
 
-    # user:“换芯声明”+声明工具在装配期已补全，这里直接归并。
-    plugin_tool_specs: list[Any] = list(plugin_assembly.get("plugin_runtime_specs") or [])
+        run_id = uuid.uuid4().hex[:12]
+        turn_id = f"{thread_id}:turn:{run_id}"
+        await persist_core_run_items(
+            core_db,
+            [
+                RunItemEvent(
+                    kind="message",
+                    thread_id=thread_id,
+                    event_id=f"{run_id}:user",
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    item_id=f"{turn_id}:user",
+                    status="completed",
+                    payload={
+                        "type": "userMessage",
+                        "status": "completed",
+                        "content": [{"type": "text", "text": options.message}],
+                    },
+                    source="core.cli",
+                )
+            ],
+        )
+        core_instructions = DEFAULT_CORE_INSTRUCTIONS
+        if options.instructions:
+            core_instructions = options.instructions
+        context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens
+        runtime_snapshot = build_runtime_snapshot(
+            permissions=resolved_permissions,
+            active_mode=options.active_mode or None,
+            model_id=resolved_model_id,
+            reasoning_level=effective_reasoning_level,
+            thinking_enabled=options.thinking_enabled,
+            thinking_budget=options.thinking_budget,
+            shallow_thinking_enabled=options.shallow_thinking_enabled,
+            context_window_tokens=context_window_tokens,
+            max_tokens=max_output_tokens,
+            temperature=options.temperature,
+            compact_trigger_tokens=options.compact_trigger_tokens,
+            compact_limit_tokens=options.compact_limit_tokens,
+        )
 
-    toolbox = build_core_toolbox(
-        work_root=work_root,
-        approval_policy=resolved_permissions.approval_policy,
-        active_tier=resolved_permissions.active_tier,
-        tier_tools=resolved_permissions.tier_tools,
-        loaded_skill_roots=skill_roots,
-        skill_registry=skill_runtime.registry,
-        mcp_service=mcp_service,
-        sub_agent_runner=sub_agent_runner,
-        operation_executor=execute_operation if operation_catalog is not None else None,
-        load_tools=load_tools_obj,
-        active_mode=active_mode,
-        plugin_tool_providers=plugin_assembly.get("plugin_tool_providers") or [],
-        plugin_tool_handlers=plugin_assembly.get("plugin_tool_handlers") or {},
-        plugin_tool_specs=plugin_tool_specs,
-        data_dir=run_dir,
-        allow_access_outside_workdir=allow_outside_workdir,
-        artifact_store=getattr(core_db, "artifact_store", None),
-        plugin_mode_exclusive_tools=plugin_assembly.get("plugin_mode_exclusive_tools") or {},
-    )
-    # user:“运行档由宿主强制”+白名单可见面、execute 拒绝、审批覆盖、预算计数。
-    if profile_spec is not None:
-        from lamtools_core.plugin_system.profiles import apply_profile
-
-        apply_profile(toolbox, profile_spec)
-    kit = CoreBaseAgentKit(
-        work_root=work_root,
-        config=CoreBaseAgentConfig(
+        sub_agent_runner = KernelSubAgentRunner(
+            work_root=work_root,
+            llm_client=llm_client,
             model_id=resolved_model_id,
             instructions=core_instructions,
             temperature=options.temperature,
@@ -456,11 +381,100 @@ async def run_core_cli_task(
             thinking_enabled=options.thinking_enabled,
             thinking_budget=options.thinking_budget,
             approval_policy=resolved_permissions.approval_policy,
+            permission_preset=resolved_permissions.permission_preset,
+            active_tier=resolved_permissions.active_tier,
+            tier_tools=resolved_permissions.tier_tools,
+            runtime_snapshot=runtime_snapshot,
+            loaded_skill_roots=skill_roots,
+            skill_registry=skill_runtime.registry,
+            mcp_config_files=plugin_assembly.get("mcp_files") or [],
+            context_window_tokens=context_window_tokens,
+            compact_trigger_tokens=options.compact_trigger_tokens,
+            compact_limit_tokens=options.compact_limit_tokens,
+            state_store=core_db.runtime_state_store,
+            session_prefix=thread_id,
+            parent_event_sink=sink,
+            model_context_sink=capture_model_context,
+        )
+
+        # Every local run uses the same plugin operation loader as the HTTP app.
+        # Reuse the already-loaded backend handles so one plugin owns one runtime
+        # instance (and one store) for the whole task.
+        operation_catalog = options.operation_catalog
+        if operation_catalog is None:
+            from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+
+            operation_catalog = build_core_plugin_operation_catalog(
+                data_dir=run_dir,
+                work_root=work_root,
+                plugin_roots=options.plugin_roots or None,
+                context=plugin_context,
+                plugin_runtimes=plugin_assembly.get("plugin_runtimes") or [],
+            )
+        plugin_context.operation_catalog = operation_catalog
+        plugin_context.llm_client = llm_client
+        plugin_context.set_service("sub_agent_runner", sub_agent_runner)
+        plugin_context.set_service("sub_agent_runner_factory", lambda: sub_agent_runner)
+        for runtime_handle in plugin_assembly.get("plugin_runtimes") or []:
+            runner = getattr(runtime_handle.value, "runner", None)
+            if runner is not None:
+                runner.sub_agent_runner = sub_agent_runner
+
+        load_tools_obj = None
+        active_mode = options.active_mode or None
+        if active_mode:
+            from lamtools_core.tool.loadtools import default_load_tools
+
+            load_tools_obj = default_load_tools()
+
+        async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
+            if operation_catalog is None:
+                raise RuntimeError("operation catalog is not configured")
+            return await operation_catalog.execute(name, payload, metadata=metadata)
+
+        # user:“换芯声明”+声明工具在装配期已补全，这里直接归并。
+        plugin_tool_specs: list[Any] = list(plugin_assembly.get("plugin_runtime_specs") or [])
+
+        toolbox = build_core_toolbox(
+            work_root=work_root,
+            approval_policy=resolved_permissions.approval_policy,
+            active_tier=resolved_permissions.active_tier,
+            tier_tools=resolved_permissions.tier_tools,
+            loaded_skill_roots=skill_roots,
+            skill_registry=skill_runtime.registry,
+            mcp_service=mcp_service,
+            sub_agent_runner=sub_agent_runner,
+            operation_executor=execute_operation if operation_catalog is not None else None,
+            load_tools=load_tools_obj,
             active_mode=active_mode,
-        ),
-        toolbox=toolbox,
-    )
-    try:
+            plugin_tool_providers=plugin_assembly.get("plugin_tool_providers") or [],
+            plugin_tool_handlers=plugin_assembly.get("plugin_tool_handlers") or {},
+            plugin_tool_specs=plugin_tool_specs,
+            data_dir=run_dir,
+            allow_access_outside_workdir=allow_outside_workdir,
+            artifact_store=getattr(core_db, "artifact_store", None),
+            plugin_mode_exclusive_tools=plugin_assembly.get("plugin_mode_exclusive_tools") or {},
+        )
+        # user:“运行档由宿主强制”+白名单可见面、execute 拒绝、审批覆盖、预算计数。
+        if profile_spec is not None:
+            from lamtools_core.plugin_system.profiles import apply_profile
+
+            apply_profile(toolbox, profile_spec)
+        kit = CoreBaseAgentKit(
+            work_root=work_root,
+            config=CoreBaseAgentConfig(
+                model_id=resolved_model_id,
+                instructions=core_instructions,
+                temperature=options.temperature,
+                max_tokens=max_output_tokens,
+                reasoning_level=effective_reasoning_level,
+                thinking_enabled=options.thinking_enabled,
+                thinking_budget=options.thinking_budget,
+                approval_policy=resolved_permissions.approval_policy,
+                active_mode=active_mode,
+            ),
+            toolbox=toolbox,
+        )
         from lamtools_core.config.retry_store import (
             load_model_retry_config,
             loop_policy_overrides,
@@ -517,10 +531,21 @@ async def run_core_cli_task(
     finally:
         from lamtools_core.plugin_system import shutdown_plugin_backends
 
-        await shutdown_plugin_backends(plugin_assembly.get("plugin_runtimes") or [])
-        await runtime_task_registry.shutdown()
-        await mcp_registry.close()
-        await core_db.close()
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(先撤回启动事实，再按原顺序清理插件/任务/MCP/数据库；一项失败也要执行其余已取得资源的清理)。
+        if plugin_context is not None:
+            plugin_context.services.pop("headless_startup", None)
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(复用原取消收尾权威，重复取消调用者也不能截断已取得资源的整组清理)。
+        from lamtools_core.async_tasks import finish_on_cancel
+        async def cleanup_owned_resources():
+            async with AsyncExitStack() as cleanup:
+                cleanup.push_async_callback(core_db.close)
+                if mcp_registry is not None:
+                    cleanup.push_async_callback(mcp_registry.close)
+                if runtime_task_registry is not None:
+                    cleanup.push_async_callback(runtime_task_registry.shutdown)
+                if plugin_assembly:
+                    cleanup.push_async_callback(shutdown_plugin_backends, plugin_assembly.get("plugin_runtimes") or [])
+        await finish_on_cancel(cleanup_owned_resources(), name="core-cli-resource-cleanup")
 
     summary = _build_summary(
         result=result,

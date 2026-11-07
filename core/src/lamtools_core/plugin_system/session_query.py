@@ -30,6 +30,9 @@ class PluginSessionQueryAPI:
     async def query(self, *, limit=50, cursor=None, title_contains=""):
         self._scope.acquire()
         try:
-            return await self._host.query((self._scope.owner, self._scope.epoch), limit=limit, cursor=cursor, title_contains=title_contains)
+            result = await self._host.query((self._scope.owner, self._scope.epoch), limit=limit, cursor=cursor, title_contains=title_contains)
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(已接收扫描可以排空，但撤回的启动代不能继续发布查询结果)。
+            self._scope.check_open()
+            return result
         finally:
             self._scope.release()

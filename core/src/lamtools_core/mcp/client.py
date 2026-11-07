@@ -81,14 +81,13 @@ class MCPClient:
 
     async def _close_unlocked(self) -> None:
         proc = self._proc
-        self._proc = None
+        # user:“复用原宿主权威”+(清理成功前保留原进程和读取任务引用，终止失败或调用取消后仍能由同一MCP所有者重试)。
         self._initialized = False
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(MCPError("MCP 连接已关闭，操作结果可能未知"))
         self._pending.clear()
         tasks = [task for task in (self._reader_task, self._stderr_task) if task is not None]
-        self._reader_task = self._stderr_task = None
         for task in tasks:
             task.cancel()
         if proc is not None and proc.returncode is None:
@@ -106,6 +105,8 @@ class MCPClient:
                 await proc.wait()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._proc = None
+        self._reader_task = self._stderr_task = None
 
     async def list_tools(self) -> list[MCPTool]:
         data = await self.request("tools/list", {})
@@ -134,6 +135,13 @@ class MCPClient:
                 )
             )
         return tools
+
+    async def request_current(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        # user:“审查当前代码，然后继续”+(固定资源连接禁止自动重连；关闭与请求竞争也不能另起未受管进程)。
+        if (not self._initialized or self._proc is None or self._proc.returncode is not None
+                or self._reader_error is not None):
+            raise MCPError("MCP connection is closed; explicitly open a new connection")
+        return await self._request(method, params)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self.request("tools/call", {"name": name, "arguments": arguments})

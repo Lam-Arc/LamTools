@@ -1123,3 +1123,9 @@
     transition: none;
   }
 }
+
+/* user:“重新设计模型与供应商界面”+(目录要铺开：宽屏用满主卡，底部仍保留设置页的滚动余量。) */
+:deep(.settings-main--models .settings-content) {
+  width: min(1360px, 100%);
+  max-width: min(1360px, 100%);
+}

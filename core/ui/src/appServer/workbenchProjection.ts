@@ -67,6 +67,8 @@ interface ProjectionMessageCacheEntry {
 
 export interface CoreWorkbenchProjectionCache {
   clear(): void
+  /** Drop the oldest entries once a map exceeds its bound (bounded memory). */
+  prune(): void
   chatSelection: { snapshot: CoreAppSnapshot; messages: CoreAppServerChatMessage[] } | null
   partsByItemId: Map<string, ProjectionPartCacheEntry>
   messagesById: Map<string, ProjectionMessageCacheEntry>
@@ -79,6 +81,26 @@ export interface CoreWorkbenchProjectionCache {
   shallowByContent: Map<string, { thinking: string; content: string }>
 }
 
+// user:“内存：长时间使用保持有界，不随浏览过的消息数量无限增长”+(投影缓存必须
+// 有上界：向上翻多少页就留下多少页的 part/message，等于把浏览过的历史再复制一份
+// 常驻内存。超出上界只丢最旧的缓存项，命中不了就重新投影，语义不变。)
+const PARTS_CACHE_LIMIT = 4_000
+const MESSAGES_CACHE_LIMIT = 2_000
+const ITEMS_CACHE_LIMIT = 8_000
+const SUB_AGENT_CACHE_LIMIT = 500
+
+function trimMap<K, V>(map: Map<K, V>, limit: number): void {
+  if (map.size <= limit) return
+  // Map iterates in insertion order; drop the oldest insertions first.
+  const excess = map.size - limit
+  let dropped = 0
+  for (const key of map.keys()) {
+    map.delete(key)
+    dropped += 1
+    if (dropped >= excess) break
+  }
+}
+
 export function createCoreWorkbenchProjectionCache(): CoreWorkbenchProjectionCache {
   return {
     clear() {
@@ -88,6 +110,13 @@ export function createCoreWorkbenchProjectionCache(): CoreWorkbenchProjectionCac
       this.itemsApp.clear()
       this.subAgentChildren.clear()
       this.shallowByContent.clear()
+    },
+    prune() {
+      trimMap(this.partsByItemId, PARTS_CACHE_LIMIT)
+      trimMap(this.messagesById, MESSAGES_CACHE_LIMIT)
+      trimMap(this.itemsApp, ITEMS_CACHE_LIMIT)
+      trimMap(this.subAgentChildren, SUB_AGENT_CACHE_LIMIT)
+      trimMap(this.shallowByContent, 1_000)
     },
     chatSelection: null,
     partsByItemId: new Map<string, ProjectionPartCacheEntry>(),
@@ -179,6 +208,7 @@ export function selectCoreWorkbenchMessagesWindow(
     }
     messages[index - startIndex] = buildWorkbenchMessage(message, content, parts, options, activeAssistant)
   }
+  cache?.prune()
   return { messages, total: sourceMessages.length, startIndex }
 }
 
@@ -223,7 +253,6 @@ function splitShallowCached(
     if (hit) return hit
     const result = splitShallowThinking(text)
     cache.shallowByContent.set(text, result)
-    if (cache.shallowByContent.size > 1_000) cache.shallowByContent.clear()
     return result
   }
   return splitShallowThinking(text)

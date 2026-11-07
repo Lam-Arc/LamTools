@@ -82,6 +82,176 @@ async def _turn_has_ended(
         return False
 
 
+#: Runtime options a refused steer carries into the new user turn, so the text
+#: runs with the same model/permissions the client sent it with. Kept in one
+#: place: the queue fallback and the direct start must agree.
+_FORWARDED_TURN_KEYS = (
+    "work_root",
+    "workRoot",
+    "model_id",
+    "reasoning_level",
+    "thinking_enabled",
+    "thinking_budget",
+    "reasoning_effort",
+    "shallow_thinking_enabled",
+    "context_window_tokens",
+    "max_tokens",
+    "temperature",
+    "compact_trigger_tokens",
+    "compact_limit_tokens",
+    "permission_preset",
+    "approval_policy",
+    "active_tier",
+    "tier_tools",
+    "allow_access_outside_workdir",
+    "active_mode",
+    "origin",
+)
+
+
+def _forwarded_turn_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: params[key]
+        for key in _FORWARDED_TURN_KEYS
+        if params.get(key) is not None
+    }
+
+
+def _accepted_turn_id(result: dict[str, Any]) -> str:
+    """Read the turn a ``turn/start`` response committed (new or deduplicated)."""
+    runtime_start = result.get("runtime_start")
+    if isinstance(runtime_start, dict) and runtime_start.get("turn_id"):
+        return str(runtime_start["turn_id"])
+    for event in result.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        if str(event.get("method") or "") not in {"turn/accepted", "turn/started"}:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        turn_id = str(event.get("turn_id") or payload.get("turn_id") or "")
+        if turn_id:
+            return turn_id
+    return ""
+
+
+async def _submitted_receipt(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    client_message_id: str,
+) -> dict[str, Any] | None:
+    """Durable proof that this client message already became a turn or a queue item.
+
+    user:“保证请求幂等，消息恰好提交一次”+(同一请求的重发、断线重连都读这条
+    回执：已经开出去的回合/已经排上的条目不再写第二遍，也不会因为响应丢失而
+    被当成新消息重复执行)。
+    """
+    factory = getattr(context, "session_factory", None)
+    persistence = getattr(context, "persistence", None)
+    if factory is None or persistence is None:
+        return None
+    async with factory() as db:
+        receipt = await persistence.find_client_event(
+            db,
+            thread_id=thread_id,
+            client_message_id=client_message_id,
+            methods={"turn/accepted", "turn/started", "queue/itemAccepted"},
+        )
+        if receipt is None:
+            return None
+        if receipt.method == "queue/itemAccepted":
+            dispatched = await persistence.find_client_event(
+                db,
+                thread_id=thread_id,
+                client_message_id=f"dispatch:{receipt.item_id}",
+                methods={"turn/accepted"},
+            )
+            if dispatched is None:
+                return {"submitted": False, "queued": True, "turn_id": "", "events": []}
+            return {
+                "submitted": True,
+                "queued": False,
+                "turn_id": str(dispatched.turn_id or ""),
+                "events": [dispatched.to_dict()],
+            }
+        return {
+            "submitted": True,
+            "queued": False,
+            "turn_id": str(receipt.turn_id or ""),
+            "events": [receipt.to_dict()],
+        }
+
+
+async def _deliver_as_next_user_turn(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    params: dict[str, Any],
+    input_items: list[dict[str, Any]],
+    client_message_id: str,
+) -> dict[str, Any]:
+    """Turn guidance the run can no longer take into a real user message.
+
+    user:“引导遇上结束阶段：当前回合正常结束，引导转为一条新的用户消息，自动开启
+    新回合”+(被结束边界拒掉的引导不是排队项、也不是伪造的内部引导事件：它走普通
+    发送同一条链路（turn/start），落库的是一条真实用户消息、事件流与生命周期和
+    手打一条消息完全一致。只有会话仍被别的回合占着（旧回合正在收尾、或回合被暂停）
+    时，才落到队列，由占有会话的那个回合结束时自动发出)。
+
+    Idempotent by ``client_message_id``: a retried request reads the receipt left
+    by the first attempt instead of opening a second turn.
+    """
+    from .background import _logger
+    from .turn_start import handle_turn_start_operation
+
+    receipt = await _submitted_receipt(
+        context=context, thread_id=thread_id, client_message_id=client_message_id,
+    )
+    if receipt is not None:
+        return {**receipt, "notify": []}
+    start_params: dict[str, Any] = {
+        "thread_id": thread_id,
+        "client_message_id": client_message_id,
+        "input": [dict(item) for item in input_items if isinstance(item, dict)],
+        **_forwarded_turn_params(params),
+    }
+    started: dict[str, Any] | None = None
+    notify: list[Any] = []
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=None, params=start_params, context=context,
+        )
+        response = getattr(outcome, "response", None)
+        result = response.get("result") if isinstance(response, dict) else None
+        if isinstance(result, dict):
+            started = result
+            # 和一次普通发送一样，事件既进响应也推给这条连接。
+            notify = list(getattr(outcome, "notify_events", None) or [])
+    except BaseException:
+        _logger.exception(
+            "[live:steer] failed to start the next turn thread_id=%s", thread_id
+        )
+    if started is not None:
+        return {
+            "submitted": True,
+            "queued": False,
+            "turn_id": _accepted_turn_id(started),
+            "events": list(started.get("events") or []),
+            "notify": notify,
+        }
+    # The session is still owned by another turn (or the input could not become
+    # a turn). Either way the text must not be dropped: it waits in the queue as
+    # a normal next-turn user message.
+    queued = await _queue_refused_guidance(
+        context=context,
+        thread_id=thread_id,
+        params=params,
+        input_items=input_items,
+        client_message_id=client_message_id,
+    )
+    return {"submitted": False, "queued": queued, "turn_id": "", "events": [], "notify": []}
+
+
 async def _queue_refused_guidance(
     *,
     context: CoreLiveContext,
@@ -92,10 +262,9 @@ async def _queue_refused_guidance(
 ) -> bool:
     """File guidance the live run can no longer take as the next user turn.
 
-    The decision is part of the turn's final reply boundary: the text must not
-    be dropped and must not be injected into a sealed run. A queued item is a
-    normal user message; an idle session dispatches it immediately, and a
-    still-running turn's completion path dispatches it when it ends.
+    Only used when the session is still owned by another turn (the ending one
+    or a paused one), so a normal start is refused: the item is a normal user
+    message, and the turn that owns the session dispatches it when it ends.
     """
     from .background import _logger
     from .queue import handle_queue_create_operation
@@ -105,31 +274,8 @@ async def _queue_refused_guidance(
         "client_message_id": client_message_id,
         "input": input_items,
         "mode": "next_turn",
+        **_forwarded_turn_params(params),
     }
-    for key in (
-        "work_root",
-        "workRoot",
-        "model_id",
-        "reasoning_level",
-        "thinking_enabled",
-        "thinking_budget",
-        "reasoning_effort",
-        "shallow_thinking_enabled",
-        "context_window_tokens",
-        "max_tokens",
-        "temperature",
-        "compact_trigger_tokens",
-        "compact_limit_tokens",
-        "permission_preset",
-        "approval_policy",
-        "active_tier",
-        "tier_tools",
-        "allow_access_outside_workdir",
-        "active_mode",
-        "origin",
-    ):
-        if key in params and params[key] is not None:
-            queue_params[key] = params[key]
     try:
         outcome = await handle_queue_create_operation(
             request_id=None, params=queue_params, context=context
@@ -224,7 +370,10 @@ async def handle_turn_steer_operation(
             # 直接命中注册表，一次条目表扫描都不需要。
             metadata_state = await context.persistence.load_metadata(db, thread_id)
             if not _is_active_turn(metadata_state, turn_id):
-                return "mismatch", None
+                # user:“回合已经结束：引导直接作为用户消息创建新回合”+(被点名的
+                # 回合已不在运行：整条会话没有别的活动回合就是"它已经结束"，还有
+                # 别的回合在跑才是真正的轮次不匹配。两者都由调用方改走普通发送)。
+                return ("turn_ended" if latest_active_turn_id(metadata_state) is None else "mismatch"), None
         guidance_status = context.host.runtime_task_registry.accept_guidance(
             thread_id,
             text,
@@ -270,15 +419,15 @@ async def handle_turn_steer_operation(
     outcome_kind, payload = write_result
     if outcome_kind in {"existing", "applied"}:
         _activate_stored_guidance(context, payload)
-    elif outcome_kind == "guidance_closed" or (
-        outcome_kind == "run_not_active"
-        and await _turn_has_ended(context, thread_id, turn_id)
-    ):
-        # The live run cannot take this text as guidance any more. This is the
-        # final-reply boundary (guidance was sealed) or a turn that already
-        # ended: never drop the text. File it as a normal user message for the
-        # next turn; an idle session dispatches it immediately.
-        queued = await _queue_refused_guidance(
+    elif outcome_kind in {"guidance_closed", "run_not_active", "turn_ended", "mismatch"}:
+        # The live run cannot take this text as guidance any more: the turn is
+        # past its end boundary (guidance already sealed), it has already ended,
+        # or the id the client steered is no longer the active turn.
+        #
+        # user:“引导遇上结束阶段：当前回合正常结束，引导转为一条新的用户消息，自动
+        # 开启新回合”+(绝不丢文本、也绝不伪造一条落库的引导事件：这段文字改走普通
+        # 发送链路开新回合；会话仍被旧回合占着时排队，由旧回合收尾自动发出)。
+        delivered = await _deliver_as_next_user_turn(
             context=context,
             thread_id=thread_id,
             params=params,
@@ -287,19 +436,26 @@ async def handle_turn_steer_operation(
         )
         response_payload: dict[str, Any] = {
             "applied": False,
-            "queued": queued,
+            "submitted": bool(delivered.get("submitted")),
+            "queued": bool(delivered.get("queued")),
+            "turn_id": str(delivered.get("turn_id") or ""),
             "reason": (
                 "turn_ending"
                 if outcome_kind == "guidance_closed"
+                else "active_turn_mismatch"
+                if outcome_kind == "mismatch"
                 else "run_not_active"
             ),
-            "events": [],
+            "events": list(delivered.get("events") or []),
         }
         if include_snapshot:
             response_payload["snapshot"] = await _load_snapshot_outside_write_lock(
                 context, thread_id
             )
-        return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
+        return CoreLiveOperationOutcome(
+            response=rpc_result(request_id, response_payload),
+            notify_events=list(delivered.get("notify") or []),
+        )
     snapshot: dict[str, Any] | None = None
     if include_snapshot:
         snapshot = await _load_snapshot_outside_write_lock(context, thread_id)

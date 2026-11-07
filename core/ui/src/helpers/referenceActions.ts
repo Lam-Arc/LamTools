@@ -57,6 +57,14 @@ export function useReferenceActions(explicitTransport?: LamToolsTransport, expli
         anchor.dataset.filePath = actual; anchor.title = actual
         delete anchor.dataset.referenceError
       } catch (error) {
+        // user:“在自动渲染成 文件 link 的时候，如果找不到就不渲染，显示原文即可”+
+        // (自动识别出来的路径核实失败时退回普通文字，不留下一个“文件不存在”的链接；
+        // 只有本来就存在的显式链接才继续显示错误态)。
+        if (anchor.dataset.fileReferenceAuto === 'true') {
+          const original = anchor.dataset.fileReferenceRaw || anchor.textContent || raw
+          anchor.replaceWith(document.createTextNode(original))
+          return
+        }
         anchor.dataset.referenceError = 'true'
         anchor.title = `${raw}\n${error instanceof Error ? error.message : '原文件不存在'}`
       }

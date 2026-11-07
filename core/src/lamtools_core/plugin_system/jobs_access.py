@@ -86,7 +86,8 @@ class PluginJob:
 
     def emit(self, stream, value):
         self._check_producer()
-        if stream not in {"stdout", "stderr"} or type(value) not in {str, bytes}:
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(输出流先验证类型，使调用方可以处理invalid-output并继续原作业)。
+        if type(stream) is not str or stream not in {"stdout", "stderr"} or type(value) not in {str, bytes}:
             raise JobAccessError("job/invalid-output", "Output must be stdout/stderr and text or bytes")
         try:
             data = value.encode("utf-8") if type(value) is str else value
@@ -189,6 +190,8 @@ class PluginJobsAPI:
                 await asyncio.wait_for(record._done.wait(), timeout)
         except TimeoutError:
             pass
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(等待完成或超时后发布只读结果前复核原启动代，不回滚已经完成的回调)。
+        self._scope.check_open()
         return record.view()
 
     async def kill(self, job_id):

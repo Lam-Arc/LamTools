@@ -105,6 +105,8 @@ export interface WorkbenchRuntime {
   historyBuffered: Readonly<Ref<boolean>>
   totalMessages: Ref<number>
   loadMoreHistory(): void | Promise<void>
+  /** Load the one history window that contains ``itemId`` (search jump). */
+  loadHistoryAround(threadId: string, itemId: string): Promise<boolean>
   lastEvent: Ref<CoreAppEvent | null>
   approval: ReturnType<typeof useCoreApprovalController>
   queue: ReturnType<typeof useCoreQueuedInputController>

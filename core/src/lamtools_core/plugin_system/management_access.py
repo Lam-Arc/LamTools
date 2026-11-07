@@ -26,6 +26,11 @@ class PluginManagementAPI:
                 result = await catalog.execute(name, _json(payload), metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
             except Exception:
                 raise HostOperationError("host/operation-failed", "Native management operation failed") from None
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(只读管理结果发布前复核原目录和启动代；启停重载仍按原管理器提交事实结算)。
+            if action in {"list", "resolve"}:
+                self._scope.check_open()
+                if self._context.resolved_operation_catalog() is not catalog:
+                    raise HostOperationError("host/changed", "Operation catalog changed during read")
             body = _json(result.payload)
             if result.status != "ok":
                 raise HostOperationError("host/operation-rejected", "Native operation was rejected or requires confirmation", status=result.status, details=body)

@@ -107,7 +107,8 @@ def test_subagent_candidates_do_not_fake_agent_handles_or_activation_results(tmp
     assert methods["subagents.startActivation"]["candidateContract"] == "context.subagents"
     assert methods["subagents.sendMessage"]["candidateContract"] == "context.subagents.message"
     assert methods["subagents.listChildren"]["candidateContract"] == "context.subagents.list"
-    assert "candidateContract" not in methods["agents.create"]
+    assert methods["agents.create"]["candidateContract"] == "context.agents.create"
+    assert "DSH" in methods["agents.create"]["difference"]
     assert all(row["conversion"] == "agent-required" for row in methods.values())
 
 

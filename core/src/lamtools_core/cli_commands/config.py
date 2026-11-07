@@ -84,6 +84,7 @@ def load_llm_config(*, model_ref: str = "", work_root: str | None = None) -> LLM
         )
     return LLMConfig(
         provider_name=provider.name,
+        provider_id=provider.id,
         provider_api_type=provider.api_type or "openai",
         base_url=base_url,
         api_key=provider.api_key,
@@ -175,6 +176,7 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
         adapter_profile = _resolve_adapter_profile(
             LLMConfig(
                 provider_name=provider.name if provider is not None else m.provider,
+                provider_id=provider.id if provider is not None else "",
                 provider_api_type=provider.api_type if provider is not None else "openai",
                 base_url=(provider.base_url if provider is not None else "").rstrip("/"),
                 api_key="",
@@ -212,6 +214,8 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
                 "reasoning_levels": declared_reasoning_levels(adapter_profile),
                 "notes": m.notes,
                 "is_default": m.is_default,
+                "enabled": m.enabled,
+                "pricing": dict(m.pricing),
                 "adapter_profile_id": m.adapter_profile_id,
                 "extra": m.to_extra(),
             }

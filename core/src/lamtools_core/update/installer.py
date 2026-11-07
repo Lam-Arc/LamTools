@@ -15,12 +15,14 @@ files.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -197,6 +199,12 @@ def download_update(url: str, sha256: str, file_name: str = "", fallback_url: st
         os.replace(partial, target)
     except UpdateInstallError:
         raise
+    except ValueError as exc:
+        # A digest mismatch is the one transport failure whose English text must
+        # not reach the user: the download is thrown away and said in one line.
+        if "sha256 mismatch" in str(exc):
+            raise UpdateInstallError("安装包摘要不一致，已删除下载，请重试") from exc
+        raise UpdateInstallError(f"下载安装包失败：{exc}") from exc
     except Exception as exc:  # noqa: BLE001 — every transport failure is one user-facing reason
         raise UpdateInstallError(f"下载安装包失败：{exc}") from exc
     finally:
@@ -239,15 +247,20 @@ def run_installer(path: str = "") -> dict[str, Any]:
     }
 
 
-def installer_arguments(log_path: Path | None = None) -> list[str]:
+def installer_arguments(log_path: Path | None = None, fail_report_path: Path | None = None) -> list[str]:
     """The switches the in-app install hands the setup.
 
     ``/LOG`` goes next to the verified download: the app is gone while the
     installer works, so that file is the only record a failed install leaves.
+    ``/FAILREPORT`` is where the setup writes why it refused to install - the
+    process names, PIDs and files that are still in the way - so the reason
+    survives the setup window instead of vanishing with it.
     """
     arguments = list(INSTALLER_ARGUMENTS)
     if log_path is not None:
         arguments.append(f"/LOG={log_path}")
+    if fail_report_path is not None:
+        arguments.append(f"/FAILREPORT={fail_report_path}")
     return arguments
 
 
@@ -260,17 +273,26 @@ def _launch_installer(candidate: Path) -> None:
     spawn asks to leave that job. A host with no job object at all (a plain CLI
     run, a test) refuses the breakaway flag, and there the shell hand-off is the
     right answer — so the failure falls back to it instead of losing the update.
+
+    Leaving the job is not assumed: the spawned process is asked whether it is
+    still in a job, and the hand-off is used when it is. A setup that dies with
+    this process is worse than none, because the caller then quits for an update
+    that never happens.
     """
-    arguments = installer_arguments(download_dir() / "install-last.log")
+    log_path = download_dir() / "install-last.log"
+    failure_path = download_dir() / "install-failure.txt"
+    # A report from an earlier attempt would be read as this attempt's verdict.
+    failure_path.unlink(missing_ok=True)
+    arguments = installer_arguments(log_path, failure_path)
     try:
-        subprocess.Popen(  # noqa: S603 — the digest was verified before publishing the file
+        process = subprocess.Popen(  # noqa: S603 — the digest was verified before publishing the file
             [str(candidate), *arguments],
             cwd=str(candidate.parent),
             creationflags=INSTALLER_SPAWN_FLAGS,
             close_fds=True,
         )
-    except OSError:
-        _log.info("Update: detached spawn refused, falling back to the shell hand-off")
+    except OSError as exc:
+        _log.info("Update: detached spawn refused (%s), using the shell hand-off", exc)
         # The shell hand-off takes one command line, so the switches travel as
         # text; quoting keeps a path with spaces (a temp dir under a user name
         # often has one) a single argument.
@@ -278,6 +300,121 @@ def _launch_installer(candidate: Path) -> None:
             str(candidate),
             arguments=" ".join(f'"{item}"' if " " in item else item for item in arguments),
         )
+        _record_launch(candidate, arguments, log_path, failure_path, process_id=0, mode="shell")
+        return
+
+    try:
+        _confirm_installer_survives(process, candidate, arguments, log_path, failure_path)
+    finally:
+        if process.returncode is not None:
+            process.close()
+
+
+#: How long a freshly started setup has to prove it is alive and outside our job.
+LAUNCH_CONFIRM_SECONDS = 1.5
+
+_SYNCHRONIZE = 0x00100000
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _process_is_in_a_job(process_id: int) -> bool | None:
+    """Whether ``process_id`` belongs to any job object, or None when unknown.
+
+    The desktop shell runs the backend inside a kill-on-close job, so a setup
+    that is still a member of a job dies when the app exits. ``IsProcessInJob``
+    called with a NULL job handle answers exactly that question.
+    """
+    if sys.platform != "win32" or process_id <= 0:
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.IsProcessInJob.restype = wintypes.BOOL
+    kernel32.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
+    handle = kernel32.OpenProcess(_SYNCHRONIZE | _PROCESS_QUERY_LIMITED_INFORMATION, False, process_id)
+    if not handle:
+        return None
+    try:
+        result = wintypes.BOOL()
+        if not kernel32.IsProcessInJob(handle, None, ctypes.byref(result)):
+            return None
+        return bool(result)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _confirm_installer_survives(
+    process: subprocess.Popen,
+    candidate: Path,
+    arguments: list[str],
+    log_path: Path,
+    failure_path: Path,
+) -> None:
+    """Fail the hand-off instead of quitting for an installer that is already gone.
+
+    Two failure modes matter and both are decided within a couple of seconds: the
+    setup exits at once (a broken artifact, a blocked executable, a refused
+    command line), or it is still inside the job object that kills everything
+    when the app exits. In either case the app must stay up and say so, because
+    quitting leaves the user with no app and no update.
+    """
+    deadline = time.monotonic() + LAUNCH_CONFIRM_SECONDS
+    while time.monotonic() < deadline:
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise UpdateInstallError(
+                f"安装程序启动后立即退出（退出码 {exit_code}），本次更新没有开始。安装日志：{log_path}"
+            )
+        if _process_is_in_a_job(process.pid):
+            _log.warning("Update: setup %s is still inside a job object; using the shell hand-off", process.pid)
+            try:
+                process.terminate()
+                process.wait(timeout=2)
+            except OSError:
+                pass
+            os.startfile(  # noqa: S606 — digest verified before publishing the file
+                str(candidate),
+                arguments=" ".join(f'"{item}"' if " " in item else item for item in arguments),
+            )
+            _record_launch(candidate, arguments, log_path, failure_path, process_id=0, mode="shell-after-job")
+            return
+        time.sleep(0.1)
+    _record_launch(candidate, arguments, log_path, failure_path, process_id=process.pid, mode="detached")
+
+
+def _record_launch(
+    candidate: Path,
+    arguments: list[str],
+    log_path: Path,
+    failure_path: Path,
+    *,
+    process_id: int,
+    mode: str,
+) -> None:
+    """Leave a record of what was started, with which switches and when.
+
+    The app is gone while the setup works, so this file plus the setup log is all
+    support has when an update fails on a machine that cannot be reproduced.
+    """
+    record = {
+        "installer": str(candidate),
+        "arguments": arguments,
+        "process_id": process_id,
+        "mode": mode,
+        "log": str(log_path),
+        "failure_report": str(failure_path),
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        (download_dir() / "install-launch.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError as exc:
+        _log.warning("Update: could not write the launch record: %s", exc)
+    _log.info("Update: installer started (pid=%s, mode=%s, log=%s)", process_id or "-", mode, log_path)
 
 
 def _reveal(directory: Path) -> None:

@@ -7,6 +7,35 @@ from .test_plugin_working_directory import env
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field,bad,code",[
+    ("rating",{},"session-data/invalid-rating"),
+    ("rating",[],"session-data/invalid-rating"),
+    ("note","\ud800","session-data/invalid-feedback"),
+    ("category","\ud800","session-data/invalid-feedback"),
+    ("text","\ud800","session-data/invalid-feedback"),
+])
+async def test_invalid_feedback_inputs_have_stable_errors_without_partial_write(env,field,bad,code):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(错误类型或无效UTF-8不能泄漏内部异常，也不能留下半次反馈写入)。
+    from lamtools_core.session import MessageRecord
+    from lamtools_core.plugin_system.session_data import SessionDataError
+    ctx, store, _, _ = env
+    await store.add_message(MessageRecord(id="checked-message",session_id="s",role="assistant",content="Answer"))
+    before = (await store.get("s")).metadata
+    with pytest.raises(SessionDataError) as error:
+        if field == "text":
+            await ctx.session_feedback.record("s",text=bad,request_id="invalid")
+        else:
+            values = {"rating":"positive","if_version":None,field:bad}
+            await ctx.message_feedback.put("s","checked-message",**values)
+    assert error.value.code == code
+    assert (await store.get("s")).metadata == before
+    assert (await ctx.message_feedback.list("s"))["items"] == []
+    assert (await ctx.session_feedback.list("s"))["items"] == []
+    result = await ctx.message_feedback.put("s","checked-message",rating="positive",if_version=None,note="valid-after-error")
+    assert result["version"] == 1 and result["note"] == "valid-after-error"
+
+
+@pytest.mark.asyncio
 async def test_message_feedback_versions_tombstones_and_reload(env):
     from lamtools_core.session import MessageRecord
     from lamtools_core.plugin_system.session_data import SessionDataError

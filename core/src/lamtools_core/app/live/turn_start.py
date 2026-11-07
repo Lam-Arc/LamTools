@@ -262,6 +262,9 @@ async def handle_turn_start_operation(
     turn_id = str(params.get("turn_id") or params.get("turnId") or f"{thread_id}:turn:{uuid.uuid4().hex[:12]}")
     user_item_id = str(params.get("user_item_id") or params.get("userItemId") or f"{turn_id}:user")
     run_claimed = False
+    # 发送确认的分段计时：从请求落到本处理器开始，到运行时任务起来为止。
+    # 一行一条，只用于观察发送链路，不参与任何业务判断。
+    _enter = time_module.perf_counter()
 
     # Capture the session's initial permission state in the acceptance event.
     # Running toolboxes refresh these fields from the session before each tool
@@ -276,12 +279,14 @@ async def handle_turn_start_operation(
     # 优先；CLI/自动回合没带模式、模型、档位时，从该会话自己的参数组补齐)。
     from ..composer_state import inherit_composer_params
 
+    _t_resolved = time_module.perf_counter()
     params = inherit_composer_params(params, resolved.get("session_metadata") or {})
     # Clients and automatic continuations need not repeat the project path on
     # every message. Resolve it before composer preparation and persist the
     # same root that the tools/runtime will receive.
     if not (params.get("work_root") or params.get("workRoot")) and resolved.get("work_root"):
         params = {**params, "work_root": resolved["work_root"]}
+    _t_prep_start = time_module.perf_counter()
     try:
         prepared = await context.host.member_hooks.prepare_turn_input(
             thread_id=thread_id, params=params, input_items=input_items,
@@ -290,11 +295,13 @@ async def handle_turn_start_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
         )
+    _t_prep_done = time_module.perf_counter()
     turn_runtime_snapshot = _runtime_snapshot_with_turn_options(
         resolved["runtime_snapshot"],
         params=params,
         active_mode=resolved.get("active_mode"),
     )
+    _t_prepared = time_module.perf_counter()
 
 
     async def write(db):
@@ -433,7 +440,6 @@ async def handle_turn_start_operation(
             run_claimed = False
             raise
 
-    _t0 = time_module.perf_counter()
     try:
         write_result = await context.persistence.write(write)
     except BaseException:
@@ -441,7 +447,6 @@ async def handle_turn_start_operation(
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
         raise
     _t1 = time_module.perf_counter()
-    _logger.info("[PERF:turn_start] persistence.write=%.3fs thread_id=%s", _t1 - _t0, thread_id)
     if isinstance(write_result, CoreLiveOperationOutcome):
         return write_result
     include_snapshot = _include_snapshot_param(params)
@@ -469,6 +474,7 @@ async def handle_turn_start_operation(
         ))
 
     imagegen_config = await _resolve_imagegen_config(context=context)
+    _t_assembled = time_module.perf_counter()
     runtime_start = {
         "thread_id": thread_id,
         "turn_id": turn_id,
@@ -540,7 +546,6 @@ async def handle_turn_start_operation(
     for event in events:
         await context.hub.publish(event)
     _t3 = time_module.perf_counter()
-    _logger.info("[PERF:turn_start] hub.publish(3)=%.3fs", _t3 - _t2)
     await _mirror_turn_started(
         context=context,
         thread_id=thread_id,
@@ -551,14 +556,12 @@ async def handle_turn_start_operation(
     )
     start_failure = await _start_runtime_task(context=context, runtime_start=runtime_start)
     _t4 = time_module.perf_counter()
-    _logger.info("[PERF:turn_start] _start_runtime_task=%.3fs", _t4 - _t3)
     if start_failure is not None:
         failure_event, failure_snapshot = start_failure
         events.append(failure_event)
         # 失败终态快照比提交后的常规快照更新（含 failed 终态），必须覆盖。
         if include_snapshot:
             response_snapshot = failure_snapshot
-    _logger.info("[PERF:turn_start] total=%.3fs thread_id=%s", _t4 - _t0, thread_id)
     _logger.info("[live:handle_turn_start] dispatched background task thread_id=%s turn_id=%s model=%s",
                   thread_id, turn_id, runtime_start.get("model_id") or "default")
     response_payload = {
@@ -567,6 +570,23 @@ async def handle_turn_start_operation(
     }
     if response_snapshot is not None:
         response_payload["snapshot"] = response_snapshot
+    # 发送链路唯一一条分段计时（approve=选项解析 prepare=输入准备 write=接收事务
+    # assemble=响应装配 publish=事件广播 start=运行时启动），长期盯发送耗时用。
+    _t_total = time_module.perf_counter()
+    _logger.info(
+        "[PERF:turn_start] total=%.3fs approve=%.3fs hooks=%.3fs prepare=%.3fs"
+        " write=%.3fs assemble=%.3fs publish=%.3fs start=%.3fs events=%d thread_id=%s",
+        _t_total - _enter,
+        _t_resolved - _enter,
+        _t_prep_done - _t_prep_start,
+        _t_prepared - _t_prep_done,
+        _t1 - _t_prepared,
+        _t_assembled - _t1,
+        _t3 - _t_assembled,
+        _t4 - _t3,
+        len(events),
+        thread_id,
+    )
     return CoreLiveOperationOutcome(
         response=rpc_result(request_id, response_payload),
         notify_events=events,

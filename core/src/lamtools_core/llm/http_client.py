@@ -15,6 +15,7 @@ from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse, LLMStreamEve
 from lamtools_core.llm.forensics import recorded_request, record_id, drain_recording
 from lamtools_core.llm.reasoning import reasoning_level_from_legacy
 from lamtools_core.llm.session_affinity import provider_session_affinity
+from lamtools_core.llm.request_extensions import prepare_current
 from lamtools_core.llm.profiles import (
     build_profiled_anthropic_request,
     build_profiled_gemini_request,
@@ -37,6 +38,7 @@ from lamtools_core.llm.profiles import (
 @dataclass(frozen=True)
 class LLMConfig:
     provider_name: str
+    provider_id: str
     provider_api_type: str
     base_url: str
     api_key: str
@@ -232,6 +234,8 @@ def _normalize_anthropic_stream_event(
 
 
 class CoreHttpLLMClient:
+    # user:“接口完善与文档更新”+(SDK可以在派发前核实该客户端确实接通扩展字段与HTTP接收边界)。
+    supports_request_extensions = True
     def __init__(
         self,
         *,
@@ -265,20 +269,26 @@ class CoreHttpLLMClient:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         prepared = self._request_with_defaults(request)
         assembled = self._assemble_request(prepared, stream=False)
+        # user:“宿主能力补齐和接口完善与文档更新”+(扩展读取最终序列化base body，接收必须发生在HTTP2xx响应头后、响应体解析前)。
+        extensions = await prepare_current(assembled["payload"], prepared.metadata)
+        if extensions is not None:
+            assembled["payload"].update(extensions.fields_for_wire())
         endpoint = f"{self.config.base_url.rstrip('/')}{assembled['endpoint']}"
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(360.0, connect=30.0),
             **httpx_client_kwargs(endpoint),
         ) as client:
             async with recorded_request(
-                client, "POST", endpoint, context=self._forensic_context(prepared),
+                client, "POST", endpoint, stream=True, context=self._forensic_context(prepared),
                 json=assembled["payload"], headers=self._headers(prepared),
             ) as response:
-                pass
+                if 200 <= response.status_code < 300 and extensions is not None:
+                    await extensions.accept()
+                await response.aread()
         if response.status_code >= 400:
             raise self._provider_error(response.status_code, response.text[:300], response)
         normalized = self._normalize_response(response.json(), model=prepared.model)
-        return LLMResponse(
+        result = LLMResponse(
             content=str(normalized.get("content") or ""),
             thinking=str(normalized.get("thinking") or ""),
             tool_calls=_llm_tool_calls_from_raw(normalized.get("tool_calls")),
@@ -288,10 +298,15 @@ class CoreHttpLLMClient:
             metadata={"cache_diagnostic_route": {**self._cache_diagnostic_route(), "forensic_record_id": record_id(response)}},
             provider_state=normalized.get("provider_state"),
         )
+        self._record_usage(prepared, result.usage)
+        return result
 
     async def stream(self, request: LLMRequest):
         prepared = self._request_with_defaults(request)
         assembled = self._assemble_request(prepared, stream=True)
+        extensions = await prepare_current(assembled["payload"], prepared.metadata)
+        if extensions is not None:
+            assembled["payload"].update(extensions.fields_for_wire())
         provider_state: Any = None
         protocol = self._protocol()
         endpoint = f"{self.config.base_url.rstrip('/')}{assembled['endpoint']}"
@@ -304,6 +319,8 @@ class CoreHttpLLMClient:
                 json=assembled["payload"],
                 headers=self._headers(prepared),
             ) as response:
+                if 200 <= response.status_code < 300 and extensions is not None:
+                    await extensions.accept()
                 if response.status_code >= 400:
                     text = await response.aread()
                     raise self._provider_error(
@@ -313,6 +330,19 @@ class CoreHttpLLMClient:
                     )
                 route = {**self._cache_diagnostic_route(), "forensic_record_id": record_id(response)}
                 terminal_event = None
+                last_usage = None
+                recorded = False
+
+                def flush_usage() -> None:
+                    # One ledger row per model call: record on the terminal
+                    # frame (or when the stream ends) so a retry never counts
+                    # the same response twice.
+                    nonlocal recorded, last_usage
+                    if recorded:
+                        return
+                    recorded = True
+                    self._record_usage(prepared, last_usage)
+
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -331,6 +361,7 @@ class CoreHttpLLMClient:
                             provider_state=finalize_provider_stream_state(provider_state),
                         )
                         await drain_recording(response)
+                        flush_usage()
                         break
                     try:
                         chunk = json.loads(data)
@@ -345,6 +376,8 @@ class CoreHttpLLMClient:
                     )
                     event = self._normalize_stream_event(chunk)
                     if event is not None:
+                        if event.usage is not None:
+                            last_usage = event.usage
                         metadata = dict(event.metadata) if isinstance(event.metadata, dict) else {}
                         if event.kind in {"usage", "finish", "done"} or event.usage is not None:
                             metadata["cache_diagnostic_route"] = route
@@ -356,11 +389,27 @@ class CoreHttpLLMClient:
                         if event.kind == "done" and record_id(response) is not None:
                             terminal_event = event
                             await drain_recording(response)
+                            flush_usage()
                             break
                         else:
                             yield event
+                flush_usage()
                 if terminal_event is not None:
                     yield terminal_event
+
+    def _record_usage(self, request: LLMRequest, usage: Any) -> None:
+        """Best-effort usage ledger write; bookkeeping never breaks a call."""
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        try:
+            from lamtools_core.usage.recorder import record_llm_call
+
+            record_llm_call(
+                self.config,
+                usage,
+                session_id=str(metadata.get("_runtime_session_id") or ""),
+            )
+        except Exception:  # noqa: BLE001 - usage recording is best-effort
+            logger.warning("failed to record LLM usage", exc_info=True)
 
     def _forensic_context(self, request: LLMRequest) -> dict[str, Any]:
         metadata = request.metadata

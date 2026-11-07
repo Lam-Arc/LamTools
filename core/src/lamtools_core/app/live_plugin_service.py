@@ -191,6 +191,18 @@ class LiveTurnService:
                             "run_id": "",
                             "result": payload,
                         }
+                    # user:“引导在结束边界之后被接收：原回合结束，创建一条真实的用户
+                    # 消息并开启新回合”+(宿主已经把这条文字建成新回合：这里必须就此
+                    # 收尾，绝不能再走一遍 turn.start / steer，否则同一段文字会第二次
+                    # 进入新回合)。
+                    if payload.get("submitted"):
+                        return {
+                            "ok": True,
+                            "mode": "started",
+                            "turn_id": str(payload.get("turn_id") or ""),
+                            "run_id": "",
+                            "result": payload,
+                        }
                     if payload.get("queued"):
                         new_turn = await self._wait_for_new_turn(thread_id, active)
                         return {
@@ -241,6 +253,14 @@ class LiveTurnService:
                         "ok": True,
                         "mode": "steered",
                         "turn_id": active,
+                        "run_id": "",
+                        "result": payload,
+                    }
+                if payload.get("submitted"):
+                    return {
+                        "ok": True,
+                        "mode": "started",
+                        "turn_id": str(payload.get("turn_id") or ""),
                         "run_id": "",
                         "result": payload,
                     }

@@ -122,10 +122,98 @@ class PluginContext:
         self._active_registration_scope().effect(setup)
 
     @property
+    def deepseek_account(self):
+        # user:“给我把 2 阶段做完，前端除外”+(账户提供方使用固定Platform协议和原授权/凭据，不自动登录或修改用户现有key)。
+        from .account_access import PluginDeepSeekAccountAPI
+        return PluginDeepSeekAccountAPI(self, self._active_registration_scope())
+
+    @property
+    def web_app(self):
+        # user:“给我把 2 阶段做完，前端除外”+(仅原HTTP宿主可发布Web运行地址，读取不冒充浏览器/静态资源宿主)。
+        from .web_app import PluginWebAppAPI
+        return PluginWebAppAPI(self, self._registration_scope)
+
+    @property
+    def sandbox_policy(self):
+        # user:“给我把 2 阶段做完，前端除外”+(策略沿原会话CAS保存，默认只读，仅供明确使用该沙箱消费者)。
+        from .sandbox_access import PluginSandboxPolicyAPI
+        return PluginSandboxPolicyAPI(self, self._active_registration_scope())
+
+    @property
+    def sandbox(self):
+        from .sandbox_access import PluginSandboxAPI
+        return PluginSandboxAPI(self, self._active_registration_scope())
+
+    @property
+    def ssh(self):
+        # user:“给我把 2 阶段做完，前端除外”+(SSH配置和进程生命周期固定当前插件启动代/项目视图)。
+        from .ssh_access import PluginSSHAPI
+        scope = self._active_registration_scope()
+        key = (scope, str(self.work_root), str(self.execution_root))
+        cached = getattr(self, "_ssh_api_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, PluginSSHAPI(self, scope))
+            self._ssh_api_cache = cached
+        return cached[1]
+
+    @property
+    def directory_picker(self):
+        # user:“给我把 2 阶段做完，前端除外”+(稳定browse能力仅提供后端列举/创建，固定项目根与原启动代)。
+        from .directory_picker import PluginDirectoryPickerAPI
+        scope = self._active_registration_scope()
+        key = (scope, str(self.work_root))
+        cached = getattr(self, "_directory_picker_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, PluginDirectoryPickerAPI(self, scope))
+            self._directory_picker_cache = cached
+        return cached[1]
+
+    @property
+    def headless_startup(self):
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(仅原命令行运行提供真实启动事实，桌面不生成虚假任务)。
+        from .startup_access import PluginHeadlessStartupAPI
+        return PluginHeadlessStartupAPI(self, self._registration_scope)
+
+    @property
+    def office_to_pdf(self):
+        # user:“给我把 2 阶段做完，前端除外”+(转换限额按插件启动代/执行视图共享，临时数据不持久化)。
+        from .office_access import PluginOfficeAPI
+        scope = self._active_registration_scope()
+        key = (scope, str(self.work_root), str(self.execution_root))
+        cached = getattr(self, "_office_api_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, PluginOfficeAPI(self, scope))
+            self._office_api_cache = cached
+        return cached[1]
+
+    @property
+    def subagent_models(self):
+        # user:“给我把 2 阶段做完，前端除外”+(持久模型政策限定当前插件和父会话，不覆盖原模型路由权威)。
+        from .subagent_models import PluginSubagentModelsAPI
+        return PluginSubagentModelsAPI(self, self._active_registration_scope())
+
+    @property
     def subagents(self):
         # user:“继续”+(具名子代理门面复用原监督器和持久邮箱，原项目/插件决定命名空间)。
         from .subagent_access import PluginSubagentAPI
         return PluginSubagentAPI(self, self._active_registration_scope())
+
+    @property
+    def agents(self):
+        # user:“继续，无人值守模式，不要停下来”+(根代理门面复用桌面原会话及循环，不新增执行所有者)。
+        from .agent_access import PluginAgentsAPI
+        return PluginAgentsAPI(self, self._active_registration_scope())
+
+    @property
+    def agent_loop(self):
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(循环工厂入口复用已验收根会话控制；不替换原kernel或建立第二执行权威)。
+        return self.agents
+
+    @property
+    def workspace_changes(self):
+        # user:“继续，无人值守模式，不要停下来”+(原项目Git变化只读快照，不读取父仓库或未受管路径)。
+        from .workspace_changes import PluginWorkspaceChangesAPI
+        return PluginWorkspaceChangesAPI(self, self._active_registration_scope())
 
     @property
     def attachments(self):
@@ -201,6 +289,33 @@ class PluginContext:
         return PluginAuthorizationAPI(self, self._active_registration_scope())
 
     @property
+    def types(self):
+        # user:“审查当前代码，然后继续”+(类型注册复用原ServiceKey/ServiceRef的验证和撤回)。
+        from .host_views import PluginTypesAPI
+        return PluginTypesAPI(self, self._active_registration_scope())
+
+    @property
+    def inspector(self):
+        from .host_views import PluginInspectorAPI
+        return PluginInspectorAPI(self, self._active_registration_scope())
+
+    @property
+    def agent_presets(self):
+        from .host_views import PluginPresetAPI
+        return PluginPresetAPI(self, self._active_registration_scope())
+
+    @property
+    def session_projection_cache(self):
+        from .host_views import PluginProjectionCacheAPI
+        scope = self._active_registration_scope()
+        key = (scope, str(self.work_root))
+        cached = getattr(self, "_projection_cache_api", None)
+        if cached is None or cached[0] != key:
+            cached = (key, PluginProjectionCacheAPI(self, scope))
+            self._projection_cache_api = cached
+        return cached[1]
+
+    @property
     def dynamic_runner(self):
         from .program_access import PluginDynamicRunnerAPI
         scope = self._active_registration_scope()
@@ -252,6 +367,12 @@ class PluginContext:
     @property
     def working_directory(self):
         return self.require_service("working_directory").for_scope(self._active_registration_scope())
+
+    @property
+    def workspace_files(self):
+        # user:“第二阶段结束后 就继续开展第三阶段”+(会话文件控制器绑定原插件启动代，复用原目录和文件系统)。
+        from .workspace_files import PluginWorkspaceFilesAPI
+        return PluginWorkspaceFilesAPI(self, self._active_registration_scope())
 
     async def for_session(self, session_id: str) -> "PluginContext":
         # user:“继续，把 2 阶段都做完”+(按持久目录取得固定执行视图，项目配置仍按原项目解析)。
@@ -342,6 +463,12 @@ class PluginContext:
         return PluginDurableAPI(self, self._active_registration_scope(), "arrange")
 
     @property
+    def llm_extensions(self):
+        # user:“宿主能力补齐和接口完善与文档更新”+(模型扩展字段复用原注册/撤回，SDK请求沿真实HTTP接受边界提交)。
+        from .llm_extensions import PluginLLMExtensionsAPI
+        return PluginLLMExtensionsAPI(self, self._active_registration_scope())
+
+    @property
     def llm(self):
         # user:“继续，把 2 阶段都做完”+(实际模型调用绑定当前启动代、项目和宿主客户端，不能用只读目录冒充调用能力)。
         from .llm_access import PluginLLMAPI
@@ -351,7 +478,8 @@ class PluginContext:
         cached = getattr(self, "_llm_access_cache", None)
         if cached is None or cached[0] != key:
             models = service.for_scope(scope, self.work_root) if service is not None else None
-            cached = (key, PluginLLMAPI(scope, self.work_root, self.llm_client, models, self.model_id))
+            cached = (key, PluginLLMAPI(scope, self.work_root, self.llm_client, models, self.model_id,
+                                       extensions=self.llm_extensions))
             self._llm_access_cache = cached
         return cached[1]
 
@@ -402,6 +530,12 @@ class PluginContext:
         return PluginConfigAPI(self._plugin_manifest, scope, self.data_dir)
 
     @property
+    def settings(self):
+        # user:“继续，无人值守模式，不要停下来”+(完整schema校验和secret公开投影基于同一原配置/CAS)。
+        from .settings_access import PluginSettingsAPI
+        return PluginSettingsAPI(self.config, self._active_registration_scope())
+
+    @property
     def credentials(self):
         # user:“每一个地方 sunday 都有等价或者近似接口”+(凭据只能从宿主私有存储取得当前 owner 的受管视图，不能指定其他插件)。
         scope = self._active_registration_scope()
@@ -413,6 +547,24 @@ class PluginContext:
     def storage(self):
         # user:“宿主能力补齐和接口完善与文档更新”+(存储命名空间由当前启动代 owner 决定，调用方不能指定另一个插件)。
         return self.require_service("plugin_storage").for_scope(self._active_registration_scope())
+
+    @property
+    def storage_domain(self):
+        # user:“继续，无人值守模式，不要停下来”+(领域表/全局槽沿用插件私有原存储的事务和版本控制)。
+        from .storage_domain import PluginStorageDomainAPI
+        return PluginStorageDomainAPI(self, self._active_registration_scope())
+
+    @property
+    def otel(self):
+        # user:“继续，无人值守模式，不要停下来”+(显式选择记录和收集端才启用遥测，默认关闭，不自动上传会话)。
+        from .telemetry_access import PluginTelemetryAPI
+        scope = self._active_registration_scope()
+        key = (scope, str(self.work_root))
+        cached = getattr(self, "_telemetry_api_cache", None)
+        if cached is None or cached[0] != key:
+            cached = (key, PluginTelemetryAPI(self, scope))
+            self._telemetry_api_cache = cached
+        return cached[1]
 
     @property
     def models(self):

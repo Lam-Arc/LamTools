@@ -489,6 +489,59 @@ describe('useCoreLiveComposerController', () => {
     ])
   })
 
+  it('settles a steer that became a new turn as accepted, never as guidance or queue', async () => {
+    const calls: string[] = []
+    const statusTexts: string[] = []
+    const text = ref('')
+    const status = ref('running')
+    const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
+      activeThreadId: ref<string | null>('thread-1'),
+      activeTurnId: ref('turn-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(0),
+      status,
+      sendMode: ref<'guide' | 'queue'>('guide'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => undefined,
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      steerTurn: async () => {
+        calls.push('steer')
+        return { ok: false, submitted: true }
+      },
+      queueInput: async () => {
+        calls.push('queued')
+      },
+      listCommands: async () => [],
+      getWorkRoot: () => '',
+      executeCommand: async () => true,
+      clearComposer: () => {
+        text.value = ''
+      },
+      setStatusText: (value) => statusTexts.push(value),
+      onError: () => undefined,
+      onTurnStarted: () => {
+        calls.push('turn-started')
+      },
+    })
+
+    // user:“引导在结束边界之后被接收：原回合结束，创建一条真实用户消息并开启新回合”
+    // +(这条发送的落点已经是新回合里的一条用户消息：不排队、不显示引导成功、按
+    //   一次正常发送收尾)。
+    text.value = '换一种做法'
+    const result = await controller.submit({ clearComposer: true })
+    await Promise.resolve()
+
+    expect(result?.status).toBe('submitted')
+    expect(calls).toEqual(['steer', 'turn-started'])
+    expect(statusTexts).toEqual([])
+    expect(text.value).toBe('')
+  })
+
   it('never stops the running turn from the keyboard', async () => {
     const calls: string[] = []
     const text = ref('')

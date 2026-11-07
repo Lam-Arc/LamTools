@@ -6,6 +6,8 @@ import sys
 import uuid
 from pathlib import Path
 
+from lamtools_core.async_tasks import finish_on_cancel
+
 
 def _source(value):
     if type(value) is not str or len(value.encode("utf8")) > 8192 or not value.strip():
@@ -52,6 +54,7 @@ class PluginDynamicRunnerAPI:
     def __init__(self, context, scope):
         self._context, self._scope = context, scope
         self._definitions, self._runs = {}, {}
+        self._stopping = set()
 
     def define(self, source):
         self._scope.check_open()
@@ -64,6 +67,8 @@ class PluginDynamicRunnerAPI:
 
     def run(self, definition_id, *, input=None, timeout=30):
         self._scope.check_open()
+        if definition_id in self._stopping:
+            raise RuntimeError("Dynamic definition is stopping; no new runs are admitted")
         source = self._definitions.get(definition_id)
         if source is None:
             raise LookupError("Dynamic definition is unavailable in this plugin view")
@@ -78,16 +83,37 @@ class PluginDynamicRunnerAPI:
         return job
 
     async def stop(self, definition_id):
-        self._scope.check_open()
-        if definition_id not in self._definitions:
-            raise LookupError("Dynamic definition is unavailable")
-        for job_id in self._runs.get(definition_id, ()):
-            try:
-                await self._context.jobs.kill(job_id)
-            except Exception as error:
-                if getattr(error, "code", None) != "job/not-found":
-                    raise
-        self._runs.pop(definition_id, None)
+        # user:“审查当前代码，然后继续”+(关闭准入后固定任务集合，取消调用者也须完成原集合的停止/等待)。
+        self._scope.acquire()
+        admitted = False
+        try:
+            if definition_id not in self._definitions:
+                raise LookupError("Dynamic definition is unavailable")
+            if definition_id in self._stopping:
+                raise RuntimeError("Dynamic definition is already stopping")
+            self._stopping.add(definition_id)
+            admitted = True
+            jobs = self._context.jobs
+            runs = tuple(self._runs.get(definition_id, ()))
+            async def stop_all():
+                # user:“完成真实接口、参数/错误、作用域、取消/清理”+(单项失败不跳过其余作业；仅保留失败所有权供重试，全部尝试后报告真实错误)。
+                failures, remaining = [], set()
+                for job_id in runs:
+                    try:
+                        await jobs.kill(job_id)
+                    except Exception as error:
+                        if getattr(error, "code", None) != "job/not-found":
+                            failures.append(error)
+                            remaining.add(job_id)
+                if failures:
+                    self._runs[definition_id] = remaining
+                    raise ExceptionGroup("Dynamic program job cleanup failed", failures)
+                self._runs.pop(definition_id, None)
+            await finish_on_cancel(stop_all(), name="plugin-dynamic-stop")
+        finally:
+            if admitted:
+                self._stopping.discard(definition_id)
+            self._scope.release()
 
     async def undefine(self, definition_id):
         await self.stop(definition_id)

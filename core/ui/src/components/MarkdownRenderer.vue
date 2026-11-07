@@ -14,7 +14,7 @@
 
 <script setup lang="ts">
 import { linkifyTextNodes } from '@/helpers/webLinks'
-import { renderFileReferenceNodes, isLocalFileReference } from '@/helpers/fileReferenceRendering'
+import { renderFileReferenceNodes, isAutoFileReferenceCandidate, isLocalFileReference } from '@/helpers/fileReferenceRendering'
 import { useReferenceActions } from '@/helpers/referenceActions'
 
 import { t, uiLanguage } from '@/i18n/index.ts'
@@ -455,11 +455,16 @@ function createMermaidRenderer(heavy: boolean): Renderer {
   renderer.html = ({ text }) => text.replace(/\bdata-(inline-visualization|writing-block)\b/gi, 'data-disabled-$1')
   // user:“E:/LamTools/MyProject/krea_ref01_00001_.png”+(Windows 文件链接先转换成安全引用，避免净化器把盘符当成协议移除)。
   renderer.link = function ({ href, title, tokens }) {
+    const label = this.parser.parseInline(tokens)
     if (props.fileReferences && isLocalFileReference(href)) {
+      // user:“只渲染两种：从盘符开始的绝对路径且有文件，从项目路径开始的相对路径且有文件”
+      // +(裸文件名、Unix 绝对路径等不确定的路径保持原文，不自动变成文件链接；
+      // 规则内的路径在 canonicalize 里确认存在后才保留，失败会退回原文)。
+      if (!isAutoFileReferenceCandidate(href, referenceActions.absolute(''))) return label
       const path = referenceActions.absolute(href.replace(/:\d+(?::\d+)?$/, ''))
-      return `<a href="#" class="file-reference-link" data-file-path="${escapeHtml(path)}" title="${escapeHtml(path)}">${this.parser.parseInline(tokens)}</a>`
+      return `<a href="#" class="file-reference-link" data-file-path="${escapeHtml(path)}" data-file-reference-auto="true" title="${escapeHtml(path)}">${label}</a>`
     }
-    return `<a href="${escapeHtml(href)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${this.parser.parseInline(tokens)}</a>`
+    return `<a href="${escapeHtml(href)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${label}</a>`
   }
 
   renderer.image = function ({ href, title, text }: { href: string; title?: string | null; text: string }): string {
@@ -1620,7 +1625,8 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 /* user:“都把这个链接标蓝可跳转”+(显式与无协议链接保持统一可见性)。 */
 :deep(a[href]) { color: var(--blue); text-decoration-color: color-mix(in srgb, var(--blue) 45%, transparent); text-underline-offset: 3px; }
 :deep(a[href]:hover) { text-decoration: underline; }
-/* user:“渲染的@改为对应文件图标”+(图标与文件名同行居中对齐，图标颜色跟随链接)。 */
+/* user:“把那个@的符号去掉 换成对应的文件图标”+(图标与文件名同行居中对齐；
+   徽标本体样式在全局 layout.css，30% 圆角)。 */
 :deep(a.file-reference-link) { display: inline-flex; align-items: center; gap: 3px; }
-:deep(.file-reference-icon) { display: inline-flex; flex: none; }
+:deep(.file-reference-icon) { display: inline-flex; flex: none; align-items: center; justify-content: center; }
 </style>

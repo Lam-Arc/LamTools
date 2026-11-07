@@ -7,6 +7,135 @@ from .test_plugin_working_directory import env
 from .test_core_checkpoint_graph import _append_production_turn, _runtime, _tool_call_history
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change",["shutdown","catalog"])
+async def test_already_dispatched_checkpoint_write_still_settles_original_commit(setup,monkeypatch,change):
+    # user:“复用原宿主权威”+(已通过准入并派发的检查点写入继续按原提交事实收尾，不把失效检查变成提交后伪回滚)。
+    import asyncio
+    from lamtools_core.app.operation_catalog import OperationCatalog
+    ctx, _, sessions, _, _ = setup
+    api, catalog = ctx.checkpoints, ctx.operation_catalog
+    original = catalog.execute
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def gated(name,*args,**kwargs):
+        if name == "session.checkpoints.create":
+            entered.set()
+            await release.wait()
+        return await original(name,*args,**kwargs)
+    monkeypatch.setattr(catalog,"execute",gated)
+    task = asyncio.create_task(api.create("s",label="accepted-before-invalidation"))
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        else:
+            ctx.operation_catalog = OperationCatalog()
+        release.set()
+        result = await asyncio.wait_for(task,3)
+        saved = await original("session.checkpoints.list",{"session_id":"s"})
+        assert any(row["id"] == result["checkpoint"]["id"] for row in saved.payload["checkpoints"])
+        assert result["checkpoint"]["label"] == "accepted-before-invalidation"
+    finally:
+        ctx.operation_catalog = catalog
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation",["list","create"])
+@pytest.mark.parametrize("change",["shutdown","catalog","store"])
+async def test_checkpoint_visibility_wait_rechecks_original_authority_before_dispatch(setup,monkeypatch,operation,change):
+    # user:“复用原宿主权威”+(检查点可见性读取期间宿主失效后，不能再向旧操作目录提交读取或恢复写入)。
+    import asyncio
+    from lamtools_core.app.operation_catalog import OperationCatalog
+    from lamtools_core.plugin_system.checkpoint_access import CheckpointAccessError
+    ctx, store, sessions, _, _ = setup
+    api, catalog = ctx.checkpoints, ctx.operation_catalog
+    host = sessions._context().host
+    original_read, original_execute = store.get_readonly, catalog.execute
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    async def gated(session_id):
+        result = await original_read(session_id)
+        entered.set()
+        await release.wait()
+        return result
+    async def observed(*args,**kwargs):
+        calls.append(args[0])
+        return await original_execute(*args,**kwargs)
+    monkeypatch.setattr(store,"get_readonly",gated)
+    monkeypatch.setattr(catalog,"execute",observed)
+    work = api.list("s") if operation == "list" else api.create("s",label="must-not-dispatch")
+    task = asyncio.create_task(work)
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        elif change == "catalog":
+            ctx.operation_catalog = OperationCatalog()
+        else:
+            host.session_store = object()
+        release.set()
+        with pytest.raises(CheckpointAccessError) as error:
+            await asyncio.wait_for(task,3)
+        assert error.value.code == "checkpoint/" + ("closed" if change == "shutdown" else "host-changed")
+        assert calls == []
+        result = await original_execute("session.checkpoints.list",{"session_id":"s"})
+        assert result.payload["checkpoints"] == []
+    finally:
+        ctx.operation_catalog = catalog
+        host.session_store = store
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change",["shutdown","catalog","store","scope"])
+async def test_checkpoint_list_rechecks_authority_after_native_operation(setup,monkeypatch,change):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(检查点只读结果发布前复核宿主和启动代，写入仍按原已接收提交收尾)。
+    import asyncio
+    from lamtools_core.app.operation_catalog import OperationCatalog
+    from lamtools_core.plugin_system.checkpoint_access import CheckpointAccessError
+    from lamtools_core.plugin_system.services import ServiceError
+    ctx, store, sessions, _, _ = setup
+    api, catalog = ctx.checkpoints, ctx.operation_catalog
+    host = sessions._context().host
+    original = catalog.execute
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def gated(*args,**kwargs):
+        result = await original(*args,**kwargs)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(catalog,"execute",gated)
+    task = asyncio.create_task(api.list("s"))
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        elif change == "catalog":
+            ctx.operation_catalog = OperationCatalog()
+        elif change == "store":
+            host.session_store = object()
+        else:
+            ctx._registration_scope.revoke()
+        release.set()
+        with pytest.raises(ServiceError if change == "scope" else CheckpointAccessError) as error:
+            await asyncio.wait_for(task,3)
+        assert error.value.code == ("service/scope-closed" if change == "scope" else "checkpoint/closed" if change == "shutdown" else "checkpoint/host-changed")
+    finally:
+        ctx.operation_catalog = catalog
+        host.session_store = store
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
 @pytest.fixture
 async def setup(env):
     ctx, store, sessions, project = env

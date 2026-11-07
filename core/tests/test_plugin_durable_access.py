@@ -12,6 +12,50 @@ from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind",["goals","schedule"])
+@pytest.mark.parametrize("action",["get","list"])
+@pytest.mark.parametrize("change",["host","scope"])
+async def test_durable_reads_recheck_catalog_and_epoch_before_publication(env,monkeypatch,kind,action,change):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(原持久查询返回前复核操作目录和启动代，失效后不得发布旧目标/计划结果)。
+    from lamtools_core.plugin_system.durable_access import DurableAccessError
+    from lamtools_core.plugin_system.services import ServiceError
+    root, _, _, _ = env
+    api = getattr(root,kind)
+    fields = {"objective":"read boundary"} if kind == "goals" else {
+        "operation":"test.task","payload":{},"trigger":{"type":"once","at":(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat()}}
+    row = await api.create(thread_id="s",request_id="read-boundary",**fields)
+    catalog = root.operation_catalog
+    original = catalog.execute
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def gated(name,*args,**kwargs):
+        result = await original(name,*args,**kwargs)
+        if name == ("goal" if kind == "goals" else "arrange") + "." + action:
+            entered.set()
+            await release.wait()
+        return result
+    monkeypatch.setattr(catalog,"execute",gated)
+    work = api.get(row["id"]) if action == "get" else api.list(thread_id="s")
+    task = asyncio.create_task(work)
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "host":
+            root.operation_catalog = OperationCatalog()
+        else:
+            root._registration_scope.revoke()
+        release.set()
+        with pytest.raises(DurableAccessError if change == "host" else ServiceError) as error:
+            await asyncio.wait_for(task,3)
+        assert error.value.code == ("durable/host-changed" if change == "host" else "service/scope-closed")
+        assert not root._registration_scope._calls
+    finally:
+        root.operation_catalog = catalog
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
 @pytest.fixture
 async def env(tmp_path):
     db = await open_core_app_db(tmp_path / "durable.db")

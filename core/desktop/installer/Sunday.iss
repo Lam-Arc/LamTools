@@ -17,6 +17,9 @@
 #ifndef WebView2Bootstrapper
   #error WebView2Bootstrapper must be supplied by build-installer.ps1
 #endif
+#ifndef RestartManagerDll
+  #error RestartManagerDll must be supplied by build-installer.ps1
+#endif
 
 ; Windows file versioning has no pre-release field, so the numeric-only form is
 ; supplied separately from the display version.
@@ -150,6 +153,13 @@ Type: files; Name: "{commondesktop}\LamTools Core.lnk"
 Type: files; Name: "{commondesktop}\LamCore.lnk"
 
 [Files]
+; 放行脚本：安装前把「谁占用了安装目录的文件」交给 Restart Manager 回答，
+; 只结束属于 Sunday 的进程（可执行文件在该目录内，或加载了该目录内的模块）。
+; dontcopy：它只在临时目录里被执行，不进入安装结果。
+Source: "sunday-release-files.ps1"; Flags: dontcopy
+; 「谁占用了这些文件」由 Windows Restart Manager 回答；这个程序集在打包时编译，
+; 安装时只做加载，不在用户机器上调用 csc。
+Source: "{#RestartManagerDll}"; Flags: dontcopy
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\sunday-backend\*"; DestDir: "{app}\sunday-backend"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#WebView2Bootstrapper}"; DestDir: "{tmp}"; DestName: "MicrosoftEdgeWebView2Setup.exe"; Flags: deleteafterinstall; Check: NeedsWebView2
@@ -171,10 +181,24 @@ const
   // Inno appends _is1 to AppId for the non-administrative install used here.
   AppUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6B191096-6A27-42BF-B8E3-98E01D43DBB4}_is1';
   WebView2ClientKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  // 放行脚本与它写的报告都放在临时目录，用完即弃。
+  ReleaseHelperName = 'sunday-release-files.ps1';
+  RestartManagerDllName = 'SundayRestartManager.dll';
+  ReleaseReportName = 'sunday-release-report.txt';
+  // 对话框里最多列这么多条，再多就只留报告文件。
+  MaxSummaryLines = 6;
 
 var
   LegacyInstallDir: String;
   LegacyUninstaller: String;
+  // 放行脚本最近一次的结果，失败时既写进日志，也写进报告与弹窗。
+  ReleaseClear: Boolean;
+  ReleaseHelperFailed: Boolean;
+  ReleaseHolderSummary: String;
+  ReleaseBlockedSummary: String;
+  ReleaseBlockedSharing: Integer;
+  ReleaseBlockedPermission: Integer;
+  ReleaseAttributeFixed: Integer;
 
 function StripOuterQuotes(Value: String): String;
 begin
@@ -234,35 +258,6 @@ begin
   end;
 end;
 
-// Close only processes whose executable lives in the directory being updated.
-// The pre-migration uninstaller waits for lamcore.exe to exit, and the app keeps
-// running in the tray, so the old uninstaller would block forever and the setup
-// would look stuck on "Preparing to install".
-function StopProcessesInDir(const Directory: String): Boolean;
-var
-  Parameters: String;
-  ResultCode: Integer;
-  EscapedDirectory: String;
-begin
-  // A Windows user name may contain an apostrophe; double it so the path stays
-  // a valid PowerShell single-quoted string.
-  EscapedDirectory := Directory;
-  StringChangeEx(EscapedDirectory, '''', '''''', True);
-  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
-    + '$d=' + #39 + EscapedDirectory + #39 + '; '
-    // The legacy uninstaller runs its second phase from a temporary _unins.tmp,
-    // so its executable path is not under the install directory. Match that
-    // process (and other known app processes) by command line as well.
-    + '$names=@(''sunday.exe'',''lamcore.exe'',''sunday-core.exe'',''lamcore-backend.exe'',''unins000.exe'',''unins001.exe'',''_unins.tmp''); '
-    + 'Get-CimInstance Win32_Process | '
-    + 'Where-Object { ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($d, [System.StringComparison]::OrdinalIgnoreCase)) -or (($names -contains $_.Name.ToLower()) -and $_.CommandLine -and $_.CommandLine.IndexOf($d, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) } | '
-    + 'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
-  Result := Exec('powershell.exe', Parameters, Directory, SW_HIDE,
-    ewWaitUntilTerminated, ResultCode);
-  Log('Closing processes in "' + Directory + '" finished with ' +
-    IntToStr(ResultCode));
-end;
-
 // Inno names the new uninstaller uninsNNN based on the stale pairs already in
 // the directory, so an old pair left by a failed 0.3.31 update would survive
 // forever. After a successful install, remove every pair except the one just
@@ -314,18 +309,300 @@ begin
   end;
 end;
 
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+// 应用内更新走静默安装，而 [Run] 里的「启动 Sunday」带 skipifsilent——那条路
+// 只在用户自己双击安装包时生效。所以应用内更新用 /AUTORESTART=1 明确要求：
+// 装完把 Sunday 重新拉起来。更新到最后剩一个关着的窗口，等于没装完。
+function WantsRestartAfterInstall: Boolean;
+begin
+  Result := ExpandConstant('{param:AUTORESTART|0}') = '1';
+end;
+
+// ---------------------------------------------------------------------------
+// Releasing the files the update has to replace.
+//
+// The old implementation matched only processes whose executable lives in the
+// install directory (plus a fixed list of names). A holder whose executable
+// lives elsewhere but which loaded a DLL from the install directory - the
+// residual python.exe on the reporting machine, holding
+// lamcore-backend\_internal\msvcp140.dll - was invisible to it, so the lock
+// guard below aborted the update. A /SILENT run exits with code 3 and no
+// message, after the app has already quit, so the update simply disappears for
+// the user. The helper script asks the Windows Restart Manager which programs
+// use the files and ends only the ones that execute Sunday's files or have them
+// loaded as modules; anything else is reported, never killed.
+// ---------------------------------------------------------------------------
+
+function ReportKind(const Line: String): String;
 var
-  CurrentInstallDir: String;
+  Tab: Integer;
+begin
+  Tab := Pos(#9, Line);
+  if Tab = 0 then
+    Result := Line
+  else
+    Result := Copy(Line, 1, Tab - 1);
+end;
+
+function ReportField(const Line: String; Index: Integer): String;
+var
+  Position, FieldIndex, I: Integer;
 begin
   Result := '';
-  CurrentInstallDir := ExpandConstant('{app}');
-  // user:“0.3.31 下载最新更新后无法安装，setup 进度不动”+
-  // (0.3.31 的 unins000.exe 在 /UPDATE 下会一直等待/直接失败，不能再把它放进
-  //  升级主路径。这里只结束旧应用进程；旧程序文件交给 [InstallDelete]，
-  //  旧卸载注册表与多余卸载器在安装成功后清理，.lam 与 lam_projects 不动。)
-  StopProcessesInDir(CurrentInstallDir);
-  Sleep(500);
+  FieldIndex := 0;
+  Position := 1;
+  for I := 1 to Length(Line) do
+  begin
+    if Line[I] = #9 then
+    begin
+      if FieldIndex = Index then
+      begin
+        Result := Copy(Line, Position, I - Position);
+        Exit;
+      end;
+      Inc(FieldIndex);
+      Position := I + 1;
+    end;
+  end;
+  if FieldIndex = Index then
+    Result := Copy(Line, Position, Length(Line) - Position + 1);
+end;
+
+function PowerShellExecutable: String;
+var
+  Root: String;
+begin
+  Root := GetEnv('SystemRoot');
+  if Root = '' then
+    Root := 'C:\Windows';
+  // Setup is a 32-bit process; Sysnative is how it reaches the 64-bit
+  // PowerShell, whose process list includes the loaded modules of the 64-bit
+  // application and of the interpreters that use it. A 32-bit PowerShell cannot
+  // see those modules, so the fallback is only a last resort.
+  Result := AddBackslash(Root) + 'Sysnative\WindowsPowerShell\v1.0\powershell.exe';
+  if not FileExists(Result) then
+    Result := AddBackslash(Root) + 'System32\WindowsPowerShell\v1.0\powershell.exe';
+  if not FileExists(Result) then
+    Result := 'powershell.exe';
+end;
+
+// Returns True when nothing blocks the install. A helper that cannot run leaves
+// False: the caller's own probe is still the authority, so a broken helper can
+// never install over a locked file.
+function RunReleaseHelper(const Stage: String): Boolean;
+var
+  HelperPath, ReportPath, Parameters, Line, Kind: String;
+  ReportLines: TArrayOfString;
+  ResultCode: Integer;
+  Index: Integer;
+  Executed: Boolean;
+  SummaryLines: Integer;
+begin
+  ReleaseClear := False;
+  ReleaseHelperFailed := False;
+  ReleaseHolderSummary := '';
+  ReleaseBlockedSummary := '';
+  ReleaseBlockedSharing := 0;
+  ReleaseBlockedPermission := 0;
+  ReleaseAttributeFixed := 0;
+  Result := False;
+
+  try
+    ExtractTemporaryFile(ReleaseHelperName);
+    ExtractTemporaryFile(RestartManagerDllName);
+  except
+    Log('Release helper could not be extracted: ' + GetExceptionMessage);
+    ReleaseHelperFailed := True;
+    Exit;
+  end;
+  HelperPath := ExpandConstant('{tmp}\') + ReleaseHelperName;
+  ReportPath := ExpandConstant('{tmp}\') + ReleaseReportName;
+  DeleteFile(ReportPath);
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + HelperPath
+    + '" -Directory "' + ExpandConstant('{app}') + '" -Report "' + ReportPath
+    + '" -AssemblyPath "' + ExpandConstant('{tmp}\') + RestartManagerDllName + '"'
+    + ' -Stage ' + Stage;
+  Executed := Exec(PowerShellExecutable, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if Executed then
+    Log('Release helper (' + Stage + ') exited with ' + IntToStr(ResultCode))
+  else
+    Log('Release helper (' + Stage + ') could not be started');
+  if not LoadStringsFromFile(ReportPath, ReportLines) then
+  begin
+    Log('Release helper (' + Stage + ') produced no report');
+    ReleaseHelperFailed := True;
+    Exit;
+  end;
+
+  SummaryLines := 0;
+  for Index := 0 to GetArrayLength(ReportLines) - 1 do
+  begin
+    Line := ReportLines[Index];
+    Kind := ReportKind(Line);
+    if Kind = 'CLEAR' then
+      ReleaseClear := ReportField(Line, 1) = '1'
+    else if Kind = 'BLOCKED_TOTAL' then
+    begin
+      ReleaseBlockedSharing := StrToIntDef(ReportField(Line, 1), 0);
+      ReleaseBlockedPermission := StrToIntDef(ReportField(Line, 2), 0);
+    end
+    else if Kind = 'BLOCKED' then
+    begin
+      if SummaryLines < MaxSummaryLines then
+      begin
+        if ReportField(Line, 2) = 'permission' then
+          ReleaseBlockedSummary := ReleaseBlockedSummary + '  ' + ReportField(Line, 1) + '（无访问权限）' + #13#10
+        else
+          ReleaseBlockedSummary := ReleaseBlockedSummary + '  ' + ReportField(Line, 1) + '（被占用）' + #13#10;
+        Inc(SummaryLines);
+      end;
+    end
+    else if Kind = 'HOLDER' then
+    begin
+      if SummaryLines < MaxSummaryLines then
+      begin
+        ReleaseHolderSummary := ReleaseHolderSummary + '  ' + ReportField(Line, 2)
+          + '（PID ' + ReportField(Line, 1) + '，匹配方式 ' + ReportField(Line, 4) + '）' + #13#10;
+        Inc(SummaryLines);
+      end;
+    end
+    else if Kind = 'STILL_RUNNING' then
+    begin
+      if SummaryLines < MaxSummaryLines then
+      begin
+        ReleaseHolderSummary := ReleaseHolderSummary + '  ' + ReportField(Line, 2)
+          + '（PID ' + ReportField(Line, 1) + '，无法结束：权限不足）' + #13#10;
+        Inc(SummaryLines);
+      end;
+    end
+    else if Kind = 'ATTRIBUTE_FIXED' then
+      Inc(ReleaseAttributeFixed)
+    else
+      Log('Release helper: ' + Line);
+  end;
+  Log('Release helper (' + Stage + '): held=' + IntToStr(ReleaseBlockedSharing)
+    + ' permission=' + IntToStr(ReleaseBlockedPermission)
+    + ' read-only-fixed=' + IntToStr(ReleaseAttributeFixed)
+    + ' clear=' + IntToStr(Ord(ReleaseClear)));
+  if ReleaseHolderSummary <> '' then
+    Log('Release helper (' + Stage + ') processes:' + #13#10 + ReleaseHolderSummary);
+  if ReleaseBlockedSummary <> '' then
+    Log('Release helper (' + Stage + ') files:' + #13#10 + ReleaseBlockedSummary);
+  Result := ReleaseClear;
+end;
+
+// ---------------------------------------------------------------------------
+// Failing visibly, without touching the existing installation.
+// ---------------------------------------------------------------------------
+
+function FailureReportPath: String;
+var
+  Requested: String;
+begin
+  // The in-app update passes the path of its own update directory. A manual run
+  // has no such parameter, so the report goes next to the download directory and
+  // stays readable after Setup exits ({tmp} would be deleted with it).
+  Requested := ExpandConstant('{param:FAILREPORT|}');
+  if Requested <> '' then
+    Result := Requested
+  else
+    Result := ExpandConstant('{localappdata}\Temp\sunday-update\install-failure.txt');
+end;
+
+function InstallFailureMessage: String;
+begin
+  Result := '安装程序无法替换正在使用的文件，本次安装已经停止，原有版本仍然可用。' + #13#10 + #13#10;
+  if ReleaseBlockedPermission > 0 then
+    Result := Result + '原因：有 ' + IntToStr(ReleaseBlockedPermission)
+      + ' 个文件没有访问权限，通常是安全软件拦截或文件权限被修改。' + #13#10
+      + '处理：暂时关闭安全软件的实时防护后重试；仍然失败时，右键安装程序选择“以管理员身份运行”。'
+  else
+    Result := Result + '原因：有 ' + IntToStr(ReleaseBlockedSharing)
+      + ' 个文件正被其他程序使用。' + #13#10
+      + '处理：退出上列进程后重新运行安装程序；Sunday 在系统托盘里时，请右键托盘图标选择“退出”。'
+      + #13#10 + '上列进程如果是以管理员身份运行的，请同样以管理员身份运行安装程序。';
+  if ReleaseHolderSummary <> '' then
+    Result := Result + #13#10 + #13#10 + '仍在使用这些文件的进程：' + #13#10 + ReleaseHolderSummary;
+  if ReleaseBlockedSummary <> '' then
+    Result := Result + #13#10 + '无法替换的文件：' + #13#10 + ReleaseBlockedSummary;
+  Result := Result + #13#10 + '完整报告：' + FailureReportPath;
+end;
+
+procedure WriteInstallFailureReport(const Stage, LockedFile: String);
+var
+  Path, Directory, Report: String;
+begin
+  Path := FailureReportPath;
+  Directory := ExtractFileDir(Path);
+  if Directory <> '' then
+    ForceDirectories(Directory);
+  Report := 'Sunday 安装失败报告' + #13#10
+    + '时间: ' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + #13#10
+    + '安装程序版本: {#AppVersion}' + #13#10
+    + '失败阶段: ' + Stage + #13#10
+    + '安装目录: ' + ExpandConstant('{app}') + #13#10
+    + '处理结果: 已中止，原有版本与用户数据保持不变' + #13#10
+    + '被占用文件数: ' + IntToStr(ReleaseBlockedSharing) + #13#10
+    + '无访问权限文件数: ' + IntToStr(ReleaseBlockedPermission) + #13#10
+    + '已修正的只读文件数: ' + IntToStr(ReleaseAttributeFixed) + #13#10
+    + '安装前探测到的首个阻塞文件: ' + LockedFile + #13#10
+    + '持有进程:' + #13#10 + ReleaseHolderSummary
+    + '阻塞文件:' + #13#10 + ReleaseBlockedSummary
+    + '安装日志: ' + ExpandConstant('{param:LOG|}') + #13#10;
+  if SaveStringToFile(Path, Report, False) then
+    Log('Wrote the install failure report to ' + Path)
+  else
+    Log('Could not write the install failure report to ' + Path);
+end;
+
+// 更新已经把应用关掉了；失败时把旧版本重新拉回来，让用户面对的是
+// 「弹窗 + 应用还在」，而不是「安装窗口消失、应用也没了」。
+procedure StartExistingInstallationAfterFailure;
+var
+  ErrorCode: Integer;
+  AppExe: String;
+begin
+  if not (WizardSilent and WantsRestartAfterInstall) then
+    Exit;
+  AppExe := ExpandConstant('{app}\') + AppMainExe;
+  if not FileExists(AppExe) then
+    Exit;
+  Log('Failed update: starting the existing installation again');
+  ShellExecAsOriginalUser('', AppExe, '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ErrorCode);
+end;
+
+procedure RefuseInstallation(const Stage, LockedFile: String);
+begin
+  WriteInstallFailureReport(Stage, LockedFile);
+  StartExistingInstallationAfterFailure;
+  // /VERYSILENT 是真无人值守：弹窗会让它永远等下去。应用内更新用的是
+  // /SILENT，用户就在机器前，所以那种情况必须把原因说出来，不能静默退出。
+  // SuppressibleMsgBox 而不是 MsgBox：只有它会尊重 /SUPPRESSMSGBOXES，
+  // 否则脚本弹窗会绕过那个开关，把无人值守的安装挂在这里。
+  if Pos('/VERYSILENT', Uppercase(GetCmdTail)) = 0 then
+    SuppressibleMsgBox(InstallFailureMessage, mbError, MB_OK, IDOK);
+  Log('Refusing to install: ' + IntToStr(ReleaseBlockedSharing + ReleaseBlockedPermission)
+    + ' program file(s) are unavailable; first is ' + LockedFile);
+  Abort;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  // user:“安装器卡住一段时间后自动退出，更新失败”+
+  // (安装阶段之前先放行：结束安装目录里的进程，也结束那些可执行文件在别处、
+  //  却加载了本目录 DLL 的进程。旧实现只按可执行文件路径匹配，漏掉了后者，
+  //  锁检测于是只能中止安装，静默安装里就表现为安装窗口自己消失。)
+  if not DirExists(ExpandConstant('{app}')) then
+  begin
+    Log('Fresh installation into ' + ExpandConstant('{app}') + '; nothing to release');
+    Exit;
+  end;
+  if RunReleaseHelper('prepare') then
+    Log('Program files are free for the update')
+  else
+    Log('Some program files are still in use after the release attempt; the install ' +
+      'phase will check again and refuse rather than damage the installation');
+  Sleep(300);
 end;
 
 function ReadLegacyLocation(RootKey: Integer; KeyName: String;
@@ -376,9 +653,10 @@ end;
 // Updating deletes the whole sunday-backend tree and rewrites Sunday.exe. If
 // one of those files is still open, the delete fails halfway and leaves an
 // installation the user cannot start. Closing the running programs comes first
-// (the close-applications check, then StopProcessesInInstallDir); this guard is
-// the backstop for whatever closing cannot reach, and it runs before the first
-// delete, so refusing leaves the previous installation untouched.
+// (RunReleaseHelper in PrepareToInstall, then Inno's own close-applications
+// check); this guard is the backstop for whatever closing cannot reach, and it
+// runs before the first delete, so refusing leaves the previous installation
+// untouched.
 // ---------------------------------------------------------------------------
 function CreateFileW(lpFileName: String; dwDesiredAccess: Cardinal;
   dwShareMode: Cardinal; lpSecurityAttributes: Cardinal;
@@ -455,24 +733,6 @@ begin
   Result := LockedFileCount;
 end;
 
-// The close-applications check asks Windows to shut the programs down, but
-// Windows cannot close an application that hides instead of closing, nor a
-// windowless backend, and it reports success either way. So close our own
-// programs here - only processes whose executable lives in the directory being
-// updated, never a same-named program installed elsewhere.
-function StopProcessesInInstallDir: Boolean;
-begin
-  Result := StopProcessesInDir(ExpandConstant('{app}'));
-end;
-
-// 应用内更新走静默安装，而 [Run] 里的「启动 Sunday」带 skipifsilent——那条路
-// 只在用户自己双击安装包时生效。所以应用内更新用 /AUTORESTART=1 明确要求：
-// 装完把 Sunday 重新拉起来。更新到最后剩一个关着的窗口，等于没装完。
-function WantsRestartAfterInstall: Boolean;
-begin
-  Result := ExpandConstant('{param:AUTORESTART|0}') = '1';
-end;
-
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Attempt: Integer;
@@ -485,6 +745,8 @@ begin
     // 旧版卸载器不再运行；安装成功后再清掉指向本目录的旧卸载键。
     DeleteLegacyUninstallKeys;
     RemoveStaleUninstallerFiles;
+    // 装好了就不该再留着上一次的失败报告，否则下次读到的是过期结论。
+    DeleteFile(FailureReportPath);
     // 只在静默安装里补这一步：非静默那趟由 [Run] 的 postinstall 负责，
     // 两条路同时跑会让应用被启动两次。
     if WantsRestartAfterInstall and WizardSilent then
@@ -497,21 +759,13 @@ begin
   end;
   if CurStep <> ssInstall then
     Exit;
-  Locked := 0;
-  // Retry before refusing: the close-applications check above asks Windows to
-  // shut applications down, and that shutdown lands asynchronously. Staying
-  // patient here is what lets a slow close finish instead of refusing an
-  // update that would have succeeded a second later.
-  for Attempt := 1 to 6 do
-  begin
-    Locked := CountLockedProgramFiles(Sample);
-    if Locked = 0 then
-      Break;
-    Sleep(1000);
-  end;
+  Locked := CountLockedProgramFiles(Sample);
   if Locked > 0 then
   begin
-    StopProcessesInInstallDir;
+    // A process started after the prepare phase, or a handle released late,
+    // still reaches the guard: release once more, then give the shutdown time
+    // to land before refusing.
+    RunReleaseHelper('install');
     for Attempt := 1 to 5 do
     begin
       Locked := CountLockedProgramFiles(Sample);
@@ -522,16 +776,11 @@ begin
   end;
   if Locked = 0 then
     Exit;
-  Log('Refusing to install: ' + IntToStr(Locked) +
-    ' program file(s) are still open; first is ' + Sample);
-  // A script message box is shown even under /VERYSILENT, which would hang an
-  // unattended install; silent runs get the log line and the exit code instead.
-  if not WizardSilent then
-    MsgBox('安装程序无法替换正在被占用的程序文件，本次安装已经停止，原有版本保持可用。' + #13#10 + #13#10 +
-      '请先从系统托盘退出 Sunday（在托盘图标上点击右键，选择“退出”），然后重新运行安装程序；' +
-      '如果 Sunday 已经退出，请在任务管理器中结束仍残留的相关进程后重试。' + #13#10 + #13#10 +
-      '仍被占用的文件：' + #13#10 + Sample, mbError, MB_OK);
-  Abort;
+  if Sample = '' then
+    Sample := '（未能定位具体文件，见安装日志）';
+  // 删除动作在这个守卫之后，所以拒绝时不会留下半残安装；这里同时写报告、
+  // 拉回旧应用并弹窗，静默安装不再以「窗口自己消失」收场。
+  RefuseInstallation('install', Sample);
 end;
 
 procedure InitializeWizard;

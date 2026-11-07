@@ -62,6 +62,11 @@ class PluginDurableAPI:
                 result = await catalog.execute(name, _json(payload), metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
             except Exception:
                 raise DurableAccessError("durable/operation-failed", "Durable host failed; inspect persistent state before retrying", may_have_changed=action not in {"get", "list"}) from None
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(只读目标/计划结果发布前复核原目录与启动代，已接收写入仍按原持久化事实结算)。
+            if action in {"get", "list"}:
+                self._scope.check_open()
+                if self._context.resolved_operation_catalog() is not catalog:
+                    raise DurableAccessError("durable/host-changed", "Operation host changed during read")
             if result.status != "ok":
                 if missing and result.payload.get("code") == "not-found":
                     return None

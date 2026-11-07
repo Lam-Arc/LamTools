@@ -314,7 +314,33 @@ def create_core_agent_operations(
             session_factory=db_session_factory,  # type: ignore[arg-type]
         )
 
+    # user:“排查并修复 Sunday 在长会话中，随着使用次数、历史消息和工具调用记录不断
+    # 增加，用户发送新消息越来越慢的问题”+(发送前每条消息都重新装配一遍插件层再建
+    # 技能注册表，实测 115ms/次，与会话长短无关却吃掉发送确认时间的一半)。
+    # 技能注册表自己按文件签名失效（SKILL.md 改了照旧生效），所以只需要把装配结果
+    # 缓存起来，插件账本变化时重建即可，不必每条消息重扫一遍插件目录。
+    _skill_registry_cache: dict[str, object] = {"key": None, "registry": None}
+
+    def _plugin_state_signature() -> tuple[object, ...]:
+        """Cheap signature of everything that changes the registry's roots."""
+        ledger = Path(paths.data_dir) / "plugin-system.jsonc"
+        try:
+            stat = ledger.stat()
+            stamp: tuple[int, int] = (int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError:
+            stamp = (0, 0)
+        return (
+            str(Path(paths.work_root)),
+            tuple(str(item) for item in plugin_roots or ()),
+            tuple(str(item) for item in resolved_command_member_roots),
+            stamp,
+        )
+
     def command_skill_registry() -> SkillRegistry:
+        signature = _plugin_state_signature()
+        cached = _skill_registry_cache["registry"]
+        if cached is not None and _skill_registry_cache["key"] == signature:
+            return cached  # type: ignore[return-value]
         plugin_assembly = assemble_core_agent_plugins(
             data_dir=paths.data_dir,
             work_root=paths.work_root,
@@ -322,7 +348,7 @@ def create_core_agent_operations(
             context=plugin_context,
             plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
         )
-        return create_skill_runtime(
+        registry = create_skill_runtime(
             plugin_skill_roots=[
                 *resolved_command_member_roots,
                 *plugin_assembly.get("skill_roots", []),
@@ -331,6 +357,9 @@ def create_core_agent_operations(
             runtime_skills=_plugin_skill_provider(plugin_assembly),
             builtin_skill_roots=resolved_command_core_roots,
         ).registry
+        _skill_registry_cache["key"] = signature
+        _skill_registry_cache["registry"] = registry
+        return registry
 
     def command_plugin_manifests() -> list[Any]:
         host = getattr(plugin_operations, "plugin_system_host", None)
@@ -754,6 +783,11 @@ def create_core_agent_operations(
                             thread_id,
                             run_id=guidance_run_id,
                             include_metadata=True,
+                        ),
+                        # user:“建立明确的回合结束边界”+(非正常收尾也要封口：等待
+                        # 输入、失败、暂停、取消之后到的引导不再进这一轮)。
+                        guidance_sealer=lambda: runtime_task_registry.seal_guidance(
+                            thread_id, run_id=guidance_run_id
                         ),
                         # user:“模式、权限、思考强度在下一步生效（即时生效）”+(运行中
                         # 的回合每步来取一次最新的输入参数组；模型不在补丁里)。
@@ -1799,6 +1833,13 @@ def create_core_agent_operations(
                                 if runtime_task_registry is not None
                                 else None
                             ),
+                            guidance_sealer=(
+                                lambda: runtime_task_registry.seal_guidance(
+                                    thread_id, run_id=str(state.run_id or "")
+                                )
+                                if runtime_task_registry is not None
+                                else None
+                            ),
                             metadata={
                                 **_runtime_metadata(request.metadata),
                                 **dict(request.payload.get("metadata") or {}),
@@ -2231,6 +2272,13 @@ def create_core_agent_operations(
                                 thread_id,
                                 run_id=str(lifecycle.state.run_id or ""),
                                 include_metadata=True,
+                            )
+                            if runtime_task_registry is not None
+                            else None
+                        ),
+                        guidance_sealer=(
+                            lambda: runtime_task_registry.seal_guidance(
+                                thread_id, run_id=str(lifecycle.state.run_id or "")
                             )
                             if runtime_task_registry is not None
                             else None

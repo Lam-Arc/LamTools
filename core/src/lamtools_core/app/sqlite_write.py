@@ -17,6 +17,76 @@ logger = logging.getLogger(__name__)
 SQLITE_BUSY_TIMEOUT_MS = 5000
 SQLITE_WRITE_RETRY_DELAYS = (0.05, 0.15, 0.35)
 
+# user:“发送耗时原则上不应随历史会话长度显著增长”+(SQLite 默认 wal_autocheckpoint
+# 是 1000 页≈4MB，超过就把整段 WAL 回写并 fsync 在提交线程里同步做完。会话越长，
+# 单次写入量越大（2400 条会话一次约 1.3MB，用户的 6000 条会话约 7.8MB），于是几乎
+# 每次发送都撞上一次 0.6-1.0s 的检查点停顿：实测长会话发送确认 p95 从 84ms 变成
+# 801ms，停顿全部落在提交上。这里把同步检查点抬到只作兜底的上界，改由后台在空闲时
+# 做 PASSIVE 检查点，请求路径不再承担检查点成本。
+SQLITE_WAL_AUTOCHECKPOINT_PAGES = 32768          # 兜底上界，约 128MB（仅在后台巡检卡住时才会用到）
+SQLITE_WAL_MAINTENANCE_PENDING_PAGES = 2048      # 未回写页超过这个水位就报警，约 8MB
+SQLITE_WAL_MAINTENANCE_INTERVAL = 1.0            # 巡检间隔（秒）；被动检查点很快，间隔短才抢得到空档
+
+
+def sqlite_database_path(session_factory: Any) -> Path | None:
+    """Return the database file behind a session factory, when it is a file."""
+    identity = database_identity(session_factory)
+    if not identity.startswith("sqlite:"):
+        return None
+    return Path(identity[len("sqlite:"):])
+
+
+async def wal_maintenance_once(session_factory: Any) -> dict[str, int]:
+    """Run one PASSIVE checkpoint and report the WAL frame state.
+
+    A passive checkpoint never waits for readers or writers, so running it from
+    a background task keeps the write path free of checkpoint stalls. The
+    returned frame counts are the only honest signal here: the WAL *file* keeps
+    its size after a checkpoint and is simply reused, so file size says nothing
+    about how much is actually outstanding.
+    """
+    path = sqlite_database_path(session_factory)
+    if path is None:
+        return {"state": "no_file"}
+    wal = path.with_name(f"{path.name}-wal")
+    if not wal.exists():
+        return {"state": "no_wal"}
+    async with session_factory() as session:
+        row = (await session.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))).first()
+    values = [int(value or 0) for value in (row or (0, 0, 0))]
+    while len(values) < 3:
+        values.append(0)
+    busy, log_frames, checkpointed = values[:3]
+    return {
+        "state": "ok",
+        "busy": busy,
+        "log": log_frames,
+        "checkpointed": checkpointed,
+        "pending": max(0, log_frames - checkpointed),
+    }
+
+
+async def wal_maintenance_loop(
+    session_factory: Any,
+    *,
+    interval: float = SQLITE_WAL_MAINTENANCE_INTERVAL,
+    pending_pages: int = SQLITE_WAL_MAINTENANCE_PENDING_PAGES,
+) -> None:
+    """Keep the WAL draining without putting a checkpoint on any request path."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            result = await wal_maintenance_once(session_factory)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - maintenance must never kill the host
+            logger.warning("[sqlite] WAL maintenance checkpoint failed", exc_info=True)
+            continue
+        if result.get("pending", 0) >= pending_pages:
+            # Readers are pinning the WAL; surface it instead of letting the
+            # file grow silently.
+            logger.warning("[sqlite] WAL is not draining: %s", result)
+
 T = TypeVar("T")
 WriteAction = Callable[[Any], Awaitable[T]]
 
@@ -102,6 +172,11 @@ def _apply_connection_pragmas(
                 "[sqlite] initial PRAGMA journal_mode=WAL completed in %.3fs",
                 perf_counter() - started,
             )
+    # 同步检查点只作兜底；常态由 wal_maintenance_loop 在空闲时被动检查点。
+    try:
+        cursor.execute(f"PRAGMA wal_autocheckpoint={SQLITE_WAL_AUTOCHECKPOINT_PAGES}")
+    except Exception:  # noqa: BLE001 - best-effort connection setup
+        logger.warning("[sqlite] PRAGMA wal_autocheckpoint failed", exc_info=True)
     started = perf_counter()
     try:
         cursor.execute("PRAGMA synchronous=NORMAL")

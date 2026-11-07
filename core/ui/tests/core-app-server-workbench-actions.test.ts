@@ -319,6 +319,21 @@ describe('core appServer workbench actions', () => {
       },
       startTurn: async () => false,
     })
+    const submitted = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      activeTurnId: 'turn-1',
+      text: '继续写',
+      status: 'running',
+      forceGuide: true,
+      steerTurn: async () => ({ ok: false, submitted: true }),
+      queueInput: async () => {
+        throw new Error('an already submitted turn must not be queued')
+      },
+      startTurn: async () => false,
+    })
+    expect(submitted.status).toBe('submitted')
+    expect(queued).toHaveLength(1) // 只有上面那条附件走了排队
+
     const startedResult = await submitCoreComposerTask({
       threadId: 'thread-1',
       text: '写文档',

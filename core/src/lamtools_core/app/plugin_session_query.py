@@ -17,13 +17,18 @@ class PluginSessionQueryService:
         scope.check_open()
         return PluginSessionQueryAPI(self, scope)
 
-    async def query(self, owner, *, limit, cursor, title_contains):
+    def _context(self):
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(查询前后共用同一原宿主检查，扫描等待期间关闭或替换不能发布旧结果)。
         try:
             context = self._sessions._context()
         except SessionError as error:
             raise SessionQueryError("session-query/closed" if error.code == "session/closed" else "session-query/host-changed", "Session query host is unavailable") from None
         if context.host.session_store is not self._store:
             raise SessionQueryError("session-query/host-changed", "Host session store changed")
+        return context
+
+    async def query(self, owner, *, limit, cursor, title_contains):
+        self._context()
         if type(limit) is not int or not 1 <= limit <= 100 or type(title_contains) is not str or len(title_contains) > 200:
             raise SessionQueryError("session-query/invalid-query", "limit is 1–100; title filter is at most 200 characters")
         now = time.monotonic()
@@ -43,6 +48,7 @@ class PluginSessionQueryService:
             rows, more = await scan(after_id=after, scan_limit=1000)
         except Exception:
             raise SessionQueryError("session-query/read-failed", "Session query failed") from None
+        self._context()
         items = []
         for index, (identifier, record) in enumerate(rows):
             after = identifier

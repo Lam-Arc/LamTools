@@ -163,8 +163,9 @@ def resolve_provider_for_model(
 
 
 def model_is_usable(model: ModelConfig | None, *, work_root: str | None = None) -> bool:
-    """True when the model exists, its provider resolves, and the URL is valid."""
-    if model is None:
+    """True for an enabled model with a configured provider and valid URL."""
+    # user:“继续，只在交互轮停下”+(显式SDK选择和子代理准入也复用禁用状态，不能只在自动场景候选中排除禁用模型)。
+    if model is None or not getattr(model, "enabled", True):
         return False
     provider = resolve_provider_for_model(model, work_root=work_root)
     if provider is None:
@@ -179,6 +180,8 @@ def _usable_model_ids(*, work_root: str | None) -> set[str]:
     provider_store = ProviderStore()
     usable: set[str] = set()
     for model in store.list_sync(work_root=work_root):
+        if not model.enabled:
+            continue
         provider = resolve_provider_for_model(
             model, work_root=work_root, provider_store=provider_store
         )

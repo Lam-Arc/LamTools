@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,10 @@ MAX_BYTES = 32 * 1024 * 1024
 def _files(root: Path, max_files: int, max_bytes: int) -> list[Path]:
     files: list[Path] = []
     size = 0
-    for directory, dirs, names in os.walk(root, followlinks=False):
+    # user:“不能用静态扫描、空壳或未安装提供方冒充可用”+(不能静默忽略目录读取失败后把不完整包报告为分析/导出成功)。
+    def fail_scan(error: OSError) -> None:
+        raise error
+    for directory, dirs, names in os.walk(root, followlinks=False, onerror=fail_scan):
         base = Path(directory)
         for name in dirs + names:
             path = base / name
@@ -32,7 +34,8 @@ def _files(root: Path, max_files: int, max_bytes: int) -> list[Path]:
                 continue
             if path.is_symlink() or path.is_junction():
                 raise ValueError(f"linked source requires manual review: {path.relative_to(root)}")
-        dirs[:] = sorted(d for d in dirs if d not in IGNORED)
+        # user:“自动化兼容脚本”+(目录剪枝与文件排除使用同一.env.*规则，避免排除目录的后代仍被扫描和复制)。
+        dirs[:] = sorted(d for d in dirs if d not in IGNORED and not d.startswith(".env."))
         for name in sorted(names):
             if name in IGNORED or name.startswith(".env."):
                 continue
@@ -79,6 +82,7 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
         "backgroundMethods": [],
         "questionMethods": [],
         "phase2Methods": [],
+        "workspaceFileMethods": [],
         "subagentMethods": [],
         "durableMethods": [],
         "findings": [], "converted": {"skills": [], "mcp": []},
@@ -115,6 +119,16 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                     item.update(conversion="agent-required", difference="此方法尚无已验收映射；按服务清单核对原协议，不猜测接口。")
                     if port is not None:
                         item.update(port)
+                if kind == "workspaceFileMethods":
+                    # user:“保持迁移脚本、机器清单、文档同步”+(文件控制器只给真实方法候选，Session身份和分页/字节/权限差异必须人工移植)。
+                    item.update(conversion="agent-required")
+                    mapped = {"workspaceFiles.read": "read", "workspaceFiles.readBytes": "read_bytes",
+                              "workspaceFiles.stat": "stat", "workspaceFiles.list": "list", "workspaceFiles.changes": "changes"}
+                    if name in mapped:
+                        item.update(candidateContract="context.workspace_files." + mapped[name],
+                            difference="显式session_id经原可见性/执行目录取得根，不接受客户端root。read为1起算行窗口，页≤1MiB且源≤64MiB；read_bytes全文件/窗口≤1MiB，Python bytes可经显式resultEncoding=multipart的Sunday附件出口，非DSH envelope/codec；stat版本仅size/mtime，list有界。所有读均限制在会话目录且拒绝已观察链接；read_bytes支持base_file普通文件旁的相对目标，仍受同一根约束。changes为SDK轮询合并异步流，ready/change、aclose和取消/停用真实回收；最多32活动流及32启动代根、目录快照最多1000项，不是完整事件日志；可显式resultEncoding=ndjson通过Sunday HTTP服务端JSON流输出，非DSH wire/二进制帧/双向流或远程后端。HTTP需显式映射，不能盲替换DSH范围/选项对象。")
+                    else:
+                        item.update(difference="此方法未提供已验收控制器映射；DSH二进制wire/Client codec及网络流须另行移植，不能用普通读取冒充。")
                 # user:“剩下问题交给 agent 来移植”+(为已具备宿主契约的方法提供人工映射，不执行参数或事件格式的盲替换)。
                 if kind == "services" and name == "subprocess":
                     item.update(candidateContract="context.processes", conversion="agent-required",
@@ -153,7 +167,11 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                         item.update(candidateContract=candidates[name],
                                     difference="仅Sunday具名持久成员：固定原项目/可见父会话/插件命名空间，原监督器与邮箱；create后message启动，request_id用于原邮箱去重。interrupt改为父会话+友好name并等待本成员清理，缺失成员报错，不等同DSH同步信号回执/精确在线authority。resume仅支持已中断且有非活动提交状态和真实继续执行器的成员，不是根Agent恢复；无DSH AgentHandle/activation结果、fork/provider registry、明确Queue/Steer或子父互发；插件停用只撤回门面，成员仍归原监督器。")
                     else:
-                        item.update(difference="该DSH根Agent或子代理方法没有等价公开协议；不得用具名成员create/list/close代替AgentHandle、activation dispose/结果、恢复或全树控制。")
+                        item.update(difference="该DSH方法没有直接映射；根会话见context.agents，成员见context.subagents，不能冒充DSH activation/authority协议。")
+                    if name == "agents.create":
+                        # user:“继续，无人值守模式，不要停下来”+(根代理已有真实控制入口，仍需人工调整DSH生命周期)。
+                        item.update(candidateContract="context.agents.create",
+                                    difference="Python根代理控制句柄，显式request_id固定插件/项目命名空间，原会话/队列/回执/继续。同一ID修复创建交接；非DSH AgentHandle/activation、根插件挂载或全树控制。")
                 if kind == "processMethods":
                     # user:“继续，把 2 阶段都做完”+(Shell 与环境只提示有差异的真实候选，后续原进程映射仍保持独立)。
                     shell_methods = {"shell.resolve": "shell.resolve", "shell.execute": "shell.execute",
@@ -255,12 +273,12 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                         item.update(difference="当前未实现授权/凭据记录、异步原子 modifyRecord 与元数据枚举契约，不能把对象序列化成字符串就视为兼容。")
                 if kind == "services" and name in {"storage", "storageDomain"}:
                     item.update(candidateContract="context.storage", conversion="agent-required",
-                                difference="当前仅插件所有的 SQLite JSON KV；DSH hub 后端/形式和带 schema、表、全局槽及变更事件的领域需重新设计，不能盲替换。")
+                                difference="原插件SQLite KV；storageDomain已有同步表/全局槽和本地通知近似，DSH后端/形式/兼容迁移协议仍需人工移植。")
                 if kind == "storageMethods":
                     item.update(conversion="agent-required")
                     if name == "storageDomain.open":
-                        item.update(candidateContract="context.storage.open",
-                                    difference="仅可考虑人工重构为单元+不透明键。同步接口、正整数精确版本、无 schema/tables/global/后端路由/变更事件；持久写不随启动失败回滚。")
+                        item.update(candidateContract="context.storage_domain.open",
+                                    difference="同步领域显式表名，原SQLite单快照事务同时提交表/全局槽；expected_revision防丢写，精确版本、≤1MiB、本地通知。无DSH schema推断、compatibleVersions迁移、跨进程通知/后端路由或异步写链；提交不随启动失败回滚。")
                     else:
                         item.update(difference="当前未实现 DSH backend/form 注册与挂载协议，保留 agent 待办，不生成空后端。")
                 if kind == "services" and name in {"llm", "agentDefaultModel", "subagentModelSelection"}:
@@ -269,6 +287,10 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                     if name == "llm":
                         item.update(suggestedContract="context.llm / context.models",
                                     difference="已有原生实际 complete、结构化异步 stream、估算和目录；固定项目/模型记录和有限输出/截止时间。仍需调整 DSH 消息、prepareCall、adapter 注册与路由协议。")
+                    if name == "subagentModelSelection":
+                        # user:“自动化兼容脚本，脚本不必能处理所有问题”+(交接持久政策近似，未知DSH方法仍交agent调整)。
+                        item.update(suggestedContract="context.subagent_models",
+                                    difference="SDK插件/父会话持久allowlist/default与原会话CAS；创建/投递/继续前检查路由身份和提供方可用性，同wire多路由拒绝。非全局工具ACL、最终HTTP授权或配置代际锁，无DSH投影/发现开关/父模型继承/推理默认协议。")
                 if kind == "modelMethods":
                     item.update(conversion="agent-required")
                     mappings = {"llm.listModels": "context.models.list", "llm.resolveModelInfo": "context.models.resolve",
@@ -332,7 +354,13 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                     if method in {"create", "state", "prompt", "cancel", "events", "follow", "wait", "updateQueue"}:
                         item.update(suggestedContract="sessions." + ("update_queue" if method == "updateQueue" else method),
                                     conversion="agent-required",
-                                    difference="Python SESSIONS 契约，参数、回执和持久事件格式需适配；仅文本，未支持 workspace/preset/附件与实时 token。")
+                                    difference="Python SESSIONS契约经原bind_service调用；原dataclass记录可按真实字段有界JSON投影，不是DSH字段/codec。HTTP仍需本插件token路由及明确映射，参数、回执和持久事件格式需适配；events为after_seq正向页，不是DSH history address/反向页；follow仅原持久事件，无开场快照/token；prompt仅文本，无workspace/preset/附件。")
+                    elif method == "list":
+                        item.update(suggestedContract="context.session_query.query", conversion="agent-required",
+                                    difference="原可见会话有限扫描，dataclass记录可按字段投影；默认50、上限100、不透明游标绑定插件代/筛选，不是DSH全量活动排序或完整summary。HTTP需明确映射。")
+                    elif method == "search":
+                        item.update(conversion="agent-required",
+                                    difference="原context.session_query.query(title_contains=...)只过滤标题，不是DSH消息内容搜索；不提供等价search候选，需移植真实内容搜索及权限/限额。")
                 if kind == "services":
                     row = known.get(name)
                     item.update({"status": row["status"] if row else "gap", "sunday": row["sunday"] if row else "补充未收录接口的公开契约", "phase": row["phase"] if row else 2})
@@ -382,6 +410,8 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                 add("questionMethods", match[1], match.start())
             for match in re.finditer(receiver + r"\s*\.\s*(agents|subagents)\s*\.\s*([\w$]+)\s*\(", text):
                 add("subagentMethods", match[1] + "." + match[2], match.start())
+            for match in re.finditer(receiver + r"\s*\.\s*workspaceFiles\s*\.\s*([\w$]+)\s*\(", text):
+                add("workspaceFileMethods", "workspaceFiles." + match[1], match.start())
             phase2_names = [row["dsh"] for row in catalog["services"] if row["phase"] == 2]
             for match in re.finditer(receiver + r"\s*\.\s*(" + "|".join(re.escape(name) for name in phase2_names) + r")\s*\.\s*([\w$]+)\s*\(", text):
                 add("phase2Methods", match[1] + "." + match[2], match.start())
@@ -427,6 +457,12 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
     if blockers:
         report["status"] = "needs-port"
     report["converted"]["skills"] = sorted(set(report["converted"]["skills"]))
+    # user:“保持迁移脚本、机器清单、文档同步”+(按实际扫描到的服务冻结同版机器边界，供交接引用；仍不代表上游插件运行验收)。
+    used_services = {item["name"] for item in report["services"]}
+    report["hostApproximationNotes"] = [
+        {"service": name, **row} for name, row in catalog.get("phase2Acceptance", {}).items()
+        if name in used_services
+    ]
     return report
 
 
@@ -443,12 +479,19 @@ def _handoff(report: dict) -> str:
              "- 已验收的内存技能子集：agent_docs/plugin_skill_extensions.md；context.skills.register 复用原技能注册表，模型与用户调用策略分别生效，没有文件位置和文件授权。",
              "- 已验收的模型只读子集：agent_docs/plugin_model_access.md；context.models.list/resolve/select 保持项目、记录 ID 和场景边界，不调用模型、不写入选择。",
              "- 已验收的插件 JSON KV：agent_docs/plugin_storage_access.md；context.storage 使用原稳定插件数据目录；不等价于 DSH storageDomain，必须人工调整领域结构与同步写入。",
+             "- 已验收的领域表与设置近似：agent_docs/plugin_phase2_public_ports.md；context.storage_domain.open 和 context.settings 仍需按机器清单调整参数、作用域和差异，不原样运行DSH协议。",
              "- 已验收的凭据引用子集：agent_docs/plugin_credentials.md；context.credentials.resolve/describe/set/unset，当前插件命名空间、同步调用、无环境回退或授权记录协议。",
              "- 已验收的配置文件子集：agent_docs/plugin_config_access.md；context.config.read/validate/replace，带修订号和基础校验，保存不代表运行时应用。",
+             # user:“保持迁移脚本、机器清单、文档同步”+(只提供真实一元入口及人工声明方式，不将上游Remote盲映射到任意操作)。
+             "- 已验收的明确Remote一元入口：agent_docs/plugin_phase3_remote.md；人工声明 http.remote，映射到已有token POST路由和精确扁平argsSchema；原始字节需显式resultEncoding=multipart并处理附件路径。resultEncoding=ndjson显式服务端JSON流要求顶层可aclose异步迭代器、断连/代际撤回回收；不是DSH envelope/codec/Peer/资源lookup/双向流；脚本不自动绑定方法。",
+             "- 会话文件控制器近似：agent_docs/plugin_workspace_files.md；context.workspace_files.read/read_bytes/stat/list/changes复用原会话目录和文件系统；base_file限同根，changes为有界轮询SDK流，取消/aclose/停用回收，HTTP服务端流需显式ndjson映射；bytes需显式Sunday multipart映射，非DSH wire。",
              "- 逐项缺口：agent_docs/dsh_compatibility_matrix.md。",
              "- 分阶段验收与未完成项：agent_docs/dsh_compatibility_checklist.md；仅已通过行为验收的子集可以打勾。",
              "- 上游依据：deepseek-ai/deepseek-harness @ " + report["upstreamCommit"], "",
-             "## 待移植", ""]
+             "## 本插件使用服务的宿主近似边界", ""]
+    for item in report.get("hostApproximationNotes", []):
+        lines.append(f'- `{item["service"]}` [{item["state"]}]：{item["difference"]}')
+    lines += ["", "以上仅为宿主接口证据；本插件仍未运行验证。", "", "## 待移植", ""]
     for item in report["findings"]:
         lines.append(f'- [ ] `{item["file"]}:{item["line"]}` [{item["code"]}] {item["message"]}')
     lines.append("- 文件读取基础：agent_docs/plugin_filesystem_access.md；含 read_byte_range、最终链接 lstat 和有限同步 stream_text。条件修改、本地路径与轮询监听的最新范围见 plugin_phase2_runtime.md；无完整 FsTarget 或会话目录变更。")
@@ -458,9 +501,17 @@ def _handoff(report: dict) -> str:
     lines.append("- 第二阶段持续补齐：agent_docs/plugin_phase2_runtime.md；条件文件修改、轮询监听、Windows Job进程、PowerShell/环境贡献、后台作业、长文本保存、实际LLM/流、目标/Arrange、会话查询、后端审批与管理。完整状态见 agent_docs/dsh_phase2_completion.md，不能因子集存在就勾选整个阶段。")
     lines.append("- 会话目录与恢复：agent_docs/plugin_session_recovery.md；目录/CAS与for_session保留原项目；主代理文件/Git/run_command按请求固定目标并追加目录通知。checkpoints复用原对话恢复/分叉；其余工具、子代理与DSH持久化/事件协议仍须适配。")
     lines.append("- 子代理持久成员：agent_docs/plugin_subagent_access.md；context.subagents.create/list/get/message/close共用原监督器，命名空间与request_id需显式移植。不是DSH根Agent或activation句柄，不把停用门面当作成员结束。")
-    for kind in ("services", "events", "remotes", "slots", "promptMethods", "commandMethods", "skillMethods", "modelMethods", "storageMethods", "credentialMethods", "configMethods", "filesystemMethods", "compactionMethods", "permissionMethods", "processMethods", "durableMethods", "backgroundMethods", "subagentMethods", "questionMethods", "phase2Methods"):
+    for kind in ("services", "events", "remotes", "slots", "promptMethods", "commandMethods", "skillMethods", "modelMethods", "storageMethods", "credentialMethods", "configMethods", "filesystemMethods", "compactionMethods", "permissionMethods", "processMethods", "durableMethods", "backgroundMethods", "subagentMethods", "questionMethods", "phase2Methods", "workspaceFileMethods"):
         for item in report[kind]:
             lines.append(f'- [ ] {kind}: `{item["name"]}` @ `{item["file"]}:{item["line"]}`，核对参数、返回值、作用域、取消、错误与卸载语义。')
+            # user:“脚本不必能处理所有问题，剩下问题交给 agent 来移植”+(将扫描器已知的候选和差异交给执行移植的agent，避免只给一条泛化待办)。
+            target = item.get("candidateContract") or item.get("suggestedContract")
+            if target:
+                lines.append(f'  - 候选接口：`{target}`。')
+            if item.get("conversion"):
+                lines.append(f'  - 处理方式：`{item["conversion"]}`。')
+            if item.get("difference"):
+                lines.append(f'  - 已知差异：{item["difference"]}')
     lines += ["", "## 验收", "",
               "- [ ] 先写需求行为测试；仅运行本次新增的相关测试，不使用 Computer Use。",
               "- [ ] 对照原插件的用户可见能力逐项验证，包括失败、权限拒绝、停用和资源清理。",
@@ -472,9 +523,9 @@ def _handoff(report: dict) -> str:
               "- [ ] 斜杠命令使用 context.commands.register，回调返回 CommandResult，目录/执行走 command.catalog/execute；会话范围、裁剪空白、无附件、非稳定注册令牌和缺少 commands/change、DSH command/run/done 必须逐项适配。现有界面只查询全局目录，专属目录需显式带 thread_id。",
               "- [ ] 嵌入式技能用 context.skills.register，转换 modelInvocable/userInvocable 并验证四种组合。磁盘技能优先，内存技能没有资源目录；registerProvider、scope、snapshot/invalidate 和 skills/change 另行移植。停用只阻止新加载，不清除已发送给模型的正文。",
               "- [ ] 模型查询用 context.models，区分记录 id 与 model_id，明确选择场景并处理同场景替换通知。不要把 list 当作路由授权，把 select 当作会话最终模型或全局写入；stream、prepareCall、适配器和子代理路由策略另行移植。",
-              "- [ ] 持久状态可人工改为 context.storage 的 JSON KV，保留 expected_revision 和 unknown-state 处理；不要直接替换 storageDomain.open(spec)。schema、tables/global、compatibleVersions、后端路由和 domain/changed 仍需实现；配置与凭据不得混为一般状态。",
+              "- [ ] 持久状态按结构选择 context.storage JSON KV 或 context.storage_domain.open 领域表/全局槽；后者显式声明 tables/version、整域CAS及本地通知。DSH schema推断、兼容迁移、远程后端和跨进程通知仍需移植；配置与凭据不得混为一般状态。",
               "- [ ] 凭据引用用 context.credentials，describe 元数据不得替代 resolve；保留当前插件 owner，显式调整无环境回退与同步语义。readRecord/modifyRecord、事件与跨插件引用继续留缺口，不将凭据值写进配置、迁移报告或日志。",
-              "- [ ] 配置候选保存可人工改为 context.config：先 read revision，保留完整对象，明确基础校验并处理 applied=false。DSH overlays/volatile/reset/secret 表单投影、重载失败回滚、注释保留仍需实现；旧界面尚未提交修订号，不据此声称所有客户端已防过期。",
+              "- [ ] 配置保存使用 context.config 的原修订协议，或 context.settings 的schema校验/默认重置/保密投影近似；保存不代表运行时应用。DSH overlays、动态namespace、volatile、继承重置、前端接线、重载失败回滚及注释保留仍需移植。",
               "- [ ] React/Cordis 界面按 Sunday 桌面 UI 契约移植；未实现位置保留明确待办。",
               "- [ ] MCP 的相对命令路径、依赖安装和变量模板在目标环境实测；保留默认停用直至完成。",
               "- [ ] 更新插件文档、差异表及本报告的验收记录；原报告 runtimeVerified=false 只代表脚本未验收。", ""]
@@ -502,13 +553,20 @@ def export_port(source: Path | str, output: Path | str, *, max_files: int = MAX_
     with tempfile.TemporaryDirectory(prefix=".dsh-port-", dir=target.parent) as temporary:
         staging = Path(temporary) / "result"
         staging.mkdir()
+        copied_bytes = 0
         for relative in report["files"]:
             src = root / relative
             if src.is_symlink() or src.is_junction() or not src.resolve().is_relative_to(root):
                 raise ValueError("source changed into a link during export")
             dst = staging / "upstream" / relative
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dst)
+            # user:“自动化兼容脚本”+(扫描后源仍可能增长；实际复制逐块执行同一总字节上限，超限不发布目标目录)。
+            with src.open("rb") as reader, dst.open("wb") as writer:
+                while chunk := reader.read(min(65536, max_bytes - copied_bytes + 1)):
+                    copied_bytes += len(chunk)
+                    if copied_bytes > max_bytes:
+                        raise ValueError("source copy limit exceeded; source may have changed after analysis")
+                    writer.write(chunk)
         for filename, value in (("plugin.json", manifest), ("migration-report.json", report)):
             (staging / filename).write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         (staging / "PORTING.md").write_text(_handoff(report), encoding="utf-8")

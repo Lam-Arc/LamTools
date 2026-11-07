@@ -62,6 +62,11 @@ class ModelConfig:
     capability: str = ""          # "text" | "multimodal" | "" (→ builtin table)
     notes: str = ""               # free-form notes/remarks (optional, user-facing)
     is_default: bool = False
+    # user:“能不能启停模型？”+(停用只从可选列表里下线，不删除配置；已有会话仍可继续跑。)
+    enabled: bool = True
+    # user:“展示模型能力、连接状态、调用用量、Token 消耗、费用与额度”+(价格随模型定义保存，
+    # 用量聚合时按它折算费用；未配置价格就只报 token，不编造金额。)
+    pricing: dict[str, Any] = field(default_factory=dict)
     source_path: str = ""         # which file this came from (for debugging/UI)
 
     @property
@@ -200,6 +205,7 @@ class ModelStore:
         reasoning = data.get("reasoning")
         if not isinstance(reasoning, dict):
             reasoning = {}
+        pricing = normalize_pricing(data.get("pricing"))
         return ModelConfig(
             id=record_id,
             model_id=model_id,
@@ -208,9 +214,16 @@ class ModelStore:
             provider_id=str(data.get("provider_id") or "").strip(),
             context_window=int(data.get("context_window") or 0),
             max_output_tokens=int(data.get("max_output_tokens") or 4096),
-            temperature=float(data.get("temperature") or 0.2),
+            # user:“温度/推理预算填 0 要能保存”+(0 是合法值，解析时不能被默认值吞掉。)
+            temperature=(
+                0.2 if data.get("temperature") is None else float(data.get("temperature"))
+            ),
             thinking_supported=bool(thinking.get("supported", data.get("thinking_supported") or False)),
-            thinking_budget=int(thinking.get("budget", data.get("thinking_budget") or 10000)),
+            thinking_budget=(
+                10000
+                if thinking.get("budget", data.get("thinking_budget")) is None
+                else int(thinking.get("budget", data.get("thinking_budget")))
+            ),
             reasoning_effort=str(data.get("reasoning_effort") or "").strip(),
             reasoning=copy.deepcopy(reasoning),
             adapter_profile_id=str(data.get("adapter_profile_id") or "").strip(),
@@ -219,6 +232,8 @@ class ModelStore:
             capability=str(data.get("capability") or "").strip().lower(),
             notes=str(data.get("notes") or "").strip(),
             is_default=bool(data.get("is_default") or False),
+            enabled=bool(data.get("enabled", True)),
+            pricing=pricing,
             source_path=str(path),
         )
 
@@ -331,6 +346,7 @@ class ModelStore:
             "capability": model.capability,
             "notes": model.notes,
             "is_default": model.is_default,
+            "enabled": model.enabled,
         }
         if model.provider_id:
             data["provider_id"] = model.provider_id
@@ -342,7 +358,38 @@ class ModelStore:
             data["request_body"] = copy.deepcopy(model.request_body)
         if model.adapter_profile_override:
             data["adapter_profile_override"] = copy.deepcopy(model.adapter_profile_override)
+        if model.pricing:
+            data["pricing"] = copy.deepcopy(model.pricing)
         return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+PRICING_KEYS = ("input_per_1m", "output_per_1m", "cache_read_per_1m", "cache_write_per_1m")
+
+
+def normalize_pricing(value: Any) -> dict[str, Any]:
+    """Keep only finite non-negative per-million-token prices.
+
+    user:“展示模型能力、连接状态、调用用量、Token 消耗、费用与额度”+(价格是可选配置；
+    缺失或非法值一律丢弃，免得把错误数字乘进费用。)
+    """
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in PRICING_KEYS:
+        raw = value.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            price = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if price < 0 or price != price or price in (float("inf"), float("-inf")):
+            continue
+        result[key] = price
+    currency = str(value.get("currency") or "").strip().upper()
+    if currency:
+        result["currency"] = currency[:8]
+    return result
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -361,6 +408,7 @@ __all__ = [
     "ModelConfig",
     "ModelStore",
     "make_model_record_id",
+    "normalize_pricing",
 ]
 
 

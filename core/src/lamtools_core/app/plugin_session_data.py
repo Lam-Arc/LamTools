@@ -10,16 +10,30 @@ from .persistence_host import RevisionConflictError
 from .session_autotitle import is_default_title
 
 
+def _title_info(record):
+    # user:“审查当前代码，然后继续”+(历史标题也受公开读取限额约束；原完整标题保留在持久权威中)。
+    return {"title": record.title[:1024], "title_truncated": len(record.title) > 1024}
+
+
 class PluginSessionDataService:
     def __init__(self, sessions, data_dir):
         self._sessions, self._data_dir = sessions, data_dir
         self._store = sessions._context().host.session_store
 
-    async def _read(self, session_id, root):
-        context = self._sessions._context()
+    def _context(self):
+        # user:“复用原宿主权威”+(共享会话数据入口统一检查并规范原宿主错误，供读取前后和只读发布前复用)。
+        try:
+            context = self._sessions._context()
+        except SessionError as error:
+            raise SessionDataError("session-data/closed" if error.code == "session/closed" else "session-data/host-changed", "Session host is unavailable") from None
         if context.host.session_store is not self._store:
             raise SessionDataError("session-data/host-changed", "Session store changed")
+        return context
+
+    async def _read(self, session_id, root):
+        context = self._context()
         result = await self._store.get_readonly_revision(session_id)
+        self._context()
         if result is None:
             raise SessionDataError("session-data/not-found", "Session is unknown or unavailable")
         record, revision = result
@@ -44,19 +58,19 @@ class PluginSessionDataService:
                     if kwargs["expected_revision"] != revision:
                         raise SessionDataError("session-data/conflict", "Session changed; read again")
                     if kwargs["only_if_default"] and not is_default_title(record.title, session_id):
-                        return {"session_id": session_id, "title": record.title, "revision": revision, "updated": False}
+                        return {"session_id": session_id, **_title_info(record), "revision": revision, "updated": False}
                     saved = await self._store.patch(session_id, title=kwargs["title"], expected_revision=revision,
                                                    only_if_title_default=kwargs["only_if_default"])
                     if saved is None:
                         raise SessionDataError("session-data/conflict", "Session became unavailable or title was changed")
-                    return {"session_id": session_id, "title": saved.title, "revision": revision + 1, "updated": True}
-                return {"session_id": session_id, "title": record.title, "revision": revision}
+                    return {"session_id": session_id, **_title_info(saved), "revision": revision + 1, "updated": True}
+                return {"session_id": session_id, **_title_info(record), "revision": revision}
             if kind == "projections":
                 if method == "events":
                     return await self._sessions.events(session_id, **kwargs)
                 # A fresh database read is the cache-invalidation strategy; no stale second projection store.
                 state = await self._sessions.state(session_id)
-                return {"session_id": session_id, "title": record.title, "revision": revision,
+                return {"session_id": session_id, **_title_info(record), "revision": revision,
                         "status": state.status, "running": state.running, "queued_count": state.queued_count,
                         "event_seq": state.last_event_seq}
             if kind != "attachments":

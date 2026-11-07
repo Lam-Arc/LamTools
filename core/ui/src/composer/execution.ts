@@ -38,6 +38,7 @@ export interface CoreExecutionModelSource {
   provider_id?: string
   model_id?: string
   display_name?: string
+  enabled?: boolean
   thinking_supported?: boolean
   thinking_budget?: number
   reasoning_off_supported?: boolean
@@ -150,8 +151,10 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
     fallbackProviderLabel?: string
   },
 ): CoreSelectOption[] {
+  // user:“能不能启停模型？”+(停用的模型只从可选列表下线，仍保留在目录里可再启用。)
+  const usableModels = params.models.filter(model => (model as { enabled?: boolean }).enabled !== false)
   const modelsByProvider = new Map<string, TModel[]>()
-  for (const model of params.models) {
+  for (const model of usableModels) {
     const providerId = String(model.provider_id || '')
     const list = modelsByProvider.get(providerId) || []
     list.push(model)
@@ -172,7 +175,7 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
 
   if (params.view === 'group') {
     const modelById = new Map<string, TModel>()
-    for (const model of params.models) {
+    for (const model of usableModels) {
       const recordId = String(model.id || model.model_id || '')
       if (recordId) modelById.set(recordId, model)
     }
@@ -193,7 +196,7 @@ export function coreModelSelectOptions<TModel extends CoreExecutionModelSource, 
         })
       }
     }
-    for (const model of params.models) {
+    for (const model of usableModels) {
       const recordId = String(model.id || model.model_id || '')
       if (!recordId || groupedIds.has(recordId)) continue
       const label = coreModelDisplayLabel(model)

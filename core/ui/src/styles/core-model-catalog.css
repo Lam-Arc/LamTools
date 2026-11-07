@@ -1,0 +1,1682 @@
+/* user:“重新设计 Sunday 的「模型与供应商」界面”+(新目录的视觉语言：
+   细线仪表盘 + 用量信号带 + 模型瓦片；材质与控件复用设置页的 --settings-* 令牌，
+   只新增布局和少量状态色，不再另起一套配色。) */
+.mc {
+  --mc-text: var(--settings-main-text, var(--theme-main-text, #fff));
+  --mc-line: color-mix(in srgb, var(--mc-text) 11%, transparent);
+  --mc-line-soft: color-mix(in srgb, var(--mc-text) 7%, transparent);
+  --mc-muted: color-mix(in srgb, var(--mc-text) 55%, transparent);
+  --mc-faint: color-mix(in srgb, var(--mc-text) 47%, transparent);
+  --mc-cell: var(--settings-card-background, color-mix(in srgb, var(--settings-main-solid, #111) 96%, var(--mc-text) 4%));
+  --mc-signal: var(--settings-control-solid, var(--theme-control-solid, #fbf7f0));
+  --mc-signal-text: var(--settings-control-text, var(--theme-control-text, #111));
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  align-content: start;
+  min-width: 0;
+  min-height: clamp(560px, calc(100dvh - 128px), 980px);
+  padding: 12px 20px 24px;
+  color: var(--mc-text);
+}
+
+.mc > * {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.mc-bar { grid-row: 1; }
+.mc-chips { grid-row: 2; }
+.mc-signal { grid-row: 3; }
+.mc-notice { grid-row: 4; }
+.mc-wall { grid-row: 5; }
+
+.mc--inspector {
+  grid-template-columns: minmax(0, 1fr) 348px;
+  column-gap: var(--space-4);
+}
+
+.mc--inspector > .mc-bar,
+.mc--inspector > .mc-chips,
+.mc--inspector > .mc-signal,
+.mc--inspector > .mc-notice {
+  grid-column: 1;
+}
+
+/* ── 命令条 ─────────────────────────────────────────────────────── */
+.mc-bar {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding-bottom: var(--space-2);
+}
+
+.mc-search {
+  flex: 1 1 260px;
+  max-width: 360px;
+  min-width: 148px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) 0 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background, #171717) 70%, transparent);
+  color: var(--theme-composer-text, var(--mc-text));
+}
+
+.mc-search > svg {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--theme-composer-text, var(--mc-text)) 45%, transparent);
+}
+
+.mc-search input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  caret-color: currentColor;
+}
+
+.mc-search input::placeholder {
+  color: color-mix(in srgb, var(--theme-composer-text, var(--mc-text)) 42%, transparent);
+}
+
+.mc-search-total {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: color-mix(in srgb, var(--theme-composer-text, var(--mc-text)) 46%, transparent);
+}
+
+.mc-bar > :deep(.model-catalog-view-toggle) {
+  flex: 0 0 auto;
+}
+
+.mc-bar-tools {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.mc-bar-tools > :deep(.model-catalog-view-toggle) {
+  margin-right: var(--space-1);
+}
+
+.mc-icon {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--mc-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--mc-text) 68%, transparent);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast, .14s) var(--ease-out, ease), color var(--dur-fast, .14s) var(--ease-out, ease), border-color var(--dur-fast, .14s) var(--ease-out, ease);
+}
+
+.mc-icon:hover {
+  border-color: color-mix(in srgb, var(--mc-text) 20%, transparent);
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-hover, 8%), transparent);
+  color: var(--mc-text);
+}
+
+.mc-icon.is-on {
+  border-color: color-mix(in srgb, var(--mc-text) 26%, transparent);
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-active, 12%), transparent);
+  color: var(--mc-text);
+}
+
+.mc-icon:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+.mc-icon--xs {
+  width: 24px;
+  height: 24px;
+  border-color: transparent;
+}
+
+.mc-icon-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--mc-signal);
+  color: var(--mc-signal-text);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+}
+
+.mc-add-provider {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.mc-filter-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--z-popover, 600);
+  width: 244px;
+  display: grid;
+  gap: 10px;
+  padding: var(--space-3);
+  border: 1px solid var(--mc-line);
+  border-radius: var(--radius);
+  background: var(--mc-cell);
+  box-shadow: var(--shadow-md);
+}
+
+.mc-field--inline {
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.mc-field--inline > span {
+  font-size: 10px;
+}
+
+.mc-text-btn {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mc-muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--mc-text) 22%, transparent);
+  text-underline-offset: 3px;
+}
+
+.mc-text-btn:hover {
+  color: var(--mc-text);
+}
+
+.mc-text-btn--start {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  justify-self: start;
+}
+
+/* ── 供应商筛选轨 ───────────────────────────────────────────────── */
+.mc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 0 var(--space-3);
+}
+
+.mc-chip {
+  flex: 0 0 auto;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mc-text) 4%, transparent);
+  color: color-mix(in srgb, var(--mc-text) 62%, transparent);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: background var(--dur-fast, .14s) var(--ease-out, ease), border-color var(--dur-fast, .14s) var(--ease-out, ease), color var(--dur-fast, .14s) var(--ease-out, ease);
+}
+
+.mc-chip:hover {
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-hover, 8%), transparent);
+  color: var(--mc-text);
+}
+
+.mc-chip.is-on {
+  border-color: color-mix(in srgb, var(--mc-text) 20%, transparent);
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-active, 12%), transparent);
+  color: var(--mc-text);
+}
+
+.mc-chip i {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 9px;
+  color: var(--mc-faint);
+}
+
+.mc-chip.is-on i {
+  color: var(--mc-muted);
+}
+
+.mc-chip-name {
+  max-width: 148px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 连接状态灯 ─────────────────────────────────────────────────── */
+.mc-led {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--mc-text) 32%, transparent);
+  cursor: pointer;
+}
+
+.mc-led[data-state="ok"] {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 16%, transparent);
+}
+
+.mc-led[data-state="no_model_list"] {
+  background: color-mix(in srgb, var(--green) 55%, var(--mc-text));
+}
+
+.mc-led[data-state="rate_limited"] {
+  background: var(--orange);
+}
+
+.mc-led[data-state="missing_key"] {
+  background: color-mix(in srgb, var(--orange) 78%, var(--mc-text));
+}
+
+.mc-led[data-state="unauthorized"],
+.mc-led[data-state="unreachable"],
+.mc-led[data-state="error"],
+.mc-led[data-state="invalid"] {
+  background: var(--red);
+}
+
+.mc-led[data-state="group"] {
+  background: color-mix(in srgb, var(--mc-text) 24%, transparent);
+}
+
+.mc-led[data-state="unknown"] {
+  background: color-mix(in srgb, var(--mc-text) 30%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mc-text) 6%, transparent);
+}
+
+/* ── 用量信号带 ─────────────────────────────────────────────────── */
+.mc-signal {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--mc-line-soft);
+  border-bottom: 1px solid var(--mc-line-soft);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--mc-text) 3%, transparent), transparent 58%);
+}
+
+.mc-signal-readout {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.mc-metric {
+  display: grid;
+  gap: 1px;
+}
+
+.mc-metric b {
+  font-family: var(--font-mono);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-metric small {
+  font-size: 9px;
+  letter-spacing: .06em;
+  color: var(--mc-faint);
+}
+
+.mc-signal-flag {
+  align-self: center;
+  padding: 2px 6px;
+  border: 1px solid var(--mc-line-soft);
+  border-radius: 999px;
+  color: var(--mc-faint);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.mc-spark {
+  position: relative;
+  height: 44px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mc-spark-slot {
+  position: relative;
+  flex: 1 1 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.mc-spark-bar {
+  width: 100%;
+  height: var(--bar, 2%);
+  min-height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: color-mix(in srgb, var(--mc-signal) 46%, transparent);
+  transform-origin: bottom;
+  animation: mc-bar-rise .46s var(--ease-out, ease) both;
+  transition: background var(--dur-fast, .14s) var(--ease-out, ease);
+}
+
+.mc-spark-slot:nth-child(3n) .mc-spark-bar {
+  animation-delay: .04s;
+}
+
+.mc-spark-slot:nth-child(3n + 1) .mc-spark-bar {
+  animation-delay: .02s;
+}
+
+.mc-spark-bar.is-empty {
+  background: color-mix(in srgb, var(--mc-text) 9%, transparent);
+}
+
+.mc-spark-bar.is-hover {
+  background: var(--mc-signal);
+}
+
+.mc-spark-tip {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 1px solid var(--mc-line);
+  border-radius: 5px;
+  background: var(--mc-cell);
+  box-shadow: var(--shadow-sm);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.mc-spark-tip b {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.mc-spark-tip i {
+  font-style: normal;
+  font-size: 8.5px;
+  color: var(--mc-faint);
+}
+
+.mc-range-seg {
+  --interaction-height-sm: 22px;
+  --radius-sm: 999px;
+  flex: 0 0 auto;
+}
+
+.mc-range-seg :deep(.sunday-segmented__item) {
+  padding: 0 8px;
+  font-size: 10.5px;
+}
+
+/* ── 提示 ───────────────────────────────────────────────────────── */
+.mc-notice {
+  margin-top: var(--space-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 5px 8px;
+  border-left: 2px solid var(--mc-signal);
+  background: color-mix(in srgb, var(--mc-text) 4%, transparent);
+  font-size: 10.5px;
+  color: var(--mc-muted);
+}
+
+/* ── 模型墙 ─────────────────────────────────────────────────────── */
+.mc-wall {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+}
+
+.mc-shelf {
+  padding: var(--space-2) 0 var(--space-3);
+  border-top: 1px solid var(--mc-line-soft);
+}
+
+.mc-shelf:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.mc-shelf-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding-bottom: var(--space-2);
+}
+
+.mc-shelf-mark {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mc-text) 7%, transparent);
+  color: color-mix(in srgb, var(--mc-text) 78%, transparent);
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.mc-shelf-name {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 标题只放名称；地址与连接状态同行，状态作为副标题的一部分，
+   不会再被误读成名字的后缀。 */
+.mc-shelf-title {
+  min-width: 0;
+  display: block;
+}
+
+.mc-shelf-title b {
+  display: block;
+  min-width: 0;
+}
+
+.mc-shelf-sub {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mc-shelf-sub em {
+  min-width: 0;
+}
+
+.mc-shelf-name b {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 680;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-shelf-name em {
+  overflow: hidden;
+  color: var(--mc-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-shelf-name:hover b {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--mc-text) 30%, transparent);
+  text-underline-offset: 3px;
+}
+
+.mc-shelf-state {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  color: var(--mc-faint);
+  white-space: nowrap;
+}
+
+.mc-shelf-state[data-state="ok"],
+.mc-shelf-state[data-state="no_model_list"] {
+  color: color-mix(in srgb, var(--green) 72%, var(--mc-text));
+}
+
+.mc-shelf-state[data-state="missing_key"],
+.mc-shelf-state[data-state="rate_limited"] {
+  color: color-mix(in srgb, var(--orange) 78%, var(--mc-text));
+}
+
+.mc-shelf-state[data-state="unauthorized"],
+.mc-shelf-state[data-state="unreachable"],
+.mc-shelf-state[data-state="error"],
+.mc-shelf-state[data-state="invalid"] {
+  color: color-mix(in srgb, var(--red) 78%, var(--mc-text));
+}
+
+.mc-shelf-metrics {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.mc-shelf-metrics b {
+  color: color-mix(in srgb, var(--mc-text) 72%, transparent);
+  font-weight: 600;
+}
+
+.mc-shelf-metrics i {
+  color: var(--mc-faint);
+  font-style: normal;
+}
+
+.mc-shelf-actions {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast, .14s) var(--ease-out, ease);
+}
+
+.mc-shelf-metrics {
+  transition: opacity var(--dur-fast, .14s) var(--ease-out, ease);
+}
+
+.mc-shelf:hover .mc-shelf-actions,
+.mc-shelf:focus-within .mc-shelf-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mc-shelf:hover .mc-shelf-metrics,
+.mc-shelf:focus-within .mc-shelf-metrics {
+  opacity: 0;
+}
+
+@media (hover: none) {
+  .mc-shelf-actions {
+    display: none;
+  }
+}
+
+.mc-budget {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 0 0 6px;
+}
+
+.mc-budget--insp {
+  justify-content: flex-start;
+  padding: 0;
+}
+
+.mc-budget-track {
+  flex: 0 0 86px;
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--mc-text) 9%, transparent);
+  overflow: hidden;
+}
+
+.mc-budget--insp .mc-budget-track {
+  flex: 1 1 auto;
+}
+
+.mc-budget-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--mc-text) 52%, transparent);
+}
+
+.mc-budget-text {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--mc-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 模型瓦片 ───────────────────────────────────────────────────── */
+.mc-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 卡片外壳承担栅格宽度，卡片本体铺满外壳；开关绝对定位在外壳右上角，
+   与卡片按钮是兄弟节点，点开关不会打开检查器。 */
+.mc-tile-wrap {
+  position: relative;
+  flex: 0 0 212px;
+  max-width: 212px;
+  min-width: 0;
+  display: flex;
+}
+
+.mc-tile-switch {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  z-index: 1;
+}
+
+/* 复用 SundaySwitch 的尺寸变量做一档更小的开关，不动组件本身。 */
+.mc-tile-switch.sunday-switch--sm {
+  --sunday-w: 28px;
+  --sunday-h: 16px;
+  --sunday-pad: 2px;
+  --sunday-thumb: 10px;
+}
+
+.mc-tile {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 84px;
+  padding: 9px 11px 8px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  border: 1px solid var(--mc-line-soft);
+  border-radius: 9px;
+  background: var(--mc-cell);
+  color: var(--mc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast, .14s) var(--ease-out, ease), border-color var(--dur-fast, .14s) var(--ease-out, ease);
+}
+
+.mc-tile:hover {
+  border-color: color-mix(in srgb, var(--mc-text) 16%, transparent);
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-hover, 8%), var(--mc-cell));
+}
+
+.mc-tile:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--mc-text) 34%, transparent);
+  outline-offset: -2px;
+}
+
+.mc-tile.is-selected {
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-active, 12%), var(--mc-cell));
+  box-shadow: inset 2px 0 0 var(--mc-signal);
+}
+
+/* 停用卡片不用虚线，虚线留给"添加模型"占位；这里用退后的描边和更暗的底，
+   加上右上角关掉的开关表示状态。 */
+.mc-tile.is-off {
+  border-color: color-mix(in srgb, var(--mc-text) 7%, transparent);
+  background: color-mix(in srgb, var(--mc-text) 1.5%, var(--mc-cell));
+}
+
+.mc-tile.is-off .mc-tile-name,
+.mc-tile.is-off .mc-tile-id,
+.mc-tile.is-off .mc-tile-usage,
+.mc-tile.is-off .mc-caps {
+  opacity: .55;
+}
+
+.mc-tile.is-off .mc-tile-spark {
+  opacity: .4;
+}
+
+.mc-insp-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-top: 8px;
+  border-top: 1px solid var(--mc-line-soft);
+}
+
+.mc-tile-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  /* 给右上角的启停开关留出位置，长名字不会钻到开关底下。 */
+  padding-right: 23px;
+}
+
+.mc-tile-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-fallback-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--mc-signal) 62%, transparent);
+}
+
+.mc-tile-id {
+  overflow: hidden;
+  color: var(--mc-faint);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-tile-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.mc-caps {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mc-cap-glyph {
+  color: color-mix(in srgb, var(--mc-text) 58%, transparent);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 550;
+  line-height: 1;
+}
+
+.mc-cap-glyph:first-child {
+  color: color-mix(in srgb, var(--mc-text) 72%, transparent);
+}
+
+.mc-tile-usage {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.mc-tile-usage b {
+  font-weight: 550;
+  color: color-mix(in srgb, var(--mc-text) 64%, transparent);
+}
+
+.mc-tile-usage i {
+  font-style: normal;
+  color: var(--mc-faint);
+}
+
+.mc-tile-spark {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 12px;
+  margin-left: auto;
+  margin-right: 2px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.mc-tile-spark path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--mc-signal) 42%, transparent);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.mc-tile.is-selected .mc-tile-spark path {
+  stroke: color-mix(in srgb, var(--mc-signal) 72%, transparent);
+}
+
+.mc-shelf-watermark {
+  container-type: inline-size;
+  flex: 1 1 96px;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 0 2px 4px 0;
+  color: color-mix(in srgb, var(--mc-text) 10%, transparent);
+  user-select: none;
+  overflow: hidden;
+}
+
+.mc-shelf-watermark b {
+  /* 按自身可用宽度缩放，避免 "100%" 这类四字符在这里被 overflow 切掉。 */
+  font-size: clamp(22px, 34cqi, 56px);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  line-height: .78;
+  letter-spacing: -.055em;
+  white-space: nowrap;
+}
+
+.mc-shelf-watermark span {
+  padding-bottom: 2px;
+  color: color-mix(in srgb, var(--mc-text) 24%, transparent);
+  font-size: 8px;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+
+.mc-tile--slot {
+  flex: 0 0 128px;
+  max-width: 128px;
+  place-content: center;
+  gap: 5px;
+  min-height: 84px;
+  padding: 0;
+  border-style: dashed;
+  background: transparent;
+  color: color-mix(in srgb, var(--mc-text) 38%, transparent);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.mc-tile--slot:hover {
+  color: color-mix(in srgb, var(--mc-text) 72%, transparent);
+  border-color: color-mix(in srgb, var(--mc-text) 24%, transparent);
+  background: color-mix(in srgb, var(--mc-text) 3%, transparent);
+}
+
+.mc-tile--new {
+  flex: 0 0 52px;
+  max-width: 52px;
+  place-content: center;
+  min-height: 84px;
+  padding: 0;
+  border-style: dashed;
+  background: transparent;
+  color: color-mix(in srgb, var(--mc-text) 44%, transparent);
+}
+
+.mc-shelf-empty {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 12px;
+  border: 1px dashed var(--mc-line);
+  border-radius: 10px;
+  color: var(--mc-faint);
+  font-size: 10.5px;
+}
+
+.mc-group-new {
+  align-self: start;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px dashed var(--mc-line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--mc-muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mc-group-new:hover {
+  color: var(--mc-text);
+  border-color: color-mix(in srgb, var(--mc-text) 24%, transparent);
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-hover, 8%), transparent);
+}
+
+.mc-no-result {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--mc-faint);
+  font-size: 11px;
+}
+
+/* ── 首次接入 ───────────────────────────────────────────────────── */
+.mc-first-run {
+  display: grid;
+  gap: var(--space-4);
+  width: min(1120px, 100%);
+  margin: auto;
+  padding: var(--space-5);
+  border: 1px solid var(--mc-line-soft);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--mc-text) 6%, transparent), transparent 60%),
+    transparent;
+}
+
+.mc-first-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.mc-first-copy strong {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.mc-first-copy span {
+  color: var(--mc-faint);
+  font-size: 10.5px;
+}
+
+.mc-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(166px, 1fr));
+  gap: var(--space-2);
+}
+
+.mc-preset {
+  min-height: 58px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--mc-line-soft);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--mc-text) 2.5%, transparent);
+  color: var(--mc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast, .14s) var(--ease-out, ease), border-color var(--dur-fast, .14s) var(--ease-out, ease);
+}
+
+.mc-preset:hover {
+  border-color: color-mix(in srgb, var(--mc-text) 20%, transparent);
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-hover, 8%), transparent);
+}
+
+.mc-preset-label {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mc-preset-host {
+  color: var(--mc-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.mc-preset--custom {
+  border-style: dashed;
+}
+
+/* ── 检查器 ─────────────────────────────────────────────────────── */
+.mc-inspector {
+  grid-column: 2;
+  grid-row: 1 / 6;
+  align-self: start;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  max-height: calc(100dvh - 132px);
+  padding: var(--space-4);
+  border: 1px solid var(--mc-line);
+  border-radius: var(--radius);
+  background: var(--mc-cell);
+  box-shadow: var(--shadow-md);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.mc-insp-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.mc-insp-title {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.mc-insp-kicker {
+  color: var(--mc-faint);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.mc-insp-title h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 720;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  word-break: break-word;
+}
+
+.mc-insp-title code {
+  overflow: hidden;
+  color: var(--mc-faint);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-insp-provider {
+  display: flex;
+}
+
+.mc-insp-provider-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--mc-line-soft);
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in srgb, var(--mc-text) 76%, transparent);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-insp-provider-btn:hover {
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-hover, 8%), transparent);
+}
+
+.mc-insp-provider-state {
+  margin-left: auto;
+  color: var(--mc-faint);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.mc-insp-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--mc-line-soft);
+  border-bottom: 1px solid var(--mc-line-soft);
+}
+
+.mc-insp-metrics > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 9px 0;
+}
+
+.mc-insp-metrics > div + div {
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--mc-line-soft);
+}
+
+.mc-insp-metrics b {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-insp-metrics small {
+  color: var(--mc-faint);
+  font-size: 9px;
+}
+
+.mc-cap-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mc-cap {
+  min-height: 46px;
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  border: 1px solid var(--mc-line-soft);
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--mc-text) 30%, transparent);
+}
+
+.mc-cap.is-on {
+  border-color: color-mix(in srgb, var(--mc-text) 18%, transparent);
+  background: color-mix(in srgb, var(--mc-text) 3.5%, transparent);
+  color: color-mix(in srgb, var(--mc-text) 82%, transparent);
+}
+
+.mc-cap span {
+  font-size: 9px;
+}
+
+.mc-spec {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.mc-spec > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: 5px 0;
+  border-top: 1px solid var(--mc-line-soft);
+}
+
+.mc-spec > div:first-child {
+  border-top: 0;
+}
+
+.mc-spec dt {
+  color: var(--mc-faint);
+  font-size: 10px;
+}
+
+.mc-spec dd {
+  margin: 0;
+  color: color-mix(in srgb, var(--mc-text) 76%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.mc-spec dd.mc-mono {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+.mc-insp-groups {
+  display: grid;
+  gap: 6px;
+}
+
+.mc-insp-label {
+  color: var(--mc-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .04em;
+}
+
+.mc-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.mc-chip-row .mc-chip {
+  height: 23px;
+  padding: 0 8px;
+  font-size: 9.5px;
+}
+
+.mc-insp-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--mc-line-soft);
+}
+
+.mc-insp-actions .btn {
+  height: 30px;
+  min-height: 30px;
+  font-size: 10.5px;
+}
+
+.mc-insp-actions .mc-danger {
+  margin-left: auto;
+}
+
+.mc-danger {
+  color: color-mix(in srgb, var(--red) 82%, var(--mc-text));
+}
+
+.mc-danger:hover {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 34%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.mc-conn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 9px;
+  border: 1px solid var(--mc-line-soft);
+  border-radius: 8px;
+}
+
+.mc-conn > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.mc-conn b {
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.mc-conn span {
+  overflow: hidden;
+  color: var(--mc-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-conn .mc-text-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.mc-conn[data-state="ok"] b,
+.mc-conn[data-state="no_model_list"] b {
+  color: color-mix(in srgb, var(--green) 76%, var(--mc-text));
+}
+
+.mc-conn[data-state="unauthorized"] b,
+.mc-conn[data-state="unreachable"] b,
+.mc-conn[data-state="error"] b,
+.mc-conn[data-state="invalid"] b {
+  color: color-mix(in srgb, var(--red) 80%, var(--mc-text));
+}
+
+.mc-conn[data-state="missing_key"] b,
+.mc-conn[data-state="rate_limited"] b {
+  color: color-mix(in srgb, var(--orange) 80%, var(--mc-text));
+}
+
+/* ── 表单 ───────────────────────────────────────────────────────── */
+.mc-form {
+  display: grid;
+  gap: 11px;
+}
+
+.mc-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.mc-field > span {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--mc-muted);
+  font-size: 10px;
+  font-weight: 620;
+  letter-spacing: .03em;
+}
+
+.mc-field > span small {
+  color: var(--mc-faint);
+  font-size: 8.5px;
+  letter-spacing: 0;
+}
+
+.mc-field input,
+.mc-field textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 33px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text, var(--mc-text)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: color-mix(in srgb, var(--theme-composer-background, #171717) 70%, transparent);
+  color: var(--theme-composer-text, var(--mc-text));
+  font: inherit;
+  font-size: 11.5px;
+  caret-color: currentColor;
+}
+
+.mc-field textarea {
+  min-height: 74px;
+  padding: 8px 9px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.mc-field input::placeholder,
+.mc-field textarea::placeholder {
+  color: color-mix(in srgb, var(--theme-composer-text, var(--mc-text)) 40%, transparent);
+}
+
+.mc-field input:focus,
+.mc-field textarea:focus {
+  outline: 0;
+}
+
+.mc-field input:disabled {
+  opacity: .6;
+}
+
+.mc-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mc-input-row .mc-icon {
+  border-color: color-mix(in srgb, var(--mc-text) 10%, transparent);
+}
+
+.mc-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mc-field-grid--price {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mc-field--switch {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  align-self: end;
+  min-height: 33px;
+}
+
+.mc-field--switch > span {
+  order: 1;
+}
+
+.mc-field--switch :deep(.sunday-switch) {
+  order: 2;
+}
+
+.mc-cap-seg :deep(.sunday-segmented__item) {
+  padding: 0 10px;
+  font-size: 10.5px;
+}
+
+.mc-advanced {
+  border-top: 1px solid var(--mc-line-soft);
+  padding-top: 8px;
+  display: grid;
+  gap: 10px;
+}
+
+.mc-advanced summary {
+  color: var(--mc-faint);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.mc-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-advanced summary::before {
+  content: '＋';
+  margin-right: 5px;
+}
+
+.mc-advanced[open] summary::before {
+  content: '－';
+}
+
+.mc-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--mc-line-soft);
+}
+
+.mc-form-actions .btn {
+  height: 30px;
+  min-height: 30px;
+  font-size: 10.5px;
+}
+
+.mc-form-actions .mc-text-btn {
+  margin-right: auto;
+}
+
+.mc-error {
+  margin: 0;
+  padding: 5px 8px;
+  border-left: 2px solid var(--red);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: color-mix(in srgb, var(--red) 86%, var(--mc-text));
+  font-size: 10px;
+}
+
+.mc-member-list {
+  max-height: 46vh;
+  display: grid;
+  gap: 1px;
+  overflow-y: auto;
+  border: 1px solid var(--mc-line-soft);
+  border-radius: 8px;
+}
+
+.mc-member {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--mc-cell);
+  cursor: pointer;
+}
+
+.mc-member:hover {
+  background: color-mix(in srgb, var(--mc-text) var(--alpha-hover, 8%), var(--mc-cell));
+}
+
+.mc-member span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.mc-member b {
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-member small {
+  overflow: hidden;
+  color: var(--mc-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-muted {
+  color: var(--mc-faint);
+  font-size: 10px;
+  padding: 8px;
+}
+
+.mc-spin {
+  animation: mc-spin 1s linear infinite;
+}
+
+@keyframes mc-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes mc-bar-rise {
+  from { transform: scaleY(.08); opacity: .35; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+
+/* ── 窄面板：检查器改为覆盖层 ───────────────────────────────────── */
+.mc.mc--overlay {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 覆盖层里 top / right / max-height 由内联几何量给值，其余结构由这条规则接管；
+   选择器权重 0,2,0 已胜过基础 .mc-inspector，不需要 !important。 */
+.mc--overlay .mc-inspector {
+  grid-column: 1;
+  grid-row: auto;
+  position: fixed;
+  bottom: auto;
+  width: min(348px, calc(100vw - 36px));
+  z-index: var(--z-modal, 700);
+  box-shadow: var(--shadow-lg);
+}
+
+/* 外壳与"添加模型"占位都属于模型位，窄面板下都排两列。 */
+.mc--narrow .mc-tile-wrap,
+.mc--narrow .mc-tile--slot {
+  flex: 1 1 calc(50% - 3px);
+  max-width: none;
+}
+
+.mc--narrow .mc-search {
+  flex: 1 1 100%;
+}
+
+.mc--narrow .mc-bar-tools {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.mc--narrow .mc-signal {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2) var(--space-3);
+}
+
+.mc--narrow .mc-spark {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 34px;
+}
+
+.mc--narrow .mc-shelf-state {
+  display: none;
+}
+
+.mc--narrow .mc-budget {
+  padding-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-spark-bar,
+  .mc-spin {
+    animation: none;
+  }
+}
+
+.mc-draft-catcher {
+  grid-column: 1;
+  grid-row: 1 / 6;
+  z-index: 3;
+  align-self: stretch;
+  justify-self: stretch;
+  cursor: default;
+}
+
+.settings-editor-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: var(--space-3);
+}

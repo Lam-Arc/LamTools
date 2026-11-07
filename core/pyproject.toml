@@ -9,6 +9,8 @@ description = "LamTools Core SDK - protocols, types, and base interfaces"
 requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
+    # user:“继续，无人值守模式，不要停下来”+(插件设置使用标准JSON Schema校验器，声明运行依赖以保证打包/新安装可用)。
+    "jsonschema>=4.25.1",
     # user:“从 GitHub 等平台下载并安装”+(市场 CLI 的实际连接客户端使用 aiohttp，干净安装也必须可用)。
     "aiohttp>=3.13.0",
     # user:“QQ…安装的时候直接从 GitHub 上”+(冻结宿主提供 QQ 绑定所需的加密运行库，插件代码仍独立分发)。
@@ -34,7 +36,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "pytest-asyncio>=1.4.0", "fastapi>=0.137.2"]
+# user:“给我把 2 阶段做完，前端除外”+(SSH验收使用真实临时服务；仅开发测试依赖，桌面运行仍用系统OpenSSH)。
+dev = ["pytest>=9.1.1", "pytest-asyncio>=1.4.0", "fastapi>=0.137.2", "asyncssh>=2.21.1"]
 server = ["uvicorn[standard]>=0.49.0", "fastapi>=0.137.2"]
 desktop = ["uvicorn[standard]>=0.49.0", "fastapi>=0.137.2"]
 
@@ -44,6 +47,8 @@ packages = ["src/lamtools_core", "src/lamtools_boot"]
 [tool.hatch.build.targets.wheel.force-include]
 "config/command" = "lamtools_core/resources/config/command"
 "skills" = "lamtools_core/resources/skills"
+# user:“宿主能力补齐和接口完善与文档更新”+(发布包带入已安装且锁定的后端依赖；构建前须独立npm ci，不碰前端)。
+"runtime/windows-sandbox" = "lamtools_core/resources/windows-sandbox"
 "src/lamtools_core/plugins/bundled" = "lamtools_core/resources/plugins/bundled"
 
 [tool.pytest.ini_options]

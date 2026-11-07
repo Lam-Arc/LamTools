@@ -79,6 +79,8 @@ class CoreConfigRoutingLLMClient:
     #: Marks the config-file-driven path: the turn host enforces the
     #: "no global default model" contract only for this client.
     uses_config_routing = True
+    # user:“如果不需要，就自己继续”+(本包装器实际委托原HTTP客户端，必须向SDK声明其扩展能力，不能误当未知客户端拒绝)。
+    supports_request_extensions = True
 
     def __init__(
         self,
@@ -223,7 +225,13 @@ def create_core_agent_http_app(
     temperature: float = 0.2,
     frontend_dir: Path | str | None = None,
     access_policy: CoreApiAccessPolicy | None = None,
+    advertised_url: str | None = None,
 ) -> FastAPI:
+    # user:“给我把 2 阶段做完，前端除外”+(原HTTP静态宿主的公开地址由启动者明确提供，不相信请求Host或推测Tauri端口)。
+    from lamtools_core.plugin_system.web_app import WebAppValues
+    web_app_value = WebAppValues.from_url(advertised_url) if advertised_url is not None else None
+    if web_app_value is not None and frontend_dir is None:
+        raise ValueError("An advertised Web app requires the existing HTTP frontend mount")
     access_policy = access_policy if access_policy is not None else CoreApiAccessPolicy.from_env()
     # Resolve the command shell while the server starts. Windows automatic
     # selection runs a bounded WSL probe whose cost must not land on the first
@@ -265,6 +273,8 @@ def create_core_agent_http_app(
             )
         config = LLMConfig(
             provider_name="",
+            # user:“如果不需要，就自己继续”+(统一补齐新版模型配置的必填身份；未配模型仍是合法启动状态，不伪造提供方)。
+            provider_id="",
             provider_api_type="openai",
             base_url="",
             api_key="",
@@ -643,6 +653,9 @@ def create_core_agent_http_app(
         if plugin_context is not None:
             # user:“宿主能力补齐和接口完善与文档更新”+(统一插件会话契约与旧频道接口，共用桌面 live 接收路径)。
             app_state["plugin_session_service"] = install_plugin_session_services(plugin_context, live_context)
+            if web_app_value is not None:
+                plugin_context.set_service("web_app", web_app_value)
+                app_state["plugin_web_app"] = web_app_value
         # Publish the complete live host before the first await lets plugin
         # starts bind their dependencies. Reuse the normal readiness join.
         await await_plugin_backends(app_state["plugin_runtimes"])
@@ -719,6 +732,16 @@ def create_core_agent_http_app(
         # only the handles in app state so shutdown uses the same boundary.
         app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
 
+        # user:“发送耗时原则上不应随历史会话长度显著增长”+(WAL 检查点从写事务里挪走：
+        # 写入路径只做兜底阈值，常态由这里在后台做 PASSIVE 检查点，避免长会话每次发送
+        # 都被一次 0.6-1.0s 的同步检查点挡住)。
+        from .sqlite_write import wal_maintenance_loop
+
+        app_state["wal_maintenance_task"] = asyncio.create_task(
+            wal_maintenance_loop(core_db_handle.session_factory),
+            name="sqlite-wal-maintenance",
+        )
+
     async def shutdown_core_agent() -> None:
         from lamtools_core.sub_agent_supervisor import (
             set_agent_run_store_factory,
@@ -728,9 +751,15 @@ def create_core_agent_http_app(
         # Wake passive readers before plugin cleanup or SQLite shutdown.
         if app_state.get("plugin_session_service") is not None:
             app_state["plugin_session_service"].shutdown()
+        plugin_context = getattr(app_state.get("operations"), "plugin_context", None)
+        if plugin_context is not None and plugin_context.service("web_app") is app_state.get("plugin_web_app"):
+            plugin_context.services.pop("web_app", None)
         set_agent_run_store_factory(None)
         for recovery_task in app_state.get("turn_recovery_tasks") or []:
             recovery_task.cancel()
+        wal_maintenance_task = app_state.get("wal_maintenance_task")
+        if wal_maintenance_task is not None:
+            wal_maintenance_task.cancel()
         await shutdown_sub_agent_supervisors()
         await shutdown_plugin_backends(app_state.get("plugin_runtimes") or [])
         memory_resume_supervisor = app_state.get("memory_resume_supervisor")
@@ -1636,7 +1665,7 @@ def _register_model_operations(
     work_root: Path | str | None = None,
 ) -> None:
     from lamtools_core.config.model_group_store import ModelGroupStore
-    from lamtools_core.config.model_store import ModelConfig, ModelStore, make_model_record_id
+    from lamtools_core.config.model_store import ModelConfig, ModelStore, normalize_pricing, make_model_record_id
     from lamtools_core.config.provider_store import ProviderStore
     from dataclasses import replace
 
@@ -1689,9 +1718,16 @@ def _register_model_operations(
             provider_id=provider_id,
             context_window=int(payload.get("context_window") or 0),
             max_output_tokens=int(payload.get("max_output_tokens") or 4096),
-            temperature=float(payload.get("temperature") or 0.2),
+            # user:“温度/推理预算填 0 要能保存”+(0 是合法值，不能被默认值吞掉。)
+            temperature=(
+                0.2 if payload.get("temperature") in (None, "") else float(payload.get("temperature"))
+            ),
             thinking_supported=bool(thinking.get("supported", payload.get("thinking_supported") or False)),
-            thinking_budget=int(thinking.get("budget", payload.get("thinking_budget") or 10000)),
+            thinking_budget=(
+                10000
+                if thinking.get("budget", payload.get("thinking_budget")) in (None, "")
+                else int(thinking.get("budget", payload.get("thinking_budget")))
+            ),
             reasoning_effort=str(payload.get("reasoning_effort") or ""),
             adapter_profile_id=str(payload.get("adapter_profile_id") or extra.get("adapter_profile_id") or ""),
             request_body=request_body,
@@ -1700,6 +1736,8 @@ def _register_model_operations(
             capability=str(payload.get("capability") or extra.get("capability") or "").strip().lower(),
             notes=str(payload.get("notes") or "").strip(),
             is_default=bool(payload.get("is_default") or False),
+            enabled=bool(payload.get("enabled", True)),
+            pricing=normalize_pricing(payload.get("pricing") or extra.get("pricing")),
         )
 
     async def models_upsert(request: OperationRequest) -> OperationResult:

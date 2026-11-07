@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -544,13 +544,29 @@ class CoreProjectStore:
     async def delete(self, project_id: str, *, expected_revision: int | None = None) -> bool:
         return await self._delete_with_sessions(project_id, expected_revision=expected_revision)
 
-    async def list_sessions(self, project_id: str) -> list[SessionRecord]:
+    async def list_sessions(
+        self,
+        project_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[SessionRecord]:
         async with self.session_factory() as db:
             project = await db.get(CoreProject, project_id)
             if project is None:
                 return []
-            sessions = await _project_sessions(db, project.work_root)
+            sessions = await _project_sessions(
+                db, project.work_root, limit=limit, offset=offset
+            )
         return [session for session in sessions if self._is_session_visible(session)]
+
+    async def count_sessions(self, project_id: str) -> int:
+        """Total sessions the project owns, for "N more" in the sidebar."""
+        async with self.session_factory() as db:
+            project = await db.get(CoreProject, project_id)
+            if project is None:
+                return 0
+            return await _project_session_count(db, project.work_root)
 
     async def delete_with_sessions(self, project_id: str, *, expected_revision: int | None = None) -> bool:
         return await self._delete_with_sessions(project_id, expected_revision=expected_revision)
@@ -793,13 +809,58 @@ def _thread_entity(session: SessionRecord, state: dict[str, Any], project_id: st
     }
 
 
-async def _project_sessions(db: Any, work_root: str) -> list[SessionRecord]:
-    rows = (
-        await db.execute(select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc()))
-    ).scalars().all()
+async def _project_sessions(
+    db: Any,
+    work_root: str,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[SessionRecord]:
+    """Sessions owned by one project.
+
+    The project a session belongs to lives in its metadata (inside the snapshot
+    JSON), and the snapshot JSON of a long session is tens of MB. Filtering in
+    Python meant every project listing — including the sidebar refresh — loaded
+    and parsed *every* session of *every* project before discarding most of
+    them. SQLite's JSON extractor answers the same question without decoding
+    anything in Python, so only the rows this project owns are materialized.
+
+    ``limit``/``offset`` are optional: callers that page pass them, callers that
+    need the whole project list (exists checks, first-session creation) do not.
+    """
+    stmt = (
+        select(CoreThreadSnapshot)
+        .where(
+            func.json_extract(
+                CoreThreadSnapshot.snapshot_json, "$.session.metadata.work_root"
+            )
+            == work_root
+        )
+        .order_by(CoreThreadSnapshot.updated_at.desc())
+    )
+    if offset:
+        stmt = stmt.offset(int(offset))
+    if limit is not None:
+        stmt = stmt.limit(max(1, int(limit)))
+    rows = (await db.execute(stmt)).scalars().all()
     sessions = [session_record_from_snapshot(row) for row in rows]
-    owned = [session for session in sessions if session.metadata.get("work_root") == work_root]
-    return sorted(owned, key=lambda session: (session.created_at, session.id))
+    return sorted(sessions, key=lambda session: (session.created_at, session.id))
+
+
+async def _project_session_count(db: Any, work_root: str) -> int:
+    """How many sessions the project owns, without materializing any of them.
+
+    The sidebar needs the number it has not loaded to say "还有 N 个会话"; a
+    COUNT over the same extracted key costs one index-free scan of the small
+    column read and no JSON decode in Python.
+    """
+    stmt = select(func.count()).select_from(CoreThreadSnapshot).where(
+        func.json_extract(
+            CoreThreadSnapshot.snapshot_json, "$.session.metadata.work_root"
+        )
+        == work_root
+    )
+    return int((await db.execute(stmt)).scalar_one() or 0)
 
 
 async def _session_revision(db: Any, session_id: str) -> int:

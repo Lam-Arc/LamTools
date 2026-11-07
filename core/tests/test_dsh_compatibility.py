@@ -205,6 +205,45 @@ def test_ignored_generated_dependencies_do_not_count_toward_scan_budget(tmp_path
     assert not (tmp_path / "ported/upstream/.env").exists()
 
 
+@pytest.mark.parametrize("grow", [False, True])
+def test_export_actual_copy_enforces_budget_after_source_changes(tmp_path, monkeypatch, grow):
+    # user:“自动化兼容脚本”+(实际导出也必须执行有界复制，扫描后源文件增长不能绕过大小上限或发布半成品)。
+    from lamtools_core.plugin_system.dsh_compat import migration
+    root = source(tmp_path, {"asset.txt": "small"})
+    output = tmp_path / "ported"
+    original = migration.analyze
+    def after_scan(*args, **kwargs):
+        report = original(*args, **kwargs)
+        if grow:
+            (root / "asset.txt").write_bytes(b"x" * 2048)
+        return report
+    monkeypatch.setattr(migration, "analyze", after_scan)
+    if grow:
+        with pytest.raises(ValueError, match="limit"):
+            migration.export_port(root, output, max_bytes=512)
+        assert not output.exists()
+    else:
+        report = migration.export_port(root, output, max_bytes=512)
+        assert (output / "upstream/asset.txt").read_text() == "small"
+        assert report["runtimeVerified"] is False
+    assert not list(tmp_path.glob(".dsh-port-*"))
+
+
+@pytest.mark.parametrize("export", [False, True])
+def test_env_pattern_directories_are_pruned_before_scanning_and_export(tmp_path, export):
+    # user:“自动化兼容脚本”+(已声明排除的.env.*目录及其全部内容不扫描、不计预算、不进入迁移包)。
+    root = source(tmp_path, {".env.private/nested/fixture.txt": "excluded fixture" * 100,
+        "src/.env.local/fixture.txt": "excluded fixture" * 100, "src/keep.txt": "keep"})
+    output = tmp_path / "ported"
+    report = export_port(root, output, max_bytes=300) if export else analyze(root, max_bytes=300)
+    assert report["files"] == ["package.json", "src/keep.txt"]
+    assert ".env.*" in report["excluded"]
+    if export:
+        assert (output / "upstream/src/keep.txt").read_text() == "keep"
+        assert not (output / "upstream/.env.private").exists()
+        assert not (output / "upstream/src/.env.local").exists()
+
+
 def test_linked_sources_rejected_before_creating_output(tmp_path):
     root = source(tmp_path, {})
     outside = tmp_path / "outside.txt"
@@ -216,6 +255,46 @@ def test_linked_sources_rejected_before_creating_output(tmp_path):
     with pytest.raises(ValueError, match="linked source"):
         export_port(root, tmp_path / "ported")
     assert not (tmp_path / "ported").exists()
+
+
+@pytest.mark.parametrize("export", [False, True])
+def test_unreadable_source_directory_fails_instead_of_reporting_incomplete_success(tmp_path, monkeypatch, export):
+    # user:“不能用静态扫描、空壳或未安装提供方冒充可用”+(扫描目录失败必须显式报错，不能遗漏整个代码目录后生成成功报告或迁移包)。
+    from lamtools_core.plugin_system.dsh_compat import migration
+    root = source(tmp_path, {"backend/index.ts": "export function apply(ctx) { ctx.tools.register({}); }"})
+    output = tmp_path / "ported"
+    original = migration.os.scandir
+    def denied(path):
+        if Path(path) == root / "backend":
+            raise PermissionError("controlled unreadable source directory")
+        return original(path)
+    monkeypatch.setattr(migration.os, "scandir", denied)
+    with pytest.raises(PermissionError, match="controlled unreadable"):
+        if export:
+            migration.export_port(root, output)
+        else:
+            migration.analyze(root)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".dsh-port-*"))
+
+
+def test_export_handoff_uses_current_host_boundaries_without_obsolete_domain_gap(tmp_path):
+    # user:“保持迁移脚本、机器清单、文档同步”+(交接保留实际使用服务的同版机器边界，不再把已有领域表或设置重置写成待实现)。
+    root = source(tmp_path, {"index.ts": "export function apply(ctx) { ctx.storageDomain.open({}); ctx.settings.read(); }"})
+    output = tmp_path / "ported"
+    report = export_port(root, output)
+    handoff = (output / "PORTING.md").read_text(encoding="utf8")
+    notes = {row["service"]: row for row in report["hostApproximationNotes"]}
+    assert set(notes) == {"storageDomain", "settings"}
+    for name, note in notes.items():
+        original = load_surface()["phase2Acceptance"][name]
+        assert note["difference"] == original["difference"]
+        assert note["state"] == original["state"]
+        assert original["difference"] in handoff
+    assert "context.storage_domain.open" in handoff
+    assert "schema、tables/global、compatibleVersions、后端路由和 domain/changed 仍需实现" not in handoff
+    assert "DSH overlays/volatile/reset/secret 表单投影" not in handoff
+    assert report["runtimeVerified"] is False and report["status"] == "needs-port"
 
 
 def test_duplicate_skills_fail_real_host_validation_without_partial_export(tmp_path):
@@ -360,7 +439,7 @@ def test_storage_migration_requires_domain_redesign_instead_of_blind_open_replac
     report = export_port(root, tmp_path / "ported")
     assert report["sundayHostContracts"]["storage"]["status"] == "verified-python"
     methods = {item["name"]: item for item in report["storageMethods"]}
-    assert methods["storageDomain.open"]["candidateContract"] == "context.storage.open"
+    assert methods["storageDomain.open"]["candidateContract"] == "context.storage_domain.open"
     assert all(item["conversion"] == "agent-required" and "suggestedContract" not in item for item in methods.values())
     assert "candidateContract" not in methods["storage.register"]
     assert "candidateContract" not in methods["storage.mount"]

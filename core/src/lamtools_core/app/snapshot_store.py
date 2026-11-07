@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,7 +23,9 @@ from lamtools_core.snapshot import (
 from lamtools_core.turn.model import LIVE_RUNTIME_STATUSES
 
 from .event_store import CORE_RUN_ITEM_METHOD, AppEventEnvelope
-from .queue_state import queue_order_key
+from .queue_state import effective_thread_status, queue_order_key
+
+logger = logging.getLogger(__name__)
 
 TERMINAL_ERROR_STATUSES = {"failed", "cancelled", "error"}
 TERMINAL_TURN_STATUSES = {"completed", *TERMINAL_ERROR_STATUSES}
@@ -118,7 +121,7 @@ class CoreAppSnapshotProjector:
         core = state.get("core") if isinstance(state.get("core"), dict) else empty_thread_snapshot(event.thread_id)
         apply_run_item_event_in_place(core, RunItemEvent.from_dict(payload))
         state["core"] = core
-        self._sync_turns_from_core(state)
+        self._sync_turns_from_core(state, only_turn_id=str(payload.get("turn_id") or "") or None)
         self._apply_member_wait_flag(state, payload)
 
     def _apply_member_wait_flag(self, state: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -275,6 +278,15 @@ class CoreAppSnapshotProjector:
         payload = dict(event.payload or {})
         turn_id = str(event.turn_id or payload.get("turn_id") or payload.get("turnId") or "").strip()
         if not turn_id:
+            return
+        turns = state.get("turns") if isinstance(state.get("turns"), dict) else {}
+        existing = turns.get(turn_id) if isinstance(turns, dict) else None
+        terminal = {"completed", "failed", "cancelled", "skipped"}
+        if not isinstance(existing, dict) or str(existing.get("status") or "") in terminal:
+            # user:“旧回合错误显示运行中”+(引导事件绝不允许凭空造出一个
+            # 「运行中」的回合：投影里没有这个回合、或它已经有终态时，这条追加输入
+            # 不改变任何状态，更不能把 last_seq 顶到最新、让界面把旧回合当成当前的
+            # 活动回合去继续引导)。
             return
         turn = self._turn(state, turn_id)
         # user:“把它作为一个引导信息发进去”+(引导是追加输入，不得覆盖原任务；
@@ -469,13 +481,27 @@ class CoreAppSnapshotProjector:
     def _sync_status_from_core(self, state: dict[str, Any]) -> None:
         self.sync_status_from_core(state)
 
-    def _sync_turns_from_core(self, state: dict[str, Any]) -> None:
+    def _sync_turns_from_core(
+        self, state: dict[str, Any], *, only_turn_id: str | None = None
+    ) -> None:
+        """Mirror core turn status/usage onto the flattened turn map.
+
+        ``only_turn_id`` restricts the mirror to the turn the projected event
+        belongs to. A single runtime event can only change its own turn, and the
+        full walk copies and deep-copies every historical turn's usage: on a
+        600-turn thread that was ~10ms of every projected write.
+        """
         core = state.get("core")
         core_turns = core.get("turns") if isinstance(core, dict) else None
         if not isinstance(core_turns, dict):
             return
         turns = state.setdefault("turns", {})
-        for turn_id, core_turn in core_turns.items():
+        if only_turn_id is not None:
+            selected = core_turns.get(only_turn_id)
+            pairs = ((only_turn_id, selected),) if selected is not None else ()
+        else:
+            pairs = core_turns.items()
+        for turn_id, core_turn in pairs:
             if not isinstance(core_turn, dict):
                 continue
             turn = dict(turns.get(turn_id) or {"turn_id": turn_id, "items": []})
@@ -541,6 +567,14 @@ class SqlAlchemyThreadSnapshotStore:
     intermediate state between "event written" and "snapshot projected".
     """
 
+    #: How many threads' parsed metadata rows stay cached. The metadata row is
+    #: the one part of a thread that grows with its whole item list
+    #: (core.item_order + every turn's items), so on a 100k-item thread it is
+    #: tens of MB and decoding it is the dominant cost of every page read.
+    #: Two entries cover "the open thread plus the one being left"; anything
+    #: more would hold several such rows resident.
+    METADATA_CACHE_LIMIT = 2
+
     def __init__(
         self,
         snapshot_model: type[Any],
@@ -553,23 +587,190 @@ class SqlAlchemyThreadSnapshotStore:
         self.item_model = item_model
         self.projector = projector or CoreAppSnapshotProjector()
         self.event_model = event_model
+        # thread_id -> (revision, snapshot_seq, parsed metadata state).
+        self._metadata_cache: dict[str, tuple[int, int, dict[str, Any]]] = {}
 
-    async def load(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
+    def invalidate_metadata_cache(self, thread_id: str | None = None) -> None:
+        """Drop the parsed-metadata cache for one thread (or all of them)."""
+        if thread_id is None:
+            self._metadata_cache.clear()
+        else:
+            self._metadata_cache.pop(thread_id, None)
+
+    def _remember_metadata(
+        self, thread_id: str, revision: int, snapshot_seq: int, state: dict[str, Any]
+    ) -> None:
+        while len(self._metadata_cache) >= self.METADATA_CACHE_LIMIT:
+            oldest = next(iter(self._metadata_cache))
+            self._metadata_cache.pop(oldest, None)
+        self._metadata_cache[thread_id] = (revision, snapshot_seq, state)
+
+    @staticmethod
+    def _copy_metadata_state(state: dict[str, Any]) -> dict[str, Any]:
+        """A writable view of a cached metadata row.
+
+        Readers decorate the state they were handed (``snapshot_seq``,
+        ``core.items``, repaired turns) and one of them
+        (``prune_orphan_turns``) pops turn ids. Copy the containers those
+        writes land in so a cached row is never mutated by a reader; the turn
+        dicts themselves are treated as immutable by every read path.
+        """
+        copy = dict(state)
+        core = copy.get("core")
+        if isinstance(core, dict):
+            core = dict(core)
+            copy["core"] = core
+            turns = core.get("turns")
+            if isinstance(turns, dict):
+                core["turns"] = dict(turns)
+        turns = copy.get("turns")
+        if isinstance(turns, dict):
+            copy["turns"] = dict(turns)
+        return copy
+
+    def _probe_supported(self) -> bool:
+        """Whether this store's row model can answer the cheap revision probe.
+
+        ``revision`` was added after the first schema; hosts (and tests) that
+        build a lighter row model keep the full read, uncached, exactly as
+        before.
+        """
+        return hasattr(self.snapshot_model, "revision")
+
+    async def _probe_metadata_row(
+        self, db: AsyncSession, thread_id: str
+    ) -> tuple[int, int, str] | None:
+        """``(revision, snapshot_seq, active_turn_id)`` without the JSON payload.
+
+        ``active_turn_id`` is the storage layer's own derived index (maintained
+        by the model's before_insert/before_update hook), so it answers "is any
+        turn still active" without reading a single turn.
+        """
+        model = self.snapshot_model
+        columns: list[Any] = [model.revision]
+        columns.append(model.snapshot_seq)
+        has_active_column = hasattr(model, "active_turn_id")
+        if has_active_column:
+            columns.append(model.active_turn_id)
+        result = await db.execute(select(*columns).where(model.thread_id == thread_id))
+        found = result.first()
+        if found is None:
+            return None
+        revision = _row_revision(None, {"revision": found[0]})
+        snapshot_seq = int(found[1] or 0)
+        active_turn_id = str(found[2] or "") if has_active_column else ""
+        return revision, snapshot_seq, active_turn_id
+
+    async def _metadata_state(
+        self, db: AsyncSession, thread_id: str
+    ) -> tuple[int, int, str, dict[str, Any]] | None:
+        """``(revision, snapshot_seq, active_turn_id, writable metadata copy)``.
+
+        A cache hit costs one primary-key probe and skips loading/decoding the
+        metadata JSON entirely. The revision only moves forward on a write, so a
+        match means the cached row is current; the write path also invalidates
+        explicitly (see ``_persist``).
+        """
+        if self._probe_supported():
+            probe = await self._probe_metadata_row(db, thread_id)
+            if probe is None:
+                self._metadata_cache.pop(thread_id, None)
+                return None
+            revision, snapshot_seq, active_turn_id = probe
+            cached = self._metadata_cache.get(thread_id)
+            if cached is not None and cached[0] == revision:
+                return revision, snapshot_seq, active_turn_id, self._copy_metadata_state(cached[2])
         row = await db.get(self.snapshot_model, thread_id)
         if row is None:
-            return self.projector.empty(thread_id)
-        return await self._assemble(db, row, thread_id)
+            return None
+        base = dict(row.snapshot_json or self.projector.empty(thread_id))
+        revision = _row_revision(row, base)
+        snapshot_seq = int(row.snapshot_seq or 0)
+        if self._probe_supported():
+            self._remember_metadata(thread_id, revision, snapshot_seq, dict(base))
+            return revision, snapshot_seq, active_turn_id, self._copy_metadata_state(base)
+        # Legacy/lightweight row model: no revision to validate a cached entry
+        # and no derived active-turn index, so the read-time repairs always run
+        # (``None`` forces them) and nothing is cached.
+        legacy_active_turn: str | None = str(
+            getattr(row, "active_turn_id", "") or ""
+        ) or None
+        return revision, snapshot_seq, legacy_active_turn, base
 
-    async def _assemble(self, db: AsyncSession, row: Any, thread_id: str) -> dict[str, Any]:
+    def _finish_state(
+        self, state: dict[str, Any], active_turn_id: str | None
+    ) -> dict[str, Any]:
+        """Strip inline image copies and run the read-time repairs when needed.
+
+        ``reconcile_status`` and ``prune_orphan_turns`` each walk the thread's
+        whole turn table; they undo damage left by older builds (a turn nothing
+        owns stuck at "running", a stale thread status). ``active_turn_id`` is
+        derived on every write, so "no active turn and a settled status" already
+        proves there is nothing to repair — a long idle thread must not pay
+        three full turn walks on every page read.
+        """
+        state = _strip_inline_image_copies(state)
+        if _projection_needs_repair(state, active_turn_id):
+            return prune_orphan_turns(self.projector.reconcile_status(state))
+        return state
+
+    def _remember_hydrated(self, thread_id: str, state: dict[str, Any]) -> None:
+        """Carry the usage-hydration marker back into the cached metadata row.
+
+        ``_hydrate_resource_usage`` replays every usage event of the thread and
+        then stamps ``core.resource_usage_version`` so it never runs twice. It
+        stamps the caller's copy, so without this the cached base would stay
+        unmarked and every page read of a never-rewritten thread would replay
+        the whole usage journal again.
+        """
+        cached = self._metadata_cache.get(thread_id)
+        if cached is None:
+            return
+        core = state.get("core")
+        cached_state = cached[2]
+        cached_core = cached_state.get("core")
+        if (
+            isinstance(core, dict)
+            and isinstance(cached_core, dict)
+            and core.get("resource_usage_version") == 1
+        ):
+            cached_core["resource_usage_version"] = 1
+
+    async def load(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
+        meta = await self._metadata_state(db, thread_id)
+        if meta is None:
+            return self.projector.empty(thread_id)
+        return await self._assemble_metadata(db, meta, thread_id)
+
+    async def _assemble(
+        self,
+        db: AsyncSession,
+        row: Any,
+        thread_id: str,
+    ) -> dict[str, Any]:
+        return await self._assemble_metadata(
+            db,
+            (_row_revision(row, None), int(getattr(row, "snapshot_seq", 0) or 0),
+             None, dict(row.snapshot_json or self.projector.empty(thread_id))),
+            thread_id,
+        )
+
+    async def _assemble_metadata(
+        self,
+        db: AsyncSession,
+        meta: tuple[int, int, str | None, dict[str, Any]],
+        thread_id: str,
+    ) -> dict[str, Any]:
         """Full assembly: metadata row + every item row, ordered by seq.
 
         The result is byte-equivalent to the old single-JSON snapshot, so
         consumers (frontend, checkpoint, session stores) are unaffected.
         """
-        state = dict(row.snapshot_json or self.projector.empty(thread_id))
-        state["snapshot_seq"] = row.snapshot_seq
-        state["revision"] = _row_revision(row, state)
+        revision, snapshot_seq, active_turn_id, state = meta
+        state["snapshot_seq"] = snapshot_seq
+        state["revision"] = revision
         await self._hydrate_resource_usage(db, state, thread_id)
+        self._remember_hydrated(thread_id, state)
         items: dict[str, Any] = {}
         order: list[str] = []
         result = await db.execute(
@@ -592,7 +793,7 @@ class SqlAlchemyThreadSnapshotStore:
         core["decisions"] = decisions
         core["interactions"] = decisions
         core["task_plan"] = await self._load_active_plan(db, thread_id)
-        return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
+        return self._finish_state(state, active_turn_id)
 
     async def load_metadata(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
         """Load only the metadata row: turns/queue/requests/registry/item_order.
@@ -602,13 +803,14 @@ class SqlAlchemyThreadSnapshotStore:
         full item-table scan and JSON parse here. ``core.items`` is empty by
         design; consumers must not treat this as a complete snapshot.
         """
-        row = await db.get(self.snapshot_model, thread_id)
-        if row is None:
+        meta = await self._metadata_state(db, thread_id)
+        if meta is None:
             return self.projector.empty(thread_id)
-        state = dict(row.snapshot_json or self.projector.empty(thread_id))
-        state["snapshot_seq"] = row.snapshot_seq
-        state["revision"] = _row_revision(row, state)
+        revision, snapshot_seq, active_turn_id, state = meta
+        state["snapshot_seq"] = snapshot_seq
+        state["revision"] = revision
         await self._hydrate_resource_usage(db, state, thread_id)
+        self._remember_hydrated(thread_id, state)
         core = state.get("core")
         if not isinstance(core, dict):
             core = empty_thread_snapshot(thread_id)
@@ -619,7 +821,7 @@ class SqlAlchemyThreadSnapshotStore:
         core["decisions"] = decisions
         core["interactions"] = decisions
         core["task_plan"] = await self._load_active_plan(db, thread_id)
-        return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
+        return self._finish_state(state, active_turn_id)
 
     async def _load_active_plan(self, db: AsyncSession, thread_id: str) -> dict[str, Any] | None:
         """The thread's durable checklist, read straight from the runtime row.
@@ -748,7 +950,7 @@ class SqlAlchemyThreadSnapshotStore:
         Top-level (user) items live inside the metadata row, so they are always
         present; only the per-item conversation rows are bounded.
         """
-        state, core = await self._page_state(db, thread_id)
+        state, core, active_turn_id = await self._page_state(db, thread_id)
         if state is None:
             return self.projector.empty(thread_id)
         if before_seq is None and before_item_id:
@@ -760,6 +962,12 @@ class SqlAlchemyThreadSnapshotStore:
         core["_page_has_older_items"] = await self._has_older_items(
             db, thread_id, loaded, before_seq=before_seq
         )
+        # Exact loaded-or-not item total without walking the metadata order:
+        # item rows and top-level (user) items are disjoint by construction —
+        # ``_persist`` only upserts ``core.items``, so a user message never gets
+        # a row here. The page builder needs it for ``total_items`` and would
+        # otherwise union two id lists that are as long as the whole thread.
+        core["_page_total_items"] = await self._item_row_count(db, thread_id)
         # 决策池必须随分页快照一起下发：会话重开/断线重连走的是 load_page，
         # 之前只有完整 load 才注入 interactions，客户端只好退回消息树兜底，
         # 桌宠与主界面都会丢掉审批/提问的标题、选项和子代理来源。
@@ -767,25 +975,30 @@ class SqlAlchemyThreadSnapshotStore:
         core["decisions"] = decisions
         core["interactions"] = decisions
         core["task_plan"] = await self._load_active_plan(db, thread_id)
-        return prune_orphan_turns(_strip_inline_image_copies(self.projector.reconcile_status(state)))
+        return self._finish_state(state, active_turn_id)
 
     async def _page_state(
         self, db: AsyncSession, thread_id: str
-    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-        """Shared front half of the bounded reads: metadata row + core container."""
-        row = await db.get(self.snapshot_model, thread_id)
-        if row is None:
-            return None, {}
-        state = dict(row.snapshot_json or self.projector.empty(thread_id))
-        state["snapshot_seq"] = row.snapshot_seq
-        state["revision"] = _row_revision(row, state)
+    ) -> tuple[dict[str, Any] | None, dict[str, Any], str]:
+        """Shared front half of the bounded reads: metadata row + core container.
+
+        The third value is the row's ``active_turn_id``: the repair gate the
+        caller passes to ``_finish_state``.
+        """
+        meta = await self._metadata_state(db, thread_id)
+        if meta is None:
+            return None, {}, ""
+        revision, snapshot_seq, active_turn_id, state = meta
+        state["snapshot_seq"] = snapshot_seq
+        state["revision"] = revision
         await self._hydrate_resource_usage(db, state, thread_id)
+        self._remember_hydrated(thread_id, state)
         core = state.get("core")
         if not isinstance(core, dict):
             core = empty_thread_snapshot(thread_id)
             state["core"] = core
         core.setdefault("item_order", [])
-        return state, core
+        return state, core, active_turn_id
 
     async def _has_older_items(
         self,
@@ -823,6 +1036,124 @@ class SqlAlchemyThreadSnapshotStore:
         value = result.scalar()
         return int(value) if value is not None else None
 
+    async def load_items_by_kind(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        *,
+        text_marker: str,
+        limit: int = 200_000,
+    ) -> dict[str, Any]:
+        """Metadata plus only the item rows whose stored JSON mentions a marker.
+
+        The outline needs each turn's closing assistant message and nothing
+        else, but the rows carry tool traffic that is 95% of a thread's bytes
+        (measured: 561MB of item rows for 48k items, of which ~480MB is tool
+        output). Matching on the raw JSON text keeps the filter in SQLite's C
+        code — no row is JSON-decoded unless it can matter — and the caller gets
+        the same metadata row it would get from ``load_metadata``.
+
+        ``text_marker`` must be a literal that appears only in the rows the
+        caller wants (for an agent message: ``"agentMessage"``).
+        """
+        if not text_marker:
+            return await self.load_metadata(db, thread_id)
+        state = await self.load_metadata(db, thread_id)
+        if not state or not state.get("thread_id"):
+            return state
+        core = state.get("core")
+        if not isinstance(core, dict):
+            core = {}
+            state["core"] = core
+        model = self.item_model
+        stmt = (
+            select(model)
+            .where(
+                model.thread_id == thread_id,
+                model.item_json.like(f'%"{text_marker}"%'),
+            )
+            .order_by(model.seq.asc(), model.item_id.asc())
+            .limit(limit)
+        )
+        items: dict[str, Any] = {}
+        for item_row in (await db.execute(stmt)).scalars():
+            item = dict(item_row.item_json or {})
+            item["seq"] = item_row.seq
+            items[str(item_row.item_id)] = item
+        core["items"] = items
+        return state
+
+    async def resolve_item_seq(
+        self, db: AsyncSession, thread_id: str, item_id: str
+    ) -> int | None:
+        """Thread-global seq of any item id, or ``None`` when it is not here.
+
+        Assistant process items have a row in the item table; user/system
+        messages live in the metadata row's ``items``. Both are addressed by the
+        same seq timeline, so a locator needs the same answer for either.
+        """
+        if not item_id:
+            return None
+        seq = await self._item_seq(db, thread_id, item_id)
+        if seq is not None:
+            return seq
+        meta = await self._metadata_state(db, thread_id)
+        if meta is None:
+            return None
+        state = meta[3]
+        core = state.get("core") if isinstance(state.get("core"), dict) else {}
+        for container in (state, core):
+            items = container.get("items")
+            if isinstance(items, dict):
+                item = items.get(item_id)
+                if isinstance(item, dict):
+                    value = item.get("seq", item.get("last_seq"))
+                    try:
+                        return int(value) if value is not None else None
+                    except (TypeError, ValueError):
+                        return None
+            order = container.get("item_order")
+            if isinstance(order, list):
+                try:
+                    index = order.index(item_id)
+                except ValueError:
+                    continue
+                # Same convention the page builder uses for an item with no
+                # seq: its 1-based position in the stored order.
+                return index + 1
+        return None
+
+    async def load_page_around(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        *,
+        item_id: str,
+        item_byte_budget: int = DEFAULT_PAGE_ITEM_BYTES,
+    ) -> tuple[int | None, dict[str, Any]]:
+        """One bounded page ending at ``item_id``, i.e. the window containing it.
+
+        Jumping to a search hit used to walk the history cursor one page at a
+        time until the target appeared, which costs one round trip per page for
+        a hit deep in a long thread. Resolving the target's seq turns that into
+        a single bounded read: everything older than the target (inclusive) is
+        what the page ends at, so the caller can show the hit immediately.
+
+        Returns ``(seq, snapshot)``; a ``None`` seq means the id is not in this
+        thread, and an empty page is returned.
+        """
+        seq = await self.resolve_item_seq(db, thread_id, item_id)
+        if seq is None:
+            return None, self.projector.empty(thread_id)
+        # ``before_seq`` is exclusive, so +1 makes the page end at the target.
+        state = await self.load_page(
+            db,
+            thread_id,
+            before_seq=seq + 1,
+            item_byte_budget=item_byte_budget,
+        )
+        return seq, state
+
     async def _load_item_rows(
         self,
         db: AsyncSession,
@@ -831,34 +1162,48 @@ class SqlAlchemyThreadSnapshotStore:
         before_seq: int | None,
         item_byte_budget: int,
     ) -> dict[str, Any]:
-        """Newest-first item rows up to the byte budget (streamed, not buffered).
+        """Newest-first item rows up to the byte budget.
 
-        Streaming matters: the budget exists so one screen never materializes a
-        whole thread, and a buffered ``all()`` would fetch every row the LIMIT
-        allows before the budget could stop it.
+        Two phases, because the budget has to stop the read *before* the rows
+        are decoded: the driver hands back everything the statement matched, so
+        a single ``select(model)`` with a row LIMIT still JSON-decodes every
+        matched row (measured: 4000 rows / 46MB decoded to serve a 40-item
+        page). Phase one reads ``(seq, item_id, length(item_json))`` — no JSON
+        is decoded — and decides where the budget stops; phase two fetches only
+        the rows inside that boundary.
         """
         budget = max(1, int(item_byte_budget))
-        stmt = select(self.item_model, func.length(self.item_model.item_json)).where(
-            self.item_model.thread_id == thread_id
+        model = self.item_model
+        sizes = select(model.seq, model.item_id, func.length(model.item_json)).where(
+            model.thread_id == thread_id
         )
         if before_seq is not None:
-            stmt = stmt.where(self.item_model.seq < int(before_seq))
-        stmt = stmt.order_by(
-            self.item_model.seq.desc(), self.item_model.item_id.desc()
-        ).limit(MAX_PAGE_ITEM_ROWS)
-        items: dict[str, Any] = {}
+            sizes = sizes.where(model.seq < int(before_seq))
+        sizes = sizes.order_by(model.seq.desc(), model.item_id.desc()).limit(
+            MAX_PAGE_ITEM_ROWS
+        )
+        chosen: list[int] = []
         total = 0
-        result = await db.stream(stmt)
-        try:
-            async for item_row, size in result:
-                item = dict(item_row.item_json or {})
-                item["seq"] = item_row.seq
-                items[str(item_row.item_id)] = item
-                total += int(size or 0)
-                if total >= budget:
-                    break
-        finally:
-            await result.close()
+        for seq, _item_id, size in (await db.execute(sizes)).all():
+            chosen.append(int(seq))
+            total += int(size or 0)
+            if total >= budget:
+                break
+        if not chosen:
+            return {}
+        oldest = min(chosen)
+        rows = select(model).where(
+            model.thread_id == thread_id,
+            model.seq >= oldest,
+        )
+        if before_seq is not None:
+            rows = rows.where(model.seq < int(before_seq))
+        rows = rows.order_by(model.seq.asc(), model.item_id.asc())
+        items: dict[str, Any] = {}
+        for item_row in (await db.execute(rows)).scalars():
+            item = dict(item_row.item_json or {})
+            item["seq"] = item_row.seq
+            items[str(item_row.item_id)] = item
         return items
 
 
@@ -915,19 +1260,26 @@ class SqlAlchemyThreadSnapshotStore:
             state["core"] = core
         touched = self._touched_item_ids(events, core)
         seq_map: dict[str, int] = {}
-        result = await db.execute(
-            select(self.item_model.item_id, self.item_model.seq).where(
-                self.item_model.thread_id == thread_id
-            )
-        )
         order = list(core.get("item_order") or [])
         order_set = set(order)
-        for item_id, seq in result.all():
-            item_id = str(item_id)
-            seq_map[item_id] = int(seq or 0)
-            if item_id not in order_set:
-                order.append(item_id)
-                order_set.add(item_id)
+        # user:“发送耗时原则上不应随历史会话长度显著增长”+(这份全量 item 索引扫描只
+        # 为两件事：修复 item_order 里漏掉的条目、给快照还没见过的新条目按 seq 定位
+        # 插入点。批次里没有新条目时两件都不需要，而扫描本身是 O(会话条目数)——
+        # 2400 条时每次写入白扫 13ms。一次 COUNT 就能替代“要不要修复”的判断。
+        needs_anchors = any(item_id not in order_set for item_id in touched)
+        if needs_anchors or await self._item_row_count(db, thread_id) != len(order):
+            needs_anchors = True
+            result = await db.execute(
+                select(self.item_model.item_id, self.item_model.seq).where(
+                    self.item_model.thread_id == thread_id
+                )
+            )
+            for item_id, seq in result.all():
+                item_id = str(item_id)
+                seq_map[item_id] = int(seq or 0)
+                if item_id not in order_set:
+                    order.append(item_id)
+                    order_set.add(item_id)
         items: dict[str, Any] = {}
         if touched:
             result = await db.execute(
@@ -942,8 +1294,20 @@ class SqlAlchemyThreadSnapshotStore:
                 items[str(item_row.item_id)] = item
         core["items"] = items
         core["item_order"] = order
-        core["_item_seq_map"] = seq_map
+        if needs_anchors:
+            core["_item_seq_map"] = seq_map
+        else:
+            core.pop("_item_seq_map", None)
         return _strip_inline_image_copies(state)
+
+    async def _item_row_count(self, db: AsyncSession, thread_id: str) -> int:
+        """Item rows for one thread; the cheap repair signal for item_order."""
+        result = await db.execute(
+            select(func.count()).select_from(self.item_model).where(
+                self.item_model.thread_id == thread_id
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     @staticmethod
     def _touched_item_ids(events: list[AppEventEnvelope], core: dict[str, Any]) -> set[str]:
@@ -994,11 +1358,29 @@ class SqlAlchemyThreadSnapshotStore:
         thread_id = events[0].thread_id
         if any(event.thread_id != thread_id for event in events):
             raise ValueError("Snapshot batches must contain one thread")
+        import os as _perf_os
+        import time as _perf_time
+
+        _perf_trace = _perf_os.environ.get("LAMTOOLS_PERF_TRACE") == "1"
+        _perf_mark = _perf_time.perf_counter()
+
+        def _perf_last(label: str) -> None:
+            nonlocal _perf_mark
+            if _perf_trace:
+                logger.info(
+                    "[PERF:apply_many] %s=%.3fs thread_id=%s",
+                    label,
+                    _perf_time.perf_counter() - _perf_mark,
+                    thread_id,
+                )
+                _perf_mark = _perf_time.perf_counter()
+
         row = await db.get(self.snapshot_model, thread_id)
         if row is not None and row.snapshot_json:
             state = await self._partial_state(db, row, thread_id, events)
         else:
             state = self.projector.empty(thread_id)
+        _perf_last("partial_state")
         revision = _row_revision(row, state) if row is not None else 0
         event_revisions: dict[str, int] = {}
         for event in sorted(events, key=lambda item: item.seq):
@@ -1019,7 +1401,9 @@ class SqlAlchemyThreadSnapshotStore:
             thread_id,
             event_revisions=event_revisions,
         )
+        _perf_last("persist_build")
         await db.flush()
+        _perf_last("flush")
         return state
 
     async def find_request(
@@ -1172,6 +1556,9 @@ class SqlAlchemyThreadSnapshotStore:
                 max(0, int(state.get("revision") or 0)),
             )
         row.snapshot_json = metadata_state
+        # The parsed-metadata cache holds the pre-write row; this write replaces
+        # it, so drop it instead of serving a stale turn list / item order.
+        self.invalidate_metadata_cache(thread_id)
         if hasattr(row, "updated_at"):
             row.updated_at = now
         flag_modified(row, "snapshot_json")
@@ -1287,6 +1674,31 @@ def _strip_inline_image_metadata(metadata: Any) -> Any:
     if isinstance(metadata, dict) and _INLINE_IMAGE_METADATA_KEY in metadata:
         return {k: v for k, v in metadata.items() if k != _INLINE_IMAGE_METADATA_KEY}
     return metadata
+
+
+_REPAIR_STATUSES = frozenset({"running", "waiting", "interrupting", "paused"})
+
+
+def _projection_needs_repair(state: dict[str, Any], active_turn_id: str | None) -> bool:
+    """Whether the read-time status repairs can possibly change this row.
+
+    ``reconcile_status`` and ``prune_orphan_turns`` fix a projection damaged by
+    an older build: a turn nothing owns stuck at ``running``, or a thread status
+    that never settled. Both walk every turn of the thread, and a long thread
+    has tens of thousands of them, so a page read must not pay for them unless
+    the damage is actually possible.
+
+    ``active_turn_id`` is derived from the projection on every write (see
+    ``_sync_snapshot_active_turn_index``) and answers "is any turn still open"
+    without touching a single turn. No open turn plus a settled status means
+    there is nothing to repair; ``None`` forces the repair for callers that hold
+    only a projection and no row.
+    """
+    if active_turn_id is None:
+        return True
+    if active_turn_id:
+        return True
+    return effective_thread_status(state) in _REPAIR_STATUSES
 
 
 def prune_orphan_turns(state: dict[str, Any]) -> dict[str, Any]:

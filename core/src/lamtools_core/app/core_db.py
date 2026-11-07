@@ -19,7 +19,7 @@ from sqlalchemy import Boolean, DateTime, Float, Index, Integer, JSON, String, U
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.pool import AsyncAdaptedQueuePool
+
 
 from lamtools_core.event import RunItemEvent
 from lamtools_core.runtime import RuntimeState, RuntimeStateConflictError
@@ -34,6 +34,14 @@ from lamtools_core.runtime.arrange import (
 )
 from lamtools_core.runtime.goal import Goal, GoalStatus, GoalStore
 
+from .db_pool import (
+    DEFAULT_MAX_OVERFLOW,
+    DEFAULT_POOL_SIZE,
+    DEFAULT_POOL_TIMEOUT,
+    InstrumentedAsyncQueuePool,
+    PoolTelemetry,
+    attach_pool_telemetry,
+)
 from .event_store import SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
 from .project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
@@ -2143,8 +2151,20 @@ class CoreAppDb:
     member_defaults: dict = field(default_factory=dict)
     session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
     artifact_store: Any = None
+    pool_telemetry: PoolTelemetry | None = None
 
     async def close(self) -> None:
+        # user:“覆盖异常中断、任务取消、超时、并发竞争、数据库断连及应用退出等场景”+(退出前先停观测并把池的最终占用写进日志，留下“连接有没有回落”的证据，再释放所有池内连接)。
+        telemetry = self.pool_telemetry
+        if telemetry is not None:
+            await telemetry.stop()
+            try:
+                final = telemetry.snapshot()
+            except Exception:  # noqa: BLE001 - shutdown must never fail on diagnostics
+                final = None
+            if final is not None:
+                log = _logger.warning if final.checked_out else _logger.info
+                log("[db:pool] shutdown %s", final.as_dict())
         await self.engine.dispose()
 
 
@@ -2164,14 +2184,31 @@ async def open_core_app_db(
         engine = create_async_engine(
             _sqlite_url(db_path),
             future=True,
-            poolclass=AsyncAdaptedQueuePool,
-            pool_size=4,
-            max_overflow=4,
+            # user:“QueuePool limit of size 4 overflow 4 reached, connection timed out, timeout 30.00”+(用带等待统计的池，池满时能定位到占用者，而不是只在别的请求上抛超时)。
+            poolclass=InstrumentedAsyncQueuePool,
+            pool_size=DEFAULT_POOL_SIZE,
+            max_overflow=DEFAULT_MAX_OVERFLOW,
+            # 失败要快：30 秒检出超时会让每个轮询都堆成新积压，队列永远排不空（实测单请求等了 313 秒）。
+            pool_timeout=DEFAULT_POOL_TIMEOUT,
         )
         configure_sqlite_engine(engine)
+        pool_telemetry = attach_pool_telemetry(engine, checkout_timeout=DEFAULT_POOL_TIMEOUT).start()
+        _logger.info(
+            "[db:pool] configured size=%d overflow=%d timeout=%.1fs capacity=%d",
+            DEFAULT_POOL_SIZE,
+            DEFAULT_MAX_OVERFLOW,
+            DEFAULT_POOL_TIMEOUT,
+            DEFAULT_POOL_SIZE + DEFAULT_MAX_OVERFLOW,
+        )
 
     async with _database_startup_phase("connection and initial PRAGMAs"):
-        connection = await engine.connect()
+        # user:“覆盖异常中断、任务取消、超时、并发竞争、数据库断连及应用退出等场景”+(启动中途失败也要把引擎和它已建的连接放回去，否则一次失败的重启会留下孤儿池)。
+        try:
+            connection = await engine.connect()
+        except BaseException:
+            await pool_telemetry.stop()
+            await engine.dispose()
+            raise
 
     try:
         async with _database_startup_phase("schema transaction"):
@@ -2202,6 +2239,11 @@ async def open_core_app_db(
                         index for index in CoreAppEvent.__table__.indexes
                         if index.name == "idx_core_events_client_message"
                     ).create(conn, checkfirst=True))
+    except BaseException:
+        # user:“覆盖异常中断、任务取消、超时、并发竞争、数据库断连及应用退出等场景”+(迁移/建表失败同样必须释放池，不能留下半开的引擎)。
+        await pool_telemetry.stop()
+        await engine.dispose()
+        raise
     finally:
         await connection.close()
 
@@ -2265,6 +2307,7 @@ async def open_core_app_db(
             persistence=persistence,
             member_defaults=dict(member_defaults or {}),
             session_actors=session_actors,
+            pool_telemetry=pool_telemetry,
             artifact_store=ArtifactStore(
                 session_factory,
                 write_coordinator,

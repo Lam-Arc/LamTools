@@ -18,6 +18,43 @@ from lamtools_core.plugin_system.context import PluginContext
 from lamtools_core.session import SessionRecord
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change",["shutdown","store","scope"])
+async def test_permission_read_rechecks_host_and_scope_after_storage_wait(env,monkeypatch,change):
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(权限偏好只读结果也不能跨越宿主失效或启动代撤回后发布)。
+    from lamtools_core.plugin_system.permission_access import PermissionAccessError
+    from lamtools_core.plugin_system.services import ServiceError
+    root, live, store, _, _, _, sessions = env
+    api = root.permissions
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = store.get_readonly
+    async def gated(session_id):
+        result = await original(session_id)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(store,"get_readonly",gated)
+    task = asyncio.create_task(api.read("s"))
+    try:
+        await asyncio.wait_for(entered.wait(),3)
+        if change == "shutdown":
+            sessions.shutdown()
+        elif change == "store":
+            live.host.session_store = object()
+        else:
+            root._registration_scope.revoke()
+        release.set()
+        with pytest.raises(ServiceError if change == "scope" else PermissionAccessError) as error:
+            await asyncio.wait_for(task,3)
+        assert error.value.code == {"shutdown":"permissions/closed","store":"permissions/host-changed","scope":"service/scope-closed"}[change]
+    finally:
+        live.host.session_store = store
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
+
 @pytest.fixture
 async def env(tmp_path, monkeypatch):
     controls = {"permission_preset": "ask", "base_tier": "full_edit", "base_allow_access_outside_workdir": False}

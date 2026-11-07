@@ -821,12 +821,14 @@ def recompute_thread_status(state: dict[str, Any]) -> None:
     if _latest_active_turn(state) is not None:
         state["status"] = "running"
         return
+    # user:“发送耗时原则上不应随历史会话长度显著增长”+(这里只需要最新的一轮，
+    # 排整个回合表是白花 O(n log n)；max 取第一个最大值，与稳定排序取首项等价)。
     turns = [
         turn for turn in (state.get("turns") or {}).values()
         if isinstance(turn, dict)
     ]
-    turns.sort(key=lambda item: int(item.get("last_seq") or 0), reverse=True)
-    latest_status = str((turns[0] if turns else {}).get("status") or "")
+    latest = max(turns, key=lambda item: int(item.get("last_seq") or 0), default={})
+    latest_status = str((latest or {}).get("status") or "")
     if latest_status == "completed":
         state["status"] = "completed"
     elif latest_status == "cancelled":

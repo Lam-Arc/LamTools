@@ -2292,7 +2292,7 @@ const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({
   activeSessionId,
   requestRpc: appRuntime.requestRpc,
 })
-const { messages, processExpandedIds, toggleProcess, hasMoreHistory, historyBuffered, loadMoreHistory } = workbench
+const { messages, processExpandedIds, toggleProcess, hasMoreHistory, historyBuffered, loadMoreHistory, loadHistoryAround } = workbench
 const historyLoading = computed(() => (
   Boolean(activeSessionId.value)
   && historyLoadingSessionId.value === activeSessionId.value
@@ -2982,16 +2982,49 @@ function locateScrollBehavior(): ScrollBehavior {
     : 'smooth'
 }
 
-/** 定位消息：轮询目标 DOM（窗口未含则逐步加载更早历史），
- * 命中 → scrollIntoView 居中 + 高亮渐隐（2.6s）。找不到给出提示。 */
+function highlightLocatedMessage(el: HTMLElement): void {
+  el.scrollIntoView({ block: 'center', behavior: locateScrollBehavior() })
+  el.classList.add('rag-hit-highlight')
+  window.setTimeout(() => el.classList.remove('rag-hit-highlight'), 2600)
+}
+
+/** 定位消息：先问后端这条消息在哪个窗口（一次请求），窗口未含才退回逐页加载。
+ *  命中 → scrollIntoView 居中 + 高亮渐隐（2.6s）。找不到给出提示。 */
 async function locateMessage(messageId: string): Promise<void> {
   const selector = `[data-message-id="${CSS.escape(messageId)}"]`
+  const visible = document.querySelector<HTMLElement>(selector)
+  if (visible) {
+    highlightLocatedMessage(visible)
+    return
+  }
+  // user:“高效搜索跳转：根据消息索引直接定位目标窗口，避免循环扩大历史窗口”
+  // 逐页向后翻是 O(页数) 次往返；后端能按消息序号直接给出目标窗口，一次就够。
+  const threadId = activeSessionId.value
+  if (threadId) {
+    try {
+      if (await loadHistoryAround(threadId, messageId)) {
+        await nextTick()
+        await afterHistoryLayoutFrame()
+        const located = document.querySelector<HTMLElement>(selector)
+        if (located) {
+          highlightLocatedMessage(located)
+          // 跳转窗口与当前最新窗口之间可能仍有未加载的一段，如实提示，
+          // 不把两段历史悄悄拼在一起。
+          if (hasMoreHistory.value) {
+            showToast('notice', t("已定位到目标消息，上滑可继续加载中间的历史"), 4000)
+          }
+          return
+        }
+      }
+    } catch (error) {
+      setLoadError(messageFromError(error))
+    }
+    if (activeSessionId.value !== threadId) return
+  }
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const el = document.querySelector<HTMLElement>(selector)
     if (el) {
-      el.scrollIntoView({ block: 'center', behavior: locateScrollBehavior() })
-      el.classList.add('rag-hit-highlight')
-      window.setTimeout(() => el.classList.remove('rag-hit-highlight'), 2600)
+      highlightLocatedMessage(el)
       return
     }
     if (hasMoreHistory.value) {
