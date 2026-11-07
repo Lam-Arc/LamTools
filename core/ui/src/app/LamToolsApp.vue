@@ -491,7 +491,7 @@
     <template #modals>
       <!-- user:“手机端内可以将分屏用全屏的方式展示，并在左上角保留返回键”+(同一套分屏，
            手机上整屏铺开，左上角一个返回键把分屏关掉，回到会话)。 -->
-      <div class="split-slot" :class="{ 'split-slot--mobile': appRuntime.platform === 'mobile' }">
+      <div class="split-slot" :class="{ 'split-slot--mobile': appRuntime.platform === 'mobile', 'split-slot--open': splitEnabled }">
         <button
           v-if="appRuntime.platform === 'mobile' && splitEnabled"
           type="button"

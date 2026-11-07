@@ -1201,3 +1201,10 @@
   left: 10px;
   z-index: 3;
 }
+
+/* An empty split slot used to cover the whole interface on phones: the workspace sits
+   under an opaque full-screen layer and the user sees a blank page. Only the open split
+   is allowed to take the screen. */
+.split-slot--mobile:not(.split-slot--open) {
+  display: none;
+}

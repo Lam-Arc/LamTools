@@ -66,8 +66,13 @@ interface BootNodes {
 function interfacePainted(): boolean {
   const node = document.getElementById('app')
   if (!node || node.childElementCount === 0) return false
-  const box = node.getBoundingClientRect()
-  return box.width > 1 && box.height > 1
+  // The shell is positioned `fixed`, so `#app` itself can have zero height while the
+  // interface is fully painted. A child with a real box is the honest signal.
+  for (const child of Array.from(node.children)) {
+    const box = child.getBoundingClientRect()
+    if (box.width > 1 && box.height > 1) return true
+  }
+  return false
 }
 
 function delay(ms: number): Promise<void> {
