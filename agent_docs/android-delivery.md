@@ -14,9 +14,11 @@
 校验和：
 
 ```
-80fb552aa3fffd1f54d3deee99407fc60fe0701ce6e68363901ae71b7f3f1394  sunday-m-arm64-debug.apk
-7ba55ac1c1eacf7562a5cc3522a8e55a4ba1b0fbeb129003f94d9b735c5f030e  sunday-m-x86_64-debug.apk
+4ad613a336875ad5c25aab7e032ffe7704e9f0ea88973d82ba8f03cc00c1b421  sunday-m-arm64-debug.apk
+d6f561455899a60870752711af33ddc3a1caab04b2d6e848e68f53fd993729d9  sunday-m-x86_64-debug.apk
 ```
+
+启动图标与桌面一致，是 Sunday 笑脸，由 `core/desktop/src-tauri/icons/icon.png` 重新生成到各密度 mipmap；此前生成工程里残留的旧「88」图标已替换。
 
 两个包都是 **debug 签名**，安装需要允许未知来源。包变大是因为内置了 iroh（QUIC + rustls + ring）。一个包只带一个 ABI 的运行时，这是
 设计使然：运行时要包含该架构的 Python 解释器，通用包会带错一半。
