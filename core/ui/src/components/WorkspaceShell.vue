@@ -42,7 +42,7 @@
     <!-- Phones have no hover edge: one visible control opens the drawer, and it leaves
          as soon as the drawer is open. -->
     <button
-      v-if="isNarrowViewport && !leftOpen"
+      v-if="showDrawerToggle && isNarrowViewport && !leftOpen"
       class="mobile-drawer-toggle"
       type="button"
       data-mobile-drawer-toggle
@@ -330,6 +330,8 @@ const props = withDefaults(
      * 顶部那条留给标题条的高度随之收回，内容独占整页。
      */
     hideMainHeader?: boolean
+    /** Set false while a full-area view or split owns the surface. */
+    showDrawerToggle?: boolean
     /** Host-controlled layout state for a Core session with no messages yet. */
     emptySession?: boolean
     /** Stable host session identity used to retain working-state placement. */
@@ -368,6 +370,7 @@ const props = withDefaults(
     composerHoldEnabled: true,
     showRightPanel: true,
     hideMainHeader: false,
+    showDrawerToggle: true,
     emptySession: false,
     composerSessionKey: null,
     composerSessionReady: true,

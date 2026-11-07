@@ -54,6 +54,7 @@
     :show-sidebar-settings-action="false"
     :collapse-left-sidebar="Boolean(fullAreaView && !sidebarNavView)"
     :hide-main-header="Boolean(sidebarNavView)"
+    :show-drawer-toggle="!fullAreaView && !splitEnabled"
     :show-right-panel="appRuntime.platform !== 'mobile'"
     :show-right-panel-header="false"
     :right-panel-hold="rightSidebarHold"
