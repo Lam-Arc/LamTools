@@ -126,10 +126,91 @@ def _env_setting(name: str, legacy_name: str, default: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Maintenance entry
+# ---------------------------------------------------------------------------
+
+def _arg_value(argv: list[str], name: str, default: str = "") -> str:
+    for index, value in enumerate(argv):
+        if value == name and index + 1 < len(argv):
+            return argv[index + 1]
+        if value.startswith(name + "="):
+            return value.split("=", 1)[1]
+    return default
+
+
+def _maintenance_core_db(argv: list[str]) -> Path:
+    """Resolve the database without touching the desktop's normal startup path."""
+    explicit = _arg_value(argv, "--core-db") or os.environ.get("LAMTOOLS_CORE_DB", "").strip()
+    if explicit:
+        return Path(explicit)
+    data_dir = (
+        os.environ.get("LAMTOOLS_CORE_DATA_DIR", "").strip()
+        or os.environ.get("LAMTOOLS_HOME", "").strip()
+    )
+    return (Path(data_dir) if data_dir else _default_data_dir()) / "core.db"
+
+
+def _run_compact_sync_journal(argv: list[str]) -> int | None:
+    """One-shot sync-journal compaction for the update process.
+
+    user:“在这一次的更新中，自动把之前的数据库进行一遍去重和缩小”+(安装完成后、
+    应用启动前，由更新脚本调用本入口；桌面必须已经退出，压缩结果写成 JSON 报告。)
+    """
+    if "--compact-sync-journal" not in argv:
+        return None
+    import json
+
+    from lamtools_core.sync_journal_maintenance import (
+        SyncCompactionError,
+        compact_sync_journal,
+        write_report,
+    )
+
+    db_path = _maintenance_core_db(argv)
+    report_path = _arg_value(argv, "--report") or str(
+        db_path.parent / "db-compaction-report.json"
+    )
+    try:
+        report = compact_sync_journal(
+            db_path,
+            apply=True,
+            keep_per_entity=int(_arg_value(argv, "--keep-runtime-per-entity", "1") or 1),
+            vacuum="--no-vacuum" not in argv,
+            backup="--no-backup" not in argv,
+            backup_dir=_arg_value(argv, "--backup-dir") or None,
+        )
+        write_report(report, report_path)
+        return 0 if report.ok else 1
+    except SyncCompactionError as error:
+        _log.error("sync journal compaction refused: %s", error)
+        try:
+            Path(report_path).write_text(
+                json.dumps({"status": "refused", "error": str(error)}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return 2
+    except BaseException as error:  # noqa: BLE001 - the report is the only channel here
+        _log.exception("sync journal compaction failed")
+        try:
+            Path(report_path).write_text(
+                json.dumps({"status": "failed", "error": str(error)}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return 1
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    maintenance_exit = _run_compact_sync_journal(sys.argv[1:])
+    if maintenance_exit is not None:
+        raise SystemExit(maintenance_exit)
     try:
         _run()
     except BaseException:

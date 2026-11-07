@@ -195,6 +195,43 @@ async def cmd_maintenance_prune_checkpoints(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+async def cmd_maintenance_compact_sync_journal(args: argparse.Namespace) -> int:
+    """Deduplicate runtime snapshots and shrink an installed or dev database."""
+    from .config import _resolve_core_db
+    from lamtools_core.sync_journal_maintenance import (
+        SyncCompactionError,
+        compact_sync_journal,
+        write_report,
+    )
+
+    db_path = _resolve_core_db(args.core_db or None)
+    try:
+        report = compact_sync_journal(
+            db_path,
+            apply=bool(args.apply),
+            keep_per_entity=int(getattr(args, "keep_runtime_per_entity", 1) or 1),
+            vacuum=not bool(getattr(args, "no_vacuum", False)),
+            backup=not bool(getattr(args, "no_backup", False)),
+            backup_dir=getattr(args, "backup_dir", "") or None,
+        )
+    except SyncCompactionError as exc:
+        print(
+            json.dumps({"status": "refused", "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        return 2
+    except Exception as exc:  # noqa: BLE001 - the CLI must report, never traceback
+        print(
+            json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        return 1
+    write_report(report, getattr(args, "report", "") or None)
+    label = "applied" if report.applied else "dry-run"
+    print(json.dumps({"status": label, **report.to_dict()}, ensure_ascii=False, sort_keys=True), flush=True)
+    return 0 if report.ok else 1
+
+
 async def cmd_maintenance_dialogue_records(args: argparse.Namespace) -> int:
     from .config import _resolve_core_db
     from lamtools_core.checkpoint_maintenance import verify_dialogue_records

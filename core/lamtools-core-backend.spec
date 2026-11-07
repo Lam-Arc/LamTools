@@ -215,6 +215,8 @@ _hiddenimports = [
     "lamtools_core.skills",
     "lamtools_core.sub_agent",
     "lamtools_core.sub_session",
+    # 更新脚本用 --compact-sync-journal 调用；入口在函数内导入，显式列出来避免漏打包。
+    "lamtools_core.sync_journal_maintenance",
     "lamtools_core.tokens",
 
     # === lamtools_core top-level packages ===

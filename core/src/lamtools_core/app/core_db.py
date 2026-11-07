@@ -2787,6 +2787,11 @@ async def _ensure_late_columns(connection: Any) -> None:
 #: Marker recording that the one-time thread-revision repair has been applied.
 THREAD_REVISION_REPAIR_MARKER = "thread_revision_repair_v1"
 
+#: user:“刚才启动 constant 的时候，后端启动失败了”+(一条快照的 revision 落后就会触发
+#: 全量修补；大库上单条 SQL 跑了几十分钟，超过桌面端 90 秒的等待就报启动失败。)
+#: 每次启动给修补留的预算；超出的快照留到下次启动，绝不让修补挡住应用可用。
+THREAD_REVISION_REPAIR_BUDGET_SECONDS = 5.0
+
 
 async def _metadata_flag(connection: Any, key: str) -> bool:
     value = await connection.scalar(
@@ -2825,14 +2830,12 @@ async def _thread_revision_repair_is_needed(connection: Any) -> bool:
 
 
 async def _ensure_thread_revision_repair(connection: Any, *, column_added: bool) -> None:
-    """Repair legacy snapshot revisions without scanning healthy event logs.
+    """Repair legacy snapshot revisions within a bounded startup budget.
 
-    ``_repair_thread_revisions`` scans ``core_app_events`` per thread and on a
-    large database takes minutes, yet it is almost always a no-op. It is only
-    needed while upgrading a database whose ``revision`` column was just added,
-    or one left by an older code version with the default-0 signature. Once it
-    has run, a marker is recorded. Later boots probe only snapshots so restored
-    legacy rows still get repaired, while healthy boots skip the event scan.
+    Only stale snapshot rows are visited; healthy boots still skip the event
+    log entirely. When the repair cannot finish inside
+    ``THREAD_REVISION_REPAIR_BUDGET_SECONDS`` the marker is not written, so the
+    remaining rows are retried on the next boot instead of blocking this one.
     """
     # Restored/imported rows can carry the legacy signature even after the
     # marker was written. Probe snapshots on every boot, never the event log.
@@ -2841,11 +2844,12 @@ async def _ensure_thread_revision_repair(connection: Any, *, column_added: bool)
         if not marked:
             await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
         return
-    await _repair_thread_revisions(connection)
-    await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
+    complete = await _repair_thread_revisions(connection)
+    if complete:
+        await _set_metadata_flag(connection, THREAD_REVISION_REPAIR_MARKER)
 
 
-async def _repair_thread_revisions(connection: Any) -> None:
+async def _repair_thread_revisions(connection: Any) -> bool:
     """把会话的 CAS 修订号抬到"该会话事件里出现过的最高值"。
 
     修订号是客户端写入时的乐观锁期望值：客户端只要见过更高的值（快照与
@@ -2853,18 +2857,65 @@ async def _repair_thread_revisions(connection: Any) -> None:
     行上的值一旦低于客户端见过的值，该会话的每次写入都会被判冲突；刷新
     回来的快照又因"不能回退"被客户端丢弃，会话从此改不动——压缩上下文、
     发消息、编辑全部失败（2026-10-04：本机开发库 d638…4b 的会话行上是 0、
-    事件里已到 363，症状即"无法压缩，压缩失败"）。修订号本应单调，取两者
-    较大者即可对齐两边；只在该行确实偏低时才写，幂等，载荷是一次索引聚合。
+    事件里已到 363，症状即"无法压缩，压缩失败"）。
+
+    user:“刚才启动 constant 的时候，后端启动失败了”+(原实现对每条快照执行一次
+    ``MAX(revision)`` 相关子查询；24GB 的库里一条 589 行的会话就要 5 秒，179 条
+    快照直接把启动拖过 90 秒的健康检查。)
+    修订号本应随 seq 单调，因此先只读该会话按 seq 最新的那一条事件（走
+    ``UNIQUE(thread_id, seq)``，只回表一行）；只有它反而低于快照时，才退回全量
+    聚合兜底。返回是否处理完所有快照。
     """
-    await connection.execute(text(
-        "UPDATE core_thread_snapshots SET revision = ("
-        "SELECT MAX(revision) FROM core_app_events "
-        "WHERE core_app_events.thread_id = core_thread_snapshots.thread_id"
-        ") WHERE revision < ("
-        "SELECT MAX(revision) FROM core_app_events "
-        "WHERE core_app_events.thread_id = core_thread_snapshots.thread_id"
-        ")"
-    ))
+    started = perf_counter()
+    rows = (
+        await connection.execute(text(
+            "SELECT thread_id, revision FROM core_thread_snapshots "
+            "WHERE (revision = 0 AND snapshot_seq > 0) OR revision < snapshot_seq"
+        ))
+    ).mappings().all()
+    deferred = 0
+    for row in rows:
+        if perf_counter() - started > THREAD_REVISION_REPAIR_BUDGET_SECONDS:
+            deferred += 1
+            continue
+        thread_id = str(row["thread_id"])
+        current = int(row["revision"] or 0)
+        latest = await connection.scalar(
+            text(
+                "SELECT revision FROM core_app_events "
+                "WHERE thread_id = :thread_id ORDER BY seq DESC LIMIT 1"
+            ),
+            {"thread_id": thread_id},
+        )
+        target = max(current, int(latest or 0))
+        if target <= current:
+            # 异常数据（最新事件反而更低）：退回一次索引聚合兜底。
+            target = max(
+                current,
+                int(await connection.scalar(
+                    text(
+                        "SELECT MAX(revision) FROM core_app_events "
+                        "WHERE thread_id = :thread_id"
+                    ),
+                    {"thread_id": thread_id},
+                ) or 0),
+            )
+        if target > current:
+            await connection.execute(
+                text(
+                    "UPDATE core_thread_snapshots SET revision = :revision "
+                    "WHERE thread_id = :thread_id"
+                ),
+                {"revision": target, "thread_id": thread_id},
+            )
+    if deferred:
+        _logger.warning(
+            "[startup:database] thread revision repair deferred for %d snapshot(s) "
+            "after %.1fs; the next boot will retry",
+            deferred,
+            THREAD_REVISION_REPAIR_BUDGET_SECONDS,
+        )
+    return deferred == 0
 
 
 async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -> None:

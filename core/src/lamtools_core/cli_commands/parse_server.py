@@ -47,7 +47,7 @@ def register_migrate_projects(sub: argparse._SubParsersAction) -> None:
 
 
 def register_maintenance(sub: argparse._SubParsersAction) -> None:
-    from .server import cmd_maintenance_checkpoint_baseline, cmd_maintenance_dialogue_records, cmd_maintenance_prune_checkpoints, cmd_maintenance_strip_snapshot_images
+    from .server import cmd_maintenance_checkpoint_baseline, cmd_maintenance_compact_sync_journal, cmd_maintenance_dialogue_records, cmd_maintenance_prune_checkpoints, cmd_maintenance_strip_snapshot_images
     maintenance = sub.add_parser(
         "maintenance",
         help="Run one-shot data maintenance on the local development database",
@@ -114,6 +114,37 @@ def register_maintenance(sub: argparse._SubParsersAction) -> None:
     dialogue_records.add_argument("--core-db", default="")
     dialogue_records.add_argument("--thread-id", default="", help="Limit to one thread")
     dialogue_records.set_defaults(func=cmd_maintenance_dialogue_records)
+
+    compact_sync = maintenance_sub.add_parser(
+        "compact-sync-journal",
+        help=(
+            "Keep only the newest runtime snapshot per session, rebuild the sync "
+            "journal and reclaim space (works on installed databases; close the app first)"
+        ),
+    )
+    compact_sync.add_argument("--core-db", default="")
+    compact_sync.add_argument(
+        "--apply", action="store_true", help="Back up, compact and VACUUM (default is a preview)"
+    )
+    compact_sync.add_argument(
+        "--keep-runtime-per-entity",
+        type=int,
+        default=1,
+        help="How many newest runtime snapshots to keep per session (default 1)",
+    )
+    compact_sync.add_argument(
+        "--no-vacuum", action="store_true", help="Rebuild without VACUUM (file stays allocated)"
+    )
+    compact_sync.add_argument(
+        "--no-backup", action="store_true", help="Skip the pre-compaction file copy"
+    )
+    compact_sync.add_argument(
+        "--backup-dir", default="", help="Where to write the pre-compaction copy"
+    )
+    compact_sync.add_argument(
+        "--report", default="", help="Write the JSON report to this path"
+    )
+    compact_sync.set_defaults(func=cmd_maintenance_compact_sync_journal)
 
 
 def register_update(sub: argparse._SubParsersAction) -> None:

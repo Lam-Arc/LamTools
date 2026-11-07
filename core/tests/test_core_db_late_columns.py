@@ -120,7 +120,10 @@ async def test_late_columns_still_repairs_a_legacy_default_revision_row(tmp_path
     async with engine.connect() as conn:
         await _ensure_late_columns(conn)
         await conn.commit()
-    assert any("MAX(revision)" in statement and "core_app_events" in statement for statement in statements)
+    # The fast path reads only the newest event (via the thread/seq index); it
+    # must not fall back to the per-thread MAX() aggregate.
+    assert any("ORDER BY seq DESC LIMIT 1" in statement for statement in statements)
+    assert not any("MAX(revision)" in statement for statement in statements)
 
     async with engine.connect() as conn:
         revision = await conn.scalar(select(CoreThreadSnapshot.revision).where(CoreThreadSnapshot.thread_id == "t1"))
@@ -173,8 +176,51 @@ async def test_late_columns_runs_the_repair_when_the_column_is_just_added(tmp_pa
         await conn.commit()
 
     assert any(statement.startswith("ALTER TABLE core_thread_snapshots ADD COLUMN revision") for statement in statements)
-    assert any("MAX(revision)" in statement and "core_app_events" in statement for statement in statements)
+    # The backfill already lifted the row above its snapshot_seq, so the repair
+    # pass has nothing to visit and never touches the event log.
+    assert not any("MAX(revision)" in statement for statement in statements)
     async with engine.connect() as conn:
         revision = await conn.scalar(text("SELECT revision FROM core_thread_snapshots WHERE thread_id = 't1'"))
     assert revision == 9
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_revision_repair_defers_when_the_budget_is_exhausted(tmp_path, monkeypatch):
+    """user:“刚才启动 constant 的时候，后端启动失败了”+(修补跑不完时必须先让应用起来：
+    超预算的快照留到下次启动，且不能写下“已修补”标记。)
+    """
+    from lamtools_core.app import core_db as core_db_module
+
+    engine = await _build_db(str(tmp_path / "budget.db"), event_count=7, snapshot_revision=0)
+    async with engine.begin() as conn:
+        await conn.execute(text("UPDATE core_thread_snapshots SET snapshot_seq = 5, revision = 0"))
+
+    monkeypatch.setattr(core_db_module, "THREAD_REVISION_REPAIR_BUDGET_SECONDS", -1.0)
+    async with engine.connect() as conn:
+        await _ensure_late_columns(conn)
+        await conn.commit()
+    async with engine.connect() as conn:
+        revision = await conn.scalar(
+            select(CoreThreadSnapshot.revision).where(CoreThreadSnapshot.thread_id == "t1")
+        )
+        marker = await conn.scalar(
+            select(CoreDbMetadata.value).where(CoreDbMetadata.key == THREAD_REVISION_REPAIR_MARKER)
+        )
+    assert revision == 0
+    assert marker is None
+
+    monkeypatch.setattr(core_db_module, "THREAD_REVISION_REPAIR_BUDGET_SECONDS", 5.0)
+    async with engine.connect() as conn:
+        await _ensure_late_columns(conn)
+        await conn.commit()
+    async with engine.connect() as conn:
+        revision = await conn.scalar(
+            select(CoreThreadSnapshot.revision).where(CoreThreadSnapshot.thread_id == "t1")
+        )
+        marker = await conn.scalar(
+            select(CoreDbMetadata.value).where(CoreDbMetadata.key == THREAD_REVISION_REPAIR_MARKER)
+        )
+    assert revision == 7
+    assert marker == "1"
     await engine.dispose()
