@@ -138,6 +138,14 @@ async function boot(): Promise<void> {
     await listen<{ keyboard?: unknown; top?: unknown }>('insets', (event) => {
       applyInsets(event.payload)
     })
+    // The first publish happens in `MainActivity.onCreate`, before this listener exists.
+    // Without this read the interface starts with an empty safe-area variable and lays
+    // its top controls under the status bar or the notch.
+    try {
+      applyInsets(await invoke<{ keyboard?: unknown; top?: unknown }>('window_insets'))
+    } catch (error) {
+      console.warn('[sunday] insets: cannot read the first values', describeError(error))
+    }
 
     // user:“大问题，返回不可用，我被困在设置页面了”+(系统返回键先问界面：界面能关掉
     // 当前整版视图就关，关不了才让宿主把任务放到后台。判断只有界面做得出来。

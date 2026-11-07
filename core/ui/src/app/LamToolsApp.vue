@@ -49,9 +49,9 @@
     :content-width="contentWidth"
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
-    :show-sidebar-search-action="showMobileFooterFallback"
-    :show-sidebar-plugins-action="showMobileFooterFallback"
-    :show-sidebar-settings-action="showMobileFooterFallback"
+    :show-sidebar-search-action="false"
+    :show-sidebar-plugins-action="false"
+    :show-sidebar-settings-action="false"
     :collapse-left-sidebar="Boolean(fullAreaView && !sidebarNavView)"
     :hide-main-header="Boolean(sidebarNavView)"
     :show-right-panel="appRuntime.platform !== 'mobile'"
@@ -270,26 +270,17 @@
            就是竖栏本身：模式、资料库、定时任务、插件、设置、远程连接，名称只留在悬停提示
            与读屏标签里)。 -->
       <div class="drawer-footer-rail" role="toolbar" :aria-label="t('主导航')">
-        <button
-          v-for="option in mobileModeOptions"
-          :key="option.id"
-          class="drawer-footer-rail__btn"
-          type="button"
-          :aria-pressed="option.id === activeMobileModeId"
-          :data-mobile-footer-mode="option.id"
-          :title="option.label"
-          :aria-label="option.label"
-          @click="openFromRail(() => selectAppModeByKey(option.id))"
-        >
-          <Check v-if="option.id === activeMobileModeId" :size="17" :stroke-width="1.9" aria-hidden="true" />
-          <Blocks v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-chat :title="t('聊天')" :aria-label="t('聊天')" @click="openFromRail(() => onRailOpen('chat'))">
+          <House :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <span class="drawer-footer-rail__sep" aria-hidden="true"></span>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-library :title="t('资料库')" :aria-label="t('资料库')" @click="openFromRail(openLibrary)">
-          <Library :size="17" :stroke-width="1.8" aria-hidden="true" />
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-superagent :title="t('Super-agent')" :aria-label="t('Super-agent')" @click="openFromRail(() => onRailOpen('superagent'))">
+          <Bot :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
         <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-arrange :title="t('定时任务')" :aria-label="t('定时任务')" @click="openFromRail(openArrange)">
           <CalendarClock :size="17" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-library :title="t('资料库')" :aria-label="t('资料库')" @click="openFromRail(openLibrary)">
+          <Library :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
         <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-plugins :title="t('插件')" :aria-label="t('插件')" @click="openFromRail(openPlugins)">
           <Blocks :size="17" :stroke-width="1.8" aria-hidden="true" />
@@ -722,6 +713,8 @@ import {
 import { gsap } from 'gsap'
 import {
   ArrowDown,
+  Bot,
+  House,
   ArrowLeft,
   Blocks,
   CalendarClock,

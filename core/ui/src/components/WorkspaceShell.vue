@@ -39,6 +39,20 @@
       @click="closeDrawers"
     ></button>
 
+    <!-- Phones have no hover edge: one visible control opens the drawer, and it leaves
+         as soon as the drawer is open. -->
+    <button
+      v-if="isNarrowViewport && !leftOpen"
+      class="mobile-drawer-toggle"
+      type="button"
+      data-mobile-drawer-toggle
+      :aria-label="t('打开左侧栏')"
+      :title="t('打开左侧栏')"
+      @click="openLeftDrawer"
+    >
+      <PanelLeft :size="18" :stroke-width="1.8" aria-hidden="true" />
+    </button>
+
     <!-- Edge hover triggers -->
     <div
       class="edge edge-left"
@@ -266,6 +280,7 @@ import { t } from '@/i18n/index.ts'
  */
 import { gsap } from 'gsap'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, useId, watch } from 'vue'
+import { PanelLeft } from 'lucide-vue-next'
 import { useComposerLayout } from '@/composables/useComposerLayout.ts'
 import { useShellLayout } from '@/composables/useShellLayout.ts'
 import type { ThemeData } from '@/composables/useShellLayout.ts'

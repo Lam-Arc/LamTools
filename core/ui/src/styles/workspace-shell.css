@@ -1208,3 +1208,24 @@
 .split-slot--mobile:not(.split-slot--open) {
   display: none;
 }
+
+/* The only visible way to open the drawer on a phone. It sits below the status bar and
+   disappears while the drawer is open, so it never competes with the drawer itself. */
+.mobile-drawer-toggle {
+  position: fixed;
+  top: calc(var(--native-safe-area-top, 0px) + 8px);
+  left: 8px;
+  /* The main surface sits at 300; the toggle has to be above it, below dialogs. */
+  z-index: 320;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-border, #d2d8e6) 70%, transparent);
+  background: var(--theme-control-background, #2e3138);
+  color: var(--theme-control-text, #fbf7f0);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 18%);
+  -webkit-tap-highlight-color: transparent;
+}

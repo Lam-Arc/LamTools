@@ -41,10 +41,29 @@ static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 #[cfg(target_os = "android")]
 fn publish_insets(keyboard: i64, top: i64) {
     use tauri::Emitter;
+    if let Ok(mut entry) = LAST_INSETS.lock() {
+        *entry = (keyboard, top);
+    }
     if let Some(app) = APP.get() {
         app.emit("insets", serde_json::json!({ "keyboard": keyboard, "top": top }))
             .ok();
     }
+}
+
+/// The last insets the host published.
+///
+/// The host publishes them from `MainActivity.onCreate`, which runs before the webview
+/// has a listener, so the first event is normally lost. The interface asks for this once
+/// its listener is attached.
+static LAST_INSETS: std::sync::Mutex<(i64, i64)> = std::sync::Mutex::new((0, 0));
+
+#[tauri::command]
+fn window_insets() -> Value {
+    let (keyboard, top) = LAST_INSETS
+        .lock()
+        .map(|entry| *entry)
+        .unwrap_or((0, 0));
+    json!({ "keyboard": keyboard, "top": top })
 }
 
 /// Sector actions from the floating ring, waiting for the interface to take them.
@@ -516,6 +535,7 @@ pub fn run() {
             overlay_stop,
             overlay_state,
             overlay_take_pending,
+            window_insets,
             pip_enter,
         ])
         .run(tauri::generate_context!())
