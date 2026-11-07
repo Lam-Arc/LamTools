@@ -8,15 +8,9 @@
     :mode-title="nextAppModeTitle"
     :can-toggle-mode="appModes.length > 1"
     :session-title="activeSessionTitle"
-    :mobile-pairing-code="remotePairing?.code"
-    :mobile-pairing-expires-at-ms="remotePairing?.expiresAtMs"
-    :mobile-pairing-loading="remoteGatewayLoading"
-    :account-status="effectiveAccountStatus"
-    :account-devices="effectiveAccountDevices"
     @toggle-left-pinned="toggleLeftPinned"
     @toggle-right-pinned="toggleRightPinned"
     @cycle-mode="cycleAppMode"
-    @mobile-pairing-create="createRemotePairing"
   />
   <div v-if="backendCrashed" class="core-status-banner" role="alert" data-backend-crashed-banner>
     <span class="core-status-banner-text">{{ t("后端进程已停止响应（可能已崩溃）。请重启应用以恢复。") }}</span>
@@ -266,7 +260,7 @@
 
     <template v-if="showSidebarFooter" #sidebar-footer>
       <!-- 手机降级页脚（无 hover 可依赖）：仍是带文字的竖排行，与今天一致。
-          桌面账号在竖栏底部，页脚不再渲染。 -->
+          桌面远程连接在竖栏底部，页脚不再渲染。 -->
       <!-- user:“手机模式下左竖栏的内容放在侧栏的最下方一排，不要文字仅图标”+(这一排
            就是竖栏本身：模式、资料库、定时任务、插件、设置、远程连接，名称只留在悬停提示
            与读屏标签里)。 -->
@@ -823,15 +817,6 @@ import type {
   CoreSettingsModelPayload,
   CoreSettingsProviderPayload,
 } from '@/components/CoreSettings.vue'
-import type {
-  MobileControlAccountContext,
-  MobileControlAccountDevice,
-  MobileControlAccountPayload,
-  MobileControlAccountStatus,
-  MobileControlGatewayStatus,
-  MobileControlIdentity,
-  MobileControlPairing,
-} from '@/components/MobileControlPanel.vue'
 import SundayLogo from '@/components/SundayLogo.vue'
 import RuntimeChecklistCard from '@/components/RuntimeChecklistCard.vue'
 import SessionSidebar, { type SessionExportFormat } from '@/components/SessionSidebar.vue'
@@ -925,15 +910,11 @@ type RawModelGroup = {
 
 const props = defineProps<{
   runtime: LamToolsRuntime
-  accountContext?: MobileControlAccountContext
   mobileCommandDockAvailable?: boolean
   showPreviewTitleBar?: boolean
 }>()
 const emit = defineEmits<{
   'left-drawer-change': [value: boolean]
-  'account-submit': [payload: MobileControlAccountPayload]
-  'account-logout': []
-  'open-account': []
   'mobile-mode-state': [payload: {
     label: string
     title: string
@@ -1254,7 +1235,7 @@ const railActiveView = computed<AppRailView>(() => {
 function openRailSplit(view: AppRailView, edge: 'right' | 'bottom' = 'right') {
   if (view === 'chat') return
   const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
-  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), superagent: t('Super-agent'), arrange: t('定时任务'), plugins: t('插件'), account: t('账号') })[view], pane)
+  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), superagent: t('Super-agent'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接') })[view], pane)
 }
 function onRailOpen(view: AppRailView): void {
   if (view === 'chat') {
@@ -1299,325 +1280,6 @@ function openModeMenu(event: MouseEvent): void {
     ariaLabel: '切换模式',
   })
 }
-const remoteGatewayStatus = ref<MobileControlGatewayStatus | null>(null)
-const remotePairing = ref<MobileControlPairing | null>(null)
-const remoteGatewayLoading = ref(false)
-const remoteGatewayError = ref('')
-const remoteAccountStatus = ref<MobileControlAccountStatus | null>(null)
-const remoteAccountIdentity = ref<MobileControlIdentity | null>(null)
-const remoteAccountLoading = ref(false)
-const effectiveAccountStatus = computed(() => props.accountContext === undefined
-  ? remoteAccountStatus.value
-  : props.accountContext.status)
-const effectiveAccountDevices = computed<MobileControlAccountDevice[]>(() => {
-  if (props.accountContext !== undefined) return props.accountContext.devices
-  const devices: MobileControlAccountDevice[] = []
-  if (remoteAccountStatus.value) {
-    devices.push({
-      nodeId: remoteAccountStatus.value.nodeId,
-      label: 'LamTools Desktop',
-      get detail() { return t("当前桌面工作环境") },
-      platform: 'desktop',
-      online: Boolean(remoteGatewayStatus.value?.relayConnected),
-      current: true,
-    })
-  }
-  for (const device of remoteGatewayStatus.value?.trustedDevices || []) {
-    devices.push({
-      nodeId: device.deviceId,
-      label: device.name || device.deviceId,
-      get detail() { return t("已配对移动设备") },
-      platform: device.platform || 'mobile',
-      online: Boolean(device.lastSeenMs && Date.now() - device.lastSeenMs < 60_000),
-    })
-  }
-  return devices
-})
-const effectiveAccountLoading = computed(() => props.accountContext?.loading ?? remoteAccountLoading.value)
-const effectiveAccountError = computed(() => props.accountContext?.error || '')
-
-function submitEffectiveAccount(payload: MobileControlAccountPayload): void {
-  if (props.accountContext !== undefined) emit('account-submit', payload)
-  else void saveRemoteAccount(payload)
-}
-
-function logoutEffectiveAccount(): void {
-  if (props.accountContext !== undefined) emit('account-logout')
-  else void logoutRemoteAccount()
-}
-
-const remoteGatewayAvailable = computed(() => (
-  typeof (window as any).__LAMTOOLS_REMOTE_STATUS__ === 'function'
-))
-
-async function refreshRemoteAccount(): Promise<void> {
-  const status = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_STATUS__ as (() => Promise<MobileControlAccountStatus | null>) | undefined
-  const identity = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_IDENTITY__ as (() => Promise<MobileControlIdentity>) | undefined
-  if (status) {
-    try {
-      remoteAccountStatus.value = await status()
-    } catch (error) {
-      remoteGatewayError.value = messageFromError(error)
-    }
-  }
-  if (identity) {
-    try {
-      remoteAccountIdentity.value = await identity()
-    } catch (error) {
-      remoteGatewayError.value = messageFromError(error)
-    }
-  }
-}
-
-async function saveRemoteAccount(payload: MobileControlAccountPayload): Promise<void> {
-  const save = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_SAVE__ as ((session: Record<string, unknown>) => Promise<MobileControlAccountStatus>) | undefined
-  const identityCall = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_IDENTITY__ as ((scope?: { serverId: string; username: string }) => Promise<MobileControlIdentity>) | undefined
-  if (!save || !identityCall) return
-  remoteAccountLoading.value = true
-  remoteGatewayError.value = ''
-  const restartGateway = Boolean(remoteGatewayStatus.value?.enabled)
-  try {
-    const baseUrl = normalizeRemoteServerBaseUrl(
-      payload.baseUrl || import.meta.env.VITE_LAMTOOLS_RELAY_URL || 'https://47.114.43.99.nip.io',
-    )
-    const auth = await requestRemoteAccountJson(
-      baseUrl,
-      `/v1/auth/${payload.mode}`,
-      { username: payload.username.trim(), password: payload.password },
-    )
-    const authTokens = parseRemoteAccountTokens(auth)
-    if (!authTokens) throw new Error(t("服务器返回了无效的登录凭据"))
-    const identity = await identityCall({ serverId: authTokens.serverId, username: payload.username.trim() })
-    remoteAccountIdentity.value = identity
-    const registration = await requestRemoteAccountJson(
-      baseUrl,
-      '/v1/nodes/register',
-      {
-        nodeId: identity.nodeId,
-        publicKey: identity.publicKey,
-        displayName: 'LamTools Desktop',
-        platform: 'desktop',
-        capabilities: ['workspace_host', 'agent_runtime', 'filesystem', 'terminal'],
-      },
-      authTokens.accessToken,
-    )
-    const node = parseRemoteAccountNode(registration.node)
-    if (!node) throw new Error(t("服务器未返回有效的桌面 Node"))
-    const boundTokens = parseRemoteAccountTokens(registration.tokens) || authTokens
-    const saved = await save({
-      baseUrl,
-      serverId: boundTokens.serverId,
-      username: payload.username.trim(),
-      nodeId: node.nodeId,
-      publicKey: node.publicKey,
-      accessToken: boundTokens.accessToken,
-      refreshToken: boundTokens.refreshToken,
-      accessExpiresAtMs: boundTokens.accessExpiresAtMs,
-      refreshExpiresAtMs: boundTokens.refreshExpiresAtMs,
-    })
-    remoteAccountStatus.value = saved || {
-      baseUrl,
-      serverId: boundTokens.serverId,
-      username: payload.username.trim(),
-      nodeId: node.nodeId,
-      accessExpiresAtMs: boundTokens.accessExpiresAtMs,
-      refreshExpiresAtMs: boundTokens.refreshExpiresAtMs,
-    }
-    // Saving a new account intentionally stops the old Relay connection in
-    // Rust. Restore the user's previous gateway intent after credentials are
-    // safely stored.
-    if (restartGateway) {
-      const start = (window as any).__LAMTOOLS_REMOTE_START__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-      if (start) remoteGatewayStatus.value = await start()
-    }
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteAccountLoading.value = false
-  }
-}
-
-async function logoutRemoteAccount(): Promise<void> {
-  const logout = (window as any).__LAMTOOLS_REMOTE_ACCOUNT_LOGOUT__ as (() => Promise<void>) | undefined
-  if (!logout) return
-  remoteAccountLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    await logout()
-    remoteAccountStatus.value = null
-    remotePairing.value = null
-    remoteGatewayStatus.value = await readRemoteGatewayStatus()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteAccountLoading.value = false
-  }
-}
-
-async function readRemoteGatewayStatus(): Promise<MobileControlGatewayStatus | null> {
-  const status = (window as any).__LAMTOOLS_REMOTE_STATUS__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  return status ? await status() : null
-}
-
-async function requestRemoteAccountJson(
-  baseUrl: string,
-  path: string,
-  body: Record<string, unknown>,
-  accessToken?: string,
-): Promise<Record<string, unknown>> {
-  let response: Response
-  try {
-    response = await fetch(`${baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify(body),
-      cache: 'no-store',
-    })
-  } catch (error) {
-    throw new Error(t("无法连接服务器：{0}", { 0: messageFromError(error) }))
-  }
-  const payload = await response.json().catch(() => null) as unknown
-  const record = isRecordValue(payload) ? payload : {}
-  if (!response.ok) {
-    const message = typeof record.message === 'string'
-      ? record.message
-      : typeof record.error === 'string' ? record.error : t("服务器请求失败（{0}）", { 0: response.status })
-    throw new Error(message)
-  }
-  return record
-}
-
-function normalizeRemoteServerBaseUrl(raw: string): string {
-  let url: URL
-  try {
-    url = new URL(raw.trim())
-  } catch {
-    throw new Error(t("服务器地址格式无效"))
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error(t("服务器地址必须使用 HTTP 或 HTTPS"))
-  const marker = url.pathname.indexOf('/v1/')
-  url.pathname = (marker >= 0 ? url.pathname.slice(0, marker) : url.pathname).replace(/\/+$/, '') || '/'
-  url.search = ''
-  url.hash = ''
-  return url.toString().replace(/\/$/, '')
-}
-
-function parseRemoteAccountTokens(value: unknown): {
-  serverId: string
-  accessToken: string
-  refreshToken: string
-  accessExpiresAtMs: number
-  refreshExpiresAtMs: number
-} | null {
-  const record = isRecordValue(value) ? (isRecordValue(value.tokens) ? value.tokens : value) : {}
-  const serverId = stringValue(record.serverId || record.server_id)
-  const accessToken = stringValue(record.accessToken || record.access_token)
-  const refreshToken = stringValue(record.refreshToken || record.refresh_token)
-  const accessExpiresAtMs = numberValue(record.accessExpiresAtMs || record.access_expires_at_ms)
-  const refreshExpiresAtMs = numberValue(record.refreshExpiresAtMs || record.refresh_expires_at_ms)
-  if (!serverId || !accessToken || !refreshToken || !accessExpiresAtMs || !refreshExpiresAtMs) return null
-  return { serverId, accessToken, refreshToken, accessExpiresAtMs, refreshExpiresAtMs }
-}
-
-function parseRemoteAccountNode(value: unknown): { nodeId: string; publicKey: string } | null {
-  if (!isRecordValue(value)) return null
-  const nodeId = stringValue(value.nodeId || value.node_id)
-  const publicKey = stringValue(value.publicKey || value.public_key)
-  return nodeId && publicKey ? { nodeId, publicKey } : null
-}
-
-function isRecordValue(value: unknown): value is Record<string, any> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function numberValue(value: unknown): number {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : 0
-}
-
-async function refreshRemoteGateway(): Promise<void> {
-  const status = (window as any).__LAMTOOLS_REMOTE_STATUS__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  if (!status) return
-  try {
-    remoteGatewayStatus.value = await status()
-    remoteGatewayError.value = ''
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  }
-}
-
-async function startRemoteGateway(): Promise<void> {
-  const start = (window as any).__LAMTOOLS_REMOTE_START__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  if (!start) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    remoteGatewayStatus.value = await start()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
-async function stopRemoteGateway(): Promise<void> {
-  const stop = (window as any).__LAMTOOLS_REMOTE_STOP__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-  if (!stop) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    remoteGatewayStatus.value = await stop()
-    remotePairing.value = null
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
-async function createRemotePairing(): Promise<void> {
-  const create = (window as any).__LAMTOOLS_REMOTE_PAIRING_CREATE__ as (() => Promise<MobileControlPairing>) | undefined
-  if (!create) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    if (!remoteGatewayStatus.value?.enabled) {
-      const start = (window as any).__LAMTOOLS_REMOTE_START__ as (() => Promise<MobileControlGatewayStatus>) | undefined
-      if (!start) throw new Error(t("手机控制命令将在桌面 Tauri 运行时启用"))
-      remoteGatewayStatus.value = await start()
-      if (!remoteGatewayStatus.value?.enabled) throw new Error(t("手机控制未能启动"))
-    }
-    remotePairing.value = await create()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
-async function revokeRemoteDevice(deviceId: string): Promise<void> {
-  const revoke = (window as any).__LAMTOOLS_REMOTE_REVOKE__ as ((id: string) => Promise<boolean>) | undefined
-  if (!revoke) return
-  remoteGatewayLoading.value = true
-  remoteGatewayError.value = ''
-  try {
-    await revoke(deviceId)
-    await refreshRemoteGateway()
-  } catch (error) {
-    remoteGatewayError.value = messageFromError(error)
-  } finally {
-    remoteGatewayLoading.value = false
-  }
-}
-
 // Ctrl+K 全局搜索：与侧边栏「搜索」按钮一样切 showSearch（同一 SearchShell 入口）。
 // 打开时避免触发浏览器/输入框插件快捷键（旧 SessionSearchDialog 已并入 SearchShell）。
 // Ctrl+N / Ctrl+O / Ctrl+B / Ctrl+J 是搜索弹窗里列出的那四条，标签写出来了就得真的能按。
@@ -4017,7 +3679,7 @@ const {
 } = updateState
 
 /**
- * 更新入口住在左侧竖栏（账号上方那一枚圆角图标），所以这里只准备它的
+ * 更新入口住在左侧竖栏（远程连接上方那一枚圆角图标），所以这里只准备它的
  * 说明文字与动作：同一个状态在竖栏里没有多余的地方写句子，全部收进 title；
  * 具体流程仍旧是设置里那张卡片的同一套下载/安装调用。
  */
@@ -4278,27 +3940,12 @@ function openSettings(section?: string): void {
   requestSettingsNavigation(() => {
     settingsSection.value = section
     fullAreaView.value = fullAreaView.value === 'settings' ? null : 'settings'
-    void refreshRemoteGateway()
-    void refreshRemoteAccount()
   })
 }
 
-/** Rail account entry: show the account state, and open settings on it. */
-const accountLabel = computed(() => {
-  const username = remoteAccountStatus.value?.username?.trim()
-  return username || t("登录 / 账号")
-})
-
-/** The account screen is its own surface; the settings section keeps the forms. */
-
+// 竖栏最后那一枚：远程连接是独立整版界面，不再有账号登录。
 function openAccount(): void {
   openFullArea('account')
-  void refreshRemoteAccount()
-}
-
-function openAccountSettings(): void {
-  closeFullArea()
-  openSettings('mobile-control')
 }
 
 function openSearch(): void {
@@ -4599,25 +4246,19 @@ function handleStudyOpenSearch(): void {
 
 // user:“将大的前端文件拆分成小块”+(主应用只把共享状态交给页面适配器)。
 const pageBindings = useCorePageBindings({
-  activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading,
-  agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef,
-  availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform,
-  contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider,
-  createRemotePairing, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup,
-  deleteProvider, density, effectiveAccountDevices, effectiveAccountError, effectiveAccountLoading,
-  effectiveAccountStatus, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit,
-  lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, logoutEffectiveAccount,
-  modelCatalogView, modelGroups, openAccountSettings, openFileFromSearch, openPluginsFromSearch,
-  openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading,
-  projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
-  refreshAgentsContent, refreshRemoteAccount, remoteAccountIdentity, remoteAccountLoading, remoteGatewayAvailable,
-  remoteGatewayError, remoteGatewayLoading, remoteGatewayStatus, remotePairing, renameProject,
-  reopenOnboarding, requestConfigOperation, revokeRemoteDevice, saveAgents, searchCommands,
-  selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers,
-  settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway, superagentHeading,
-  submitEffectiveAccount, theme, themeMode, themeSchedule, transport,
-  uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
-  updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles,
+  activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving,
+  allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders,
+  closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup,
+  createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup,
+  deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit,
+  lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups,
+  openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError,
+  projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
+  refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands,
+  selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef,
+  settingsSection, startPlanFromLibrary, superagentHeading, theme, themeMode, themeSchedule,
+  transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
+  updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles
 })
 
 defineExpose({
@@ -4665,8 +4306,6 @@ onMounted(() => {
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
   void loadInitialData().then(() => checkOnboarding())
-  void refreshRemoteGateway()
-  void refreshRemoteAccount()
   // External config edits and model substitutions must reach the user even
   // when no settings surface is open.
   startConfigNoticePolling()
@@ -4753,7 +4392,7 @@ onUnmounted(() => {
 }
 
 /* ── 运行状态提示条（fixed 在标题栏下方，36px = --titlebar-offset）──
-   新版本不再走这里：它只在左侧竖栏的账号上方出现（见 AppRail）。这条只留给
+   新版本不再走这里：它只在左侧竖栏的远程连接上方出现（见 AppRail）。这条只留给
    后端崩溃这类必须横跨整个窗口说的状态。 */
 .core-status-banner {
   position: fixed;

@@ -22,17 +22,12 @@ export function useCorePageBindings(context: {
   createModelGroup: any
   createModelWithProvider: any
   createProvider: any
-  createRemotePairing: any
   currentWorkRoot: any
   defaultPermissionPreset: any
   deleteModel: any
   deleteModelGroup: any
   deleteProvider: any
   density: any
-  effectiveAccountDevices: any
-  effectiveAccountError: any
-  effectiveAccountLoading: any
-  effectiveAccountStatus: any
   effectiveThemeMode: any
   handleCapabilitiesChanged: any
   jumpToSearchedMessage: any
@@ -41,10 +36,8 @@ export function useCorePageBindings(context: {
   libraryHeading: any
   libraryRef: any
   libraryRefreshTick: any
-  logoutEffectiveAccount: any
   modelCatalogView: any
   modelGroups: any
-  openAccountSettings: any
   openFileFromSearch: any
   openPluginsFromSearch: any
   openSessionFromSearch: any
@@ -58,18 +51,9 @@ export function useCorePageBindings(context: {
   projectSettingsSection: any
   projectSettingsSessionId: any
   refreshAgentsContent: any
-  refreshRemoteAccount: any
-  remoteAccountIdentity: any
-  remoteAccountLoading: any
-  remoteGatewayAvailable: any
-  remoteGatewayError: any
-  remoteGatewayLoading: any
-  remoteGatewayStatus: any
-  remotePairing: any
   renameProject: any
   reopenOnboarding: any
   requestConfigOperation: any
-  revokeRemoteDevice: any
   saveAgents: any
   searchCommands: any
   selectedProject: any
@@ -80,10 +64,7 @@ export function useCorePageBindings(context: {
   settingsRef: any
   settingsSection: any
   startPlanFromLibrary: any
-  startRemoteGateway: any
-  stopRemoteGateway: any
   superagentHeading: any
-  submitEffectiveAccount: any
   theme: any
   themeMode: any
   themeSchedule: any
@@ -99,7 +80,7 @@ export function useCorePageBindings(context: {
   updateState: any
   uploadArtifactFiles: any
 }) {
-  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, createRemotePairing, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveAccountDevices, effectiveAccountError, effectiveAccountLoading, effectiveAccountStatus, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, logoutEffectiveAccount, modelCatalogView, modelGroups, openAccountSettings, openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, refreshRemoteAccount, remoteAccountIdentity, remoteAccountLoading, remoteGatewayAvailable, remoteGatewayError, remoteGatewayLoading, remoteGatewayStatus, remotePairing, renameProject, reopenOnboarding, requestConfigOperation, revokeRemoteDevice, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, startRemoteGateway, stopRemoteGateway, superagentHeading, submitEffectiveAccount, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
+  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups, openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, superagentHeading, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
   return computed<Record<string, Record<string, any>>>(() => ({
   superagent: {
     'class': 'full-area-view',
@@ -174,15 +155,6 @@ export function useCorePageBindings(context: {
     'commandShellPlatform': unref(commandShellPlatform),
     'requestRpc': unref(requestConfigOperation),
     'updateState': unref(updateState),
-    'remoteGatewayStatus': unref(remoteGatewayStatus),
-    'remotePairing': unref(remotePairing),
-    'remoteGatewayLoading': unref(remoteGatewayLoading),
-    'remoteGatewayError': effectiveAccountError.value || remoteGatewayError.value,
-    'remoteGatewayAvailable': unref(remoteGatewayAvailable),
-    'remoteAccountStatus': unref(effectiveAccountStatus),
-    'remoteAccountIdentity': unref(remoteAccountIdentity),
-    'remoteAccountLoading': unref(effectiveAccountLoading),
-    'remoteAccountDevices': unref(effectiveAccountDevices),
     'onClose': unref(closeFullArea),
     'onSectionChange': ($event: any) => { settingsSection.value = $event },
     'onUpdate:density': uiPreferences.setDensity,
@@ -218,12 +190,6 @@ export function useCorePageBindings(context: {
     'onDeleteModelGroup': unref(deleteModelGroup),
     'onSetModelGroupMembers': unref(setModelGroupMembers),
     'onCreateModelWithProvider': unref(createModelWithProvider),
-    'onRemoteGatewayStart': unref(startRemoteGateway),
-    'onRemoteGatewayStop': unref(stopRemoteGateway),
-    'onRemotePairingCreate': unref(createRemotePairing),
-    'onRemoteDeviceRevoke': unref(revokeRemoteDevice),
-    'onRemoteAccountSubmit': unref(submitEffectiveAccount),
-    'onRemoteAccountLogout': unref(logoutEffectiveAccount),
     'onReopenOnboarding': unref(reopenOnboarding)
   },
   plugins: {
@@ -241,19 +207,10 @@ export function useCorePageBindings(context: {
   },
   account: {
     'class': 'full-area-view',
-    // AccountShell hands this to RemoteConnectionPanel; without it the phone falls back
-    // to the desktop branch and loses the scan button.
+    // RemoteConnectionPanel 靠它区分「出码 / 扫码」；缺了手机就落回桌面分支、没有扫码键。
     'appRuntime': appRuntime,
     'bandActions': appRuntime.platform !== 'mobile',
-    'accountStatus': unref(effectiveAccountStatus),
-    'devices': unref(effectiveAccountDevices),
-    'loading': unref(remoteAccountLoading),
-    'error': unref(remoteGatewayError),
-    'theme': unref(theme),
-    'onLogout': unref(logoutEffectiveAccount),
-    'onOpenSettings': unref(openAccountSettings),
-    'onRefresh': unref(refreshRemoteAccount),
-    'onClose': unref(closeFullArea)
+    'theme': unref(theme)
   },
   project: {
     ref: (instance: unknown) => { projectSettingsRef.value = instance as typeof projectSettingsRef.value },

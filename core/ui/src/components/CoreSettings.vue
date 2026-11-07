@@ -548,25 +548,6 @@
         </div>
       </section>
 
-      <MobileControlPanel
-        v-if="activeSection === 'mobile-control'"
-        :account-status="remoteAccountStatus"
-        :account-identity="remoteAccountIdentity"
-        :account-loading="remoteAccountLoading"
-        :account-devices="remoteAccountDevices"
-        :status="remoteGatewayStatus"
-        :pairing="remotePairing"
-        :loading="remoteGatewayLoading"
-        :error="remoteGatewayError"
-        :available="remoteGatewayAvailable"
-        @gateway-start="$emit('remote-gateway-start')"
-        @gateway-stop="$emit('remote-gateway-stop')"
-        @pairing-create="$emit('remote-pairing-create')"
-        @revoke="(deviceId) => $emit('remote-device-revoke', deviceId)"
-        @account-submit="(payload) => $emit('remote-account-submit', payload)"
-        @account-logout="$emit('remote-account-logout')"
-      />
-
       <section v-if="activeSection === 'agents'" class="settings-panel">
         <header class="settings-title">
           <h1>{{ t("上下文") }}</h1>
@@ -1101,14 +1082,6 @@ import {
 } from '@/core-app/overlayAction.ts'
 import CorePetEditor from '@/components/CorePetEditor.vue'
 import CoreLoadToolsEditor from '@/components/CoreLoadToolsEditor.vue'
-import MobileControlPanel, {
-  type MobileControlAccountDevice,
-  type MobileControlAccountPayload,
-  type MobileControlAccountStatus,
-  type MobileControlGatewayStatus,
-  type MobileControlIdentity,
-  type MobileControlPairing,
-} from '@/components/MobileControlPanel.vue'
 import UiSelect from '@/components/UiSelect.vue'
 import CoreModelCatalogViewToggle from '@/components/CoreModelCatalogViewToggle.vue'
 import SettingsDraftDialog from '@/components/SettingsDraftDialog.vue'
@@ -1210,15 +1183,6 @@ const props = withDefaults(defineProps<{
   /** Await the host's existing persistence/revision handling before closing. */
   persistCatalog?: (operation: SettingsCatalogMutation, payload: Record<string, unknown>) => Promise<void>
   updateState?: CoreUpdateState
-  remoteGatewayStatus?: MobileControlGatewayStatus | null
-  remotePairing?: MobileControlPairing | null
-  remoteGatewayLoading?: boolean
-  remoteGatewayError?: string
-  remoteGatewayAvailable?: boolean
-  remoteAccountStatus?: MobileControlAccountStatus | null
-  remoteAccountIdentity?: MobileControlIdentity | null
-  remoteAccountLoading?: boolean
-  remoteAccountDevices?: MobileControlAccountDevice[]
 }>(), {
   modelGroups: () => [],
   catalogView: 'provider',
@@ -1264,12 +1228,6 @@ const emit = defineEmits<{
   'delete-model-group': [groupId: string]
   'set-model-group-members': [payload: { group_id: string; model_ids: string[] }]
   'create-model-with-provider': [payload: Record<string, unknown>]
-  'remote-gateway-start': []
-  'remote-gateway-stop': []
-  'remote-pairing-create': []
-  'remote-device-revoke': [deviceId: string]
-  'remote-account-submit': [payload: MobileControlAccountPayload]
-  'remote-account-logout': []
 }>()
 
 const sections = CORE_SETTINGS_SECTIONS

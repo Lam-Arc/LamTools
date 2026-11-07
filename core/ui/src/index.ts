@@ -110,7 +110,6 @@ export { default as SettingsShell } from '@/components/SettingsShell.vue';
 export { default as ThemeEditor } from '@/components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from '@/components/ThemeAreaEditor.vue';
 export { default as CoreSettings } from '@/components/CoreSettings.vue';
-export { default as MobileControlPanel } from '@/components/MobileControlPanel.vue';
 export { default as PluginsShell } from '@/components/PluginsShell.vue';
 export { default as PluginModeHost } from '@/components/PluginModeHost.vue';
 export { default as CoreProjectSettings } from '@/components/CoreProjectSettings.vue';
@@ -218,16 +217,6 @@ export type {
   CoreSettingsProvider,
   CoreSettingsProviderPayload,
 } from '@/components/CoreSettings.vue';
-export type {
-  MobileControlAccountContext,
-  MobileControlAccountDevice,
-  MobileControlAccountPayload,
-  MobileControlAccountStatus,
-  MobileControlGatewayStatus,
-  MobileControlPairing,
-  MobileControlTrustedDevice,
-} from '@/components/MobileControlPanel.vue';
-
 // Helpers
 export {
   createSessionMapper,

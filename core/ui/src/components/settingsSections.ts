@@ -93,7 +93,6 @@ export const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'appearance', get label() { return t("界面") }, icon: 'palette' },
   { id: 'loadtools', get label() { return t("工具模式") }, icon: 'list-checks' },
   { id: 'permissions', get label() { return t("权限") }, icon: 'lock' },
-  { id: 'mobile-control', get label() { return t("手机控制") }, icon: 'smartphone' },
   { id: 'agents', get label() { return t("上下文") }, icon: 'file-code' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
   { id: 'about', get label() { return t("关于与更新") }, icon: 'info' },
