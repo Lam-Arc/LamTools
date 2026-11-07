@@ -9,7 +9,6 @@ import SearchShell from '../src/components/SearchShell.vue'
 
 const read = (relativePath: string): string => readFileSync(resolve(import.meta.dirname, '..', relativePath), 'utf8')
 const appSource = read('src/app/LamToolsApp.vue')
-const topBarSource = read('src/components/MobileTopBar.vue')
 const shellCss = read('src/styles/layout.css')
 
 /**
@@ -18,19 +17,20 @@ const shellCss = read('src/styles/layout.css')
  */
 describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
   it('switches one full-area view at a time and hides the composer while open', () => {
-    expect(appSource).toMatch(/type FullAreaViewId = 'library' \| 'search' \| 'arrange' \| 'settings' \| 'plugins' \| 'account' \| 'project'/)
+    expect(appSource).toMatch(/type FullAreaViewId = 'library' \| 'search' \| 'superagent' \| 'arrange' \| 'settings' \| 'plugins' \| 'account' \| 'project' \| 'plugin'/)
     expect(appSource).toMatch(/const fullAreaView = ref<FullAreaViewId \| null>\(null\)/)
     expect(appSource).toMatch(/function openFullArea\(view: FullAreaViewId\): void \{[\s\S]*?fullAreaView\.value = fullAreaView\.value === view \? null : view/)
     expect(appSource).toMatch(/function closeFullArea\(\): void \{\s*requestSettingsNavigation\(\(\) => \{ fullAreaView\.value = null \}\)/)
     expect(appSource).toMatch(/function requestSettingsNavigation[\s\S]*?showSettings\.value && settingsRef\.value[\s\S]*?settingsRef\.value\.requestNavigation\(proceed\)[\s\S]*?showProjectView\.value && projectSettingsRef\.value[\s\S]*?projectSettingsRef\.value\.requestNavigation\(proceed\)/)
 
-    // The views mount inside #main-content, mutually exclusive by the ref.
-    expect(appSource).toMatch(/<template v-if="fullAreaView">[\s\S]*?<CoreArrangeManager[\s\S]*?v-if="showArrange"[\s\S]*?<SearchShell[\s\S]*?v-else-if="showSearch"[\s\S]*?<LibraryHomeView[\s\S]*?v-else-if="showLibrary"[\s\S]*?<CoreSettings[\s\S]*?v-else-if="showSettings"[\s\S]*?<PluginsShell[\s\S]*?v-else-if="showPlugins"[\s\S]*?<AccountShell[\s\S]*?v-else-if="showAccount"/)
-    // Each one's back path closes the full-area state.
-    expect(appSource).toMatch(/<CoreArrangeManager[\s\S]*?@back="closeFullArea"/)
-    expect(appSource).toMatch(/<SearchShell[\s\S]*?@close="closeFullArea"/)
-    // 资料库是一个入口三个分区（资料 / 记忆 / 方案），壳视图承担整版机制与返回路径。
-    expect(appSource).toMatch(/<LibraryHomeView[\s\S]*?v-else-if="showLibrary"[\s\S]*?@back="closeFullArea"/)
+    // 所有整版页面共用一层路由壳：一个 ref 决定当前页，页面按 key 懒加载。
+    expect(appSource).toMatch(/<CoreAppPage v-else-if="fullAreaView" :page="fullAreaView" :bindings="pageBindings" \/>/)
+    const pageShell = read('src/components/CoreAppPage.vue')
+    for (const page of ['library', 'settings', 'superagent', 'arrange', 'search', 'plugins', 'account', 'project']) {
+      expect(pageShell, `CoreAppPage 少了 ${page} 页面`).toContain(`  ${page}: defineAsyncComponent(`)
+    }
+    // 返回路径由绑定统一下发：整版页面的回退都指向 closeFullArea。
+    expect(read('src/app/useCorePageBindings.ts')).toMatch(/'onBack': unref\(closeFullArea\)/)
 
     // A full-area view owns the area: the composer and plugin surface step aside.
     expect(appSource).toMatch(/shouldHideComposer = computed\(\(\) => Boolean\(fullAreaView\.value\) \|\|/)
@@ -45,13 +45,11 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
     expect(appSource).toMatch(/function onRailOpen\(view: AppRailView\): void \{[\s\S]*?closeFullArea\(\)[\s\S]*?openAccount\(\)[\s\S]*?openFullArea\(view\)/)
     expect(appSource).toMatch(/const railActiveView = computed<AppRailView>\(\(\) => \{/)
 
-    expect(appSource).toMatch(/data-mobile-footer-library @click="openLibrary"/)
+    expect(appSource).toMatch(/data-mobile-footer-library[\s\S]{0,240}?@click="openFromRail\(openLibrary\)"/)
     // 设置 / 插件 / 账号也走同一族整版界面。
     expect(appSource).toMatch(/function openSettings\(section\?: string\): void \{[\s\S]*?settingsRef\.value\?\.requestSection\(section\)[\s\S]*?requestSettingsNavigation\(\(\) => \{[\s\S]*?fullAreaView\.value = fullAreaView\.value === 'settings' \? null : 'settings'/)
     expect(appSource).toMatch(/function openPlugins\(section\?: string\): void \{[\s\S]*?openFullArea\('plugins'\)/)
     expect(appSource).toMatch(/function openAccount\(\): void \{[\s\S]*?openFullArea\('account'\)/)
-    expect(topBarSource).toMatch(/data-mobile-library-button @click="runAction\('open-library'\)"/)
-    expect(topBarSource).toMatch(/emit\('open-library'\)/)
   })
 
   it('imports every icon the rail and the dock render', () => {
@@ -75,15 +73,8 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
     const railImports = appRailSource.slice(0, appRailSource.indexOf('export type AppRailView'))
     const railEntryIcons = [...appRailSource.matchAll(/\{ id: '[a-z]+'[\s\S]*?icon: ([A-Z][A-Za-z0-9]*)/g)].map(match => match[1])
     expect(railEntryIcons).toEqual(expect.arrayContaining(['House', 'CalendarClock', 'BookOne', 'Receive', 'Settings']))
-    for (const icon of [...railEntryIcons, 'UserRound']) {
+    for (const icon of [...railEntryIcons, 'MonitorSmartphone']) {
       expect(railImports.includes(icon), `${icon} is used in AppRail but not imported`).toBe(true)
-    }
-
-    const topBarLucide = topBarSource.slice(0, topBarSource.indexOf("} from 'lucide-vue-next'"))
-    const dockIcons = [...topBarSource.matchAll(/<([A-Z][A-Za-z0-9]*)\s+:size=/g)].map(match => match[1])
-    expect(dockIcons).toEqual(expect.arrayContaining(['Search', 'Library']))
-    for (const icon of dockIcons) {
-      expect(topBarLucide.includes(icon), `${icon} is rendered in the dock but not imported`).toBe(true)
     }
   })
 
@@ -99,9 +90,13 @@ describe('full-area views (搜索 / 资料库 / 定时任务)', () => {
     expect(appSource).toMatch(/case 'arrange':[\s\S]*?get title\(\) \{ return t\("定时任务"\)/)
 
     // 桌面不再在界面内部重复标题与返回键（手机没有顶部条，保留内部的）。
-    expect(read('src/components/CoreArrangeManager.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.arrange-mobile-head/)
-    expect(read('src/components/SearchShell.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.search-back/)
-    expect(read('src/components/AccountShell.vue')).toMatch(/@media \(min-width: 641px\) \{[\s\S]*?\.account-back/)
+    expect(read('src/components/CoreArrangeManager.vue')).toMatch(/@container app-page \(min-width: 641px\) \{[\s\S]*?\.arrange-mobile-head/)
+    expect(read('src/components/SearchShell.vue')).toMatch(/@container app-page \(min-width: 641px\) \{[\s\S]*?\.search-back/)
+    // 远程连接页不再自带标题与返回键：整版页面的顶部条统一提供，页面内只放面板。
+    const accountSource = read('src/components/AccountShell.vue')
+    expect(accountSource).toContain('RemoteConnectionPanel')
+    expect(accountSource).not.toMatch(/account-back|account-head/)
+    expect(appSource).toMatch(/case 'account':[\s\S]*?get title\(\) \{ return t\("远程连接"\)/)
     expect(read('src/components/PlanLibraryView.vue')).toContain('FullAreaActions')
   })
 
@@ -210,10 +205,10 @@ describe('settings/plugins/project borrow the session drawer as their left nav',
     expect(projectSource).not.toContain('useOutsidePointerDismiss')
     expect(projectSource).toContain('class="full-area-column full-area-surface"')
     // 入口变成整版界面：不再有独立的浮窗开关，打开即切走整个界面。
-    expect(appSource).toMatch(/v-else-if="showProjectView && selectedProject && !activePluginMode"/)
+    expect(read('src/components/CoreAppPage.vue')).toContain("project: defineAsyncComponent(() => import('./CoreProjectSettings.vue'))")
     expect(appSource).not.toContain('showProjectSettings')
     expect(appSource).toMatch(/function openProjectActions\(projectId: string\) \{\s*requestSettingsNavigation\(\(\) => \{[\s\S]*?selectedProjectId\.value = project\.id[\s\S]*?fullAreaView\.value = 'project'/)
     // 项目设置是聊天项目的内页：竖栏仍停在聊天区。
-    expect(appSource).toMatch(/view === 'search' \|\| view === 'project'\) return 'chat'/)
+    expect(appSource).toMatch(/view === 'project' \|\| view === 'plugin'\) return 'chat'/)
   })
 })

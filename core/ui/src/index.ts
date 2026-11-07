@@ -79,7 +79,6 @@ export { default as SessionSidebar } from '@/components/SessionSidebar.vue';
 export { default as ChatThread } from '@/components/ChatThread.vue';
 export { default as ComposerBar } from '@/components/ComposerBar.vue';
 export { default as CoreSendStopButton } from '@/components/CoreSendStopButton.vue';
-export { default as MobileTopBar } from '@/components/MobileTopBar.vue';
 export { default as CoreExecutionControls } from '@/components/CoreExecutionControls.vue';
 export { default as CoreRuntimeMenu } from '@/components/CoreRuntimeMenu.vue';
 export { default as CoreWorkspaceMenu } from '@/components/CoreWorkspaceMenu.vue';

@@ -55,12 +55,12 @@ describe('left rail entry arrangement', () => {
     expect(sidebarCss).toMatch(/\.sidebar-toolbar \{[\s\S]*?position: relative;/)
   })
 
-  it('moves the account and settings entries off the desktop footer', () => {
-    // 桌面页脚不再渲染：账号在竖栏底部，设置是竖栏里的一个图标。
-    expect(appSource).toContain(':show-sidebar-search-action="showMobileFooterFallback"')
-    expect(appSource).toContain(':show-sidebar-plugins-action="showMobileFooterFallback"')
-    expect(appSource).toContain(':show-sidebar-settings-action="showMobileFooterFallback"')
-    expect(appSource).toContain('const showSidebarFooter = computed(() => showMobileFooterFallback.value)')
+  it('moves the remote connection and settings entries off the desktop footer', () => {
+    // 桌面页脚不再渲染：远程连接在竖栏底部，设置是竖栏里的一个图标。
+    expect(appSource).toContain(':show-sidebar-search-action="false"')
+    expect(appSource).toContain(':show-sidebar-plugins-action="false"')
+    expect(appSource).toContain(':show-sidebar-settings-action="false"')
+    expect(appSource).toContain("const showSidebarFooter = computed(() => appRuntime.platform === 'mobile')")
     expect(appSource).not.toContain('class="drawer-footer-account"')
     const railSource = read('src/components/AppRail.vue')
     expect(railSource).toMatch(/data-rail-entry="account"[\s\S]*?@click="emit\('open', 'account'\)"/)
@@ -71,25 +71,25 @@ describe('left rail entry arrangement', () => {
     // 账号有自己的界面（用户共识：内容先少放），竖栏底部入口直接开它。
     expect(appSource).toMatch(/function onRailOpen\(view: AppRailView\): void \{[\s\S]*?if \(view === 'account'\) \{[\s\S]*?openAccount\(\)/)
     expect(appSource).toMatch(/function openAccount\(\): void \{\s*openFullArea\('account'\)/)
-    // 登录、注册、配对表单仍在设置里，由账号界面的链接过去。
-    expect(appSource).toMatch(/function openAccountSettings\(\): void \{[\s\S]*?openSettings\('mobile-control'\)/)
-    expect(appSource).toMatch(/<AccountShell[\s\S]*?:on-open-settings="openAccountSettings"/)
-    expect(appSource).toContain(':section="settingsSection"')
+    // 远程连接页自己就是整版页面，不再有「去设置里填账号表单」这类旧入口。
+    expect(appSource).not.toContain('openAccountSettings')
+    // 分区状态由绑定下发，页面自己不再接收 section prop。
+    expect(read('src/app/useCorePageBindings.ts')).toMatch(/'section': unref\(settingsSection\)/)
   })
 
   it('leaves the mobile fallback footer on its labelled rows', () => {
-    expect(appSource).toMatch(/class="drawer-footer-stack"[\s\S]*?data-mobile-footer-account[\s\S]*?data-mobile-footer-library[\s\S]*?data-mobile-footer-arrange/)
+    expect(appSource).toMatch(/class="drawer-footer-rail"[\s\S]*?data-mobile-footer-chat[\s\S]*?data-mobile-footer-arrange[\s\S]*?data-mobile-footer-library[\s\S]*?data-mobile-footer-remote[\s\S]*?openFromRail\(openAccount\)/)
     expect(shellCss).toMatch(/\.drawer-footer-stack \{[\s\S]*?flex: 1 1 100%;[\s\S]*?flex-direction: column;/)
   })
 
   it('opens settings on the requested section and falls back to the first one', async () => {
     const sections = [
       { id: 'models', label: '模型与供应商' },
-      { id: 'mobile-control', label: '手机控制' },
+      { id: 'appearance', label: '界面' },
     ]
-    const targeted = mount(SettingsShell, { props: { sections, initialSection: 'mobile-control' } })
+    const targeted = mount(SettingsShell, { props: { sections, initialSection: 'appearance' } })
     await targeted.vm.$nextTick()
-    expect(targeted.get('[data-settings-section="mobile-control"]').classes()).toContain('active')
+    expect(targeted.get('[data-settings-section="appearance"]').classes()).toContain('active')
 
     // 未知 id 不能把设置开到一个空白页。
     const unknown = mount(SettingsShell, { props: { sections, initialSection: 'nope' } })

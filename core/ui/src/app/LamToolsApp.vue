@@ -910,7 +910,6 @@ type RawModelGroup = {
 
 const props = defineProps<{
   runtime: LamToolsRuntime
-  mobileCommandDockAvailable?: boolean
   showPreviewTitleBar?: boolean
 }>()
 const emit = defineEmits<{
@@ -938,8 +937,8 @@ const appRuntime = props.runtime
 // Load the shared preference for desktop, mobile and the real-UI showcase.
 // An unavailable backend keeps the existing Simplified Chinese default.
 void loadUiLanguage(appRuntime.requestRpc).catch(() => undefined)
-const showMobileFooterFallback = computed(() => appRuntime.platform === 'mobile' && props.mobileCommandDockAvailable !== true)
-const showSidebarFooter = computed(() => showMobileFooterFallback.value)
+// 手机上侧栏底部那一排就是导航本体；桌面有最左竖栏，页脚不渲染。
+const showSidebarFooter = computed(() => appRuntime.platform === 'mobile')
 const commandShellPlatform = (() => {
   if (appRuntime.platform === 'mobile') return 'mobile' as const
   if (appRuntime.platform !== 'desktop') return 'web' as const
