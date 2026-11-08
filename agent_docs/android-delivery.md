@@ -6,12 +6,13 @@
 
 ## 交付物
 
-| 文件 | 用途 | 大小 |
-| --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 297 MB |
-| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB |
+| 文件 | 用途 | 大小 | 交付名（Downloads） |
+| --- | --- | --- | --- |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 297 MB | `02-sunday-m-arm64-debug.apk` |
+| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB | `02-sunday-m-x86_64-debug.apk` |
 
-校验和（2026-11-07 19:57 构建，含新首屏、相机方向与连接可靠性修复）：
+校验和（2026-11-07 19:57 构建，含新首屏、相机方向与连接可靠性修复；交付时文件名带
+`02-` 前缀，内容与这里列出的一致）：
 
 ```
 0d50e1418bc856b62b9cd1078579edd4d575ee716ebc581d68fa3b44241b25f9  sunday-m-arm64-debug.apk
