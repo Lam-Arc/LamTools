@@ -266,7 +266,7 @@ BOOT_DRAWABLE_XML = """<?xml version="1.0" encoding="utf-8"?>
 
 BOOT_COLORS_XML = """<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="sunday_boot_surface">#14161a</color>
+    <color name="sunday_boot_surface">#070912</color>
 </resources>
 """
 

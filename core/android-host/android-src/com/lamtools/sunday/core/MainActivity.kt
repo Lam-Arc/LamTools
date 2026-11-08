@@ -2,6 +2,8 @@ package com.lamtools.sunday.core
 
 import android.app.PictureInPictureParams
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -13,11 +15,15 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.Toast
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   companion object {
+    /** 与 index-android.html 的启动层底色一致，避免两段颜色对不上。 */
+    private const val BOOT_SURFACE = "#070912"
+
     private var alive: java.lang.ref.WeakReference<MainActivity>? = null
 
     /** The activity, for a bridge that needs a context: opening a file, mostly. */
@@ -75,7 +81,12 @@ class MainActivity : TauriActivity() {
     if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
       WebView.setWebContentsDebuggingEnabled(true)
     }
-    enableEdgeToEdge()
+    // 启动层是深色，状态栏图标必须是浅色才看得见；界面本身是浅色主题，画完之后会
+    // 自己再定一次，所以这里只负责第一屏。
+    enableEdgeToEdge(
+      statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+      navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+    )
     nativeSetLibraryDir(applicationInfo.nativeLibraryDir)
     nativeSetFilesDir(filesDir.absolutePath)
     // Touch the keystore bridge before Tauri starts. Its initialiser is what hands the
@@ -90,6 +101,9 @@ class MainActivity : TauriActivity() {
     // it tries to install.
     Thread({ RuntimeAssets.ensure(applicationContext) }, "sunday-runtime-assets").start()
     super.onCreate(savedInstanceState)
+    // user:“首屏启动的画面”+(WebView 在页面画出来之前会先铺一层白底，实测冷启动第 2 秒
+    // 整屏纯白；窗口背景和 WebView 自身的底色都压成同一个近黑色，这一帧就不存在了)。
+    paintBootSurface()
     // The file picker registers its result contract here, which has to happen before the
     // activity is started. Touching the object also runs its initialiser, which is what
     // hands the JavaVM to Rust.
@@ -249,6 +263,24 @@ class MainActivity : TauriActivity() {
   private fun resumeWebViewSoon() {
     val web = webView() ?: return
     web.postDelayed({ web.onResume() }, 350)
+  }
+
+  /** Keeps the window and the webview on the boot screen's own colour, never white. */
+  private fun paintBootSurface() {
+    val surface = try {
+      Color.parseColor(BOOT_SURFACE)
+    } catch (error: Throwable) {
+      return
+    }
+    try {
+      window?.setBackgroundDrawable(ColorDrawable(surface))
+    } catch (error: Throwable) {
+      Log.w("SundayBoot", "cannot paint the window background", error)
+    }
+    val paint = Runnable { webView()?.setBackgroundColor(surface) }
+    paint.run()
+    // wry attaches the webview during its own onCreate pass; the posted call catches it.
+    window?.decorView?.post(paint)
   }
 
   /** The only WebView in this window is the interface; wry puts it in the content view. */
