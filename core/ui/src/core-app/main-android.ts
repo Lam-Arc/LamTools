@@ -111,6 +111,28 @@ function clearStaleSplitState(): void {
   }
 }
 
+/**
+ * 给数据通道加一道闸。
+ *
+ * user:“进去的时候加载界面居然要加载 30 秒”“我定的要求是 5 秒以内”+(核心启动要几秒，
+ * 界面不该干等它：先把界面挂出来，请求在这里排队，等核心能回答的那一刻再发出去)。
+ */
+function gateTransport<T extends object>(base: T, ready: Promise<unknown>): T {
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop === 'request') {
+        return async (...args: unknown[]) => {
+          await ready.catch(() => undefined)
+          const call = Reflect.get(target, prop) as (...a: unknown[]) => Promise<unknown>
+          return call.apply(target, args)
+        }
+      }
+      const value = Reflect.get(target, prop, receiver)
+      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value
+    },
+  })
+}
+
 /** The wait before the first paint, reported honestly.
  *
  *  user:“从点击图标到进入工作台，全程有反馈：原生窗口底色先挡住白闪，随后 HTML 启动层
@@ -139,23 +161,21 @@ async function boot(): Promise<void> {
   // 拨号和启动核心同时进行：连电脑要花的时间藏在核心启动里，不额外占用首屏。
   // user:“从点击这个应用到我进界面，我定的要求是 5 秒以内”+(所以这两件事不能排队)。
   const remoteAttempt = ensureRemote(6000)
+  // 启动核心不再挡在挂载前面：核心慢几秒，界面就先出来，数据等它。
+  const coreReady = invoke('core_start')
+  coreReady.catch(() => undefined)
 
-  try {
-    await invoke('core_start')
-  } catch (error) {
-    // user:“失败路径保留：core_start 抛错时启动层显示错误与「重试」按钮，不要落在空白”
-    // +(所以这里不 renderBreak 到 #app，而是把启动层本身留在原地当错误页)。
-    screen.fail(`核心启动失败。\n\n${describeError(error)}`)
-    return
-  }
 
   try {
     screen.phase('ready', '正在加载界面…')
 
     // 已经连着电脑就整条走隧道；连着的时候上面那次拨号已经成功；连不上就从这里拿到
     // null，界面用本机 Core，不再等第二次。
-    const peer = await remoteAttempt
-    const activeTransport = peer === null ? transport : createRemoteTransport()
+    const peer = await Promise.race([
+      remoteAttempt,
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2500)),
+    ])
+    const activeTransport = peer === null ? gateTransport(transport, coreReady) : createRemoteTransport()
     if (peer !== null) capabilities.remote = { peer }
     const runtime = createLamToolsRuntime({
       transport: activeTransport,
@@ -215,6 +235,16 @@ ${message}`)
       reportPaintError(error instanceof Error ? error.message : String(error))
     }
     app.mount('#app')
+
+    // 核心要是启动失败，启动层还在就当场说明；已经淡出就在控制台留下原因，
+    // 界面上的请求会各自报出自己拿到的那条错误。
+    coreReady.catch((error) => {
+      const message = `核心启动失败。
+
+${describeError(error)}`
+      if (screen.visible) screen.fail(message)
+      else console.error('[sunday] boot:', message)
+    })
 
 
     // Not awaited: the boot layer leaves when the interface has painted, and nothing
