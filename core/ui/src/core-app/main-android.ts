@@ -96,6 +96,42 @@ function gateTransport<T extends object>(base: T, ready: Promise<unknown>): T {
   })
 }
 
+/** 挂载前连通道，允许重试。
+ *
+ *  user:“类似的时序问题不要再犯，检查”+(以前只连一次，一次失败整层报「界面启动失败」
+ *  退出；事件通道在 Activity 重建后可能还没就绪，等一会儿再连就好了)。 */
+async function connectWithRetry(target: { connect(): Promise<void> }, attempts = 5): Promise<void> {
+  // user:“类似的时序问题不要再犯，检查”+(以前挂载前只连一次，失败就整层报「界面启动
+  // 失败」退出；事件通道在 Activity 重建后可能还没就绪，等一会儿再连就好了)。
+  let lastError: unknown
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      await target.connect()
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => window.setTimeout(resolve, 300 * (index + 1)))
+    }
+  }
+  throw lastError
+}
+
+/** 核心启动也允许重来：宿主对已经在跑的 guest 是直接复用的，所以重入是安全的。 */
+function startCoreOnce(attempts = 3): Promise<unknown> {
+  let attempt = 0
+  const run = async (): Promise<unknown> => {
+    attempt += 1
+    try {
+      return await invoke('core_start')
+    } catch (error) {
+      if (attempt >= attempts) throw error
+      await new Promise((resolve) => window.setTimeout(resolve, 1200 * attempt))
+      return run()
+    }
+  }
+  return run()
+}
+
 /** The wait before the first paint, reported honestly.
  *
  *  user:“从点击图标到进入工作台，全程有反馈：原生窗口底色先挡住白闪，随后 HTML 启动层
@@ -126,7 +162,7 @@ async function boot(): Promise<void> {
   // 后台拨号不占界面时间，预算给足；连上了再重开一次切过去。
   const remoteAttempt = ensureRemote(20_000)
   // 启动核心不再挡在挂载前面：核心慢几秒，界面就先出来，数据等它。
-  const coreReady = invoke('core_start')
+  const coreReady = startCoreOnce()
   coreReady.catch(() => undefined)
 
 
@@ -159,7 +195,7 @@ async function boot(): Promise<void> {
       platform: 'mobile',
       capabilities,
     })
-    await activeTransport.connect()
+    await connectWithRetry(activeTransport)
     // The window is edge to edge, so nothing resizes when the keyboard opens and nothing
     // reserves the status bar. The host publishes both heights; the shared layout already
     // reads these two variables, so there is no second layout engine here.

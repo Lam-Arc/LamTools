@@ -17,6 +17,7 @@
     <CoreModelThinkingMenu
       :model-value="modelValue"
       :model-options="modelOptions"
+      :model-loading="modelLoading"
       :catalog-view="catalogView"
       :thinking-mode="thinkingMode"
       :thinking-mode-options="thinkingModeOptions"
@@ -50,6 +51,8 @@ import CoreRuntimeMenu from '@/components/CoreRuntimeMenu.vue'
 const props = withDefaults(defineProps<{
   modelValue?: string
   modelOptions?: CoreSelectOption[]
+  /** 模型清单还没读到过：菜单要区分「正在加载」和「真的没有」。 */
+  modelLoading?: boolean
   catalogView?: CoreModelCatalogView
   thinkingMode: CoreThinkingMode | string
   thinkingModeOptions: CoreThinkingModeOption[]
@@ -67,6 +70,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   modelValue: '',
   modelOptions: () => [],
+  modelLoading: false,
   catalogView: 'provider',
   shallowThinkingEnabled: false,
   activeMode: '',

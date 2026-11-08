@@ -578,6 +578,7 @@
         :runtime-mode-label="runtimeModeLabel"
         :permission-preset="permissionPreset"
         :model-options="modelOptions"
+        :model-loading="modelsPending"
         :catalog-view="modelCatalogView"
         :thinking-mode-options="thinkingModeOptions"
         shallow-label="Shallow"
@@ -921,8 +922,9 @@ function onLeftDrawerChange(value: boolean): void {
 }
 const appRuntime = props.runtime
 // Load the shared preference for desktop, mobile and the real-UI showcase.
-// An unavailable backend keeps the existing Simplified Chinese default.
-void loadUiLanguage(appRuntime.requestRpc).catch(() => undefined)
+// user:“类似的时序问题不要再犯，检查”+(语言偏好也只读一次就定终身：通道没就绪那一次
+// 失败，界面语言就再也回不来。重试几次，仍然失败才保持现有的简体中文默认)。
+void withRetry(() => loadUiLanguage(appRuntime.requestRpc), 3).catch(() => undefined)
 // 手机上侧栏底部那一排就是导航本体；桌面有最左竖栏，页脚不渲染。
 const showSidebarFooter = computed(() => appRuntime.platform === 'mobile')
 const commandShellPlatform = (() => {
@@ -1523,6 +1525,23 @@ const defaultModelId = ref('')
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
 const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
 const allowAccessOutsideWorkdir = ref(false)
+/**
+ * 每块启动数据是否真的读到过。
+ *
+ * user:“类似的时序问题不要再犯，检查”+(「读到空」和「还没读到」以前是同一副面孔，
+ * 于是一次时序失败看起来就像数据被人删了：界面写着「暂无可用模型」「还没有项目」。
+ * 这里按块记账，没读到的交给后台补齐计划继续补，读到了才允许显示空状态)。
+ */
+const startupLoad = ref({
+  projects: false,
+  sessions: false,
+  models: false,
+  modelGroups: false,
+  permission: false,
+  pluginModes: false,
+})
+/** 模型还没读到过：菜单该说「正在加载」，而不是断言「暂无」。 */
+const modelsPending = computed(() => !startupLoad.value.models)
 const { pendingAttachments, attachmentInputItems, hasBlockingFailure, addProcessing, addUploaded, markFailed, removeAttachment, clearAttachments, removeSubmittedAttachments, setSession: setAttachmentSession } = usePendingAttachments()
 watch(attachmentInputItems, (items) => {
   workbench.attachments.value = items
@@ -2002,7 +2021,9 @@ workbench.setComposerCallbacks({
       composerErrorText.value = t('附件尚未准备好，请重试或移除失败的引用')
       return false
     }
-    if (!activePluginMode.value && availableModels.value.length === 0) {
+    // user:“我这里显示的是暂无可用模型”+(模型还没读到过就拦着不让发，等于把一次时序
+    // 失败升级成「发不出消息」。只有确认读到「没有模型」才拦，没读到就放行让核心回答)。
+    if (!activePluginMode.value && startupLoad.value.models && availableModels.value.length === 0) {
       showToast('error', t('请先添加供应商/模型（设置 → 模型与供应商）'), 8000)
       return false
     }
@@ -2262,28 +2283,110 @@ async function handleQueuedInputEdit(item: CoreQueuedInput): Promise<void> {
   focusComposer(composerText.value.length)
 }
 
+/**
+ * 启动阶段的读取都可能撞上「通道还没就绪」。
+ *
+ * user:“类似的时序问题不要再犯，检查”+(以前每处都是失败一次就把状态清成空、永不重试，
+ * 于是远程模式下界面永远显示「暂无可用模型」「还没有项目」。统一在这里退避重试：
+ * 一次失败只代表这一刻还没准备好，不代表没有数据)。
+ */
+async function withRetry<T>(run: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastError: unknown
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      return await run()
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => window.setTimeout(resolve, 700 * (index + 1)))
+    }
+  }
+  throw lastError
+}
+
+/**
+ * 启动数据补齐：重试排完还没到的，不把「暂时没有」当成「永远没有」。
+ *
+ * user:“类似的时序问题不要再犯，检查”+(远程模式下通道就绪比界面挂载晚，退避重试也
+ * 可能全部落空；那时界面就永远空着，用户只能重开应用。这里给每块没读到的数据排一份
+ * 后台补齐计划：间隔越来越长，读到就不再碰；回到前台再给一次机会)。
+ */
+const STARTUP_RECONCILE_DELAYS = [1500, 3000, 5000, 8000, 13_000, 21_000]
+let startupReconcileTimer: ReturnType<typeof setTimeout> | null = null
+let startupReconcileAttempt = 0
+let startupReconcileRunning = false
+
+type StartupSlice = keyof typeof startupLoad.value
+
+function pendingStartupLoads(): StartupSlice[] {
+  return (Object.keys(startupLoad.value) as StartupSlice[])
+    .filter((key) => !startupLoad.value[key])
+}
+
+function scheduleStartupReconcile(immediate = false): void {
+  if (startupReconcileRunning) return
+  if (pendingStartupLoads().length === 0) return
+  if (startupReconcileTimer !== null) return
+  if (!immediate && startupReconcileAttempt >= STARTUP_RECONCILE_DELAYS.length) return
+  const delay = immediate ? 0 : STARTUP_RECONCILE_DELAYS[startupReconcileAttempt]
+  if (!immediate) startupReconcileAttempt += 1
+  startupReconcileTimer = window.setTimeout(() => {
+    startupReconcileTimer = null
+    void reconcileStartupData()
+  }, delay)
+}
+
+async function reconcileStartupData(): Promise<void> {
+  if (startupReconcileRunning) return
+  const pending = pendingStartupLoads()
+  if (pending.length === 0) return
+  startupReconcileRunning = true
+  try {
+    // 每块只试一次：节奏由上面的计划控制，不让一次补齐变成一串串行等待。
+    await Promise.allSettled(pending.map((key) => {
+      if (key === 'projects') return withRetry(refreshProjects, 1)
+      if (key === 'sessions') return withRetry(refreshSessions, 1)
+      if (key === 'models') return withRetry(loadModelOptions, 1)
+      if (key === 'modelGroups') return withRetry(loadModelGroups, 1)
+      if (key === 'permission') return withRetry(loadPermissionMode, 1)
+      return withRetry(refreshPluginModes, 1)
+    }))
+    if (startupLoad.value.projects) loadError.value = null
+    // 首屏读到空才没选会话；数据后面才到时补选一次，界面不能停在空会话上。
+    if (!activeSessionId.value && !selectedProjectId.value) {
+      if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
+      else if (projects.value[0]) selectedProjectId.value = projects.value[0].id
+    }
+  } finally {
+    startupReconcileRunning = false
+  }
+  scheduleStartupReconcile()
+}
+
 async function loadInitialData() {
   try {
     loadError.value = null
     // The project list is what the start screen is built from; a failure in model
     // discovery or theme preferences must not leave it empty. On a phone that was
     // exactly the symptom: a 200 with a full list, and a screen saying there is none.
-    await refreshProjects().catch((error) => setLoadError(
+    await withRetry(refreshProjects).catch((error) => setLoadError(
       error instanceof Error ? error.message : String(error),
     ))
-    await Promise.all([
-      loadModelOptions(),
-      loadModelGroups(),
+    // 每一步各自重试，一步失败不再把后面几步一起带下去。
+    await Promise.allSettled([
+      withRetry(loadModelOptions),
+      withRetry(loadModelGroups),
       loadModelCatalogPreference(),
-      loadPermissionMode(),
-      refreshSessions(),
+      withRetry(loadPermissionMode),
+      withRetry(refreshSessions),
     ])
-    await refreshPluginModes()
+    await withRetry(refreshPluginModes).catch(() => undefined)
     if (coreSessions.value[0]) {
       await selectSession(coreSessions.value[0].id)
     } else if (projects.value[0]) {
       selectedProjectId.value = projects.value[0].id
     }
+    // 还有没读到的：排后台补齐，让「暂时没有」有机会变成「读到了」。
+    scheduleStartupReconcile()
   } catch (error) {
     setLoadError(error instanceof Error ? error.message : String(error))
   }
@@ -2291,6 +2394,7 @@ async function loadInitialData() {
 
 async function refreshProjects() {
   projects.value = await projectClient.list()
+  startupLoad.value.projects = true
 }
 
 function handleProjectsSynced(): void {
@@ -2303,6 +2407,7 @@ async function refreshSessions() {
   // active snapshot and applies live status changes separately, so a delayed
   // refresh cannot freeze the sidebar at the status seen during turn/start.
   sessions.value = loaded
+  startupLoad.value.sessions = true
 }
 
 function openProjectCreate() {
@@ -2871,7 +2976,10 @@ async function connectLive(threadId: string) {
   // Persisted transcript first, live attach in the background: a session whose
   // turn is still open (or a long thread whose snapshot is slow to assemble)
   // must not hold the visible thread blank until the resume signal answers.
-  await workbench.connect(threadId, { attachInBackground: true })
+  //
+  // user:“类似的时序问题不要再犯，检查”+(第一次打开撞上通道还没就绪，会话就永远空着，
+  // 只有切走再切回来才有内容。这里失败重试几次，别让一次时序失败变成空白记录)。
+  await withRetry(() => workbench.connect(threadId, { attachInBackground: true }), 3)
 }
 
 /**
@@ -3540,7 +3648,8 @@ async function loadModelCatalogPreference() {
       : {}
     modelCatalogView.value = value.classification === 'group' ? 'group' : 'provider'
   } catch {
-    modelCatalogView.value = 'provider'
+    // user:“类似的时序问题不要再犯，检查”+(读不到就保持当前分类方式：一次时序失败
+    // 不该把用户选的「按分组」悄悄重置成「按供应商」)。
   }
 }
 
@@ -3567,9 +3676,9 @@ async function loadPermissionMode() {
     const mode = value.permission_mode
     if (mode === 'read_only' || mode === 'limited_edit' || mode === 'full_edit') {
       permissionMode.value = mode
-    } else {
-      await updatePermissionMode(permissionMode.value)
     }
+    // user:“类似的时序问题不要再犯”+(读取失败时以前会拿默认值回写一次设置：一次瞬时失败
+    // 就可能把电脑上的权限模式改掉。缺失值只留在界面上，等下一次读取或用户自己改)。
     if (value.permission_preset === 'ask' || value.permission_preset === 'auto' || value.permission_preset === 'full_access') {
       defaultPermissionPreset.value = value.permission_preset
     } else {
@@ -3577,10 +3686,10 @@ async function loadPermissionMode() {
       defaultPermissionPreset.value = value.approval_policy === 'auto_approve' ? 'auto' : 'ask'
     }
     allowAccessOutsideWorkdir.value = Boolean(value.allow_access_outside_workdir)
-  } catch {
-    permissionMode.value = 'full_edit'
-    defaultPermissionPreset.value = 'ask'
-    allowAccessOutsideWorkdir.value = false
+    startupLoad.value.permission = true
+  } catch (error) {
+    // 读不到就保持界面默认，不回写、不吞掉，让上层决定重试。
+    throw error
   }
 }
 
@@ -3802,6 +3911,7 @@ async function refreshPluginModes(): Promise<void> {
     // user:“实现这个插件，也正好实验我们的新插件架构”+(连接就绪后重新发现页面入口，不能只依赖侧栏首次挂载时的未就绪请求)。
     await Promise.all([refreshPluginUIModes(requestConfigOperation), ensureContributions(requestConfigOperation)])
     pluginModes.value = listModes()
+    startupLoad.value.pluginModes = true
     if (!appModes.value.some((mode) => modeKey(mode) === activeAppModeKey.value)) {
       activeAppModeKey.value = 'core:agent'
       if (isActivePluginSession()) {
@@ -3813,6 +3923,9 @@ async function refreshPluginModes(): Promise<void> {
     }
   } catch (error) {
     console.error('[plugins] UI mode list failed', error)
+    // user:“类似的时序问题不要再犯，检查”+(一次失败不代表插件没了：读到过列表就留着，
+    // 后面补齐再刷新；从没读到过才清空并把界面退回核心模式)。
+    if (startupLoad.value.pluginModes) return
     pluginModes.value = []
     if (activePluginMode.value) {
       activeAppModeKey.value = 'core:agent'
@@ -4053,16 +4166,21 @@ async function loadModelOptions() {
     availableModels.value = Array.isArray(modelsResponse.models)
       ? modelsResponse.models as RawModel[]
       : []
+    // 读到了才算数：空列表也是一种结论，但「没读到」不是。
+    startupLoad.value.models = true
     // There is no global default model: the composer inherits the main-chat
     // scene's most recently used model. An empty value means "nothing to
     // inherit" — the composer then shows no model rather than some default.
     const sceneModels = (modelsResponse as { scene_models?: Record<string, unknown> }).scene_models
     const sceneModelId = sceneModels && typeof sceneModels.chat === 'string' ? sceneModels.chat : ''
     defaultModelId.value = sceneModelId
-  } catch {
-    availableModels.value = []
-    availableProviders.value = []
-    defaultModelId.value = ''
+  } catch (error) {
+    // 清空只在重试耗尽之后发生；重试由 loadInitialData 的 withRetry 负责。
+    if (availableModels.value.length === 0) {
+      availableProviders.value = []
+      defaultModelId.value = ''
+    }
+    throw error
   }
 }
 
@@ -4130,9 +4248,8 @@ async function loadModelGroups() {
     })
     const revision = Number(response.revision)
     modelGroupsRevision.value = Number.isFinite(revision) ? revision : undefined
+    startupLoad.value.modelGroups = true
   } catch (error) {
-    modelGroups.value = []
-    modelGroupsRevision.value = undefined
     throw error
   }
 }
@@ -4291,6 +4408,13 @@ onMounted(() => {
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
   void loadInitialData().then(() => checkOnboarding())
+  // user:“类似的时序问题不要再犯，检查”+(手机从后台回来时隧道可能已经断了、数据可能
+  // 还是启动前那份：给没读到的启动数据一次立刻补齐的机会，而不是等用户重开应用)。
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return
+    startupReconcileAttempt = 0
+    scheduleStartupReconcile(true)
+  })
   // External config edits and model substitutions must reach the user even
   // when no settings surface is open.
   startConfigNoticePolling()

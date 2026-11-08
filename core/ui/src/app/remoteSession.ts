@@ -27,6 +27,8 @@ export function saveTicket(ticket: string): void {
 
 interface Status {
   connected?: boolean
+  /** 正在拨号：宿主的 inner 锁被这次拨号占着，此时还没有可用隧道。 */
+  connecting?: boolean
   peer?: string | null
 }
 
@@ -47,7 +49,11 @@ export async function remoteStatus(): Promise<Status | null> {
  */
 export async function ensureRemote(budgetMs = 5000): Promise<string | null> {
   const status = await remoteStatus()
-  if (status?.connected) return status.peer ?? ''
+  if (status?.connected && !status.connecting) return status.peer ?? ''
+  // user:“类似的时序问题不要再犯，检查”+(拨号中以前答「已连接」，界面拿着还没建好的
+  // 隧道去读项目与模型，读一次空一次；现在如实报「正在连接」，这里等这一次的结果，
+  // 而不是再拨一次把这一次顶掉)。
+  if (status?.connecting) return await waitForTunnel(budgetMs)
   const ticket = readTicket()
   if (!ticket) return null
   try {
@@ -59,6 +65,18 @@ export async function ensureRemote(budgetMs = 5000): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/** 等正在进行的这次拨号出结果：连上返回对端，失败或超时返回 null。 */
+async function waitForTunnel(budgetMs: number): Promise<string | null> {
+  const deadline = Date.now() + Math.max(0, budgetMs)
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    const status = await remoteStatus()
+    if (status?.connected && !status.connecting) return status.peer ?? ''
+    if (!status?.connecting) return null
+  }
+  return null
 }
 
 /** 配对过的电脑。
