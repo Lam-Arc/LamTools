@@ -8,16 +8,22 @@
 
 | 文件 | 用途 | 大小 | 交付名（Downloads） |
 | --- | --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 297 MB | `02-sunday-m-arm64-debug.apk` |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 305 MB | `02-sunday-m-arm64-debug.apk` |
 | `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB | `02-sunday-m-x86_64-debug.apk` |
 
-校验和（2026-11-07 22:36 构建，含首屏提速、远程 JSON-RPC 转发与设备切换；交付时文件名带
-`02-` 前缀，内容与这里列出的一致）：
+校验和（arm64 为 2026-11-08 03:22 构建，含内置运行时、远程事件通道与断线自动恢复；
+交付时文件名带 `02-` 前缀，内容与这里列出的一致）：
 
 ```
-dbe33705357c2598cd3924872a717484296ce3321f26c155811b93e5c9b30d62  sunday-m-arm64-debug.apk
+661a2ab5be8b81ea6c2136d13cb5b6523d640d0fa8dd429178c6eacf22292e88  sunday-m-arm64-debug.apk
 d797ab438c9d67a4ccbec8483cb074ecf02d52250d3b95cd7e54f1dc31d099a6  sunday-m-x86_64-debug.apk
 ```
+
+**打 arm64 包必须设置 `SUNDAY_RT_ABI=aarch64` 与 `SUNDAY_RT_ASSETS=<runtime>/tools/out/aarch64/assets`。**
+漏掉的包能装能开，但 APK 里既没有 `assets/runtime/rootfs-*` 也没有 `libproot.so`，启动层
+会一直报 `cannot start proot: No such file or directory`——手机永远只能用远程模式，
+还没到远程那一步就先看到「启动失败」。判断方法：`unzip -l` 里搜 `proot`，
+没结果就是没带运行时。
 
 启动图标与桌面一致，是 Sunday 笑脸，由 `core/desktop/src-tauri/icons/icon.png` 重新生成到各密度 mipmap；此前生成工程里残留的旧「88」图标已替换。
 
@@ -265,12 +271,38 @@ user:“铺满屏幕，渐变流动，高级而令人舒适，要这种效果，
 - 电脑：`%APPDATA%\Sunday\p2p\p2p.log`，由 `sunday-p2p` 自己追加，记录每次出票、中继状态、对端连入（`PEER ...`）和接收错误；桌面宿主新版本也会把传输进程的后续输出写进同一份日志。
 - 手机：`files/runtime/guest.log`（核心）与 `adb logcat`（宿主 `[sunday] ...` 行）。
 
+## 真机验收（2026-11-08，vivo V2536A / Android 16 / arm64）
+
+远程模式五步，全部在真机上点出来，不是模拟器结论：
+
+1. 项目 `E:\mobile control test`（在电脑上创建，手机远程可见）；
+2. 手机上新建会话并发送「请立即回复你好」，模型 `opencode-go-deepseek-v4.1-flash` 回复
+   「你好。」，30 秒内出现在界面；
+3. 让它创建文件，`E:\mobile control test\Hello World.txt` 落地，内容 `hello from sunday m`，
+   助手回报路径；
+4. 让它调子代理：`calc_helper` 启动、返回 1+1=2、结果回到主会话；
+5. 让它调 `ask`：手机上弹出选项卡（保留 / 删除），点「保留」后回合继续并给出总结。
+
+同时还确认了：
+
+* 远程模式下模型、权限、插件全部可用（同一份配置由手机继承，不需要在手机上重配）；
+* 手机独立运行：本地 Core 在真机上 `proot` 启动成功，3 秒内应答 `core.ready`；
+* 断联恢复：换掉电脑侧传输进程后，手机会自动重拨并切回远程，不需要重开应用；
+* 冷启动到界面 5.1 秒（`am start` 到无障碍树出现输入框，含 0.35 秒轮询误差）。
+
+多客户端并发（同一会话手机与电脑同时发）实测：core 是唯一写方，一轮只接受一个 turn；
+后发的那个立刻收到 `SESSION_BUSY / session has an active turn`，客户端按既有逻辑转成排队或
+引导，不会两个回合并行。跨设备的会话列表：以前新建会话只通知订阅该会话的连接，实测另一
+连接什么都收不到；现在 `thread/start` 会向所有连接广播 `session/created`，另外界面每 20 秒
+对一次 `/sessions` 兜底。**这两处要电脑端更新到含该提交的 core 与前端后才生效。**
+
 ## 已知问题
 
 1. 上传过程中进程被杀会留下一段 `pending://` 草稿，界面因此拒绝发送，直到把那个附件
    引用移除。桌面同样存在这个草稿状态，只是不容易撞上。
 2. 审批通过后最终回复的渲染有延迟（实测那次对话几十秒内完整出现），不是失败。
-3. 多客户端并发没有验证：宿主现在一条 socket 承载所有页面，重连时重新订阅当前会话。
+3. 手机独立运行的首次配置没走过：本地 Core 能起来，但手机上还没有供应商与模型，
+   要在手机自己的设置里配一次才能脱离电脑对话。
 4. 共享 UI 的一条 CSP 规则拒绝了一个 `data:` 字体（logcat 里可见），不影响布局与阅读。
 
 ## 复现构建
