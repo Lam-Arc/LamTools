@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -81,9 +82,49 @@ pub async fn p2p_connect(
         inner.endpoint = Some(endpoint);
     }
     let endpoint = inner.endpoint.clone().expect("endpoint ready");
-    let client = Client::dial(&endpoint, &ticket, &name)
-        .await
-        .map_err(|error| format!("{error:#}"))?;
+    // user:“连接过程中一点反应都没有，我根本不知道卡在哪里了”+(先告诉界面目标地址，
+    // 再给整次尝试一个明确的上限，超时就报可执行的原因，而不是让 iroh 叠三层超时)。
+    use tauri::Emitter as _;
+    let target = sunday_p2p::decode_ticket(&ticket)
+        .ok()
+        .and_then(|addr| {
+            addr.addrs.iter().find_map(|item| match item {
+                sunday_p2p::iroh::TransportAddr::Ip(ip) => Some(ip.to_string()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default();
+    app.emit(
+        "p2p-progress",
+        json!({ "phase": "dialing", "target": target }),
+    )
+    .ok();
+    let client = match tokio::time::timeout(
+        Duration::from_secs(45),
+        Client::dial(&endpoint, &ticket, &name),
+    )
+    .await
+    {
+        Ok(Ok(client)) => client,
+        Ok(Err(error)) => {
+            app.emit("p2p-progress", json!({ "phase": "failed", "target": target }))
+                .ok();
+            return Err(format!("{error:#}"));
+        }
+        Err(_) => {
+            app.emit("p2p-progress", json!({ "phase": "timeout", "target": target }))
+                .ok();
+            return Err(format!(
+                "连接超时（45 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。目标地址：{}",
+                if target.is_empty() { "未知".to_owned() } else { target }
+            ));
+        }
+    };
+    app.emit(
+        "p2p-progress",
+        json!({ "phase": "connected", "target": target }),
+    )
+    .ok();
     let peer = client.peer.clone();
     // user:“接收实时事件”+(Core 的通知由 PC 侧泵进隧道，这里换成 Tauri 事件交给界面；
     // 界面拿到的是同一条通知，不需要知道它是从哪条网络路径来的)。
@@ -123,20 +164,26 @@ pub async fn p2p_call(
         .map_err(|error| format!("{error:#}"))
 }
 
-/// Takes a photo with the system camera and reads the ticket out of it.
+/// 实时扫码：相机预览里识别到二维码就回填票据。
 ///
-/// user:“设备配对：支持二维码、配对码等简单方式”+(扫桌面那个码，省掉手打一百多字符)。
+/// user:“扫码还要靠拍照，而不是直接调用摄像头权限扫描识别”+(相机常开，每几帧解一次，
+/// 识别到立即返回，不再经过系统相机拍照与落盘)。
 #[tauri::command]
 pub async fn p2p_scan() -> Result<Value, String> {
-    let paths = crate::picker::pick_paths("camera".to_owned(), String::new())
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(guest) = paths.first() else {
-        return Ok(json!({ "ticket": serde_json::Value::Null }));
-    };
-    let host = crate::runtime::host_path(guest).ok_or_else(|| "扫描图片的位置不可用".to_owned())?;
-    let ticket = sunday_p2p::scan_qr_file(&host).map_err(|error| format!("{error:#}"))?;
-    Ok(json!({ "ticket": ticket }))
+    let (request, receiver) = crate::picker::open_request();
+    if let Err(error) = crate::picker::start_qr(&request) {
+        crate::picker::forget(&request);
+        return Err(error);
+    }
+    let answer = tauri::async_runtime::spawn_blocking(move || {
+        receiver.recv_timeout(std::time::Duration::from_secs(120))
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    match answer {
+        Ok(text) if !text.is_empty() => Ok(json!({ "ticket": text })),
+        _ => Ok(json!({ "ticket": serde_json::Value::Null })),
+    }
 }
 
 /// The ticket as an SVG QR code, so the other device can just scan it.

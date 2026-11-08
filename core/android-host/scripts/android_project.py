@@ -236,6 +236,7 @@ def sync_manifest() -> int:
     text = inject_permissions(text, nl)
     text = inject_small_window_flag(text, nl)
     text = inject_overlay_service(text, nl)
+    text = inject_qr_scanner(text, nl)
     if text != original:
         MANIFEST.write_text(text, encoding="utf-8", newline="")
         say("sync: injected the overlay service, its permissions and the small-window flag")
@@ -322,7 +323,8 @@ def sync_android_theme() -> int:
 
 def inject_permissions(text: str, nl: str) -> str:
     """Adds the permissions the ring needs, above `<application>`."""
-    missing = [name for name in OVERLAY_PERMISSIONS if f'android:name="{name}"' not in text]
+    required = (*OVERLAY_PERMISSIONS, "android.permission.CAMERA")
+    missing = [name for name in required if f'android:name="{name}"' not in text]
     if not missing:
         return text
     anchor = nl + "    <application"
@@ -330,6 +332,26 @@ def inject_permissions(text: str, nl: str) -> str:
         return text
     block = nl.join(f'    <uses-permission android:name="{name}" />' for name in missing)
     return text.replace(anchor, nl + block + nl + nl + "    <application", 1)
+
+
+def inject_qr_scanner(text: str, nl: str) -> str:
+    """声明实时扫码界面；相机权限由 inject_permissions 一起补上。"""
+    if 'android:name=".QrScanActivity"' in text:
+        return text
+    anchor = "    </application>"
+    if anchor not in text:
+        return text
+    activity = (
+        "        <activity"
+        + nl
+        + '            android:name=".QrScanActivity"'
+        + nl
+        + '            android:exported="false"'
+        + nl
+        + '            android:theme="@style/Theme.sunday_android_host" />'
+        + nl
+    )
+    return text.replace(anchor, activity + anchor, 1)
 
 
 def inject_small_window_flag(text: str, nl: str) -> str:

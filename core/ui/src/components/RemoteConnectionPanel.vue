@@ -3,64 +3,98 @@
     <div class="remote-panel__head">
       <span class="remote-panel__title">{{ t("设备连接") }}</span>
       <span class="remote-panel__state" :class="{ 'is-on': serving || connected }">
-        {{ serving ? t('正在接受连接') : connected ? t('已连接') : t('未连接') }}
+        {{ connected ? t('已连接') : serving ? t('等待手机连接') : t('未连接') }}
       </span>
-      <button class="remote-panel__refresh" type="button" :disabled="busy" @click="refresh">{{ t("刷新") }}</button>
+      <button class="remote-panel__link" type="button" :disabled="busy" @click="refresh">{{ t("刷新") }}</button>
     </div>
 
     <p v-if="error" class="remote-panel__error" role="alert">{{ error }}</p>
 
-    <!-- 电脑：出票据，手机来连 -->
+    <!-- 电脑：二维码就是全部入口；生成票据即开始接受连接。 -->
     <template v-if="isDesktop">
-      <p class="remote-panel__hint">{{ t("在手机上打开远程连接，粘贴这段票据。第一次连接会自动成为可信设备，之后不用再确认。") }}</p>
-      <div class="remote-panel__pair">
-        <!-- user:“设备配对：支持二维码、配对码等简单方式”+(二维码和下面那行文本是同一张票据)。 -->
+      <div v-if="ticket" class="remote-panel__pair">
         <div v-if="qrSvg" class="remote-panel__qr" v-html="qrSvg" aria-hidden="true"></div>
-        <div class="remote-panel__pair-copy">
-          <code class="remote-panel__ticket" data-remote-ticket>{{ ticket || t("还没有票据，点右边的按钮生成") }}</code>
+        <div class="remote-panel__pair-side">
+          <p class="remote-panel__hint">{{ t("用 Sunday M 扫一下，首次连接会自动成为可信设备。") }}</p>
+          <button
+            class="remote-panel__ticket"
+            type="button"
+            :title="t('点击复制票据')"
+            :aria-label="t('复制票据')"
+            @click="copyTicket"
+          >
+            <code data-remote-ticket>{{ copied ? t("已复制") : ticket }}</code>
+          </button>
           <div class="remote-panel__row">
-            <button class="remote-panel__button" type="button" :disabled="busy" @click="createTicket">{{ ticket ? t("换一张") : t("生成票据") }}</button>
-            <button v-if="ticket" class="remote-panel__button" type="button" @click="copyTicket">{{ t("复制票据") }}</button>
+            <button class="remote-panel__button" type="button" :disabled="busy" @click="createTicket">{{ t("换一张") }}</button>
+            <button class="remote-panel__button" type="button" :disabled="busy" @click="stopServing">{{ t("停止") }}</button>
           </div>
         </div>
       </div>
-      <div class="remote-panel__row">
-        <button v-if="!serving" class="remote-panel__button is-primary" type="button" :disabled="busy || !ticket" @click="serveStart">{{ t("开始接受连接") }}</button>
-        <button v-else class="remote-panel__button" type="button" :disabled="busy" @click="serveStop">{{ t("停止接受连接") }}</button>
-        <span class="remote-panel__note">{{ t("直连优先，打不通才走公共中继；任务在这台电脑上执行。") }}</span>
-      </div>
+      <button
+        v-else
+        class="remote-panel__button is-primary remote-panel__wide"
+        type="button"
+        :disabled="busy"
+        @click="createTicket"
+      >
+        {{ busy ? t("正在生成…") : t("生成票据") }}
+      </button>
     </template>
 
-    <!-- 手机：粘贴票据去连电脑 -->
+    <!-- 手机：扫码是主入口，粘贴票据是退路。 -->
     <template v-else>
-      <p class="remote-panel__hint">{{ t("从电脑的远程连接页复制票据，粘贴到这里。连上之后，会话、工具和审批都在电脑上跑。") }}</p>
-      <textarea
-        v-model="ticketInput"
-        class="remote-panel__input"
-        rows="3"
-        spellcheck="false"
-        :placeholder="t('sunday1:…')"
-        data-remote-ticket-input
-      />
-      <div class="remote-panel__row">
-        <button class="remote-panel__button" type="button" :disabled="busy" @click="scan" data-remote-scan>{{ t("扫码") }}</button>
-        <button v-if="!connected" class="remote-panel__button is-primary" type="button" :disabled="busy || !ticketInput.trim()" @click="connect">{{ t("连接") }}</button>
-        <button v-else class="remote-panel__button" type="button" :disabled="busy" @click="disconnect">{{ t("断开") }}</button>
-        <span v-if="peer" class="remote-panel__note">{{ t("已连到 {0}", { 0: shortId(peer) }) }}</span>
+      <div v-if="connected" class="remote-panel__row">
+        <span class="remote-panel__hint">{{ t("已连到 {0}", { 0: shortId(peer) }) }}</span>
+        <button class="remote-panel__button" type="button" :disabled="busy" @click="disconnect">{{ t("断开") }}</button>
       </div>
+      <template v-else>
+        <button
+          class="remote-panel__button is-primary remote-panel__wide"
+          type="button"
+          :disabled="busy"
+          @click="scan"
+          data-remote-scan
+        >
+          {{ t("扫码连接") }}
+        </button>
+        <p v-if="busy && progressText" class="remote-panel__hint" role="status">
+          {{ progressText }}（{{ t("已等待 {0} 秒", { 0: elapsed }) }}）
+        </p>
+        <button class="remote-panel__link" type="button" :disabled="busy" data-remote-paste-toggle @click="pasting = !pasting">
+          {{ pasting ? t("收起") : t("粘贴票据") }}
+        </button>
+        <template v-if="pasting">
+          <textarea
+            v-model="ticketInput"
+            class="remote-panel__input"
+            rows="2"
+            spellcheck="false"
+            :placeholder="t('sunday1:…')"
+            data-remote-ticket-input
+          />
+          <button
+            class="remote-panel__button"
+            type="button"
+            :disabled="busy || !ticketInput.trim()"
+            @click="connect"
+          >
+            {{ t("连接") }}
+          </button>
+        </template>
+      </template>
     </template>
 
-    <div class="remote-panel__devices">
-      <div class="remote-panel__devices-title">{{ t("可信设备") }}<span>{{ devices.length }}</span></div>
-      <ul v-if="devices.length" class="remote-panel__list">
+    <!-- 没有可信设备时整块不出现，避免空状态占位。 -->
+    <details v-if="devices.length" class="remote-panel__devices">
+      <summary>{{ t("可信设备") }}<span>{{ devices.length }}</span></summary>
+      <ul class="remote-panel__list">
         <li v-for="device in devices" :key="device.id" class="remote-panel__device">
-          <span class="remote-panel__device-name">{{ device.name || shortId(device.id) }}</span>
-          <code class="remote-panel__device-id">{{ shortId(device.id) }}</code>
+          <span class="remote-panel__device-name" :title="device.id">{{ device.name || shortId(device.id) }}</span>
           <button class="remote-panel__revoke" type="button" :disabled="busy" @click="revoke(device.id)">{{ t("撤销") }}</button>
         </li>
       </ul>
-      <p v-else class="remote-panel__empty">{{ t("还没有可信设备。配对一次就会出现在这里，撤销后立刻失效。") }}</p>
-    </div>
+    </details>
   </section>
 </template>
 
@@ -72,13 +106,14 @@ import { computed, onMounted, ref } from 'vue'
 import { saveTicket } from '@/app/remoteSession.ts'
 
 /**
- * 设备连接面板。
+ * 配对面板。
  *
- * user:“把「周几 / 账号」换成 Sunday / Sunday M 远程连接”+(这一块只说连接：本机票据、
- * 对方的票据、可信设备；不解释账号，也不需要登录)。
+ * user:“简化配对界面，桌面端和移动端都简化”+(电脑只有一个动作：生成二维码/票据，
+ * 生成即开始接受连接，票据本身就是复制入口；手机只有一个主动作：扫码，手动粘贴
+ * 收在次要入口里。可信设备没有就不占位置)。
  *
- * 命令由宿主提供：桌面是 p2p_ticket / p2p_serve_start / …，手机是 p2p_connect / p2p_call /
- * …。这里只做界面，协议与身份都在 core/p2p。
+ * 命令由宿主提供：桌面是 p2p_ticket / p2p_qr / …，手机是 p2p_scan / p2p_connect / …。
+ * 这里只做界面，协议与身份都在 core/p2p。
  */
 const props = defineProps<{ platform?: 'desktop' | 'mobile' | 'web' }>()
 
@@ -91,6 +126,11 @@ const peer = ref('')
 const devices = ref<Array<{ id: string; name: string }>>([])
 const busy = ref(false)
 const error = ref('')
+const pasting = ref(false)
+const copied = ref(false)
+const progressText = ref('')
+const elapsed = ref(0)
+let progressTimer: number | null = null
 
 const isDesktop = computed(() => (props.platform ?? 'desktop') === 'desktop')
 
@@ -141,18 +181,63 @@ async function refreshQr(value: string): Promise<void> {
     const result = await call<{ svg?: string }>('p2p_qr', { ticket: value })
     qrSvg.value = result?.svg ?? ''
   } catch {
-    // A missing QR only costs convenience: the ticket text is right above it.
+    // 二维码只是方便，票据文字本身还能复制。
   }
 }
 
 async function copyTicket(): Promise<void> {
   try {
     await navigator.clipboard.writeText(ticket.value)
+    copied.value = true
+    window.setTimeout(() => { copied.value = false }, 1500)
   } catch {
-    // Clipboard unavailable: the text is selectable anyway.
+    // 剪贴板不可用时票据文字仍可手动选择。
   }
 }
 
+/** 从票据里取出直连地址与中继，用于说明这次会先试什么。 */
+function describeTicket(value: string): { ip: string; relay: boolean } {
+  try {
+    const body = value.trim().replace(/^sunday1:/, '')
+    const padded = body.replace(/-/g, '+').replace(/_/g, '/')
+      + '='.repeat((4 - (body.length % 4)) % 4)
+    const parsed = JSON.parse(atob(padded)) as {
+      addrs?: Array<{ Ip?: string; Relay?: string }>
+    }
+    return {
+      ip: parsed.addrs?.find((item) => typeof item.Ip === 'string')?.Ip ?? '',
+      relay: Boolean(parsed.addrs?.some((item) => typeof item.Relay === 'string')),
+    }
+  } catch {
+    return { ip: '', relay: false }
+  }
+}
+
+/** user:“连接过程中一点反应都没有”+(连接期间说明先试哪条路，并显示已等待时间)。 */
+function startConnecting(value: string): void {
+  const { ip, relay } = describeTicket(value)
+  progressText.value = ip && relay
+    ? t('正在连接：先试直连 {0}，失败自动走中继', { 0: ip })
+    : ip
+      ? t('正在直连 {0}', { 0: ip })
+      : t('正在通过中继连接')
+  elapsed.value = 0
+  if (progressTimer !== null) window.clearInterval(progressTimer)
+  progressTimer = window.setInterval(() => {
+    elapsed.value += 1
+  }, 1000)
+}
+
+function stopConnecting(): void {
+  if (progressTimer !== null) {
+    window.clearInterval(progressTimer)
+    progressTimer = null
+  }
+  progressText.value = ''
+  elapsed.value = 0
+}
+
+/** 生成票据即开始接受连接，不再让用户点第二次。 */
 async function createTicket(): Promise<void> {
   busy.value = true
   error.value = ''
@@ -166,6 +251,7 @@ async function createTicket(): Promise<void> {
     const result = await call<{ ticket?: string }>('p2p_ticket', args)
     if (result?.ticket) {
       ticket.value = result.ticket
+      serving.value = true
       await refreshQr(ticket.value)
     }
   } catch (cause) {
@@ -175,27 +261,14 @@ async function createTicket(): Promise<void> {
   }
 }
 
-async function serveStart(): Promise<void> {
-  busy.value = true
-  error.value = ''
-  try {
-    const apiBase = await call<string>('get_api_base')
-    if (!apiBase) throw new Error(t('拿不到本地后端地址'))
-    await call('p2p_serve_start', { apiBase })
-    serving.value = true
-  } catch (cause) {
-    error.value = String(cause)
-  } finally {
-    busy.value = false
-  }
-}
-
-async function serveStop(): Promise<void> {
+async function stopServing(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
     await call('p2p_serve_stop')
     serving.value = false
+    ticket.value = ''
+    qrSvg.value = ''
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -203,12 +276,15 @@ async function serveStop(): Promise<void> {
   }
 }
 
+/** 扫码成功就直接连，不再让用户点“连接”。 */
 async function scan(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
     const result = await call<{ ticket?: string | null }>('p2p_scan')
-    if (result?.ticket) ticketInput.value = result.ticket
+    if (!result?.ticket) return
+    ticketInput.value = result.ticket
+    await connect()
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -219,6 +295,7 @@ async function scan(): Promise<void> {
 async function connect(): Promise<void> {
   busy.value = true
   error.value = ''
+  startConnecting(ticketInput.value)
   try {
     const name = isDesktop.value ? 'PC' : 'Phone'
     const result = await call<{ peer?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
@@ -230,8 +307,11 @@ async function connect(): Promise<void> {
     window.location.reload()
   } catch (cause) {
     error.value = String(cause)
+    // 扫码扫到了但连不上时，把票据留下来让用户能重试。
+    if (!isDesktop.value) pasting.value = true
   } finally {
     busy.value = false
+    stopConnecting()
   }
 }
 
@@ -260,13 +340,30 @@ async function revoke(id: string): Promise<void> {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  void refresh()
+  if (!host()) return
+  void import('@tauri-apps/api/event').then(async ({ listen }) => {
+    try {
+      await listen<{ phase?: string }>('p2p-progress', (event) => {
+        const phase = event.payload?.phase
+        if (phase === 'dialing') {
+          if (!progressText.value) progressText.value = t('正在连接对方…')
+        } else if (phase === 'connected') {
+          progressText.value = t('已连上，正在切换到远程会话…')
+        }
+      })
+    } catch {
+      // 进度事件只是提示，缺了不影响连接。
+    }
+  })
+})
 </script>
 
 <style scoped>
 .remote-panel {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-3);
   padding: var(--space-3);
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent);
   border-radius: var(--radius);
@@ -293,7 +390,27 @@ onMounted(refresh)
   opacity: 1;
 }
 
-.remote-panel__refresh,
+.remote-panel__link {
+  margin-left: auto;
+  border: 0;
+  padding: 2px 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  opacity: .62;
+  cursor: pointer;
+}
+
+.remote-panel__link:hover {
+  opacity: 1;
+}
+
+.remote-panel__link:disabled {
+  opacity: .32;
+  cursor: default;
+}
+
 .remote-panel__button,
 .remote-panel__revoke {
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
@@ -305,15 +422,16 @@ onMounted(refresh)
   cursor: pointer;
 }
 
-.remote-panel__refresh {
-  margin-left: auto;
-}
-
 .remote-panel__button.is-primary {
   background: var(--theme-main-text);
   color: var(--theme-main-background);
   border-color: transparent;
   font-weight: 650;
+}
+
+.remote-panel__wide {
+  width: 100%;
+  padding: 10px 12px;
 }
 
 .remote-panel__revoke {
@@ -322,7 +440,6 @@ onMounted(refresh)
 }
 
 .remote-panel__hint,
-.remote-panel__note,
 .remote-panel__empty {
   margin: 0;
   font-size: 12px;
@@ -337,22 +454,37 @@ onMounted(refresh)
   flex-wrap: wrap;
 }
 
-.remote-panel__ticket,
-.remote-panel__device-id {
-  flex: 1 1 240px;
-  min-width: 0;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
-  font: 12px/1.5 ui-monospace, monospace;
-  overflow-wrap: anywhere;
-}
-
 .remote-panel__pair {
   display: flex;
   gap: var(--space-3);
   align-items: flex-start;
   flex-wrap: wrap;
+}
+
+.remote-panel__pair-side {
+  display: grid;
+  flex: 1 1 220px;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.remote-panel__ticket {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.remote-panel__ticket code {
+  display: block;
+  min-width: 0;
+  font: 12px/1.5 ui-monospace, monospace;
+  overflow-wrap: anywhere;
 }
 
 .remote-panel__qr {
@@ -370,13 +502,6 @@ onMounted(refresh)
   height: 100%;
 }
 
-.remote-panel__pair-copy {
-  display: grid;
-  flex: 1 1 240px;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
 .remote-panel__input {
   width: 100%;
   padding: 8px;
@@ -389,22 +514,22 @@ onMounted(refresh)
 }
 
 .remote-panel__devices {
-  display: grid;
-  gap: var(--space-1);
-  margin-top: var(--space-1);
+  border-top: 1px solid color-mix(in srgb, var(--theme-main-text) 8%, transparent);
+  padding-top: var(--space-2);
 }
 
-.remote-panel__devices-title {
+.remote-panel__devices summary {
   display: flex;
   gap: var(--space-2);
   font-size: 12px;
   opacity: .72;
+  cursor: pointer;
 }
 
 .remote-panel__list {
   display: grid;
   gap: var(--space-1);
-  margin: 0;
+  margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -416,6 +541,7 @@ onMounted(refresh)
 }
 
 .remote-panel__device-name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

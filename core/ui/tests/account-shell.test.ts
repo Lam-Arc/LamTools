@@ -33,12 +33,24 @@ describe('remote connection page', () => {
     expect(wrapper.find('.account-back').exists()).toBe(false)
   })
 
-  it('shows the scan entry on a phone and a ticket on a desktop', () => {
+  it('keeps one primary action per side: scan on the phone, a ticket on the desktop', async () => {
     const phone = mountAccount('mobile')
     expect(phone.find('[data-remote-scan]').exists()).toBe(true)
+    // 手动粘贴是退路，默认不占位置。
+    expect(phone.find('[data-remote-ticket-input]').exists()).toBe(false)
+    await phone.get('[data-remote-paste-toggle]').trigger('click')
+    expect(phone.find('[data-remote-ticket-input]').exists()).toBe(true)
 
     const desktop = mountAccount('desktop')
     expect(desktop.text()).toContain('生成票据')
     expect(desktop.find('[data-remote-scan]').exists()).toBe(false)
+    // 没有可信设备时整块不出现。
+    expect(desktop.find('.remote-panel__devices').exists()).toBe(false)
+  })
+
+  it('only offers stop once a ticket exists', () => {
+    const desktop = mountAccount('desktop')
+    expect(desktop.text()).not.toContain('换一张')
+    expect(desktop.text()).not.toContain('停止')
   })
 })

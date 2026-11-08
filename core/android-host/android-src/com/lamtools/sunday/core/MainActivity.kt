@@ -94,6 +94,7 @@ class MainActivity : TauriActivity() {
     // activity is started. Touching the object also runs its initialiser, which is what
     // hands the JavaVM to Rust.
     FilePickerBridge.attach(this)
+    QrScanBridge.attach(this)
     // The window does not shrink for the keyboard (edge to edge), so the interface can
     // only learn how much it covers from here.
     KeyboardBridge.watch(this)

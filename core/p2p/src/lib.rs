@@ -20,11 +20,11 @@ pub mod scan;
 pub mod ticket;
 pub mod trust;
 
-pub use identity::{Identity, ALPN};
+pub use identity::{dialable_addr, relay_summary, Identity, ALPN};
 pub use events::pump_core_events;
 pub use link::{Client, Frame, ServerLink};
 pub use proxy::call_core;
 pub use qr::ticket_qr_svg;
-pub use scan::scan_qr_file;
+pub use scan::{decode_qr_luma, scan_qr_file};
 pub use ticket::{decode_ticket, encode_ticket};
 pub use trust::{TrustStore, TrustedDevice};
