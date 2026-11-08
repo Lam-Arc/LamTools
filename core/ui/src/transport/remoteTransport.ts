@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-import { ensureRemote } from '@/app/remoteSession.ts'
+import { ensureRemote, remoteStatus } from '@/app/remoteSession.ts'
 
 import {
   TransportRpcError,
@@ -57,8 +57,15 @@ export class RemoteTransport implements LamToolsTransport {
     } catch (error) {
       // user:“网络切换后尽可能恢复连接及会话状态”+(PC 重启或换网之后，先按记住的票据
       // 重连一次；重连成功就把这次请求补上，不让一次断线变成一条发不出去的消息)。
-      const peer = await ensureRemote()
-      if (peer === null) throw new TransportRpcError(undefined, String(error))
+      //
+      // 但重连只在隧道真的断了的时候做：Core 自己回的业务错误（比如参数不对）不该触发
+      // 一次拨号，否则一个普通失败会被说成「连接断开」，还白等 1.2 秒。
+      const status = await remoteStatus()
+      if (status?.connected) throw error
+      const peer = await ensureRemote(1200)
+      if (peer === null) {
+        throw new TransportRpcError(undefined, '和电脑的连接断开了，回「远程连接」重新连一次（或在输入框上方切回本机）')
+      }
       return await this.perform<TResponse>(request)
     }
   }
@@ -66,7 +73,16 @@ export class RemoteTransport implements LamToolsTransport {
   private async perform<TResponse>(request: TransportRequest): Promise<TResponse> {
     try {
       if (request.kind === 'http') {
-        const body = request.body ? JSON.parse(new TextDecoder().decode(request.body)) : undefined
+        // 请求体可能是二进制；解析不了就原样发空，不要让一个畸形输入变成一条假故障。
+        let body: unknown
+        if (request.body) {
+          const text = new TextDecoder().decode(request.body)
+          try {
+            body = JSON.parse(text)
+          } catch {
+            body = text
+          }
+        }
         const reply = (await invoke('p2p_call', {
           method: 'core_http',
           params: { method: request.method, path: request.path, body },

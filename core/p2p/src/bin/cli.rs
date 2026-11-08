@@ -225,6 +225,14 @@ async fn serve(args: Vec<String>) -> Result<()> {
                                 .and_then(|value| value.as_str())
                                 .unwrap_or("/")
                                 .to_owned();
+                            // user:“连上电脑了之后也没有出现项目”+(界面用相对路径 /projects，
+                            // 本机通道在宿主里补了 /api/core 前缀，这条远程转发以前没有补，
+                            // 于是电脑上每个这样的请求都是 404)。
+                            let path = if path.starts_with("/api/") {
+                                path
+                            } else {
+                                format!("/api/core{path}")
+                            };
                             let body = params.get("body");
                             let (status, answer) =
                                 sunday_p2p::call_core("127.0.0.1", core_port, &core_token, &http, &path, body)?;

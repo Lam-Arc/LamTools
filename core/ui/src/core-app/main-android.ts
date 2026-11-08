@@ -8,6 +8,7 @@ import {
   activateDevice,
   ensureRemote,
   readDevices,
+  remoteStatus,
 } from '@/app/remoteSession.ts'
 import type { RuntimeWorkspaceControl, RuntimeWorkspaceOption } from '@/app/runtime.ts'
 import { ref } from 'vue'
@@ -82,7 +83,13 @@ function createWorkspaceControl(activePeer: string | null): RuntimeWorkspaceCont
     async select(id: string) {
       if (id === activeId.value) return
       activateDevice(id === 'local' ? null : id)
-      // 通道在启动时选定，切换就是让界面按新通道重开一次。
+      // user:“我怎么从控制电脑切回手机”+(只清票据不够：宿主里的隧道还连着，重开之后
+      // 又会按「已连接」走回电脑。切换必须先断掉现有隧道，再按新选择重开)。
+      try {
+        await invoke('p2p_disconnect')
+      } catch {
+        // 没有连接时这里是空操作，不影响切换。
+      }
       window.location.reload()
     },
   }
@@ -160,7 +167,8 @@ async function boot(): Promise<void> {
 
   // 拨号和启动核心同时进行：连电脑要花的时间藏在核心启动里，不额外占用首屏。
   // user:“从点击这个应用到我进界面，我定的要求是 5 秒以内”+(所以这两件事不能排队)。
-  const remoteAttempt = ensureRemote(6000)
+  // 后台拨号不占界面时间，预算给足；连上了再重开一次切过去。
+  const remoteAttempt = ensureRemote(20_000)
   // 启动核心不再挡在挂载前面：核心慢几秒，界面就先出来，数据等它。
   const coreReady = invoke('core_start')
   coreReady.catch(() => undefined)
@@ -171,10 +179,23 @@ async function boot(): Promise<void> {
 
     // 已经连着电脑就整条走隧道；连着的时候上面那次拨号已经成功；连不上就从这里拿到
     // null，界面用本机 Core，不再等第二次。
-    const peer = await Promise.race([
-      remoteAttempt,
-      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2500)),
-    ])
+    // user:“我定的要求是 5 秒以内”+(界面永远不等拨号：宿主要是已经连着电脑就整条走隧道，
+    // 否则先用本机把界面挂出来，拨号在后台继续，连上了再重开一次切过去)。
+    const knownRemote = await remoteStatus()
+    const peer: string | null = knownRemote?.connected ? (knownRemote.peer ?? '') : null
+    if (peer === null) {
+      void remoteAttempt.then((late) => {
+        if (!late) return
+        try {
+          if (performance.now() > 40_000) return
+          if (sessionStorage.getItem('sunday.p2p.switched') === late) return
+          sessionStorage.setItem('sunday.p2p.switched', late)
+        } catch {
+          return
+        }
+        window.location.reload()
+      })
+    }
     const activeTransport = peer === null ? gateTransport(transport, coreReady) : createRemoteTransport()
     if (peer !== null) capabilities.remote = { peer }
     const runtime = createLamToolsRuntime({
