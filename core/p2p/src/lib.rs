@@ -16,6 +16,7 @@ pub mod identity;
 pub mod link;
 pub mod proxy;
 pub mod qr;
+pub mod rpc;
 pub mod scan;
 pub mod ticket;
 pub mod trust;

@@ -179,6 +179,20 @@ async fn serve(args: Vec<String>) -> Result<()> {
         let core_port = flags.core_port;
         let core_token = flags.core_token.clone();
         let pump_token = flags.core_token.clone();
+        // user:“连上电脑了之后也没有出现项目”+(界面读项目、会话、工作台快照走的是 Core 的
+        // JSON-RPC；这条通道不和事件共用一条 socket，免得大回复把事件流堵住)。
+        let rpc = match core_port {
+            0 => None,
+            port => match sunday_p2p::rpc::CoreRpc::connect(port, &core_token).await {
+                Ok(bridge) => Some(Arc::new(bridge)),
+                Err(error) => {
+                    let line = format!("RPC-CHANNEL ERROR {error:#}");
+                    eprintln!("{line}");
+                    diary(&log_dir, &line);
+                    None
+                }
+            },
+        };
         tokio::spawn(async move {
         let closed = Arc::new(tokio::sync::Mutex::new(false));
         if core_port != 0 {
@@ -190,6 +204,7 @@ async fn serve(args: Vec<String>) -> Result<()> {
             .serve(move |method, params| {
                 let name = name.clone();
                 let core_token = core_token.clone();
+                let rpc = rpc.clone();
                 async move {
                     match method.as_str() {
                         "ping" => Ok(serde_json::json!({ "pong": true })),
@@ -210,12 +225,25 @@ async fn serve(args: Vec<String>) -> Result<()> {
                                 .and_then(|value| value.as_str())
                                 .unwrap_or("/")
                                 .to_owned();
+                            // user:“连上电脑了之后也没有出现项目”+(界面用相对路径 /projects，
+                            // 本机通道在宿主里补了 /api/core 前缀，这条远程转发以前没有补，
+                            // 于是电脑上每个这样的请求都是 404)。
+                            let path = if path.starts_with("/api/") {
+                                path
+                            } else {
+                                format!("/api/core{path}")
+                            };
                             let body = params.get("body");
                             let (status, answer) =
                                 sunday_p2p::call_core("127.0.0.1", core_port, &core_token, &http, &path, body)?;
                             Ok(serde_json::json!({ "status": status, "body": answer }))
                         }
-                        other => bail!("unknown method {other}"),
+                        // 其余一律当成 Core 的 JSON-RPC 方法原样转过去：
+                        // 界面正是靠这条路拿项目、会话与工作台快照。
+                        other => match rpc.as_ref() {
+                            Some(bridge) => bridge.call(other, params).await,
+                            None => bail!("这台设备没有配置 Core 端口"),
+                        },
                     }
                 }
             })

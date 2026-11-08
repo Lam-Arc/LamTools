@@ -20,6 +20,11 @@ use sunday_p2p::{encode_ticket, Client, Identity, TrustStore};
 pub struct P2pState {
     dir: PathBuf,
     inner: Mutex<Inner>,
+    /// 最近一次成功连接的对端 id。
+    ///
+    /// user:“点刷新什么反应都没有”+(p2p_call 会整条调用期间持有 inner 锁，状态查询如果也去
+    /// 抢同一把锁，界面每 3 秒一次的刷新就会排在一条长 RPC 后面，看起来像卡住了)
+    peer: Mutex<Option<String>>,
 }
 
 #[derive(Default)]
@@ -35,6 +40,7 @@ impl P2pState {
         Self {
             dir,
             inner: Mutex::new(Inner::default()),
+            peer: Mutex::new(None),
         }
     }
 
@@ -70,7 +76,14 @@ pub async fn p2p_connect(
     state: State<'_, Arc<P2pState>>,
     ticket: String,
     name: String,
+    timeout_ms: Option<u64>,
 ) -> Result<Value, String> {
+    // user:“从点击图标到进入界面要 5 秒以内”+(启动时只用很短的时间试着连一次电脑，
+    // 连不上立刻用本机，绝不把界面卡在一次等不到的重连上)。
+    let budget = Duration::from_millis(timeout_ms.unwrap_or(45_000).clamp(400, 120_000));
+    // 连接的第一步是创建 iroh 端点，这一步本身就可能花几十秒（建 socket、连中继、查地址）；
+    // 只给拨号设上限没有用。整个连接过程都罩在同一个预算里。
+    let attempt = async move {
     let mut inner = state.inner.lock().await;
     if inner.endpoint.is_none() {
         let identity = Identity::load_or_create(&state.dir).map_err(|error| error.to_string())?;
@@ -104,7 +117,7 @@ pub async fn p2p_connect(
     )
     .ok();
     let client = match tokio::time::timeout(
-        Duration::from_secs(45),
+        budget,
         Client::dial(&endpoint, &ticket, &name),
     )
     .await
@@ -119,7 +132,8 @@ pub async fn p2p_connect(
             app.emit("p2p-progress", json!({ "phase": "timeout", "target": target }))
                 .ok();
             return Err(format!(
-                "连接超时（45 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。目标地址：{}",
+                "连接超时（{} 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。目标地址：{}",
+                budget.as_secs().max(1),
                 if target.is_empty() { "未知".to_owned() } else { target }
             ));
         }
@@ -130,6 +144,7 @@ pub async fn p2p_connect(
     )
     .ok();
     let peer = client.peer.clone();
+    *state.peer.lock().await = Some(peer.clone());
     // user:“接收实时事件”+(Core 的通知由 PC 侧泵进隧道，这里换成 Tauri 事件交给界面；
     // 界面拿到的是同一条通知，不需要知道它是从哪条网络路径来的)。
     let mut events = client.subscribe();
@@ -147,6 +162,15 @@ pub async fn p2p_connect(
     });
     inner.client = Some(client);
     Ok(json!({ "peer": peer }))
+    };
+
+    match tokio::time::timeout(budget + Duration::from_millis(250), attempt).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "连接超时（{} 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。",
+            budget.as_secs().max(1)
+        )),
+    }
 }
 
 /// Forwards one call over the tunnel. `core_http` is what the shared UI uses for the
@@ -164,9 +188,15 @@ pub async fn p2p_call(
             client.close();
         }
     }
-    let client = inner.client.as_mut().ok_or_else(|| {
-        "和电脑的连接已经断开，回「远程连接」点刷新重连一次".to_owned()
-    })?;
+    if inner.client.is_none() {
+        drop(inner);
+        *state.peer.lock().await = None;
+        return Err("和电脑的连接已经断开，回「远程连接」点刷新重连一次".to_owned());
+    }
+    let client = inner
+        .client
+        .as_mut()
+        .ok_or_else(|| "和电脑的连接已经断开，回「远程连接」点刷新重连一次".to_owned())?;
     client
         .call(&method, params.unwrap_or_else(|| json!({})))
         .await
@@ -204,21 +234,28 @@ pub async fn p2p_qr(ticket: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn p2p_status(state: State<'_, Arc<P2pState>>) -> Result<Value, String> {
-    let inner = state.inner.lock().await;
-    // user:“连上了之后也报错”“后面就没有再连上过”+(只看有没有 Client 对象会把一条
-    // 已经断掉的隧道报成「已连接」，界面于是既不重连也不提示；这里按隧道的真实
-    // 存活状态回答，断掉就当成没连，界面才有机会自己重连)。
-    let connected = inner
-        .client
-        .as_ref()
-        .map(|client| client.is_alive())
-        .unwrap_or(false);
-    Ok(json!({
-        "connected": connected,
-        "peer": inner.client.as_ref().map(|client| client.peer.clone()),
-        "ticket": inner.ticket,
-    }))
+    // 有一条调用正在进行时锁是拿不到的，那说明隧道正常在用；这时候按缓存回答，别让
+    // 刷新按钮排在它后面。
+    let inner = match state.inner.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(_) => None,
+    };
+    let cached = state.peer.lock().await.clone();
+    if let Some(inner) = inner.as_ref() {
+        let connected = inner
+            .client
+            .as_ref()
+            .map(|client| client.is_alive())
+            .unwrap_or(false);
+        return Ok(json!({
+            "connected": connected,
+            "peer": inner.client.as_ref().map(|c| c.peer.clone()).or(cached),
+            "ticket": inner.ticket,
+        }));
+    }
+    return Ok(json!({ "connected": true, "busy": true, "peer": cached }));
 }
+
 
 #[tauri::command]
 pub async fn p2p_disconnect(state: State<'_, Arc<P2pState>>) -> Result<(), String> {
@@ -226,6 +263,8 @@ pub async fn p2p_disconnect(state: State<'_, Arc<P2pState>>) -> Result<(), Strin
     if let Some(client) = inner.client.take() {
         client.close();
     }
+    drop(inner);
+    *state.peer.lock().await = None;
     Ok(())
 }
 

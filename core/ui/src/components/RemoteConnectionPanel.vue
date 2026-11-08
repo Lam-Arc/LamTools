@@ -116,7 +116,7 @@ import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
-import { readTicket, saveTicket } from '@/app/remoteSession.ts'
+import { readTicket, rememberDevice, saveTicket } from '@/app/remoteSession.ts'
 
 /**
  * 配对面板。
@@ -339,7 +339,11 @@ async function connect(): Promise<void> {
     const result = await call<{ peer?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
     connected.value = Boolean(result?.peer)
     peer.value = result?.peer ?? ''
-    if (result?.peer) saveTicket(ticketInput.value.trim())
+    if (result?.peer) {
+      saveTicket(ticketInput.value.trim())
+      // 配过的电脑进设备清单，之后可以在输入框上方的设备菜单里直接切。
+      rememberDevice(ticketInput.value.trim(), shortId(result.peer))
+    }
     // user:“两种模式可切换”+(通道在启动时选定，切换就是让界面按新通道重开一次；
     // 本机 Core 不受影响，重开后仍是同一个会话)。
     window.location.reload()

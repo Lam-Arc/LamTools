@@ -168,15 +168,9 @@
           >
             <span aria-hidden="true">＋</span><span>{{ sidebarPrimaryActionLabel }}</span>
           </button>
-          <button
-            v-if="appRuntime.platform === 'mobile' && !activePluginMode"
-            class="sidebar-sync-project"
-            type="button"
-            :title="t('同步项目')"
-            :aria-label="t('同步项目')"
-            data-sidebar-sync-project
-            @click="emit('sync-request')"
-          ><MonitorSmartphone :size="17" :stroke-width="1.9" aria-hidden="true" /></button>
+          <!-- user:“新建项目右边的电脑和手机按钮是干什么的？点了为什么什么反应都没有，
+               如果没有用，就把它去掉”+(它发的是一个没人接的事件，是个死按钮；设备切换
+               现在在输入框上方的设备菜单里，这里不再留一个没有反应的图标)。 -->
         </div>
         <CoreProjectCreate
           v-if="showProjectCreate && !activePluginMode"
