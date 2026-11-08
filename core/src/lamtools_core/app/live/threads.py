@@ -443,6 +443,18 @@ async def handle_thread_start_operation(
             data={"code": "SESSION_ALREADY_EXISTS"},
         ))
     await context.hub.publish(event)
+    # user:“如果在电脑的库里面，那我没看见，很有可能的原因就是电脑这边没有前端更新”+
+    # (thread/started 只发给订阅了这条会话的连接；别的客户端开着另一个会话，就收不到
+    #  任何通知，会话列表要手动刷新才出现。这里补一条全局通知，所有连接都会刷新列表)。
+    await context.hub.broadcast({
+        "method": "session/created",
+        "thread_id": thread_id,
+        "payload": {
+            "session_id": thread_id,
+            "title": str(params.get("title") or ""),
+            "work_root": str(params.get("work_root") or ""),
+        },
+    })
     return CoreLiveOperationOutcome(
         response=rpc_result(
             request_id,

@@ -1627,6 +1627,9 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 :deep(a[href]:hover) { text-decoration: underline; }
 /* user:“把那个@的符号去掉 换成对应的文件图标”+(图标与文件名同行居中对齐；
    徽标本体样式在全局 layout.css，30% 圆角)。 */
-:deep(a.file-reference-link) { display: inline-flex; align-items: center; gap: 3px; }
-:deep(.file-reference-icon) { display: inline-flex; flex: none; align-items: center; justify-content: center; }
+/* user:“可见 txt link 图标错位”+(以前整条链接是 inline-flex：它的基线取第一个子项，
+   也就是徽标底部，于是链接文字比周围正文低一截、看起来像图标掉到下一行。改回行内排版，
+   徽标自己对齐文字中线；窄屏上长文件名也能正常折行)。 */
+:deep(a.file-reference-link) { display: inline; overflow-wrap: anywhere; }
+:deep(.file-reference-icon) { display: inline-block; flex: none; margin-right: 3px; vertical-align: -3px; }
 </style>

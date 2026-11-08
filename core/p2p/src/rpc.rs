@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio_tungstenite::tungstenite::Message;
 
 type Job = (String, Value, oneshot::Sender<Result<Value>>);
@@ -25,6 +25,18 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>>;
 /// A live JSON-RPC bridge to the local Core.
 pub struct CoreRpc {
     jobs: mpsc::Sender<Job>,
+    /// 这条桥自己那次 `initialize` 的答复。
+    ///
+    /// user:“我这里显示的是暂无可用模型”+(界面在远程模式下也会发一次 initialize，而
+    /// Core 一条连接只允许介绍一次；不留这份答复，界面之后每条 RPC 都会被拒成
+    /// 「Already initialized」，模型、权限、插件就永远是空的)。
+    initialized: Value,
+    /// Core 推到这条连接上的通知。
+    ///
+    /// user:“显示和电脑断联了”“请立即回复你好没反应”+(Core 只把会话的流式事件推给
+    /// 「订阅了这个会话」的连接；另开一条没订阅的 socket 永远收不到 item/delta，手机上
+    /// 于是发得出去、看不见回复。请求和事件共用这条订阅过的连接，事件从这里转发出去)。
+    events: broadcast::Sender<Value>,
 }
 
 impl CoreRpc {
@@ -61,6 +73,36 @@ impl CoreRpc {
             .await
             .context("cannot send the initialize frame")?;
 
+        // 先收下这次握手的答复，再开始转发。
+        let initialized = loop {
+            let message = socket
+                .next()
+                .await
+                .context("Core 在握手期间关闭了 RPC 通道")?
+                .context("握手时读取 Core 的答复失败")?;
+            let text = match message {
+                Message::Text(text) => text.to_string(),
+                Message::Binary(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                Message::Close(_) => bail!("Core 在握手时关闭了 RPC 通道"),
+            };
+            let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
+            if value.get("id").and_then(Value::as_u64) != Some(0) {
+                // 握手期间的推送不关这次答复的事。
+                continue;
+            }
+            if let Some(error) = value.get("error") {
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Core 拒绝了 initialize");
+                bail!("{message}");
+            }
+            break value.get("result").cloned().unwrap_or(Value::Null);
+        };
+
+        let (events, _) = broadcast::channel::<Value>(4096);
+        let events_for_reader = events.clone();
         let (mut sink, mut stream) = socket.split();
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (jobs, mut inbox) = mpsc::channel::<Job>(64);
@@ -78,7 +120,13 @@ impl CoreRpc {
                     Message::Close(_) => break,
                 };
                 let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
-                let Some(id) = value.get("id").and_then(|id| id.as_u64()) else { continue };
+                let Some(id) = value.get("id").and_then(|id| id.as_u64()) else {
+                    // 没有 id 的是推送（item/delta、状态变化）：交给事件转发，不在这里丢。
+                    if value.get("method").is_some() {
+                        let _ = events_for_reader.send(value);
+                    }
+                    continue;
+                };
                 let Some(sender) = reader_pending.lock().await.remove(&id) else { continue };
                 if let Some(error) = value.get("error") {
                     let message = error
@@ -118,7 +166,20 @@ impl CoreRpc {
             }
         });
 
-        Ok(Self { jobs })
+        Ok(Self { jobs, initialized, events })
+    }
+
+    /// 这条 Core 连接上的推送流。界面订阅的会话一经 `thread/resume` 生效，进度就来了。
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Value> {
+        self.events.subscribe()
+    }
+
+    /// 远程界面的 `initialize` 该得到的答复。
+    ///
+    /// 界面每次连接、每次重载都会发一次；桥把它换成同一条 Core 连接上的那次握手结果，
+    /// 既满足协议，也不会让 Core 因为“第二次介绍”而拒绝后续所有调用。
+    pub fn initialize_result(&self) -> Value {
+        self.initialized.clone()
     }
 
     /// One JSON-RPC call, answered by the Core on the shared socket.

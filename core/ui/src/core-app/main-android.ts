@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import { createRemoteTransport } from '@/transport/remoteTransport.ts'
-import { ensureRemote, remoteStatus } from '@/app/remoteSession.ts'
+import { ensureRemote, readTicket, remoteStatus } from '@/app/remoteSession.ts'
 import { bootScreen, type BootProgressPayload } from './bootScreen.ts'
 
 /**
@@ -137,6 +137,54 @@ function startCoreOnce(attempts = 3): Promise<unknown> {
  *  user:“从点击图标到进入工作台，全程有反馈：原生窗口底色先挡住白闪，随后 HTML 启动层
  *  接管，显示品牌标记、动画和三阶段文字”+(这里就是「随后接管」：启动层挂在 #app 外面，
  *  Vue 挂载清不掉它，只有首屏真的有内容了才淡出)。 */
+/** 隧道真的连上时切过去，一次而已。
+ *
+ *  user:“类似的时序问题不要再犯，检查”+(以前只等启动时那一次拨号的 promise：拨号晚于
+ *  预算就再也没人切了，于是隧道已经连着，界面还停在本机、空着。这里改成听宿主的连接
+ *  事件——只要有配对的票据、还没切过、用户也没主动选本机，就连上即切)。
+ */
+function switchToRemote(peer: string, alreadyRemote: () => boolean): void {
+  if (!peer) return
+  if (alreadyRemote()) return
+  if (!readTicket()) return
+  try {
+    if (sessionStorage.getItem('sunday.p2p.switched') === peer) return
+    sessionStorage.setItem('sunday.p2p.switched', peer)
+  } catch {
+    return
+  }
+  window.location.reload()
+}
+
+/** 连不上就过一会儿再试，直到连上或用户自己选回本机。
+ *
+ *  user:“显示和电脑断联了”“第一次连上后面就连不上”+(以前启动时只拨一次，20 秒没拨通
+ *  就再也不试了，界面永远停在本机；电脑重启、换网之后手机只能重开应用。这里失败就退避
+ *  重试，回到前台也再给一次，读到票据消失（用户主动选本机）才停)。
+ */
+let remoteLoopRunning = false
+
+async function keepRemoteAlive(alreadyRemote: () => boolean): Promise<void> {
+  if (remoteLoopRunning) return
+  remoteLoopRunning = true
+  let delay = 3_000
+  try {
+    while (!alreadyRemote()) {
+      if (!readTicket()) return
+      const peer = await ensureRemote(25_000)
+      if (peer) {
+        switchToRemote(peer, alreadyRemote)
+        return
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, delay))
+      delay = Math.min(delay * 2, 30_000)
+      if (document.visibilityState === 'visible' && alreadyRemote()) return
+    }
+  } finally {
+    remoteLoopRunning = false
+  }
+}
+
 async function boot(): Promise<void> {
   clearStaleSplitState()
   const screen = bootScreen()
@@ -157,6 +205,24 @@ async function boot(): Promise<void> {
     console.warn('[sunday] boot: cannot listen for runtime-progress', describeError(error))
   }
 
+  // 先挂上「连上就切」的监听，再开始拨号：启动期间就拨通的那次也不能漏。
+  let usingRemote = false
+  try {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return
+      if (usingRemote || !readTicket()) return
+      void keepRemoteAlive(() => usingRemote)
+    })
+    await listen<{ phase?: string }>('p2p-progress', (event) => {
+      if (event.payload?.phase !== 'connected') return
+      void remoteStatus().then((status) => {
+        switchToRemote(status?.peer ?? '', () => usingRemote)
+      })
+    })
+  } catch (error) {
+    console.warn('[sunday] boot: cannot listen for p2p-progress', describeError(error))
+  }
+
   // 拨号和启动核心同时进行：连电脑要花的时间藏在核心启动里，不额外占用首屏。
   // user:“从点击这个应用到我进界面，我定的要求是 5 秒以内”+(所以这两件事不能排队)。
   // 后台拨号不占界面时间，预算给足；连上了再重开一次切过去。
@@ -174,18 +240,19 @@ async function boot(): Promise<void> {
     // user:“我定的要求是 5 秒以内”+(界面永远不等拨号：宿主要是已经连着电脑就整条走隧道，
     // 否则先用本机把界面挂出来，拨号在后台继续，连上了再重开一次切过去)。
     const knownRemote = await remoteStatus()
-    const peer: string | null = knownRemote?.connected ? (knownRemote.peer ?? '') : null
+    // 正在拨号不算连上：那时隧道还没建好，整条走隧道只会读一次空一次。
+    const peer: string | null = knownRemote?.connected && !knownRemote.connecting
+      ? (knownRemote.peer ?? '')
+      : null
+    usingRemote = peer !== null
     if (peer === null) {
       void remoteAttempt.then((late) => {
-        if (!late) return
-        try {
-          if (performance.now() > 40_000) return
-          if (sessionStorage.getItem('sunday.p2p.switched') === late) return
-          sessionStorage.setItem('sunday.p2p.switched', late)
-        } catch {
+        if (late) {
+          switchToRemote(late, () => usingRemote)
           return
         }
-        window.location.reload()
+        // 这一次没拨通不代表连不上：接着退避重试。
+        return keepRemoteAlive(() => usingRemote)
       })
     }
     const activeTransport = peer === null ? gateTransport(transport, coreReady) : createRemoteTransport()

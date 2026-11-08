@@ -195,7 +195,34 @@ async fn serve(args: Vec<String>) -> Result<()> {
         };
         tokio::spawn(async move {
         let closed = Arc::new(tokio::sync::Mutex::new(false));
-        if core_port != 0 {
+        if let Some(bridge) = rpc.as_ref() {
+            // user:“请立即回复你好没反应”+(事件必须走界面订阅过的那条 Core 连接；另起一条
+            // 没订阅的 socket 收不到任何会话进度，手机就只能发出消息、看不到回复)。
+            let send = link.sender();
+            let flag = Arc::clone(&closed);
+            let mut events = bridge.subscribe_events();
+            tokio::spawn(async move {
+                loop {
+                    if *flag.lock().await {
+                        return;
+                    }
+                    match events.recv().await {
+                        Ok(value) => {
+                            let Some(method) = value.get("method").and_then(|item| item.as_str()) else {
+                                continue;
+                            };
+                            let params = value.get("params").cloned().unwrap_or(serde_json::Value::Null);
+                            if sunday_p2p::link::write_event(&send, method, params).await.is_err() {
+                                return;
+                            }
+                        }
+                        // 一轮里事件比转发快时丢掉最旧的；快照会补回来。
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => return,
+                    }
+                }
+            });
+        } else if core_port != 0 {
             let send = link.sender();
             let flag = Arc::clone(&closed);
             tokio::spawn(sunday_p2p::events::pump_until_closed(core_port, pump_token, send, flag));
@@ -210,6 +237,15 @@ async fn serve(args: Vec<String>) -> Result<()> {
                         "ping" => Ok(serde_json::json!({ "pong": true })),
                         "whoami" => Ok(serde_json::json!({ "device": name })),
                         "echo" => Ok(params),
+                        // 界面在每条连接上都会先发一次 initialize，重载之后再发一次。
+                        // 桥已经替它介绍过自己，这里把同一份答复还回去，而不是让 Core
+                        // 以「Already initialized」拒掉界面后面所有 RPC。
+                        "initialize" => match rpc.as_ref() {
+                            Some(bridge) => Ok(bridge.initialize_result()),
+                            None => bail!("这台设备没有配置 Core 端口"),
+                        },
+                        // 介绍完成的确认通知：Core 那边早就不需要了。
+                        "initialized" => Ok(serde_json::json!({})),
                         // 远程的 Core 调用：把 method/path 原样转给本机 Core。
                         "core_http" => {
                             if core_port == 0 {

@@ -4233,6 +4233,24 @@ async function drainConfigNotices() {
   }
 }
 
+let sessionListTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * 会话列表的兜底刷新。
+ *
+ * user:“如果在电脑的库里面，那我没看见，很有可能的原因就是电脑这边没有前端更新”
+ * +(新会话、标题、状态都可能由另一台设备或定时任务改掉；旧版 Core 不会把
+ *  「新会话」广播给没订阅它的连接，界面就一直停在打开时那份列表。这里每 20 秒对一次
+ *  服务端，只在页面可见时发，失败就等下一轮)。
+ */
+function startSessionListPolling(): void {
+  if (sessionListTimer !== null) return
+  sessionListTimer = setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+    void refreshSessions().catch(() => undefined)
+  }, 20_000)
+}
+
 let configNoticeTimer: ReturnType<typeof setInterval> | null = null
 
 function startConfigNoticePolling(): void {
@@ -4447,7 +4465,10 @@ onMounted(() => {
     if (document.visibilityState !== 'visible') return
     startupReconcileAttempt = 0
     scheduleStartupReconcile(true)
+    // 回到前台先对一次会话列表：期间可能有别的设备动过它。
+    void refreshSessions().catch(() => undefined)
   })
+  startSessionListPolling()
   // External config edits and model substitutions must reach the user even
   // when no settings surface is open.
   startConfigNoticePolling()
