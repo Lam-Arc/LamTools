@@ -219,6 +219,8 @@ class BootScreen {
     await afterPaint()
     nodes.root.classList.add('is-leaving')
     await delay(FADE_MS)
+    // 启动层里的色场是一个 canvas，层没了就该停算，别让看不见的动画继续占着 GPU。
+    window.dispatchEvent(new Event('sunday-boot-done'))
     nodes.root.remove()
     this.nodes = null
   }

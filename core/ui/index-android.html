@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#14161a" />
+  <meta name="theme-color" content="#070912" />
   <title>Sunday</title>
   <!--
     The boot layer's styles are inline on purpose.
@@ -12,6 +12,11 @@
     CSS 提供：那份 CSS 要等模块脚本下载解析完才生效，而第一个白帧就发生在它之前)。
     Everything below must work before any bundle is parsed, which is why it is here and
     not in a stylesheet.
+
+    背景是一张网格渐变（mesh gradient），不是几个彩色圆叠在一起：
+    user:“要的是像苹果或者说谷歌那种，就是很高级的流动感”+(所以用canvas逐像素算一遍
+    低分辨率色场再平滑放大——色与色之间是插值出来的连续过渡，没有圆心、没有边、没有
+    色带，五个色点只是在很慢地互相游动)。
   -->
   <style>
     html,
@@ -19,7 +24,7 @@
       margin: 0;
       padding: 0;
       height: 100%;
-      background: #14161a;
+      background: #070912;
       color: #e6e8eb;
       font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
       -webkit-text-size-adjust: 100%;
@@ -33,162 +38,183 @@
       inset: 0;
       z-index: 2147483000;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 14px;
       padding: 24px;
       box-sizing: border-box;
-      background: #14161a;
-      transition: opacity 0.34s ease;
-      will-change: opacity;
+      overflow: hidden;
+      background: #070912;
+      transition: opacity 0.38s ease, transform 0.38s ease;
+      will-change: opacity, transform;
     }
 
     .sunday-boot.is-leaving {
       opacity: 0;
+      transform: scale(1.035);
       pointer-events: none;
     }
 
-    .sunday-boot__mark {
-      position: relative;
-      width: 58px;
-      height: 58px;
-      margin-bottom: 4px;
-    }
-
-    .sunday-boot__ring {
+    /* 色场本身。canvas 的分辨率只有屏幕的一半，再往上拉伸，插值把一切都抹平。 */
+    .sunday-boot__canvas {
       position: absolute;
       inset: 0;
-      border-radius: 50%;
-      border: 2px solid rgba(230, 232, 235, 0.14);
-      border-top-color: #7aa2ff;
-      animation: sunday-boot-spin 2.4s linear infinite;
+      width: 100%;
+      height: 100%;
+      display: block;
+      pointer-events: none;
+      filter: saturate(1.06) contrast(1.04);
     }
 
-    .sunday-boot__core {
+    /* 压四角、留中间：不让画面变成一张平均的蓝紫纸。 */
+    .sunday-boot__veil {
       position: absolute;
-      inset: 19px;
-      border-radius: 50%;
-      background: #e6e8eb;
-      animation: sunday-boot-breathe 2.4s ease-in-out infinite;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(ellipse 104% 92% at 50% 48%, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.1) 72%, rgba(5, 7, 15, 0.46) 100%),
+        linear-gradient(180deg, rgba(5, 7, 15, 0.26) 0%, rgba(5, 7, 15, 0) 24%, rgba(5, 7, 15, 0) 76%, rgba(5, 7, 15, 0.22) 100%);
     }
 
-    .sunday-boot__title {
-      font-size: 17px;
+    /* 极淡的颗粒，静态一层，避免大面积渐变出现色带。 */
+    .sunday-boot__grain {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.05;
+      mix-blend-mode: soft-light;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='160' height='160' filter='url(%23n)' opacity='0.9'/></svg>");
+      background-size: 160px 160px;
+    }
+
+    /* 中间一层很淡的柔光，把字托起来，不靠压暗背景换可读性。 */
+    .sunday-boot__bloom {
+      position: absolute;
+      left: 50%;
+      top: 46%;
+      width: 108vmax;
+      height: 108vmax;
+      transform: translate3d(-50%, -50%, 0);
+      pointer-events: none;
+      border-radius: 50%;
+      background: radial-gradient(
+        circle at 50% 50%,
+        rgba(236, 240, 255, 0.10) 0%,
+        rgba(236, 240, 255, 0.045) 34%,
+        rgba(230, 236, 255, 0) 62%
+      );
+      animation: sunday-boot-bloom 21s ease-in-out infinite;
+      will-change: opacity;
+    }
+
+    .sunday-boot__stack {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      text-align: center;
+      transform: translateY(-2vh);
+    }
+
+    /* 字标用极慢的光带擦过，代替任何加载指示。 */
+    .sunday-boot__word {
+      font-size: 15px;
       font-weight: 600;
-      letter-spacing: 0.16em;
+      letter-spacing: 0.52em;
+      text-indent: 0.52em;
       text-transform: uppercase;
-      color: rgba(230, 232, 235, 0.92);
+      background: linear-gradient(100deg, rgba(255, 255, 255, 0.46) 34%, #ffffff 50%, rgba(255, 255, 255, 0.46) 66%);
+      background-size: 260% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation: sunday-boot-sheen 8s ease-in-out infinite;
     }
 
     .sunday-boot__phase {
       min-height: 1.5em;
-      font-size: 15px;
-      color: #e6e8eb;
-      text-align: center;
-    }
-
-    .sunday-boot__track {
-      width: min(232px, 62vw);
-      height: 3px;
-      border-radius: 999px;
-      background: rgba(230, 232, 235, 0.12);
-      overflow: hidden;
-    }
-
-    .sunday-boot__fill {
-      width: 0;
-      height: 100%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, #7aa2ff, #b48cff);
-      transition: width 0.35s ease;
-    }
-
-    /* No honest denominator (a manifest from before the unpack size was recorded): a
-       sliding bar says "working" without inventing a number. */
-    .sunday-boot.is-indeterminate .sunday-boot__fill {
-      width: 38%;
-      animation: sunday-boot-slide 1.4s ease-in-out infinite;
+      margin-top: 2px;
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      color: rgba(233, 236, 243, 0.8);
+      text-shadow: 0 0 20px rgba(110, 130, 240, 0.3);
     }
 
     .sunday-boot__note {
-      min-height: 2.6em;
-      max-width: 78vw;
-      font-size: 12px;
-      line-height: 1.6;
-      text-align: center;
-      color: rgba(230, 232, 235, 0.55);
+      min-height: 2.4em;
+      max-width: 76vw;
+      font-size: 11.5px;
+      line-height: 1.7;
+      letter-spacing: 0.02em;
+      color: rgba(233, 236, 243, 0.42);
       white-space: pre-wrap;
     }
 
     .sunday-boot__retry {
-      margin-top: 6px;
-      padding: 11px 20px;
-      border-radius: 10px;
-      border: 1px solid #2f3540;
-      background: #1b1f26;
-      color: #e6e8eb;
-      font: 14px system-ui, -apple-system, 'Segoe UI', sans-serif;
+      margin-top: 10px;
+      padding: 11px 22px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.9);
+      font: 13px system-ui, -apple-system, 'Segoe UI', sans-serif;
+      letter-spacing: 0.04em;
+      -webkit-backdrop-filter: blur(8px);
+      backdrop-filter: blur(8px);
     }
 
     .sunday-boot__retry:active {
-      background: #232833;
+      background: rgba(255, 255, 255, 0.12);
     }
 
-    .sunday-boot.is-error .sunday-boot__ring {
-      border-top-color: #f08a8a;
-      animation: none;
+    /* 失败：光停住、整体褪色，只留说明与重试。 */
+    .sunday-boot.is-error .sunday-boot__canvas {
+      filter: saturate(0.35) brightness(0.72);
     }
 
-    .sunday-boot.is-error .sunday-boot__core {
-      background: #f08a8a;
+    .sunday-boot.is-error .sunday-boot__word {
+      background: none;
+      -webkit-text-fill-color: rgba(255, 178, 178, 0.9);
       animation: none;
     }
 
     .sunday-boot.is-error .sunday-boot__phase {
-      color: #f08a8a;
-    }
-
-    .sunday-boot.is-error .sunday-boot__track {
-      display: none;
+      color: #ff9d9d;
+      text-shadow: none;
     }
 
     .sunday-boot.is-error .sunday-boot__note {
-      color: rgba(240, 138, 138, 0.8);
+      color: rgba(255, 157, 157, 0.62);
     }
 
-    @keyframes sunday-boot-spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
-    @keyframes sunday-boot-breathe {
+    @keyframes sunday-boot-bloom {
       0%,
       100% {
-        transform: scale(0.86);
-        opacity: 0.65;
+        opacity: 0.6;
       }
       50% {
-        transform: scale(1);
         opacity: 1;
       }
     }
 
-    @keyframes sunday-boot-slide {
+    @keyframes sunday-boot-sheen {
       0% {
-        transform: translateX(-100%);
+        background-position: 140% 50%;
       }
+      55%,
       100% {
-        transform: translateX(280%);
+        background-position: -40% 50%;
       }
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .sunday-boot__ring,
-      .sunday-boot__core,
-      .sunday-boot.is-indeterminate .sunday-boot__fill {
+      .sunday-boot__bloom,
+      .sunday-boot__word {
         animation: none;
+      }
+      .sunday-boot__word {
+        background: none;
+        -webkit-text-fill-color: rgba(255, 255, 255, 0.86);
       }
     }
   </style>
@@ -201,16 +227,165 @@
     user:“启动层独立于 #app，Vue 挂载不会清掉它”+(所以是 body 的兄弟节点，不是子节点)。
   -->
   <div id="boot-screen" class="sunday-boot" role="status" aria-live="polite">
-    <div class="sunday-boot__mark" aria-hidden="true">
-      <span class="sunday-boot__ring"></span>
-      <span class="sunday-boot__core"></span>
+    <canvas id="boot-field" class="sunday-boot__canvas" aria-hidden="true"></canvas>
+    <div class="sunday-boot__veil" aria-hidden="true"></div>
+    <div class="sunday-boot__grain" aria-hidden="true"></div>
+    <div class="sunday-boot__bloom" aria-hidden="true"></div>
+    <div class="sunday-boot__stack">
+      <div class="sunday-boot__word">Sunday</div>
+      <div class="sunday-boot__phase" id="boot-phase">准备运行时</div>
+      <div class="sunday-boot__note" id="boot-note">正在准备启动环境…</div>
+      <button class="sunday-boot__retry" id="boot-retry" type="button" hidden>重试</button>
     </div>
-    <div class="sunday-boot__title">Sunday</div>
-    <div class="sunday-boot__phase" id="boot-phase">准备运行时</div>
-    <div class="sunday-boot__track"><div class="sunday-boot__fill" id="boot-fill"></div></div>
-    <div class="sunday-boot__note" id="boot-note">正在准备启动环境…</div>
-    <button class="sunday-boot__retry" id="boot-retry" type="button" hidden>重试</button>
   </div>
+  <!-- boot-field:begin -->
+  <script>
+    /*
+     * 网格渐变。
+     *
+     * 逐像素算一张很小的色场（30x54），再整块平滑放大到屏幕：色与色之间是插值，没有
+     * 圆心、没有边、没有色带，所以看起来是一整片在缓慢呼吸的光，而不是几个彩色圆。
+     * 五个色点各自沿不同的周期游动（23/27/33/41/47 秒），永远不重复同一个构图。
+     * 每像素的运算量不到一千个像素，手机上也不吃 CPU。
+     */
+    (function () {
+      var canvas = document.getElementById('boot-field');
+      if (!canvas || !canvas.getContext) return;
+      var ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) return;
+
+      var SMALL_W = 30;
+      var SMALL_H = 54;
+      var small = document.createElement('canvas');
+      small.width = SMALL_W;
+      small.height = SMALL_H;
+      var sctx = small.getContext('2d');
+      if (!sctx) return;
+      var frame = sctx.createImageData(SMALL_W, SMALL_H);
+      var pixels = frame.data;
+
+      // 底色：近黑的深海军蓝。所有颜色都从这个底上长出来，所以画面永远不会发白。
+      var BASE = [4, 5, 10];
+
+      // 五个色点。位置是 0..1 的归一化坐标，ox/oy 是游动幅度，tx/ty 是周期（秒）。
+      var POINTS = [
+        { c: [48, 62, 168], w: 1.05, s: 0.27, cx: 0.26, cy: 0.18, ox: 0.30, oy: 0.24, tx: 15, ty: 21, ph: 0.0 },
+        { c: [126, 70, 202], w: 0.95, s: 0.25, cx: 0.78, cy: 0.24, ox: 0.28, oy: 0.30, tx: 19, ty: 13, ph: 1.7 },
+        { c: [30, 146, 176], w: 0.85, s: 0.26, cx: 0.18, cy: 0.80, ox: 0.30, oy: 0.24, tx: 23, ty: 17, ph: 3.1 },
+        { c: [122, 106, 214], w: 0.5, s: 0.23, cx: 0.52, cy: 0.50, ox: 0.24, oy: 0.30, tx: 12, ty: 26, ph: 4.4 },
+        { c: [198, 116, 86], w: 0.34, s: 0.17, cx: 0.94, cy: 0.93, ox: 0.07, oy: 0.06, tx: 26, ty: 14, ph: 5.6 }
+      ];
+
+      var reduced =
+        window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var started = 0;
+      var raf = 0;
+      var last = -1;
+
+      function paint(seconds) {
+        var t = seconds;
+        for (var i = 0; i < POINTS.length; i += 1) {
+          var p = POINTS[i];
+          p.x = p.cx + p.ox * Math.sin(((2 * Math.PI) / p.tx) * t + p.ph);
+          p.y = p.cy + p.oy * Math.cos(((2 * Math.PI) / p.ty) * t + p.ph * 1.3);
+        }
+
+        // 坐标先被一层很慢的正弦扭曲一下：颜色于是像流体一样互相挤，而不是整体平移。
+        // 每一行、每一列的偏移都在循环外算好，逐像素只剩加减。
+        var warpX = new Float32Array(SMALL_H);
+        var warpY = new Float32Array(SMALL_W);
+        for (var ry = 0; ry < SMALL_H; ry += 1) {
+          warpX[ry] = Math.sin((ry / (SMALL_H - 1)) * 3.1 + t * 0.42) * 0.062;
+        }
+        for (var rx = 0; rx < SMALL_W; rx += 1) {
+          warpY[rx] = Math.cos((rx / (SMALL_W - 1)) * 2.6 - t * 0.36) * 0.062;
+        }
+
+        var o = 0;
+        for (var y = 0; y < SMALL_H; y += 1) {
+          var ny = y / (SMALL_H - 1);
+          var wy = warpX[y];
+          for (var x = 0; x < SMALL_W; x += 1) {
+            var nx = x / (SMALL_W - 1);
+            var wx = nx + warpY[x];
+            var wyy = ny + wy;
+            var r = 0;
+            var g = 0;
+            var b = 0;
+            var sum = 0;
+            for (var k = 0; k < POINTS.length; k += 1) {
+              var q = POINTS[k];
+              var dx = wx - q.x;
+              var dy = wyy - q.y;
+              var d2 = dx * dx + dy * dy;
+              var weight = q.w * Math.exp(-d2 / (2 * q.s * q.s));
+              r += q.c[0] * weight;
+              g += q.c[1] * weight;
+              b += q.c[2] * weight;
+              sum += weight;
+            }
+            // 曝光压到四成左右：颜色是"光"，不是"颜色块"，底子必须还是近黑。
+            var a = (1 - Math.exp(-sum)) * 0.9;
+            var vx = (wx - 0.5) * 2;
+            var vy = (wyy - 0.5) * 2;
+            var radius = Math.sqrt(vx * vx + vy * vy);
+            var vignette = 1 - 0.6 * Math.max(0, Math.min(1, (radius - 0.42) / 0.78));
+
+            pixels[o] = (BASE[0] + (r / sum - BASE[0]) * a) * vignette;
+            pixels[o + 1] = (BASE[1] + (g / sum - BASE[1]) * a) * vignette;
+            pixels[o + 2] = (BASE[2] + (b / sum - BASE[2]) * a) * vignette;
+            pixels[o + 3] = 255;
+            o += 4;
+          }
+        }
+
+        sctx.putImageData(frame, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(small, 0, 0, canvas.width, canvas.height);
+      }
+
+      function resize() {
+        var ratio = window.devicePixelRatio || 1;
+        var cap = 560;
+        canvas.width = Math.max(180, Math.min(cap, Math.round((window.innerWidth * ratio) / 2)));
+        canvas.height = Math.max(320, Math.min(cap * 2, Math.round((window.innerHeight * ratio) / 2)));
+        last = -1;
+      }
+
+      function tick(now) {
+        if (!started) started = now;
+        var seconds = (now - started) / 1000;
+        // 30fps 足够：这一层本来就是慢动作，多出的帧只会白烧电。
+        if (seconds - last >= 1 / 30) {
+          last = seconds;
+          paint(seconds);
+        }
+        raf = window.requestAnimationFrame(tick);
+      }
+
+      resize();
+      window.addEventListener('resize', function () {
+        resize();
+        paint(last > 0 ? last : 0);
+      });
+
+      if (reduced) {
+        paint(0);
+      } else {
+        raf = window.requestAnimationFrame(tick);
+      }
+
+      // 启动层被移除后停止计算，别让一个看不见的动画继续占着 GPU。
+      window.addEventListener('sunday-boot-done', function () {
+        if (raf) window.cancelAnimationFrame(raf);
+        raf = 0;
+      });
+
+      window.__sundayBootField = { paint: paint };
+    })();
+  </script>
+  <!-- boot-field:end -->
   <script type="module" src="/src/core-app/main-android.ts"></script>
 </body>
 </html>

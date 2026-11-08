@@ -11,11 +11,11 @@
 | `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 297 MB |
 | `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB |
 
-校验和（2026-11-07 19:01 构建，含相机方向与连接可靠性修复）：
+校验和（2026-11-07 19:57 构建，含新首屏、相机方向与连接可靠性修复）：
 
 ```
-aa56b2d95d682f758a56b26dbe0b3d937ba8a2caf60755223019e3fce3e86cd3  sunday-m-arm64-debug.apk
-86a726c9ae70410fd09e1d1beaef1ffbe69dde8d54d1747ab7128231abae4f02  sunday-m-x86_64-debug.apk
+0d50e1418bc856b62b9cd1078579edd4d575ee716ebc581d68fa3b44241b25f9  sunday-m-arm64-debug.apk
+de24b1ed049829adfa04060df1549d5b3c1d833e7c22a10711a697a28234ad98  sunday-m-x86_64-debug.apk
 ```
 
 启动图标与桌面一致，是 Sunday 笑脸，由 `core/desktop/src-tauri/icons/icon.png` 重新生成到各密度 mipmap；此前生成工程里残留的旧「88」图标已替换。
@@ -132,6 +132,35 @@ files/runtime/
 | 启动首屏 | 通过 | 冷启动 t15 原生底色，t60 启动层显示 1% / 4 MB 515 MB，之后进入欢迎页；日志完整出现 staging → unpacking → starting → waiting → ready |
 | 手机悬浮环（服务与环） | 通过 | 系统窗口列表先出现悬浮按钮，点击后变成两个窗口；长按截图看到六扇区环；注入扇区动作后输入框出现「来自悬浮环」 |
 | 小窗 | 未验证 | 命令与回落代码已接，未在设备上点过 |
+
+## 2026-11-07 晚：首屏重做（网格渐变）
+
+user:“铺满屏幕，渐变流动，高级而令人舒适，要这种效果，不用常规的圈或者条”
+“要的是像苹果或者说谷歌那种，就是很高级的流动感”+(旧启动层是转圈加一条进度条，
+换成一整屏会流动的渐变，进度只用文字说明)。
+
+做法：`index-android.html` 里放一张 canvas，逐像素算一张 30x54 的低分辨率色场再平滑
+放大——色与色之间是插值，没有圆心、没有边、没有色带；五个色点各自沿 12 到 26 秒的周期
+游动，另外每帧对坐标做一层缓慢的正弦扭曲，所以颜色像流体一样互相挤，而不是整体平移。
+曝光压到四成左右，底子仍是近黑，颜色只作为光存在。文字只留 `SUNDAY`、阶段名与一行
+说明；没有转圈，也没有进度条。
+
+同批修掉三处启动期瑕疵：
+
+| 位置 | 改动 | 证据 |
+| --- | --- | --- |
+| `MainActivity.kt` | 窗口与 WebView 的底色统一成 `#070912`，杀掉 WebView 绘制前的白底 | 逐秒取样：1s `(20,22,30)`、2s `(7,9,18)`（原来第 2 秒是纯白 `255,255,255`）、3s 起色场出现 |
+| `MainActivity.kt` | 启动期 `enableEdgeToEdge(SystemBarStyle.dark(...))`，状态栏图标改为浅色 | 启动截图里时间与电量从黑变白，可读 |
+| `bootScreen.ts` | 启动层移除时广播 `sunday-boot-done`，色场停止计算 | 层消失后不再有 rAF 循环 |
+| `android_project.py` | 原生启动底色 `#14161a` → `#0b0c10` → `#070912`，和 HTML 启动层同色 | 1s 那一帧与 2s 之后的帧颜色接近，交接看不出接缝 |
+
+浏览器预览：`.lam/artifacts/boot-preview/index.html`，由
+`python .lam/artifacts/boot-preview/build.py` 从 `index-android.html` 里抽取 CSS、标记与
+色场脚本生成，不复制第二份样式。`R` 重播、`E` 失败态、`P` 手机尺寸，地址后加 `?hold=1`
+停帧只看渐变。
+
+色场在模拟器上逐秒采样 `(47,56,123) → (80,63,150) → (97,72,161) → (57,84,131)`，
+说明它在动而不是一张静态图；真机 arm64 未验。
 
 ## 2026-11-07 晚：相机方向与「Connection lost」的根因
 
