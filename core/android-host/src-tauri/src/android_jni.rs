@@ -49,6 +49,42 @@ pub extern "system" fn Java_com_lamtools_sunday_core_FilePickerBridge_nativeDeli
     crate::picker::deliver(&id, &body);
 }
 
+/// 实时扫码的桥：注册类加载器，并解一帧相机亮度面。
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_QrScanBridge_nativeRegister(
+    mut env: JNIEnv,
+    _class: JClass,
+) {
+    crate::picker::remember(&mut env);
+}
+
+/// 一帧 NV21 的亮度面 -> 二维码文本。没有识别到不是错误，返回 null。
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_lamtools_sunday_core_QrScanBridge_nativeDecode(
+    mut env: JNIEnv,
+    _class: JClass,
+    width: jni::sys::jint,
+    height: jni::sys::jint,
+    data: jni::objects::JByteArray,
+) -> jni::sys::jstring {
+    if width <= 0 || height <= 0 {
+        return std::ptr::null_mut();
+    }
+    let bytes = match env.convert_byte_array(&data) {
+        Ok(bytes) => bytes,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match sunday_p2p::decode_qr_luma(width as usize, height as usize, &bytes) {
+        Some(text) => env
+            .new_string(text)
+            .map(|value| value.into_raw())
+            .unwrap_or(std::ptr::null_mut()),
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// The keyboard's height in CSS pixels.
 ///
 /// The shared interface reads it from `--native-keyboard-inset`; this is the only place

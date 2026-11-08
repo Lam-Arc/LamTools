@@ -117,6 +117,53 @@ pub fn deliver(request_id: &str, payload: &str) {
     }
 }
 
+/// 一条空的请求通道：扫码这类“只等一个字符串”的一次性请求共用。
+pub fn open_request() -> (String, std::sync::mpsc::Receiver<String>) {
+    let request = next_request_id();
+    let (sender, receiver) = channel::<String>();
+    pending()
+        .lock()
+        .expect("picker lock")
+        .insert(request.clone(), sender);
+    (request, receiver)
+}
+
+/// 请求作废（启动失败或超时），避免迟到答案写进一个没人等的 id。
+pub fn forget(request_id: &str) {
+    pending().lock().expect("picker lock").remove(request_id);
+}
+
+/// 让 Kotlin 打开实时扫码界面；结果仍走 `deliver`。
+pub fn start_qr(request_id: &str) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use jni::objects::JValue;
+        let vm = VM.get().ok_or_else(|| "the Android runtime is not ready".to_owned())?;
+        let class = BRIDGE
+            .get()
+            .ok_or_else(|| "the scanner bridge is not ready".to_owned())?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|error| error.to_string())?;
+        let argument = env
+            .new_string(request_id)
+            .map_err(|error| error.to_string())?;
+        env.call_static_method(
+            &class.0,
+            "scanQr",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&argument)],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = request_id;
+        Err("实时扫码只在 Android 上可用".to_owned())
+    }
+}
+
 /// Opens the picker and answers with paths the guest can read, or an empty list when the
 /// user cancelled.
 /// The document picker always allows several files. A caller that only wants one takes

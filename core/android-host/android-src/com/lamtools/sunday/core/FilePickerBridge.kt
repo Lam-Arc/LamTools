@@ -65,6 +65,14 @@ object FilePickerBridge {
   }
 
   /**
+   * 启动实时扫码。Rust 通过 JNI 调到这里，结果走同一条 nativeDeliver 通道。
+   */
+  @JvmStatic
+  fun scanQr(requestId: String) {
+    QrScanBridge.scan(requestId)
+  }
+
+  /**
    * Opens the picker. Called over JNI from Rust, so the work moves to the UI thread.
    *
    * `source` is the composer's own vocabulary (`file`, `photos`, `camera`), so the one

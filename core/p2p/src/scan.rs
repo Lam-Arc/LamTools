@@ -10,6 +10,25 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
+/// Decodes a QR code straight from one luminance frame.
+///
+/// user:“扫码还要靠拍照，而不是直接调用摄像头权限扫描识别”+(相机预览的 NV21 亮度面
+/// 直接交给同一个解码器，不再走拍照、落盘、再读图那一路)。
+pub fn decode_qr_luma(width: usize, height: usize, luma: &[u8]) -> Option<String> {
+    if width == 0 || height == 0 || luma.len() < width * height {
+        return None;
+    }
+    let mut prepared =
+        rqrr::PreparedImage::prepare_from_greyscale(width, height, |x, y| luma[y * width + x]);
+    let mut grids = prepared.detect_grids();
+    for grid in grids.iter_mut() {
+        if let Ok((_meta, content)) = grid.decode() {
+            return Some(content);
+        }
+    }
+    None
+}
+
 /// Finds the first QR code in an image and returns its text.
 pub fn scan_qr_file(path: &Path) -> Result<String> {
     // A photo from the camera can be forty megapixels; decoding at native size is slow and
@@ -41,6 +60,21 @@ mod tests {
     ///
     /// This is the real contract of the feature: what the desktop paints is what the phone
     /// reads, byte for byte, including the `sunday1:` prefix.
+    #[test]
+    fn decodes_a_luma_frame() {
+        let ticket = "sunday1:luma-frame-2f9ac1";
+        let code = qrcode::QrCode::new(ticket.as_bytes()).expect("encode");
+        let image = code
+            .render::<image::Luma<u8>>()
+            .quiet_zone(true)
+            .module_dimensions(6, 6)
+            .build();
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        let luma: Vec<u8> = image.pixels().map(|pixel| pixel[0]).collect();
+        assert_eq!(decode_qr_luma(width, height, &luma).as_deref(), Some(ticket));
+    }
+
     #[test]
     fn round_trips_through_the_encoder() {
         let ticket = "sunday1:round-trip-2f9ac1";

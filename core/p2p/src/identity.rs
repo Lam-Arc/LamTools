@@ -79,6 +79,38 @@ impl Identity {
     }
 }
 
+/// Waits briefly for a relay connection, then returns the address a ticket should carry.
+///
+/// user:“第一次连上了，后面就没有再连上过”+(票据在 endpoint 刚 bind 时就生成，那时还没连上
+/// 中继，二维码里只有当时的局域网地址；电脑重启或换网后这个地址就失效，只能一直超时。
+/// 出票前先给中继一点时间，让票据带上可复用的中继入口。)
+pub async fn dialable_addr(
+    endpoint: &Endpoint,
+    wait: std::time::Duration,
+) -> iroh::EndpointAddr {
+    let _ = tokio::time::timeout(wait, endpoint.online()).await;
+    endpoint.addr()
+}
+
+/// One line per home relay for diagnostics: connected, or the last error.
+pub fn relay_summary(endpoint: &Endpoint) -> Vec<String> {
+    use iroh::Watcher;
+    let mut out = Vec::new();
+    for status in endpoint.home_relay_status().get() {
+        if status.is_connected() {
+            out.push(format!("{} connected", status.url()));
+        } else if let Some(error) = status.last_error() {
+            out.push(format!("{} error: {error:#}", status.url()));
+        } else {
+            out.push(format!("{} connecting", status.url()));
+        }
+    }
+    if out.is_empty() {
+        out.push("none configured".to_owned());
+    }
+    out
+}
+
 /// Relays the user added through the environment.
 ///
 /// `SUNDAY_P2P_RELAY` and `SUNDAY_P2P_RELAYS` accept one or more URLs separated by commas.

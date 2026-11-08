@@ -15,22 +15,22 @@
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
 pub struct P2pHostState {
     child: Mutex<Option<Child>>,
-    ticket: Mutex<String>,
-    port: Mutex<u16>,
+    ticket: Arc<Mutex<String>>,
+    port: Arc<Mutex<u16>>,
 }
 
 impl Default for P2pHostState {
     fn default() -> Self {
         Self {
             child: Mutex::new(None),
-            ticket: Mutex::new(String::new()),
-            port: Mutex::new(0),
+            ticket: Arc::new(Mutex::new(String::new())),
+            port: Arc::new(Mutex::new(0)),
         }
     }
 }
@@ -151,10 +151,66 @@ fn ensure_child(api_base: &str, state: &P2pHostState) -> Result<(String, u16), S
         let _ = child.kill();
         return Err("传输进程没有给出票据".to_owned());
     }
-    *state.ticket.lock().map_err(|_| "票据不可用".to_string())? = ticket.clone();
-    *state.port.lock().map_err(|_| "端口不可用".to_string())? = port;
+    if let Ok(mut slot) = state.ticket.lock() {
+        *slot = ticket.clone();
+    }
+    if let Ok(mut slot) = state.port.lock() {
+        *slot = port;
+    }
+
+    // 继续读传输进程的输出：网络变化会打一行新的 TICKET，配对失败时会有 PEER 和错误。
+    // user:“连不上……一点反应都没有”+(排障需要证据；之前 READY 之后就不再读管道，
+    // 对端是否连到、中继是否可用全都丢了)。
+    let log_path = data_dir().join("p2p.log");
+    let ticket_slot = Arc::clone(&state.ticket);
+    let stderr = child.stderr.take();
+    spawn_log_reader(log_path.clone(), reader, Some(ticket_slot));
+    if let Some(stderr) = stderr {
+        spawn_log_reader(log_path, BufReader::new(stderr), None);
+    }
+
     *guard = Some(child);
     Ok((ticket, port))
+}
+
+/// 把子进程的后续输出写进 `%APPDATA%/Sunday/p2p/p2p.log`，顺便更新票据。
+fn spawn_log_reader(
+    path: PathBuf,
+    mut reader: BufReader<impl std::io::Read + Send + 'static>,
+    ticket: Option<Arc<Mutex<String>>>,
+) {
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Some(value) = trimmed.strip_prefix("TICKET ") {
+                        if let Some(slot) = &ticket {
+                            if let Ok(mut current) = slot.lock() {
+                                *current = value.to_owned();
+                            }
+                        }
+                    }
+                    if let Some(file) = file.as_mut() {
+                        let _ = writeln!(file, "{trimmed}");
+                        let _ = file.flush();
+                    }
+                }
+            }
+        }
+    });
 }
 
 /// The text the phone pastes. Starts the transport on first use.

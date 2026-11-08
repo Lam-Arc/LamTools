@@ -105,20 +105,67 @@ fn scan(args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// 传输进程自己的日志：宿主不读管道时，这里仍然留下对端连接和中继状态。
+fn diary(dir: &std::path::Path, line: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("p2p.log"))
+    {
+        let _ = writeln!(file, "{line}");
+        let _ = file.flush();
+    }
+}
+
 async fn serve(args: Vec<String>) -> Result<()> {
     let flags = parse(args)?;
     let identity = Identity::load_or_create(&flags.dir)?;
     let endpoint = identity.endpoint().await?;
-    let ticket = encode_ticket(&endpoint.addr())?;
+    // 出票前等中继就绪，否则票据里只有当时的局域网地址。
+    let addr = sunday_p2p::dialable_addr(&endpoint, std::time::Duration::from_secs(10)).await;
+    let ticket = encode_ticket(&addr)?;
     let trust = Arc::new(Mutex::new(TrustStore::load(&flags.dir)?));
     println!("NAME {}", flags.name);
     println!("ID {}", endpoint.id());
     println!("TICKET {ticket}");
+    diary(&flags.dir, &format!("TICKET {ticket}"));
+    for line in sunday_p2p::relay_summary(&endpoint) {
+        println!("RELAY {line}");
+        diary(&flags.dir, &format!("RELAY {line}"));
+    }
+    // 网络切换后地址会变：把新票据直接再打一行，宿主读到就更新二维码。
+    {
+        let endpoint = endpoint.clone();
+        let mut last = ticket.clone();
+        tokio::spawn(async move {
+            use iroh::Watcher as _;
+            let mut watcher = endpoint.watch_addr();
+            loop {
+                let addr = match watcher.updated().await {
+                    Ok(addr) => addr,
+                    Err(_) => break,
+                };
+                let Ok(next) = encode_ticket(&addr) else { continue };
+                if next != last {
+                    last = next.clone();
+                    println!("TICKET {next}");
+                }
+            }
+        });
+    }
     println!("READY");
 
     loop {
-        let mut link = ServerLink::accept(&endpoint, Arc::clone(&trust)).await?;
+        let mut link = match ServerLink::accept(&endpoint, Arc::clone(&trust)).await {
+            Ok(link) => link,
+            Err(error) => {
+                diary(&flags.dir, &format!("ACCEPT ERROR {error:#}"));
+                return Err(error);
+            }
+        };
         println!("PEER {} trusted={}", link.peer, link.trusted);
+        diary(&flags.dir, &format!("PEER {} trusted={}", link.peer, link.trusted));
         // 每来一台设备就起一条事件泵：Core 的通知按帧推回给对端。
         let closed = Arc::new(tokio::sync::Mutex::new(false));
         if flags.core_port != 0 {

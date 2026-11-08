@@ -58,6 +58,9 @@
         >
           {{ t("扫码连接") }}
         </button>
+        <p v-if="busy && progressText" class="remote-panel__hint" role="status">
+          {{ progressText }}（{{ t("已等待 {0} 秒", { 0: elapsed }) }}）
+        </p>
         <button class="remote-panel__link" type="button" :disabled="busy" data-remote-paste-toggle @click="pasting = !pasting">
           {{ pasting ? t("收起") : t("粘贴票据") }}
         </button>
@@ -125,6 +128,9 @@ const busy = ref(false)
 const error = ref('')
 const pasting = ref(false)
 const copied = ref(false)
+const progressText = ref('')
+const elapsed = ref(0)
+let progressTimer: number | null = null
 
 const isDesktop = computed(() => (props.platform ?? 'desktop') === 'desktop')
 
@@ -189,6 +195,48 @@ async function copyTicket(): Promise<void> {
   }
 }
 
+/** 从票据里取出直连地址与中继，用于说明这次会先试什么。 */
+function describeTicket(value: string): { ip: string; relay: boolean } {
+  try {
+    const body = value.trim().replace(/^sunday1:/, '')
+    const padded = body.replace(/-/g, '+').replace(/_/g, '/')
+      + '='.repeat((4 - (body.length % 4)) % 4)
+    const parsed = JSON.parse(atob(padded)) as {
+      addrs?: Array<{ Ip?: string; Relay?: string }>
+    }
+    return {
+      ip: parsed.addrs?.find((item) => typeof item.Ip === 'string')?.Ip ?? '',
+      relay: Boolean(parsed.addrs?.some((item) => typeof item.Relay === 'string')),
+    }
+  } catch {
+    return { ip: '', relay: false }
+  }
+}
+
+/** user:“连接过程中一点反应都没有”+(连接期间说明先试哪条路，并显示已等待时间)。 */
+function startConnecting(value: string): void {
+  const { ip, relay } = describeTicket(value)
+  progressText.value = ip && relay
+    ? t('正在连接：先试直连 {0}，失败自动走中继', { 0: ip })
+    : ip
+      ? t('正在直连 {0}', { 0: ip })
+      : t('正在通过中继连接')
+  elapsed.value = 0
+  if (progressTimer !== null) window.clearInterval(progressTimer)
+  progressTimer = window.setInterval(() => {
+    elapsed.value += 1
+  }, 1000)
+}
+
+function stopConnecting(): void {
+  if (progressTimer !== null) {
+    window.clearInterval(progressTimer)
+    progressTimer = null
+  }
+  progressText.value = ''
+  elapsed.value = 0
+}
+
 /** 生成票据即开始接受连接，不再让用户点第二次。 */
 async function createTicket(): Promise<void> {
   busy.value = true
@@ -247,6 +295,7 @@ async function scan(): Promise<void> {
 async function connect(): Promise<void> {
   busy.value = true
   error.value = ''
+  startConnecting(ticketInput.value)
   try {
     const name = isDesktop.value ? 'PC' : 'Phone'
     const result = await call<{ peer?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
@@ -262,6 +311,7 @@ async function connect(): Promise<void> {
     if (!isDesktop.value) pasting.value = true
   } finally {
     busy.value = false
+    stopConnecting()
   }
 }
 
@@ -290,7 +340,24 @@ async function revoke(id: string): Promise<void> {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  void refresh()
+  if (!host()) return
+  void import('@tauri-apps/api/event').then(async ({ listen }) => {
+    try {
+      await listen<{ phase?: string }>('p2p-progress', (event) => {
+        const phase = event.payload?.phase
+        if (phase === 'dialing') {
+          if (!progressText.value) progressText.value = t('正在连接对方…')
+        } else if (phase === 'connected') {
+          progressText.value = t('已连上，正在切换到远程会话…')
+        }
+      })
+    } catch {
+      // 进度事件只是提示，缺了不影响连接。
+    }
+  })
+})
 </script>
 
 <style scoped>
