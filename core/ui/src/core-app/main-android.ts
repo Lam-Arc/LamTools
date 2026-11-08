@@ -4,7 +4,13 @@ import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import { createRemoteTransport } from '@/transport/remoteTransport.ts'
-import { ensureRemote } from '@/app/remoteSession.ts'
+import {
+  activateDevice,
+  ensureRemote,
+  readDevices,
+} from '@/app/remoteSession.ts'
+import type { RuntimeWorkspaceControl, RuntimeWorkspaceOption } from '@/app/runtime.ts'
+import { ref } from 'vue'
 import { bootScreen, type BootProgressPayload } from './bootScreen.ts'
 
 /**
@@ -49,6 +55,37 @@ const capabilities: import('@/app/runtime.ts').RuntimeCapabilities = {
       return paths.length ? paths : null
     },
   },
+}
+
+/**
+ * 设备切换：本机 + 配对过的电脑。
+ *
+ * user:“假如说我有多个设备，我该怎么切换呢？我怎么从控制电脑切回手机？”+(输入框上方那个
+ * 设备菜单以前是空的，因为宿主从来没有提供工作环境选项；现在它列出本机和每一台配对的
+ * 电脑，选一项就切过去，切回「本机」就是不再走隧道)。
+ */
+function createWorkspaceControl(activePeer: string | null): RuntimeWorkspaceControl {
+  const options = ref<RuntimeWorkspaceOption[]>([
+    { id: 'local', label: '本机', platform: 'android', deviceName: '这台手机' },
+    ...readDevices().map((device) => ({
+      id: device.id,
+      label: device.name,
+      platform: 'desktop',
+      deviceName: device.name,
+      online: Boolean(activePeer) && device.id === activePeer,
+    })),
+  ])
+  const activeId = ref(activePeer ? activePeer : 'local')
+  return {
+    activeId,
+    options,
+    async select(id: string) {
+      if (id === activeId.value) return
+      activateDevice(id === 'local' ? null : id)
+      // 通道在启动时选定，切换就是让界面按新通道重开一次。
+      window.location.reload()
+    },
+  }
 }
 
 /** A thrown value as text. `invoke` rejects with a string from the Rust side, and a
@@ -99,6 +136,10 @@ async function boot(): Promise<void> {
     console.warn('[sunday] boot: cannot listen for runtime-progress', describeError(error))
   }
 
+  // 拨号和启动核心同时进行：连电脑要花的时间藏在核心启动里，不额外占用首屏。
+  // user:“从点击这个应用到我进界面，我定的要求是 5 秒以内”+(所以这两件事不能排队)。
+  const remoteAttempt = ensureRemote(6000)
+
   try {
     await invoke('core_start')
   } catch (error) {
@@ -111,14 +152,16 @@ async function boot(): Promise<void> {
   try {
     screen.phase('ready', '正在加载界面…')
 
-    // 已经连着电脑就整条走隧道；断了就用记住的票据重连一次；都不行才退回本机 Core。
-    const peer = await ensureRemote()
+    // 已经连着电脑就整条走隧道；连着的时候上面那次拨号已经成功；连不上就从这里拿到
+    // null，界面用本机 Core，不再等第二次。
+    const peer = await remoteAttempt
     const activeTransport = peer === null ? transport : createRemoteTransport()
     if (peer !== null) capabilities.remote = { peer }
     const runtime = createLamToolsRuntime({
       transport: activeTransport,
       platform: 'mobile',
       capabilities,
+      workspaceControl: createWorkspaceControl(peer),
     })
     await activeTransport.connect()
     // The window is edge to edge, so nothing resizes when the keyboard opens and nothing

@@ -70,7 +70,14 @@ pub async fn p2p_connect(
     state: State<'_, Arc<P2pState>>,
     ticket: String,
     name: String,
+    timeout_ms: Option<u64>,
 ) -> Result<Value, String> {
+    // user:“从点击图标到进入界面要 5 秒以内”+(启动时只用很短的时间试着连一次电脑，
+    // 连不上立刻用本机，绝不把界面卡在一次等不到的重连上)。
+    let budget = Duration::from_millis(timeout_ms.unwrap_or(45_000).clamp(400, 120_000));
+    // 连接的第一步是创建 iroh 端点，这一步本身就可能花几十秒（建 socket、连中继、查地址）；
+    // 只给拨号设上限没有用。整个连接过程都罩在同一个预算里。
+    let attempt = async move {
     let mut inner = state.inner.lock().await;
     if inner.endpoint.is_none() {
         let identity = Identity::load_or_create(&state.dir).map_err(|error| error.to_string())?;
@@ -104,7 +111,7 @@ pub async fn p2p_connect(
     )
     .ok();
     let client = match tokio::time::timeout(
-        Duration::from_secs(45),
+        budget,
         Client::dial(&endpoint, &ticket, &name),
     )
     .await
@@ -119,7 +126,8 @@ pub async fn p2p_connect(
             app.emit("p2p-progress", json!({ "phase": "timeout", "target": target }))
                 .ok();
             return Err(format!(
-                "连接超时（45 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。目标地址：{}",
+                "连接超时（{} 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。目标地址：{}",
+                budget.as_secs().max(1),
                 if target.is_empty() { "未知".to_owned() } else { target }
             ));
         }
@@ -147,6 +155,15 @@ pub async fn p2p_connect(
     });
     inner.client = Some(client);
     Ok(json!({ "peer": peer }))
+    };
+
+    match tokio::time::timeout(budget + Duration::from_millis(250), attempt).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "连接超时（{} 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。",
+            budget.as_secs().max(1)
+        )),
+    }
 }
 
 /// Forwards one call over the tunnel. `core_http` is what the shared UI uses for the

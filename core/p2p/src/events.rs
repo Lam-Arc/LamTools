@@ -25,7 +25,7 @@ pub async fn pump_core_events(
     token: &str,
     send: std::sync::Arc<Mutex<iroh::endpoint::SendStream>>,
 ) -> Result<()> {
-    let url = format!("ws://127.0.0.1:{port}/app-server");
+    let url = format!("ws://127.0.0.1:{port}/api/core/app-server");
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let mut request = url
         .as_str()
