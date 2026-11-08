@@ -81,6 +81,10 @@ pub async fn p2p_connect(
         inner.ticket = encode_ticket(&endpoint.addr()).map_err(|error| error.to_string())?;
         inner.endpoint = Some(endpoint);
     }
+    // 重连之前先把旧连接收掉，否则电脑那边还挂着上一台手机，会白等一轮握手。
+    if let Some(previous) = inner.client.take() {
+        previous.close();
+    }
     let endpoint = inner.endpoint.clone().expect("endpoint ready");
     // user:“连接过程中一点反应都没有，我根本不知道卡在哪里了”+(先告诉界面目标地址，
     // 再给整次尝试一个明确的上限，超时就报可执行的原因，而不是让 iroh 叠三层超时)。
@@ -154,10 +158,15 @@ pub async fn p2p_call(
     params: Option<Value>,
 ) -> Result<Value, String> {
     let mut inner = state.inner.lock().await;
-    let client = inner
-        .client
-        .as_mut()
-        .ok_or_else(|| "还没有连接到电脑".to_owned())?;
+    // 隧道已经断了就当场丢掉，别让界面拿着一个死连接反复拿到英文报错。
+    if inner.client.as_ref().map(|client| !client.is_alive()).unwrap_or(false) {
+        if let Some(client) = inner.client.take() {
+            client.close();
+        }
+    }
+    let client = inner.client.as_mut().ok_or_else(|| {
+        "和电脑的连接已经断开，回「远程连接」点刷新重连一次".to_owned()
+    })?;
     client
         .call(&method, params.unwrap_or_else(|| json!({})))
         .await
@@ -196,8 +205,16 @@ pub async fn p2p_qr(ticket: String) -> Result<Value, String> {
 #[tauri::command]
 pub async fn p2p_status(state: State<'_, Arc<P2pState>>) -> Result<Value, String> {
     let inner = state.inner.lock().await;
+    // user:“连上了之后也报错”“后面就没有再连上过”+(只看有没有 Client 对象会把一条
+    // 已经断掉的隧道报成「已连接」，界面于是既不重连也不提示；这里按隧道的真实
+    // 存活状态回答，断掉就当成没连，界面才有机会自己重连)。
+    let connected = inner
+        .client
+        .as_ref()
+        .map(|client| client.is_alive())
+        .unwrap_or(false);
     Ok(json!({
-        "connected": inner.client.is_some(),
+        "connected": connected,
         "peer": inner.client.as_ref().map(|client| client.peer.clone()),
         "ticket": inner.ticket,
     }))

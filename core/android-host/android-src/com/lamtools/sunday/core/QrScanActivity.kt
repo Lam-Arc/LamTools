@@ -10,6 +10,7 @@ import android.hardware.Camera
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.widget.FrameLayout
@@ -35,9 +36,12 @@ class QrScanActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCallbac
   }
 
   private var surfaceView: SurfaceView? = null
+  private var root: FrameLayout? = null
   private var camera: Camera? = null
   private var previewWidth = 0
   private var previewHeight = 0
+  /** 预览已经按这个角度转正；比例换算要用它，不能用传感器方向。 */
+  private var previewRotation = 0
   @Volatile
   private var decoding = false
   @Volatile
@@ -46,7 +50,8 @@ class QrScanActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCallbac
 
   override fun onCreate(state: Bundle?) {
     super.onCreate(state)
-    val root = FrameLayout(this)
+    val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+    this.root = root
     val view = SurfaceView(this)
     surfaceView = view
     view.holder.addCallback(this)
@@ -90,7 +95,7 @@ class QrScanActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCallbac
 
   override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
     // 权限对话框关掉后 surface 才可能就绪；此时补一次启动。
-    if (camera == null) startCamera()
+    if (camera == null) startCamera() else fitPreview()
   }
 
   override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -117,16 +122,65 @@ class QrScanActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCallbac
       if (parameters.supportedFocusModes?.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE) == true) {
         parameters.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE
       }
+      // user:“这个相机有问题，显示的时候可能是什么方向没对上”+(传感器方向 90° 的手机
+      // 不设显示方向时画面是横躺的；按「传感器方向 - 屏幕旋转」转正，界面拿到的就是
+      // 竖着的画面，和人举着手机看到的一致)。
+      val info = Camera.CameraInfo()
+      Camera.getCameraInfo(0, info)
+      val rotation = when (windowManager.defaultDisplay.rotation) {
+        Surface.ROTATION_90 -> 90
+        Surface.ROTATION_180 -> 180
+        Surface.ROTATION_270 -> 270
+        else -> 0
+      }
+      var displayOrientation = (info.orientation - rotation + 360) % 360
+      if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+        displayOrientation = (360 - displayOrientation) % 360
+      }
+      device.setDisplayOrientation(displayOrientation)
       device.parameters = parameters
       previewWidth = size.width
       previewHeight = size.height
+      previewRotation = displayOrientation
       device.setPreviewCallback(this)
+      fitPreview()
       device.startPreview()
       camera = device
+      Log.i(
+        TAG,
+        "preview ${size.width}x${size.height} sensor=${info.orientation} screen=$rotation display=$displayOrientation",
+      )
     } catch (error: Throwable) {
       Log.e(TAG, "cannot start the camera", error)
       finishCancelled()
     }
+  }
+
+  /**
+   * 预览面按「转正之后」的比例贴合屏幕，多出来的部分留给黑底。
+   *
+   * user:“显示有问题”+(转正后画面是竖的，如果把 SurfaceView 拉满整屏就会被横向拉长；
+   * 这里按旋转后的宽高算一个等比尺寸，居中放)。
+   */
+  private fun fitPreview() {
+    val view = surfaceView ?: return
+    val box = root ?: return
+    if (previewWidth <= 0 || previewHeight <= 0) return
+    val boxWidth = box.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+    val boxHeight = box.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+    val swapped = previewRotation % 180 != 0
+    val fittedWidth = if (swapped) previewHeight else previewWidth
+    val fittedHeight = if (swapped) previewWidth else previewHeight
+    val scale = minOf(
+      boxWidth.toFloat() / fittedWidth,
+      boxHeight.toFloat() / fittedHeight,
+    )
+    val width = (fittedWidth * scale).toInt()
+    val height = (fittedHeight * scale).toInt()
+    if (width <= 0 || height <= 0) return
+    view.layoutParams = FrameLayout.LayoutParams(width, height, Gravity.CENTER)
+    view.requestLayout()
+    Log.i(TAG, "surface ${width}x$height in box ${boxWidth}x$boxHeight")
   }
 
   override fun onPreviewFrame(data: ByteArray?, source: Camera?) {

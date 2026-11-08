@@ -157,27 +157,35 @@ async fn serve(args: Vec<String>) -> Result<()> {
     println!("READY");
 
     loop {
+        // user:“第一次连的时候连上了，后面就没有再连上过”“连上了之后也报错”+(实测传输
+        // 进程会在一次握手超时之后直接退出，进程一死，电脑这边就再也接不到任何设备；
+        // 一次失败的握手只说明这一次没成，记一笔继续等下一台)。
         let mut link = match ServerLink::accept(&endpoint, Arc::clone(&trust)).await {
-            Ok(link) => link,
+            Ok(Some(link)) => link,
+            Ok(None) => return Ok(()),
             Err(error) => {
-                diary(&flags.dir, &format!("ACCEPT ERROR {error:#}"));
-                return Err(error);
+                let line = format!("ACCEPT ERROR {error:#}");
+                eprintln!("{line}");
+                diary(&flags.dir, &line);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
             }
         };
         println!("PEER {} trusted={}", link.peer, link.trusted);
         diary(&flags.dir, &format!("PEER {} trusted={}", link.peer, link.trusted));
         // 每来一台设备就起一条事件泵：Core 的通知按帧推回给对端。
-        let closed = Arc::new(tokio::sync::Mutex::new(false));
-        if flags.core_port != 0 {
-            let send = link.sender();
-            let token = flags.core_token.clone();
-            let port = flags.core_port;
-            let flag = Arc::clone(&closed);
-            tokio::spawn(sunday_p2p::events::pump_until_closed(port, token, send, flag));
-        }
+        let log_dir = flags.dir.clone();
         let name = flags.name.clone();
         let core_port = flags.core_port;
         let core_token = flags.core_token.clone();
+        let pump_token = flags.core_token.clone();
+        tokio::spawn(async move {
+        let closed = Arc::new(tokio::sync::Mutex::new(false));
+        if core_port != 0 {
+            let send = link.sender();
+            let flag = Arc::clone(&closed);
+            tokio::spawn(sunday_p2p::events::pump_until_closed(core_port, pump_token, send, flag));
+        }
         let result = link
             .serve(move |method, params| {
                 let name = name.clone();
@@ -214,10 +222,17 @@ async fn serve(args: Vec<String>) -> Result<()> {
             .await;
         *closed.lock().await = true;
         match result {
-            Ok(()) => println!("PEER-CLOSED {}", link.peer),
-            Err(error) => println!("PEER-ERROR {} {error}", link.peer),
+            Ok(()) => {
+                println!("PEER-CLOSED {}", link.peer);
+                diary(&log_dir, &format!("PEER-CLOSED {}", link.peer));
+            }
+            Err(error) => {
+                println!("PEER-ERROR {} {error:#}", link.peer);
+                diary(&log_dir, &format!("PEER-ERROR {} {error:#}", link.peer));
+            }
         }
         link.close();
+        });
     }
 }
 

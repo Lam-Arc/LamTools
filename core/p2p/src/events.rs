@@ -9,7 +9,7 @@
 //! forwards every message that carries a `method` as an event frame. Which events matter is
 //! the interface's business, not the transport's.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
