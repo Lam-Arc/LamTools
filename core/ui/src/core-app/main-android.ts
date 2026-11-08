@@ -4,14 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import { createRemoteTransport } from '@/transport/remoteTransport.ts'
-import {
-  activateDevice,
-  ensureRemote,
-  readDevices,
-  remoteStatus,
-} from '@/app/remoteSession.ts'
-import type { RuntimeWorkspaceControl, RuntimeWorkspaceOption } from '@/app/runtime.ts'
-import { ref } from 'vue'
+import { ensureRemote, remoteStatus } from '@/app/remoteSession.ts'
 import { bootScreen, type BootProgressPayload } from './bootScreen.ts'
 
 /**
@@ -56,43 +49,6 @@ const capabilities: import('@/app/runtime.ts').RuntimeCapabilities = {
       return paths.length ? paths : null
     },
   },
-}
-
-/**
- * 设备切换：本机 + 配对过的电脑。
- *
- * user:“假如说我有多个设备，我该怎么切换呢？我怎么从控制电脑切回手机？”+(输入框上方那个
- * 设备菜单以前是空的，因为宿主从来没有提供工作环境选项；现在它列出本机和每一台配对的
- * 电脑，选一项就切过去，切回「本机」就是不再走隧道)。
- */
-function createWorkspaceControl(activePeer: string | null): RuntimeWorkspaceControl {
-  const options = ref<RuntimeWorkspaceOption[]>([
-    { id: 'local', label: '本机', platform: 'android', deviceName: '这台手机' },
-    ...readDevices().map((device) => ({
-      id: device.id,
-      label: device.name,
-      platform: 'desktop',
-      deviceName: device.name,
-      online: Boolean(activePeer) && device.id === activePeer,
-    })),
-  ])
-  const activeId = ref(activePeer ? activePeer : 'local')
-  return {
-    activeId,
-    options,
-    async select(id: string) {
-      if (id === activeId.value) return
-      activateDevice(id === 'local' ? null : id)
-      // user:“我怎么从控制电脑切回手机”+(只清票据不够：宿主里的隧道还连着，重开之后
-      // 又会按「已连接」走回电脑。切换必须先断掉现有隧道，再按新选择重开)。
-      try {
-        await invoke('p2p_disconnect')
-      } catch {
-        // 没有连接时这里是空操作，不影响切换。
-      }
-      window.location.reload()
-    },
-  }
 }
 
 /** A thrown value as text. `invoke` rejects with a string from the Rust side, and a
@@ -202,7 +158,6 @@ async function boot(): Promise<void> {
       transport: activeTransport,
       platform: 'mobile',
       capabilities,
-      workspaceControl: createWorkspaceControl(peer),
     })
     await activeTransport.connect()
     // The window is edge to edge, so nothing resizes when the keyboard opens and nothing

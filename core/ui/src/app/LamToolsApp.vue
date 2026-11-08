@@ -602,14 +602,7 @@
             :names="pendingSubAgentNames"
           />
         </template>
-        <template #after-runtime>
-          <CoreWorkspaceMenu
-            v-if="appRuntime.platform === 'mobile' && appRuntime.workspaceControl"
-            :active-id="appRuntime.workspaceControl.activeId.value"
-            :options="appRuntime.workspaceControl.options.value"
-            @select="appRuntime.workspaceControl.select"
-          />
-        </template>
+        <!-- user:“工作环境的切换从输入框挪到设备连接那个页面”+(所以这里不再有第二个入口)。 -->
       </CoreExecutionControls>
     </template>
 
@@ -782,7 +775,6 @@ import CommandPalette from '@/components/CommandPalette.vue'
 import AppRail, { type AppRailView } from '@/components/AppRail.vue'
 import CoreUpdateCard from '@/components/CoreUpdateCard.vue'
 import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
-import CoreWorkspaceMenu from '@/components/CoreWorkspaceMenu.vue'
 import CoreQueuedInputTray from '@/components/CoreQueuedInputTray.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import CorePendingDecisionPanel from '@/components/CorePendingDecisionPanel.vue'

@@ -1,23 +1,130 @@
 <template>
-  <section class="remote-panel" data-remote-connection>
-    <div class="remote-panel__head">
-      <span class="remote-panel__title">{{ t("设备连接") }}</span>
-      <span class="remote-panel__state" :class="{ 'is-on': serving || connected }">
-        {{ connected ? t('已连接') : serving ? t('等待手机连接') : t('未连接') }}
-      </span>
-      <button class="remote-panel__link" type="button" :disabled="busy" @click="refresh">{{ t("刷新") }}</button>
-    </div>
+  <section class="device-page" data-remote-connection>
+    <header class="device-page__head">
+      <div class="device-page__intro">
+        <h2 class="device-page__title">{{ t("设备连接") }}</h2>
+        <p class="device-page__sub">
+          {{ isDesktop
+            ? t("手机扫这里，就能接手这台电脑上的会话。")
+            : t("选择在哪里工作：这台手机，或一台配对过的电脑。") }}
+        </p>
+      </div>
+      <button class="device-page__refresh" type="button" :disabled="busy" @click="refresh">
+        <RefreshCw :size="14" :stroke-width="2" aria-hidden="true" />
+        {{ t("刷新") }}
+      </button>
+    </header>
 
-    <p v-if="error" class="remote-panel__error" role="alert">{{ error }}</p>
+    <p v-if="error" class="device-page__error" role="alert">{{ error }}</p>
+
+    <!-- 手机：设备清单。切换就发生在这里，输入框上方不再有第二个入口。 -->
+    <template v-if="!isDesktop">
+      <ul class="device-list">
+        <li class="device-item" :class="{ 'is-active': activeId === 'local' }">
+          <span class="device-item__icon"><Smartphone :size="18" :stroke-width="1.9" aria-hidden="true" /></span>
+          <span class="device-item__body">
+            <span class="device-item__name">{{ t("本机") }}</span>
+            <span class="device-item__meta">{{ t("这台手机 · 不需要连接") }}</span>
+          </span>
+          <span v-if="activeId === 'local'" class="device-item__badge is-here">{{ t("当前") }}</span>
+          <button
+            v-else
+            class="device-item__action"
+            type="button"
+            :disabled="busy"
+            data-device-switch="local"
+            @click="switchTo('local')"
+          >
+            {{ t("切到本机") }}
+          </button>
+        </li>
+
+        <li
+          v-for="entry in paired"
+          :key="entry.id"
+          class="device-item"
+          :class="{ 'is-active': activeId === entry.id }"
+        >
+          <span class="device-item__icon"><Monitor :size="18" :stroke-width="1.9" aria-hidden="true" /></span>
+          <span class="device-item__body">
+            <span class="device-item__name">{{ entry.name }}</span>
+            <span class="device-item__meta">
+              {{ t("电脑 · 已配对") }}
+              <template v-if="connected && peer === entry.id"> · {{ t("连接正常") }}</template>
+              <template v-else-if="connected && peer !== entry.id"> · {{ t("未连接") }}</template>
+            </span>
+          </span>
+          <span v-if="activeId === entry.id" class="device-item__badge is-here">{{ t("当前") }}</span>
+          <button
+            v-else
+            class="device-item__action"
+            type="button"
+            :disabled="busy"
+            :data-device-switch="entry.id"
+            @click="switchTo(entry.id)"
+          >
+            {{ t("切换") }}
+          </button>
+        </li>
+
+        <li v-if="paired.length === 0" class="device-list__empty">
+          {{ t("还没有配对的电脑。在电脑上打开「远程连接」生成二维码，然后下方扫码。") }}
+        </li>
+      </ul>
+
+      <div class="device-page__actions">
+        <button
+          class="device-page__button is-primary"
+          type="button"
+          :disabled="busy"
+          data-remote-scan
+          @click="scan"
+        >
+          <QrCode :size="16" :stroke-width="2" aria-hidden="true" />
+          {{ t("扫码连接电脑") }}
+        </button>
+        <button
+          class="device-page__button"
+          type="button"
+          :disabled="busy"
+          data-remote-paste-toggle
+          @click="pasting = !pasting"
+        >
+          {{ pasting ? t("收起票据") : t("粘贴票据") }}
+        </button>
+      </div>
+
+      <p v-if="busy && progressText" class="device-page__progress" role="status">
+        {{ progressText }}（{{ t("已等待 {0} 秒", { 0: elapsed }) }}）
+      </p>
+
+      <div v-if="pasting" class="device-page__paste">
+        <textarea
+          v-model="ticketInput"
+          rows="3"
+          spellcheck="false"
+          :placeholder="t('sunday1:…')"
+          data-remote-ticket-input
+        />
+        <button
+          class="device-page__button is-primary"
+          type="button"
+          :disabled="busy || !ticketInput.trim()"
+          @click="connect"
+        >
+          {{ t("连接这台电脑") }}
+        </button>
+      </div>
+    </template>
 
     <!-- 电脑：二维码就是全部入口；生成票据即开始接受连接。 -->
-    <template v-if="isDesktop">
-      <div v-if="ticket" class="remote-panel__pair">
-        <div v-if="qrSvg" class="remote-panel__qr" v-html="qrSvg" aria-hidden="true"></div>
-        <div class="remote-panel__pair-side">
-          <p class="remote-panel__hint">{{ t("用 Sunday M 扫一下，首次连接会自动成为可信设备。") }}</p>
+    <template v-else>
+      <div v-if="ticket" class="pair-card">
+        <div v-if="qrSvg" class="pair-card__qr" v-html="qrSvg" aria-hidden="true"></div>
+        <div class="pair-card__side">
+          <p class="pair-card__hint">{{ t("用 Sunday M 扫一下，首次连接会自动成为可信设备。") }}</p>
           <button
-            class="remote-panel__ticket"
+            class="pair-card__ticket"
             type="button"
             :title="t('点击复制票据')"
             :aria-label="t('复制票据')"
@@ -25,86 +132,39 @@
           >
             <code data-remote-ticket>{{ copied ? t("已复制") : ticket }}</code>
           </button>
-          <div class="remote-panel__row">
-            <button class="remote-panel__button" type="button" :disabled="busy" @click="createTicket">{{ t("换一张") }}</button>
-            <button class="remote-panel__button" type="button" :disabled="busy" @click="stopServing">{{ t("停止") }}</button>
+          <div class="device-page__actions">
+            <button class="device-page__button" type="button" :disabled="busy" @click="createTicket">{{ t("换一张") }}</button>
+            <button class="device-page__button" type="button" :disabled="busy" @click="stopServing">{{ t("停止接受") }}</button>
           </div>
         </div>
       </div>
       <button
         v-else
-        class="remote-panel__button is-primary remote-panel__wide"
+        class="device-page__button is-primary is-wide"
         type="button"
         :disabled="busy"
         @click="createTicket"
       >
-        {{ busy ? t("正在生成…") : t("生成票据") }}
+        {{ busy ? t("正在生成…") : t("生成配对二维码") }}
       </button>
+
+      <div v-if="connected" class="device-page__note">
+        {{ t("手机已连上这台电脑。") }}
+        <button class="device-page__link" type="button" :disabled="busy" @click="disconnect">{{ t("断开") }}</button>
+      </div>
     </template>
 
-    <!-- 手机：扫码是主入口，粘贴票据是退路。 -->
-    <template v-else>
-      <div v-if="connected" class="remote-panel__row">
-        <span class="remote-panel__hint">{{ t("已连到 {0}", { 0: shortId(peer) }) }}</span>
-        <button class="remote-panel__button" type="button" :disabled="busy" @click="disconnect">{{ t("断开") }}</button>
-      </div>
-      <template v-else>
-        <!-- user:“第一次连上了，后面就没有再连上过”+(记住的票据还在，就该有一键重连，
-             不用每次都去电脑上重新扫码)。 -->
-        <button
-          v-if="remembered"
-          class="remote-panel__button is-primary remote-panel__wide"
-          type="button"
-          :disabled="busy"
-          data-remote-reconnect
-          @click="reconnect"
-        >
-          {{ busy ? t("正在重连…") : t("重连上次的电脑") }}
-        </button>
-        <button
-          class="remote-panel__button remote-panel__wide"
-          :class="{ 'is-primary': !remembered }"
-          type="button"
-          :disabled="busy"
-          @click="scan"
-          data-remote-scan
-        >
-          {{ t("扫码连接") }}
-        </button>
-        <p v-if="busy && progressText" class="remote-panel__hint" role="status">
-          {{ progressText }}（{{ t("已等待 {0} 秒", { 0: elapsed }) }}）
-        </p>
-        <button class="remote-panel__link" type="button" :disabled="busy" data-remote-paste-toggle @click="pasting = !pasting">
-          {{ pasting ? t("收起") : t("粘贴票据") }}
-        </button>
-        <template v-if="pasting">
-          <textarea
-            v-model="ticketInput"
-            class="remote-panel__input"
-            rows="2"
-            spellcheck="false"
-            :placeholder="t('sunday1:…')"
-            data-remote-ticket-input
-          />
-          <button
-            class="remote-panel__button"
-            type="button"
-            :disabled="busy || !ticketInput.trim()"
-            @click="connect"
-          >
-            {{ t("连接") }}
-          </button>
-        </template>
-      </template>
-    </template>
+    <p v-if="!isDesktop" class="device-page__foot">
+      {{ t("电脑上打开 Sunday，进入「远程连接」生成二维码，再用这里扫码；第一次连上之后，这台手机会记住它。") }}
+    </p>
 
     <!-- 没有可信设备时整块不出现，避免空状态占位。 -->
-    <details v-if="devices.length" class="remote-panel__devices">
-      <summary>{{ t("可信设备") }}<span>{{ devices.length }}</span></summary>
-      <ul class="remote-panel__list">
-        <li v-for="device in devices" :key="device.id" class="remote-panel__device">
-          <span class="remote-panel__device-name" :title="device.id">{{ device.name || shortId(device.id) }}</span>
-          <button class="remote-panel__revoke" type="button" :disabled="busy" @click="revoke(device.id)">{{ t("撤销") }}</button>
+    <details v-if="devices.length" class="device-page__trusted">
+      <summary>{{ t("可信设备") }} <span>{{ devices.length }}</span></summary>
+      <ul>
+        <li v-for="device in devices" :key="device.id">
+          <span :title="device.id">{{ device.name || shortId(device.id) }}</span>
+          <button type="button" :disabled="busy" @click="revoke(device.id)">{{ t("撤销") }}</button>
         </li>
       </ul>
     </details>
@@ -115,15 +175,23 @@
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { Monitor, QrCode, RefreshCw, Smartphone } from 'lucide-vue-next'
 
-import { readTicket, rememberDevice, saveTicket } from '@/app/remoteSession.ts'
+import {
+  activateDevice,
+  readDevices,
+  readTicket,
+  rememberDevice,
+  saveTicket,
+  type PairedDevice,
+} from '@/app/remoteSession.ts'
 
 /**
- * 配对面板。
+ * 设备连接页。
  *
- * user:“简化配对界面，桌面端和移动端都简化”+(电脑只有一个动作：生成二维码/票据，
- * 生成即开始接受连接，票据本身就是复制入口；手机只有一个主动作：扫码，手动粘贴
- * 收在次要入口里。可信设备没有就不占位置)。
+ * user:“工作环境的切换从输入框挪到设备连接那个页面”“设备连接页面你也要重做一遍，
+ * 现在的样式太普通了，不易用”+(所以这一页的主体是设备清单：本机一行、每台配对过的
+ * 电脑一行，行内直接切换；扫码与粘贴退到清单下面当“添加设备”，不再是首屏唯一动作)。
  *
  * 命令由宿主提供：桌面是 p2p_ticket / p2p_qr / …，手机是 p2p_scan / p2p_connect / …。
  * 这里只做界面，协议与身份都在 core/p2p。
@@ -137,16 +205,18 @@ const serving = ref(false)
 const connected = ref(false)
 const peer = ref('')
 const devices = ref<Array<{ id: string; name: string }>>([])
+const paired = ref<PairedDevice[]>([])
 const busy = ref(false)
 const error = ref('')
 const pasting = ref(false)
 const copied = ref(false)
-const remembered = ref('')
 const elapsed = ref(0)
 const progressText = ref('')
 let progressTimer: number | null = null
 
 const isDesktop = computed(() => (props.platform ?? 'desktop') === 'desktop')
+/** 当前在哪一台设备上工作：连着电脑就是对端 id，否则本机。 */
+const activeId = computed(() => (connected.value && peer.value ? peer.value : 'local'))
 
 function host(): ((command: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
   const bridge = (window as unknown as {
@@ -165,6 +235,10 @@ function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id
 }
 
+function loadPaired(): void {
+  paired.value = readDevices()
+}
+
 async function refresh(): Promise<void> {
   busy.value = true
   error.value = ''
@@ -179,7 +253,7 @@ async function refresh(): Promise<void> {
         await refreshQr(ticket.value)
       }
     }
-    remembered.value = readTicket()
+    loadPaired()
     const list = await call<{ devices?: Array<{ id: string; name: string }> }>('p2p_devices')
     devices.value = list?.devices ?? []
   } catch (cause) {
@@ -198,15 +272,12 @@ async function refresh(): Promise<void> {
 async function refreshQuiet(): Promise<void> {
   if (busy.value) return
   try {
-    const status = await call<{
-      serving?: boolean
-      connected?: boolean
-      peer?: string | null
-    }>('p2p_status')
+    const status = await call<{ serving?: boolean; connected?: boolean; peer?: string | null }>('p2p_status')
     if (!status) return
     serving.value = status.serving === true
     connected.value = status.connected === true
     peer.value = status.peer ?? ''
+    loadPaired()
   } catch {
     // 轮询失败不打断用户正在做的事。
   }
@@ -239,9 +310,7 @@ function describeTicket(value: string): { ip: string; relay: boolean } {
     const body = value.trim().replace(/^sunday1:/, '')
     const padded = body.replace(/-/g, '+').replace(/_/g, '/')
       + '='.repeat((4 - (body.length % 4)) % 4)
-    const parsed = JSON.parse(atob(padded)) as {
-      addrs?: Array<{ Ip?: string; Relay?: string }>
-    }
+    const parsed = JSON.parse(atob(padded)) as { addrs?: Array<{ Ip?: string; Relay?: string }> }
     return {
       ip: parsed.addrs?.find((item) => typeof item.Ip === 'string')?.Ip ?? '',
       relay: Boolean(parsed.addrs?.some((item) => typeof item.Relay === 'string')),
@@ -273,6 +342,24 @@ function stopConnecting(): void {
   }
   progressText.value = ''
   elapsed.value = 0
+}
+
+/** 切换工作设备：先断掉现有隧道，再按新选择重开界面。 */
+async function switchTo(id: string): Promise<void> {
+  if (busy.value || id === activeId.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    activateDevice(id === 'local' ? null : id)
+    // user:“我怎么从控制电脑切回手机”+(只清票据不够：宿主里的隧道还连着，重开之后
+    // 又会按「已连接」走回电脑。切换必须先断掉现有隧道)。
+    await call('p2p_disconnect').catch(() => undefined)
+    window.location.reload()
+  } catch (cause) {
+    error.value = String(cause)
+  } finally {
+    busy.value = false
+  }
 }
 
 /** 生成票据即开始接受连接，不再让用户点第二次。 */
@@ -341,28 +428,18 @@ async function connect(): Promise<void> {
     peer.value = result?.peer ?? ''
     if (result?.peer) {
       saveTicket(ticketInput.value.trim())
-      // 配过的电脑进设备清单，之后可以在输入框上方的设备菜单里直接切。
+      // 配过的电脑进设备清单，之后直接在清单里切换。
       rememberDevice(ticketInput.value.trim(), shortId(result.peer))
+      loadPaired()
     }
-    // user:“两种模式可切换”+(通道在启动时选定，切换就是让界面按新通道重开一次；
-    // 本机 Core 不受影响，重开后仍是同一个会话)。
     window.location.reload()
   } catch (cause) {
     error.value = String(cause)
-    // 扫码扫到了但连不上时，把票据留下来让用户能重试。
     if (!isDesktop.value) pasting.value = true
   } finally {
     busy.value = false
     stopConnecting()
   }
-}
-
-/** 用记住的票据直接重连。 */
-async function reconnect(): Promise<void> {
-  const saved = readTicket()
-  if (!saved) return
-  ticketInput.value = saved
-  await connect()
 }
 
 async function disconnect(): Promise<void> {
@@ -415,117 +492,307 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.remote-panel {
+.device-page {
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--theme-main-text) 3%, transparent);
+  gap: var(--space-4);
 }
 
-.remote-panel__head {
+.device-page__head {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  align-items: flex-start;
+  gap: var(--space-3);
 }
 
-.remote-panel__title {
+.device-page__intro {
+  min-width: 0;
+}
+
+.device-page__title {
+  margin: 0;
+  font-size: 17px;
   font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
-.remote-panel__state {
+.device-page__sub {
+  margin: 4px 0 0;
   font-size: 12px;
-  opacity: .62;
+  line-height: 1.6;
+  opacity: 0.6;
 }
 
-.remote-panel__state.is-on {
-  color: var(--green);
-  opacity: 1;
-}
-
-.remote-panel__link {
+.device-page__refresh {
   margin-left: auto;
-  border: 0;
-  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
+  border-radius: 999px;
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: 12px;
-  opacity: .62;
   cursor: pointer;
 }
 
-.remote-panel__link:hover {
-  opacity: 1;
+.device-page__refresh:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
 }
 
-.remote-panel__link:disabled {
-  opacity: .32;
+.device-page__refresh:disabled {
+  opacity: 0.4;
   cursor: default;
 }
 
-.remote-panel__button,
-.remote-panel__revoke {
+.device-page__error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ── 设备清单 ─────────────────────────────────────────── */
+.device-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.device-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--theme-main-text) 2.5%, transparent);
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.device-item.is-active {
+  border-color: color-mix(in srgb, var(--theme-main-text) 26%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
+}
+
+.device-item__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--theme-main-text) 7%, transparent);
+  opacity: 0.85;
+}
+
+.device-item__body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.device-item__name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-item__meta {
+  font-size: 11.5px;
+  line-height: 1.4;
+  opacity: 0.55;
+}
+
+.device-item__badge {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.device-item__badge.is-here {
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+  color: var(--green);
+}
+
+.device-item__action {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 16%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.device-item__action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--theme-main-text) 8%, transparent);
+}
+
+.device-item__action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.device-list__empty {
+  padding: 18px 14px;
+  border: 1px dashed color-mix(in srgb, var(--theme-main-text) 16%, transparent);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.7;
+  opacity: 0.6;
+}
+
+/* ── 动作 ─────────────────────────────────────────────── */
+.device-page__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.device-page__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
   border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
-  padding: 6px 10px;
   font: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
 
-.remote-panel__button.is-primary {
+.device-page__button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
+}
+
+.device-page__button.is-primary {
   background: var(--theme-main-text);
-  color: var(--theme-main-background);
   border-color: transparent;
+  color: var(--theme-main-background);
   font-weight: 650;
 }
 
-.remote-panel__wide {
+.device-page__button.is-wide {
   width: 100%;
-  padding: 10px 12px;
 }
 
-.remote-panel__revoke {
-  padding: 3px 8px;
-  font-size: 12px;
+.device-page__button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
-.remote-panel__hint,
-.remote-panel__empty {
+.device-page__foot {
+  margin: 0;
+  padding-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  opacity: 0.42;
+}
+
+.device-page__progress {
   margin: 0;
   font-size: 12px;
-  opacity: .66;
-  line-height: 1.5;
+  line-height: 1.6;
+  opacity: 0.66;
 }
 
-.remote-panel__row {
+.device-page__paste {
+  display: grid;
+  gap: 8px;
+}
+
+.device-page__paste textarea {
+  width: 100%;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text) 4%, transparent);
+  color: inherit;
+  font: 12px/1.6 ui-monospace, monospace;
+  resize: vertical;
+}
+
+.device-page__note {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12.5px;
+  opacity: 0.72;
 }
 
-.remote-panel__pair {
+.device-page__link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+/* ── 电脑端：二维码 ───────────────────────────────────── */
+.pair-card {
   display: flex;
-  gap: var(--space-3);
+  gap: 16px;
   align-items: flex-start;
   flex-wrap: wrap;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--theme-main-text) 2.5%, transparent);
 }
 
-.remote-panel__pair-side {
+.pair-card__qr {
+  flex: 0 0 auto;
+  width: 156px;
+  height: 156px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+}
+
+.pair-card__qr :deep(svg) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.pair-card__side {
   display: grid;
   flex: 1 1 220px;
-  gap: var(--space-2);
+  gap: 10px;
   min-width: 0;
 }
 
-.remote-panel__ticket {
+.pair-card__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.66;
+}
+
+.pair-card__ticket {
   display: block;
   width: 100%;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border: 0;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
@@ -534,77 +801,59 @@ onMounted(() => {
   cursor: pointer;
 }
 
-.remote-panel__ticket code {
+.pair-card__ticket code {
   display: block;
   min-width: 0;
   font: 12px/1.5 ui-monospace, monospace;
   overflow-wrap: anywhere;
 }
 
-.remote-panel__qr {
-  flex: 0 0 auto;
-  width: 148px;
-  height: 148px;
-  padding: 6px;
-  border-radius: var(--radius-sm);
-  background: #ffffff;
-}
-
-.remote-panel__qr :deep(svg) {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.remote-panel__input {
-  width: 100%;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
-  background: color-mix(in srgb, var(--theme-main-text) 4%, transparent);
-  color: inherit;
-  font: 12px/1.5 ui-monospace, monospace;
-  resize: vertical;
-}
-
-.remote-panel__devices {
+/* ── 可信设备 ─────────────────────────────────────────── */
+.device-page__trusted {
   border-top: 1px solid color-mix(in srgb, var(--theme-main-text) 8%, transparent);
-  padding-top: var(--space-2);
+  padding-top: 10px;
 }
 
-.remote-panel__devices summary {
+.device-page__trusted summary {
   display: flex;
-  gap: var(--space-2);
+  gap: 8px;
   font-size: 12px;
-  opacity: .72;
+  opacity: 0.66;
   cursor: pointer;
 }
 
-.remote-panel__list {
+.device-page__trusted ul {
   display: grid;
-  gap: var(--space-1);
-  margin: var(--space-2) 0 0;
+  gap: 6px;
+  margin: 10px 0 0;
   padding: 0;
   list-style: none;
 }
 
-.remote-panel__device {
+.device-page__trusted li {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 10px;
+  font-size: 12px;
 }
 
-.remote-panel__device-name {
+.device-page__trusted li span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  opacity: 0.72;
 }
 
-.remote-panel__error {
-  margin: 0;
-  color: var(--red);
-  font-size: 12px;
+.device-page__trusted li button {
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
 }
 </style>
