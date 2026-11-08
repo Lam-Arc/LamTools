@@ -49,8 +49,21 @@
         <button class="remote-panel__button" type="button" :disabled="busy" @click="disconnect">{{ t("断开") }}</button>
       </div>
       <template v-else>
+        <!-- user:“第一次连上了，后面就没有再连上过”+(记住的票据还在，就该有一键重连，
+             不用每次都去电脑上重新扫码)。 -->
         <button
+          v-if="remembered"
           class="remote-panel__button is-primary remote-panel__wide"
+          type="button"
+          :disabled="busy"
+          data-remote-reconnect
+          @click="reconnect"
+        >
+          {{ busy ? t("正在重连…") : t("重连上次的电脑") }}
+        </button>
+        <button
+          class="remote-panel__button remote-panel__wide"
+          :class="{ 'is-primary': !remembered }"
           type="button"
           :disabled="busy"
           @click="scan"
@@ -101,9 +114,9 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
-import { saveTicket } from '@/app/remoteSession.ts'
+import { readTicket, saveTicket } from '@/app/remoteSession.ts'
 
 /**
  * 配对面板。
@@ -128,8 +141,9 @@ const busy = ref(false)
 const error = ref('')
 const pasting = ref(false)
 const copied = ref(false)
-const progressText = ref('')
+const remembered = ref('')
 const elapsed = ref(0)
+const progressText = ref('')
 let progressTimer: number | null = null
 
 const isDesktop = computed(() => (props.platform ?? 'desktop') === 'desktop')
@@ -165,12 +179,36 @@ async function refresh(): Promise<void> {
         await refreshQr(ticket.value)
       }
     }
+    remembered.value = readTicket()
     const list = await call<{ devices?: Array<{ id: string; name: string }> }>('p2p_devices')
     devices.value = list?.devices ?? []
   } catch (cause) {
     error.value = String(cause)
   } finally {
     busy.value = false
+  }
+}
+
+/**
+ * 静默轮询连接状态。
+ *
+ * user:“连上了电脑，但是它弹了一个错误”“我根本不知道卡在哪里了”+(手机连上或者断开，
+ * 电脑这边应当自己变，而不是让用户盯着二维码猜；断开之后也还留着上一台的残影)。
+ */
+async function refreshQuiet(): Promise<void> {
+  if (busy.value) return
+  try {
+    const status = await call<{
+      serving?: boolean
+      connected?: boolean
+      peer?: string | null
+    }>('p2p_status')
+    if (!status) return
+    serving.value = status.serving === true
+    connected.value = status.connected === true
+    peer.value = status.peer ?? ''
+  } catch {
+    // 轮询失败不打断用户正在做的事。
   }
 }
 
@@ -315,6 +353,14 @@ async function connect(): Promise<void> {
   }
 }
 
+/** 用记住的票据直接重连。 */
+async function reconnect(): Promise<void> {
+  const saved = readTicket()
+  if (!saved) return
+  ticketInput.value = saved
+  await connect()
+}
+
 async function disconnect(): Promise<void> {
   busy.value = true
   try {
@@ -342,6 +388,10 @@ async function revoke(id: string): Promise<void> {
 
 onMounted(() => {
   void refresh()
+  const timer = window.setInterval(() => {
+    void refreshQuiet()
+  }, 3000)
+  onUnmounted(() => window.clearInterval(timer))
   if (!host()) return
   void import('@tauri-apps/api/event').then(async ({ listen }) => {
     try {

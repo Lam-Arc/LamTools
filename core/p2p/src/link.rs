@@ -11,6 +11,7 @@
 //! side, and impossible to desync because the length is authoritative.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,6 +88,9 @@ pub struct Client {
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>>>,
     events: broadcast::Sender<Event>,
     next_id: u64,
+    /// 读帧的任务还在跑就说明隧道还活着。断了之后界面必须知道，否则会一直显示
+    /// 「已连接」，而每一次操作都拿到一个看不懂的英文错误。
+    alive: Arc<AtomicBool>,
     pub peer: String,
 }
 
@@ -122,12 +126,14 @@ impl Client {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let (event_tx, _) = broadcast::channel(EVENT_BUFFER);
+        let alive = Arc::new(AtomicBool::new(true));
 
         // One reader for the whole connection: replies go to their caller, events go to
         // subscribers, and a closed stream fails every waiting call instead of hanging.
         let reader_pending = Arc::clone(&pending);
         let reader_events = event_tx.clone();
         let reader_conn = conn.clone();
+        let reader_alive = Arc::clone(&alive);
         tauri_free_spawn(async move {
             loop {
                 match read_frame(&mut recv).await {
@@ -147,6 +153,7 @@ impl Client {
                     Ok(Frame::Pong) => {}
                     Ok(_) => {}
                     Err(error) => {
+                        reader_alive.store(false, Ordering::SeqCst);
                         for (_, sender) in reader_pending.lock().await.drain() {
                             let _ = sender.send(Err(error.to_string()));
                         }
@@ -163,8 +170,14 @@ impl Client {
             pending,
             events: event_tx,
             next_id: 1,
+            alive,
             peer,
         })
+    }
+
+    /// 隧道是否还活着。
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
     }
 
     /// One Core-style call. Matched by id, so a slow answer cannot be taken for the next one.
@@ -206,6 +219,7 @@ impl Client {
     }
 
     pub fn close(&self) {
+        self.alive.store(false, Ordering::SeqCst);
         self.conn.close(0u32.into(), b"done");
     }
 }
@@ -221,10 +235,13 @@ pub struct ServerLink {
 
 impl ServerLink {
     /// Waits for one connection and runs the handshake.
-    pub async fn accept(endpoint: &Endpoint, trust: Arc<Mutex<TrustStore>>) -> Result<Self> {
-        let connecting = match endpoint.accept().await {
-            Some(connecting) => connecting,
-            None => bail!("endpoint closed"),
+    ///
+    /// `Ok(None)` 表示端点已经关了，调用方该收工；握手失败则是 `Err`——一次失败只说明
+    /// 那一次没成就，不能让调用方连带退出。手机在超时后放弃拨号时，留下的那次握手会
+    /// 在服务端超时，这属于正常现象。
+    pub async fn accept(endpoint: &Endpoint, trust: Arc<Mutex<TrustStore>>) -> Result<Option<Self>> {
+        let Some(connecting) = endpoint.accept().await else {
+            return Ok(None);
         };
         let conn = connecting.await.context("handshake failed")?;
         let peer = conn.remote_id().to_string();
@@ -253,13 +270,13 @@ impl ServerLink {
             },
         )
         .await?;
-        Ok(Self {
+        Ok(Some(Self {
             conn,
             send: Arc::new(Mutex::new(send)),
             recv,
             peer,
             trusted,
-        })
+        }))
     }
 
     /// Pushes one event to the far side.

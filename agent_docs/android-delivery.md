@@ -9,13 +9,13 @@
 | 文件 | 用途 | 大小 |
 | --- | --- | --- |
 | `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 297 MB |
-| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 311 MB |
+| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB |
 
-校验和：
+校验和（2026-11-07 19:01 构建，含相机方向与连接可靠性修复）：
 
 ```
-722d2a25fb63ea3f0b008cbeed0ce776a9ba40153c83db6ec369f28c74a60fd6  sunday-m-arm64-debug.apk
-5e271b78679203fd96b32c3ef04dcf10daed9d1049c920937aebb6f54e8ab0df  sunday-m-x86_64-debug.apk
+aa56b2d95d682f758a56b26dbe0b3d937ba8a2caf60755223019e3fce3e86cd3  sunday-m-arm64-debug.apk
+86a726c9ae70410fd09e1d1beaef1ffbe69dde8d54d1747ab7128231abae4f02  sunday-m-x86_64-debug.apk
 ```
 
 启动图标与桌面一致，是 Sunday 笑脸，由 `core/desktop/src-tauri/icons/icon.png` 重新生成到各密度 mipmap；此前生成工程里残留的旧「88」图标已替换。
@@ -132,6 +132,37 @@ files/runtime/
 | 启动首屏 | 通过 | 冷启动 t15 原生底色，t60 启动层显示 1% / 4 MB 515 MB，之后进入欢迎页；日志完整出现 staging → unpacking → starting → waiting → ready |
 | 手机悬浮环（服务与环） | 通过 | 系统窗口列表先出现悬浮按钮，点击后变成两个窗口；长按截图看到六扇区环；注入扇区动作后输入框出现「来自悬浮环」 |
 | 小窗 | 未验证 | 命令与回落代码已接，未在设备上点过 |
+
+## 2026-11-07 晚：相机方向与「Connection lost」的根因
+
+两个报上来的问题各有独立成因，都不是界面文案问题。
+
+**相机方向。** `QrScanActivity` 建好预览却从没调用 `setDisplayOrientation`，传感器方向
+90° 的手机拿到的就是横躺且被拉满整屏的画面。现在按 `(传感器方向 - 屏幕旋转)` 转正，
+再把 SurfaceView 按转正后的比例居中（多出来的部分留黑底），布局完成后再套一次。
+模拟器实测：`preview 1280x720 sensor=90 screen=0 display=90`、`surface 1080x1920 in box
+1080x2400`，截图确认画面居中、上下留黑、不再被拉宽。真机传感器方向不同也走同一个公式，
+但真机画面未验。
+
+**Connection lost。** 这个字符串来自 quinn（`ReadError::ConnectionLost`），不是业务层
+报错，含义是手机和电脑之间的 QUIC 连接断了。真正让"第一次连上、后面连不上"的是传输
+进程的退出路径：`ServerLink::accept` 只要遇到一次握手超时（手机在 45 秒超时后放弃拨号，
+留下的那次握手会在服务端超时）就 `return Err`，`sunday-p2p serve` 整个进程跟着退出，
+进程一死后桌面这边就再也接不到任何设备，`p2p.log` 里只剩一行 `Error: handshake failed`。
+实测复现与修复后对比：同一台机器、同样中断两次握手，修复前进程消失，修复后只多两行
+`ACCEPT ERROR handshake failed: timed out`，进程仍在监听。
+
+同批修掉的还有四处：
+
+| 位置 | 改动 | 证据 |
+| --- | --- | --- |
+| `core/p2p/src/bin/cli.rs` | 握手失败只记日志、睡 1 秒继续等；端点关闭才退出 | 见上，进程存活 |
+| `core/p2p/src/bin/cli.rs` | 每条连接各起一个任务，不再一条一条排队服务 | 手机保持连接时，另一个客户端 `call --method ping` 立即得到 `{"pong":true}` |
+| `core/p2p/src/link.rs` + `core/android-host/.../p2p_bridge.rs` | `Client` 记住读帧任务是否还活着；`p2p_status` 按真实存活回答；`p2p_call` 发现隧道死了就丢掉并给中文提示 | 杀掉电脑端传输进程后，手机「设备连接」由「已连接」变为「未连接」 |
+| `core/ui/src/components/RemoteConnectionPanel.vue` | 记住票据就显示「重连上次的电脑」；电脑端每 3 秒静默刷新连接状态 | 重装启动后自动回到「已连接 / 已连到 16c281…41c7」；电脑端换票/重启传输后同一张票据仍可重连 |
+
+电脑端的「手机已连接」显示还需要桌面应用本身重装：宿主 `p2p_host.rs` 这次加了读取
+`PEER` 状态，但正在运行的桌面版仍是旧宿主。
 
 ## 未验证（不得当作通过）
 

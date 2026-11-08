@@ -23,6 +23,11 @@ pub struct P2pHostState {
     child: Mutex<Option<Child>>,
     ticket: Arc<Mutex<String>>,
     port: Arc<Mutex<u16>>,
+    /// 当前连着的手机；空表示没有设备在线。
+    ///
+    /// user:“我根本不知道卡在哪里了”+(电脑这边也要看得见手机到底连上没有，
+    /// 否则二维码摆在屏幕上，连接成没成全靠猜)。
+    peer: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for P2pHostState {
@@ -31,6 +36,7 @@ impl Default for P2pHostState {
             child: Mutex::new(None),
             ticket: Arc::new(Mutex::new(String::new())),
             port: Arc::new(Mutex::new(0)),
+            peer: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -163,10 +169,11 @@ fn ensure_child(api_base: &str, state: &P2pHostState) -> Result<(String, u16), S
     // 对端是否连到、中继是否可用全都丢了)。
     let log_path = data_dir().join("p2p.log");
     let ticket_slot = Arc::clone(&state.ticket);
+    let peer_slot = Arc::clone(&state.peer);
     let stderr = child.stderr.take();
-    spawn_log_reader(log_path.clone(), reader, Some(ticket_slot));
+    spawn_log_reader(log_path.clone(), reader, Some(ticket_slot), Some(peer_slot));
     if let Some(stderr) = stderr {
-        spawn_log_reader(log_path, BufReader::new(stderr), None);
+        spawn_log_reader(log_path, BufReader::new(stderr), None, None);
     }
 
     *guard = Some(child);
@@ -178,6 +185,7 @@ fn spawn_log_reader(
     path: PathBuf,
     mut reader: BufReader<impl std::io::Read + Send + 'static>,
     ticket: Option<Arc<Mutex<String>>>,
+    peer: Option<Arc<Mutex<Option<String>>>>,
 ) {
     std::thread::spawn(move || {
         use std::io::Write;
@@ -200,6 +208,21 @@ fn spawn_log_reader(
                         if let Some(slot) = &ticket {
                             if let Ok(mut current) = slot.lock() {
                                 *current = value.to_owned();
+                            }
+                        }
+                    }
+                    // 传输进程每接上一台设备打印 PEER，断开时打印 PEER-CLOSED / PEER-ERROR。
+                    if let Some(rest) = trimmed.strip_prefix("PEER ") {
+                        let id = rest.split_whitespace().next().unwrap_or("").to_owned();
+                        if let Some(slot) = &peer {
+                            if let Ok(mut current) = slot.lock() {
+                                *current = Some(id);
+                            }
+                        }
+                    } else if trimmed.starts_with("PEER-CLOSED") || trimmed.starts_with("PEER-ERROR") {
+                        if let Some(slot) = &peer {
+                            if let Ok(mut current) = slot.lock() {
+                                *current = None;
                             }
                         }
                     }
@@ -272,6 +295,9 @@ pub fn stop(state: &P2pHostState) {
     if let Ok(mut ticket) = state.ticket.lock() {
         ticket.clear();
     }
+    if let Ok(mut peer) = state.peer.lock() {
+        *peer = None;
+    }
 }
 
 #[tauri::command]
@@ -289,7 +315,13 @@ pub fn p2p_status(state: tauri::State<'_, P2pHostState>) -> Result<Value, String
         }
     }
     let ticket = state.ticket.lock().map(|ticket| ticket.clone()).unwrap_or_default();
-    Ok(json!({ "serving": serving, "ticket": ticket }))
+    let peer = state.peer.lock().ok().and_then(|slot| slot.clone());
+    Ok(json!({
+        "serving": serving,
+        "ticket": ticket,
+        "connected": peer.is_some(),
+        "peer": peer,
+    }))
 }
 
 /// user:“允许撤销授权”+(传输进程把名单放在自己的目录里，这里改同一份文件)。
