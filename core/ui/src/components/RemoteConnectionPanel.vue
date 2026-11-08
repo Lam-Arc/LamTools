@@ -20,7 +20,11 @@
     <!-- 手机：设备清单。切换就发生在这里，输入框上方不再有第二个入口。 -->
     <template v-if="!isDesktop">
       <ul class="device-list">
-        <li class="device-item" :class="{ 'is-active': activeId === 'local' }">
+        <li
+          class="device-item"
+          :class="{ 'is-active': activeId === 'local' }"
+          @click="onRowClick('local')"
+        >
           <span class="device-item__icon"><Smartphone :size="18" :stroke-width="1.9" aria-hidden="true" /></span>
           <span class="device-item__body">
             <span class="device-item__name">{{ t("本机") }}</span>
@@ -44,6 +48,7 @@
           :key="entry.id"
           class="device-item"
           :class="{ 'is-active': activeId === entry.id }"
+          @click="onRowClick(entry.id)"
         >
           <span class="device-item__icon"><Monitor :size="18" :stroke-width="1.9" aria-hidden="true" /></span>
           <span class="device-item__body">
@@ -216,7 +221,26 @@ let progressTimer: number | null = null
 
 const isDesktop = computed(() => (props.platform ?? 'desktop') === 'desktop')
 /** 当前在哪一台设备上工作：连着电脑就是对端 id，否则本机。 */
-const activeId = computed(() => (connected.value && peer.value ? peer.value : 'local'))
+/**
+ * 界面此刻真正在用的工作环境（不是隧道状态）。
+ *
+ * user:“我切到本机之后它又变回去了”+(以前这里用 connected && peer 推断，隧道一连上就
+ * 认为当前是电脑，可界面走的是启动时选定的通道，两者能同时成立又互相矛盾)。
+ * 启动流程会把实际选择写进 localStorage，这里照它显示。
+ */
+const activeId = computed(() => {
+  try {
+    return localStorage.getItem('sunday.p2p.active') || 'local'
+  } catch {
+    return 'local'
+  }
+})
+
+/** 点整行就能切，不用先找到右边那颗按钮。 */
+function onRowClick(id: string): void {
+  if (busy.value || id === activeId.value) return
+  void switchTo(id)
+}
 
 function host(): ((command: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
   const bridge = (window as unknown as {

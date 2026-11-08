@@ -245,6 +245,14 @@ async function boot(): Promise<void> {
       ? (knownRemote.peer ?? '')
       : null
     usingRemote = peer !== null
+    // user:“我切到本机之后它又变回去了”+(设备页以前拿隧道状态猜界面用的是哪一端：
+    //  隧道连着就显示「当前：电脑」，可界面可能是启动时选的本机，两个说法互相矛盾。
+    //  这里把界面的实际选择记下来，设备页照它显示)。
+    try {
+      localStorage.setItem('sunday.p2p.active', usingRemote ? (peer ?? 'local') : 'local')
+    } catch {
+      // 存储不可用只是少了这条提示，不影响连接。
+    }
     if (peer === null) {
       void remoteAttempt.then((late) => {
         if (late) {

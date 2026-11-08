@@ -64,7 +64,7 @@ export class RemoteTransport implements LamToolsTransport {
       if (status?.connected) throw error
       const peer = await ensureRemote(1200)
       if (peer === null) {
-        throw new TransportRpcError(undefined, '和电脑的连接断开了，回「远程连接」重新连一次（或在输入框上方切回本机）')
+        throw new TransportRpcError(undefined, '和电脑的连接断开了：打开抽屉底部的「设备连接」，可以重连或切回本机')
       }
       return await this.perform<TResponse>(request)
     }

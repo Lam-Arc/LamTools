@@ -211,12 +211,12 @@ pub async fn p2p_call(
     if inner.client.is_none() {
         drop(inner);
         *state.peer.lock().await = None;
-        return Err("和电脑的连接已经断开，回「远程连接」点刷新重连一次".to_owned());
+        return Err("和电脑的连接已经断开，打开「设备连接」重连或切回本机".to_owned());
     }
     let client = inner
         .client
         .as_mut()
-        .ok_or_else(|| "和电脑的连接已经断开，回「远程连接」点刷新重连一次".to_owned())?;
+        .ok_or_else(|| "和电脑的连接已经断开，打开「设备连接」重连或切回本机".to_owned())?;
     client
         .call(&method, params.unwrap_or_else(|| json!({})))
         .await
