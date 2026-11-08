@@ -7,6 +7,7 @@
 //! 备用域名服务器（本机直接地址照样能用）。等桌面端接上之后再把 JNI 上下文补进来。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,21 @@ pub struct P2pState {
     /// user:“点刷新什么反应都没有”+(p2p_call 会整条调用期间持有 inner 锁，状态查询如果也去
     /// 抢同一把锁，界面每 3 秒一次的刷新就会排在一条长 RPC 后面，看起来像卡住了)
     peer: Mutex<Option<String>>,
+    /// 是否正在拨号。
+    ///
+    /// user:“类似的时序问题不要再犯，检查”+(拨号期间 inner 锁被占着，状态查询只能靠
+    /// 「锁拿不到」猜，以前猜成「已连接」；界面于是拿着一个还没建好的隧道去读项目、读模型，
+    /// 读一次空一次，还显示成「暂无可用模型」。这里把拨号单独记下来，让状态说实话)。
+    connecting: Arc<AtomicBool>,
+}
+
+/// 拨号期间置位，离开作用域（成功、失败、超时、被取消）自动复位。
+struct DialingGuard(Arc<AtomicBool>);
+
+impl Drop for DialingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 #[derive(Default)]
@@ -41,6 +57,7 @@ impl P2pState {
             dir,
             inner: Mutex::new(Inner::default()),
             peer: Mutex::new(None),
+            connecting: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -81,6 +98,9 @@ pub async fn p2p_connect(
     // user:“从点击图标到进入界面要 5 秒以内”+(启动时只用很短的时间试着连一次电脑，
     // 连不上立刻用本机，绝不把界面卡在一次等不到的重连上)。
     let budget = Duration::from_millis(timeout_ms.unwrap_or(45_000).clamp(400, 120_000));
+    // 从这里开始到函数结束，对外都算「正在连接」，状态查询据此如实回答。
+    state.connecting.store(true, Ordering::SeqCst);
+    let _dialing = DialingGuard(state.connecting.clone());
     // 连接的第一步是创建 iroh 端点，这一步本身就可能花几十秒（建 socket、连中继、查地址）；
     // 只给拨号设上限没有用。整个连接过程都罩在同一个预算里。
     let attempt = async move {
@@ -249,11 +269,19 @@ pub async fn p2p_status(state: State<'_, Arc<P2pState>>) -> Result<Value, String
             .unwrap_or(false);
         return Ok(json!({
             "connected": connected,
+            "connecting": state.connecting.load(Ordering::SeqCst),
             "peer": inner.client.as_ref().map(|c| c.peer.clone()).or(cached),
             "ticket": inner.ticket,
         }));
     }
-    return Ok(json!({ "connected": true, "busy": true, "peer": cached }));
+    // 锁被拨号占着：这时候还没有可用隧道，不能答「已连接」。
+    let dialing = state.connecting.load(Ordering::SeqCst);
+    return Ok(json!({
+        "connected": !dialing,
+        "connecting": dialing,
+        "busy": true,
+        "peer": cached,
+    }));
 }
 
 

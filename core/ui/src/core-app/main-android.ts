@@ -4,14 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { createLamToolsRuntime, LamToolsApp } from '@/index.ts'
 import { createIpcTransport } from '@/transport/ipcTransport.ts'
 import { createRemoteTransport } from '@/transport/remoteTransport.ts'
-import {
-  activateDevice,
-  ensureRemote,
-  readDevices,
-  remoteStatus,
-} from '@/app/remoteSession.ts'
-import type { RuntimeWorkspaceControl, RuntimeWorkspaceOption } from '@/app/runtime.ts'
-import { ref } from 'vue'
+import { ensureRemote, remoteStatus } from '@/app/remoteSession.ts'
 import { bootScreen, type BootProgressPayload } from './bootScreen.ts'
 
 /**
@@ -56,43 +49,6 @@ const capabilities: import('@/app/runtime.ts').RuntimeCapabilities = {
       return paths.length ? paths : null
     },
   },
-}
-
-/**
- * 设备切换：本机 + 配对过的电脑。
- *
- * user:“假如说我有多个设备，我该怎么切换呢？我怎么从控制电脑切回手机？”+(输入框上方那个
- * 设备菜单以前是空的，因为宿主从来没有提供工作环境选项；现在它列出本机和每一台配对的
- * 电脑，选一项就切过去，切回「本机」就是不再走隧道)。
- */
-function createWorkspaceControl(activePeer: string | null): RuntimeWorkspaceControl {
-  const options = ref<RuntimeWorkspaceOption[]>([
-    { id: 'local', label: '本机', platform: 'android', deviceName: '这台手机' },
-    ...readDevices().map((device) => ({
-      id: device.id,
-      label: device.name,
-      platform: 'desktop',
-      deviceName: device.name,
-      online: Boolean(activePeer) && device.id === activePeer,
-    })),
-  ])
-  const activeId = ref(activePeer ? activePeer : 'local')
-  return {
-    activeId,
-    options,
-    async select(id: string) {
-      if (id === activeId.value) return
-      activateDevice(id === 'local' ? null : id)
-      // user:“我怎么从控制电脑切回手机”+(只清票据不够：宿主里的隧道还连着，重开之后
-      // 又会按「已连接」走回电脑。切换必须先断掉现有隧道，再按新选择重开)。
-      try {
-        await invoke('p2p_disconnect')
-      } catch {
-        // 没有连接时这里是空操作，不影响切换。
-      }
-      window.location.reload()
-    },
-  }
 }
 
 /** A thrown value as text. `invoke` rejects with a string from the Rust side, and a
@@ -140,6 +96,42 @@ function gateTransport<T extends object>(base: T, ready: Promise<unknown>): T {
   })
 }
 
+/** 挂载前连通道，允许重试。
+ *
+ *  user:“类似的时序问题不要再犯，检查”+(以前只连一次，一次失败整层报「界面启动失败」
+ *  退出；事件通道在 Activity 重建后可能还没就绪，等一会儿再连就好了)。 */
+async function connectWithRetry(target: { connect(): Promise<void> }, attempts = 5): Promise<void> {
+  // user:“类似的时序问题不要再犯，检查”+(以前挂载前只连一次，失败就整层报「界面启动
+  // 失败」退出；事件通道在 Activity 重建后可能还没就绪，等一会儿再连就好了)。
+  let lastError: unknown
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      await target.connect()
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => window.setTimeout(resolve, 300 * (index + 1)))
+    }
+  }
+  throw lastError
+}
+
+/** 核心启动也允许重来：宿主对已经在跑的 guest 是直接复用的，所以重入是安全的。 */
+function startCoreOnce(attempts = 3): Promise<unknown> {
+  let attempt = 0
+  const run = async (): Promise<unknown> => {
+    attempt += 1
+    try {
+      return await invoke('core_start')
+    } catch (error) {
+      if (attempt >= attempts) throw error
+      await new Promise((resolve) => window.setTimeout(resolve, 1200 * attempt))
+      return run()
+    }
+  }
+  return run()
+}
+
 /** The wait before the first paint, reported honestly.
  *
  *  user:“从点击图标到进入工作台，全程有反馈：原生窗口底色先挡住白闪，随后 HTML 启动层
@@ -170,7 +162,7 @@ async function boot(): Promise<void> {
   // 后台拨号不占界面时间，预算给足；连上了再重开一次切过去。
   const remoteAttempt = ensureRemote(20_000)
   // 启动核心不再挡在挂载前面：核心慢几秒，界面就先出来，数据等它。
-  const coreReady = invoke('core_start')
+  const coreReady = startCoreOnce()
   coreReady.catch(() => undefined)
 
 
@@ -202,9 +194,8 @@ async function boot(): Promise<void> {
       transport: activeTransport,
       platform: 'mobile',
       capabilities,
-      workspaceControl: createWorkspaceControl(peer),
     })
-    await activeTransport.connect()
+    await connectWithRetry(activeTransport)
     // The window is edge to edge, so nothing resizes when the keyboard opens and nothing
     // reserves the status bar. The host publishes both heights; the shared layout already
     // reads these two variables, so there is no second layout engine here.

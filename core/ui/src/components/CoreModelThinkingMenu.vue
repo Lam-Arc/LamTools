@@ -132,7 +132,7 @@
               </section>
             </div>
 
-            <div v-if="displayedModelOptions.length === 0" class="core-model-thinking-menu__empty">{{ t("暂无可用模型") }}</div>
+            <div v-if="displayedModelOptions.length === 0" class="core-model-thinking-menu__empty">{{ modelLoading ? t("正在加载模型…") : t("暂无可用模型") }}</div>
           </section>
 
           <aside class="core-model-thinking-menu__thinking-column" :aria-label="t('思考强度')">
@@ -178,6 +178,8 @@ import { useComposerMenuViewport } from '@/composables/useComposerMenuViewport.t
 const props = withDefaults(defineProps<{
   modelValue?: string
   modelOptions?: CoreSelectOption[]
+  /** 模型清单还没读到过：说「正在加载」，不要断言「暂无」。 */
+  modelLoading?: boolean
   catalogView?: CoreModelCatalogView
   thinkingMode: CoreThinkingMode | string
   thinkingModeOptions?: CoreThinkingModeOption[]
@@ -189,6 +191,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   modelValue: '',
   modelOptions: () => [],
+  modelLoading: false,
   catalogView: 'provider',
   thinkingModeOptions: () => [],
   shallowThinkingEnabled: false,
