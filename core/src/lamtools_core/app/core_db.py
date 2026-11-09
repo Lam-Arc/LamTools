@@ -652,6 +652,12 @@ class CoreSyncChange(CoreDbBase):
     """
 
     __tablename__ = "core_sync_changes"
+    __table_args__ = (
+        # user:“在这一次的更新中，自动把之前的数据库进行一遍去重和缩小”+(运行时状态是
+        # 状态而不是历史：写入侧按 entity 覆盖时需要一个索引才能 O(log n) 找到旧行，
+        # 否则每次保存都要扫全表。旧库由 maintenance compact-sync-journal 建这个索引。)
+        Index("idx_core_sync_changes_entity", "entity_type", "entity_id", "seq"),
+    )
 
     seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     change_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
@@ -877,6 +883,9 @@ class CoreArtifact(CoreDbBase):
     # 资料库的用户状态：收藏，以及归档到哪一层（空串 = 未归档）。
     favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     folder: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    # 检索键与质量评价：标签是自由字符串，评分 0 到 5，0 表示未评。
+    tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     deleted: Mapped[bool] = mapped_column(nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
@@ -950,6 +959,9 @@ class SqlAlchemyRuntimeStateStore:
         self.write_coordinator = write_coordinator
         self._sync_journal = sync_journal
         self._sync_publisher = sync_publisher
+        # 旧库可能还没有 idx_core_sync_changes_entity；没有索引时退回追加式写入，
+        # 不拿每次保存扫全表去换“一定合并”。
+        self._runtime_journal_index_ready: bool | None = None
 
     def set_sync_publisher(self, publisher: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
         self._sync_publisher = publisher
@@ -1009,7 +1021,7 @@ class SqlAlchemyRuntimeStateStore:
                     raise RuntimeStateConflictError(
                         f"Runtime state revision conflict for {session_id}"
                     )
-                self._append_runtime_change(db, state, state_payload, pending_payload, now)
+                await self._append_runtime_change(db, state, state_payload, pending_payload, now)
                 setattr(state, "_runtime_store_revision", next_revision)
                 return state
 
@@ -1499,7 +1511,7 @@ class SqlAlchemyRuntimeStateStore:
                     )
                 )
                 await db.flush()
-                change = self._append_runtime_change(db, state, state_payload, pending_payload, now)
+                change = await self._append_runtime_change(db, state, state_payload, pending_payload, now)
                 return 1, change.change_id if change is not None else None
 
             current_revision = int(row.revision or 0)
@@ -1542,7 +1554,7 @@ class SqlAlchemyRuntimeStateStore:
             )
             if result.rowcount != 1:
                 raise RuntimeStateConflictError(f"Runtime state revision conflict for {state.session_id}")
-            change = self._append_runtime_change(db, state, state_payload, pending_payload, now)
+            change = await self._append_runtime_change(db, state, state_payload, pending_payload, now)
             return next_revision, change.change_id if change is not None else None
 
         try:
@@ -1552,7 +1564,26 @@ class SqlAlchemyRuntimeStateStore:
         setattr(state, "_runtime_store_revision", next_revision)
         return change_id
 
-    def _append_runtime_change(
+    async def _runtime_journal_can_coalesce(self, db: Any) -> bool:
+        """Whether the journal has the entity index needed to replace old rows.
+
+        Without it a delete would scan the whole journal on every save, which is
+        worse than the growth it prevents; such a database keeps the legacy
+        append-only behaviour until ``maintenance compact-sync-journal`` creates
+        the index (or a fresh ``create_all`` does).
+        """
+        if self._runtime_journal_index_ready is None:
+            self._runtime_journal_index_ready = (
+                await db.scalar(
+                    text(
+                        "SELECT 1 FROM sqlite_master WHERE type='index' "
+                        "AND name='idx_core_sync_changes_entity'"
+                    )
+                )
+            ) is not None
+        return self._runtime_journal_index_ready
+
+    async def _append_runtime_change(
         self,
         db: Any,
         state: RuntimeState,
@@ -1562,6 +1593,15 @@ class SqlAlchemyRuntimeStateStore:
     ) -> Any | None:
         if self._sync_journal is None:
             return None
+        if await self._runtime_journal_can_coalesce(db):
+            # user:“也不是完全发不出去 反正卡住了好久”+(同一会话的运行时快照只有最新
+            # 一份有意义：先删旧行再追加，日志不再随每一步膨胀，客户端的游标仍然只增。
+            await db.execute(
+                delete(CoreSyncChange).where(
+                    CoreSyncChange.entity_type == "runtime",
+                    CoreSyncChange.entity_id == state.session_id,
+                )
+            )
         entity = {
             "thread_id": state.session_id,
             **dict(state_payload),
@@ -2728,6 +2768,8 @@ _LATE_COLUMNS: dict[str, dict[str, str]] = {
     "core_artifacts": {
         "favorite": "BOOLEAN NOT NULL DEFAULT 0",
         "folder": "VARCHAR(512) NOT NULL DEFAULT ''",
+        "tags_json": "JSON NOT NULL DEFAULT '[]'",
+        "rating": "INTEGER NOT NULL DEFAULT 0",
     },
     "core_projects": {
         "workspace_id": "VARCHAR(128) NOT NULL DEFAULT ''",

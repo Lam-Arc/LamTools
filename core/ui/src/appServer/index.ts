@@ -120,6 +120,7 @@ export {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   applyCoreAppEvent,
+  mergeCoreNewestSnapshot,
   type CoreAppServerRuntimeClient,
   type CoreAppServerRuntimeControllerOptions,
   type CoreAppServerRuntimeState,

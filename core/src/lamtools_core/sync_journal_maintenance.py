@@ -37,6 +37,10 @@ _log = logging.getLogger(__name__)
 #: 启动修补使用的覆盖索引；压缩时一次性建好，之后每次启动都只查索引。
 THREAD_REVISION_INDEX = "idx_core_events_thread_revision"
 
+#: 写入侧按 (entity_type, entity_id) 覆盖旧运行时快照所需的索引。
+#: 新库由 create_all 建；旧库只能在这里补，否则写入侧会退回追加式增长。
+SYNC_ENTITY_INDEX = "idx_core_sync_changes_entity"
+
 #: 重建期间使用的临时表名，不能和正式表冲突。
 _COMPACT_TABLE = "core_sync_changes__compact"
 _KEEP_TABLE = "_core_sync_keep_runtime"
@@ -48,6 +52,7 @@ class SyncCompactionReport:
     applied: bool = False
     vacuumed: bool = False
     index_created: bool = False
+    entity_index_created: bool = False
     backup_path: str = ""
     before_bytes: int = 0
     after_bytes: int = 0
@@ -183,6 +188,20 @@ def _ensure_revision_index(connection: sqlite3.Connection) -> bool:
     return True
 
 
+def _ensure_sync_entity_index(connection: sqlite3.Connection) -> bool:
+    existing = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?", (SYNC_ENTITY_INDEX,)
+    ).fetchone()
+    if existing is not None:
+        return False
+    _log.info("[compact] creating entity index %s (one-time)", SYNC_ENTITY_INDEX)
+    connection.execute(
+        f"CREATE INDEX IF NOT EXISTS {SYNC_ENTITY_INDEX} "
+        "ON core_sync_changes(entity_type, entity_id, seq)"
+    )
+    return True
+
+
 def _vacuum(connection: sqlite3.Connection) -> None:
     _log.info("[compact] VACUUM started")
     connection.execute("VACUUM")
@@ -240,6 +259,7 @@ def compact_sync_journal(
 
         _rebuild_journal(connection, keep_per_entity=keep)
         report.index_created = _ensure_revision_index(connection)
+        report.entity_index_created = _ensure_sync_entity_index(connection)
 
         after = _journal_stats(connection)
         report.max_seq_after = after["max_seq"]

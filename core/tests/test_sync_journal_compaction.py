@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lamtools_core.app.core_db import CoreDbBase, CoreSyncChange
 from lamtools_core.sync_journal_maintenance import (
+    SYNC_ENTITY_INDEX,
     THREAD_REVISION_INDEX,
     compact_sync_journal,
 )
@@ -41,6 +42,8 @@ def _seed(path: Path) -> None:
     payload = '{"payload": "%s"}' % ("x" * 4096)
     connection = sqlite3.connect(path)
     try:
+        # Simulate a database created before the write-side coalescing index.
+        connection.execute("DROP INDEX IF EXISTS idx_core_sync_changes_entity")
         connection.executemany(
             "INSERT INTO core_sync_changes (seq, change_id, workspace_id, entity_type, "
             "event_type, operation, entity_id, thread_id, revision, entity_json, created_at) "
@@ -100,15 +103,21 @@ async def test_compaction_keeps_newest_runtime_snapshot_and_preserves_events(tmp
     # A pre-compaction copy exists and the covering index was created.
     assert report.backup_path and Path(report.backup_path).is_file()
     assert report.index_created is True
+    assert report.entity_index_created is True
     connection = sqlite3.connect(db)
     try:
         index = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
             (THREAD_REVISION_INDEX,),
         ).fetchone()
+        entity_index = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+            (SYNC_ENTITY_INDEX,),
+        ).fetchone()
     finally:
         connection.close()
     assert index is not None
+    assert entity_index is not None
     assert report.after_bytes <= report.before_bytes
 
 

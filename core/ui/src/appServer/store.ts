@@ -450,6 +450,20 @@ export function createCoreAppServerRuntimeController<
       adoptResolvedRequestStates(currentState.snapshot as CoreAppSnapshot, incoming)
       return
     }
+    // user:“也不是完全发不出去 反正卡住了好久”+(后端现在只推最近一页的线程快照；
+    // 有历史页游标的通知必须并入当前状态，不能像整份快照那样整体替换。)
+    if (currentState && (incoming as { history_page?: unknown }).history_page) {
+      const merged = mergeCoreNewestSnapshot(currentState.snapshot as CoreAppSnapshot, incoming)
+      if (!sessionStateStore.applySnapshot(merged)) return
+      for (const id of [
+        ...(merged.core?.seen_event_ids ?? []),
+        ...(merged.seen_event_ids ?? []),
+      ]) {
+        receivedEventIds.add(id)
+      }
+      runtime.state = sessionStateStore.get(merged.thread_id)?.snapshot as Snapshot
+      return
+    }
     // The guard must see the received set BEFORE this snapshot's ids are
     // recorded, otherwise "unseen event" would always be satisfied (an
     // incoming snapshot's own ids would count as received).
@@ -1623,6 +1637,30 @@ export function mergeCoreHistorySnapshot<T extends CoreAppSnapshot>(current: T, 
       item_order: orderBySeq(mergedCoreItems, [...(page.core?.item_order || []), ...(current.core.item_order || [])]),
       turns: mergeTurns(page.core?.turns, current.core.turns),
     } : page.core,
+  }
+}
+
+/**
+ * Merge an unsolicited, paged snapshot notification into the projection.
+ *
+ * user:“也不是完全发不出去 反正卡住了好久”+(长会话的整份快照有 64MB，后端现在只
+ * 推最近一页；通知里的页必须并入当前状态，否则替换会把这一页之前的历史整段丢掉。)
+ * The page carries the newest scalars (status/revision/snapshot_seq), so they win;
+ * items and turns are the union of the current state and the page.
+ */
+export function mergeCoreNewestSnapshot<T extends CoreAppSnapshot>(current: T, page: T): T {
+  const merged = mergeCoreHistorySnapshot(current, page)
+  return {
+    ...page,
+    items: merged.items,
+    item_order: merged.item_order,
+    turns: merged.turns,
+    core: page.core ? {
+      ...page.core,
+      items: merged.core?.items ?? page.core.items,
+      item_order: merged.core?.item_order ?? page.core.item_order,
+      turns: merged.core?.turns ?? page.core.turns,
+    } : merged.core,
   }
 }
 

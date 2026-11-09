@@ -33,6 +33,7 @@ from .live_protocol import (
 )
 from .operation_catalog import OperationCatalog
 from .security import is_allowed_origin, is_same_server_origin
+from .thread_history import DEFAULT_THREAD_HISTORY_PAGE_BYTES, _character_page_snapshot
 
 
 logger = logging.getLogger(__name__)
@@ -55,16 +56,22 @@ SNAPSHOT_TRIGGER_EVENTS = frozenset({
     "turn/interrupted",
     "turn/steered",
     "queue/itemAccepted",
-    "queue/itemUpdated",
-    "queue/itemDeleted",
     "queue/itemDispatched",
-    # queue/itemReordered 不在此列：事件本身携带完整 order，客户端可确定性重放；
-    # 再加一次整线程快照只会在每次拖拽时传一份可能几十 MB 的冗余数据。
+    # queue/itemUpdated / queue/itemDeleted 不在此列：事件本身携带完整状态，
+    # 客户端可确定性重放；每次删除/改状态再推一份整线程快照，正是在长会话里
+    # 把发送通道堵住几十秒的原因（实测 64.5MB × 十余次）。
+    # queue/itemReordered 同理：事件携带完整 order。
 })
 # Safety net: even for snapshot-trigger events, at most one snapshot per
 # connection per interval — the next trigger (or thread/resume) delivers the
 # latest state anyway.
 SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0
+
+# user:“也不是完全发不出去 反正卡住了好久”+(长会话的整份快照有 64MB，推送一次就
+# 把发送通道占住；通知里的快照超过这个条目数就按最近 10 个回合分页，历史往前翻
+# 由客户端再按页取。)
+SNAPSHOT_NOTIFICATION_MAX_ITEMS = 300
+SNAPSHOT_NOTIFICATION_TURN_LIMIT = 10
 
 # RPC replies and state notifications must not compete with the lossy stream
 # of high-volume runItem deltas. Both lanes are bounded; producers of control
@@ -651,7 +658,14 @@ class CoreLiveConnection:
     async def _send_snapshot(self, thread_id: str) -> None:
         async with self.context.session_factory() as db:
             snapshot = await self.context.snapshot_store.load(db, thread_id)
-        await self._send(snapshot_notification(snapshot))
+        payload = _snapshot_for_notification(snapshot)
+        if payload is not snapshot:
+            logger.info(
+                "[live] paged snapshot notification thread=%s items=%d",
+                thread_id,
+                _snapshot_item_count(snapshot),
+            )
+        await self._send(snapshot_notification(payload))
 
     async def send_snapshot(self, thread_id: str) -> None:
         await self._send_snapshot(thread_id)
@@ -1027,6 +1041,33 @@ def _thread_id_from_params(params: dict[str, Any]) -> str:
 
 def _turn_id_from_params(params: dict[str, Any]) -> str:
     return str(params.get("turn_id") or params.get("turnId") or "")
+
+
+def _snapshot_item_count(snapshot: dict[str, Any]) -> int:
+    total = 0
+    for container in (snapshot.get("items"), (snapshot.get("core") or {}).get("items")):
+        if isinstance(container, dict):
+            total += len(container)
+    return total
+
+
+def _snapshot_for_notification(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Bound an unsolicited snapshot push to one recent page.
+
+    user:“也不是完全发不出去 反正卡住了好久”+(64.5MB 的整份线程快照会让发送通道
+    排队几十秒；超过阈值时只推最近 10 个回合、2MB 以内的一页，并带上
+    ``history_page`` 让客户端按页往前翻，其余字段保持不变。)
+    """
+    if _snapshot_item_count(snapshot) <= SNAPSHOT_NOTIFICATION_MAX_ITEMS:
+        return snapshot
+    return _character_page_snapshot(
+        snapshot,
+        before_item_id=None,
+        before_seq=None,
+        char_limit=10_000_000,
+        turn_limit=SNAPSHOT_NOTIFICATION_TURN_LIMIT,
+        byte_limit=DEFAULT_THREAD_HISTORY_PAGE_BYTES,
+    )
 
 
 def _describe_large_outbound(
