@@ -397,6 +397,20 @@ def test_the_operations_are_registered() -> None:
     assert {"update.check", "update.download", "update.install"} <= set(catalog.list())
 
 
+def test_internal_build_refuses_in_app_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """user:“加”+(内部测试版只走 update-constant.ps1，应用内安装会被拒绝。)"""
+    from lamtools_core.update import operations
+
+    monkeypatch.setattr(operations, "is_prerelease_build", lambda: True)
+    monkeypatch.setattr(operations, "prerelease_update_allowed", lambda: False)
+    catalog = operations.build_update_operation_catalog()
+
+    result = asyncio.run(catalog.execute("update.install", {}))
+
+    assert result.payload["ok"] is False
+    assert "update-constant.ps1" in result.payload["error"]
+
+
 def test_update_download_refuses_when_the_manifest_has_no_digest(monkeypatch: pytest.MonkeyPatch) -> None:
     from lamtools_core.update import operations
 
@@ -484,6 +498,9 @@ def test_a_second_start_watches_instead_of_downloading_twice(monkeypatch: pytest
 def test_update_install_requires_a_verified_download(monkeypatch: pytest.MonkeyPatch) -> None:
     from lamtools_core.update import operations
 
+    # This case is about the verified-download guard, not the internal-build
+    # guard; pin a release build so the latter does not answer first.
+    monkeypatch.setattr(operations, "is_prerelease_build", lambda: False)
     catalog = operations.build_update_operation_catalog()
 
     refused = asyncio.run(catalog.execute("update.install", {}))

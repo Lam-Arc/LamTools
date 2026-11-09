@@ -267,6 +267,9 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
   /** 有新版本、但没有任何可用安装包（本平台）：文案不能说成"已是最新"。 */
   const noInstallerForPlatform = computed(() => reason.value === 'no_installer_for_platform')
 
+  /** 内部测试版：后端跳过远程检查，设置页要说明是跳过而不是"已是最新"。 */
+  const internalBuild = computed(() => reason.value === 'internal_build')
+
   return {
     status,
     currentVersion,
@@ -278,6 +281,7 @@ export function useCoreUpdateState(requestRpc: CoreUpdateRequestRpc) {
     sourceLabel,
     reason,
     noInstallerForPlatform,
+    internalBuild,
     error,
     installSupported,
     installHint,

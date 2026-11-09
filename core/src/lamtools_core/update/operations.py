@@ -17,7 +17,7 @@ from lamtools_core.app.operation_catalog import (
     OperationRequest,
     OperationResult,
 )
-from lamtools_core.update.checker import check_update
+from lamtools_core.update.checker import check_update, is_prerelease_build, prerelease_update_allowed
 from lamtools_core.update.installer import (
     UpdateInstallError,
     cancel_download,
@@ -94,6 +94,16 @@ def build_update_operation_catalog() -> OperationCatalog:
 
     async def update_install(request: OperationRequest) -> OperationResult:
         del request  # no payload: the verified file is host-held state
+        if is_prerelease_build() and not prerelease_update_allowed():
+            # user:“加”+(内部测试版只走 update-constant.ps1；应用内安装会把后端换成
+            # 另一套布局/字段，实测能直接让 constant 起不来。)
+            return OperationResult(
+                name="update.install",
+                payload={
+                    "ok": False,
+                    "error": "内部测试版不通过应用内更新安装，请用 update-constant.ps1 更新",
+                },
+            )
         try:
             result = await asyncio.to_thread(run_installer)
         except UpdateInstallError as exc:

@@ -43,6 +43,27 @@ SITE_UPDATE_URL_ENV = "LAMTOOLS_DESKTOP_UPDATE_URL"
 #: Where a result came from, for the settings UI and for diagnostics.
 SOURCE_SITE = "site"
 SOURCE_GITHUB = "github"
+#: Result source when an internal test build deliberately skips the network.
+SOURCE_LOCAL = "local"
+
+#: user:“加”+(内部测试版跳过应用内更新检查：线上正式版或旧便携包会把后端换成另一套
+#: 布局/字段，实测能直接让 constant 起不来。需要时用这个环境变量强制检查。)
+ALLOW_PRERELEASE_UPDATE_ENV = "LAMTOOLS_ALLOW_PRERELEASE_UPDATE"
+
+
+def is_prerelease_build(version: str | None = None) -> bool:
+    """Whether this is an internal test build (PEP 440 pre-release, e.g. 0.3.39-a2)."""
+    value = str(version or __version__).strip()
+    return "-" in value.split("+", 1)[0]
+
+
+def prerelease_update_allowed() -> bool:
+    return os.environ.get(ALLOW_PRERELEASE_UPDATE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 #: Repository-owned Inno installer asset name (e.g. Sunday_0.3.2_x64-setup.exe).
 SETUP_ASSET_PATTERN = re.compile(
@@ -353,6 +374,17 @@ def check_update() -> dict[str, Any]:
     without requiring website publication.
     """
     base: dict[str, Any] = {"current_version": __version__}
+    if is_prerelease_build() and not prerelease_update_allowed():
+        # 内部测试版只由 update-constant.ps1 手工更新，应用内检查直接跳过。
+        base["status"] = "up_to_date"
+        base["source"] = SOURCE_LOCAL
+        base["reason"] = "internal_build"
+        _log.info(
+            "Update check skipped for internal build %s (set %s=1 to override)",
+            __version__,
+            ALLOW_PRERELEASE_UPDATE_ENV,
+        )
+        return base
     candidates: dict[str, dict[str, Any]] = {}
     reasons: list[str] = []
     reported_version = ""
@@ -425,15 +457,19 @@ def check_update() -> dict[str, Any]:
 
 
 __all__ = [
+    "ALLOW_PRERELEASE_UPDATE_ENV",
     "DEFAULT_SITE_UPDATE_URL",
     "RELEASES_LATEST_URL",
     "RELEASES_PAGE_URL",
     "SITE_UPDATE_URL_ENV",
     "SOURCE_GITHUB",
     "SOURCE_LABELS",
+    "SOURCE_LOCAL",
     "SOURCE_SITE",
     "check_update",
     "compare_versions",
+    "is_prerelease_build",
+    "prerelease_update_allowed",
     "site_update_url",
     "source_label",
 ]

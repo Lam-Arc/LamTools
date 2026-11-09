@@ -849,6 +849,7 @@
   "已收藏": "Favorite",
   "已新增触发器，请填写配置后保存。": "A new trigger has been added. Please fill in the configuration and save it.",
   "已是最新版本（v": "Already the latest version (v",
+  "内部测试版，已跳过应用内更新检查（请用 update-constant.ps1 更新）": "Internal test build: in-app updates are skipped (use update-constant.ps1 to update).",
   "已暂停": "Paused",
   "已暂停（单步）": "Paused (single step)",
   "已暴露": "Exposed",
@@ -2523,5 +2524,8 @@
   "打开会话": "Open session",
   "桌宠": "Desktop Pet",
   "展开其余 {0} 项": "Show {0} more",
-  "部分文件不存在": "Some files are missing"
+  "部分文件不存在": "Some files are missing",
+  "调用 {0} 次": "Called {0} times",
+  "尚未调用": "Not used yet",
+  "总调用 {0} 次": "{0} calls in total"
 }

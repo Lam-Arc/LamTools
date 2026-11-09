@@ -24,6 +24,11 @@ def _windows_runtime_by_default(monkeypatch) -> None:
     """Keep legacy asset tests deterministic on every CI host OS."""
     monkeypatch.setattr("lamtools_core.update.checker.platform.system", lambda: "Windows")
     monkeypatch.setattr("lamtools_core.update.checker.platform.machine", lambda: "AMD64")
+    # The suite ships as an internal pre-release during development, and that
+    # build deliberately skips the remote check. Pin a final release here so the
+    # ordinary cases still exercise the network path; the skip has its own test.
+    monkeypatch.setattr("lamtools_core.update.checker.__version__", "0.3.39")
+    monkeypatch.setattr(lamtools_core, "__version__", "0.3.39")
 
 
 def _release(
@@ -439,3 +444,28 @@ def test_non_dns_failure_is_not_mislabeled(caplog) -> None:
     assert "stage=request" in caplog.text
     assert "exception_chain=ConnectTimeout" in caplog.text
     assert "dns_errno=unavailable" in caplog.text
+
+
+def test_prerelease_build_skips_the_remote_check(monkeypatch) -> None:
+    """user:“加”+(内部测试版不查线上版本，避免被正式版/旧便携包替换后起不来。)"""
+    monkeypatch.setattr("lamtools_core.update.checker.__version__", "0.3.39-a2")
+
+    def _must_not_fetch(url):  # noqa: ANN001
+        raise AssertionError("internal build must not hit the network")
+
+    monkeypatch.setattr("lamtools_core.update.checker._http_get_json", _must_not_fetch)
+
+    result = check_update()
+
+    assert result["status"] == "up_to_date"
+    assert result["reason"] == "internal_build"
+    assert result["source"] == "local"
+    assert result["current_version"] == "0.3.39-a2"
+
+
+def test_prerelease_build_can_opt_in_with_the_env_override(monkeypatch) -> None:
+    monkeypatch.setattr("lamtools_core.update.checker.__version__", "0.3.39-a2")
+    monkeypatch.setenv("LAMTOOLS_ALLOW_PRERELEASE_UPDATE", "1")
+    _stub_http(monkeypatch, _release(tag="v9.9.9"))
+
+    assert check_update()["status"] == "update_available"

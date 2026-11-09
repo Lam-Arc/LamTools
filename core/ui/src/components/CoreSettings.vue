@@ -460,7 +460,8 @@
               {{ updateStatus === 'checking' ? t("正在检查…") : t("检查更新") }}
             </button>
           </div>
-          <p v-if="updateStatus === 'up_to_date' && updateNoInstallerForPlatform" class="about-status" data-update-no-installer>{{ t("已发布 v") }}{{ updateLatestVersion }}{{ t("，但没有适用于本平台的安装包（可到发布页查看）") }}</p>
+          <p v-if="updateStatus === 'up_to_date' && updateInternalBuild" class="about-status" data-update-internal>{{ t("内部测试版，已跳过应用内更新检查（请用 update-constant.ps1 更新）") }}</p>
+          <p v-else-if="updateStatus === 'up_to_date' && updateNoInstallerForPlatform" class="about-status" data-update-no-installer>{{ t("已发布 v") }}{{ updateLatestVersion }}{{ t("，但没有适用于本平台的安装包（可到发布页查看）") }}</p>
           <p v-else-if="updateStatus === 'up_to_date'" class="about-status" data-update-up-to-date>{{ t("已是最新版本（v") }}{{ updateLatestVersion }}<template v-if="updateSourceLabel">{{ t("· 来源：") }}{{ updateSourceLabel }}</template>）
           </p>
           <p v-else-if="updateStatus === 'check_failed'" class="about-status error" data-update-error>{{ t("检查失败：") }}{{ updateError }}{{ t("（检查网络后重试）") }}</p>
@@ -1045,6 +1046,7 @@ const {
   releaseUrl: updateReleaseUrl,
   sourceLabel: updateSourceLabel,
   noInstallerForPlatform: updateNoInstallerForPlatform,
+  internalBuild: updateInternalBuild,
   error: updateError,
   installSupported: updateInstallSupported,
   installHint: updateInstallHint,
