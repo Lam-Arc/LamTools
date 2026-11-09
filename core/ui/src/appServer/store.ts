@@ -348,7 +348,7 @@ export function createCoreAppServerRuntimeController<
     runtime.client?.close()
     const client = await options.createClient({
       onEvent: (event) => enqueueEvent(event),
-      onSnapshot: (snapshot) => hydrate(snapshot),
+      onSnapshot: (snapshot) => hydrate(snapshot, { mergePaged: true }),
       onSyncChange: (change) => applySyncChangeRevision(change),
       onConnectionState: (state) => {
         if (runtime.connectionGeneration !== generation) return
@@ -419,7 +419,7 @@ export function createCoreAppServerRuntimeController<
     }
   }
 
-  function hydrate(snapshot: Snapshot) {
+  function hydrate(snapshot: Snapshot, options: { mergePaged?: boolean } = {}) {
     const incomingThreadId = typeof (snapshot as { thread_id?: unknown } | null | undefined)?.thread_id === 'string'
       ? (snapshot as unknown as { thread_id: string }).thread_id
       : ''
@@ -451,8 +451,9 @@ export function createCoreAppServerRuntimeController<
       return
     }
     // user:“也不是完全发不出去 反正卡住了好久”+(后端现在只推最近一页的线程快照；
-    // 有历史页游标的通知必须并入当前状态，不能像整份快照那样整体替换。)
-    if (currentState && (incoming as { history_page?: unknown }).history_page) {
+    // 通知里的分页必须并入当前状态，不能像整份快照那样整体替换。RPC 响应不走这里，
+    // 以免把服务端已删除的旧条目从本地缓存里带回来。)
+    if (options.mergePaged && currentState && (incoming as { history_page?: unknown }).history_page) {
       const merged = mergeCoreNewestSnapshot(currentState.snapshot as CoreAppSnapshot, incoming)
       if (!sessionStateStore.applySnapshot(merged)) return
       for (const id of [
