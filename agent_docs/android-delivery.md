@@ -1,6 +1,6 @@
 # Android 客户端交付说明
 
-分支 `sunday/m-python-core-android`（工作树 `.worktrees/m-python`）。
+分支 `sunday/m3-isolated-core`（主仓 `E:\LamTools`）。
 共享业务实现是原版 Python Core，Android 只提供 Linux 运行环境与平台适配：SAF 文件
 选择、键盘高度、进程与启动。界面是同一套共享 UI，没有第二套业务实现。
 
@@ -8,14 +8,14 @@
 
 | 文件 | 用途 | 大小 | 交付名（Downloads） |
 | --- | --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 305 MB | `02-sunday-m-arm64-debug.apk` |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 413 MB | `02-sunday-m-arm64-debug.apk` |
 | `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB | `02-sunday-m-x86_64-debug.apk` |
 
-校验和（arm64 为 2026-11-08 03:22 构建，含内置运行时、远程事件通道与断线自动恢复；
-交付时文件名带 `02-` 前缀，内容与这里列出的一致）：
+校验和（arm64 为 2026-11-09 04:12 构建，含内置运行时、远程链路修复；交付时文件名带
+`02-` 前缀，内容与这里列出的一致。x86_64 包是 2026-11-06 的旧构建，本轮没有重打）：
 
 ```
-18a8fb12ba28afa555dfafd738a4ea6ef56b96e4b1fba5a80608825200294d48  sunday-m-arm64-debug.apk
+6507af5c85b92448c88ab0c5da27da5c36ec8407dd189e0fe1b309b2d345456a  sunday-m-arm64-debug.apk
 d797ab438c9d67a4ccbec8483cb074ecf02d52250d3b95cd7e54f1dc31d099a6  sunday-m-x86_64-debug.apk
 ```
 
@@ -240,6 +240,32 @@ user:“铺满屏幕，渐变流动，高级而令人舒适，要这种效果，
 
 电脑端的「手机已连接」显示还需要桌面应用本身重装：宿主 `p2p_host.rs` 这次加了读取
 `PEER` 状态，但正在运行的桌面版仍是旧宿主。
+
+## 2026-11-09：远程链路修复批次（提交 `6822b447`、`7327bf99`）
+
+这一批把 `agent_docs/p2p-link-audit.md` 第二轮审查里的问题全部落到了代码上。APK 已重打
+（见上表校验和），电脑端的传输程序已换成同一份 `sunday-p2p.exe`。
+
+| 问题 | 修法 | 验证 |
+| --- | --- | --- |
+| 远程模式下附件、图片/PDF 预览、素材库全部不可用（隧道只搬文本） | `core_http` 改成字节透传（请求/响应都带 base64 与原始响应头，服务端解码 chunked） | 真实隧道 `core_http GET /projects` 返回 200 与可解码 JSON；Rust 单测覆盖二进制与 chunked |
+| 撤销设备不生效 | 名单每次握手前重读；新增撤销名单，在自动信任之前检查；设备页可「重新允许」 | 端到端：撤销后连接被拒并看到「可能已被撤销授权」，重新允许后恢复 |
+| 断线要等 180 秒超时才被发现 | 客户端 12 秒心跳、40 秒判死；服务端 120 秒无帧收连接；宿主发 `lost`，界面显示断线并重连 | `cargo test`；真机待验 |
+| 断线不通知界面、远程期间不重连 | `RemoteTransport` 监听 `p2p-progress`；常驻重连循环改为「只要还记着票据就守着」 | 类型检查；真机待验 |
+| 失败重放可能重复执行写操作 | 只重放读操作，写操作明确报「没有确认送达」 | `vitest tests/remote-codec.test.ts` |
+| 请求串行（服务端逐条 await、手机宿主整段持锁） | 服务端每条 Call 独立任务；`Client::call` 改 `&self`，宿主只取一次 `Arc` 就放锁 | 编译与单测；真机待验性能 |
+| 事件 Lagged 静默丢帧 | 服务端与手机宿主都补发 `thread/gap`，界面走已有的重新 resume；手机转发任务不再因 Lagged 退出 | 代码审查；真机待验 |
+| 桌面配对命令阻塞 IPC 线程 | 改异步命令 + `spawn_blocking`，二维码按票据缓存 | 编译通过 |
+| 电脑名显示成十六进制 id | `Welcome` 带对端名字 | 代码审查；真机待验 |
+| 「换一张」换不了票据 | 去掉这个按钮 | 界面 |
+
+仍需注意：
+
+- 正在运行的桌面应用还是旧宿主（没有 `p2p_allow`、没有子进程守护），设备页的「重新允许」
+  要在桌面重装/重启之后才会出现；撤销与重连本身在传输进程里，已经生效。
+- 电脑端传输进程现在由我手动起在 `%APPDATA%\Sunday\p2p`，直连 Core 的 59928 端口；
+  重启桌面应用之后请打开一次「设备连接」让宿主自己拉起传输进程，避免指向已经死掉的端口。
+- 真机还没有安装这一版 APK：无线调试当前是关的（5555 / 34127 都拒绝连接）。
 
 ## 未验证（不得当作通过）
 
