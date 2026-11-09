@@ -163,12 +163,19 @@
     </p>
 
     <!-- 没有可信设备时整块不出现，避免空状态占位。 -->
-    <details v-if="devices.length" class="device-page__trusted">
+    <details v-if="devices.length || revoked.length" class="device-page__trusted">
       <summary>{{ t("可信设备") }} <span>{{ devices.length }}</span></summary>
       <ul>
         <li v-for="device in devices" :key="device.id">
           <span :title="device.id">{{ device.name || shortId(device.id) }}</span>
           <button type="button" :disabled="busy" @click="revoke(device.id)">{{ t("撤销") }}</button>
+        </li>
+      </ul>
+      <!-- user:“允许撤销授权”+(撤销之后那台设备不该还能连；这里把被撤销的列出来，可以重新允许) -->
+      <ul v-if="revoked.length">
+        <li v-for="device in revoked" :key="device.id">
+          <span :title="device.id">{{ device.name || shortId(device.id) }} · {{ t("已撤销") }}</span>
+          <button type="button" :disabled="busy" :data-device-allow="device.id" @click="allow(device.id)">{{ t("重新允许") }}</button>
         </li>
       </ul>
     </details>
@@ -209,6 +216,7 @@ const serving = ref(false)
 const connected = ref(false)
 const peer = ref('')
 const devices = ref<Array<{ id: string; name: string }>>([])
+const revoked = ref<Array<{ id: string; name: string }>>([])
 const paired = ref<PairedDevice[]>([])
 const busy = ref(false)
 const error = ref('')
@@ -281,8 +289,9 @@ async function refresh(): Promise<void> {
       }
     }
     loadPaired()
-    const list = await call<{ devices?: Array<{ id: string; name: string }> }>('p2p_devices')
+    const list = await call<{ devices?: Array<{ id: string; name: string }>; revoked?: Array<{ id: string; name: string }> }>('p2p_devices')
     devices.value = list?.devices ?? []
+    revoked.value = list?.revoked ?? []
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -497,6 +506,18 @@ async function disconnect(): Promise<void> {
     peer.value = ''
     saveTicket('')
     window.location.reload()
+  } finally {
+    busy.value = false
+  }
+}
+
+async function allow(id: string): Promise<void> {
+  busy.value = true
+  try {
+    await call('p2p_allow', { id })
+    await refresh()
+  } catch (cause) {
+    error.value = String(cause)
   } finally {
     busy.value = false
   }

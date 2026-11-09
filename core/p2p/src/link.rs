@@ -152,7 +152,7 @@ impl Client {
         let (peer, peer_name) = match welcome {
             Frame::Welcome { id, name, trusted } => {
                 if !trusted {
-                    bail!("对端没有把这台设备当作可信设备，请先在电脑上确认配对");
+                    bail!("对端没有接受这台设备：可能已被撤销授权，请在电脑的「设备连接」页确认后重试");
                 }
                 (id, name)
             }
@@ -325,21 +325,27 @@ impl ServerLink {
             Frame::Hello { name } => name,
             other => bail!("expected hello, got {other:?}"),
         };
-        let trusted = {
+        let (trusted, revoked) = {
             let mut store = trust.lock().await;
             // user:“撤销设备要真的生效”+(宿主撤销时改的是名单文件，传输进程手里是启动时
             // 读的那份内存副本；不重读就会出现「列表里没了、那台设备还能连」，而且下一次
             // 写入还会把撤销记录覆盖掉。每次握手前重读一次，文件很小）。
             store.reload().ok();
-            let known = store.is_trusted(&peer);
-            if !known {
-                // First contact: the ticket was handed to this device by the user, which
-                // is the consent. Remembering it here is what makes the next connection
-                // silent.
-                store.trust(&peer, &peer_name);
-                store.save().ok();
+            if store.is_revoked(&peer) {
+                // user:“允许撤销授权”+(首次连接会自动信任，所以撤销必须先于自动信任检查，
+                // 否则那台设备下一次连上来又被当成“第一次见面”重新放进来)。
+                (false, true)
+            } else {
+                let known = store.is_trusted(&peer);
+                if !known {
+                    // First contact: the ticket was handed to this device by the user,
+                    // which is the consent. Remembering it here is what makes the next
+                    // connection silent.
+                    store.trust(&peer, &peer_name);
+                    store.save().ok();
+                }
+                (store.is_trusted(&peer), false)
             }
-            store.is_trusted(&peer)
         };
         write_frame(
             &mut send,
@@ -350,6 +356,9 @@ impl ServerLink {
             },
         )
         .await?;
+        // user:“撤销设备要真的生效”+(不要在这一帧之后立刻断开：连接一关，对端可能还没读到
+        // 这个 Welcome，只能看到「closed by peer」。让这一帧走到、由调用方决定怎么收尾)。
+        let _ = revoked;
         Ok(Some(Self {
             conn,
             send: Arc::new(Mutex::new(send)),

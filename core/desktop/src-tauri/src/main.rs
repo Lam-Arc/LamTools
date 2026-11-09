@@ -34,11 +34,13 @@ use windows_sys::Win32::{
 };
 
 use tauri::{
-    menu::{Menu, MenuEvent, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, Url, WebviewWindow, WebviewWindowBuilder, WebviewUrl,
 };
 
+mod computer_use_overlay;
+mod desktop_overlay;
+mod tray_panel;
 mod migration;
 mod p2p_host;
 mod pet;
@@ -50,10 +52,6 @@ mod windows_snap_layout;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const TRAY_ID: &str = "lamtools-tray";
-const TRAY_OPEN_MAIN_ID: &str = "tray-open-main";
-// user:“桌宠是独立系统：即使桌宠隐藏，也可使用 Ping”+(托盘可直接开/关桌宠覆盖层)
-const TRAY_PET_ID: &str = "tray-pet";
-const TRAY_QUIT_ID: &str = "tray-quit";
 static NEXT_SESSION_EXPORT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "linux")]
@@ -70,8 +68,8 @@ unsafe extern "C" {
     fn prctl(option: i32, arg2: usize, arg3: usize, arg4: usize, arg5: usize) -> i32;
 }
 
-struct BackendState {
-    api_base: Mutex<Option<String>>,
+pub(crate) struct BackendState {
+    pub(crate) api_base: Mutex<Option<String>>,
     startup_error: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
     #[cfg(windows)]
@@ -248,6 +246,10 @@ pub(crate) fn request_quit(app: &tauri::AppHandle) {
     state.quitting.store(true, Ordering::SeqCst);
     stop_backend(state.inner());
     // user:“把这台电脑上的桌面端跑起来”+(传输进程同为子进程，退出路径也要一起收掉)。
+    // user:“无需做安全边界”+(退出时把桌面操作覆盖层一起收掉，不留残窗)。
+    if let Some(window) = app.get_webview_window(computer_use_overlay::OVERLAY_LABEL) {
+        let _ = window.close();
+    }
     p2p_host::stop(app.state::<p2p_host::P2pHostState>().inner());
     app.exit(0);
 }
@@ -549,82 +551,52 @@ fn open_pet_overlay_when_ready(app: &tauri::AppHandle) -> Result<pet::OverlayBou
     Err(last_error)
 }
 
-fn spawn_pet_overlay_thread(app: &tauri::AppHandle) -> Result<(), String> {
+
+/// 托盘打开标注层：和桌宠一样放到后台线程建窗，避免主线程同步等窗口就绪。
+fn spawn_overlay_thread(app: &tauri::AppHandle) -> Result<(), String> {
     let handle = app.clone();
     std::thread::Builder::new()
-        .name("pet-overlay-open".into())
+        .name("desktop-overlay-open".into())
         .spawn(move || {
-            // 托盘菜单线程自己建窗：这里不在任何 WebView2 回调里，直接走同步版。
-            match pet::open_overlay_and_poll(handle.clone()) {
-                Ok(_) => {
-                    // 页面 ready 后会再刷新一次；这里先把托盘状态从“打开”切过去。
-                    let _ = refresh_tray_menu(&handle);
-                }
-                Err(error) => {
-                    eprintln!("[sunday] desktop pet overlay failed: {error}");
-                }
+            match tauri::async_runtime::block_on(desktop_overlay::desktop_overlay_open(handle.clone())) {
+                Ok(_) => {}
+                Err(error) => eprintln!("[sunday] desktop overlay failed: {error}"),
             }
         })
         .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
-fn handle_tray_menu(app: &tauri::AppHandle, event: MenuEvent) {
-    match event.id().as_ref() {
-        TRAY_OPEN_MAIN_ID => reveal_main_window(app),
-        TRAY_PET_ID => {
-            // user:"那个托盘的桌宠，不要一直都叫“打开桌宠”，应该是“打开桌宠”和“关闭桌宠”"+
-            // (入口按覆盖层真实可见性切换：开着就关，关着就开。)
-            if pet::overlay_is_open(app) {
-                if let Err(error) = pet::close_overlay_sync(app) {
-                    eprintln!("[sunday] desktop pet overlay close failed: {error}");
-                }
-                let _ = refresh_tray_menu(app);
-            } else if let Err(error) = spawn_pet_overlay_thread(app) {
-                eprintln!("[sunday] desktop pet overlay failed: {error}");
-            }
-        }
-        TRAY_QUIT_ID => request_quit(app),
-        _ => {}
-    }
-}
-
-/// 托盘菜单的桌宠入口：打开时“关闭桌宠”，关闭时“打开桌宠”。
+/// 托盘左/右键都打开自绘面板：原生菜单已经完全退场。
 ///
-/// user:"应该是“打开桌宠”和“关闭桌宠”"+(状态变化时重建菜单；原生托盘菜单重建
-/// 成本很低，比维护一个外部 CheckMenuItem 句柄可靠。)
-fn refresh_tray_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let open = pet::overlay_is_open(app);
-    let open_main = MenuItem::with_id(app, TRAY_OPEN_MAIN_ID, "打开界面", true, None::<&str>)?;
-    let pet_label = if open { "关闭桌宠" } else { "打开桌宠" };
-    let pet_item = MenuItem::with_id(app, TRAY_PET_ID, pet_label, true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_main, &pet_item, &quit])?;
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_menu(Some(menu))?;
-    }
-    Ok(())
+/// user:“托盘样式重做”“只做自绘面板”+(Windows 原生托盘菜单改不了配色和圆角，
+/// 点图标改成弹出独立小窗，打开界面/桌宠/标注层/退出都在窗口里完成。)
+fn handle_tray_click(app: &tauri::AppHandle, position: tauri::PhysicalPosition<f64>) {
+    tray_panel::toggle_at(app, (position.x.round() as i32, position.y.round() as i32));
 }
 
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let open_main = MenuItem::with_id(app, TRAY_OPEN_MAIN_ID, "打开界面", true, None::<&str>)?;
-    // user:“托盘无打开桌宠选项”+(托盘必须给出桌宠入口，否则用户找不到打开的路径)
-    let open_pet = MenuItem::with_id(app, TRAY_PET_ID, "打开桌宠", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_main, &open_pet, &quit])?;
-
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .menu(&menu)
         .tooltip("Sunday")
-        .show_menu_on_left_click(true)
-        .on_menu_event(handle_tray_menu);
+        // 不再挂原生菜单：点图标弹自绘面板，菜单和面板不同时存在。
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                position,
+                button_state,
+                ..
+            } = event
+            {
+                // Windows 会同时派发按下和抬起，只认抬起，避免一次点击开两次面板。
+                if button_state == MouseButtonState::Up {
+                    handle_tray_click(tray.app_handle(), position);
+                }
+            }
+        });
     if let Some(icon) = app.default_window_icon().cloned() {
         builder = builder.icon(icon);
     }
     builder.build(app)?;
-    // 自启/CLI 可能已经把覆盖层打开了：按真实可见性初始化菜单文案。
-    refresh_tray_menu(app.handle())?;
-
     Ok(())
 }
 
@@ -759,6 +731,9 @@ fn main() {
             }
 
             setup_tray(app)?;
+            // user:“把它的入口设成跟 ping 一样”+(标注层圈选改成全局热键，
+            // 和 Ping 同一套轮询实现；配置读不到就用默认 Ctrl+Alt+A)。
+            desktop_overlay::start_capture_watch(app.handle());
             #[cfg(windows)]
             install_taskbar_icon(app)?;
             // user:“你看看 ping 环 要不也自己做窗口？”+(Ping 覆盖层独立于桌宠：
@@ -794,6 +769,28 @@ fn main() {
                         // every request (audit 20 S3).
                         let app_handle = app.clone();
                         spawn_backend_watcher(app_handle);
+                        // user:“AI 直接在屏幕上标记、绘制、互动”+(自动化与开发验收
+                        // 也要能直接拉起标注层，不依赖托盘点击)。
+                        if desktop_overlay::open_requested() {
+                            match spawn_overlay_thread(&app) {
+                                Ok(()) => eprintln!("[sunday] desktop overlay requested via --open-overlay"),
+                                Err(error) => eprintln!("[sunday] --open-overlay failed: {error}"),
+                            }
+                        }
+                        // user:“每个 GUI 能力都要有对应的 CLI 能力”+(托盘点击没法脚本化，
+                        // 面板也要能带 --tray-panel 或环境变量直接弹出来做验证)。
+                        if tray_panel::open_requested() {
+                            let handle = app.clone();
+                            std::thread::Builder::new()
+                                .name("tray-panel-open".into())
+                                .spawn(move || {
+                                    let anchor = pet::platform::cursor_position().unwrap_or((0, 0));
+                                    tray_panel::toggle_at(&handle, anchor);
+                                    eprintln!("[sunday] tray panel requested via --tray-panel");
+                                })
+                                .map(|_| ())
+                                .ok();
+                        }
                         // user:“打开桌宠你用 cli”+(带 --pet 或 --open-pet 启动就直接
                         // 打开覆盖层，不依赖托盘，自动化也能直接驱动。)
                         // 既支持命令行参数，也支持环境变量：tauri dev 会把 `--` 之后的
@@ -868,11 +865,35 @@ fn main() {
             p2p_host::p2p_status,
             p2p_host::p2p_devices,
             p2p_host::p2p_revoke,
+            p2p_host::p2p_allow,
             ping,
             get_app_info,
             pick_directory,
             pick_files,
             open_external_url,
+            computer_use_overlay::computer_use_overlay_open,
+            computer_use_overlay::computer_use_overlay_ready,
+            computer_use_overlay::computer_use_overlay_close,
+            computer_use_overlay::computer_use_overlay_set_rects,
+            computer_use_overlay::computer_use_overlay_heartbeat,
+            desktop_overlay::desktop_overlay_open,
+            desktop_overlay::desktop_overlay_capture_hotkey_set,
+            desktop_overlay::desktop_overlay_take_capture,
+            tray_panel::tray_panel_state,
+            tray_panel::tray_panel_open,
+            tray_panel::tray_panel_material,
+            tray_panel::tray_panel_fit,
+            tray_panel::tray_panel_close,
+            tray_panel::tray_panel_toggle,
+            tray_panel::tray_panel_reveal_main,
+            tray_panel::tray_panel_quit,
+            desktop_overlay::desktop_overlay_bounds,
+            desktop_overlay::desktop_overlay_ready,
+            desktop_overlay::desktop_overlay_close,
+            desktop_overlay::desktop_overlay_set_rects,
+            desktop_overlay::desktop_overlay_heartbeat,
+            desktop_overlay::desktop_overlay_debug_state,
+            desktop_overlay::desktop_overlay_set_activatable,
             pet::pet_overlay_open,
             pet::pet_overlay_close,
             pet::pet_overlay_heartbeat,
@@ -899,6 +920,7 @@ fn main() {
             pet::pet_capture_monitor,
             // user:“重新设计与实现 Ping 的框选工具”+(独立截图窗口 + 心跳看门狗)
             pet::pet_ping_capture_open,
+            pet::pet_ping_capture_region,
             pet::pet_ping_capture_frame,
             pet::pet_ping_capture_show,
             pet::pet_ping_capture_heartbeat,

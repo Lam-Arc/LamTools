@@ -181,6 +181,14 @@ async fn serve(args: Vec<String>) -> Result<()> {
         };
         println!("PEER {} trusted={}", link.peer, link.trusted);
         diary(&flags.dir, &format!("PEER {} trusted={}", link.peer, link.trusted));
+        if !link.trusted {
+            // user:“允许撤销授权”+(被撤销的设备在握手里已经拿到 trusted=false，这里主动收掉，
+            // 对端会看到「已被撤销」而不是一句看不懂的 closed by peer)。
+            println!("PEER-REJECTED {}", link.peer);
+            diary(&flags.dir, &format!("PEER-REJECTED {}", link.peer));
+            link.close();
+            continue;
+        }
         // 每来一台设备就起一条事件泵：Core 的通知按帧推回给对端。
         let log_dir = flags.dir.clone();
         let name = flags.name.clone();

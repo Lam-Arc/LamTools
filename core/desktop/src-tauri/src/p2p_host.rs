@@ -420,11 +420,14 @@ pub fn p2p_status(state: tauri::State<'_, P2pHostState>) -> Result<Value, String
 pub fn p2p_devices() -> Result<Value, String> {
     let path = data_dir().join("p2p-trust.json");
     if !path.exists() {
-        return Ok(json!({ "devices": [] }));
+        return Ok(json!({ "devices": [], "revoked": [] }));
     }
     let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let parsed: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    Ok(json!({ "devices": parsed.get("devices").cloned().unwrap_or_else(|| json!([])) }))
+    Ok(json!({
+        "devices": parsed.get("devices").cloned().unwrap_or_else(|| json!([])),
+        "revoked": parsed.get("revoked").cloned().unwrap_or_else(|| json!([])),
+    }))
 }
 
 #[tauri::command]
@@ -438,12 +441,56 @@ pub fn p2p_revoke(id: String) -> Result<Value, String> {
     let Some(list) = parsed.get_mut("devices").and_then(|value| value.as_array_mut()) else {
         return Ok(json!({ "removed": false }));
     };
+    let name = list
+        .iter()
+        .find(|device| device.get("id").and_then(|value| value.as_str()) == Some(id.as_str()))
+        .and_then(|device| device.get("name"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_owned();
     let before = list.len();
     list.retain(|device| device.get("id").and_then(|value| value.as_str()) != Some(id.as_str()));
     let removed = list.len() != before;
-    if removed {
+    // user:“允许撤销授权”+(删除名单只是“忘了它”，首次连接还会自动信任；必须留一条撤销记录，
+    // 传输进程在自动信任之前先查这张表)。
+    if !parsed.get("revoked").map(|value| value.is_array()).unwrap_or(false) {
+        parsed["revoked"] = json!([]);
+    }
+    if let Some(revoked) = parsed.get_mut("revoked").and_then(|value| value.as_array_mut()) {
+        if !revoked
+            .iter()
+            .any(|device| device.get("id").and_then(|value| value.as_str()) == Some(id.as_str()))
+        {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or(0);
+            revoked.push(json!({ "id": id, "name": name, "revoked_at": now }));
+        }
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&parsed).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({ "removed": removed }))
+}
+
+/// 重新允许一台被撤销的设备：删掉撤销记录，下一次连接按首次配对处理。
+#[tauri::command]
+pub fn p2p_allow(id: String) -> Result<Value, String> {
+    let path = data_dir().join("p2p-trust.json");
+    if !path.exists() {
+        return Ok(json!({ "allowed": false }));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let mut parsed: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let Some(revoked) = parsed.get_mut("revoked").and_then(|value| value.as_array_mut()) else {
+        return Ok(json!({ "allowed": false }));
+    };
+    let before = revoked.len();
+    revoked.retain(|device| device.get("id").and_then(|value| value.as_str()) != Some(id.as_str()));
+    let allowed = revoked.len() != before;
+    if allowed {
         std::fs::write(&path, serde_json::to_string_pretty(&parsed).map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
     }
-    Ok(json!({ "removed": removed }))
+    Ok(json!({ "allowed": allowed }))
 }
