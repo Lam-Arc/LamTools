@@ -62,7 +62,8 @@ export class RemoteTransport implements LamToolsTransport {
       // 一次拨号，否则一个普通失败会被说成「连接断开」，还白等 1.2 秒。
       const status = await remoteStatus()
       if (status?.connected) throw error
-      const peer = await ensureRemote(1200)
+      // 单飞之后这里不会再顶掉正在进行的拨号；给它够一次局域网握手的时间。
+      const peer = await ensureRemote(8_000)
       if (peer === null) {
         throw new TransportRpcError(undefined, '和电脑的连接断开了：打开抽屉底部的「设备连接」，可以重连或切回本机')
       }

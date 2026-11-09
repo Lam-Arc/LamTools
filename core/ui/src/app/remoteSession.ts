@@ -47,7 +47,25 @@ export async function remoteStatus(): Promise<Status | null> {
  * so a reconnect here also restores what the interface was doing: the same Core, the same
  * threads, the same events.
  */
-export async function ensureRemote(budgetMs = 5000): Promise<string | null> {
+/**
+ * 同一时刻只允许一次拨号。
+ *
+ * user:“点了切换电脑，它重启一遍核心之后进去还在手机”“第一次连上后面就连不上”+
+ * (启动、后台重连循环、单条请求失败后的补救都会调到这里；每调一次 `p2p_connect` 都会
+ *  先关掉上一条连接，于是 A 刚连上就被 B 顶掉，日志里全是 PEER / PEER-CLOSED)。
+ *  这里让并发调用共享同一次拨号的结果。
+ */
+let inflightDial: Promise<string | null> | null = null
+
+export function ensureRemote(budgetMs = 5000): Promise<string | null> {
+  if (inflightDial) return inflightDial
+  inflightDial = dialRemote(budgetMs).finally(() => {
+    inflightDial = null
+  })
+  return inflightDial
+}
+
+async function dialRemote(budgetMs = 5000): Promise<string | null> {
   const status = await remoteStatus()
   if (status?.connected && !status.connecting) return status.peer ?? ''
   // user:“类似的时序问题不要再犯，检查”+(拨号中以前答「已连接」，界面拿着还没建好的
