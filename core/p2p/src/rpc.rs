@@ -9,7 +9,7 @@
 //! Neither blocks the other, and the event pump keeps its own socket.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +37,12 @@ pub struct CoreRpc {
     /// 「订阅了这个会话」的连接；另开一条没订阅的 socket 永远收不到 item/delta，手机上
     /// 于是发得出去、看不见回复。请求和事件共用这条订阅过的连接，事件从这里转发出去)。
     events: broadcast::Sender<Value>,
+    /// 这条桥的 Core socket 是否已经断开。
+    ///
+    /// user:“电脑那边一重启，手机上就全是错，只能重新配对”+(Core 换端口重启时这条
+    /// WebSocket 会断，reader 退出、jobs 通道关闭；调用方如果不知道桥已经死了，就会一直
+    /// 往一个空通道里投任务。这里留一个标志，让上层能重建而不是永久报错)。
+    dead: Arc<AtomicBool>,
 }
 
 impl CoreRpc {
@@ -103,6 +109,8 @@ impl CoreRpc {
 
         let (events, _) = broadcast::channel::<Value>(4096);
         let events_for_reader = events.clone();
+        let dead = Arc::new(AtomicBool::new(false));
+        let dead_for_reader = Arc::clone(&dead);
         let (mut sink, mut stream) = socket.split();
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (jobs, mut inbox) = mpsc::channel::<Job>(64);
@@ -139,7 +147,9 @@ impl CoreRpc {
                 }
                 let _ = sender.send(Ok(value.get("result").cloned().unwrap_or(Value::Null)));
             }
-            // The socket died: fail everything still waiting instead of hanging forever.
+            // The socket died: fail everything still waiting instead of hanging forever,
+            // and tell the owner so the next call can rebuild the bridge.
+            dead_for_reader.store(true, Ordering::SeqCst);
             for (_, sender) in reader_pending.lock().await.drain() {
                 let _ = sender.send(Err(anyhow::anyhow!("与 Core 的 RPC 通道已断开")));
             }
@@ -166,7 +176,12 @@ impl CoreRpc {
             }
         });
 
-        Ok(Self { jobs, initialized, events })
+        Ok(Self { jobs, initialized, events, dead })
+    }
+
+    /// Core 那边的 socket 是否已经断开（需要重建）。
+    pub fn is_dead(&self) -> bool {
+        self.dead.load(Ordering::SeqCst)
     }
 
     /// 这条 Core 连接上的推送流。界面订阅的会话一经 `thread/resume` 生效，进度就来了。

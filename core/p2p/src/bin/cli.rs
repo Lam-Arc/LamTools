@@ -129,7 +129,14 @@ async fn serve(args: Vec<String>) -> Result<()> {
     println!("NAME {}", flags.name);
     println!("ID {}", endpoint.id());
     println!("TICKET {ticket}");
-    diary(&flags.dir, &format!("TICKET {ticket}"));
+    // user:“票据就是完整控制权”+(拿到它的人可以调用 Core 的任何 RPC，包括执行工具。
+    // 日志会被复制出去排障，所以默认只记前缀；要用日志里的票据做实验时显式开环境变量)。
+    let logged_ticket = if std::env::var("SUNDAY_P2P_LOG_TICKET").ok().as_deref() == Some("1") {
+        ticket.clone()
+    } else {
+        format!("{}…", &ticket[..ticket.len().min(24)])
+    };
+    diary(&flags.dir, &format!("TICKET {logged_ticket}"));
     for line in sunday_p2p::relay_summary(&endpoint) {
         println!("RELAY {line}");
         diary(&flags.dir, &format!("RELAY {line}"));
@@ -181,45 +188,64 @@ async fn serve(args: Vec<String>) -> Result<()> {
         let pump_token = flags.core_token.clone();
         // user:“连上电脑了之后也没有出现项目”+(界面读项目、会话、工作台快照走的是 Core 的
         // JSON-RPC；这条通道不和事件共用一条 socket，免得大回复把事件流堵住)。
-        let rpc = match core_port {
-            0 => None,
-            port => match sunday_p2p::rpc::CoreRpc::connect(port, &core_token).await {
-                Ok(bridge) => Some(Arc::new(bridge)),
-                Err(error) => {
-                    let line = format!("RPC-CHANNEL ERROR {error:#}");
-                    eprintln!("{line}");
-                    diary(&log_dir, &line);
-                    None
-                }
+        // user:“电脑那边一重启，手机上就全是错”+(Core 换端口重启会让这条桥的 socket 断掉。
+        // 桥放在 Mutex<Option<...>> 里，死掉时由下一条 RPC 就地重建，而不是让手机上的
+        // 每条调用都报「RPC 通道已关闭」直到重新配对)。
+        let rpc: Arc<Mutex<Option<Arc<sunday_p2p::rpc::CoreRpc>>>> = Arc::new(Mutex::new(
+            match core_port {
+                0 => None,
+                port => match sunday_p2p::rpc::CoreRpc::connect(port, &core_token).await {
+                    Ok(bridge) => Some(Arc::new(bridge)),
+                    Err(error) => {
+                        let line = format!("RPC-CHANNEL ERROR {error:#}");
+                        eprintln!("{line}");
+                        diary(&log_dir, &line);
+                        None
+                    }
+                },
             },
-        };
+        ));
         tokio::spawn(async move {
         let closed = Arc::new(tokio::sync::Mutex::new(false));
-        if let Some(bridge) = rpc.as_ref() {
+        if rpc.lock().await.is_some() {
             // user:“请立即回复你好没反应”+(事件必须走界面订阅过的那条 Core 连接；另起一条
             // 没订阅的 socket 收不到任何会话进度，手机就只能发出消息、看不到回复)。
             let send = link.sender();
             let flag = Arc::clone(&closed);
-            let mut events = bridge.subscribe_events();
+            let rpc_for_events = Arc::clone(&rpc);
             tokio::spawn(async move {
                 loop {
                     if *flag.lock().await {
                         return;
                     }
-                    match events.recv().await {
-                        Ok(value) => {
-                            let Some(method) = value.get("method").and_then(|item| item.as_str()) else {
-                                continue;
-                            };
-                            let params = value.get("params").cloned().unwrap_or(serde_json::Value::Null);
-                            if sunday_p2p::link::write_event(&send, method, params).await.is_err() {
-                                return;
-                            }
+                    // 桥重建之后事件流会换一条，外层循环重新订阅它。
+                    let bridge = { rpc_for_events.lock().await.clone() };
+                    let Some(bridge) = bridge else {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        continue;
+                    };
+                    let mut events = bridge.subscribe_events();
+                    loop {
+                        if *flag.lock().await {
+                            return;
                         }
-                        // 一轮里事件比转发快时丢掉最旧的；快照会补回来。
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(_) => return,
+                        match events.recv().await {
+                            Ok(value) => {
+                                let Some(method) = value.get("method").and_then(|item| item.as_str()) else {
+                                    continue;
+                                };
+                                let params = value.get("params").cloned().unwrap_or(serde_json::Value::Null);
+                                if sunday_p2p::link::write_event(&send, method, params).await.is_err() {
+                                    return;
+                                }
+                            }
+                            // 一轮里事件比转发快时丢掉最旧的；快照会补回来。
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            // 这条桥没了：回到外层换一条。
+                            Err(_) => break,
+                        }
                     }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
             });
         } else if core_port != 0 {
@@ -227,11 +253,14 @@ async fn serve(args: Vec<String>) -> Result<()> {
             let flag = Arc::clone(&closed);
             tokio::spawn(sunday_p2p::events::pump_until_closed(core_port, pump_token, send, flag));
         }
+        // 处理闭包里也要写日记（桥重建），给它一份自己的目录，别把外层的搬走。
+        let handler_dir = log_dir.clone();
         let result = link
             .serve(move |method, params| {
                 let name = name.clone();
                 let core_token = core_token.clone();
                 let rpc = rpc.clone();
+                let dir = handler_dir.clone();
                 async move {
                     match method.as_str() {
                         "ping" => Ok(serde_json::json!({ "pong": true })),
@@ -240,10 +269,13 @@ async fn serve(args: Vec<String>) -> Result<()> {
                         // 界面在每条连接上都会先发一次 initialize，重载之后再发一次。
                         // 桥已经替它介绍过自己，这里把同一份答复还回去，而不是让 Core
                         // 以「Already initialized」拒掉界面后面所有 RPC。
-                        "initialize" => match rpc.as_ref() {
-                            Some(bridge) => Ok(bridge.initialize_result()),
-                            None => bail!("这台设备没有配置 Core 端口"),
-                        },
+                        "initialize" => {
+                            let bridge = { rpc.lock().await.clone() };
+                            match bridge {
+                                Some(bridge) => Ok(bridge.initialize_result()),
+                                None => bail!("这台设备没有配置 Core 端口"),
+                            }
+                        }
                         // 介绍完成的确认通知：Core 那边早就不需要了。
                         "initialized" => Ok(serde_json::json!({})),
                         // 远程的 Core 调用：把 method/path 原样转给本机 Core。
@@ -276,10 +308,35 @@ async fn serve(args: Vec<String>) -> Result<()> {
                         }
                         // 其余一律当成 Core 的 JSON-RPC 方法原样转过去：
                         // 界面正是靠这条路拿项目、会话与工作台快照。
-                        other => match rpc.as_ref() {
-                            Some(bridge) => bridge.call(other, params).await,
-                            None => bail!("这台设备没有配置 Core 端口"),
-                        },
+                        other => {
+                            if core_port == 0 {
+                                bail!("这台设备没有配置 Core 端口");
+                            }
+                            let bridge = {
+                                let mut guard = rpc.lock().await;
+                                let dead = guard.as_ref().map(|item| item.is_dead()).unwrap_or(true);
+                                if dead {
+                                    match sunday_p2p::rpc::CoreRpc::connect(core_port, &core_token).await {
+                                        Ok(fresh) => {
+                                            let line = "RPC-CHANNEL REBUILT".to_owned();
+                                            println!("{line}");
+                                            diary(&dir, &line);
+                                            *guard = Some(Arc::new(fresh));
+                                        }
+                                        Err(error) => {
+                                            let line = format!("RPC-CHANNEL REBUILD FAILED {error:#}");
+                                            eprintln!("{line}");
+                                            diary(&dir, &line);
+                                            return Err(anyhow::anyhow!(
+                                                "和 Core 的 RPC 通道断了，重建也失败：{error:#}"
+                                            ));
+                                        }
+                                    }
+                                }
+                                guard.as_ref().expect("bridge just ensured").clone()
+                            };
+                            bridge.call(other, params).await
+                        }
                     }
                 }
             })

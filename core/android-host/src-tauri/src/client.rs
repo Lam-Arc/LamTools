@@ -26,7 +26,7 @@
 //! session" means.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -42,6 +42,12 @@ struct Session {
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     /// Streams run items in the order the core produced them.
     ordered: Mutex<()>,
+    /// Set to false when the socket task ends.
+    ///
+    /// user:“本地核心挂了之后，手机上所有操作都失败，只能杀掉应用重开”+(pump 退出时只清了
+    /// 等待中的请求，`session` 还留着这条死连接；之后每一次调用都往关闭的通道里发。
+    /// 这里留一个存活标志，下一次调用据此重建 socket 并重新握手)。
+    alive: AtomicBool,
 }
 
 impl Session {
@@ -52,9 +58,14 @@ impl Session {
                 outbound,
                 pending: Mutex::new(HashMap::new()),
                 ordered: Mutex::new(()),
+                alive: AtomicBool::new(true),
             }),
             inbound,
         )
+    }
+
+    fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
     }
 
     fn fail_pending(&self) {
@@ -103,8 +114,16 @@ impl CoreLink {
 
     /// Returns the live session, connecting on first use.
     async fn ensure_session(&self) -> Result<Arc<Session>, String> {
-        if let Some(session) = self.session.lock().expect("session lock").clone() {
-            return Ok(session);
+        // Take the clone in its own statement: holding the guard across `close_session`
+        // would re-lock the same mutex and deadlock.
+        let existing = self.session.lock().expect("session lock").clone();
+        if let Some(session) = existing {
+            if session.is_alive() {
+                return Ok(session);
+            }
+            // The socket died under us: drop it and its cached handshake, then reconnect.
+            // The UI re-initializes on its own, so a fresh socket is enough here.
+            self.close_session();
         }
         let (url, token) = self.endpoint();
         if url.is_empty() {
@@ -228,6 +247,7 @@ async fn pump(
             }
         }
     }
+    session.alive.store(false, Ordering::SeqCst);
     session.fail_pending();
     println!("[sunday] core socket closed");
     app.emit("core-event", json!({ "method": "core/disconnected", "payload": {} }))

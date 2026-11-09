@@ -50,7 +50,11 @@ pub struct Event {
     pub params: serde_json::Value,
 }
 
-const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+/// A single frame has to carry a whole Core reply, and a thread snapshot on a long
+/// conversation is tens of megabytes (the UI avoids asking for one, but `thread/resume`
+/// and approval snapshots still can). 16 MB used to turn those into a closed tunnel;
+/// this bound still refuses a hostile length while leaving room for a real reply.
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const EVENT_BUFFER: usize = 256;
 
 async fn write_frame(send: &mut iroh::endpoint::SendStream, frame: &Frame) -> Result<()> {
