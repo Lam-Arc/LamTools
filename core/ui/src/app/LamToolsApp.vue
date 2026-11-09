@@ -326,11 +326,12 @@
       <div
         v-if="appRuntime.capabilities.remote"
         class="core-remote-badge"
+        :class="{ 'is-lost': remoteLinkDown }"
         data-remote-badge
-        :title="t('这一步在电脑上执行')"
+        :title="remoteLinkDown ? t('和电脑的连接断开了，正在自动重连') : t('这一步在电脑上执行')"
       >
         <MonitorSmartphone :size="13" :stroke-width="1.9" aria-hidden="true" />
-        <span>{{ t("在电脑上运行") }}</span>
+        <span>{{ remoteLinkDown ? remoteLinkText : t("在电脑上运行") }}</span>
       </div>
       <!-- 手机没有顶部条：整版界面的返回键浮动在左上角，内容由 --full-area-head-inset 让位。 -->
       <button
@@ -632,6 +633,9 @@
     </template>
   </WorkspaceShell>
 
+  <!-- user:“查一下 computer use 功能怎么做”+(桌面任务运行时右下角常驻状态条，可暂停可结束。) -->
+  <ComputerUseBar />
+
   <ContextMenuHost />
   <!-- user:“我只要切换界面，编辑就自动取消了，那它不是永远不可能编辑到主界面吗”+
        (编辑器挂在应用层：从设置页点开后切到任何界面都不卸载，贴着当前界面继续编辑。) -->
@@ -773,6 +777,7 @@ import { THEME_STUDIO_STORAGE_KEY } from '@/themeStudio/constants.ts'
 import { applyStoredPublishedTheme } from '@/themeStudio/bootstrap.ts'
 import ChatOutlineNavigator from '@/components/ChatOutlineNavigator.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
+import ComputerUseBar from '@/components/ComputerUseBar.vue'
 import AppRail, { type AppRailView } from '@/components/AppRail.vue'
 import CoreUpdateCard from '@/components/CoreUpdateCard.vue'
 import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
@@ -949,6 +954,34 @@ const connectionErrorToastGate = createCoreConnectionErrorToastGate({
 watch(workbench.connectionState, (state) => connectionErrorToastGate.onConnectionState(state), { immediate: true })
 onUnmounted(() => connectionErrorToastGate.dispose())
 
+// user:“显示和电脑断联了”+(隧道断了要看得见：以前这个标记永远写「在电脑上运行」，
+// 断线和正常时一模一样，用户只能靠自己发现消息发不出去)。
+const remoteWasOpen = ref(false)
+const remoteLinkDown = ref(false)
+const remoteLinkText = computed(() => (
+  remoteWasOpen.value ? t('和电脑断开了，正在重连…') : t('正在连接电脑…')
+))
+let remoteLinkTimer: number | null = null
+watch(workbench.connectionState, (state) => {
+  if (!appRuntime.capabilities.remote) return
+  if (state === 'open') {
+    remoteWasOpen.value = true
+    if (remoteLinkTimer !== null) window.clearTimeout(remoteLinkTimer)
+    remoteLinkTimer = null
+    remoteLinkDown.value = false
+    return
+  }
+  // 启动阶段本来就不是 open，先等两秒，避免刚进界面就误报断线。
+  if (remoteLinkTimer !== null) return
+  remoteLinkTimer = window.setTimeout(() => {
+    remoteLinkTimer = null
+    remoteLinkDown.value = true
+  }, 2_000)
+}, { immediate: true })
+onUnmounted(() => {
+  if (remoteLinkTimer !== null) window.clearTimeout(remoteLinkTimer)
+})
+
 async function requestJson<T = unknown>(
   path: string,
   options: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
@@ -1073,7 +1106,7 @@ const settingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requ
 const projectSettingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requestSection: (id: string) => void } | null>(null)
 // 整版界面状态：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
-type FullAreaViewId = 'library' | 'search' | 'superagent' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
+type FullAreaViewId = 'library' | 'direct' | 'search' | 'superagent' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
 const fullAreaView = ref<FullAreaViewId | null>(null)
 // user:“返回不可用，我被困在设置页面了”+(系统返回先关整版界面，界面没得关才交给后台)。
 function handleSystemBack(event: Event): void {
@@ -1177,6 +1210,10 @@ const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
       return { get title() { return t("搜索") }, get subtitle() { return t("跨项目查找会话、消息、方案与文件。") } }
     case 'library':
       return libraryHeading.value ?? { get title() { return t("资料库") }, get subtitle() { return t("资料 / 记忆 / 方案 — 一个入口三块内容。") } }
+    // user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+    // +(调用台的标题说清楚它与聊天不同：直接调用，不进对话流程。)
+    case 'direct':
+      return { get title() { return t("调用台") }, get subtitle() { return t("直接调用模型，参数与结果都在这一页，历史可回看。") } }
     case 'arrange':
       return arrangeHeading.value ?? { get title() { return t("定时任务") }, get subtitle() { return t("按计划运行任务，或在需要时随时执行。") } }
     case 'superagent':
@@ -1222,7 +1259,7 @@ const railActiveView = computed<AppRailView>(() => {
 function openRailSplit(view: AppRailView, edge: 'right' | 'bottom' = 'right') {
   if (view === 'chat') return
   const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
-  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), superagent: t('Super-agent'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接') })[view], pane)
+  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), superagent: t('Super-agent'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接'), direct: t('调用台') })[view], pane)
 }
 function onRailOpen(view: AppRailView): void {
   if (view === 'chat') {

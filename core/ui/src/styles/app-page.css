@@ -73,6 +73,18 @@
 }
 
 /* user:“清晰展示当前设备、连接状态和运行位置”+(跟着状态栏下来，不挡内容)。 */
+/* 断线时同一个位置换成橙色提示，不再让人以为还连在电脑上。 */
+.core-remote-badge.is-lost {
+  background: color-mix(in srgb, #ff8a3d 18%, transparent);
+  color: #ffb089;
+  animation: core-remote-lost-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes core-remote-lost-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 .core-remote-badge {
   position: fixed;
   right: 10px;

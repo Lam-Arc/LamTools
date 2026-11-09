@@ -70,7 +70,7 @@ const EVENT_BUFFER: usize = 256;
 /// 客户端多久发一次心跳。
 const PING_EVERY: Duration = Duration::from_secs(12);
 /// 多久没收到 Pong 就认为这条连接已经没了。
-const PING_DEAD_AFTER_MILLIS: u64 = 40_000;
+const PING_DEAD_AFTER_MILLIS: u64 = 26_000;
 /// 服务端多久没收到任何帧就收掉连接。
 ///
 /// user:“显示和电脑断联了”+(网络静默断开时 QUIC 既不报错也不关闭，读帧会一直挂着；
