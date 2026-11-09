@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Generic, TypeVar
 
+from lamtools_core.async_tasks import finish_on_cancel
+
 T = TypeVar("T")
 
 
@@ -119,10 +121,62 @@ class ServiceRef(Generic[T]):
                 scope.acquire()
                 acquired.append(scope)
             result = callback(*args, **kwargs)
-            return await result if inspect.isawaitable(result) else result
+            result = await result if inspect.isawaitable(result) else result
+            if inspect.isasyncgen(result):
+                checked = self._checked_stream(result)
+                await anext(checked)
+                return checked
+            return result
         finally:
             for scope in reversed(acquired):
                 scope.release()
+
+    async def _checked_stream(self, stream):
+        # user:“复用原宿主权威”+(事件流每次读取及发布前复核调用者和原提供方，撤回后不发布旧事件)。
+        try:
+            # user:“完成真实接口、参数/错误、作用域、取消/清理”+(先建立清理边界，使首次读取前关闭也回收原生成器)。
+            yield None
+            while True:
+                self.get()
+                try:
+                    item = await self._pull_stream(stream)
+                except StopAsyncIteration:
+                    return
+                self.get()
+                yield item
+        finally:
+            await stream.aclose()
+
+    async def _pull_stream(self, stream):
+        scopes = list(dict.fromkeys(s for s in (self._provider, self._requester) if s is not None))
+        if not scopes:
+            return await anext(stream)
+        # user:“完成真实接口、参数/错误、作用域、取消/清理”+(请求方或受管提供方撤回时取消正在等待的读取并等其清理)。
+        async def leased_pull():
+            acquired = []
+            try:
+                # user:“完成真实接口、参数/错误、作用域、取消/清理”+(正在执行的读取持有原代租约，停用等待提供方真实退出)。
+                for scope in scopes:
+                    scope.acquire()
+                    acquired.append(scope)
+                return await anext(stream)
+            finally:
+                for scope in reversed(acquired):
+                    scope.release()
+        pull = asyncio.create_task(leased_pull())
+        watchers = [asyncio.create_task(scope._revoked.wait()) for scope in scopes]
+        tasks = [pull, *watchers]
+        async def cleanup():
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            self.get()
+            return await pull
+        finally:
+            await finish_on_cancel(cleanup(), name="plugin-service-stream-pull-cleanup")
 
 
 class RegistrationScope:
@@ -130,6 +184,7 @@ class RegistrationScope:
     def __init__(self, registry: HostServiceRegistry, owner: str, epoch: int) -> None:
         self.registry, self.owner, self.epoch = registry, owner, epoch
         self.accepting = True
+        self._revoked = asyncio.Event()
         self.published = False
         self.disposed = False
         self.entries: dict[str, ServiceRegistration] = {}
@@ -175,6 +230,7 @@ class RegistrationScope:
 
     def revoke(self) -> None:
         self.accepting = False
+        self._revoked.set()
         for entry in list(self.entries.values()):
             entry()
 

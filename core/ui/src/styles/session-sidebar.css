@@ -295,6 +295,17 @@
 .project-menu-button {
   flex: 0 0 auto;
 }
+/* user:“把“新建会话”按钮放在项目最右侧，它的左侧是“三个点更多”按钮”+
+   (行内最右常驻该项目的“新建会话”图标；「···」浮层整体让出这一格，悬停时贴在它左侧)。 */
+.project-row.has-project-new-session .project-btns {
+  right: calc(var(--sidebar-icon-size) + var(--sidebar-item-gap));
+}
+/* user:“新建会话的那个图标，可以把它稍微调小一点吗？再换一个更圆润一点的图标”+
+   (新建入口换成圆形气泡加号，图标比同排的「···」小一档，按钮的点击范围保持不变)。 */
+.project-action.project-new-session svg {
+  width: 15px;
+  height: 15px;
+}
 .project-block:hover .project-btns,
 .project-block:focus-within .project-btns,
 .project-btns:has(.project-menu-button[aria-expanded="true"]) {
@@ -679,6 +690,15 @@
   .project-menu-button {
     width: 44px;
     flex-basis: 44px;
+  }
+  /* 触摸靶放大到 44px 时图标跟着回一档，不然 15px 的点在手机上太碎。 */
+  .project-action.project-new-session svg {
+    width: var(--sidebar-icon-size);
+    height: var(--sidebar-icon-size);
+  }
+  /* 手机上新建入口是 44px 触摸靶，浮层让位也要按 44px 算，不能再压住它。 */
+  .project-row.has-project-new-session .project-btns {
+    right: calc(44px + var(--sidebar-item-gap));
   }
   .conversation,
   .conversation-select {

@@ -1,15 +1,32 @@
 """user:“第二阶段结束后 就继续开展第三阶段”+(明确的一元Remote映射复用原HTTP路由与认证，不开放任意操作目录或推断服务方法)。"""
 import copy
+import hmac
 import json
 import re
 
 from .capabilities import CapabilityError
-from .plugin_http import _normalize_path, dispatch_http_request, read_http_routes
+from .operation_bridge import read_operations
+from .plugin_http import _normalize_path, _provided_token, dispatch_http_request, plugin_http_token, read_http_routes
 from .tool_schema import check_arguments, check_schema
 from .remote_binary import (RemotePayload, encode_remote_response, MAX_BINARY_BYTES, MAX_RESULT_JSON_BYTES,
                             MAX_ATTACHMENTS, MAX_RESULT_DEPTH, MAX_RESULT_NODES)
 
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+
+
+def authenticate_remote(host, plugin, headers):
+    if host is None:
+        return 503, {"error": "plugin system is not ready"}
+    if not host.available(plugin):
+        return 409, {"error": "plugin is not available"}
+    if host.get(plugin) is None:
+        return 404, {"error": "plugin is not installed"}
+    # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(先验证已有令牌，再披露方法/参数；未认证请求不创建令牌)。
+    expected = plugin_http_token(host, plugin, create=False)
+    supplied = _provided_token({str(k).lower(): str(v) for k, v in (headers or {}).items()})
+    if not expected or not supplied or not expected.isascii() or not supplied.isascii() or not hmac.compare_digest(expected, supplied):
+        return 401, {"error": "invalid plugin token"}
+    return None
 
 
 def read_remote_methods(manifest):
@@ -50,11 +67,15 @@ def read_remote_methods(manifest):
 async def dispatch_remote_request(*, host, catalog, plugin, namespace, method, body, headers=None, remote=""):
     if host is None or catalog is None:
         return 503, {"error": "plugin system is not ready"}
-    if not host.available(plugin):
-        return 409, {"error": "plugin is not available"}
+    rejection = authenticate_remote(host, plugin, headers)
+    if rejection is not None:
+        return rejection
     manifest = host.get(plugin)
     if manifest is None:
         return 404, {"error": "plugin is not installed"}
+    declaration = copy.deepcopy(manifest.raw)
+    manager = getattr(host, "backend_manager", None)
+    generation = manager.generation.get(plugin) if manager is not None else None
     try:
         methods = read_remote_methods(manifest)
     except (ValueError, TypeError, CapabilityError, UnicodeError, RecursionError):
@@ -69,6 +90,20 @@ async def dispatch_remote_request(*, host, catalog, plugin, namespace, method, b
         check_arguments(schema, body["args"])
     except (ValueError, TypeError, RecursionError):
         return 400, {"error": "invalid Remote arguments"}
+    def pre_dispatch(_manifest, route, spec):
+        # user:“复用原宿主权威”+(最后派发前复核实际声明、路由、操作、启动代和既有令牌；未引入新授权体系)。
+        try:
+            current = host.get(plugin)
+            if (current is None or current.raw != declaration or getattr(host, "backend_manager", None) is not manager
+                    or (manager is not None and manager.generation.get(plugin) != generation)
+                    or read_remote_methods(current).get((namespace, method)) != descriptor):
+                return 409, {"error": "Remote binding changed"}
+            current_routes = read_http_routes(current)
+            if route not in current_routes or spec not in read_operations(current):
+                return 409, {"error": "Remote binding changed"}
+            return authenticate_remote(host, plugin, headers)
+        except (ValueError, TypeError, CapabilityError, UnicodeError, RecursionError):
+            return 409, {"error": "Remote binding changed"}
     # user:“复用原宿主权威”+(原路由再次检查可用性、令牌、操作归属和审批；不直连catalog.execute，不回退到未声明方法)。
     release = None
     if encoding == "ndjson":
@@ -80,7 +115,7 @@ async def dispatch_remote_request(*, host, catalog, plugin, namespace, method, b
         if encoding == "ndjson":
             valid = binding_check(host, catalog, plugin, manifest, path)
         status, result = await dispatch_http_request(host=host, catalog=catalog, plugin=plugin, method="POST", path=path,
-            body=body["args"], headers=headers, remote=remote)
+            body=body["args"], headers=headers, remote=remote, create_token=False, pre_dispatch=pre_dispatch)
         if encoding == "ndjson" and status == 200:
             source = result["payload"]
             try:

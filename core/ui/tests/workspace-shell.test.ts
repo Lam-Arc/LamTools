@@ -333,9 +333,9 @@ describe('WorkspaceShell responsive drawers', () => {
     const sidebarCss = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
     const variablesCss = readFileSync(resolve(import.meta.dirname, '../src/styles/variables.css'), 'utf8')
 
-    expect(variablesCss).toContain('--sidebar-width: 162px')
-    expect(shellCss).toMatch(/--sidebar-width: min\(86vw, 320px\)/)
-    expect(shellCss).toContain('--right-drawer-width: var(--right-rail-width)')
+    expect(variablesCss).toContain('--sidebar-width: var(--layout-sidebar-width, 186px)')
+    expect(shellCss).toMatch(/--sidebar-width: var\(--layout-sidebar-width, min\(86vw, 320px\)\)/)
+    expect(shellCss).toContain('--right-drawer-width: var(--layout-right-drawer-width, var(--right-rail-width))')
     // 宽卡时代的旧尺寸必须保持清除：右侧只剩贴边竖栏，任何密度都不再预留宽卡。
     expect(shellCss).not.toMatch(/--right-drawer-width: \d+px/)
     expect(shellCss).not.toContain('--right-card-width')

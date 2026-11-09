@@ -12,6 +12,12 @@ import { DEFAULT_THEME } from '@/helpers/theme.ts'
 export type DensityMode = 'compact' | 'standard' | 'loose'
 export type { ThemeData, ThemeCSSVars }
 
+/* user:“让左侧栏和主内容区中间的边界可以被拖动”+(会话栏宽度由用户拖定：
+   默认档位仍由样式表按窗口宽度给，拖过之后以用户值为准；键盘微调一档 16px)。 */
+export const LEFT_DRAWER_WIDTH_MIN = 160
+export const LEFT_DRAWER_WIDTH_MAX = 480
+export const LEFT_DRAWER_WIDTH_STEP = 16
+
 /**
  * How long `.drawer-right` takes to retract. Must stay equal to the
  * `--right-drawer-retract` token in variables.css: the raised layer is held for
@@ -46,6 +52,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const isNarrowViewport = ref(false)
   const density = ref<DensityMode>(options.density ?? 'standard')
   const contentWidth = ref(options.contentWidth ?? 780)
+  /* 用户拖定的会话栏宽度（px）；null 表示继续跟随样式表按窗口给出的默认档位。 */
+  const leftWidth = ref<number | null>(null)
   const theme = ref<ThemeData>(options.theme ?? { ...DEFAULT_THEME })
 
   // --- shell class ---
@@ -68,7 +76,10 @@ export function useShellLayout(options: ShellLayoutOptions) {
     // 右侧抽屉只剩贴边图标竖栏，宽度恒等于 --right-rail-width。
     const rightWidth = 46
     return {
-      left: leftOpen.value ? 'var(--sidebar-width)' : '18px',
+      // 拖过宽度后不能再交给 --sidebar-width：它在 :root 只能解析出默认档。
+      left: !leftOpen.value
+        ? '18px'
+        : leftWidth.value !== null ? `${leftWidth.value}px` : 'var(--sidebar-width)',
       right: (rightOpen.value && rightPinned.value) ? `${rightWidth}px` : '18px',
     }
   })
@@ -83,6 +94,10 @@ export function useShellLayout(options: ShellLayoutOptions) {
     const titlebarBg = stops.length > 0 ? (stops[0].color || '#111111') : '#111111'
     return {
       '--content-width': `${Math.min(1120, Math.max(560, contentWidth.value))}px`,
+      // 用户拖定的宽度内联在 shell 上，盖过样式表里的三档默认值；手机抽屉不吃它。
+      ...(leftWidth.value !== null && !isNarrowViewport.value
+        ? { '--sidebar-width': `${leftWidth.value}px` }
+        : {}),
       '--theme-titlebar-bg': titlebarBg,
       ...cssVars,
     } as Record<string, string>
@@ -121,6 +136,25 @@ export function useShellLayout(options: ShellLayoutOptions) {
     },
     { immediate: true },
   )
+
+  /* 拖出来的宽度按视口收口：给聊天区至少留 360px，窄窗口也不会把主区挤没。 */
+  function clampLeftWidth(value: number): number {
+    const viewport = typeof window === 'undefined' ? 0 : window.innerWidth
+    const maxByViewport = viewport > 0
+      ? Math.max(LEFT_DRAWER_WIDTH_MIN, viewport - 360)
+      : LEFT_DRAWER_WIDTH_MAX
+    const upper = Math.min(LEFT_DRAWER_WIDTH_MAX, maxByViewport)
+    return Math.round(Math.min(Math.max(value, LEFT_DRAWER_WIDTH_MIN), upper))
+  }
+
+  function setLeftWidth(value: number | null): void {
+    leftWidth.value = value === null ? null : clampLeftWidth(value)
+  }
+
+  /** 双击分界线：回到样式表给的默认档位。 */
+  function resetLeftWidth(): void {
+    leftWidth.value = null
+  }
 
   // --- drawer controls ---
   function setSidebarCollapsed(collapsed: boolean) {
@@ -205,7 +239,9 @@ export function useShellLayout(options: ShellLayoutOptions) {
       !leftPinned.value &&
       leftOpen.value &&
       !target.closest('.drawer-left') &&
-      !target.closest('.edge-left')
+      !target.closest('.edge-left') &&
+      // 拖分界线不算“点在抽屉外”，否则会话栏会在拖动开始的一瞬间收起。
+      !target.closest('.sidebar-resize-handle')
     ) {
       leftOpen.value = false
     }
@@ -276,7 +312,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   // --- auto-save with debounce ---
   let saveTimer: ReturnType<typeof setTimeout> | undefined
-  watch([density, contentWidth, theme], () => {
+  watch([density, contentWidth, theme, leftWidth], () => {
     clearTimeout(saveTimer)
     saveTimer = setTimeout(saveSettings, 500)
   })
@@ -326,6 +362,9 @@ export function useShellLayout(options: ShellLayoutOptions) {
       const saved = JSON.parse(raw)
       if (saved.density) density.value = saved.density
       if (saved.contentWidth) contentWidth.value = saved.contentWidth
+      if (typeof saved.leftWidth === 'number' && Number.isFinite(saved.leftWidth)) {
+        leftWidth.value = clampLeftWidth(saved.leftWidth)
+      }
       if (saved.theme) theme.value = migrateThemeDefaults({ ...DEFAULT_THEME, ...saved.theme })
     } catch {
       /* ignore */
@@ -339,6 +378,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
         JSON.stringify({
           density: density.value,
           contentWidth: contentWidth.value,
+          leftWidth: leftWidth.value,
           theme: theme.value,
         }),
       )
@@ -357,6 +397,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     isNarrowViewport,
     density,
     contentWidth,
+    leftWidth,
     theme,
     // computed
     shellClass,
@@ -366,6 +407,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
     sidebarCollapsed,
     // actions
     setSidebarCollapsed,
+    setLeftWidth,
+    resetLeftWidth,
     toggleLeftPinned,
     toggleRightPinned,
     onLeftDrawerLeave,

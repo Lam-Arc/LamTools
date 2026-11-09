@@ -55,6 +55,19 @@
       >{{ tab.label }}</button>
     </div>
 
+    <!-- user:“让库能打 tag”+(标签是检索键：点一个标签就只看带它的条目)。 -->
+    <div v-if="allTags.length" class="filter-tabs material-tag-filter" role="group" :aria-label="t('标签')" data-materials-tag-filter>
+      <button
+        v-for="tag in allTags"
+        :key="tag"
+        type="button"
+        :class="{ active: activeTag === tag }"
+        :aria-pressed="activeTag === tag"
+        :data-materials-tag="tag"
+        @click="activeTag = activeTag === tag ? '' : tag"
+      >{{ tag }}</button>
+    </div>
+
     <!-- ── 文件夹里：面包屑 + 这一层的内容 ── -->
     <nav v-if="openFolder" class="library-crumb materials-crumb" data-materials-crumb :aria-label="t('位置')">
       <button type="button" class="crumb-link" @click="goToFolder('')">{{ t("资料库") }}</button>
@@ -153,6 +166,7 @@
             :data-cover="coverStyle(item.kind, item.name)"
           >
             <img v-if="thumbFor(item)" :src="thumbFor(item)" :alt="item.name" loading="lazy" />
+            <div v-if="cssPreviewFor(item)" class="material-css-preview" v-html="cssPreviewFor(item)" />
             <template v-else>
               <component :is="kindIcon(item.kind, item.name)" class="material-cover-icon" :size="28" :stroke-width="1.5" aria-hidden="true" />
               <span class="material-cover-ext">{{ coverLabel(item) }}</span>
@@ -173,6 +187,53 @@
           <button class="card-menu-btn" type="button" :aria-label="t('{0} 的操作', { 0: item.name })" @click.stop="openMenu($event, item)">
             <MoreHorizontal :size="15" :stroke-width="1.8" aria-hidden="true" />
           </button>
+          <div class="material-meta-row" data-material-meta>
+            <button
+              v-for="tag in item.tags ?? []"
+              :key="tag"
+              type="button"
+              class="material-tag"
+              :title="t('去掉标签 {0}', { 0: tag })"
+              @click.stop="toggleTag(item, tag)"
+            >{{ tag }}</button>
+            <span class="material-tag-entry">
+              <input
+                :value="tagDraftFor(item)"
+                class="material-tag-input"
+                type="text"
+                :placeholder="t('+ 标签')"
+                :aria-label="t('给 {0} 加标签', { 0: item.name })"
+                :data-material-tag-input="item.artifact_id"
+                @input="setTagDraft(item, ($event.target as HTMLInputElement).value)"
+                @keydown.enter.prevent="commitTag(item)"
+                @keydown.space.prevent="commitTag(item)"
+                @focus="focusedTagId = item.artifact_id"
+                @blur="blurTagEditor(item)"
+              />
+              <!-- user:“输入后空格或者回车自动生成新tag，支持补全”+(前缀补全，点一条直接落成标签) -->
+              <span v-if="focusedTagId === item.artifact_id && suggestionsFor(item).length" class="material-tag-suggest" role="listbox">
+                <button
+                  v-for="suggestion in suggestionsFor(item)"
+                  :key="suggestion"
+                  type="button"
+                  role="option"
+                  :data-material-tag-suggest="suggestion"
+                  @mousedown.prevent="commitTag(item, suggestion)"
+                >{{ suggestion }}</button>
+              </span>
+            </span>
+            <span class="material-rating" role="group" :aria-label="t('评分')">
+              <button
+                v-for="score in 5"
+                :key="score"
+                type="button"
+                class="material-rating-star"
+                :class="{ 'is-on': (item.rating ?? 0) >= score }"
+                :aria-label="t('{0} 分', { 0: score })"
+                @click.stop="setRating(item, score)"
+              >★</button>
+            </span>
+          </div>
           <h4 class="material-name" :title="displayPath(item) || item.name">{{ item.name }}</h4>
           <p class="material-meta">
             <button
@@ -285,6 +346,8 @@ import {
   Star,
 } from 'lucide-vue-next'
 import type { ProjectArtifact } from '@/types.ts'
+import { buildSpecimens, collectRules } from '@/library/style-assets.ts'
+import '@/library/style-runtime.ts'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
@@ -344,6 +407,16 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 
 const items = ref<ProjectArtifact[]>([])
+/** 选中的标签；空串 = 不筛。 */
+const activeTag = ref('')
+/** 样式表的预览结果，按条目缓存，避免重复解析。 */
+const cssPreviews = ref<Record<string, string>>({})
+const cssPending = new Set<string>()
+/** 解析过就不再问：解析不出样本的文件也要记住，否则每次渲染都会重发请求。 */
+const cssTried = new Set<string>()
+/** 正在输入标签的那张卡，用来决定补全要不要露出来。 */
+const focusedTagId = ref('')
+const tagDrafts = ref<Record<string, string>>({})
 const loading = ref(false)
 const error = ref('')
 const stats = ref<{ count: number; bytes: number }>({ count: 0, bytes: 0 })
@@ -535,6 +608,7 @@ const visible = computed(() => {
     }
     return true
   })
+  if (activeTag.value) list = list.filter(item => (item.tags ?? []).includes(activeTag.value))
   if (activeTab.value === 'favorite') list = list.filter(item => item.favorite)
   else if (activeTab.value !== 'all' && activeTab.value !== 'folders') {
     list = list.filter(item => mediaGroup(item) === activeTab.value)
@@ -572,6 +646,82 @@ function shortDate(value?: string): string {
 }
 
 /* ---- 导航与动作 ---- */
+/** 全项目出现过的标签，排好序给筛选条。 */
+const allTags = computed(() => {
+  const found = new Set<string>()
+  for (const item of items.value) for (const tag of item.tags ?? []) found.add(tag)
+  return [...found].sort()
+})
+
+/** 样式表的缩略图：解析它的规则，渲染两三段真实片段。 */
+function cssPreviewFor(item: ProjectArtifact): string {
+  if (!/\.css$/i.test(item.name)) return ''
+  const cached = cssPreviews.value[item.artifact_id]
+  if (cached) return cached
+  void loadCssPreview(item)
+  return ''
+}
+
+async function loadCssPreview(item: ProjectArtifact): Promise<void> {
+  if (cssPending.has(item.artifact_id)) return
+  cssPending.add(item.artifact_id)
+  try {
+    const result = await props.requestRpc('artifact.text', { artifact_id: item.artifact_id })
+    const text = String(result.text ?? '')
+    if (!text) return
+    const specimens = buildSpecimens(collectRules(text), 3)
+    const html = specimens.map(entry => `<div class="style-specimen-item">${entry.html}</div>`).join('')
+    cssPreviews.value = { ...cssPreviews.value, [item.artifact_id]: html }
+  } catch {
+    // 读不到就保持原来的封面，不额外报错。
+  }
+}
+
+async function setRating(item: ProjectArtifact, score: number): Promise<void> {
+  const next = (item.rating ?? 0) === score ? 0 : score
+  await patch(item, 'artifact.rating', { rating: next })
+}
+
+function tagDraftFor(item: ProjectArtifact): string {
+  return tagDrafts.value[item.artifact_id] ?? ''
+}
+
+function setTagDraft(item: ProjectArtifact, value: string): void {
+  tagDrafts.value = { ...tagDrafts.value, [item.artifact_id]: value }
+}
+
+/** 补全：全项目已有的标签里，前缀对得上、这张卡上还没有的。 */
+function suggestionsFor(item: ProjectArtifact): string[] {
+  const draft = tagDraftFor(item).trim().toLowerCase()
+  const own = new Set(item.tags ?? [])
+  return allTags.value
+    .filter(tag => !own.has(tag) && (!draft || tag.startsWith(draft)))
+    .slice(0, 6)
+}
+
+/** 回车、空格、点补全都走这里：规范成小写，已有的忽略，空串不落。 */
+async function commitTag(item: ProjectArtifact, preset?: string): Promise<void> {
+  const raw = (preset ?? tagDraftFor(item)).trim().toLowerCase()
+  if (!raw) return
+  const current = item.tags ?? []
+  setTagDraft(item, '')
+  if (current.includes(raw)) return
+  await patch(item, 'artifact.tags', { tags: [...current, raw] })
+}
+
+/** 失焦时把手里的词落成标签，别让人以为白输了。 */
+function blurTagEditor(item: ProjectArtifact): void {
+  const draft = tagDraftFor(item)
+  focusedTagId.value = ''
+  if (draft.trim()) void commitTag(item)
+}
+
+async function toggleTag(item: ProjectArtifact, tag: string): Promise<void> {
+  const current = item.tags ?? []
+  const next = current.includes(tag) ? current.filter(entry => entry !== tag) : [...current, tag]
+  await patch(item, 'artifact.tags', { tags: next })
+}
+
 function selectTab(tab: TabId): void {
   activeTab.value = tab
   if (tab !== 'folders') openFolder.value = ''

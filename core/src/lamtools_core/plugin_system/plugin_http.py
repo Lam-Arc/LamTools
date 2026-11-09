@@ -148,6 +148,8 @@ async def dispatch_http_request(
     body: Any = None,
     headers: dict[str, str] | None = None,
     remote: str = "",
+    create_token: bool = True,
+    pre_dispatch=None,
 ) -> tuple[int, dict[str, Any]]:
     """Resolve one plugin HTTP request. Returns ``(status_code, payload)``."""
     if host is None or catalog is None:
@@ -179,7 +181,8 @@ async def dispatch_http_request(
     raw_headers = {str(key).lower(): str(value) for key, value in (headers or {}).items()}
     safe_headers = _safe_headers(raw_headers)
     if route.auth == "token":
-        expected = plugin_http_token(host, plugin)
+        # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(Remote复验只读取现有令牌，撤回后不自动重建)。
+        expected = plugin_http_token(host, plugin, create=create_token)
         provided = _provided_token(raw_headers)
         # user:“第二阶段结束后 就继续开展第三阶段”+(原URL安全令牌为ASCII；非ASCII请求明确拒绝，不让compare_digest抛出未处理异常)。
         if not expected or not provided or not expected.isascii() or not provided.isascii() or not hmac.compare_digest(expected, provided):
@@ -195,6 +198,12 @@ async def dispatch_http_request(
     if spec.permission != "auto_allow":
         # ask_user / hard_block cannot be approved from an HTTP request.
         return 403, {"error": "route operation requires interactive approval"}
+
+    # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(Remote分发前复核最初的方法声明与启动代)。
+    if pre_dispatch is not None:
+        rejection = pre_dispatch(manifest, route, spec)
+        if rejection is not None:
+            return rejection
 
     payload = {
         "method": request_method,
@@ -250,7 +259,13 @@ def create_plugin_http_router(host_provider, catalog_provider) -> APIRouter:
 
     @router.post("/plugin-remote/{plugin}/{namespace}/{method}")
     async def plugin_remote(plugin: str, namespace: str, method: str, request: Request):
-        from .remote_gateway import dispatch_remote_request, remote_response
+        from .remote_gateway import authenticate_remote, dispatch_remote_request, remote_response
+        # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(无有效令牌先拒绝，不读取或解析请求体)。
+        if catalog_provider() is None:
+            return remote_response(503, {"error": "plugin system is not ready"})
+        rejection = authenticate_remote(host_provider(), plugin, dict(request.headers))
+        if rejection is not None:
+            return remote_response(*rejection)
         status, payload = await dispatch_remote_request(host=host_provider(), catalog=catalog_provider(),
             plugin=plugin, namespace=namespace, method=method, body=await _read_request_body(request),
             headers=dict(request.headers), remote=str(request.client.host if request.client else ""))

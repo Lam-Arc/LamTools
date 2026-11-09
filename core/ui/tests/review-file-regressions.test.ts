@@ -142,6 +142,20 @@ describe('reviewed file regressions', () => {
     expect(splitNative).toHaveBeenCalledTimes(2)
   })
 
+  it('renders split text without a line number gutter', async () => {
+    vi.mocked(splitNative).mockResolvedValueOnce('body')
+    const documents = newDocuments()
+    const controller = { registerGuard: () => () => {} } as unknown as SplitWorkspaceController
+    const tab = { id: 'a', kind: 'editor' as const, title: 'a.md', resource: 'a.md' }
+    const wrapper = mount(CoreSplitTextEditor, { props: { tab, root: 'E:/project', controller, documents } })
+    try {
+      await flushPromises()
+      expect(wrapper.find('.cm-content').text()).toContain('body')
+      expect(wrapper.find('.cm-lineNumbers').exists()).toBe(false)
+      expect(wrapper.find('.cm-gutters').exists()).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
   it('applies content changed by another view while keeping the shared document', async () => {
     vi.mocked(splitNative).mockResolvedValue('original A')
     const documents = newDocuments()

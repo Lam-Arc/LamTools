@@ -163,19 +163,24 @@
         <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
 
-    <article class="setting-card">
+    <!-- user:“直接enter是引导还是排队的切换在设置通用页面中加上”+
+         (通用页用一眼能看懂的开关表达普通 Enter 的落点：开=直接引导，关=排队；
+          开关只改之后的发送，Ctrl/Cmd+Enter 永远执行另一种，都不动已排队的项。) -->
+    <article class="setting-card" data-send-behavior-card>
       <div class="subhead">
-        <span class="muted subhead-title">{{ t("消息发送") }}</span>
+        <span class="muted subhead-title">{{ t("Enter 发送方式") }}</span>
       </div>
-      <p class="general-hint">{{ t("会话正在运行时发送消息的去向：直接引导会把消息立即交给当前回合；排队会先进入输入队列，本轮结束后按顺序发出。Ctrl+Enter 永远执行另一种，且两个键都不会改动已排队的项。") }}</p>
-      <UiSelect
-        :model-value="sendBehavior"
-        :options="sendBehaviorOptions"
-        :aria-label="t('消息发送')"
-        :disabled="loading || sendBehaviorSaving"
-        data-send-behavior-select
-        @update:model-value="changeSendBehavior"
-      />
+      <div class="general-toggle-row">
+        <p class="general-hint general-hint--inline">{{ t("打开时直接按 Enter 会把消息立即交给当前回合；关闭时直接按 Enter 先进入输入队列，本轮结束后按顺序发出。Ctrl+Enter 永远执行另一种。会话空闲时两个键都开新回合，两个键都不会改动已排队的项。") }}</p>
+        <SundaySwitch
+          :model-value="sendBehaviorIsGuide"
+          :disabled="loading"
+          :label="t('Enter 直接引导')"
+          data-send-behavior-switch
+          @update:model-value="toggleSendBehavior"
+        />
+      </div>
+      <p class="general-hint" data-send-behavior-summary>{{ sendBehaviorSummary }}</p>
       <p v-if="sendBehaviorSaved" class="general-saved" role="status">
         <Check :size="12" :stroke-width="2.2" aria-hidden="true" />{{ t("已保存") }}</p>
     </article>
@@ -291,6 +296,7 @@ import { UI_LANGUAGES, uiLanguage, saveUiLanguage } from '@/i18n/index.ts'
 import { useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
 import { useSplitPreviewPreference } from '@/split/previewPreference.ts'
 import {
+  CORE_SEND_BEHAVIOR_DEFAULT_MODE,
   CORE_SEND_BEHAVIOR_NAMESPACE,
   coreSendBehaviorModeRef,
   normalizeCoreSendBehaviorMode,
@@ -327,45 +333,85 @@ async function changeLanguage(locale: string) {
   }
 }
 
-// user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(卡片用下拉切换并立即
-//   持久化：写共享单例让发送控制器马上生效，再落 settings 命名空间；失败时回滚)。
-// computed：t() 依赖响应式 uiLanguage，普通数组只在 setup 时求值一次，切语言不刷新。
-const sendBehaviorOptions = computed<Array<{ value: CoreComposerSendMode; label: string }>>(() => [
-  { value: 'guide', label: t("直接引导") },
-  { value: 'queue', label: t("排队") },
-])
+// user:“直接enter是引导还是排队的切换在设置通用页面中加上”+
+// (开关只表达普通 Enter 的落点：开=直接引导，关=排队，Ctrl/Cmd+Enter 永远执行另一种。
+//   写库串行化：连点开关时后一次意图覆盖前一次；失败只退回到最后一次确认保存的值，
+//   启动读库也不能盖掉用户在读完之前的操作。)
 const sendBehavior = coreSendBehaviorModeRef
-const sendBehaviorSaving = ref(false)
+const sendBehaviorIsGuide = computed(() => sendBehavior.value === 'guide')
+const sendBehaviorSummary = computed(() => sendBehaviorIsGuide.value
+  ? t("当前：Enter 直接引导，Ctrl+Enter 排队")
+  : t("当前：Enter 排队，Ctrl+Enter 直接引导"))
 const sendBehaviorSaved = ref(false)
 
+/** 最近一次确认写进后端（或读到）的模式：写失败时界面退回这里。 */
+let sendBehaviorPersisted: CoreComposerSendMode = CORE_SEND_BEHAVIOR_DEFAULT_MODE
+/** 串行写库：正在写时新意图只覆盖 pending，不再并发写。 */
+let sendBehaviorWriting = false
+let sendBehaviorPendingMode: CoreComposerSendMode | null = null
+/** 每次用户切换自增：启动时的读库结果不能覆盖用户在读完之前的操作。 */
+let sendBehaviorEditVersion = 0
+
 async function fetchSendBehavior(): Promise<void> {
+  const version = sendBehaviorEditVersion
   try {
     const value = readValue(await props.requestRpc('settings.get', { namespace: CORE_SEND_BEHAVIOR_NAMESPACE }))
+    // 用户在读库返回前已经切过：以用户刚选的为准，别把旧值翻回去。
+    if (sendBehaviorEditVersion !== version) return
     const mode = normalizeCoreSendBehaviorMode(value.mode)
-    if (mode) setCoreSendBehaviorMode(mode)
+    if (mode) {
+      sendBehaviorPersisted = mode
+      setCoreSendBehaviorMode(mode)
+    } else {
+      // 后端还没存过或值不可识别：本地偏好就是当前生效值，保留它。
+      sendBehaviorPersisted = sendBehavior.value
+    }
   } catch (e) {
-    // 读不到就沿用本地偏好（默认直接引导），不拦住其它卡片
+    // 读不到就沿用本地偏好（默认直接引导），不拦住其它卡片。
+    // 用户在读库途中已经切过时不要动基线：否则后续写失败会退回到一个没存下的值。
+    if (sendBehaviorEditVersion !== version) return
     error.value = e instanceof Error ? e.message : String(e)
+    sendBehaviorPersisted = sendBehavior.value
   }
 }
 
-async function changeSendBehavior(rawMode: string): Promise<void> {
-  const mode = normalizeCoreSendBehaviorMode(rawMode)
-  if (!mode || sendBehaviorSaving.value || mode === sendBehavior.value) return
-  const previous = sendBehavior.value
-  sendBehaviorSaving.value = true
+function toggleSendBehavior(next: boolean): void {
+  void changeSendBehavior(next ? 'guide' : 'queue')
+}
+
+async function changeSendBehavior(rawMode: unknown): Promise<void> {
+  const mode = normalizeCoreSendBehaviorMode(typeof rawMode === 'boolean' ? (rawMode ? 'guide' : 'queue') : rawMode)
+  if (!mode || mode === sendBehavior.value) return
+  sendBehaviorEditVersion += 1
+  sendBehaviorPendingMode = mode
+  // 先让发送控制器按新值走：设置面板不能显示一个还没生效的状态。
+  setCoreSendBehaviorMode(mode)
   sendBehaviorSaved.value = false
   error.value = ''
-  setCoreSendBehaviorMode(mode)
+  if (sendBehaviorWriting) return
+  sendBehaviorWriting = true
   try {
-    await props.requestRpc('settings.update', { namespace: CORE_SEND_BEHAVIOR_NAMESPACE, value: { mode } })
-    sendBehaviorSaved.value = true
-  } catch (e) {
-    // 保存失败就退回上一次生效的模式，界面不能显示一个后端没存下的状态
-    setCoreSendBehaviorMode(previous)
-    error.value = e instanceof Error ? e.message : String(e)
+    while (sendBehaviorPendingMode) {
+      const target = sendBehaviorPendingMode
+      sendBehaviorPendingMode = null
+      try {
+        await props.requestRpc('settings.update', { namespace: CORE_SEND_BEHAVIOR_NAMESPACE, value: { mode: target } })
+        sendBehaviorPersisted = target
+        if (!sendBehaviorPendingMode && sendBehavior.value === target) {
+          sendBehaviorSaved.value = true
+          error.value = ''
+        }
+      } catch (e) {
+        // 后面还有更新的选择：继续写最新值，不让一次失败吞掉用户的最终意图。
+        if (sendBehaviorPendingMode) continue
+        // 最新一次写入失败：退回最后一次确认保存的模式，界面不能显示后端没存下的状态。
+        setCoreSendBehaviorMode(sendBehaviorPersisted)
+        error.value = e instanceof Error ? e.message : String(e)
+        sendBehaviorSaved.value = false
+      }
+    }
   } finally {
-    sendBehaviorSaving.value = false
+    sendBehaviorWriting = false
   }
 }
 

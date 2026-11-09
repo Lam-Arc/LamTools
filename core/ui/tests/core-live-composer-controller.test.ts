@@ -653,6 +653,65 @@ describe('useCoreLiveComposerController', () => {
     expect(text.value).toBe('')
   })
 
+  it('keeps the special-send side on the fallback keyup and ignores IME-confirm Enter', async () => {
+    const calls: string[] = []
+    const text = ref('')
+    // user:“直接enter是引导还是排队的切换在设置通用页面中加上”+
+    // (排队模式下不按 Ctrl 的回车进队列，按住 Ctrl 的回车跳过队列直接引导；
+    //  输入法确认键（keyCode 229）不是发送指令，空输入也不发。)
+    const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
+      activeThreadId: ref<string | null>('thread-1'),
+      activeTurnId: ref('turn-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(0),
+      status: ref('running'),
+      sendMode: ref<'guide' | 'queue'>('queue'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => {
+        calls.push('start')
+      },
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      steerTurn: async () => {
+        calls.push('steer')
+        return { ok: true }
+      },
+      queueInput: async () => {
+        calls.push('queue')
+      },
+      listCommands: async () => [],
+      getWorkRoot: () => '',
+      executeCommand: async () => true,
+      clearComposer: () => {
+        text.value = ''
+      },
+      setStatusText: () => undefined,
+    })
+
+    // 输入法确认键不能触发发送
+    const imeEvent = new KeyboardEvent('keydown', { key: 'Enter' })
+    Object.defineProperty(imeEvent, 'keyCode', { value: 229 })
+    await controller.handleKeydown(imeEvent)
+    expect(calls).toEqual([])
+
+    // keydown 被吞掉、只剩 keyup 补发时，Ctrl 仍执行另一种落点
+    text.value = '晚点再做'
+    const ctrlKeyup = new KeyboardEvent('keyup', { key: 'Enter', ctrlKey: true })
+    await controller.handleKeyup(ctrlKeyup, 0)
+    expect(calls).toEqual(['steer'])
+    expect(text.value).toBe('')
+
+    // 不按修饰键的补发沿用设置本身：排队
+    text.value = '轮到再做'
+    await controller.handleKeyup(new KeyboardEvent('keyup', { key: 'Enter' }), 0)
+    expect(calls).toEqual(['steer', 'queue'])
+    expect(text.value).toBe('')
+  })
+
   it('owns command loading, palette selection, and live submission effects', async () => {
     const calls: string[] = []
     const activeThreadId = ref<string | null>('thread-1')

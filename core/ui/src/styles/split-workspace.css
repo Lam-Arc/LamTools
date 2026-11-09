@@ -73,8 +73,7 @@
 .split-code-editor .cm-scroller { overflow: auto; line-height: 1.75; }
 .split-code-editor .cm-content { padding-block: var(--space-3); caret-color: var(--theme-main-text); }
 .split-code-editor .cm-line { padding-inline: var(--space-3); }
-.split-code-editor .cm-gutters { color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); background: var(--theme-main-background); border: 0; padding-left: var(--space-1); }
-.split-code-editor .cm-activeLine, .split-code-editor .cm-activeLineGutter { background: var(--theme-main-subtle-background); }
+.split-code-editor .cm-activeLine { background: var(--theme-main-subtle-background); }
 .split-code-editor .cm-focused { outline: none; }
 .split-code-editor .cm-cursor { border-left-color: var(--theme-main-text); }
 .split-code-editor .cm-selectionBackground, .split-code-editor .cm-focused .cm-selectionBackground { background: color-mix(in srgb, var(--theme-main-text) 20%, transparent); }

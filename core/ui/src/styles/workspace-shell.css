@@ -260,6 +260,54 @@
 }
 
 /* =========================================================================
+   Sidebar divider — draggable seam between the sidebar and the main card
+   ========================================================================= */
+/* user:“让左侧栏和主内容区中间的边界可以被拖动”+(把手压在会话栏与聊天卡之间
+   那条缝上、贴着会话栏右缘：拖动改宽度，双击回默认档；手机上抽屉是浮层，不参与)。 */
+.sidebar-resize-handle {
+  position: absolute;
+  top: var(--titlebar-offset, 0px);
+  bottom: var(--shell-bottom-inset, 6px);
+  left: calc(var(--rail-width) + var(--left-card-width) - 4px);
+  width: 10px;
+  z-index: calc(var(--z-main-surface, 300) + 2);
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+body.sidebar-is-resizing .sidebar-resize-handle::after {
+  background: color-mix(in srgb, var(--blue) 55%, transparent);
+}
+.sidebar-resize-handle:focus-visible { outline: none; }
+/* 拖拽期间压住文本选中与指针形态：指针越过聊天区也不会闪成别的光标。 */
+body.sidebar-is-resizing,
+body.sidebar-is-resizing * {
+  user-select: none;
+  cursor: col-resize;
+}
+/* 拖动时聊天卡与输入栏必须跟手：morph 过渡在场会让它们慢半拍拖在后面。 */
+body.sidebar-is-resizing .workspace-main,
+body.sidebar-is-resizing .floating-composer {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-resize-handle::after { transition: none; }
+}
+
+/* =========================================================================
    最左竖栏（app rail）— 整界面导航，桌面常驻
    ========================================================================= */
 .app-rail {
@@ -1048,6 +1096,7 @@
     --shell-bottom-inset: var(--layout-bottom-inset, 0px);
   }
   .app-rail { display: none; }
+  .sidebar-resize-handle { display: none; }
   .workspace-shell { --right-drawer-width: var(--layout-right-drawer-width, 100vw); }
   .workspace-shell { --main-x-padding: 14px; }
   .edge { display: none; }

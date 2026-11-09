@@ -681,7 +681,10 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
         return true
       }
     }
-    if (event.key === 'Enter' && !event.isComposing && !event.repeat && (!event.shiftKey || paletteVisible.value)) {
+    // user:“直接enter是引导还是排队的切换在设置通用页面中加上”+
+    // (输入法确认键（isComposing 与老路径的 keyCode 229）不是发送指令；
+    //  普通 Enter 按设置走，Ctrl/Cmd+Enter 永远是另一种。)
+    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229 && !event.repeat && (!event.shiftKey || paletteVisible.value)) {
       event.preventDefault()
       lastEnterHandledAt.value = Date.now()
       // Ctrl/Cmd+Enter 是“特殊发送”：执行与设置相反的落点（见 coreComposerSendIntent）。
@@ -695,7 +698,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   }
 
   async function handleKeyup(event: KeyboardEvent, fallbackMs = 750): Promise<boolean> {
-    if (event.isComposing || event.key !== 'Enter' || event.shiftKey || Date.now() - lastEnterHandledAt.value < fallbackMs) return false
+    if (event.isComposing || event.keyCode === 229 || event.key !== 'Enter' || event.shiftKey || Date.now() - lastEnterHandledAt.value < fallbackMs) return false
     event.preventDefault()
     lastEnterHandledAt.value = Date.now()
     if (paletteVisible.value) {
@@ -703,7 +706,9 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       if (selected) await selectCommand(selected)
       return true
     }
-    if (canEnterSubmit()) await submit({ clearComposer: true })
+    // keydown 被输入法吞掉、只剩这次补发的回车时，Ctrl/Cmd 仍按“特殊发送”走：
+    // 否则落点会退回普通 Enter 的设置，和用户按住修饰键的意图正好相反。
+    if (canEnterSubmit()) await submit({ clearComposer: true, specialSend: event.ctrlKey || event.metaKey })
     return true
   }
 

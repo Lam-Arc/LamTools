@@ -52,19 +52,33 @@ class PluginCredentials:
         configured = key in self._call("keys")
         return CredentialInfo(configured, "plugin-store" if configured else None)
 
+    def describe_many(self, refs: list[str]) -> dict[str, CredentialInfo]:
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(一次读取原所有者键快照，批量状态不读取凭据明文)。
+        if type(refs) is not list or len(refs) > 64:
+            raise CredentialError("credentials/invalid-ref", "Use at most 64 credential identifiers")
+        names = [self._key(ref) for ref in refs]
+        keys = set(self._call("keys")) if names else set()
+        self._scope.check_open()
+        return {key: CredentialInfo(key in keys, "plugin-store" if key in keys else None) for key in names}
+
     def resolve(self, key: str) -> ResolvedCredential | None:
         key = self._key(key)
         value = self._call("get", key)
         return ResolvedCredential(value) if value else None
 
-    def set(self, key: str, value: str) -> None:
-        key = self._key(key)
+    @staticmethod
+    def _value(value):
+        # user:“复用原宿主权威”+(控制器预检与原凭据写入使用同一值校验)。
         try:
             valid = isinstance(value, str) and bool(value.strip()) and len(value.encode("utf-8")) <= 64 * 1024
         except UnicodeError:
             valid = False
         if not valid:
             raise CredentialError("credentials/invalid-value", "Credential must be a nonblank string of at most 64 KiB; use unset to remove it")
+
+    def set(self, key: str, value: str) -> None:
+        key = self._key(key)
+        self._value(value)
         self._call("set", key, value)
 
     def unset(self, key: str) -> None:

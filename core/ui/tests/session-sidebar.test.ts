@@ -246,7 +246,7 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('[data-project-empty]').isVisible()).toBe(false)
   })
 
-  it('renders a single-icon new-session button immediately left of each project name', async () => {
+  it('keeps the new-session icon at the far right of the row, with the menu trigger to its left', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {
         projectGroups: [{ id: 'docs', name: 'Docs', sessions: [{ id: 'guide', title: 'Guide' }] }],
@@ -256,12 +256,17 @@ describe('SessionSidebar sections', () => {
     const row = wrapper.get('[data-project-row="docs"]')
     const button = row.get('[data-project-new-session="docs"]')
     const name = row.get('[data-project-entry="docs"]')
+    const menu = row.get('[data-project-menu-trigger="docs"]')
 
     expect(button.text().trim()).toBe('')
     expect(button.find('svg').exists()).toBe(true)
     expect(button.attributes('title')).toBe('新建会话')
     expect(button.attributes('aria-label')).toContain('Docs')
-    expect(button.element.nextElementSibling).toBe(name.element)
+    // 行内最后一个元素是新建入口，紧挨在它左边的是「···」浮层。
+    expect(row.element.lastElementChild).toBe(button.element)
+    expect(button.element.previousElementSibling).toBe(menu.element.parentElement)
+    expect(row.classes()).toContain('has-project-new-session')
+    expect(name.element.compareDocumentPosition(button.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     await button.trigger('click')
     expect(wrapper.emitted('new-session')).toEqual([['docs']])
@@ -527,6 +532,8 @@ describe('SessionSidebar sections', () => {
     // 「···」是行内浮层：不占项目名的布局空间（不得回到 flex 占位）。
     expect(css).not.toMatch(/\.project-btns \{[^}]*flex: 0 0 28px/)
     expect(css).toMatch(/\.project-block:hover \.project-btns,[\s\S]*?\.project-btns:has\(\.project-menu-button\[aria-expanded="true"\]\)/)
+    // 有新建入口时「···」让出最右一格，不压住新建图标。
+    expect(css).toMatch(/\.project-row\.has-project-new-session \.project-btns \{[\s\S]*?right: calc\(var\(--sidebar-icon-size\) \+ var\(--sidebar-item-gap\)\);/)
     expect(css).not.toContain('.conversation-hover-actions')
     expect(css).not.toContain('.session-context-menu')
     expect(css).not.toContain('.session-export-menu')

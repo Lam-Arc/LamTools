@@ -88,6 +88,7 @@
         class="project-row"
         :class="{
           'is-dragging': isDragging('project', group.id, undefined, section.id),
+          'has-project-new-session': allowProjectNewSession && group.canManage !== false,
         }"
         :draggable="!normalizedQuery"
         :data-project-row="group.id"
@@ -111,19 +112,6 @@
                 否则外层规则只能被继承、永远压不过这里的显式样式。) -->
           <strong data-ui-template="template.project-name">{{ group.name }}</strong>
         </button>
-        <!-- user:“新建会话键放在项目名右侧、...左侧”+(项目名与项目菜单之间放单图标入口) -->
-        <button
-          v-if="allowProjectNewSession && group.canManage !== false"
-          class="project-action project-new-session"
-          type="button"
-          :disabled="isProjectBusy(group.id)"
-          :title="t('新建会话')"
-          :aria-label="t('在 {0} 中新建会话', { 0: group.name })"
-          :data-project-new-session="group.id"
-          @click.stop="emit('new-session', group.id)"
-        >
-          <MessageSquarePlus :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </button>
         <div class="project-btns">
           <button
             class="project-action menu-trigger project-menu-button"
@@ -136,6 +124,21 @@
             @click.stop="toggleProjectMenu(section.id, group, $event)"
           ><MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
         </div>
+        <!-- user:“把“新建会话”按钮放在项目最右侧，它的左侧是“三个点更多”按钮”+
+             (行内最右是该项目的“新建会话”图标，常驻可见；「···」浮层整体让在它左侧，
+              悬停或菜单展开时才出现，不再压住新建入口。) -->
+        <button
+          v-if="allowProjectNewSession && group.canManage !== false"
+          class="project-action project-new-session"
+          type="button"
+          :disabled="isProjectBusy(group.id)"
+          :title="t('新建会话')"
+          :aria-label="t('在 {0} 中新建会话', { 0: group.name })"
+          :data-project-new-session="group.id"
+          @click.stop="emit('new-session', group.id)"
+        >
+          <MessageCirclePlus :size="15" :stroke-width="1.8" aria-hidden="true" />
+        </button>
       </div>
 
       <div class="conversation-list" v-show="!isCollapsed(group.id)">
@@ -340,6 +343,7 @@ import { computed, nextTick, onBeforeUnmount, ref, reactive, watch } from 'vue'
 import {
   ChevronDown,
   ChevronUp,
+  MessageCirclePlus,
   MessageSquarePlus,
   MoreHorizontal,
   Pause,

@@ -318,7 +318,7 @@ def test_repository_script_runs_from_another_directory_without_pythonpath(tmp_pa
     report = json.loads(result.stdout)
     assert report["services"][0]["name"] == "tools"
     assert report["runtimeVerified"] is False
-    assert report["sundayHostContracts"]["ownedServices"]["version"] == 1
+    assert report["sundayHostContracts"]["ownedServices"]["version"] == 5
     assert report["sundayHostContracts"]["sessions"]["version"] == 1
 
 

@@ -72,6 +72,9 @@ class ArtifactRecord:
     # 资料库的用户状态与列表展示需要的最小字段。
     favorite: bool = False
     folder: str = ""
+    # user:“让库能打 tag 和评分”+(检索键与质量评价，和收藏各自独立)。
+    tags: list[str] = field(default_factory=list)
+    rating: int = 0
     updated_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -102,6 +105,8 @@ class ArtifactRecord:
             tool_name=str(data.get("tool_name") or ""),
             provenance=dict(data.get("provenance") or {}),
             availability=str(data.get("availability") or "available"),
+            tags=[str(item) for item in data.get("tags") or []],
+            rating=int(data.get("rating") or 0),
         )
 
 

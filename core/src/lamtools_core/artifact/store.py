@@ -431,6 +431,32 @@ class ArtifactStore:
             return _artifact_record(row)
         return await self.write_coordinator.run(write)
 
+    async def set_tags(self, artifact_id: str, tags: list[str]) -> ArtifactRecord:
+        """资料库的标签：自由字符串，规范成小写去重，最多 12 个，单个不超过 32 字。"""
+        cleaned = _clean_artifact_tags(tags)
+
+        async def write(db: Any) -> ArtifactRecord:
+            row = await db.get(CoreArtifact, artifact_id)
+            if row is None:
+                raise LookupError(f"Artifact not found: {artifact_id}")
+            row.tags_json = cleaned
+            return _artifact_record(row)
+
+        return await self.write_coordinator.run(write)
+
+    async def set_rating(self, artifact_id: str, rating: int) -> ArtifactRecord:
+        """评分 0 到 5，0 表示未评。"""
+        value = max(0, min(5, int(rating)))
+
+        async def write(db: Any) -> ArtifactRecord:
+            row = await db.get(CoreArtifact, artifact_id)
+            if row is None:
+                raise LookupError(f"Artifact not found: {artifact_id}")
+            row.rating = value
+            return _artifact_record(row)
+
+        return await self.write_coordinator.run(write)
+
     async def set_folder(self, artifact_id: str, folder: str) -> ArtifactRecord:
         """把一个成果归到资料库的某一层（空串 = 取消归档）。"""
         cleaned = _clean_artifact_folder(folder)
@@ -587,6 +613,24 @@ def _safe_workspace_path(root: Path, relative: str) -> Path:
 UPLOAD_DIRNAME = "资料"
 
 
+def _clean_artifact_tags(values: list[str]) -> list[str]:
+    """标签规范化：去空白、转小写、去重、限量；空串直接丢掉。"""
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        text = " ".join(str(raw).split()).strip().lower()
+        if not text:
+            continue
+        text = text[:32]
+        if text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= 12:
+            break
+    return result
+
+
 def _clean_artifact_folder(value: str) -> str:
     """资料库的归档层级：相对路径，逐段校验，拒绝越界。"""
     raw = str(value or "").strip().replace("\\", "/").strip("/")
@@ -642,6 +686,8 @@ def _artifact_record(row: CoreArtifact) -> ArtifactRecord:
         availability="available" if _content_exists(row) else "missing",
         favorite=bool(row.favorite),
         folder=row.folder or "",
+        tags=[str(item) for item in (row.tags_json or [])],
+        rating=int(row.rating or 0),
         updated_at=row.updated_at.isoformat() if row.updated_at else row.created_at.isoformat(),
     )
 

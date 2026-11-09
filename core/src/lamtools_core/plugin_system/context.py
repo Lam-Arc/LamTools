@@ -169,6 +169,12 @@ class PluginContext:
         return cached[1]
 
     @property
+    def directory_picker_controller(self):
+        # user:“第二阶段结束后 就继续开展第三阶段”+(只通过原项目内browse能力提供目录控制器近似)。
+        from .directory_picker_controller import PluginDirectoryPickerController
+        return PluginDirectoryPickerController(self, self._active_registration_scope())
+
+    @property
     def headless_startup(self):
         # user:“每一个地方 sunday 都有等价或者近似接口”+(仅原命令行运行提供真实启动事实，桌面不生成虚假任务)。
         from .startup_access import PluginHeadlessStartupAPI
@@ -216,10 +222,28 @@ class PluginContext:
         return PluginWorkspaceChangesAPI(self, self._active_registration_scope())
 
     @property
+    def workspace_registry(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(原项目查询固定当前插件项目和启动代)。
+        from .workspace_registry_access import PluginWorkspaceRegistryAPI
+        return PluginWorkspaceRegistryAPI(self, self._active_registration_scope())
+
+    @property
+    def workspace_controller(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(当前项目重命名使用原CAS写入)。
+        from .workspace_controller import PluginWorkspaceController
+        return PluginWorkspaceController(self, self._active_registration_scope())
+
+    @property
     def attachments(self):
         # user:“给我把 2 阶段做完，前端除外”+(受管附件接口固定项目和会话归属)。
         from .session_data import PluginAttachmentAPI
         return PluginAttachmentAPI(self.require_service("session_data"), self._active_registration_scope(), self.work_root, "attachments")
+
+    @property
+    def file_uploads(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(编码写入沿用原会话附件持久化)。
+        from .file_uploads import PluginFileUploadsAPI
+        return PluginFileUploadsAPI(self, self._active_registration_scope())
 
     @property
     def browser_use(self):
@@ -266,6 +290,12 @@ class PluginContext:
         return PluginFileReferencesAPI(self.execution_root or self.work_root, self._active_registration_scope())
 
     @property
+    def session_file_references(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(会话文件候选固定原会话执行目录及可见性)。
+        from .session_file_references import PluginSessionFileReferencesAPI
+        return PluginSessionFileReferencesAPI(self, self._active_registration_scope())
+
+    @property
     def web(self):
         from .content_access import PluginWebAPI
         return PluginWebAPI(self, self._active_registration_scope())
@@ -281,6 +311,12 @@ class PluginContext:
         # user:“给我把 2 阶段做完，前端除外”+(交互终端沿用同一受管进程，停用回收)。
         from .terminal_access import PluginTerminalsAPI
         return PluginTerminalsAPI(self, self._active_registration_scope())
+
+    @property
+    def terminal_controller(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(按原会话执行目录提供明确非PTY的受管进程)。
+        from .terminal_controller import PluginTerminalController
+        return PluginTerminalController(self, self._active_registration_scope())
 
     @property
     def authorization(self):
@@ -417,6 +453,12 @@ class PluginContext:
         return cached[1]
 
     @property
+    def job_controller(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(按原会话可见性访问当前插件受管作业)。
+        from .job_controller import PluginJobController
+        return PluginJobController(self, self._active_registration_scope())
+
+    @property
     def shell_env(self):
         # user:“继续，把 2 阶段都做完”+(环境注册绑定启动代，共享宿主贡献表，不改变系统环境)。
         from .shell_access import PluginShellEnvironmentAPI
@@ -433,6 +475,18 @@ class PluginContext:
         # user:“继续，把 2 阶段都做完”+(插件管理使用现有事务，禁止在自己的活跃调用中停止自身)。
         from .management_access import PluginManagementAPI
         return PluginManagementAPI(self, self._active_registration_scope(), "plugin.system")
+
+    @property
+    def plugin_market(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只读原市场，不暴露安装操作)。
+        from .market_access import PluginMarketAPI
+        return PluginMarketAPI(self, self._active_registration_scope())
+
+    @property
+    def remote_access(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只读取本插件真实声明的方法清单)。
+        from .remote_access import PluginRemoteAccess
+        return PluginRemoteAccess(self, self._active_registration_scope())
 
     @property
     def profiles(self):
@@ -536,12 +590,24 @@ class PluginContext:
         return PluginSettingsAPI(self.config, self._active_registration_scope())
 
     @property
+    def settings_controller(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(原CAS写入后仅返回脱敏配置)。
+        from .settings_controller import PluginSettingsController
+        return PluginSettingsController(self, self._active_registration_scope())
+
+    @property
     def credentials(self):
         # user:“每一个地方 sunday 都有等价或者近似接口”+(凭据只能从宿主私有存储取得当前 owner 的受管视图，不能指定其他插件)。
         scope = self._active_registration_scope()
         if self._secret_store is None:
             raise LookupError("Host credential store is unavailable")
         return self._secret_store.for_scope(scope)
+
+    @property
+    def credential_controller(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(批量凭据元数据不返回机密值)。
+        from .credential_controller import PluginCredentialController
+        return PluginCredentialController(self, self._active_registration_scope())
 
     @property
     def storage(self):
@@ -575,6 +641,12 @@ class PluginContext:
     def skills(self):
         # user:“宿主能力补齐和接口完善与文档更新”+(技能门面只登记当前受管启动代的内存说明)。
         return self.require_service("skill_extensions").for_scope(self._active_registration_scope())
+
+    @property
+    def session_skill_catalog(self):
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(技能列表采用原会话目录、注册表及启用状态)。
+        from .session_skill_catalog import PluginSessionSkillCatalog
+        return PluginSessionSkillCatalog(self, self._active_registration_scope())
 
     @property
     def commands(self):

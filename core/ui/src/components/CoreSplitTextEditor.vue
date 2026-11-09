@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EditorState } from '@codemirror/state'
-import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
+import { EditorView, drawSelection, highlightActiveLine, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { javascript } from '@codemirror/lang-javascript'
@@ -58,8 +58,9 @@ onMounted(async () => {
   const ext = props.tab.resource.split('.').pop()?.toLowerCase()
   const language = ext === 'md' ? markdown() : ext === 'json' ? json() : ['js','ts','tsx','jsx','vue'].includes(ext || '') ? javascript({ typescript: ext !== 'js', jsx: true }) : []
   editorText = doc.content
+  // user:“取消分屏预览器中的行号”+(分屏里的文本编辑器不再渲染行号栏，正文占满整行)。
   editor = new EditorView({ parent: host.value, state: EditorState.create({ doc: doc.content, extensions: [
-    lineNumbers(), history(), drawSelection(), highlightActiveLine(), syntaxHighlighting(defaultHighlightStyle), language,
+    history(), drawSelection(), highlightActiveLine(), syntaxHighlighting(defaultHighlightStyle), language,
     keymap.of([{ key: 'Mod-s', run: () => { void save(); return true } }, ...defaultKeymap, ...historyKeymap, indentWithTab]),
     EditorView.lineWrapping, EditorView.contentAttributes.of({ 'aria-label': `编辑 ${filename.value}`, spellcheck: 'false' }),
     EditorView.updateListener.of(update => { if (update.docChanged) { editorText = update.state.doc.toString(); doc.content = editorText } }),

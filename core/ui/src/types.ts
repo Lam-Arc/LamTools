@@ -174,6 +174,10 @@ export type ArtifactStatus = 'ready' | 'running' | 'completed' | 'failed' | 'mis
 
 /** Compatibility envelope for the artifact registry projection. */
 export interface ProjectArtifact {
+  /** 检索键：按「是什么」打，和层各管一件事。 */
+  tags?: string[]
+  /** 0 到 5，0 表示未评。 */
+  rating?: number
   artifact_id: string;
   name: string;
   kind: string;

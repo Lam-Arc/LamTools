@@ -1424,8 +1424,23 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         return OperationResult(name=request.name, payload={"project": project.to_dict()})
 
+    async def project_resolve(request: OperationRequest) -> OperationResult:
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(复用原项目数据库读取规范根，缺失不创建目录或项目)。
+        root = request.payload.get("work_root")
+        if type(root) is not str or not root or len(root) > 4096 or "\x00" in root or not Path(root).is_absolute():
+            return OperationResult(name=request.name, status="error", payload={"error": "Invalid project root"})
+        try:
+            project = await project_store.resolve_by_path(root)
+        except (OSError, ValueError):
+            return OperationResult(name=request.name, status="error", payload={"error": "Invalid project root"})
+        return OperationResult(name=request.name, payload={"project": project.to_dict() if project else None})
+
     async def project_update(request: OperationRequest) -> OperationResult:
         payload = request.payload
+        expected_revision = payload.get("expected_revision")
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(可选原项目修订直接传给原CAS，旧调用保持原有行为)。
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
+            return OperationResult(name=request.name, status="error", payload={"error": "Invalid project revision"})
         try:
             project = await project_store.update(
                 _project_id(request),
@@ -1440,6 +1455,7 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
                     if "color_key" in payload or "colorKey" in payload
                     else None
                 ),
+                expected_revision=expected_revision,
             )
         except (OSError, ValueError) as exc:
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
@@ -1502,6 +1518,7 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         "project.list": project_list,
         "project.create": project_create,
         "project.get": project_get,
+        "project.resolve": project_resolve,
         "project.update": project_update,
         "project.delete": project_delete,
         "project.sessions.create": project_sessions_create,
@@ -1584,6 +1601,26 @@ def _register_core_artifact_operations(
         if record is None or record.project_id != project.id:
             return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
         return OperationResult(name=request.name, payload={"artifact": record.to_dict()})
+
+    async def artifact_text(request: OperationRequest) -> OperationResult:
+        """读条目背后那份文件的文本。只给资料库预览用，限制大小，不返回二进制。"""
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        path = Path(record.work_root or project.work_root) / record.path.removeprefix("workspace://")
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(Path(record.work_root or project.work_root).resolve())
+            if not resolved.is_file() or resolved.stat().st_size > 400_000:
+                return OperationResult(name=request.name, status="error", payload={"error": "Not previewable"})
+            text = resolved.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"text": text, "path": record.path})
 
     async def artifact_remove(request: OperationRequest) -> OperationResult:
         project = await _project_for(request)
@@ -1675,6 +1712,46 @@ def _register_core_artifact_operations(
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(name=request.name, payload={"artifact": updated.to_dict()})
 
+    async def artifact_tags(request: OperationRequest) -> OperationResult:
+        """给条目写标签。整体替换，不做增量：调用方先读后写，语义最清楚。"""
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        if not artifact_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "artifact_id is required"})
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        raw = request.payload.get("tags")
+        tags = [str(item) for item in raw] if isinstance(raw, list) else []
+        try:
+            updated = await artifact_store.set_tags(record.artifact_id, tags)
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifact": updated.to_dict()})
+
+    async def artifact_rating(request: OperationRequest) -> OperationResult:
+        """评分 0 到 5，0 表示未评。"""
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        if not artifact_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "artifact_id is required"})
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        try:
+            rating = int(request.payload.get("rating") or 0)
+        except (TypeError, ValueError):
+            return OperationResult(name=request.name, status="error", payload={"error": "rating must be an integer"})
+        try:
+            updated = await artifact_store.set_rating(record.artifact_id, rating)
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifact": updated.to_dict()})
+
     async def artifact_stats(request: OperationRequest) -> OperationResult:
         project = await _project_for(request)
         if project is None:
@@ -1718,6 +1795,9 @@ def _register_core_artifact_operations(
         "artifact.open": artifact_open,
         "artifact.favorite": artifact_favorite,
         "artifact.folder": artifact_folder,
+        "artifact.tags": artifact_tags,
+        "artifact.text": artifact_text,
+        "artifact.rating": artifact_rating,
         "artifact.stats": artifact_stats,
         "artifact.upload": artifact_upload,
     }

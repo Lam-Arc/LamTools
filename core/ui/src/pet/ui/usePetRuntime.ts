@@ -18,7 +18,10 @@ import { clipPrimarySource, hitboxWorldRect, type PetHitbox } from '../engine/sp
 import { defaultConfig, migrateConfig, PET_CONFIG_VERSION, type PetConfigV1 } from '../config.ts'
 import { patchPetConfig } from '../configFile.ts'
 import { PetAgentHost } from '../agent/host.ts'
-import { createPetAgentClient, type PetAgentClient } from '../agent/client.ts'
+import { createPetAgentClient, type PetAgentClient, type PetProjectSession } from '../agent/client.ts'
+import { turnCompletionNotice, TurnNoticeTracker, turnNoticeBubble, type TurnNotice } from '../agent/turnNotice.ts'
+import { resolveWatchPet, SessionWatcher, WATCH_MAX_CHANNELS } from '../agent/sessionWatch.ts'
+import { windowFingerprint } from '../engine/windows.ts'
 import * as bridge from '../bridge.ts'
 import type { MonitorInfo, OverlayBounds } from '../bridge.ts'
 import { analyzeImport, type ImportAnalysis, type ImportScanResult } from '../assets/importer.ts'
@@ -60,6 +63,25 @@ export interface RuntimeError {
 }
 
 const SPRITE_FALLBACK = new Map<string, HTMLCanvasElement>()
+
+/**
+ * 窗口枚举周期。
+ *
+ * user:“第 1 点就是我怀疑桌宠的建图并不是实时去建的，而是只在桌宠启动后去建”+
+ * (原来窗口只在启动和 clip 遮挡时枚举；现在三档 zMode 都按这个节奏刷新，
+ *  1.2 秒既能跟上窗口开关，也不至于让 EnumWindows 变成负担。)
+ */
+const WINDOW_REFRESH_MS = 1200
+
+/**
+ * 会话发现周期。
+ *
+ * user:“改让桌宠盯所有会话 不只是一个会话”+(全局 /sessions 一条请求就能看到
+ * 所有会话与状态；3 秒一轮既跟得上审批出现的时机，也不至于把本地接口打满。)
+ */
+const WATCH_DISCOVERY_MS = 4000
+/** 同一次落定只弹一条通知：通道实时事件与列表轮询是两条线，必须去重。 */
+const FINISH_NOTICE_DEDUPE_MS = 15_000
 
 export function usePetRuntime() {
   const config = reactive<PetConfigV1>(defaultConfig())
@@ -123,6 +145,30 @@ export function usePetRuntime() {
   let lastRectsReportedAt = 0
   let lastL3At = 0
   let lastWindowsAt = 0
+  /** 桌面窗口几何指纹：只有窗口集合真的变了才重建地形图。 */
+  let lastWindowKey = ''
+  /** 同一时刻只跑一轮窗口枚举，避免慢调用堆叠。 */
+  let windowsRefreshing = false
+  /** 窗口枚举的报错只在内容变化时报一次，1.2 秒一轮不能刷屏。 */
+  let lastWindowError = ''
+  /** 每个会话上一轮状态：回合结束通知靠它判“活跃 → 终态”。 */
+  const turnNotices = new TurnNoticeTracker()
+  /** 已经报过的通道错误：同一错误只报一次，不刷屏。 */
+  const channelErrors = new Map<string, string>()
+  /** 绑定串行链：多只宠物同时首次启动时，避免重复建默认会话。 */
+  let bindingChain: Promise<void> = Promise.resolve()
+  /** 所有会话的守望器：完成通知判定与订阅计划。 */
+  const watcher = new SessionWatcher()
+  /** 会话发现定时器与在途标记。 */
+  let discoveryTimer = 0
+  let discoverSoonTimer = 0
+  let discovering = false
+  let lastDiscoverError = ''
+  /** 每个会话最近一次通知时间：两条通知来源共用，避免同一次落定弹两遍。 */
+  const lastFinishNoticeAt = new Map<string, number>()
+  /** 会话 → 项目 / 标题：气泡来源行与点开后重建通道都要用。 */
+  const sessionProjects = new Map<string, string | null>()
+  const sessionTitles = new Map<string, string>()
   let hostPoller = 0
   /** 主窗口焦点轮询：聚焦时隐藏气泡（用户已经在主界面里）。 */
   let mainFocusTimer = 0
@@ -352,7 +398,7 @@ export function usePetRuntime() {
       const host = new PetAgentHost(client, config.bindings, bindings => {
         config.bindings = bindings
         scheduleSave()
-      })
+      }, () => scheduleDiscovery())
       agents.value = host
       // 配置里缺失的绑定同步进 host（host 用 reactive 共享同一份对象）。
       for (const [petId, binding] of Object.entries(config.bindings.pets || {})) {
@@ -363,8 +409,14 @@ export function usePetRuntime() {
       await ensureBlockyPreset()
       void loadProjectNames()
       subscribeNativeEvents()
-      await refreshWindows()
+      await refreshWindows(true)
       startLoop()
+      // user:“改让桌宠盯所有会话 不只是一个会话”+(启动先发现一次，之后每 3 秒同步：
+      //  新会话很快被盯上，跑完的会话立刻弹通知；发现失败保留上一轮订阅。)
+      void discoverSessions()
+      if (!discoveryTimer) {
+        discoveryTimer = window.setInterval(() => { void discoverSessions() }, WATCH_DISCOVERY_MS)
+      }
       ready.value = true
       // 外部观测点：标题直接反映运行时是否就绪。
       document.title = 'Sunday Pet · ready'
@@ -616,6 +668,8 @@ export function usePetRuntime() {
       { x, y },
     )
     void preloadPetAssets(record)
+    // user:“也没有触发审批”+(每只桌宠启动就要有被监听的会话，不能等用户手选。)
+    void ensurePetSession(record.id)
     return pet
   }
 
@@ -712,23 +766,42 @@ export function usePetRuntime() {
   // 世界刷新
   // -------------------------------------------------------------------------
 
-  async function refreshWindows(): Promise<void> {
+  /**
+   * 桌面窗口 → L2 地形图。
+   *
+   * user:“第 1 点就是我怀疑桌宠的建图并不是实时去建的，而是只在桌宠启动后去建”+
+   * (窗口枚举改成常驻刷新，跟 zMode 无关；本地用几何指纹去重，只有窗口真的
+   *  新增/关闭/移动/换层级时才换地形，瓦片图随之重建；windowsRef 每轮都更新，
+   *  局部遮挡裁剪跟着窗口走。)
+   */
+  async function refreshWindows(force = false): Promise<void> {
     const instance = world.value
-    if (!instance) return
+    if (!instance || windowsRefreshing) return
+    windowsRefreshing = true
     try {
-      const fetched = await bridge.desktopWindows().catch(() => [] as never[])
-      if (Array.isArray(fetched)) {
-        windowsRef.value = fetched.map(item => item.bounds)
-        instance.applyWindows(fetched.map(item => ({
-          id: item.id,
-          title: item.title,
-          className: item.className,
-          bounds: item.bounds,
-          z: item.z,
-        })))
-      }
+      const fetched = await bridge.desktopWindows()
+      if (!Array.isArray(fetched)) return
+      const windows = fetched.map(item => ({
+        id: item.id,
+        title: item.title,
+        className: item.className,
+        bounds: item.bounds,
+        z: item.z,
+      }))
+      windowsRef.value = fetched.map(item => item.bounds)
+      const key = windowFingerprint(windows)
+      if (!force && key === lastWindowKey) return
+      lastWindowKey = key
+      instance.applyWindows(windows)
+      lastWindowError = ''
     } catch (error) {
-      report('windows', error)
+      const message = error instanceof Error ? error.message : String(error)
+      if (message !== lastWindowError) {
+        lastWindowError = message
+        report('windows', error)
+      }
+    } finally {
+      windowsRefreshing = false
     }
   }
 
@@ -882,8 +955,9 @@ export function usePetRuntime() {
       }
       reportInteractiveRects(instance)
       if (config.useL3 && Date.now() - lastL3At > config.perf.l3RefreshMs) void refreshL3()
-      // 局部遮挡需要跟着窗口移动：1.2 秒一次足够跟手，也不会把桌面枚举跑成负担。
-      if (config.zMode === 'clip' && now - lastWindowsAt > 1200) {
+      // user:“第 1 点就是我怀疑桌宠的建图并不是实时去建的”+(不再跟 zMode 绑死：
+      //  top / behind / clip 三档都按同一个节奏刷新窗口，建图不再只发生在启动那一刻。)
+      if (now - lastWindowsAt > WINDOW_REFRESH_MS) {
         lastWindowsAt = now
         void refreshWindows()
       }
@@ -1189,8 +1263,12 @@ export function usePetRuntime() {
     requestId?: string | null
     isQuestion?: boolean
     options?: BubbleState['options']
+    /** 显式气泡编号：完成通知按回合去重，不能靠标题。 */
+    id?: string
+    /** 覆盖默认展开规则：完成通知按 config.bubbles.done 决定展开还是折叠。 */
+    expanded?: boolean
   }): void {
-    const id = `${input.sessionId}:${input.requestId || input.title}`
+    const id = input.id || `${input.sessionId}:${input.requestId || input.title}`
     if (bubbles.value.some(item => item.id === id)) return
     bubbles.value = [
       ...bubbles.value,
@@ -1207,7 +1285,7 @@ export function usePetRuntime() {
         isQuestion: Boolean(input.isQuestion),
         options: input.options || [],
         createdAt: Date.now(),
-        expanded: input.kind === 'actionable',
+        expanded: input.expanded ?? (input.kind === 'actionable'),
         dismissed: false,
         handling: false,
         error: '',
@@ -1250,7 +1328,9 @@ export function usePetRuntime() {
     try {
       const host = agents.value
       if (!host) throw new Error('Agent 连接还没准备好')
-      const channel = host.get(bubble.sessionId) || host.channel(null, bubble.sessionId)
+      // user:“改让桌宠盯所有会话”+(通道会随订阅计划回收，点气泡时必须能按项目重建。)
+      const channel = host.get(bubble.sessionId)
+        || host.channel(sessionProjects.get(bubble.sessionId) || null, bubble.sessionId)
       if (bubble.requestId) {
         // 审批/提问：精确回到原请求。
         const decision = bubble.isQuestion ? 'other_guidance' : 'approve'
@@ -1274,8 +1354,11 @@ export function usePetRuntime() {
     bubble.error = ''
     try {
       const host = agents.value
-      const channel = host?.get(bubble.sessionId)
-      if (!channel) throw new Error('会话通道已关闭')
+      if (!host) throw new Error('Agent 连接还没准备好')
+      // user:“改让桌宠盯所有会话”+(审批气泡所在会话可能已经退订：按项目重建通道，
+      //  审批仍然回到原请求，不做本地模拟。)
+      const channel = host.get(bubble.sessionId)
+        || host.channel(sessionProjects.get(bubble.sessionId) || null, bubble.sessionId)
       const raw = String(option.id || option.label || '').toLowerCase()
       const decision = raw.includes('deny') || raw.includes('decline') || raw.includes('cancel')
         ? 'deny'
@@ -1308,22 +1391,187 @@ export function usePetRuntime() {
     }
   }
 
-  /** 轮询桌宠通道的提问/审批与回复，转为气泡。 */
-  function pollAgentEvents(): void {    const host = agents.value
+  /**
+   * 保证这只桌宠有一条被监听的会话。
+   *
+   * user:“也没有触发审批”+(绑定原来只能靠用户在会话选择器里手选，
+   *  petTarget / petChannel 里的“首次兜底”分支没有任何调用点，等于死代码，
+   *  于是桌宠一个会话都不看，审批永远到不了桌面。启动时按设计把绑定建起来，
+   *  首次使用在 My Project 只建一个默认会话并落盘；串行执行避免重复建会话。)
+   */
+  function ensurePetSession(petId: string): Promise<void> {
+    bindingChain = bindingChain.then(async () => {
+      const host = agents.value
+      if (!host) return
+      try {
+        await host.petChannel(petId)
+      } catch (error) {
+        report('agent-bind', error)
+      }
+    })
+    return bindingChain
+  }
+
+    /**
+   * 桌宠守望：盯所有会话。
+   *
+   * user:“改让桌宠盯所有会话 不只是一个会话，自己去考虑边界情况与设计”+
+   * (发现走全局 /sessions 一条请求。只有“可能弹审批”的会话才常开通道：
+   *  正在忙的、绑定到桌宠聊天的、头上还挂着未处理气泡的；订阅数与会话总数无关。
+   *  发现失败保留上一轮订阅，绝不因为一次抖动把审批通道全拆了。)
+   */
+  function boundSessionIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const binding of Object.values(agents.value?.bindings.pets || {})) {
+      if (binding?.sessionId) ids.add(binding.sessionId)
+      if (binding?.temporarySessionId) ids.add(binding.temporarySessionId)
+    }
+    return ids
+  }
+
+  function pendingBubbleSessionIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const bubble of bubbles.value) {
+      if (bubble.dismissed || bubble.kind !== 'actionable') continue
+      ids.add(bubble.sessionId)
+    }
+    return ids
+  }
+
+  /** 通知落在哪只宠物：该会话绑定的那只优先，其次第一只可见的。 */
+  function petForSession(sessionId: string): string {
+    return resolveWatchPet(agents.value?.bindings.pets || {}, petRecords.value, sessionId)
+  }
+
+  function sessionSourceLine(sessionId: string, extra = ''): string {
+    const projectId = sessionProjects.get(sessionId) || agents.value?.projectOf(sessionId) || ''
+    const title = sessionTitles.get(sessionId) || sessionId
+    return [projectNames.value[projectId] || projectId, title, extra].filter(Boolean).join(' - ')
+  }
+
+  /** 完成通知：两条来源共用一份去重与气泡参数。 */
+  function pushFinishBubble(sessionId: string, notice: TurnNotice): void {
+    const now = Date.now()
+    const last = lastFinishNoticeAt.get(sessionId) || 0
+    if (now - last < FINISH_NOTICE_DEDUPE_MS) return
+    const bubble = turnNoticeBubble(sessionId, notice, config.bubbles.done, now)
+    if (!bubble) return
+    lastFinishNoticeAt.set(sessionId, now)
+    pushBubble({
+      id: bubble.id,
+      petId: petForSession(sessionId),
+      sessionId,
+      kind: bubble.kind,
+      title: bubble.title,
+      subject: notice.body,
+      body: notice.body,
+      source: sessionSourceLine(sessionId),
+      expanded: bubble.expanded,
+    })
+  }
+
+  /**
+   * 后端广播 session/updated：马上对一次列表。
+   *
+   * user:“改让桌宠盯所有会话”+(一次结束会连着来几条广播，250ms 合并成一次发现，
+   *  完成通知基本是即时的，不必等 3 秒轮询。)
+   */
+  function scheduleDiscovery(): void {
+    if (discoverSoonTimer) return
+    discoverSoonTimer = window.setTimeout(() => {
+      discoverSoonTimer = 0
+      void discoverSessions()
+    }, 250)
+  }
+
+  async function discoverSessions(): Promise<void> {
+    const client = agentClient.value
+    const host = agents.value
+    if (!client || !host || discovering) return
+    if (petRecords.value.length === 0) {
+      // 一只宠物都没有：气泡没有落点，订阅也没有意义。
+      for (const channel of host.list()) host.release(channel.sessionId)
+      return
+    }
+    discovering = true
+    try {
+      const sessions: PetProjectSession[] = await client.listAllSessions()
+      const bound = boundSessionIds()
+      const pending = pendingBubbleSessionIds()
+      const plan = watcher.observe(sessions, {
+        now: Date.now(),
+        bound,
+        pending,
+        maxChannels: WATCH_MAX_CHANNELS,
+      })
+      for (const session of sessions) {
+        sessionProjects.set(session.id, session.projectId)
+        sessionTitles.set(session.id, session.title)
+      }
+      // 列表里已经没有的会话不再记住；绑定会话和挂着气泡的会话例外，用户还要点它。
+      const seenSessions = new Set(sessions.map(session => session.id))
+      for (const id of [...sessionProjects.keys()]) {
+        if (seenSessions.has(id) || bound.has(id) || pending.has(id)) continue
+        sessionProjects.delete(id)
+        sessionTitles.delete(id)
+      }
+      for (const session of plan.subscribe) {
+        host.channel(session.projectId || null, session.id, session.workRoot)
+      }
+      const keep = new Set(plan.subscribe.map(session => session.id))
+      for (const channel of host.list()) {
+        // 绑定会话与挂着气泡的会话永不释放，哪怕这一轮列表里没看到它。
+        if (keep.has(channel.sessionId) || bound.has(channel.sessionId) || pending.has(channel.sessionId)) continue
+        host.release(channel.sessionId)
+      }
+      const cutoff = Date.now() - FINISH_NOTICE_DEDUPE_MS * 4
+      for (const [id, at] of lastFinishNoticeAt) {
+        if (at < cutoff) lastFinishNoticeAt.delete(id)
+      }
+      for (const session of plan.finished) {
+        const notice = turnCompletionNotice('running', /fail|error/i.test(String(session.status || '')) ? 'failed' : 'completed')
+        if (notice) pushFinishBubble(session.id, notice)
+      }
+      lastDiscoverError = ''
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message !== lastDiscoverError) {
+        lastDiscoverError = message
+        report('watch', error)
+      }
+    } finally {
+      discovering = false
+    }
+  }
+
+  /**
+   * 轮询所有已订阅通道的审批/提问与回合终态。
+   *
+   * user:“改让桌宠盯所有会话 不只是一个会话”+(轮询对象从“宠物绑定”换成
+   * “当前订阅的通道”：守望器决定订阅哪些会话，这里只把它们上面的审批、提问
+   * 和终态转成气泡；一只宠物都没绑也能收到。)
+   */
+  function pollAgentEvents(): void {
+    const host = agents.value
     if (!host) return
-    for (const record of petRecords.value) {
-      const binding = host.bindings.pets[record.id]
-      const sessionId = binding?.temporarySessionId || binding?.sessionId
-      if (!sessionId) continue
-      // user:"看看桌宠能不能正常转发"+
-      // (只读 host.get 的通道永远不存在：桌宠只有点过气泡/发过消息才建通道，
-      //  绑定了会话却从不打开，审批和提问就永远到不了桌面。绑定了就必须
-      //  主动打开通道，打开是幂等的；快照还没到时下一轮轮询再取。)
-      const channel = host.get(sessionId)
-        || host.channel(binding?.temporaryProjectId || binding?.projectId || null, sessionId)
-      if (!channel.ready) continue
-      const decisions = channel.decisions().value
-      for (const decision of decisions) {
+    for (const channel of host.list()) {
+      const sessionId = channel.sessionId
+      if (!channel.ready) {
+        // user:“也没有触发审批”+(通道没就绪就什么都不出，等于静默失效：
+        //  错误要进运行时报错区，并且按退避自动重开，不能一辈子卡在这一步。)
+        const errorText = channel.lastError
+        if (errorText && channelErrors.get(sessionId) !== errorText) {
+          channelErrors.set(sessionId, errorText)
+          report('agent', `会话 ${sessionId} 通道未就绪：${errorText}`)
+        }
+        void channel.ensureReady()
+        continue
+      }
+      channelErrors.delete(sessionId)
+      // 通道侧是实时源：判一次“忙 → 落定”，与列表守望互相兜底。
+      const notice = turnNotices.observe(sessionId, channel.turnStatus().value)
+      if (notice) pushFinishBubble(sessionId, notice)
+      for (const decision of channel.decisions().value) {
         const policy = decision.isQuestion ? config.bubbles.question : config.bubbles.approval
         const title = decision.title || (decision.isQuestion ? 'Agent 在等你回答' : '需要你的批准')
         const subject = (decision.subject || title.replace(/^需要确认[：:]\s*/, ''))
@@ -1335,13 +1583,10 @@ export function usePetRuntime() {
         // user:"左上角显示来源：项目-会话-子代理"+
         // (来源行是面包屑：项目名 - 会话名 - 子代理名；拿不到名称就退回 id。
         //  主 Agent 的请求没有第三段。)
-        const projectId = decision.projectId || binding?.temporaryProjectId || binding?.projectId || ''
-        const sessionTitle = (channel.snapshot as { session?: { title?: string } } | null)?.session?.title || sessionId
-        const source = [
-          projectNames.value[projectId] || projectId,
-          sessionTitle,
+        const source = sessionSourceLine(
+          sessionId,
           decision.subAgentName ? `子代理 ${decision.subAgentName}` : '',
-        ].filter(Boolean).join(' - ')
+        )
         // 同一 requestId 先以消息树兜底出现、随后决策池补上更完整的标题/选项时，
         // 必须原地更新，否则永远停在兜底的“需要确认：approval”。
         const existing = bubbles.value.find(
@@ -1356,7 +1601,7 @@ export function usePetRuntime() {
           existing.options = options
         } else {
           pushBubble({
-            petId: record.id,
+            petId: petForSession(sessionId),
             sessionId,
             kind: 'actionable',
             title,
@@ -1526,7 +1771,9 @@ export function usePetRuntime() {
       case 'toggle-pets':
         for (const record of petRecords.value) togglePetVisible(record.id)
         break
-      case 'refresh-terrain': void refreshL3(); break
+      // user:“第 1 点就是我怀疑桌宠的建图并不是实时去建的”+(手动刷新也要真的重建
+      //  地形图：原来只调 L3 视觉边缘，useL3 关闭时等于什么都不做。)
+      case 'refresh-terrain': void refreshWindows(true); void refreshL3(); break
       case 'toggle-terrain-lines': debug.terrain = !debug.terrain; break
       case 'hide-overlay': void shutdown(); break
       default:
@@ -1734,6 +1981,10 @@ export function usePetRuntime() {
     if (rafHandle) cancelAnimationFrame(rafHandle)
     rafHandle = 0
     if (hostPoller) clearInterval(hostPoller)
+    if (discoveryTimer) clearInterval(discoveryTimer)
+    discoveryTimer = 0
+    if (discoverSoonTimer) clearTimeout(discoverSoonTimer)
+    discoverSoonTimer = 0
     if (mainFocusTimer) clearInterval(mainFocusTimer)
     mainFocusTimer = 0
     if (heartbeatTimer) clearInterval(heartbeatTimer)

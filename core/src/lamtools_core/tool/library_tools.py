@@ -33,11 +33,17 @@ LIBRARY_TOOL_DESCRIPTION = (
     "lists the file it points at (file=…): workspace uploads live under the "
     "project's 资料/ folder, chat uploads live in the app's attachment store, "
     "and either way the listed path is a real file you can read_file. "
-    "Actions: list (entry ids, names, roles, layers, favorites, file locations), "
+    "Tags are the retrieval key, layers are the archive: tag entries by what they "
+    "are (button, card, css, motion) so they can be found again by kind, and put "
+    "them in a layer by which part of the project they belong to. Ratings are 0 "
+    "to 5, 0 = unrated. "
+    "Actions: list (entry ids, names, roles, layers, tags, ratings, favorites, "
+    "file locations; pass 'tag' to list only the entries carrying it), "
     "register (file a workspace file into the catalog; optionally assign its "
     "layer in the same call), favorite (set favorite true/false), folder "
-    "(re-layer one or more entries), remove (soft-remove; restorable, file "
-    "untouched), restore. "
+    "(re-layer one or more entries), tag (add, remove or set tags on existing "
+    "entries), rate (0 to 5), remove (soft-remove; restorable, file untouched), "
+    "restore. "
     "File deliberately: after a turn produces a deliverable worth keeping, "
     "'register' it and give it a fitting layer in the same call — follow the "
     "layers this project already uses (check with 'list' first), otherwise pick "
@@ -53,7 +59,7 @@ LIBRARY_TOOL_SCHEMA: dict[str, object] = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["list", "register", "favorite", "folder", "remove", "restore"],
+            "enum": ["list", "register", "favorite", "folder", "tag", "rate", "remove", "restore"],
             "description": "Operation to perform on the project library catalog.",
         },
         "path": {
@@ -78,6 +84,26 @@ LIBRARY_TOOL_SCHEMA: dict[str, object] = {
         "folder": {
             "type": "string",
             "description": "Catalog layer name; '' removes entries from any layer. With 'register': optional layer assigned in the same call.",
+        },
+        "tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "For 'tag': the tags to add or remove. Lowercase, short, by what the thing is.",
+        },
+        "mode": {
+            "type": "string",
+            "enum": ["add", "remove", "set"],
+            "description": "For 'tag': add merges, remove drops, set replaces the whole list. Default add.",
+        },
+        "rating": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "For 'rate': 0 to 5, 0 clears the rating.",
+        },
+        "tag": {
+            "type": "string",
+            "description": "For 'list': only entries carrying this tag.",
         },
     },
     "required": ["action"],
@@ -117,11 +143,15 @@ async def _format_records(records: list[Any], artifact_store: Any) -> str:
         else:
             flags.append("missing")
             location = "file=(missing)"
+        tags = ",".join(getattr(record, "tags", []) or [])
+        rating = int(getattr(record, "rating", 0) or 0)
         parts = [
             str(getattr(record, "artifact_id", "") or ""),
             str(getattr(record, "name", "") or ""),
             f"role={getattr(record, 'role', '') or '-'}",
             f"folder={getattr(record, 'folder', '') or '-'}",
+            f"tags={tags}" if tags else "",
+            f"rating={rating}" if rating else "",
             "favorite" if getattr(record, "favorite", False) else "",
             location,
             *(flags),
@@ -171,6 +201,9 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
         try:
             if action == "list":
                 records = await artifact_store.list(project_id)
+                wanted = str(args.get("tag") or "").strip().lower()
+                if wanted:
+                    records = [item for item in records if wanted in [str(tag).lower() for tag in getattr(item, "tags", []) or []]]
                 return ToolResult(
                     call_id=call.id,
                     name=call.name,
@@ -218,6 +251,47 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
             if not ids:
                 return _failed(call, f"'{action}' requires artifact_ids", "missing_argument")
 
+            if action == "tag":
+                raw_tags = args.get("tags")
+                tags = [str(item) for item in raw_tags] if isinstance(raw_tags, list) else []
+                mode = str(args.get("mode") or "add").strip().lower()
+                if mode not in {"add", "remove", "set"}:
+                    return _failed(call, f"Unknown mode '{mode}'", "invalid_argument")
+                for artifact_id in ids:
+                    record = await artifact_store.get(artifact_id)
+                    if record is None:
+                        return _failed(call, f"Artifact not found: {artifact_id}", "artifact_not_found")
+                    current = [str(item) for item in getattr(record, "tags", []) or []]
+                    if mode == "set":
+                        merged = tags
+                    elif mode == "remove":
+                        drop = {item.strip().lower() for item in tags}
+                        merged = [item for item in current if item.lower() not in drop]
+                    else:
+                        merged = current + tags
+                    await artifact_store.set_tags(artifact_id, merged)
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="ok",
+                    content=f"Tagged {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} ({mode}: {', '.join(tags) or '-'})",
+                    metadata={"mode": mode, "tags": tags, "artifact_ids": ids},
+                )
+            if action == "rate":
+                try:
+                    rating = int(args.get("rating") or 0)
+                except (TypeError, ValueError):
+                    return _failed(call, "rating must be an integer 0-5", "invalid_argument")
+                rating = max(0, min(5, rating))
+                for artifact_id in ids:
+                    await artifact_store.set_rating(artifact_id, rating)
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="ok",
+                    content=f"Rated {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} {rating}/5",
+                    metadata={"rating": rating, "artifact_ids": ids},
+                )
             if action == "favorite":
                 favorite = bool(args.get("favorite", True))
                 for artifact_id in ids:

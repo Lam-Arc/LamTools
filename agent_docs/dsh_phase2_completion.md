@@ -1071,3 +1071,8 @@ snapshot仍限定1–1000项并报告truncated，没有新增分页或浏览器�
 user:“第二阶段结束后 就继续开展第三阶段”+(固定71项非前端Python近似范围及本清单已发现缺陷收尾后直接推进原20项第三阶段，不再重复无新发现审查作为等待理由)。
 
 当前71项行为证据及已发现缺陷修复均保留，不宣称DSH全部方法或JS/TS运行兼容；协议差异继续由迁移agent处理。第三阶段非前端执行顺序、20项原范围和首批HTTP基础修复见[dsh_phase3_completion.md](dsh_phase3_completion.md)。未来第二阶段回归仍优先处理。
+
+
+## 第三阶段真实HTTP接续发现的原会话读取缺陷
+
+原PluginSessionService现绑定原session_store/persistence，准入、metadata和历史读取等待后复核，拒绝更换存储或关闭后发布旧state/events。先复现2项，再扩展五等待点/两失效的10项新增验收；与第三阶段原记录投影合计19项通过。保留并行steer回执改动，不改已提交写入结算和固定71项近似等级。工作账目统一记入dsh_phase3_completion.md本轮记录。

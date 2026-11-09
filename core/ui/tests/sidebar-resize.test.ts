@@ -95,6 +95,14 @@ describe('sidebar divider resizing', () => {
     wrapper.unmount()
   })
 
+  it('widens the three default sidebar tiers by 15%', () => {
+    const css = readFileSync(resolve(import.meta.dirname, '../src/styles/variables.css'), 'utf8')
+    // 162→186、200→230、232→267：默认档位整体放大 15%。
+    expect(css).toContain('--sidebar-width: var(--layout-sidebar-width, 186px);')
+    expect(css).toContain('--sidebar-width-mid: 230px;')
+    expect(css).toContain('--sidebar-width-full: 267px;')
+  })
+
   it('pins the divider to the seam between the sidebar and the main card', () => {
     const css = readFileSync(resolve(import.meta.dirname, '../src/styles/workspace-shell.css'), 'utf8')
     expect(css).toMatch(/\.sidebar-resize-handle\s*\{[\s\S]*?cursor: col-resize;/)

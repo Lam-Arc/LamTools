@@ -25,6 +25,8 @@ export interface PetProjectSession {
   workRoot?: string
   /** 最近会话排序用（ISO 时间或毫秒时间戳）。 */
   updatedAt?: string | number
+  /** 后端会话状态：running / waiting / completed / failed 等，桌宠守望按它判忙闲。 */
+  status?: string
   /** 插件/内部编排会话：不能作为 Ping 目标。 */
   internal?: boolean
 }
@@ -35,6 +37,13 @@ export interface PetAgentClient {
   projects: CoreProjectClient
   listProjects(): Promise<{ id: string; name: string; workRoot: string }[]>
   listSessions(projectId: string): Promise<PetProjectSession[]>
+  /**
+   * 全局会话列表（跨项目，一条请求）。
+   *
+   * user:“改让桌宠盯所有会话 不只是一个会话”+(守望所有会话的发现源：
+   *  按项目逐个拉会把请求数乘上项目数，后端本来就有全局 /sessions。）
+   */
+  listAllSessions(): Promise<PetProjectSession[]>
   createSession(projectId: string, title?: string): Promise<PetProjectSession>
   /** 兜底项目：My Project。从未绑定过时用它创建唯一一个默认会话。 */
   ensureFallbackSession(): Promise<{ projectId: string; sessionId: string; created: boolean }>
@@ -76,6 +85,20 @@ export function createPetAgentClient(apiBase: string): PetAgentClient {
     }))
   }
 
+  async function listAllSessions(): Promise<PetProjectSession[]> {
+    // 失败必须抛：调用方靠“空列表”和“读不到”区分是否要拆掉现有订阅。
+    const response = await transport.request<{ status: number; body: Uint8Array }>({
+      kind: 'http',
+      method: 'GET',
+      path: '/sessions',
+      timeoutMs: 30_000,
+    })
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`会话列表读取失败（${response.status}）`)
+    }
+    return parseAllSessions(new TextDecoder().decode(response.body))
+  }
+
   async function createSession(projectId: string, title = '桌宠会话'): Promise<PetProjectSession> {
     const created = await projects.createSession(projectId, title)
     return {
@@ -92,11 +115,8 @@ export function createPetAgentClient(apiBase: string): PetAgentClient {
    * (已有会话就复用最近一个；没有才建一个。绝不每次启动都建空会话。)
    */
   async function ensureProjectSession(projectId: string) {
-    const sessions = await listSessions(projectId)
-    if (sessions.length > 0) {
-      const latest = sessions[0]
-      return { projectId, sessionId: latest.id, created: false }
-    }
+    const latest = pickLatestPetSession(await listSessions(projectId))
+    if (latest) return { projectId, sessionId: latest.id, created: false }
     const created = await createSession(projectId)
     return { projectId, sessionId: created.id, created: true }
   }
@@ -172,6 +192,7 @@ export function createPetAgentClient(apiBase: string): PetAgentClient {
     projects,
     listProjects,
     listSessions,
+    listAllSessions,
     createSession,
     ensureFallbackSession,
     ensurePingSession,
@@ -191,6 +212,27 @@ export function createPetAgentClient(apiBase: string): PetAgentClient {
   }
 }
 
+/**
+ * 默认会话选谁：最近的普通会话。
+ *
+ * user:“也没有触发审批”+(首次兜底会把默认会话绑成“最近一个”，
+ *  不能按后端返回顺序碰运气，也不能绑到插件/内部编排会话上：
+ *  那些会话不会有人给它发审批，绑了等于没绑。)
+ */
+export function pickLatestPetSession(sessions: PetProjectSession[]): PetProjectSession | undefined {
+  const candidates = sessions.filter(session => session && !session.internal)
+  if (candidates.length === 0) return undefined
+  const stamp = (value: string | number | undefined): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+    if (typeof value === 'string' && value) {
+      const parsed = Date.parse(value)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    return 0
+  }
+  return [...candidates].sort((a, b) => stamp(b.updatedAt) - stamp(a.updatedAt))[0] ?? candidates[0]
+}
+
 async function resolveFallbackWorkRoot(): Promise<string> {
   const runtime = globalThis as { __TAURI_INTERNALS__?: unknown }
   if (runtime.__TAURI_INTERNALS__) {
@@ -202,6 +244,51 @@ async function resolveFallbackWorkRoot(): Promise<string> {
 }
 
 type PetProjectSummary = { id: string; name: string; workRoot: string }
+
+/**
+ * 全局 /sessions 的响应 → 桌宠可用的会话条目。
+ *
+ * 后端两种外形都出现过：裸数组和 `{ sessions: [...] }`；字段也同时有蛇形与驼峰。
+ * 解析失败必须抛，调用方靠它区分“真的没有会话”和“这次没读到”。
+ */
+export function parseAllSessions(text: string): PetProjectSession[] {
+  const parsed = (() => {
+    try { return JSON.parse(text) as unknown } catch { return null }
+  })()
+  if (parsed === null) throw new Error('会话列表解析失败')
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { sessions?: unknown }).sessions)
+      ? ((parsed as { sessions: unknown[] }).sessions)
+      : []
+  return rows.flatMap(row => {
+    const item = (row || {}) as RawAllSession
+    const id = item.id ? String(item.id) : ''
+    if (!id) return []
+    const metadata = item.metadata && typeof item.metadata === 'object' ? item.metadata : undefined
+    const workRoot = typeof metadata?.work_root === 'string' ? metadata.work_root : undefined
+    return [{
+      id,
+      title: String(item.title || id),
+      projectId: item.project_id ? String(item.project_id) : null,
+      workRoot,
+      updatedAt: item.updated_at || item.updatedAt,
+      status: typeof item.status === 'string' ? item.status : undefined,
+      internal: Boolean(metadata?.owner_plugin) || isInternalSessionId(id),
+    }]
+  })
+}
+
+/** 全局 /sessions 的原始行：兼容蛇形与驼峰两套字段。 */
+type RawAllSession = {
+  id?: string
+  title?: string
+  status?: string
+  project_id?: string
+  updated_at?: string
+  updatedAt?: string
+  metadata?: Record<string, unknown>
+}
 
 /** “My Project” 的三种识别方式：精确名、含 My Project、工作区以 MyProject 结尾。 */
 function findFallbackProject(projects: PetProjectSummary[]): PetProjectSummary | undefined {

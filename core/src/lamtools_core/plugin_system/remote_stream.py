@@ -34,18 +34,29 @@ def reserve(host, plugin):
 
 def binding_check(host, catalog, plugin, manifest, path):
     from .plugin_http import read_http_routes, plugin_http_token
+    from .operation_bridge import read_operations
     manager = getattr(host, "backend_manager", None)
     generation = manager.generation.get(plugin) if manager is not None else None
     declaration = copy.deepcopy(manifest.raw)
     operation = next(route.operation for route in read_http_routes(manifest) if route.method == "POST" and route.path == path)
     token = plugin_http_token(host, plugin, create=False)
+    try:
+        expected_spec = next((item for item in read_operations(manifest) if item.name == operation), None)
+    except Exception:
+        expected_spec = None
     def valid():
-        current = host.get(plugin)
-        return (host.available(plugin) and current is not None and current.raw == declaration
-            and getattr(host, "backend_manager", None) is manager
-            and (manager is None or manager.generation.get(plugin) == generation)
-            and catalog.has(operation) and catalog.owner_of(operation) == "plugin:" + plugin
-            and bool(token) and plugin_http_token(host, plugin, create=False) == token)
+        try:
+            current = host.get(plugin)
+            # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(流存续时复核外部操作声明，不继续发送权限已撤回的帧)。
+            current_spec = next((item for item in read_operations(current) if item.name == operation), None) if current is not None else None
+            return (expected_spec is not None and expected_spec.permission == "auto_allow" and current_spec == expected_spec
+                and host.available(plugin) and current is not None and current.raw == declaration
+                and getattr(host, "backend_manager", None) is manager
+                and (manager is None or manager.generation.get(plugin) == generation)
+                and catalog.has(operation) and catalog.owner_of(operation) == "plugin:" + plugin
+                and bool(token) and plugin_http_token(host, plugin, create=False) == token)
+        except Exception:
+            return False
     return valid
 
 
@@ -77,6 +88,9 @@ class RemoteStreamResponse(Response):
                         raise ValueError("stream binding changed")
                     frame = encode_frame({"kind": "item", "payload": value})
                     await send({"type": "http.response.body", "body": frame, "more_body": True})
+                # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(最后一次pull也可能撤回原授权；正常end与数据帧同样必须复核，不能依赖轮询及时抢占)。
+                if not self.valid():
+                    raise ValueError("stream binding changed before completion")
                 frame = encode_frame({"kind": "end"})
             except (asyncio.CancelledError, OSError):
                 raise

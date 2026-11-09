@@ -2,6 +2,7 @@
 import secrets
 import time
 from collections import OrderedDict
+from pathlib import Path
 
 from lamtools_core.plugin_system.session_query import SessionQueryError, SessionSummary, SessionQueryPage, PluginSessionQueryAPI
 from lamtools_core.plugin_system.sessions import SessionError
@@ -27,7 +28,7 @@ class PluginSessionQueryService:
             raise SessionQueryError("session-query/host-changed", "Host session store changed")
         return context
 
-    async def query(self, owner, *, limit, cursor, title_contains):
+    async def query(self, owner, *, limit, cursor, title_contains, project_root=None):
         self._context()
         if type(limit) is not int or not 1 <= limit <= 100 or type(title_contains) is not str or len(title_contains) > 200:
             raise SessionQueryError("session-query/invalid-query", "limit is 1–100; title filter is at most 200 characters")
@@ -38,11 +39,12 @@ class PluginSessionQueryService:
             if type(cursor) is not str or len(cursor) > 128:
                 raise SessionQueryError("session-query/invalid-cursor", "Cursor is invalid or expired")
             row = self._cursors.get(cursor)
-            if row is None or row[1] != owner or row[2] != title_contains:
+            if row is None or row[1] != owner or row[2] != title_contains or row[4] != project_root:
                 raise SessionQueryError("session-query/invalid-cursor", "Cursor is invalid, expired or belongs to another query")
             after = row[3]
         scan = getattr(self._store, "scan_readonly", None)
-        if not callable(scan):
+        read_current = getattr(self._store, "get_readonly", None)
+        if not callable(scan) or (project_root is not None and not callable(read_current)):
             raise SessionQueryError("session-query/unavailable", "Host provides no bounded read-only session scan")
         try:
             rows, more = await scan(after_id=after, scan_limit=1000)
@@ -52,7 +54,22 @@ class PluginSessionQueryService:
         items = []
         for index, (identifier, record) in enumerate(rows):
             after = identifier
-            if record is not None and title_contains.casefold() in record.title.casefold():
+            if record is not None and project_root is not None:
+                # user:“复用原宿主权威”+(扫描后重新读取原可见会话，不能发布等待期间已隐藏或移动的记录)。
+                try:
+                    record = await read_current(identifier)
+                except Exception:
+                    raise SessionQueryError("session-query/read-failed", "Session query failed") from None
+                self._context()
+            in_project = project_root is None
+            if record is not None and project_root is not None:
+                # user:“复用原宿主权威”+(只接受原会话记录中归属当前项目的路径，不让请求方指定授权根)。
+                root = record.metadata.get("work_root")
+                try:
+                    in_project = type(root) is str and bool(root) and "\x00" not in root and Path(root).is_absolute() and str(Path(root).resolve()) == project_root
+                except (OSError, ValueError, RuntimeError):
+                    in_project = False
+            if record is not None and in_project and title_contains.casefold() in record.title.casefold():
                 items.append(SessionSummary(record.id, record.title[:1024], record.status, len(record.title) > 1024))
             if len(items) == limit:
                 more = more or index + 1 < len(rows)
@@ -62,5 +79,5 @@ class PluginSessionQueryService:
             while len(self._cursors) >= 128:
                 self._cursors.popitem(last=False)
             next_cursor = secrets.token_urlsafe(24)
-            self._cursors[next_cursor] = (now + 120, owner, title_contains, after)
+            self._cursors[next_cursor] = (now + 120, owner, title_contains, after, project_root)
         return SessionQueryPage(tuple(items), next_cursor, more)

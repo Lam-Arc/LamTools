@@ -354,6 +354,13 @@ class CoreProjectStore:
             project = await db.get(CoreProject, project_id)
         return _record(project) if project is not None else None
 
+    async def resolve_by_path(self, work_root: Path | str) -> CoreProjectRecord | None:
+        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(按原规范路径查已有记录，不创建目录或新项目)。
+        root = str(normalize_workspace_root(work_root))
+        async with self.session_factory() as db:
+            project = await db.scalar(select(CoreProject).where(CoreProject.work_root == root))
+        return _record(project) if project is not None else None
+
     async def rename(
         self,
         project_id: str,

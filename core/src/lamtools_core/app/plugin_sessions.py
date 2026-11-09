@@ -277,6 +277,15 @@ class PluginSessionService:
             for item in page.events:
                 if self._closed.is_set():
                     return
+                # user:“复用原宿主权威”+(缓存页逐条发布前复核原存储及会话可见性，不泄露撤回后的事件)。
+                self._context()
+                if self._store is not None:
+                    visible = await self._store.get(session_id)
+                    if self._closed.is_set():
+                        return
+                    self._context()
+                    if visible is None:
+                        raise SessionError("session/not-found", session_id, "session is unknown or unavailable")
                 cursor = item["seq"]
                 yield item
             if not page.has_more:

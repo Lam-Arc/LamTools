@@ -126,7 +126,7 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                               "workspaceFiles.stat": "stat", "workspaceFiles.list": "list", "workspaceFiles.changes": "changes"}
                     if name in mapped:
                         item.update(candidateContract="context.workspace_files." + mapped[name],
-                            difference="显式session_id经原可见性/执行目录取得根，不接受客户端root。read为1起算行窗口，页≤1MiB且源≤64MiB；read_bytes全文件/窗口≤1MiB，Python bytes可经显式resultEncoding=multipart的Sunday附件出口，非DSH envelope/codec；stat版本仅size/mtime，list有界。所有读均限制在会话目录且拒绝已观察链接；read_bytes支持base_file普通文件旁的相对目标，仍受同一根约束。changes为SDK轮询合并异步流，ready/change、aclose和取消/停用真实回收；最多32活动流及32启动代根、目录快照最多1000项，不是完整事件日志；可显式resultEncoding=ndjson通过Sunday HTTP服务端JSON流输出，非DSH wire/二进制帧/双向流或远程后端。HTTP需显式映射，不能盲替换DSH范围/选项对象。")
+                            difference="显式session_id经原可见性/执行目录取得根，不接受客户端root。read为1起算行窗口，页≤1MiB且源≤64MiB；read_bytes全文件/窗口≤1MiB，Python bytes可经显式resultEncoding=multipart的Sunday附件出口，非DSH envelope/codec；stat版本仅size/mtime，list有界。所有读均限制在会话目录、拒绝已观察链接，并在发布前复核会话与执行目录；read_bytes支持base_file普通文件旁的相对目标，仍受同一根约束。changes为SDK轮询合并异步流，会话隐藏/目录变更时轮询发现并关闭，ready/change、aclose和取消/停用真实回收；最多32活动流及32启动代根、目录快照最多1000项，不是完整事件日志；可显式resultEncoding=ndjson通过Sunday HTTP服务端JSON流输出，非DSH wire/二进制帧/双向流或远程后端。HTTP需显式映射，不能盲替换DSH范围/选项对象。")
                     else:
                         item.update(difference="此方法未提供已验收控制器映射；DSH二进制wire/Client codec及网络流须另行移植，不能用普通读取冒充。")
                 # user:“剩下问题交给 agent 来移植”+(为已具备宿主契约的方法提供人工映射，不执行参数或事件格式的盲替换)。
@@ -349,6 +349,55 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                 if kind == "events" and name == "approval/request":
                     item.update(candidateContract="context.approvals.answer", conversion="agent-required",
                                 difference="受管单终端回答者，不是 Cordis waterfall/agent-scoped next 链。必须按请求 plugin/session/turn 明确匹配；默认缺失或错误不放行。")
+                if kind == "remotes" and name == "fileReferences.list":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(会话文件引用只映射已验收的原执行目录扫描，参数与结果仍需人工移植)。
+                    item.update(suggestedContract="context.session_file_references.list", conversion="agent-required",
+                                difference="显式session_id经原可见性与执行目录获得当前项目内扫描根，扫描后复核会话与原目录；返回相对路径、kind和截断标记，有限扫描/协作取消。无DSH Agent解析、自动激活、Peer lookup或相同候选协议；HTTP需明确映射。")
+                if kind == "remotes" and name in {"directoryPicker.list", "directoryPicker.createDirectory", "directoryPicker.pick"}:
+                    # user:“第二阶段结束后 就继续开展第三阶段”+(只提示真实browse方法，原生选择器不可用须明确说明)。
+                    if name == "directoryPicker.pick":
+                        item.update(conversion="agent-required", difference="当前仅browse；原生选择器返回directory-picker/unavailable，未实现DSH native chooser或客户端UI。")
+                    else:
+                        method = "list" if name.endswith(".list") else "create_directory"
+                        item.update(suggestedContract="context.directory_picker_controller." + method, conversion="agent-required",
+                                    difference="仅固定当前插件项目根内的原browse；默认根、截断和错误与DSH不同，取消等待原线程结束；HTTP需插件显式映射。")
+                if kind == "remotes" and name == "skills.list":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(仅映射真实原技能提供方，预设作用域差异保留给移植)。
+                    item.update(suggestedContract="context.session_skill_catalog.list", conversion="agent-required",
+                                difference="原会话可见性和执行目录，复用应用实际技能注册表/启用账本，仅返回允许用户调用的元数据；发现后复核会话、目录和启用账本，非原子权限快照。无DSH预设作用域、Agent恢复或相同codec。原注册表同步扫描可读取技能正文但不返回正文；HTTP需显式映射。")
+                if kind == "remotes" and name == "credentials.describe":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(凭据元数据单向投影，不能向Remote推荐resolve原文)。
+                    item.update(suggestedContract="context.credential_controller.describe", conversion="agent-required",
+                                difference="同步批量描述当前插件命名空间最多64个标识，逐字段返回configured/source/writable，不返回凭据值；无DSH全局provider或自动Remote映射。")
+                if kind == "remotes" and name in {"credentials.set", "credentials.unset"}:
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(仅映射本插件凭据单向写入，绝不回传密值)。
+                    item.update(suggestedContract="context.credential_controller." + name.split(".")[1], conversion="agent-required",
+                                difference="仅当前插件原私有凭据，单向set/unset不返回密值；写入调用后不明失败或绑定变化报may_have_changed。无DSH全局provider、Peer授权或自动Remote映射。")
+                if kind == "remotes" and name == "settings.describe":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只推荐当前插件的既有脱敏投影，不把原配置全文映射到Remote)。
+                    item.update(suggestedContract="context.settings.public", conversion="agent-required",
+                                difference="仅当前插件的原配置脱敏值、修订和无密值验证信息；不提供DSH全局命名空间、schema/layer投影或自动Remote映射。")
+                if kind == "remotes" and name == "settings.replace":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(写入只返回脱敏投影，避免原始配置通过Remote泄露)。
+                    item.update(suggestedContract="context.settings_controller.replace", conversion="agent-required",
+                                difference="原当前插件schema校验和CAS替换后重新读取脱敏投影；提交后失效标记may_have_changed。非DSH全局命名空间/层次或自动Remote映射。")
+                if kind == "remotes" and name in {"job.list", "job.follow", "job.kill"}:
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(作业只映射真实插件所有者和会话范围，观察流差异仍须移植)。
+                    method = {"job.list": "watch_list", "job.follow": "follow", "job.kill": "kill"}[name]
+                    item.update(suggestedContract="context.job_controller." + method, conversion="agent-required",
+                                difference="仅当前插件视图中当前可见会话和无会话标签的作业；watch_list轮询变化快照，follow为轮询非消耗双路独立字节游标及base64帧，kill等待实际退出。非DSH会话全局名册、事件驱动、单一输出游标或人工kill通知协议；HTTP需明确映射。")
+                if kind == "remotes" and name == "terminal.environment":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(仅建议真实会话目录与非pty环境，不冒充DSH可重连终端)。
+                    item.update(suggestedContract="context.terminal_controller.environment", conversion="agent-required",
+                                difference="原可见会话的当前执行目录和存在状态，pty=false；环境结果经明确插件HTTP映射。没有DSH shell profile、PTY、attach/resize/重连或自动Remote控制。")
+                if kind == "remotes" and name == "workspace.rename":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只映射当前项目的原CAS重命名，不冒充全局工作区权限或名称唯一性)。
+                    item.update(suggestedContract="context.workspace_controller.rename", conversion="agent-required",
+                                difference="仅当前插件项目，必须提交原项目修订，复用原project.update CAS；已派发取消等待结算。原宿主不保证DSH全局名称唯一性，参数/结果与Peer授权需人工移植。")
+                if kind == "remotes" and name == "pluginMarket.search":
+                    # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只搜索原固定市场目录，复杂查询和自定义索引仍需人工处理)。
+                    item.update(suggestedContract="context.plugin_market.search", conversion="agent-required",
+                                difference="搜索原Sunday固定官方市场目录并分页，保留缓存来源和可安装状态；简单子串匹配且各页不固定快照，非DSH配置索引、模糊排名或详情，不能自动安装或生成Remote映射。")
                 if kind == "remotes" and name.startswith("session."):
                     method = name.partition(".")[2]
                     if method in {"create", "state", "prompt", "cancel", "events", "follow", "wait", "updateQueue"}:
@@ -364,6 +413,18 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                 if kind == "services":
                     row = known.get(name)
                     item.update({"status": row["status"] if row else "gap", "sunday": row["sunday"] if row else "补充未收录接口的公开契约", "phase": row["phase"] if row else 2})
+                    if name == "workspaceRegistry":
+                        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(仅为真实受限读取提供人工候选，不能暗示写入和完整注册表可用)。
+                        item.update(candidateContract="context.workspace_registry.get", conversion="agent-required",
+                            difference="按项目ID或resolve_by_path(绝对路径)只读取当前插件项目的原记录；sessions按固定项目根有界扫描原可见会话，非DSH持久成员账本。需人工适配字段；不提供上游全局列表、注册、排序、归档或跨工作区访问。")
+                    if name == "fileUploads":
+                        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只推荐真实附件持久化，不将附件ID当作DSH暂存凭证)。
+                        item.update(candidateContract="context.file_uploads.save_encoded", conversion="agent-required",
+                            difference="显式session_id、文件名及标准base64写入原会话附件，最多512KiB；写入后重验会话/宿主，失效可能已提交；返回原持久附件记录，不是DSH按Session暂存凭证/消费绑定、进度、流式输入或图像专用上传。HTTP需明确映射。")
+                    if name == "remoteAccess":
+                        # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(仅提供本插件实际声明名单，不声称DSH Peer授权)。
+                        item.update(candidateContract="context.remote_access.declared_methods", conversion="agent-required",
+                            difference="只读当前插件实际声明且原操作归属/审批条件可用的方法名单；不是DSH Peer角色、资源授权决定或follow策略流。")
                     if row is None:
                         finding("unknown-service", relative, item["line"], f"未收录服务 {name}，需核对插件依赖及上游版本。")
                 if item not in report[kind]:
@@ -483,7 +544,18 @@ def _handoff(report: dict) -> str:
              "- 已验收的凭据引用子集：agent_docs/plugin_credentials.md；context.credentials.resolve/describe/set/unset，当前插件命名空间、同步调用、无环境回退或授权记录协议。",
              "- 已验收的配置文件子集：agent_docs/plugin_config_access.md；context.config.read/validate/replace，带修订号和基础校验，保存不代表运行时应用。",
              # user:“保持迁移脚本、机器清单、文档同步”+(只提供真实一元入口及人工声明方式，不将上游Remote盲映射到任意操作)。
-             "- 已验收的明确Remote一元入口：agent_docs/plugin_phase3_remote.md；人工声明 http.remote，映射到已有token POST路由和精确扁平argsSchema；原始字节需显式resultEncoding=multipart并处理附件路径。resultEncoding=ndjson显式服务端JSON流要求顶层可aclose异步迭代器、断连/代际撤回回收；不是DSH envelope/codec/Peer/资源lookup/双向流；脚本不自动绑定方法。",
+             "- 已验收的明确Remote一元入口：agent_docs/plugin_phase3_remote.md；人工声明 http.remote，映射到已有token POST路由和精确扁平argsSchema；在读取请求体和方法声明前验证已配置令牌，派发前复核声明/操作/启动代和令牌，撤回时不自动重建；原始字节需显式resultEncoding=multipart并处理附件路径。resultEncoding=ndjson显式服务端JSON流要求顶层可aclose异步迭代器、断连/代际撤回回收，最后pull后也复核原授权再发送end；不是DSH envelope/codec/Peer/资源lookup/双向流；脚本不自动绑定方法。",
+             "- 工作区重命名子集：agent_docs/plugin_workspace_controller.md；context.workspace_controller.rename仅当前项目、要求原修订CAS；不保证DSH全局名称唯一性。",
+             "- 工作区注册表只读近似：agent_docs/plugin_workspace_registry.md；context.workspace_registry.get/resolve_by_path仅限当前项目，context.workspace_registry.sessions按原可见会话有界扫描并按固定项目根过滤；非DSH全局列表、会话记账或归档/删除。",
+             "- Remote方法清单：agent_docs/plugin_remote_access_inventory.md；context.remote_access.declared_methods只列本插件原声明/归属/审批条件，不代表调用者的Peer资源授权。",
+             "- 插件市场只读子集：agent_docs/plugin_market_access.md；context.plugin_market.search过滤Sunday固定官方目录，非DSH自定义索引/模糊排名/稳定分页/详情，不提供安装。",
+             "- 会话终端管道子集：agent_docs/plugin_terminal_controller.md；context.terminal_controller.environment/open绑定可见会话执行目录，open交付前复核并在失效时回收，pty=false，无DSH retain/attach/resize/重连或会话销毁回收。",
+             "- 会话作业控制子集：agent_docs/plugin_job_controller.md；context.job_controller.list/read/follow/kill仅当前插件作业及可见会话标签，follow轮询base64双路字节游标与DSH事件流不同。",
+             "- 设置控制器脱敏读取：agent_docs/plugin_settings_controller.md；context.settings.public及context.settings_controller.replace只返回当前插件脱敏配置，不公开原配置全文或全局命名空间。",
+             "- 凭据控制器元数据子集：agent_docs/plugin_credential_controller.md；context.credential_controller.describe/set/unset仅限当前插件；状态及单向写入不返回密值，不推荐Remote读取机密值。",
+             "- 编码文件保存子集：agent_docs/plugin_file_uploads.md；context.file_uploads.save_encoded写入原会话附件，返回持久记录而非DSH暂存凭证；无流式/进度/收据消费。",
+             "- 会话技能目录近似：agent_docs/plugin_session_skill_catalog.md；context.session_skill_catalog.list复用已安装原注册表/启用账本，按会话执行目录过滤用户可调用项；无预设作用域或Agent恢复。",
+             "- 会话文件引用近似：agent_docs/plugin_session_file_references.md；context.session_file_references.list先核对原会话可见性/项目/执行目录，再进行原有限扫描，不自动恢复Agent。",
              "- 会话文件控制器近似：agent_docs/plugin_workspace_files.md；context.workspace_files.read/read_bytes/stat/list/changes复用原会话目录和文件系统；base_file限同根，changes为有界轮询SDK流，取消/aclose/停用回收，HTTP服务端流需显式ndjson映射；bytes需显式Sunday multipart映射，非DSH wire。",
              "- 逐项缺口：agent_docs/dsh_compatibility_matrix.md。",
              "- 分阶段验收与未完成项：agent_docs/dsh_compatibility_checklist.md；仅已通过行为验收的子集可以打勾。",

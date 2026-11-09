@@ -64,20 +64,30 @@ export class SessionChannel {
   private opened = false
   private opening: Promise<void> | null = null
   lastError = ''
+  /** 通道重开的退避时间点（毫秒时间戳）。 */
+  private retryAfter = 0
   /** 当前连接的 App Server 客户端（分叉/回退等通用 RPC 的入口）。 */
   private wireClient: CoreAppServerClient | null = null
   private readonly projection: ReturnType<typeof useCoreWorkbenchProjectionController>
   private readonly approval = shallowRef<ReturnType<typeof useCoreApprovalController> | null>(null)
 
+  private readonly onSessionUpdate: (() => void) | undefined
+
   constructor(private readonly client: PetAgentClient, options: {
     sessionId: string
     projectId: string | null
     workRoot?: string
+    /** 后端广播 session/updated 时的回调：桌宠靠它立刻重新对一遍会话状态。 */
+    onSessionUpdated?: () => void
   }) {
+    this.onSessionUpdate = options.onSessionUpdated
     this.sessionId = options.sessionId
     this.projectId = options.projectId
     this.workRoot = options.workRoot
     this.controller = createCoreAppServerRuntimeController(this.runtime as never, {
+      // session/updated 是全局广播：任一在连的通道收到就顺手让守望器对一次列表，
+      // 完成通知不必等到下一轮 3 秒轮询。
+      onSessionUpdated: () => this.onSessionUpdate?.(),
       createClient: ({ onEvent, onSnapshot, onSyncChange, onConnectionState }) => {
         const transport = this.client.transport.fork ? this.client.transport.fork() : this.client.transport
         const created = new CoreAppServerClient({
@@ -314,11 +324,35 @@ export class SessionChannel {
     return client
   }
 
+  /**
+   * 通道没就绪时重开，失败按 3 秒退避。
+   *
+   * user:“也没有触发审批”+
+   * (通道原来只在创建时 open 一次，失败就永久静默：轮询拿到的是同一个死通道，
+   *  lastError 也没人看。现在由轮询驱动重试，失败只记 lastError 并按退避再来，
+   *  绝不每轮都打一次 RPC。)
+   */
+  async ensureReady(now = Date.now()): Promise<boolean> {
+    if (this.opened) return true
+    if (now < this.retryAfter) return false
+    this.retryAfter = now + CHANNEL_RETRY_DELAY_MS
+    try {
+      await this.open()
+      this.retryAfter = 0
+      return this.opened
+    } catch {
+      return false
+    }
+  }
+
   close(): void {
     this.controller.disconnect()
     this.opened = false
   }
 }
+
+/** 通道重开的最小间隔：失败后 3 秒再试，避免轮询把后端打成筛子。 */
+const CHANNEL_RETRY_DELAY_MS = 3000
 
 /**
  * 会话路由：桌宠通道与 Ping 通道分开维护，切换任何一边都不影响另一边。
@@ -335,6 +369,7 @@ export class PetAgentHost {
     private readonly client: PetAgentClient,
     bindings: PetBindingsState = emptyBindings(),
     persist: (bindings: PetBindingsState) => void = () => {},
+    private readonly onSessionUpdated: (() => void) | undefined = undefined,
   ) {
     this.bindings = reactive(bindings) as PetBindingsState
     this.persist = persist
@@ -350,7 +385,12 @@ export class PetAgentHost {
   channel(projectId: string | null, sessionId: string, workRoot?: string): SessionChannel {
     const existing = this.channels.get(sessionId)
     if (existing) return existing
-    const created = new SessionChannel(this.client, { sessionId, projectId, workRoot })
+    const created = new SessionChannel(this.client, {
+      sessionId,
+      projectId,
+      workRoot,
+      onSessionUpdated: this.onSessionUpdated,
+    })
     this.channels.set(sessionId, created)
     void created.open().catch(error => {
       created.lastError = error instanceof Error ? error.message : String(error)
@@ -360,6 +400,29 @@ export class PetAgentHost {
 
   get(sessionId: string): SessionChannel | undefined {
     return this.channels.get(sessionId)
+  }
+
+  /** 当前所有在订阅的通道：审批轮询遍历它，不再遍历宠物绑定。 */
+  list(): SessionChannel[] {
+    return [...this.channels.values()]
+  }
+
+  /** 会话所属项目：气泡点开、临时切换后重建通道时要用。 */
+  projectOf(sessionId: string): string | null {
+    return this.channels.get(sessionId)?.projectId ?? null
+  }
+
+  /**
+   * 释放一个通道。
+   *
+   * user:“改让桌宠盯所有会话”+(会话不再需要守望时要断开订阅，
+   *  否则会话越攒越多，每条都是一份 App Server 订阅。)
+   */
+  release(sessionId: string): void {
+    const channel = this.channels.get(sessionId)
+    if (!channel) return
+    channel.close()
+    this.channels.delete(sessionId)
   }
 
   private async fallback(): Promise<{ projectId: string; sessionId: string }> {

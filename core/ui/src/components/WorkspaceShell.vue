@@ -121,6 +121,24 @@
       </template>
     </LeftSidebarShell>
 
+    <!-- user:“让左侧栏和主内容区中间的边界可以被拖动”+(会话栏与聊天卡之间那条缝
+         就是宽度把手：拖动改宽度、双击回默认档，键盘左右键逐档微调)。 -->
+    <div
+      v-if="sidebarResizable"
+      class="sidebar-resize-handle"
+      data-sidebar-resize-handle
+      role="separator"
+      aria-orientation="vertical"
+      :aria-label="t('拖动调整左侧栏宽度')"
+      :aria-valuemin="LEFT_DRAWER_WIDTH_MIN"
+      :aria-valuemax="LEFT_DRAWER_WIDTH_MAX"
+      :aria-valuenow="sidebarResizeValue"
+      tabindex="0"
+      @pointerdown="startSidebarResize"
+      @keydown="onSidebarResizeKeydown"
+      @dblclick="resetLeftWidth"
+    ></div>
+
     <!-- ===== Main Area ===== -->
     <main
       class="workspace-main" data-region="main" data-ui-id="shell.main"
@@ -282,7 +300,12 @@ import { gsap } from 'gsap'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, useId, watch } from 'vue'
 import { PanelLeft } from 'lucide-vue-next'
 import { useComposerLayout } from '@/composables/useComposerLayout.ts'
-import { useShellLayout } from '@/composables/useShellLayout.ts'
+import {
+  LEFT_DRAWER_WIDTH_MAX,
+  LEFT_DRAWER_WIDTH_MIN,
+  LEFT_DRAWER_WIDTH_STEP,
+  useShellLayout,
+} from '@/composables/useShellLayout.ts'
 import type { ThemeData } from '@/composables/useShellLayout.ts'
 import ComposerBar from '@/components/ComposerBar.vue'
 import CoreSendStopButton from '@/components/CoreSendStopButton.vue'
@@ -429,6 +452,9 @@ const {
   openRightDrawer,
   closeDrawers,
   setSidebarCollapsed,
+  leftWidth,
+  setLeftWidth,
+  resetLeftWidth,
 } = useShellLayout({
   storageKey: props.storageKey,
   density: props.density,
@@ -465,6 +491,64 @@ watch(
 )
 
 const shellElement = ref<HTMLElement | null>(null)
+
+/* user:“让左侧栏和主内容区中间的边界可以被拖动”+
+   (分界线把手贴在会话栏右缘：拖动改宽度，松手落盘，双击回默认档。
+    拖拽期间在 body 上挂类，越过聊天区也不会把别人的文字选中)。 */
+const SIDEBAR_RESIZE_BODY_CLASS = 'sidebar-is-resizing'
+// 只给固定住的会话栏拖宽度：未固定时它是悬停浮出的，指针一离开就收回，拖不稳。
+const sidebarResizable = computed(
+  () => leftOpen.value && leftPinned.value && !props.collapseLeftSidebar && !isNarrowViewport.value,
+)
+const sidebarResizeValue = computed(() => leftWidth.value ?? undefined)
+
+type SidebarResizeState = { pointerId: number; startX: number; startWidth: number }
+let sidebarResize: SidebarResizeState | null = null
+
+function currentSidebarWidth(): number {
+  const drawer = shellElement.value?.querySelector<HTMLElement>('.drawer-left')
+  // 首帧或测试环境量不到布局时，回落到已保存的宽度，拖动仍从同一个数开始。
+  return Math.round(drawer?.getBoundingClientRect().width || leftWidth.value || 0)
+}
+
+function startSidebarResize(event: PointerEvent): void {
+  if (event.button !== 0) return
+  const startWidth = currentSidebarWidth()
+  if (startWidth <= 0) return
+  // 先把当前宽度定成用户值：拖动途中窗口跨断点换档，不能把宽度拽回去。
+  setLeftWidth(startWidth)
+  sidebarResize = { pointerId: event.pointerId, startX: event.clientX, startWidth }
+  document.body.classList.add(SIDEBAR_RESIZE_BODY_CLASS)
+  window.addEventListener('pointermove', onSidebarResizeMove)
+  window.addEventListener('pointerup', endSidebarResize)
+  window.addEventListener('pointercancel', endSidebarResize)
+  event.preventDefault()
+}
+
+function onSidebarResizeMove(event: PointerEvent): void {
+  if (!sidebarResize || event.pointerId !== sidebarResize.pointerId) return
+  setLeftWidth(sidebarResize.startWidth + (event.clientX - sidebarResize.startX))
+  event.preventDefault()
+}
+
+function endSidebarResize(): void {
+  sidebarResize = null
+  document.body.classList.remove(SIDEBAR_RESIZE_BODY_CLASS)
+  window.removeEventListener('pointermove', onSidebarResizeMove)
+  window.removeEventListener('pointerup', endSidebarResize)
+  window.removeEventListener('pointercancel', endSidebarResize)
+}
+
+function onSidebarResizeKeydown(event: KeyboardEvent): void {
+  const step = event.shiftKey ? LEFT_DRAWER_WIDTH_STEP * 4 : LEFT_DRAWER_WIDTH_STEP
+  if (event.key === 'ArrowLeft') setLeftWidth(currentSidebarWidth() - step)
+  else if (event.key === 'ArrowRight') setLeftWidth(currentSidebarWidth() + step)
+  else if (event.key === 'Home') setLeftWidth(LEFT_DRAWER_WIDTH_MIN)
+  else if (event.key === 'End') setLeftWidth(LEFT_DRAWER_WIDTH_MAX)
+  else return
+  event.preventDefault()
+}
+
 // 视窗已归档：composer 布局的视口参数恒为关闭。
 const composerLayout = useComposerLayout({
   root: shellElement,
@@ -583,6 +667,7 @@ watch(composerLayout.placement, async () => {
 })
 
 onUnmounted(() => {
+  endSidebarResize()
   clearWorkflowInteractionLeave()
   composerPlacementRevision += 1
   composerPlacementTween?.kill()

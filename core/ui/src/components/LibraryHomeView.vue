@@ -24,6 +24,12 @@
       :artifact-signal="artifactSignal"
       :upload-files="uploadFiles"
     />
+    <LibraryStyleView
+      v-else-if="section === 'styles'"
+      ref="sectionRef"
+      @heading="onChildHeading"
+      @back="emit('back')"
+    />
     <MemoryView
       v-else-if="section === 'memory'"
       ref="sectionRef"
@@ -78,6 +84,7 @@ import type { LamToolsTransport } from '@/transport/index.ts'
 // user:“该修修”+(Wiki 分区使用真实组件，避免未注册标签导致空白)。
 import WikiView from '@/components/WikiView.vue'
 import MaterialsView from '@/components/MaterialsView.vue'
+import LibraryStyleView from '@/components/LibraryStyleView.vue'
 import MemoryView from '@/components/MemoryView.vue'
 import PlanLibraryView from '@/components/PlanLibraryView.vue'
 import type { PlanLibraryEntry } from '@/components/PlanLibraryView.vue'
@@ -112,9 +119,11 @@ const emit = defineEmits<{
   heading: [payload: { title: string; subtitle: string }]
 }>()
 
-type SectionId = 'materials' | 'memory' | 'plans' | 'wiki';
+type SectionId = 'materials' | 'styles' | 'memory' | 'plans' | 'wiki';
 const SECTIONS: Array<{ id: SectionId; label: string }> = [
   { id: 'materials', get label() { return t("资料") } },
+  // user:“将本项目的所有样式做完为第一批 library 增强试验”+(样式表也是资料：收进资料库按资产浏览，而不是散在代码目录里)。
+  { id: 'styles', get label() { return t("样式") } },
   { id: 'memory', get label() { return t("记忆") } },
   { id: 'plans', get label() { return t("方案") } },
   { id: 'wiki', get label() { return t("Wiki") } },

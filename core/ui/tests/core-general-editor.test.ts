@@ -2,8 +2,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 import CoreGeneralEditor from '../src/components/CoreGeneralEditor.vue'
-import { setCoreSendBehaviorMode } from '../src/composables'
+import { coreSendBehaviorMode, setCoreSendBehaviorMode } from '../src/composables'
 import { useSplitPreviewPreference } from '../src/split/previewPreference'
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 type RequestRpc = (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 
@@ -77,7 +83,7 @@ describe('CoreGeneralEditor', () => {
     const titles = wrapper.findAll('.subhead-title').map((node) => node.text())
     // user:“支持自定义 Assistant 显示名称和头像”+(通用设置新增一张 Assistant 显示卡片)
     // user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(通用设置新增一张消息发送卡片)
-    expect(titles).toEqual(['界面语言', 'HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续', '消息发送', 'Assistant 显示', '实验性功能'])
+    expect(titles).toEqual(['界面语言', 'HTTP 代理', '不使用代理的地址', '自定义证书', '提问自动继续', 'Enter 发送方式', 'Assistant 显示', '实验性功能'])
     expect(wrapper.findAll('.setting-card')).toHaveLength(8)
   })
 
@@ -169,21 +175,30 @@ describe('CoreGeneralEditor', () => {
     expect((toggle.element as HTMLInputElement).checked).toBe(true)
   })
 
-  // user:“设置中可调消息发送后直接引导或排队，默认直接引导”+(下拉切换立即写
-  //   settings 命名空间并同步共享单例；写失败时回滚到上一个生效的模式)。
-  function findSendBehaviorSelect(wrapper: ReturnType<typeof mount>) {
-    const select = wrapper.findAllComponents({ name: 'UiSelect' })
-      .find((candidate) => candidate.props('ariaLabel') === '消息发送')
-    expect(select, '消息发送下拉卡片').toBeDefined()
-    return select!
+  // user:“直接enter是引导还是排队的切换在设置通用页面中加上”+
+  // (开关即普通 Enter 的落点：开=直接引导、关=排队；切换立即写 settings 命名空间并同步
+  //   共享单例，写失败退回最后一次确认保存的值，连点时以最后一次意图为准)。
+  function findSendBehaviorSwitch(wrapper: ReturnType<typeof mount>) {
+    const toggle = wrapper.get('[aria-label="Enter 直接引导"]')
+    expect(toggle.attributes('role'), 'Enter 发送方式开关').toBe('switch')
+    return toggle
   }
 
-  it('persists the send behavior pick and updates the shared mode', async () => {
+  it('renders the Enter switch in the default guide mode', async () => {
+    setCoreSendBehaviorMode('guide')
+    const { wrapper } = await mountEditor()
+    const toggle = findSendBehaviorSwitch(wrapper)
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.get('[data-send-behavior-summary]').text()).toContain('Enter 直接引导')
+    setCoreSendBehaviorMode('guide')
+  })
+
+  it('persists the Enter switch and updates the shared mode', async () => {
     setCoreSendBehaviorMode('guide')
     const { wrapper, rpc, sendBehavior } = await mountEditor()
-    const select = findSendBehaviorSelect(wrapper)
+    const toggle = findSendBehaviorSwitch(wrapper)
 
-    select.vm.$emit('update:modelValue', 'queue')
+    await toggle.setValue(false)
     await flushPromises()
 
     expect(rpc).toHaveBeenCalledWith('settings.update', {
@@ -192,12 +207,29 @@ describe('CoreGeneralEditor', () => {
     })
     expect(sendBehavior.mode).toBe('queue')
     expect(wrapper.text()).toContain('已保存')
+    expect(wrapper.get('[data-send-behavior-summary]').text()).toContain('Ctrl+Enter 直接引导')
+
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(sendBehavior.mode).toBe('guide')
+    expect(wrapper.get('[data-send-behavior-summary]').text()).toContain('Ctrl+Enter 排队')
     setCoreSendBehaviorMode('guide')
   })
 
-  it('reverts the send behavior pick when the write fails', async () => {
+  it('adopts the stored mode on load', async () => {
     setCoreSendBehaviorMode('guide')
-    const { rpc, sendBehavior } = createRequestRpc()
+    const initial = createRequestRpc()
+    initial.sendBehavior.mode = 'queue'
+    const wrapper = mount(CoreGeneralEditor, { props: { requestRpc: initial.rpc } })
+    await flushPromises()
+
+    expect((findSendBehaviorSwitch(wrapper).element as HTMLInputElement).checked).toBe(false)
+    setCoreSendBehaviorMode('guide')
+  })
+
+  it('reverts the Enter switch when the write fails', async () => {
+    setCoreSendBehaviorMode('guide')
+    const { rpc } = createRequestRpc()
     const base = rpc.getMockImplementation()!
     let failNext = false
     rpc.mockImplementation(async (method, params) => {
@@ -208,12 +240,66 @@ describe('CoreGeneralEditor', () => {
     await flushPromises()
 
     failNext = true
-    findSendBehaviorSelect(wrapper).vm.$emit('update:modelValue', 'queue')
+    await findSendBehaviorSwitch(wrapper).setValue(false)
     await flushPromises()
 
     expect(wrapper.get('.general-error').text()).toContain('保存失败')
-    expect(sendBehavior.mode).toBeUndefined()
+    expect(coreSendBehaviorMode.mode).toBe('guide')
+    expect((findSendBehaviorSwitch(wrapper).element as HTMLInputElement).checked).toBe(true)
     expect(wrapper.text()).not.toContain('已保存')
+    setCoreSendBehaviorMode('guide')
+  })
+
+  it('keeps the last pick when the switch is toggled while a write is in flight', async () => {
+    setCoreSendBehaviorMode('guide')
+    const { rpc, sendBehavior } = createRequestRpc()
+    const base = rpc.getMockImplementation()!
+    const firstWrite = deferred()
+    const written: string[] = []
+    rpc.mockImplementation(async (method, params) => {
+      if (method === 'settings.update' && params?.namespace === 'core.sendBehavior') {
+        const value = (params.value || {}) as { mode?: string }
+        written.push(String(value.mode))
+        if (value.mode === 'queue') await firstWrite.promise
+      }
+      return base(method, params)
+    })
+    const wrapper = mount(CoreGeneralEditor, { props: { requestRpc: rpc } })
+    await flushPromises()
+
+    const toggle = findSendBehaviorSwitch(wrapper)
+    await toggle.setValue(false)
+    await toggle.setValue(true)
+    // 第一次写入还卡着时不再并发写第二次，只记住最新意图。
+    expect(written).toEqual(['queue'])
+
+    firstWrite.resolve()
+    await flushPromises()
+
+    expect(written).toEqual(['queue', 'guide'])
+    expect(sendBehavior.mode).toBe('guide')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    setCoreSendBehaviorMode('guide')
+  })
+
+  it('does not let a late settings read overwrite a fresh pick', async () => {
+    setCoreSendBehaviorMode('guide')
+    const { rpc } = createRequestRpc()
+    const base = rpc.getMockImplementation()!
+    const read = deferred()
+    rpc.mockImplementation(async (method, params) => {
+      if (method === 'settings.get' && params?.namespace === 'core.sendBehavior') await read.promise
+      return base(method, params)
+    })
+    const wrapper = mount(CoreGeneralEditor, { props: { requestRpc: rpc } })
+    // 只等网络卡片读完（sendBehavior 的读库仍挂起），开关此时已可用。
+    await flushPromises()
+
+    await findSendBehaviorSwitch(wrapper).setValue(false)
+    read.resolve()
+    await flushPromises()
+
+    expect(coreSendBehaviorMode.mode).toBe('queue')
     setCoreSendBehaviorMode('guide')
   })
 

@@ -23,7 +23,9 @@ class PluginWorkspaceFilesAPI:
 
     def _check(self):
         self._scope.check_open()
-        if self._context.service("working_directory") is not self._host:
+        if (self._context._registration_scope is not self._scope
+                or Path(self._context.work_root).resolve() != self._project
+                or self._context.service("working_directory") is not self._host):
             raise WorkspaceFileError("workspace-file/host-changed", "Original directory host changed")
 
     async def _filesystem(self, session_id, path):
@@ -45,6 +47,11 @@ class PluginWorkspaceFilesAPI:
             fs = await self._filesystem(session_id, path)
             result = getattr(self, "_" + action)(fs, path, **options)
             self._check()
+            # user:“复用原宿主权威”+(文件读取后重新核对会话可见性和执行目录，旧作用域不发布结果)。
+            current = await self._filesystem(session_id, path)
+            self._check()
+            if Path(current.root).resolve() != Path(fs.root).resolve():
+                raise WorkspaceFileError("workspace-file/session-directory-changed", "Session execution directory changed during read")
             return result
         except FilesystemError as error:
             mapped = {"fs/not-found": "not-found", "fs/not-file": "not-regular-file", "fs/not-text": "not-text", "fs/too-large": "too-large"}
@@ -131,7 +138,7 @@ class PluginWorkspaceFilesAPI:
         stream = None
         try:
             fs = await self._filesystem(session_id, path)
-            stream = await open_changes(self, fs, path, interval)
+            stream = await open_changes(self, fs, path, interval, session_id)
             self._check()
             return stream
         except BaseException:

@@ -17,7 +17,12 @@ const props = defineProps<{ runtime: PetRuntime }>()
 const drafts = ref<Record<string, string>>({})
 
 const scale = computed(() => Math.max(0.1, props.runtime.overlay.width / Math.max(1, window.innerWidth)))
-const visible = computed(() => props.runtime.bubbles.value.filter(bubble => !bubble.dismissed))
+const allBubbles = computed(() => props.runtime.bubbles.value.filter(bubble => !bubble.dismissed))
+// user:"主窗口聚焦时不显示气泡"+(审批/提问在主界面聚焦时让位给主界面；
+//  回合结束这类被动通知是例外，否则任务跑完的时候用户在主界面里永远看不到提示。)
+const visible = computed(() => props.runtime.mainFocused.value
+  ? allBubbles.value.filter(bubble => bubble.kind === 'notification')
+  : allBubbles.value)
 
 /** 展开态 / 折叠成胶囊；activeId 是当前翻到的那一条。 */
 const ui = reactive({ expanded: true, activeId: '' })
@@ -30,8 +35,6 @@ const activeIndex = computed(() => {
 })
 const active = computed<BubbleState | null>(() => visible.value[activeIndex.value] ?? null)
 const pendingCount = computed(() => visible.value.length)
-// user:"主窗口聚焦时不显示气泡"+(用户在 Sunday 主界面里，气泡让位给主界面。)
-const hidden = computed(() => props.runtime.mainFocused.value)
 
 // user:"这个5秒自动折叠，应该是我的鼠标离开了它再折叠。如果我的鼠标只要挪上去了，
 // 就重新计时啊！"+
@@ -74,7 +77,11 @@ onBeforeUnmount(() => {
 })
 
 watch(active, value => {
-  if (value && value.id !== ui.activeId) ui.activeId = value.id
+  if (!value || value.id === ui.activeId) return
+  ui.activeId = value.id
+  // user:“当一个会话结束后，桌宠上面并没有触发通知”+(任务完成按
+  //  config.bubbles.done 呈现：弹出直接展开卡片，标记先折叠成胶囊等用户点。)
+  if (value.kind === 'notification') ui.expanded = value.expanded
 }, { immediate: true })
 
 function step(delta: number): void {
@@ -177,7 +184,7 @@ const position = computed(() => {
   <div class="pet-bubbles" data-region="pet-bubbles">
     <!-- 折叠态：只显示待选择数量的胶囊 -->
     <button
-      v-if="active && !hidden && !ui.expanded"
+      v-if="active && !ui.expanded"
       :ref="setElement"
       type="button"
       class="pet-bubble-badge"
@@ -190,7 +197,7 @@ const position = computed(() => {
 
     <!-- 展开态：一张卡，只显示当前一条 -->
     <section
-      v-else-if="active && !hidden && position"
+      v-else-if="active && position"
       :ref="setElement"
       class="pet-bubble"
       data-pet-hit

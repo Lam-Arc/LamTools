@@ -134,16 +134,17 @@
   --right-drawer-retract: 180ms;
 
   /* —— Core 左侧栏标尺（桌面端紧凑密度）—— */
-  /* 左栏宽度：小界面用紧凑档（标准宽度的 70%），窗口宽裕先升中间档，
+  /* 左栏宽度：小界面用紧凑档（约为标准宽度的 70%），窗口宽裕先升中间档，
      大界面/全屏恢复标准宽度（workspace-shell.css 的 min-width 断点负责切换；
-     手机抽屉另有宽度）。 */
+     手机抽屉另有宽度）。user:“把左侧栏默认给的位置大一点…15%吧”+
+     (三档默认宽度整体放大 15%：162→186、200→230、232→267)。 */
   /* 会话栏与聊天区共用的面板圆角：外侧（贴窗口边缘）用大圆角，
      内侧（两栏相交的间隙处）用小白角。 */
   --workspace-panel-radius-outer: var(--radius);
   --workspace-panel-radius-inner: var(--radius-sm);
-  --sidebar-width: var(--layout-sidebar-width, 162px);
-  --sidebar-width-mid: 200px;
-  --sidebar-width-full: 232px;
+  --sidebar-width: var(--layout-sidebar-width, 186px);
+  --sidebar-width-mid: 230px;
+  --sidebar-width-full: 267px;
   /* 标题栏高度：原生标题栏存在时由 TitleBar 写入 --titlebar-native-height；
      编辑器布局变量优先，全站统一从这条链读取。 */
   /* user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(窗口是 edge-to-edge 的，
