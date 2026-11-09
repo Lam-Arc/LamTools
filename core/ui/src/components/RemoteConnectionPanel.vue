@@ -374,10 +374,30 @@ async function switchTo(id: string): Promise<void> {
   busy.value = true
   error.value = ''
   try {
-    activateDevice(id === 'local' ? null : id)
-    // user:“我怎么从控制电脑切回手机”+(只清票据不够：宿主里的隧道还连着，重开之后
-    // 又会按「已连接」走回电脑。切换必须先断掉现有隧道)。
-    await call('p2p_disconnect').catch(() => undefined)
+    // user:“点了切换电脑，重启一遍核心之后进去还在手机，再点还是这样”“要把后台退出
+    // 再重进才行”+(启动阶段那次自动切换会留一个去重标记防止重载打转，可它在
+    // sessionStorage 里，重载并不清；用户第二次亲手点，就被自己上一次的记录挡住了。
+    // 既然是人主动选的，就把标记清掉，让这一次自动切换重新生效)。
+    try {
+      sessionStorage.removeItem('sunday.p2p.switched')
+    } catch {
+      // 存储不可用只是少了这层去重，不影响切换本身。
+    }
+    if (id === 'local') {
+      activateDevice(null)
+      // user:“我怎么从控制电脑切回手机”+(只清票据不够：宿主里的隧道还连着，重开之后
+      // 又会按「已连接」走回电脑。切换必须先断掉现有隧道)。
+      await call('p2p_disconnect').catch(() => undefined)
+      window.location.reload()
+      return
+    }
+    const device = readDevices().find((item) => item.id === id)
+    if (!device) throw new Error(t('这台电脑不在配对列表里了'))
+    activateDevice(id)
+    // user:“点了切换电脑…进去还在手机”+(以前只存票据就重载，重载时通道还没通，界面
+    // 只能先落回本机，再赌后台拨号；拨号慢一点就一直停在本机。这里先连上再重载)。
+    const name = isDesktop.value ? 'PC' : 'Phone'
+    await call('p2p_connect', { ticket: device.ticket, name, timeoutMs: 45_000 })
     window.location.reload()
   } catch (cause) {
     error.value = String(cause)
