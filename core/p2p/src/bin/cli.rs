@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use sunday_p2p::{encode_ticket, Client, Identity, ServerLink, TrustStore};
 use tokio::sync::Mutex;
 
@@ -167,7 +168,7 @@ async fn serve(args: Vec<String>) -> Result<()> {
         // user:“第一次连的时候连上了，后面就没有再连上过”“连上了之后也报错”+(实测传输
         // 进程会在一次握手超时之后直接退出，进程一死，电脑这边就再也接不到任何设备；
         // 一次失败的握手只说明这一次没成，记一笔继续等下一台)。
-        let mut link = match ServerLink::accept(&endpoint, Arc::clone(&trust)).await {
+        let mut link = match ServerLink::accept(&endpoint, Arc::clone(&trust), &flags.name).await {
             Ok(Some(link)) => link,
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -207,12 +208,16 @@ async fn serve(args: Vec<String>) -> Result<()> {
         ));
         tokio::spawn(async move {
         let closed = Arc::new(tokio::sync::Mutex::new(false));
+        // 最近一次被界面订阅的会话，事件丢帧时用它告诉界面该重新 resume 哪一条。
+        let last_thread: Arc<tokio::sync::Mutex<Option<String>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
         if rpc.lock().await.is_some() {
             // user:“请立即回复你好没反应”+(事件必须走界面订阅过的那条 Core 连接；另起一条
             // 没订阅的 socket 收不到任何会话进度，手机就只能发出消息、看不到回复)。
             let send = link.sender();
             let flag = Arc::clone(&closed);
             let rpc_for_events = Arc::clone(&rpc);
+            let events_thread = Arc::clone(&last_thread);
             tokio::spawn(async move {
                 loop {
                     if *flag.lock().await {
@@ -239,8 +244,25 @@ async fn serve(args: Vec<String>) -> Result<()> {
                                     return;
                                 }
                             }
-                            // 一轮里事件比转发快时丢掉最旧的；快照会补回来。
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            // user:“一轮里事件比转发快，不能悄悄丢”+(界面靠 thread/gap
+                            // 自己重新 resume；这条腿以前直接 continue，手机上就只剩半截内容。)
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                let thread = events_thread
+                                    .lock()
+                                    .await
+                                    .clone()
+                                    .unwrap_or_default();
+                                let params = serde_json::json!({
+                                    "thread_id": thread,
+                                    "reason": "p2p_lagged",
+                                });
+                                if sunday_p2p::link::write_event(&send, "thread/gap", params)
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
                             // 这条桥没了：回到外层换一条。
                             Err(_) => break,
                         }
@@ -261,7 +283,14 @@ async fn serve(args: Vec<String>) -> Result<()> {
                 let core_token = core_token.clone();
                 let rpc = rpc.clone();
                 let dir = handler_dir.clone();
+                let last_thread = Arc::clone(&last_thread);
                 async move {
+                    // 记下界面当前订阅的会话：事件丢帧时 thread/gap 要指名这一条。
+                    if matches!(method.as_str(), "thread/resume") {
+                        if let Some(thread) = params.get("thread_id").and_then(|value| value.as_str()) {
+                            *last_thread.lock().await = Some(thread.to_owned());
+                        }
+                    }
                     match method.as_str() {
                         "ping" => Ok(serde_json::json!({ "pong": true })),
                         "whoami" => Ok(serde_json::json!({ "device": name })),
@@ -301,10 +330,50 @@ async fn serve(args: Vec<String>) -> Result<()> {
                             } else {
                                 format!("/api/core{path}")
                             };
-                            let body = params.get("body");
-                            let (status, answer) =
-                                sunday_p2p::call_core("127.0.0.1", core_port, &core_token, &http, &path, body)?;
-                            Ok(serde_json::json!({ "status": status, "body": answer }))
+                            // user:“远程模式下附件发不出去、图片预览是坏的”+(以前这条只带
+                            // JSON 文本，multipart 和图片字节全被当文本毁掉；现在头与字节原样
+                            // 透传，回答也按字节带回去)。
+                            let headers: Vec<(String, String)> = params
+                                .get("headers")
+                                .and_then(|value| value.as_object())
+                                .map(|map| {
+                                    map.iter()
+                                        .filter_map(|(name, value)| {
+                                            value
+                                                .as_str()
+                                                .map(|text| (name.clone(), text.to_owned()))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let body = match params.get("body_b64").and_then(|value| value.as_str()) {
+                                Some(text) if !text.is_empty() => {
+                                    Some(B64.decode(text).context("请求体不是合法的 base64")?)
+                                }
+                                _ => None,
+                            };
+                            let token = core_token.clone();
+                            // 阻塞的 TCP 读写要离开异步执行器，否则一条大附件会把别的 RPC 卡住。
+                            let (status, headers, body) = tokio::task::spawn_blocking(move || {
+                                sunday_p2p::proxy::call_core_raw(
+                                    "127.0.0.1",
+                                    core_port,
+                                    &token,
+                                    &http,
+                                    &path,
+                                    &headers,
+                                    body,
+                                )
+                            })
+                            .await
+                            .context("转发任务没有完成")??;
+                            let headers: std::collections::HashMap<String, String> =
+                                headers.into_iter().collect();
+                            Ok(serde_json::json!({
+                                "status": status,
+                                "headers": headers,
+                                "body_b64": B64.encode(body),
+                            }))
                         }
                         // 其余一律当成 Core 的 JSON-RPC 方法原样转过去：
                         // 界面正是靠这条路拿项目、会话与工作台快照。
@@ -366,7 +435,7 @@ async fn call(args: Vec<String>) -> Result<()> {
     let endpoint = identity.endpoint().await?;
     let params: serde_json::Value =
         serde_json::from_str(&flags.params).context("--params must be JSON")?;
-    let mut client = Client::dial(&endpoint, &flags.ticket, &flags.name).await?;
+    let client = Client::dial(&endpoint, &flags.ticket, &flags.name).await?;
     let result = client.call(&flags.method, params).await?;
     println!("PEER {}", client.peer);
     println!("RESULT {}", serde_json::to_string(&result)?);

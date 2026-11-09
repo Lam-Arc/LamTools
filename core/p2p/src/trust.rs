@@ -60,6 +60,26 @@ impl TrustStore {
         self.devices.iter().any(|device| device.id == id)
     }
 
+    /// 重新从磁盘读取名单。
+    ///
+    /// user:“允许撤销授权”+(宿主撤销时改的是 `p2p-trust.json`，传输进程手里是启动时读的
+    /// 那份内存副本。不重读就会变成「列表里已经没有它了，它还能连进来」，而且下一次有
+    /// 新设备接入时 `save()` 会把撤销记录整条覆盖回去。)
+    pub fn reload(&mut self) -> Result<()> {
+        if self.path.as_os_str().is_empty() {
+            return Ok(());
+        }
+        if !self.path.exists() {
+            // 文件被删掉视为「撤销所有设备」，而不是继续信任内存里的旧名单。
+            self.devices.clear();
+            return Ok(());
+        }
+        let text = std::fs::read_to_string(&self.path).context("cannot read p2p-trust.json")?;
+        let parsed: Self = serde_json::from_str(&text).context("p2p-trust.json is not valid JSON")?;
+        self.devices = parsed.devices;
+        Ok(())
+    }
+
     /// Adds a device, replacing an entry with the same id.
     pub fn trust(&mut self, id: &str, name: &str) -> TrustedDevice {
         let device = TrustedDevice {
@@ -85,4 +105,30 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// user:“撤销设备要真的生效”+(改文件之后，下一次握手必须看不到这台设备)。
+    #[test]
+    fn reload_picks_up_a_revocation_written_by_the_host() {
+        let dir = std::env::temp_dir().join(format!("sunday-trust-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut server_side = TrustStore::load(&dir).unwrap();
+        server_side.trust("phone-1", "Phone");
+        server_side.save().unwrap();
+
+        // 宿主那一侧：独立读文件、撤销、写回。
+        let mut host_side = TrustStore::load(&dir).unwrap();
+        assert!(host_side.revoke("phone-1"));
+        host_side.save().unwrap();
+
+        // 传输进程不重启，只重读。
+        server_side.reload().unwrap();
+        assert!(!server_side.is_trusted("phone-1"));
+        assert!(server_side.devices.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -169,16 +169,21 @@ async function keepRemoteAlive(alreadyRemote: () => boolean): Promise<void> {
   remoteLoopRunning = true
   let delay = 3_000
   try {
-    while (!alreadyRemote()) {
-      if (!readTicket()) return
+    // user:“显示和电脑断联了”+(以前一连上就退出循环，远程期间再断线就没人重连；
+    // 只要还记着票据（用户没主动选本机），就一直守着。连着的时候只是隔一会儿确认一次)。
+    while (readTicket()) {
       const peer = await ensureRemote(25_000)
       if (peer) {
-        switchToRemote(peer, alreadyRemote)
-        return
+        if (!alreadyRemote()) {
+          switchToRemote(peer, alreadyRemote)
+          return
+        }
+        delay = 3_000
+        await new Promise((resolve) => window.setTimeout(resolve, 15_000))
+        continue
       }
       await new Promise((resolve) => window.setTimeout(resolve, delay))
       delay = Math.min(delay * 2, 30_000)
-      if (document.visibilityState === 'visible' && alreadyRemote()) return
     }
   } finally {
     remoteLoopRunning = false
@@ -210,7 +215,7 @@ async function boot(): Promise<void> {
   try {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') return
-      if (usingRemote || !readTicket()) return
+      if (!readTicket()) return
       void keepRemoteAlive(() => usingRemote)
     })
     await listen<{ phase?: string }>('p2p-progress', (event) => {
@@ -253,16 +258,11 @@ async function boot(): Promise<void> {
     } catch {
       // 存储不可用只是少了这条提示，不影响连接。
     }
-    if (peer === null) {
-      void remoteAttempt.then((late) => {
-        if (late) {
-          switchToRemote(late, () => usingRemote)
-          return
-        }
-        // 这一次没拨通不代表连不上：接着退避重试。
-        return keepRemoteAlive(() => usingRemote)
-      })
-    }
+    // 拨号结果回来得晚也照样切；同时常驻重连循环，远程期间断线也能自己恢复。
+    void remoteAttempt.then((late) => {
+      if (late && !usingRemote) switchToRemote(late, () => usingRemote)
+    })
+    void keepRemoteAlive(() => usingRemote)
     const activeTransport = peer === null ? gateTransport(transport, coreReady) : createRemoteTransport()
     if (peer !== null) capabilities.remote = { peer }
     const runtime = createLamToolsRuntime({

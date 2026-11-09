@@ -2,12 +2,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
 import { ensureRemote, remoteStatus } from '@/app/remoteSession.ts'
+import { base64ToBytes, bytesToBase64, isReplaySafe } from '@/transport/remoteCodec.ts'
 
 import {
   TransportRpcError,
   type LamToolsTransport,
   type TransportConnectionState,
-  type TransportHttpResponse,
   type TransportMessage,
   type TransportRequest,
 } from '@/transport/types.ts'
@@ -27,10 +27,12 @@ export class RemoteTransport implements LamToolsTransport {
   private readonly subscribers = new Set<(message: TransportMessage) => void>()
   private readonly stateSubscribers = new Set<(state: TransportConnectionState) => void>()
   private unlisten: (() => void) | null = null
+  private progressUnlisten: (() => void) | null = null
 
   async connect(): Promise<void> {
     if (this.state === 'connected') return
     this.setState('connecting')
+    this.unlisten?.()
     this.unlisten = await listen('p2p-event', (event) => {
       const payload = event.payload as { method?: unknown; params?: unknown } | undefined
       const method = typeof payload?.method === 'string' ? payload.method : undefined
@@ -42,12 +44,22 @@ export class RemoteTransport implements LamToolsTransport {
         params: (payload?.params ?? {}) as Record<string, unknown>,
       })
     })
+    // user:“显示和电脑断联了”+(宿主发现隧道断了会发 lost；界面必须知道，否则会一直
+    // 认为自己在远程，流式输出静默停掉也没有任何提示)。
+    this.progressUnlisten?.()
+    this.progressUnlisten = await listen<{ phase?: string }>('p2p-progress', (event) => {
+      const phase = event.payload?.phase
+      if (phase === 'connected') this.setState('connected')
+      else if (phase === 'lost' || phase === 'failed' || phase === 'timeout') this.setState('disconnected')
+    })
     this.setState('connected')
   }
 
   async close(): Promise<void> {
     this.unlisten?.()
     this.unlisten = null
+    this.progressUnlisten?.()
+    this.progressUnlisten = null
     this.setState('disconnected')
   }
 
@@ -56,12 +68,18 @@ export class RemoteTransport implements LamToolsTransport {
       return await this.perform<TResponse>(request)
     } catch (error) {
       // user:“网络切换后尽可能恢复连接及会话状态”+(PC 重启或换网之后，先按记住的票据
-      // 重连一次；重连成功就把这次请求补上，不让一次断线变成一条发不出去的消息)。
+      // 重连一次；重连成功就把这次请求补上)。
       //
       // 但重连只在隧道真的断了的时候做：Core 自己回的业务错误（比如参数不对）不该触发
       // 一次拨号，否则一个普通失败会被说成「连接断开」，还白等 1.2 秒。
       const status = await remoteStatus()
       if (status?.connected) throw error
+      if (!isReplaySafe(request)) {
+        throw new TransportRpcError(
+          undefined,
+          '和电脑的连接断开了，这条操作没有确认送达：在「设备连接」里重连之后再试一次',
+        )
+      }
       // 单飞之后这里不会再顶掉正在进行的拨号；给它够一次局域网握手的时间。
       const peer = await ensureRemote(8_000)
       if (peer === null) {
@@ -74,24 +92,21 @@ export class RemoteTransport implements LamToolsTransport {
   private async perform<TResponse>(request: TransportRequest): Promise<TResponse> {
     try {
       if (request.kind === 'http') {
-        // 请求体可能是二进制；解析不了就原样发空，不要让一个畸形输入变成一条假故障。
-        let body: unknown
-        if (request.body) {
-          const text = new TextDecoder().decode(request.body)
-          try {
-            body = JSON.parse(text)
-          } catch {
-            body = text
-          }
-        }
+        // user:“远程模式下附件发不出去、图片预览是坏的”+(隧道这层以前只搬文本，
+        // multipart 和图片字节全被毁掉；现在按字节透传，并把 Content-Type 一起带过去)。
         const reply = (await invoke('p2p_call', {
           method: 'core_http',
-          params: { method: request.method, path: request.path, body },
-        })) as { status?: number; body?: unknown }
+          params: {
+            method: request.method,
+            path: request.path,
+            headers: request.headers ?? {},
+            body_b64: request.body && request.body.length ? bytesToBase64(request.body) : '',
+          },
+        })) as { status?: number; headers?: Record<string, string>; body_b64?: string } | undefined
         return {
           status: reply?.status ?? 0,
-          headers: { 'content-type': 'application/json' },
-          body: new TextEncoder().encode(JSON.stringify(reply?.body ?? null)),
+          headers: reply?.headers ?? {},
+          body: base64ToBytes(reply?.body_b64),
         } as TResponse
       }
       const result = (await invoke('p2p_call', {
@@ -105,9 +120,10 @@ export class RemoteTransport implements LamToolsTransport {
   }
 
   send(message: TransportMessage): void {
-    if (message.channel === 'rpc' && message.method) {
-      void invoke('p2p_call', { method: message.method, params: message.params ?? {} })
-    }
+    // 反向 RPC（服务端请求客户端）在远程模式下走不通：应答帧没有 method，
+    // 而隧道的每一帧都要一个 Core 方法名。当前只有 `initialized` 这类通知会走这里。
+    if (message.channel !== 'rpc' || !message.method) return
+    void invoke('p2p_call', { method: message.method, params: message.params ?? {} }).catch(() => undefined)
   }
 
   subscribe(handler: (message: TransportMessage) => void): () => void {
@@ -126,6 +142,7 @@ export class RemoteTransport implements LamToolsTransport {
   }
 
   private setState(state: TransportConnectionState): void {
+    if (this.state === state) return
     this.state = state
     for (const handler of this.stateSubscribers) handler(state)
   }

@@ -7,7 +7,7 @@
 //! 备用域名服务器（本机直接地址照样能用）。等桌面端接上之后再把 JNI 上下文补进来。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ pub struct P2pState {
     inner: Mutex<Inner>,
     /// 最近一次成功连接的对端 id。
     ///
-    /// user:“点刷新什么反应都没有”+(p2p_call 会整条调用期间持有 inner 锁，状态查询如果也去
+    /// user:“点刷新什么反应都没有”+(p2p_call 以前整条调用期间持有 inner 锁，状态查询如果也去
     /// 抢同一把锁，界面每 3 秒一次的刷新就会排在一条长 RPC 后面，看起来像卡住了)
     peer: Mutex<Option<String>>,
     /// 是否正在拨号。
@@ -32,6 +32,18 @@ pub struct P2pState {
     /// 「锁拿不到」猜，以前猜成「已连接」；界面于是拿着一个还没建好的隧道去读项目、读模型，
     /// 读一次空一次，还显示成「暂无可用模型」。这里把拨号单独记下来，让状态说实话)。
     connecting: Arc<AtomicBool>,
+    /// 隧道是否还活着。
+    ///
+    /// user:“显示和电脑断联了”+(网络静默断开时读帧会一直挂着，界面却还是「已连接」；
+    /// 这里存的就是 Client 自己那只存活标志，宿主据此在真的断了时通知界面)。
+    alive: Mutex<Arc<AtomicBool>>,
+    /// 每次连接递增一个号：旧连接的后台监听据此退出，不会在新连接上来之后误报「断了」。
+    generation: Arc<AtomicU64>,
+    /// 拨号串行，但不占用 `inner` 锁。
+    ///
+    /// user:“切换的时候明明没在连，却报连接超时”+(以前拨号的预算里包含了排队等一条长调用
+    /// 释放 inner 锁的时间，45 秒被等锁吃光，用户被引向错误的方向)。
+    dialing_gate: Mutex<()>,
 }
 
 /// 拨号期间置位，离开作用域（成功、失败、超时、被取消）自动复位。
@@ -46,7 +58,7 @@ impl Drop for DialingGuard {
 #[derive(Default)]
 struct Inner {
     endpoint: Option<sunday_p2p::iroh::Endpoint>,
-    client: Option<Client>,
+    client: Option<Arc<Client>>,
     ticket: String,
 }
 
@@ -58,6 +70,9 @@ impl P2pState {
             inner: Mutex::new(Inner::default()),
             peer: Mutex::new(None),
             connecting: Arc::new(AtomicBool::new(false)),
+            alive: Mutex::new(Arc::new(AtomicBool::new(false))),
+            generation: Arc::new(AtomicU64::new(0)),
+            dialing_gate: Mutex::new(()),
         }
     }
 
@@ -101,24 +116,34 @@ pub async fn p2p_connect(
     // 从这里开始到函数结束，对外都算「正在连接」，状态查询据此如实回答。
     state.connecting.store(true, Ordering::SeqCst);
     let _dialing = DialingGuard(state.connecting.clone());
-    // 连接的第一步是创建 iroh 端点，这一步本身就可能花几十秒（建 socket、连中继、查地址）；
-    // 只给拨号设上限没有用。整个连接过程都罩在同一个预算里。
-    let attempt = async move {
-    let mut inner = state.inner.lock().await;
-    if inner.endpoint.is_none() {
-        let identity = Identity::load_or_create(&state.dir).map_err(|error| error.to_string())?;
-        let endpoint = identity
-            .endpoint()
-            .await
-            .map_err(|error| format!("{error:#}"))?;
-        inner.ticket = encode_ticket(&endpoint.addr()).map_err(|error| error.to_string())?;
-        inner.endpoint = Some(endpoint);
+    // 同一时刻只允许一次拨号。这里刻意不碰 inner 锁：一条 180 秒的调用不该让「切换设备」等到超时。
+    let _gate = state.dialing_gate.lock().await;
+
+    let endpoint = {
+        let mut inner = state.inner.lock().await;
+        if inner.endpoint.is_none() {
+            let identity = Identity::load_or_create(&state.dir).map_err(|error| error.to_string())?;
+            let endpoint = identity
+                .endpoint()
+                .await
+                .map_err(|error| format!("{error:#}"))?;
+            inner.ticket = encode_ticket(&endpoint.addr()).map_err(|error| error.to_string())?;
+            inner.endpoint = Some(endpoint);
+        }
+        // 重连之前先把旧连接收掉，否则电脑那边还挂着上一台手机，会白等一轮握手。
+        if let Some(previous) = inner.client.take() {
+            previous.close();
+        }
+        inner.endpoint.clone().expect("endpoint ready")
+    };
+    // 这一代之前的连接与监听都作废。
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    {
+        let alive = state.alive.lock().await;
+        alive.store(false, Ordering::SeqCst);
     }
-    // 重连之前先把旧连接收掉，否则电脑那边还挂着上一台手机，会白等一轮握手。
-    if let Some(previous) = inner.client.take() {
-        previous.close();
-    }
-    let endpoint = inner.endpoint.clone().expect("endpoint ready");
+    *state.peer.lock().await = None;
+
     // user:“连接过程中一点反应都没有，我根本不知道卡在哪里了”+(先告诉界面目标地址，
     // 再给整次尝试一个明确的上限，超时就报可执行的原因，而不是让 iroh 叠三层超时)。
     use tauri::Emitter as _;
@@ -136,12 +161,7 @@ pub async fn p2p_connect(
         json!({ "phase": "dialing", "target": target }),
     )
     .ok();
-    let client = match tokio::time::timeout(
-        budget,
-        Client::dial(&endpoint, &ticket, &name),
-    )
-    .await
-    {
+    let client = match tokio::time::timeout(budget, Client::dial(&endpoint, &ticket, &name)).await {
         Ok(Ok(client)) => client,
         Ok(Err(error)) => {
             app.emit("p2p-progress", json!({ "phase": "failed", "target": target }))
@@ -164,33 +184,81 @@ pub async fn p2p_connect(
     )
     .ok();
     let peer = client.peer.clone();
+    let peer_name = client.peer_name.clone();
     *state.peer.lock().await = Some(peer.clone());
+    // 换成这条连接自己的标志：它的读帧与心跳任务断掉时，这个值会跟着变 false。
+    let alive = client.alive_flag();
+    *state.alive.lock().await = Arc::clone(&alive);
+
     // user:“接收实时事件”+(Core 的通知由 PC 侧泵进隧道，这里换成 Tauri 事件交给界面；
     // 界面拿到的是同一条通知，不需要知道它是从哪条网络路径来的)。
     let mut events = client.subscribe();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         use tauri::Emitter;
-        while let Ok(event) = events.recv().await {
-            handle
-                .emit(
-                    "p2p-event",
-                    json!({ "method": event.method, "params": event.params }),
-                )
-                .ok();
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    handle
+                        .emit(
+                            "p2p-event",
+                            json!({ "method": event.method, "params": event.params }),
+                        )
+                        .ok();
+                }
+                // user:“一轮里事件比转发快，不能悄悄丢”+(以前 Lagged 会让这个转发任务直接
+                // 退出，手机从此只发得出、收不到，连断线都不算；现在告诉界面重新 resume)。
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    handle
+                        .emit(
+                            "p2p-event",
+                            json!({ "method": "thread/gap", "params": { "reason": "p2p_lagged" } }),
+                        )
+                        .ok();
+                }
+                Err(_) => break,
+            }
         }
     });
-    inner.client = Some(client);
-    Ok(json!({ "peer": peer }))
-    };
 
-    match tokio::time::timeout(budget + Duration::from_millis(250), attempt).await {
-        Ok(result) => result,
-        Err(_) => Err(format!(
-            "连接超时（{} 秒）。请确认电脑上的配对二维码是刚生成的，手机和电脑在同一 Wi-Fi，或电脑能连上中继。",
-            budget.as_secs().max(1)
-        )),
+    // user:“显示和电脑断联了”+(断线必须主动告诉界面，而不是等下一次操作超时；
+    // 界面收到 lost 才会显示「断开了」并开始重连)。
+    {
+        let owned = Arc::clone(state.inner());
+        let watch = Arc::clone(&alive);
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Emitter;
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if owned.generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                if watch.load(Ordering::SeqCst) {
+                    continue;
+                }
+                *owned.peer.lock().await = None;
+                if let Ok(mut inner) = owned.inner.try_lock() {
+                    let dead = inner
+                        .client
+                        .as_ref()
+                        .map(|client| !client.is_alive())
+                        .unwrap_or(false);
+                    if dead {
+                        if let Some(client) = inner.client.take() {
+                            client.close();
+                        }
+                    }
+                }
+                handle.emit("p2p-progress", json!({ "phase": "lost" })).ok();
+                return;
+            }
+        });
     }
+
+    let client = Arc::new(client);
+    state.inner.lock().await.client = Some(client);
+    Ok(json!({ "peer": peer, "name": peer_name }))
 }
 
 /// Forwards one call over the tunnel. `core_http` is what the shared UI uses for the
@@ -201,22 +269,27 @@ pub async fn p2p_call(
     method: String,
     params: Option<Value>,
 ) -> Result<Value, String> {
-    let mut inner = state.inner.lock().await;
-    // 隧道已经断了就当场丢掉，别让界面拿着一个死连接反复拿到英文报错。
-    if inner.client.as_ref().map(|client| !client.is_alive()).unwrap_or(false) {
-        if let Some(client) = inner.client.take() {
-            client.close();
+    // 只在取连接时持锁：界面的项目、模型、会话是并发加载的，不该互相排队。
+    let client = {
+        let mut inner = state.inner.lock().await;
+        // 隧道已经断了就当场丢掉，别让界面拿着一个死连接反复拿到英文报错。
+        if inner
+            .client
+            .as_ref()
+            .map(|client| !client.is_alive())
+            .unwrap_or(false)
+        {
+            if let Some(client) = inner.client.take() {
+                client.close();
+            }
         }
-    }
-    if inner.client.is_none() {
-        drop(inner);
+        inner.client.clone()
+    };
+    let Some(client) = client else {
+        state.alive.lock().await.store(false, Ordering::SeqCst);
         *state.peer.lock().await = None;
         return Err("和电脑的连接已经断开，打开「设备连接」重连或切回本机".to_owned());
-    }
-    let client = inner
-        .client
-        .as_mut()
-        .ok_or_else(|| "和电脑的连接已经断开，打开「设备连接」重连或切回本机".to_owned())?;
+    };
     client
         .call(&method, params.unwrap_or_else(|| json!({})))
         .await
@@ -254,45 +327,50 @@ pub async fn p2p_qr(ticket: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn p2p_status(state: State<'_, Arc<P2pState>>) -> Result<Value, String> {
-    // 有一条调用正在进行时锁是拿不到的，那说明隧道正常在用；这时候按缓存回答，别让
-    // 刷新按钮排在它后面。
-    let inner = match state.inner.try_lock() {
-        Ok(guard) => Some(guard),
-        Err(_) => None,
-    };
+    // 有一条调用正在进行时锁是拿不到的，那说明隧道正常在用；这时候按存活标志回答，
+    // 别让刷新按钮排在它后面。
+    let snapshot = state.inner.try_lock().ok().map(|inner| {
+        (
+            inner
+                .client
+                .as_ref()
+                .map(|client| client.is_alive())
+                .unwrap_or(false),
+            inner.client.as_ref().map(|client| client.peer.clone()),
+            inner.ticket.clone(),
+        )
+    });
     let cached = state.peer.lock().await.clone();
-    if let Some(inner) = inner.as_ref() {
-        let connected = inner
-            .client
-            .as_ref()
-            .map(|client| client.is_alive())
-            .unwrap_or(false);
-        return Ok(json!({
-            "connected": connected,
-            "connecting": state.connecting.load(Ordering::SeqCst),
-            "peer": inner.client.as_ref().map(|c| c.peer.clone()).or(cached),
-            "ticket": inner.ticket,
-        }));
-    }
-    // 锁被拨号占着：这时候还没有可用隧道，不能答「已连接」。
+    let alive_now = state.alive.lock().await.load(Ordering::SeqCst);
     let dialing = state.connecting.load(Ordering::SeqCst);
-    return Ok(json!({
-        "connected": !dialing,
-        "connecting": dialing,
-        "busy": true,
-        "peer": cached,
-    }));
+    match snapshot {
+        Some((connected, peer, ticket)) => Ok(json!({
+            "connected": connected,
+            "connecting": dialing,
+            "peer": peer.or(cached),
+            "ticket": ticket,
+        })),
+        // 锁被一条调用占着：连通性只看存活标志，不能拿「锁拿不到」当「已连接」。
+        None => Ok(json!({
+            "connected": alive_now && !dialing,
+            "connecting": dialing,
+            "busy": true,
+            "peer": cached,
+        })),
+    }
 }
-
 
 #[tauri::command]
 pub async fn p2p_disconnect(state: State<'_, Arc<P2pState>>) -> Result<(), String> {
+    // 先推进一代，旧连接的后台监听就不会在断开之后误报「断了」。
+    state.generation.fetch_add(1, Ordering::SeqCst);
     let mut inner = state.inner.lock().await;
     if let Some(client) = inner.client.take() {
         client.close();
     }
     drop(inner);
     *state.peer.lock().await = None;
+    state.alive.lock().await.store(false, Ordering::SeqCst);
     Ok(())
 }
 

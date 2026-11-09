@@ -138,7 +138,6 @@
             <code data-remote-ticket>{{ copied ? t("已复制") : ticket }}</code>
           </button>
           <div class="device-page__actions">
-            <button class="device-page__button" type="button" :disabled="busy" @click="createTicket">{{ t("换一张") }}</button>
             <button class="device-page__button" type="button" :disabled="busy" @click="stopServing">{{ t("停止接受") }}</button>
           </div>
         </div>
@@ -228,13 +227,16 @@ const isDesktop = computed(() => (props.platform ?? 'desktop') === 'desktop')
  * 认为当前是电脑，可界面走的是启动时选定的通道，两者能同时成立又互相矛盾)。
  * 启动流程会把实际选择写进 localStorage，这里照它显示。
  */
-const activeId = computed(() => {
+/** 只读一次 localStorage 不够：切换之后到重载之间，徽标要立刻跟着走。 */
+function readActive(): string {
   try {
     return localStorage.getItem('sunday.p2p.active') || 'local'
   } catch {
     return 'local'
   }
-})
+}
+
+const activeId = ref(readActive())
 
 /** 点整行就能切，不用先找到右边那颗按钮。 */
 function onRowClick(id: string): void {
@@ -266,6 +268,7 @@ function loadPaired(): void {
 async function refresh(): Promise<void> {
   busy.value = true
   error.value = ''
+  activeId.value = readActive()
   try {
     const status = await call<{ serving?: boolean; ticket?: string; connected?: boolean; peer?: string | null }>('p2p_status')
     if (status) {
@@ -467,13 +470,13 @@ async function connect(): Promise<void> {
   startConnecting(ticketInput.value)
   try {
     const name = isDesktop.value ? 'PC' : 'Phone'
-    const result = await call<{ peer?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
+    const result = await call<{ peer?: string; name?: string }>('p2p_connect', { ticket: ticketInput.value.trim(), name })
     connected.value = Boolean(result?.peer)
     peer.value = result?.peer ?? ''
     if (result?.peer) {
       saveTicket(ticketInput.value.trim())
       // 配过的电脑进设备清单，之后直接在清单里切换。
-      rememberDevice(ticketInput.value.trim(), shortId(result.peer))
+      rememberDevice(ticketInput.value.trim(), result.name || shortId(result.peer))
       loadPaired()
     }
     window.location.reload()
@@ -511,12 +514,14 @@ async function revoke(id: string): Promise<void> {
   }
 }
 
+let quietTimer: number | null = null
+
 onMounted(() => {
+  activeId.value = readActive()
   void refresh()
-  const timer = window.setInterval(() => {
+  quietTimer = window.setInterval(() => {
     void refreshQuiet()
   }, 3000)
-  onUnmounted(() => window.clearInterval(timer))
   if (!host()) return
   void import('@tauri-apps/api/event').then(async ({ listen }) => {
     try {
@@ -532,6 +537,11 @@ onMounted(() => {
       // 进度事件只是提示，缺了不影响连接。
     }
   })
+})
+
+onUnmounted(() => {
+  if (quietTimer !== null) window.clearInterval(quietTimer)
+  quietTimer = null
 })
 </script>
 

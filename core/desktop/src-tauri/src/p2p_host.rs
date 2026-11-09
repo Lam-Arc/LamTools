@@ -15,12 +15,14 @@
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
+#[derive(Clone, Default)]
 pub struct P2pHostState {
-    child: Mutex<Option<Child>>,
+    child: Arc<Mutex<Option<Child>>>,
     ticket: Arc<Mutex<String>>,
     port: Arc<Mutex<u16>>,
     /// 当前连着的手机；空表示没有设备在线。
@@ -28,17 +30,14 @@ pub struct P2pHostState {
     /// user:“我根本不知道卡在哪里了”+(电脑这边也要看得见手机到底连上没有，
     /// 否则二维码摆在屏幕上，连接成没成全靠猜)。
     peer: Arc<Mutex<Option<String>>>,
-}
-
-impl Default for P2pHostState {
-    fn default() -> Self {
-        Self {
-            child: Mutex::new(None),
-            ticket: Arc::new(Mutex::new(String::new())),
-            port: Arc::new(Mutex::new(0)),
-            peer: Arc::new(Mutex::new(None)),
-        }
-    }
+    /// 最近一次启动传输进程用的后端地址：进程死掉之后照它重启。
+    api_base: Arc<Mutex<String>>,
+    /// 守护线程已经起来（一个进程只要一条）。
+    supervisord: Arc<AtomicBool>,
+    /// 宿主正在退出：守护线程不要再拉起新进程。
+    stopping: Arc<AtomicBool>,
+    /// 同一张票据的二维码只生成一次（每次生成都要起一次子进程）。
+    qr_cache: Arc<Mutex<(String, String)>>,
 }
 
 fn data_dir() -> PathBuf {
@@ -91,6 +90,8 @@ fn binary() -> Result<PathBuf, String> {
 
 /// Starts the transport if it is not already running.
 fn ensure_child(api_base: &str, state: &P2pHostState) -> Result<(String, u16), String> {
+    // 宿主可以重新开始服务了；守护线程据此恢复工作。
+    state.stopping.store(false, Ordering::SeqCst);
     let mut guard = state.child.lock().map_err(|_| "传输进程状态不可用".to_string())?;
     if let Some(child) = guard.as_mut() {
         if child.try_wait().ok().flatten().is_none() {
@@ -163,6 +164,9 @@ fn ensure_child(api_base: &str, state: &P2pHostState) -> Result<(String, u16), S
     if let Ok(mut slot) = state.port.lock() {
         *slot = port;
     }
+    if let Ok(mut slot) = state.api_base.lock() {
+        *slot = api_base.trim().to_owned();
+    }
 
     // 继续读传输进程的输出：网络变化会打一行新的 TICKET，配对失败时会有 PEER 和错误。
     // user:“连不上……一点反应都没有”+(排障需要证据；之前 READY 之后就不再读管道，
@@ -177,7 +181,55 @@ fn ensure_child(api_base: &str, state: &P2pHostState) -> Result<(String, u16), S
     }
 
     *guard = Some(child);
+    // 进程起来之后交给守护线程：它死了（崩溃、被系统收掉）就照原来的地址重启，
+    // 否则手机要等到用户手动打开「设备连接」才能重新连上。
+    supervise(state);
     Ok((ticket, port))
+}
+
+/// 一条常驻线程盯着传输进程。
+///
+/// user:“传输进程死了只能手动重新生成二维码”+(以前只有打开设备页才会检查子进程，
+/// 手机那边于是长时间连不上任何东西，界面上也看不出原因)。
+fn supervise(state: &P2pHostState) {
+    if state.supervisord.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let host = state.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        // 宿主退出期间不要重启：进程会在退出时被杀掉。
+        if host.stopping.load(Ordering::SeqCst) {
+            continue;
+        }
+        let api = host
+            .api_base
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        if api.is_empty() {
+            continue;
+        }
+        let exited = {
+            let mut guard = match host.child.lock() {
+                Ok(guard) => guard,
+                Err(_) => continue,
+            };
+            match guard.as_mut() {
+                None => true,
+                Some(child) => child.try_wait().ok().flatten().is_some(),
+            }
+        };
+        if !exited {
+            continue;
+        }
+        if let Ok(mut guard) = host.child.lock() {
+            *guard = None;
+        }
+        if let Err(error) = ensure_child(&api, &host) {
+            eprintln!("[sunday] p2p supervisor: {error}");
+        }
+    });
 }
 
 /// 把子进程的后续输出写进 `%APPDATA%/Sunday/p2p/p2p.log`，顺便更新票据。
@@ -237,13 +289,18 @@ fn spawn_log_reader(
 }
 
 /// The text the phone pastes. Starts the transport on first use.
+///
+/// 异步命令：启动要等中继和 READY（最长 30 秒），不能把 IPC 线程堵在那里让整个窗口没反应。
 #[tauri::command]
-pub fn p2p_ticket(
+pub async fn p2p_ticket(
     api_base: String,
     state: tauri::State<'_, P2pHostState>,
 ) -> Result<Value, String> {
-    let (ticket, port) = ensure_child(&api_base, &state)?;
-    Ok(json!({ "ticket": ticket, "port": port }))
+    let host = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_child(&api_base, &host))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|(ticket, port)| json!({ "ticket": ticket, "port": port }))
 }
 
 /// The ticket as an SVG QR code.
@@ -251,11 +308,32 @@ pub fn p2p_ticket(
 /// The transport binary owns the encoding; the host only passes the ticket through, so the
 /// code the phone scans and the text it pastes are the same string by construction.
 #[tauri::command]
-pub fn p2p_qr(ticket: String) -> Result<Value, String> {
-    // The transport binary owns QR encoding so this host never links the crate: one
-    // implementation, two callers, and no second windows dependency graph.
+pub async fn p2p_qr(
+    ticket: String,
+    state: tauri::State<'_, P2pHostState>,
+) -> Result<Value, String> {
+    // 同一张票据只渲染一次：每次渲染都要起一个进程，设备页每 3 秒刷新一次不该反复起进程。
+    if let Ok(cache) = state.qr_cache.lock() {
+        if cache.0 == ticket && !cache.1.is_empty() {
+            return Ok(json!({ "svg": cache.1 }));
+        }
+    }
+    let requested = ticket.clone();
+    let svg = tauri::async_runtime::spawn_blocking(move || build_qr(&requested))
+        .await
+        .map_err(|error| error.to_string())??;
+    if let Ok(mut cache) = state.qr_cache.lock() {
+        cache.0 = ticket;
+        cache.1 = svg.clone();
+    }
+    Ok(json!({ "svg": svg }))
+}
+
+/// The transport binary owns QR encoding so this host never links the crate: one
+/// implementation, two callers, and no second windows dependency graph.
+fn build_qr(ticket: &str) -> Result<String, String> {
     let mut command = Command::new(binary()?);
-    command.arg("qr").arg("--ticket").arg(&ticket);
+    command.arg("qr").arg("--ticket").arg(ticket);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -267,17 +345,20 @@ pub fn p2p_qr(ticket: String) -> Result<Value, String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
-    Ok(json!({ "svg": String::from_utf8_lossy(&output.stdout) }))
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Kept for symmetry with the phone side; starting the transport is what actually serves.
 #[tauri::command]
-pub fn p2p_serve_start(
+pub async fn p2p_serve_start(
     api_base: String,
     state: tauri::State<'_, P2pHostState>,
 ) -> Result<Value, String> {
-    let (ticket, port) = ensure_child(&api_base, &state)?;
-    Ok(json!({ "serving": true, "ticket": ticket, "port": port }))
+    let host = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || ensure_child(&api_base, &host))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|(ticket, port)| json!({ "serving": true, "ticket": ticket, "port": port }))
 }
 
 /// Stops the transport process and forgets its ticket.
@@ -286,6 +367,7 @@ pub fn p2p_serve_start(
 /// 进程句柄被丢弃不会终止子进程，实测窗口关掉后 sunday-p2p 仍在监听旧票据，
 /// 下一次启动又拉起第二个，旧的那个永远指着已经死掉的 Core 端口。)
 pub fn stop(state: &P2pHostState) {
+    state.stopping.store(true, Ordering::SeqCst);
     if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
@@ -297,6 +379,13 @@ pub fn stop(state: &P2pHostState) {
     }
     if let Ok(mut peer) = state.peer.lock() {
         *peer = None;
+    }
+    if let Ok(mut api) = state.api_base.lock() {
+        api.clear();
+    }
+    if let Ok(mut cache) = state.qr_cache.lock() {
+        cache.0.clear();
+        cache.1.clear();
     }
 }
 
@@ -325,6 +414,8 @@ pub fn p2p_status(state: tauri::State<'_, P2pHostState>) -> Result<Value, String
 }
 
 /// user:“允许撤销授权”+(传输进程把名单放在自己的目录里，这里改同一份文件)。
+///
+/// 传输进程每次握手前都会重读这份名单，所以撤销立即生效，不需要重启进程。
 #[tauri::command]
 pub fn p2p_devices() -> Result<Value, String> {
     let path = data_dir().join("p2p-trust.json");
