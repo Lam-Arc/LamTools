@@ -256,12 +256,9 @@ a {
   gap: 9px;
   min-height: 44px;
   padding: 0 20px;
-  border: 0;
-  border-radius: var(--radius-sm);
   font-size: 14px;
   font-weight: 740;
   line-height: 1;
-  cursor: pointer;
   transition: transform 160ms ease-out, background-color 160ms ease-out, color 160ms ease-out;
 }
 
@@ -561,6 +558,42 @@ a {
   opacity: 0.66;
   font-size: 11px;
   font-weight: 650;
+}
+
+/* user:“接 GitHub release”+(安卓包由 GitHub Release 分发，页面给出扫码入口，
+   手机相机扫一下就能下载，不用先把链接发到手机上)。 */
+.download-qr {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--site-line);
+  border-radius: 14px;
+  background: var(--site-surface);
+}
+
+.download-qr img {
+  flex: none;
+  width: 96px;
+  height: 96px;
+  padding: 6px;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.download-qr strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--site-ink);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.download-qr span {
+  color: var(--site-muted);
+  font-size: 11px;
+  line-height: 1.6;
 }
 
 .download-linux-alt {

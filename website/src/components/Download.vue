@@ -11,7 +11,11 @@ const version = import.meta.env.VITE_SUNDAY_VERSION || '0.3.31'
 const linuxVersion = import.meta.env.VITE_LINUX_VERSION || '0.3.17'
 const downloadUrl = import.meta.env.VITE_WINDOWS_DOWNLOAD_URL || '/downloads/Sunday-latest-x64-setup.exe'
 const mobileVersion = import.meta.env.VITE_SUNDAY_MOBILE_VERSION || '0.1.48'
-const androidDownloadUrl = import.meta.env.VITE_ANDROID_DOWNLOAD_URL || '/downloads/Sunday-mobile-latest.apk'
+// user:“接 GitHub release”+(安卓包走 GitHub Release 的固定地址：同一个 tag 下同名资产
+// 每次构建覆盖，官网链接不用跟着版本号改，扫码之后永远是最新那一个)。
+const androidDownloadUrl = import.meta.env.VITE_ANDROID_DOWNLOAD_URL
+  || 'https://github.com/Lam-Arc/LamTools/releases/download/android-latest/Sunday-mobile-arm64.apk'
+const androidQrUrl = import.meta.env.VITE_ANDROID_QR_URL || '/downloads/android-qr.svg'
 const linuxReleaseDownloadBase = 'https://github.com/Lam-Arc/LamTools/releases/latest/download'
 const linuxAppImageUrl = import.meta.env.VITE_LINUX_APPIMAGE_URL || `${linuxReleaseDownloadBase}/Sunday_${linuxVersion}_amd64.AppImage`
 const linuxDebUrl = import.meta.env.VITE_LINUX_DEB_URL || `${linuxReleaseDownloadBase}/Sunday_${linuxVersion}_amd64.deb`
@@ -53,6 +57,13 @@ const linuxDebUrl = import.meta.env.VITE_LINUX_DEB_URL || `${linuxReleaseDownloa
             </span>
             <ArrowDownToLine :size="18" :stroke-width="1.8" aria-hidden="true" />
           </a>
+        </div>
+        <div class="download-qr">
+          <img :src="androidQrUrl" alt="手机扫码下载 Sunday 安卓版" width="104" height="104" loading="lazy" />
+          <div>
+            <strong>手机扫码安装</strong>
+            <span>用手机相机扫一下就能下载 APK。装好之后在手机「远程连接」里扫码配对电脑。</span>
+          </div>
         </div>
         <div class="download-linux-alt">
           <span>Debian / Ubuntu：</span>

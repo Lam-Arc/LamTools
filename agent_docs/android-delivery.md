@@ -19,6 +19,27 @@
 b5ba8abcb1c434385a34fb8571c09a9c88197ad3a957d6d80f3af8e5ec486b67  sunday-m-x86_64-debug.apk
 ```
 
+## 下载渠道（2026-11-10）
+
+user:“接 GitHub release”+(安卓包走 GitHub Release，官网给扫码入口，不再靠拷文件)。
+
+固定位置：
+
+```
+https://github.com/Lam-Arc/LamTools/releases/download/android-latest/Sunday-mobile-arm64.apk
+```
+
+- tag 固定为 `android-latest`，资产名固定为 `Sunday-mobile-arm64.apk`，每次发布覆盖同一个
+  位置。官网 `website/src/components/Download.vue` 的「下载 Android 版」和扫码二维码都
+  指向它，不会随版本号失效；要换自有服务就设 `VITE_ANDROID_DOWNLOAD_URL`。
+- 二维码是 `website/public/downloads/android-qr.svg`，由
+  `cargo run --example qr_text -- <url>` 生成，和配对二维码共用同一个渲染器。
+- 发包一条命令：`python scripts/publish-android.py`。它会先确认 APK 里确实有
+  `lib/arm64-v8a/libproot.so` 与 `assets/runtime/rootfs-*`，否则拒绝上传；然后算 SHA-256、
+  覆盖资产、把构建时间与校验和写进 Release 说明。`--dry-run` 只校验不上传。
+- CI 里的 `android-apk.yml` 仍然只做「干净检出也能构建」的验证。可安装的包需要内置运行时，
+  那份资产不进仓库（`core/android-runtime/tools/out` 被忽略），所以 CI 产物不能直接发给用户。
+- 包是 debug 签名。以后换成 release 签名，老用户需要卸载重装一次，否则会报签名冲突。
 **打 arm64 包必须设置 `SUNDAY_RT_ABI=aarch64` 与 `SUNDAY_RT_ASSETS=<runtime>/tools/out/aarch64/assets`。**
 漏掉的包能装能开，但 APK 里既没有 `assets/runtime/rootfs-*` 也没有 `libproot.so`，启动层
 会一直报 `cannot start proot: No such file or directory`——手机永远只能用远程模式，
