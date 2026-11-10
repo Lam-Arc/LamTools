@@ -74,6 +74,8 @@ export { selectCoreSubAgentRun, selectCoreSubAgentRuns } from '@/agents/subAgent
 export { default as WorkspaceShell } from '@/components/WorkspaceShell.vue';
 export { default as LamToolsApp } from '@/app/LamToolsApp.vue';
 export { default as LeftSidebarShell } from '@/components/LeftSidebarShell.vue';
+// 手机端宿主（core/mobile/src/App.vue）渲染这个顶栏；库入口不导出它，手机端就解析不到。
+export { default as MobileTopBar } from '@/components/MobileTopBar.vue';
 export { default as RailAction } from '@/components/RailAction.vue';
 export { default as SessionSidebar } from '@/components/SessionSidebar.vue';
 export { default as ChatThread } from '@/components/ChatThread.vue';

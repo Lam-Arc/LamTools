@@ -27,10 +27,6 @@ use crate::{HostPlatform, PLATFORM_UNIVERSAL};
 /// second list saying so.
 const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     (
-        "git",
-        include_str!("../../src/lamtools_core/plugins/bundled/git/plugin.json"),
-    ),
-    (
         "imagegen",
         include_str!("../../src/lamtools_core/plugins/bundled/imagegen/plugin.json"),
     ),
@@ -366,7 +362,6 @@ mod tests {
         assert_eq!(
             names,
             [
-                "git",
                 "imagegen",
                 "plan",
                 "study",
@@ -384,7 +379,8 @@ mod tests {
             .iter()
             .find(|plugin| plugin.name == "study")
             .expect("study entry");
-        assert_eq!(study.version, "1.0.0");
+        // 清单是唯一事实来源：Study 插件已经升到 2.0.0。
+        assert_eq!(study.version, "2.0.0");
         assert_eq!(study.platforms, "universal");
         // The declared skill roots, as the panel reports them.
         assert_eq!(
