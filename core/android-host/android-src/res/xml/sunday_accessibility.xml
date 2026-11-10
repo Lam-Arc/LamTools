@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- user:“加，安卓控制，上模拟器里把它跑通”+(读屏、点按、滑动、输入都走系统无障碍服务) -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/sunday_accessibility_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.lamtools.sunday.core.MainActivity" />

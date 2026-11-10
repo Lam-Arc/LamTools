@@ -32,6 +32,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_FilePickerBridge_nativeRegi
     _class: JClass,
 ) {
     crate::picker::remember(&mut env);
+    crate::device_control::remember(&mut env);
     println!("[sunday] file picker bridge registered");
 }
 
@@ -57,6 +58,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_QrScanBridge_nativeRegister
     _class: JClass,
 ) {
     crate::picker::remember(&mut env);
+    crate::device_control::remember(&mut env);
 }
 
 /// 一帧 NV21 的亮度面 -> 二维码文本。没有识别到不是错误，返回 null。
@@ -96,6 +98,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_KeyboardBridge_nativeRegist
     _class: JClass,
 ) {
     crate::picker::remember(&mut env);
+    crate::device_control::remember(&mut env);
     println!("[sunday] keyboard bridge registered");
 }
 

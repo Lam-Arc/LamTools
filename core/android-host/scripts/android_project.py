@@ -193,6 +193,23 @@ def sync_sources() -> int:
         target.write_bytes(data)
         written += 1
 
+    # 资源文件（无障碍配置、字符串）没有别的路径能进生成工程：`sync` 只拷 `*.kt`，
+    # 而 `gen/` 会在 regenerate 时被清掉，所以这里和源码一起同步。
+    res_root = SRC_ROOT / "res"
+    if res_root.exists():
+        for path in sorted(res_root.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(res_root)
+            target = PROJECT / "app/src/main/res" / relative
+            data = path.read_bytes()
+            if target.exists() and target.read_bytes() == data:
+                unchanged += 1
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            written += 1
+
     say(f"sync: {written} written, {unchanged} unchanged, into {JAVA_ROOT}")
     code = sync_manifest()
     if code != EXIT_OK:
@@ -236,6 +253,7 @@ def sync_manifest() -> int:
     text = inject_permissions(text, nl)
     text = inject_small_window_flag(text, nl)
     text = inject_overlay_service(text, nl)
+    text = inject_accessibility_service(text, nl)
     text = inject_qr_scanner(text, nl)
     if text != original:
         MANIFEST.write_text(text, encoding="utf-8", newline="")
@@ -323,7 +341,9 @@ def sync_android_theme() -> int:
 
 def inject_permissions(text: str, nl: str) -> str:
     """Adds the permissions the ring needs, above `<application>`."""
-    required = (*OVERLAY_PERMISSIONS, "android.permission.CAMERA")
+    # user:“加，安卓控制，上模拟器里把它跑通”+(设备控制要能看到并打开其它应用，
+    # 安卓 11 起列应用必须声明这一条)。
+    required = (*OVERLAY_PERMISSIONS, "android.permission.CAMERA", "android.permission.QUERY_ALL_PACKAGES")
     missing = [name for name in required if f'android:name="{name}"' not in text]
     if not missing:
         return text
@@ -352,6 +372,38 @@ def inject_qr_scanner(text: str, nl: str) -> str:
         + nl
     )
     return text.replace(anchor, activity + anchor, 1)
+
+
+ACCESSIBILITY_MARKER = "<!-- >>> Sunday accessibility -->"
+
+
+def inject_accessibility_service(text: str, nl: str) -> str:
+    """声明设备控制的无障碍服务；用户还要在系统设置里打开它。"""
+    if ACCESSIBILITY_MARKER in text:
+        return text
+    anchor = "    </application>"
+    if anchor not in text:
+        return text
+    block = nl.join(
+        [
+            "        " + ACCESSIBILITY_MARKER,
+            "        <service",
+            '            android:name=".SundayAccessibilityService"',
+            '            android:exported="true"',
+            '            android:label="Sunday 设备控制"',
+            '            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">',
+            "            <intent-filter>",
+            '                <action android:name="android.accessibilityservice.AccessibilityService" />',
+            "            </intent-filter>",
+            "            <meta-data",
+            '                android:name="android.accessibilityservice"',
+            '                android:resource="@xml/sunday_accessibility" />',
+            "        </service>",
+            "        <!-- <<< Sunday accessibility -->",
+            "",
+        ]
+    )
+    return text.replace(anchor, block + anchor, 1)
 
 
 def inject_small_window_flag(text: str, nl: str) -> str:

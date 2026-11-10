@@ -676,6 +676,9 @@ impl Runtime {
                 [
                     "LAMTOOLS_CORE_API_TOKEN=".to_owned() + &token,
                     "TZ=Asia/Shanghai".to_owned(),
+                    // user:“加，安卓控制”+(Core 靠这个标记决定要不要把设备控制工具交给模型；
+                    // 桌面与远程模式没有这个变量，就不会出现一个点了没反应的按钮)。
+                    "SUNDAY_HOST_PLATFORM=android".to_owned(),
                 ],
             );
         }

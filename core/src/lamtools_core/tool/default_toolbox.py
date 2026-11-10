@@ -19,7 +19,7 @@ from lamtools_core.agent import (
     SubAgentRunResult,
 )
 from lamtools_core.llm import normalize_reasoning_level, reasoning_level_from_legacy
-from lamtools_core.skills import SkillRegistry
+from lamtools_core.skills import SkillRegistry, derive_skill_usage_store
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult, ToolSpec
 from lamtools_core.tool.approval import ApprovalGate, PermissionResolver
 from lamtools_core.tool.loadtools import LoadTools, mode_tool_set
@@ -31,6 +31,16 @@ from lamtools_core.tool.durable_tools import (
     durable_tool_specs,
 )
 from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
+from lamtools_core.computer_use import make_computer_use_handler
+from lamtools_core.tool.android_use import android_control_available, make_android_use_handler
+# user:“AI 直接在屏幕上标记、绘制、互动”+(标注层是独立能力：Agent 画标记，
+# 用户圈选批注，状态归 Core，覆盖层只负责显示)。
+from lamtools_core.overlay import make_desktop_overlay_handler
+from lamtools_core.overlay.tools import (
+    DESKTOP_OVERLAY_TOOL_DESCRIPTION,
+    DESKTOP_OVERLAY_TOOL_NAME,
+    DESKTOP_OVERLAY_TOOL_SCHEMA,
+)
 from lamtools_core.tool.image_tools import make_generate_image_handler
 from lamtools_core.tool.mcp_tools import MCPToolCaller
 from lamtools_core.tool.outside_access import (
@@ -208,6 +218,14 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "web_search": AUTO_ALLOW,
     "web_fetch": ASK_USER,
     "generate_image": ASK_USER,
+    # user:“无需做安全边界”+(桌面操作不再走审批，模型可以连续执行多步任务)。
+    "computer_use": AUTO_ALLOW,
+    # user:“加，安卓控制，上模拟器里把它跑通”+(和 computer_use 一样不逐条审批：
+    # 无障碍服务本身就是用户在系统设置里亲手打开的那道门)。
+    "android_use": AUTO_ALLOW,
+    # user:“用户能直接点击、圈选、批注，与 Agent 实时互动”+(画标记和读批注
+    # 都不改变系统状态，和 computer_use 一样直接放行)。
+    DESKTOP_OVERLAY_TOOL_NAME: AUTO_ALLOW,
     "mcp": AUTO_ALLOW,
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
     SUB_AGENT_MESSAGE_TOOL_NAME: AUTO_ALLOW,
@@ -237,6 +255,9 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "web_search",
     "web_fetch",
     "generate_image",
+    "computer_use",
+    "android_use",
+    DESKTOP_OVERLAY_TOOL_NAME,
     "mcp",
     SUB_AGENT_TOOL_NAME,
     SUB_AGENT_MESSAGE_TOOL_NAME,
@@ -247,6 +268,7 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
 
 
 DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
+    "android_use": "computer",
     "read_file": "file_read",
     "list_dir": "file_read",
     "search_files": "file_read",
@@ -266,6 +288,8 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "web_search": "web",
     "web_fetch": "web",
     "generate_image": "image",
+    "computer_use": "computer",
+    DESKTOP_OVERLAY_TOOL_NAME: "computer",
     "mcp": "mcp",
     SUB_AGENT_TOOL_NAME: "agent",
     SUB_AGENT_MESSAGE_TOOL_NAME: "agent",
@@ -345,6 +369,13 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "no_image_in_response", "message": "生图响应中没有解析出图片"},
         {"type": "reference_missing", "message": "参考图文件不存在: {path}"},
     ],
+    "computer_use": [
+        {"type": "no_task", "message": "还没有开始桌面任务，先调用 action=start"},
+        {"type": "stale_ref", "message": "元素引用已失效，重新 snapshot 再点"},
+        {"type": "coordinate_out_of_range", "message": "坐标超出截图范围，坐标要按最近一次截图给"},
+        {"type": "uia_unavailable", "message": "无障碍树不可用，改用截图坐标操作"},
+        {"type": "user_took_over", "message": "用户接管了鼠标键盘，任务已暂停"},
+    ],
     "mcp": [{"type": "mcp_error", "message": "MCP query failed: {reason}"}],
     "question": [],
 }
@@ -368,7 +399,15 @@ DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "generate_image": (
         "Check 设置 → 生图 已启用且 API 地址正确；生成较慢可重试；参考图需为可访问 URL 或工作区内文件"
     ),
+    "computer_use": (
+        "重新 snapshot 拿新的 ref；坐标按最近一次 screenshot 的图片像素给；"
+        "用户接管时先确认再 resume；管理员权限窗口无法操作，请用户换窗口或提权重启"
+    ),
     "mcp": "Query tool schemas; execute through core mcp call with run_command.",
+    DESKTOP_OVERLAY_TOOL_NAME: (
+        "坐标按屏幕物理像素给；先 list 看有没有旧标记和用户批注；"
+        "绑定窗口时 window_id 来自 computer_use snapshot；交互层没打开时让用户从托盘打开交互层"
+    ),
     "question": "Rephrase the question, simplify options, or proceed with a reasonable default",
 }
 
@@ -812,8 +851,220 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
             "anyOf": [{"required": ["question"]}, {"required": ["questions"]}],
         },
     },
+    {
+        "name": "computer_use",
+        "description": (
+            "操作这台电脑的桌面：看屏幕、读界面元素、动鼠标键盘。一次调用做一个动作。\n"
+            "固定流程：start 声明目标 → snapshot 看窗口和元素 → click/type/key/scroll/drag 操作 "
+            "→ screenshot 确认 → stop 结束。\n"
+            "坐标规则：click/scroll/drag 的 x,y 是最近一次 screenshot 返回图片里的像素坐标，"
+            "程序自动换算成屏幕坐标；元素有 ref 时优先用 ref，不要自己算坐标。\n"
+            "不做窗口归属、权限和落点拦截，动作直接执行；"
+            "默认后台注入，不移动你的鼠标，窗口被遮挡也能操作，没反应会自动回退前台。\n"
+            "用户随时可以按 Esc 或点覆盖层上的提示条结束任务。"
+        ),
+        "input_schema": _schema(
+            {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "start", "status", "stop", "pause", "resume",
+                        "screenshot", "snapshot", "click", "type", "key",
+                        "scroll", "drag", "focus",
+                    ],
+                    "description": "要做的动作。",
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "start 时的任务目标，一句话说清要在这台电脑上完成什么。",
+                },
+                "max_steps": {
+                    "type": "integer",
+                    "description": "start 时的步数上限，默认 40，最多 200。",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "start 时的超时秒数，默认 600。",
+                },
+                "target": {
+                    "type": "string",
+                    "enum": ["screen", "monitor", "window", "region"],
+                    "description": "screenshot 的抓取范围，默认 screen（整个虚拟桌面）。",
+                },
+                "window_id": {
+                    "type": "integer",
+                    "description": "snapshot/screenshot/focus 的目标窗口句柄，来自 snapshot 的窗口列表。",
+                },
+                "monitor_id": {
+                    "type": "string",
+                    "description": "target=monitor 时指定显示器 id，省略则用光标所在显示器。",
+                },
+                "region": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "target=region 时的物理像素区域 [x, y, width, height]。",
+                },
+                "max_width": {
+                    "type": "integer",
+                    "description": "截图最长边宽度，默认 2000，超过会等比缩小。",
+                },
+                "annotate": {
+                    "type": "string",
+                    "enum": ["none", "grid", "target"],
+                    "description": "截图标注：grid 叠坐标网格，target 圈出上一次动作落点。",
+                },
+                "include_tree": {
+                    "type": "boolean",
+                    "description": "snapshot 是否读无障碍树，默认 true。",
+                },
+                "max_nodes": {
+                    "type": "integer",
+                    "description": "snapshot 返回的元素数量上限，默认 260。",
+                },
+                "ref": {
+                    "type": "string",
+                    "description": "snapshot 返回的元素引用，例如 e12。优先用 ref 而不是坐标。",
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "click/type/key/scroll 是否先尝试后台注入，默认 true。"
+                        "后台不移动真实鼠标，窗口被遮挡也能生效；没反应会自动回退前台。"
+                    ),
+                },
+                "x": {"type": "number", "description": "截图像素横坐标。"},
+                "y": {"type": "number", "description": "截图像素纵坐标。"},
+                "button": {
+                    "type": "string",
+                    "enum": ["left", "right", "middle"],
+                    "description": "click 的鼠标键，默认 left。",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "click 的次数，默认 1，最多 3。",
+                },
+                "modifiers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "点击时按住的修饰键，例如 [\"ctrl\"]。",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "type 要输入的文本，支持中文。",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["unicode", "paste"],
+                    "description": "type 的输入方式，unicode 逐字符发送，paste 走剪贴板适合长文本。",
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "key 的按键组合，例如 [\"ctrl\",\"shift\",\"t\"] 或 [\"enter\"]。",
+                },
+                "delta": {
+                    "type": "integer",
+                    "description": "scroll 的滚动格数，正数向下，负数向上。",
+                },
+                "axis": {
+                    "type": "string",
+                    "enum": ["vertical", "horizontal"],
+                    "description": "scroll 的滚动方向，默认 vertical。",
+                },
+                "from_ref": {"type": "string", "description": "drag 起点元素 ref。"},
+                "to_ref": {"type": "string", "description": "drag 终点元素 ref。"},
+                "from_x": {"type": "number", "description": "drag 起点截图像素横坐标。"},
+                "from_y": {"type": "number", "description": "drag 起点截图像素纵坐标。"},
+                "to_x": {"type": "number", "description": "drag 终点截图像素横坐标。"},
+                "to_y": {"type": "number", "description": "drag 终点截图像素纵坐标。"},
+                "duration": {
+                    "type": "number",
+                    "description": "drag 的持续秒数，默认 0.4。",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "pause/stop 的原因，会记进任务状态。",
+                },
+            },
+            ["action"],
+        ),
+    },
+    # user:“AI 直接在屏幕上标记、绘制、互动”+(标注层工具：一次画一组标记，
+    # 按 id 清除，读回用户圈选批注；绑定窗口的标记由覆盖层跟随)。
+    {
+        "name": DESKTOP_OVERLAY_TOOL_NAME,
+        "description": DESKTOP_OVERLAY_TOOL_DESCRIPTION,
+        "input_schema": deepcopy(DESKTOP_OVERLAY_TOOL_SCHEMA),
+        "failure_modes": [
+            {"type": "invalid_argument", "message": "Argument has an invalid type or value"},
+            {"type": "unknown_mark_kind", "message": "Unsupported mark kind"},
+            {"type": "too_many_marks", "message": "Too many marks for one call"},
+            {"type": "overlay_unavailable", "message": "Desktop overlay is not running"},
+        ],
+    },
     deepcopy(SUB_AGENT_TOOL_SPEC),
     deepcopy(SUB_AGENT_MESSAGE_TOOL_SPEC),
+    # user:“加，安卓控制，上模拟器里把它跑通”+(手机上的设备控制：读屏、点按、滑动、输入、
+    # 返回桌面、打开应用；截图不在这一版里，界面树已经把文字和位置给全了)。
+    {
+        "name": "android_use",
+        "description": (
+            "操作这台安卓手机：读屏、点按、长按、滑动、输入、返回/回桌面、打开应用，一次调用做一个动作。"
+            "固定流程是先 snapshot 看界面，优先用 ref 做 tap_node/set_text，坐标只在没有 ref 时用，"
+            "动作之后再用 snapshot 确认结果。ref 只对刚拿到的 snapshot 有效，界面变了就重新 snapshot。"
+        ),
+        "input_schema": _schema(
+            {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "status", "snapshot", "tap", "long_press", "swipe",
+                        "tap_node", "set_text", "global", "open_app", "list_apps",
+                    ],
+                    "description": "要做的动作。",
+                },
+                "x": {"type": "number", "description": "tap/long_press 的横坐标，屏幕像素。"},
+                "y": {"type": "number", "description": "tap/long_press 的纵坐标，屏幕像素。"},
+                "from": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "swipe 起点 [x,y]。",
+                },
+                "to": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "swipe 终点 [x,y]。",
+                },
+                "duration_ms": {
+                    "type": "integer",
+                    "description": "手势时长；长按默认 700，滑动默认 300。",
+                },
+                "ref": {"type": "string", "description": "snapshot 里的元素引用，例如 0.1.2。"},
+                "text": {"type": "string", "description": "set_text 要写入的文本。"},
+                "name": {
+                    "type": "string",
+                    "enum": ["back", "home", "recents", "notifications"],
+                    "description": "global 的按键。",
+                },
+                "package": {
+                    "type": "string",
+                    "description": "open_app 的包名，例如 com.android.settings。",
+                },
+                "query": {"type": "string", "description": "list_apps 的过滤词。"},
+                "max_nodes": {
+                    "type": "integer",
+                    "description": "snapshot 最多返回多少个元素，默认 80。",
+                },
+            },
+            ["action"],
+        ),
+        "failure_modes": [
+            {"type": "invalid_argument", "message": "Argument has an invalid type or value"},
+            {"type": "accessibility_disabled", "message": "The accessibility service is not enabled"},
+            {"type": "no_window", "message": "No readable window in the foreground"},
+        ],
+        "recovery": "accessibility_disabled 时请用户在系统设置 → 无障碍里打开「Sunday 设备控制」。",
+    },
 )
 
 
@@ -845,11 +1096,16 @@ def _core_spec_for(name: str) -> ToolSpec:
 
 
 def default_core_tool_specs() -> list[ToolSpec]:
-    return [
-        _core_spec_for(name)
+    names = [
+        name
         for name in DEFAULT_TOOL_ORDER
         if name not in _BUNDLED_PLUGIN_TOOL_NAMES
     ]
+    # user:“加，安卓控制”+(只有安卓宿主才把设备控制交给模型；桌面和远程模式碰不到手机，
+    # 注册了也只会是一个点了没反应的按钮)。
+    if not android_control_available():
+        names = [name for name in names if name != "android_use"]
+    return [_core_spec_for(name) for name in names]
 
 
 def bundled_core_tool_specs() -> list[ToolSpec]:
@@ -1178,6 +1434,9 @@ class CoreToolbox:
         plugin_mode_exclusive_tools: dict[str, set[str]] | None = None,
         plugin_availability: Callable[[str], bool] | None = None,
         skill_state_store: Any | None = None,
+        # user:“我希望能够在插件界面中看见 skill 的调用统计”+(工具箱可选注入用量账本，
+        # 未注入时按启停账本同目录的 skill_usage.json 派生)。
+        skill_usage_store: Any | None = None,
         permission_overrides: dict[str, str] | None = None,
         enable_plugin_manager: bool = False,
         data_dir: str | Path | None = None,
@@ -1221,6 +1480,8 @@ class CoreToolbox:
         self.manifest_hard_block_tools: set[str] = set()
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
         self.skill_state_store = skill_state_store
+        # 用量账本与启停账本同目录；只读面板与记账共用同一文件。
+        self.skill_usage_store = skill_usage_store or derive_skill_usage_store(skill_state_store)
         self.data_dir = Path(data_dir) if data_dir else None
         # 项目资料库的存储句柄：library 工具经它整理当前项目的成果目录。
         self.artifact_store = artifact_store
@@ -1619,6 +1880,16 @@ class CoreToolbox:
             if skill_name not in self.loaded_skill_names:
                 effective_exclude.add(spec.name)
         return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=effective_exclude or None)
+
+    def _record_skill_usage(self, name: str, *, source: str = "model") -> None:
+        """Count one successful skill load; a ledger failure never breaks the tool."""
+        store = getattr(self, "skill_usage_store", None)
+        if store is None:
+            return
+        try:
+            store.record(name, source=source)
+        except (OSError, ValueError) as exc:
+            _logger.warning("[skills] usage record failed for %s: %s", name, exc)
 
     def skill_index(self) -> str:
         try:
@@ -2131,6 +2402,8 @@ class CoreToolbox:
                 content = self.skill_registry.load_prompt_content(self.work_root, name)
             found = not content.startswith(f'Skill "{name}" not found.')
             if found:
+                # user:“我希望能够在插件界面中看见 skill 的调用统计”+(只有成功加载才计一次调用)。
+                self._record_skill_usage(name)
                 try:
                     skill = self.skill_registry.get(self.work_root, name, active_mode=self.active_mode)
                 except TypeError:
@@ -2479,6 +2752,18 @@ class CoreToolbox:
                 artifact_registry=self.imagegen_config.get("artifact_registry") if isinstance(imagegen_config, dict) else None,
             ),
             "mcp": inspect_mcp,
+            # user:“查一下 computer use 功能怎么做”+(桌面操作工具装配到默认工具箱，
+            # work_root 用来落截图证据)。
+            "computer_use": make_computer_use_handler(self.work_root),
+            # user:“加，安卓控制”+(只在安卓上装配；其它平台连通道都不存在)。
+            **(
+                {"android_use": make_android_use_handler()}
+                if android_control_available()
+                else {}
+            ),
+            # user:“AI 直接在屏幕上标记、绘制、互动”+(标注层状态在 Core 进程内，
+            # 不依赖 work_root；覆盖层页面按 snapshot 轮询渲染)。
+            DESKTOP_OVERLAY_TOOL_NAME: make_desktop_overlay_handler(self.work_root),
             SUB_AGENT_TOOL_NAME: call_sub_agent,
             SUB_AGENT_MESSAGE_TOOL_NAME: call_sub_agent_message,
             "write_checklist": _write_checklist_handler,

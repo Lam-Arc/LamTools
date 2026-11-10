@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 无障碍设置页里显示给用户的说明。 -->
+    <string name="sunday_accessibility_description">让 Sunday 读取屏幕内容，并执行点按、滑动与输入。</string>
+</resources>

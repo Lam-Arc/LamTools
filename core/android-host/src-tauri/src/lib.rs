@@ -22,6 +22,7 @@ use tauri::{Manager, State};
 
 mod android_jni;
 mod client;
+mod device_control;
 mod p2p_bridge;
 mod picker;
 mod runtime;
@@ -420,6 +421,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_KeystoreBridge_nativeRegist
     // This is the earliest JNI call the app makes (`MainActivity.onCreate` touches this
     // object before Tauri starts), so the picker takes the JavaVM from here.
     picker::remember(&mut env);
+    device_control::remember(&mut env);
     // The keystore is not used: the API key lives in the guest's own provider config,
     // the same place desktop keeps it. Keeping the symbol means the Kotlin initialiser
     // still links; when key sealing moves here, this is where it plugs in.
@@ -438,6 +440,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeBack(
 ) -> jni::sys::jboolean {
     use tauri::Emitter;
     picker::remember(&mut env);
+    device_control::remember(&mut env);
     match APP.get() {
         Some(app) if app.emit("back-request", true).is_ok() => 1,
         _ => 0,
@@ -456,6 +459,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeSetLibra
     if let Ok(text) = env.get_string(&dir) {
         let value: String = text.into();
         picker::remember(&mut env);
+    device_control::remember(&mut env);
         runtime::set_native_lib_dir(&value);
         println!("[sunday] native library dir: {value}");
     }
@@ -472,6 +476,7 @@ pub extern "system" fn Java_com_lamtools_sunday_core_MainActivity_nativeSetFiles
     if let Ok(text) = env.get_string(&dir) {
         let value: String = text.into();
         picker::remember(&mut env);
+    device_control::remember(&mut env);
         runtime::set_files_dir(&value);
         println!("[sunday] files dir: {value}");
     }
@@ -496,6 +501,9 @@ pub fn run() {
             )));
             let link = CoreLink::new(handle.clone());
             let runtime = Runtime::new(handle.clone());
+            // user:“加，安卓控制，上模拟器里把它跑通”+(工具在 guest 里，连不到 Tauri；
+            // 宿主开一条本机回环通道，把端口与令牌写进 guest 的 userdata，让 Core 能找到它)。
+            device_control::start(data_dir.join("runtime").join("userdata"));
             // Nothing is copied here: staging the packaged archive is Kotlin's job (it
             // streams assets without holding the archive in memory), and the runtime
             // install waits for the manifest that staging writes last.
