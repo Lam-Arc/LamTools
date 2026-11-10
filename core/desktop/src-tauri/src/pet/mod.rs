@@ -16,7 +16,7 @@
 //! - 角色包（`.sundaypet` / 文件夹）安装走白名单 + 大小/数量上限 + 路径穿越校验，
 //!   普通资源包不能执行任何脚本。
 
-mod platform;
+pub(crate) mod platform;
 pub mod cards;
 
 use std::path::{Path, PathBuf};
@@ -74,6 +74,9 @@ pub struct PetState {
     capture_frame: Mutex<Option<Vec<u8>>>,
     capture_heartbeat: Mutex<Option<Instant>>,
     capture_gen: AtomicU64,
+    /// 标注层圈选后带来的预置选区，屏幕物理像素 [x, y, width, height]。
+    /// user:“合并，这样更干净”+(圈选直接进 Ping 的截图编辑器，用户不用再拖一次)。
+    capture_region: Mutex<Option<[i32; 4]>>,
     /// 测试注入：模拟页面死掉（心跳停更），只在开发/隔离测试里使用。
     capture_heartbeat_frozen: AtomicBool,
     /// 配置读改写串行化：主界面设置、桌宠面板、Ping 面板可能同时写同一份
@@ -408,7 +411,7 @@ pub fn ensure_ping_overlay(app: &AppHandle) -> Result<OverlayBounds, String> {
 /// user:“启动就是黑屏”+(某些系统缩放下，窗口 API 会把物理像素当逻辑像素再乘一次
 /// 缩放，2048×1152 的屏幕会被摆成 2560×1440，桌宠于是落到屏幕外面。这里改成
 /// 设置后读回真实尺寸，按比例修正，直到和屏幕一致。)
-fn place_overlay(window: &tauri::WebviewWindow, bounds: &OverlayBounds) -> Result<(), String> {
+pub(crate) fn place_overlay(window: &tauri::WebviewWindow, bounds: &OverlayBounds) -> Result<(), String> {
     let target_w = bounds.width.max(1) as f64;
     let target_h = bounds.height.max(1) as f64;
     let mut want_w = target_w;
@@ -802,8 +805,6 @@ pub async fn pet_overlay_ready(app: AppHandle) -> Result<(), String> {
     };
     mark_frontend_seen(&app);
     window.show().map_err(|error| error.to_string())?;
-    // 覆盖层真正可见后，托盘入口切成“关闭桌宠”。
-    let _ = crate::refresh_tray_menu(&app);
     // user:“点击打开桌宠没反应”+(看门狗收走窗口后会停掉轮询线程；页面慢启动
     //  完成后再显示时，必须把轮询一起拉起来，否则穿透状态和 Ping 快捷键全失效。)
     start_polling(&app);
@@ -813,7 +814,6 @@ pub async fn pet_overlay_ready(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn pet_overlay_close(app: AppHandle) -> Result<(), String> {
     close_overlay_sync(&app)?;
-    let _ = crate::refresh_tray_menu(&app);
     Ok(())
 }
 
@@ -841,7 +841,6 @@ fn destroy_overlay_now(app: &AppHandle, window: &tauri::WebviewWindow) {
         eprintln!("[pet] destroy overlay window failed: {error}");
         let _ = window.hide();
     }
-    let _ = crate::refresh_tray_menu(app);
 }
 
 /// 同步关闭覆盖层：托盘菜单在主线程上调用，不能走 async 命令。
@@ -1304,6 +1303,9 @@ fn reset_capture_window(app: &AppHandle) {
     if let Ok(mut frame) = state.capture_frame.lock() {
         *frame = None;
     }
+    if let Ok(mut region) = state.capture_region.lock() {
+        *region = None;
+    }
     if let Ok(mut beat) = state.capture_heartbeat.lock() {
         *beat = None;
     }
@@ -1374,16 +1376,25 @@ fn start_capture_watchdog(app: AppHandle, hwnd: isize) {
 }
 
 #[tauri::command]
-pub async fn pet_ping_capture_open(app: AppHandle) -> Result<OverlayBounds, String> {
+pub async fn pet_ping_capture_open(
+    app: AppHandle,
+    region: Option<[i32; 4]>,
+) -> Result<OverlayBounds, String> {
     #[cfg(windows)]
     {
         // 不重入：上一次的截图窗口和帧先彻底清掉，再拍新的一张。
         reset_capture_window(&app);
         park_ping_overlay(&app);
 
+        // 标注层带过来的选区：按选区中心选显示器，并把它交给页面预置框选。
+        let preset = region.map(|rect| [rect[0], rect[1], rect[2].max(1), rect[3].max(1)]);
         let (frame, monitor) = capture_with_overlay_hidden(&app, || {
             let (x, y) = platform::cursor_position()?;
-            let monitor = platform::monitor_at(x, y)?;
+            let (cx, cy) = match preset {
+                Some([rx, ry, rw, rh]) => (rx + rw / 2, ry + rh / 2),
+                None => (x, y),
+            };
+            let monitor = platform::monitor_at(cx, cy)?;
             let (width, height, pixels) = platform::capture(&monitor)?;
             Ok((
                 platform::encode_capture_bytes(
@@ -1408,6 +1419,10 @@ pub async fn pet_ping_capture_open(app: AppHandle) -> Result<OverlayBounds, Stri
                 .capture_heartbeat
                 .lock()
                 .map_err(|_| "capture heartbeat lock failed".to_string())? = Some(Instant::now());
+            *state
+                .capture_region
+                .lock()
+                .map_err(|_| "capture region lock failed".to_string())? = preset;
         }
 
         let builder = WebviewWindowBuilder::new(
@@ -1466,6 +1481,16 @@ pub async fn pet_ping_capture_frame(app: AppHandle) -> Result<tauri::ipc::Respon
         .clone()
         .ok_or_else(|| "capture frame is not ready".to_string())?;
     Ok(tauri::ipc::Response::new(frame))
+}
+
+/// 标注层预置的选区，屏幕物理像素；页面据此直接框好区域。
+#[tauri::command]
+pub fn pet_ping_capture_region(app: AppHandle) -> Option<[i32; 4]> {
+    app.state::<PetState>()
+        .capture_region
+        .lock()
+        .ok()
+        .and_then(|value| *value)
 }
 
 /// 页面已完成首帧绘制：确保窗口可见并拿到焦点（Esc 才能进来）。
@@ -1577,6 +1602,12 @@ fn lam_home() -> PathBuf {
 
 fn pet_root() -> PathBuf {
     lam_home().join("pet")
+}
+
+/// 桌宠与桌面标注层共用一份配置文件：快捷键这类桌面级设置放一起。
+pub(crate) fn read_config_json() -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(pet_root().join("config.json")).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 fn packs_root() -> PathBuf {

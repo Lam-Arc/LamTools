@@ -1,6 +1,6 @@
 [package]
 name = "sunday"
-version = "0.3.39-a2"
+version = "0.3.39"
 description = "Sunday desktop app"
 authors = ["Lam"]
 edition = "2021"

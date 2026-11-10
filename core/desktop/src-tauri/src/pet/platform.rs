@@ -402,6 +402,44 @@ mod imp {
     }
 
 
+    /// 把键盘焦点真正交给 WebView2 的子窗口。
+    ///
+    /// user:“用户能直接点击、圈选、批注”+(透明分层覆盖层去掉 NOACTIVATE 后，
+    /// 父窗口能到前台，但键盘消息只到父窗口，WebView2 的渲染子窗口没拿到焦点，
+    /// 字符进不了输入框。这里枚举子窗口，优先把焦点给 RenderWidgetHost)。
+    pub fn focus_webview_child(window: &WebviewWindow) -> Result<(), String> {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            EnumChildWindows, SetForegroundWindow,
+        };
+
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as HWND;
+        unsafe {
+            SetForegroundWindow(hwnd);
+            let mut target: HWND = std::ptr::null_mut();
+            EnumChildWindows(hwnd, Some(enum_webview_focus), &mut target as *mut HWND as LPARAM);
+            if !target.is_null() {
+                SetFocus(target);
+            }
+        }
+        Ok(())
+    }
+
+    unsafe extern "system" fn enum_webview_focus(child: HWND, lparam: LPARAM) -> i32 {
+        let out = &mut *(lparam as *mut HWND);
+        let mut buffer = [0u16; 256];
+        let length = GetClassNameW(child, buffer.as_mut_ptr(), buffer.len() as i32);
+        let name = String::from_utf16_lossy(&buffer[..length.max(0) as usize]);
+        if name.contains("Chrome_RenderWidgetHostHWND") {
+            *out = child;
+            return 0;
+        }
+        if name.contains("Chrome_WidgetWin") && (*out).is_null() {
+            *out = child;
+        }
+        1
+    }
+
     pub struct RawWindow {
         pub id: String,
         pub title: String,
@@ -638,7 +676,7 @@ mod imp {
 pub use imp::{
     capture, close_overlay_windows, configure_overlay_window, cursor_position, desktop_windows,
     emergency_hide_window, escape_down, hotkey_active, is_window_hung, monitor_at, monitors, parse_hotkey,
-    set_overlay_activatable, set_z_mode, virtual_screen_bounds,
+    focus_webview_child, set_overlay_activatable, set_z_mode, virtual_screen_bounds,
 };
 
 // ---------------------------------------------------------------------------
@@ -724,7 +762,7 @@ mod stub {
 #[cfg(not(windows))]
 pub use stub::{
     capture, close_overlay_windows, configure_overlay_window, cursor_position, desktop_windows,
-    hotkey_active, monitor_at, monitors, parse_hotkey, set_z_mode, virtual_screen_bounds,
+    focus_webview_child, hotkey_active, monitor_at, monitors, parse_hotkey, set_z_mode, virtual_screen_bounds,
 };
 
 // ---------------------------------------------------------------------------

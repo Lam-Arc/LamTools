@@ -879,6 +879,8 @@ fn main() {
             desktop_overlay::desktop_overlay_open,
             desktop_overlay::desktop_overlay_capture_hotkey_set,
             desktop_overlay::desktop_overlay_take_capture,
+            desktop_overlay::desktop_overlay_settings,
+            desktop_overlay::desktop_overlay_settings_changed,
             tray_panel::tray_panel_state,
             tray_panel::tray_panel_open,
             tray_panel::tray_panel_material,

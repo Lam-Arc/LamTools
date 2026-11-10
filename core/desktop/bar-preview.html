@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Computer Use 胶囊预览</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      background: radial-gradient(circle at 50% 0%, #1d1f26 0%, #111215 55%, #0a0b0d 100%);
+      color: #e8e8ec;
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      overflow: hidden;
+    }
+    .preview-root {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    /* 模拟一个应用窗口的顶边 */
+    .preview-window-edge {
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 8px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent);
+    }
+    .preview-content {
+      padding: 96px 64px;
+      display: grid;
+      gap: 14px;
+      max-width: 520px;
+    }
+    .preview-content h1 {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .preview-content p {
+      font-size: 13px;
+      line-height: 1.7;
+      color: rgba(232, 232, 236, 0.62);
+    }
+    .preview-controls {
+      position: absolute;
+      left: 64px;
+      bottom: 64px;
+      display: flex;
+      gap: 10px;
+    }
+    .preview-controls button {
+      height: 30px;
+      padding: 0 14px;
+      border-radius: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.06);
+      color: #e8e8ec;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .preview-controls button:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+  </style>
+</head>
+<body>
+  <div id="bar-preview"></div>
+  <script type="module" src="./src/bar-preview.ts"></script>
+</body>
+</html>

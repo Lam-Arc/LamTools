@@ -119,6 +119,15 @@ export default defineConfig({
         card: resolve(__dirname, 'card.html'),
         // 独立截图窗口：静态截图 + 框选/标注，Esc/取消/发送都只作用于这个窗口。
         capture: resolve(__dirname, 'capture.html'),
+        // user:“覆盖层说明 Sunday 正在操作你的电脑”+(桌面操作覆盖层是独立文档，
+        // 只画边框、提示条和 Agent 光标，不加载主界面)。
+        computerUse: resolve(__dirname, 'computer-use.html'),
+        // user:“AI 直接在屏幕上标记、绘制、互动”+(标注层是独立覆盖层文档，
+        // 只画标记、工具条和批注输入条，不加载主界面)。
+        overlay: resolve(__dirname, 'overlay.html'),
+        // user:“托盘样式重做”“只做自绘面板”+(托盘面板是独立小窗文档：
+        // 只画状态、开关和退出，不加载主界面)。
+        tray: resolve(__dirname, 'tray.html'),
         // 地图与寻路实验台：独立普通页面，几何判定框/平台地图/寻路模型单独调试。
         petNavLab: resolve(__dirname, 'pet-navlab.html'),
         // 方块人动画实验台：独立普通页面，动作组切换与姿态单独调试。

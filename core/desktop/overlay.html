@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- user:“AI 直接在屏幕上标记、绘制、互动”+(标注层文档本身全透明：
+       只有标记、工具条和批注输入条画东西，其余位置必须能看见桌面。) -->
+  <title>Sunday Overlay</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #overlay-app {
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      background-color: transparent !important;
+      overflow: hidden;
+    }
+    body {
+      color: #f2f2f4;
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay-app"></div>
+  <script type="module" src="./src/overlay.ts"></script>
+</body>
+</html>

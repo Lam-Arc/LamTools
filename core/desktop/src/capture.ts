@@ -18,7 +18,7 @@ import { createApp } from 'vue'
 import '@/styles/variables.css'
 import '@/styles/base.css'
 import CaptureApp from '@/pet/ui/CaptureApp.vue'
-import { closePingCapture, fetchPingCaptureFrame } from '@/pet/bridge.ts'
+import { closePingCapture, fetchPingCaptureFrame, fetchPingCaptureRegion } from '@/pet/bridge.ts'
 
 // 页面挂载前的兜底：读图失败/加载卡住时 Esc 也能把整个窗口关掉。
 window.addEventListener('keydown', event => {
@@ -38,12 +38,18 @@ async function boot(): Promise<void> {
   host.setAttribute('aria-label', 'Sunday 截图框选')
   let frame = null
   let bootError = ''
+  let presetRegion: [number, number, number, number] | null = null
+  try {
+    presetRegion = await fetchPingCaptureRegion()
+  } catch {
+    presetRegion = null
+  }
   try {
     frame = await fetchPingCaptureFrame()
   } catch (cause) {
     bootError = cause instanceof Error ? cause.message : String(cause)
   }
-  createApp(CaptureApp, { frame, bootError }).mount(host)
+  createApp(CaptureApp, { frame, bootError, presetRegion }).mount(host)
   document.title = bootError ? 'Sunday Capture · error' : 'Sunday Capture · ready'
   console.log('[capture] booted', bootError || 'frame ready')
 }
