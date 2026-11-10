@@ -156,24 +156,47 @@ impl CoreRpc {
         });
 
         let writer_pending = Arc::clone(&pending);
+        let writer_dead = Arc::clone(&dead);
         tokio::spawn(async move {
-            while let Some((method, params, answer)) = inbox.recv().await {
-                let id = next_id();
-                writer_pending.lock().await.insert(id, answer);
-                let frame = json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "method": method,
-                    "params": params,
-                })
-                .to_string();
-                if sink.send(Message::Text(frame.into())).await.is_err() {
-                    if let Some(sender) = writer_pending.lock().await.remove(&id) {
-                        let _ = sender.send(Err(anyhow::anyhow!("向 Core 发送 RPC 失败")));
+            // user:“手机端远控电脑连接不稳定，频繁断连”+(桥空闲时只有读半边在跑，写半边
+            // 不发任何东西：链路层的 Pong 攒在发送队列里，NAT 与移动网络会静默丢掉这条
+            // 连接，下一次 RPC 撞上的就是一个死 socket。每 10 秒发一个 WebSocket Ping，
+            // 让写方向一直有真实流量，也顺手验证对端还在；发不出去就当场把桥标死)。
+            let mut keepalive = tokio::time::interval(Duration::from_secs(10));
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // 第一个 tick 立即返回，先吃掉它，否则连接刚建好就发一次心跳。
+            keepalive.tick().await;
+            loop {
+                tokio::select! {
+                    job = inbox.recv() => {
+                        let Some((method, params, answer)) = job else { break };
+                        let id = next_id();
+                        writer_pending.lock().await.insert(id, answer);
+                        let frame = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "method": method,
+                            "params": params,
+                        })
+                        .to_string();
+                        if sink.send(Message::Text(frame.into())).await.is_err() {
+                            if let Some(sender) = writer_pending.lock().await.remove(&id) {
+                                let _ = sender.send(Err(anyhow::anyhow!("向 Core 发送 RPC 失败")));
+                            }
+                            break;
+                        }
                     }
-                    break;
+                    _ = keepalive.tick() => {
+                        if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
+            // 写半边退出同样说明这条桥不能用了。以前只置读那边的标志，写这边退出之后
+            // `is_dead()` 还是 false，上层就不会重建，之后每条 RPC 都报「RPC 通道已关闭」，
+            // 一直错到重新配对为止。
+            writer_dead.store(true, Ordering::SeqCst);
         });
 
         Ok(Self { jobs, initialized, events, dead })

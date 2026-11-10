@@ -28,6 +28,10 @@ export class RemoteTransport implements LamToolsTransport {
   private readonly stateSubscribers = new Set<(state: TransportConnectionState) => void>()
   private unlisten: (() => void) | null = null
   private progressUnlisten: (() => void) | null = null
+  /** 正在做的那一次自动恢复；空表示没有在恢复。 */
+  private recovery: Promise<void> | null = null
+  /** 界面主动关掉之后不再自动重连（切回本机、退出远程）。 */
+  private closed = false
 
   async connect(): Promise<void> {
     if (this.state === 'connected') return
@@ -50,12 +54,42 @@ export class RemoteTransport implements LamToolsTransport {
     this.progressUnlisten = await listen<{ phase?: string }>('p2p-progress', (event) => {
       const phase = event.payload?.phase
       if (phase === 'connected') this.setState('connected')
-      else if (phase === 'lost' || phase === 'failed' || phase === 'timeout') this.setState('disconnected')
+      else if (phase === 'lost' || phase === 'failed' || phase === 'timeout') {
+        this.setState('disconnected')
+        // user:“手机端远控电脑连接不稳定，频繁断连”+(断了不能只显示一句「断开了」等用户
+        // 自己点重连：换网、切后台回来、对端重启都在几秒内就能连回去。这里立刻自己试一次，
+        // 成功就静默恢复，失败才留在断开状态让用户处理)。
+        if (phase === 'lost') void this.recover()
+      }
     })
+    this.closed = false
     this.setState('connected')
   }
 
+  /**
+   * 断线后自己连回去一次。
+   *
+   * 拨号预算是 45 秒（蜂窝和走中继时握手要十几秒），失败就停，不做无限重试。
+   */
+  private async recover(): Promise<void> {
+    if (this.closed || this.recovery) return
+    this.recovery = (async () => {
+      // 等一下再拨：切后台回来、一次瞬时丢包都在这段窗口里自愈，不值得为它重建整条隧道。
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      if (this.closed) return
+      const peer = await ensureRemote(45_000)
+      if (this.closed) return
+      if (peer !== null) this.setState('connected')
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        this.recovery = null
+      })
+    await this.recovery
+  }
+
   async close(): Promise<void> {
+    this.closed = true
     this.unlisten?.()
     this.unlisten = null
     this.progressUnlisten?.()
@@ -80,8 +114,9 @@ export class RemoteTransport implements LamToolsTransport {
           '和电脑的连接断开了，这条操作没有确认送达：在「设备连接」里重连之后再试一次',
         )
       }
-      // 单飞之后这里不会再顶掉正在进行的拨号；给它够一次局域网握手的时间。
-      const peer = await ensureRemote(8_000)
+      // 单飞之后这里不会再顶掉正在进行的拨号；蜂窝和走中继时握手要十几秒，8 秒太紧，
+      // 过去一个普通抖动就会被报成「连接断开」。
+      const peer = await ensureRemote(20_000)
       if (peer === null) {
         throw new TransportRpcError(undefined, '和电脑的连接断开了：打开抽屉底部的「设备连接」，可以重连或切回本机')
       }

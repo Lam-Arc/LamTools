@@ -9,14 +9,14 @@
 | 文件 | 用途 | 大小 | 交付名（Downloads） |
 | --- | --- | --- | --- |
 | `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 305 MB | `02-sunday-m-arm64-debug.apk` |
-| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB | `02-sunday-m-x86_64-debug.apk` |
+| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 319 MB | — |
 
-校验和（arm64 为 2026-11-09 13:29 构建，含内置运行时、远程链路修复与设备控制；交付时
-文件名带 `02-` 前缀，内容与这里列出的一致。x86_64 包是 2026-11-06 的旧构建，本轮没有重打）：
+校验和（2026-11-09 17:36 / 17:40 构建，含内置运行时、截图与通知读取、远程链路的稳定性修复；交付时
+文件名带 `02-` 前缀，内容与这里列出的一致）：
 
 ```
-8f36165b026cbad51be2b8e3b6a888386234afd1ebbc3e0b768284b10409c55a  sunday-m-arm64-debug.apk
-d797ab438c9d67a4ccbec8483cb074ecf02d52250d3b95cd7e54f1dc31d099a6  sunday-m-x86_64-debug.apk
+0bbb2dc9bf83d2f44fbed1531efe5a64072f6a14a1e3672788f041be5be97388  sunday-m-arm64-debug.apk
+b5ba8abcb1c434385a34fb8571c09a9c88197ad3a957d6d80f3af8e5ec486b67  sunday-m-x86_64-debug.apk
 ```
 
 **打 arm64 包必须设置 `SUNDAY_RT_ABI=aarch64` 与 `SUNDAY_RT_ASSETS=<runtime>/tools/out/aarch64/assets`。**
@@ -301,13 +301,124 @@ adb shell settings put secure accessibility_enabled 1
 | global back | 回到设置首页 |
 | 点搜索 → set_text 「battery」 | 输入框里出现 battery |
 | 桌面侧调用同一个 Python handler | snapshot 返回 14 行可读树，global home 返回 ok |
+| screenshot | 480x853 JPEG，`model_image_data_url` 带原图字节，画面是真实界面（不是黑屏） |
+| notifications | `connected: true`，读回系统通知的包名、标题、正文；用 `cmd notification post` 发的测试通知也在列表里 |
+
+**读取能力（2026-11-10 补）**：
+
+- `screenshot`：走无障碍的 `takeScreenshot`，拷成 ARGB_8888、按 `max_width` 缩放、JPEG 82，
+  只把 base64 交给工具层；工具把它挂到 `model_image_data_url`，不落盘。
+- 无障碍配置必须写 `android:canTakeScreenshot="true"`，否则系统直接拒绝：
+  `Services don't have the capability of taking the screenshot`。加上之后 `capabilities`
+  从 33 变成 161。
+- `notifications`：`SundayNotificationListenerService` 保留最近 40 条（同一 package+title
+  覆盖，避免聊天刷屏），不经过无障碍，所以无障碍没开也能读；需要用户在「通知使用权」里
+  允许一次。模拟器上可用
+  `adb shell settings put secure enabled_notification_listeners com.lamtools.sunday.core/com.lamtools.sunday.core.SundayNotificationListenerService`，
+  真机必须在系统设置里点。
+- `DeviceControlBridge` 先看 action 是不是 `notifications`，是就交给监听服务，不再要求
+  无障碍在线。
 
 **限制**：
 
-- 这一版没有截图；界面树已带文字与位置，够点，需要「看画」再加 `takeScreenshot`。
+- WebView 的输入框对 `performAction(CLICK/SET_TEXT)` 会抛异常（`length=1; index=1`）；
+  `tap_node` 与 `set_text` 现在都会捕获并回退（点中心 / 聚焦后重试），不再让一次异常
+  变成整个动作失败。
 - 只能读到系统无障碍愿意暴露的节点；密码框、部分自绘界面读不到文字。
 - 工具只出现在手机本机的 Core；「远程模式」跑在电脑上的 Core 没有它。
 - 手机 App 里还没有「去开无障碍」的引导页，目前要用户自己去系统设置。
+- 截图在 60 Hz 以下的动态画面里可能拿到上一帧；这一层不做任何识别，交给模型判断。
+
+## 2026-11-10：远程连接不稳定（频繁断连 / RPC 连接失败）
+
+user:“手机端远控电脑连接不稳定，频繁断连，或者RPC连接失败，需要优化一下”。
+
+**先让日志能读**：`p2p.log` 以前没有时间戳，只能看出「很多次」，看不出间隔是 2 秒还是
+2 分钟。`diary()` 现在每行前加 `YYYY-MM-DD HH:MM:SSZ`，这是定位下面几个根因的前提。
+
+**证据（新日志，UTC）**：
+
+```
+04:17:42Z PEER 6ba8… trusted=true          # 连上
+03:58:04Z PEER-ERROR … cannot write a frame header: connection lost: timed out
+03:58:46Z PEER-ERROR … closed by peer: heartbeat lost (code 0)
+```
+
+两条错误之间只隔 42 秒，而连接建立到 `timed out` 只有 28 秒。
+
+**根因一：服务端读帧被 `select!` 取消，读位置错乱。**
+
+`ServerLink::serve` 以前把 `read_frame` 直接放在 `select!` 里和「处理已完成的调用」并列。
+另一条分支先完成时，正在读的那一帧被取消——QUIC 不接受这种取消，已经读走的字节就丢了。
+下一次 `read_frame` 把半个帧体的字节当成新帧头，读位置从此错开，服务端会卡在一个永远读
+不满的长度上：它不再消费对端的数据，手机端的写窗口被堵住，心跳发不出去。
+
+证据就是这一轮加的心跳诊断：
+
+```
+05:20:09 heartbeat #1 sent          # 服务端 ping #1 received
+05:20:29 heartbeat skipped: the write lock is busy
+05:21:19 heartbeat #7 sent          # 服务端 ping #7 received
+```
+
+中间 5 次心跳全部卡在写锁上，服务端一个都没收到。现在读帧放进独立任务，谁也取消不了它；
+写回复也放进独立任务，读循环只管读。
+
+**根因二：QUIC 的 30 秒空闲超时先于应用层心跳触发。**
+
+iroh 默认 `max_idle_timeout` 是 30 秒（`iroh` 源码里测试注释写的就是 "3s idle timeout
+instead of the 30s default"）。手机端在加载会话时，一条几十 MB 的回复把写方向的
+`SendStream` 锁占住；应用层心跳是「sleep 10 秒 → 拿写锁 → 写 Ping」，它排在锁后面发不
+出去。QUIC 的空闲计时不看你在不在排队，28 秒后直接把连接关掉，电脑侧下一次写帧就报
+`connection lost: timed out`；客户端再过一会儿也判死，报 `heartbeat lost`。
+
+修复在 `identity.rs`，两端共用同一个 endpoint：
+
+- `keep_alive_interval = 10s`：链路层自己发保活，不依赖业务层拿锁；
+- `max_idle_timeout = 120s`：和传输进程自己的 `IDLE_TIMEOUT` 对齐。
+
+`link.rs` 的心跳同时改成 `try_lock`：拿不到写锁说明正在发真实数据，连接肯定活着，跳过
+这一轮而不是排队；判死从 26 秒放到 120 秒，与链路层的空闲上限对齐。
+
+**根因二：断线后每条调用要等满 180 秒。**
+
+`Client::call` 以前只在 180 秒超时或对端回错时返回。断线发生在一次调用中间时，用户看到
+的是「点了没反应」。现在连接有一条 `watch` 通道，读帧失败或心跳判死都会通知它，等回复
+的调用当场返回「和电脑的连接断开了：正在重连」，界面能立刻显示断开并开始重连。
+
+**根因三：桥的写半边死了，上层不知道。**
+
+`rpc.rs` 里只有读半边退出会把 `dead` 置 true；写半边（发不出去 Core 的请求）退出时
+`is_dead()` 仍是 false，于是 `cli.rs` 不会重建桥，之后每条 RPC 都报「RPC 通道已关闭」，
+一直错到重新配对。现在写半边退出也置 `dead`，并且每 10 秒发一个 WebSocket Ping，让桥的
+写方向一直有真实流量（空闲的桥以前连 Pong 都要攒着等下一次写）。
+
+**根因四：界面的补救预算太短。**
+
+`remoteTransport.request` 在隧道断开时会 `ensureRemote(8_000)`，蜂窝或走中继时 8 秒不够
+一次握手，于是普通抖动被报成「连接断开」。改成 20 秒；`p2p-progress` 收到 `lost` 后
+界面自己静默重连一次（1.5 秒后，45 秒预算），成功就恢复，失败才停在断开状态让用户处理。
+
+**验收**：
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| `core/p2p` 单测 | 通过 | `cargo test`：9 项全通过 |
+| Core 的 ws 保活 | 通过 | 用 `core/p2p/examples/idle_probe` 直连 `ws://127.0.0.1:59928/api/core/app-server`，20 秒收到 Core 的 Ping，45 秒仍是 open |
+| 模拟器远程模式 | 通过 | 写入票据后界面右上角「在电脑上运行」，加载出电脑上的真实会话（截图核对） |
+| 心跳真的发出去了 | 通过（诊断） | 客户端 logcat 的 `heartbeat #1 sent` 与服务端的 `ping #1 received` 一一对应 |
+| 断连点被定位 | 通过（诊断） | 紧接着出现 `heartbeat skipped: the write lock is busy`，服务端 120 秒后报「对端长时间没有任何帧」 |
+| 修复后长时间复测 | 未完成 | 最后一轮模拟器到电脑的 UDP 路径整体不通（局域网地址 ping 也不回，服务端只看到 `aborted by peer`），无法在设备上复测；要在真机或网络正常的模拟器上补验 |
+| 断线即时失败 | 通过（代码路径） | `call` 里的 `lost.changed()` 分支；未在设备上制造断线复测 |
+
+**仍未解决**：
+
+- 手机 app 被杀或在后台被系统冻结时，连接一定会断，回到前台要重连一次；这一次已经能
+  静默恢复，但仍会有一次「断开 → 连上」的过程。
+- `ACCEPT ERROR handshake failed: aborted by peer` 仍会出现：客户端拨号超时/切换目标时
+  会主动放弃握手，服务端如实记一笔，不影响下一次。
+- 这一轮的心跳诊断日志（`heartbeat #n sent` / `ping #n received`）先留着，等长时间稳定性
+  复测通过再收成只在异常时打印。
 
 ## 未验证（不得当作通过）
 

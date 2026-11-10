@@ -107,16 +107,44 @@ fn scan(args: Vec<String>) -> Result<()> {
 }
 
 /// 传输进程自己的日志：宿主不读管道时，这里仍然留下对端连接和中继状态。
+///
+/// user:“手机端远控电脑连接不稳定，频繁断连”+(以前没有时间戳，PEER / PEER-CLOSED 只能
+/// 看出「很多次」，看不出间隔是 2 秒还是 2 分钟，也就分不清「正在用的时候断」和「切后台
+/// 回来重连」；现在每行都带 UTC 时间)。
 fn diary(dir: &std::path::Path, line: &str) {
     use std::io::Write;
+    let stamp = clock();
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(dir.join("p2p.log"))
     {
-        let _ = writeln!(file, "{line}");
+        let _ = writeln!(file, "{stamp} {line}");
         let _ = file.flush();
     }
+}
+
+/// `YYYY-MM-DD HH:MM:SSZ`，只用于读日志，不参与任何判断。
+fn clock() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let days = secs / 86_400;
+    let rest = secs % 86_400;
+    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
+    // 民间日期换算（Howard Hinnant 的 days_from_civil 逆运算），只覆盖 1970 年之后。
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}Z")
 }
 
 async fn serve(args: Vec<String>) -> Result<()> {
@@ -285,6 +313,8 @@ async fn serve(args: Vec<String>) -> Result<()> {
         }
         // 处理闭包里也要写日记（桥重建），给它一份自己的目录，别把外层的搬走。
         let handler_dir = log_dir.clone();
+        // serve 接管了连接的读半边，连接本身也随它结束；对端 id 先留一份给日志。
+        let peer = link.peer.clone();
         let result = link
             .serve(move |method, params| {
                 let name = name.clone();
@@ -421,15 +451,14 @@ async fn serve(args: Vec<String>) -> Result<()> {
         *closed.lock().await = true;
         match result {
             Ok(()) => {
-                println!("PEER-CLOSED {}", link.peer);
-                diary(&log_dir, &format!("PEER-CLOSED {}", link.peer));
+                println!("PEER-CLOSED {}", peer);
+                diary(&log_dir, &format!("PEER-CLOSED {}", peer));
             }
             Err(error) => {
-                println!("PEER-ERROR {} {error:#}", link.peer);
-                diary(&log_dir, &format!("PEER-ERROR {} {error:#}", link.peer));
+                println!("PEER-ERROR {} {error:#}", peer);
+                diary(&log_dir, &format!("PEER-ERROR {} {error:#}", peer));
             }
         }
-        link.close();
         });
     }
 }

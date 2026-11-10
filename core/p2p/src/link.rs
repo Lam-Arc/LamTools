@@ -19,7 +19,7 @@ use anyhow::{bail, Context, Result};
 use futures_util::stream::{FuturesUnordered, StreamExt as _};
 use iroh::{Endpoint, EndpointAddr};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::sync::{broadcast, oneshot, watch, Mutex};
 
 use crate::ticket::decode_ticket;
 use crate::trust::TrustStore;
@@ -68,9 +68,13 @@ const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const EVENT_BUFFER: usize = 256;
 
 /// 客户端多久发一次心跳。
-const PING_EVERY: Duration = Duration::from_secs(12);
-/// 多久没收到 Pong 就认为这条连接已经没了。
-const PING_DEAD_AFTER_MILLIS: u64 = 26_000;
+const PING_EVERY: Duration = Duration::from_secs(10);
+/// 多久没收到 Pong 才认为这条连接已经没了。
+///
+/// user:“手机端远控电脑连接不稳定，频繁断连”+(26 秒判死等于两次心跳没回就断：手机切一下
+/// 后台、地铁里抖一下、一个大回复把写锁占住十几秒，都会被当成断线。放宽到 60 秒，链路层
+/// 另有 10 秒的 QUIC 保活，仍然远短于一次操作默认的 180 秒等待)。
+const PING_DEAD_AFTER_MILLIS: u64 = 120_000;
 /// 服务端多久没收到任何帧就收掉连接。
 ///
 /// user:“显示和电脑断联了”+(网络静默断开时 QUIC 既不报错也不关闭，读帧会一直挂着；
@@ -125,6 +129,11 @@ pub struct Client {
     /// 「已连接」，而每一次操作都拿到一个看不懂的英文错误。
     alive: Arc<AtomicBool>,
     /// 最近一次收到 Pong 的时间，心跳任务据此判死。
+    /// 存活状态的变化通知：`true` 是活着，`false` 是断了。
+    ///
+    /// user:“手机端远控电脑连接不稳定，频繁断连”+(断线要当场让正在等回复的调用失败，
+    /// 而不是各自等满 180 秒；界面也能靠它立刻开始重连)。
+    lost: Arc<watch::Sender<bool>>,
     /// 对端的显示名，来自握手；老服务端没有这个名字时是空串。
     pub peer_name: String,
     pub peer: String,
@@ -165,6 +174,9 @@ impl Client {
         let (event_tx, _) = broadcast::channel(EVENT_BUFFER);
         let alive = Arc::new(AtomicBool::new(true));
         let last_pong = Arc::new(AtomicU64::new(now_millis()));
+        // 断线只有一个出口：读帧失败或心跳判死时把它置 false，所有在等回复的调用当场返回。
+        let (lost_tx, _) = watch::channel(true);
+        let lost = Arc::new(lost_tx);
 
         // One reader for the whole connection: replies go to their caller, events go to
         // subscribers, and a closed stream fails every waiting call instead of hanging.
@@ -173,6 +185,7 @@ impl Client {
         let reader_conn = conn.clone();
         let reader_alive = Arc::clone(&alive);
         let reader_pong = Arc::clone(&last_pong);
+        let reader_lost = Arc::clone(&lost);
         tauri_free_spawn(async move {
             loop {
                 match read_frame(&mut recv).await {
@@ -194,10 +207,12 @@ impl Client {
                     }
                     Ok(_) => {}
                     Err(error) => {
+                        println!("[sunday-p2p] reader stopped: {error:#}");
                         reader_alive.store(false, Ordering::SeqCst);
                         for (_, sender) in reader_pending.lock().await.drain() {
                             let _ = sender.send(Err(error.to_string()));
                         }
+                        let _ = reader_lost.send_replace(false);
                         reader_conn.close(0u32.into(), b"closed");
                         return;
                     }
@@ -211,7 +226,9 @@ impl Client {
         let ping_alive = Arc::clone(&alive);
         let ping_pong = Arc::clone(&last_pong);
         let ping_conn = conn.clone();
+        let ping_lost = Arc::clone(&lost);
         tauri_free_spawn(async move {
+            let mut beats: u64 = 0;
             loop {
                 tokio::time::sleep(PING_EVERY).await;
                 if !ping_alive.load(Ordering::SeqCst) {
@@ -220,14 +237,38 @@ impl Client {
                 let last = ping_pong.load(Ordering::SeqCst);
                 if now_millis().saturating_sub(last) > PING_DEAD_AFTER_MILLIS {
                     ping_alive.store(false, Ordering::SeqCst);
+                    let _ = ping_lost.send_replace(false);
                     ping_conn.close(0u32.into(), b"heartbeat lost");
                     return;
                 }
-                let mut send = ping_send.lock().await;
-                if write_frame(&mut send, &Frame::Ping).await.is_err() {
-                    ping_alive.store(false, Ordering::SeqCst);
-                    ping_conn.close(0u32.into(), b"heartbeat write failed");
-                    return;
+                // user:“手机端远控电脑连接不稳定，频繁断连”+(写方向正忙说明连接一定活着，
+                // 而等锁会让心跳排队；QUIC 的空闲计时不看你是否在排队。拿不到锁就跳过这一轮)。
+                let mut send = match ping_send.try_lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        // user:“手机端远控电脑连接不稳定，频繁断连”+(写锁被占说明这条连接
+                        // 正在发真实数据，绝不是死连接；把它当成还活着。否则一次大回复就会
+                        // 让心跳连续拿不到锁，60 秒后自己把一条好好的连接关掉)。
+                        println!("[sunday-p2p] heartbeat skipped: the write lock is busy");
+                        ping_pong.store(now_millis(), Ordering::SeqCst);
+                        continue;
+                    }
+                };
+                match write_frame(&mut send, &Frame::Ping).await {
+                    Ok(()) => {
+                        beats += 1;
+                        // 诊断：30 秒一行，看清心跳有没有真的发出去。
+                        if beats % 6 == 1 {
+                            println!("[sunday-p2p] heartbeat #{beats} sent");
+                        }
+                    }
+                    Err(error) => {
+                        println!("[sunday-p2p] heartbeat write failed: {error:#}");
+                        ping_alive.store(false, Ordering::SeqCst);
+                        let _ = ping_lost.send_replace(false);
+                        ping_conn.close(0u32.into(), b"heartbeat write failed");
+                        return;
+                    }
                 }
             }
         });
@@ -239,6 +280,7 @@ impl Client {
             events: event_tx,
             next_id: AtomicU64::new(1),
             alive,
+            lost,
             peer_name,
             peer,
         })
@@ -258,6 +300,10 @@ impl Client {
     ///
     /// `&self`：界面的项目、模型、会话是并发加载的，它们不该因为对方回答慢就互相排队。
     pub async fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        // 已经断了就别发：写进一个死连接的帧不会有回答，只会让界面白等三分钟。
+        if !self.alive.load(Ordering::SeqCst) {
+            bail!("和电脑的连接已经断开");
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
@@ -273,11 +319,23 @@ impl Client {
             )
             .await?;
         }
-        match tokio::time::timeout(Duration::from_secs(180), rx).await {
-            Ok(Ok(Ok(result))) => Ok(result),
-            Ok(Ok(Err(message))) => bail!("{message}"),
-            Ok(Err(_)) => bail!("连接已关闭"),
-            Err(_) => {
+        // user:“手机端远控电脑连接不稳定，频繁断连”+(断线发生在一轮调用中间时，以前这条
+        // 调用要等满 180 秒才报超时，用户只看到卡住；现在连接一断就立刻返回，界面能当场
+        // 显示断开并开始重连)。
+        let mut lost = self.lost.subscribe();
+        let mut answer = rx;
+        let mut deadline = Box::pin(tokio::time::sleep(Duration::from_secs(180)));
+        tokio::select! {
+            result = &mut answer => match result {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(message)) => bail!("{message}"),
+                Err(_) => bail!("连接已关闭"),
+            },
+            _ = lost.changed() => {
+                self.pending.lock().await.remove(&id);
+                bail!("和电脑的连接断开了：正在重连")
+            }
+            _ = &mut deadline => {
                 self.pending.lock().await.remove(&id);
                 bail!("等待对端回答超时")
             }
@@ -291,6 +349,7 @@ impl Client {
 
     pub fn close(&self) {
         self.alive.store(false, Ordering::SeqCst);
+        let _ = self.lost.send_replace(false);
         self.conn.close(0u32.into(), b"done");
     }
 }
@@ -386,35 +445,76 @@ impl ServerLink {
     /// 每条 Call 各自成任务、谁先答完谁先回，不再一条慢调用挡住后面的全部加载。
     /// user:“远程的时候打开界面要等很久”+(界面启动会并发读项目、模型、设置、大纲；
     /// 以前服务端逐条 await，一条冷启动的写在前面，后面全在排队)。
-    pub async fn serve<F, Fut>(&mut self, handler: F) -> Result<()>
+    pub async fn serve<F, Fut>(mut self, handler: F) -> Result<()>
     where
         F: Fn(String, serde_json::Value) -> Fut,
         Fut: std::future::Future<Output = Result<serde_json::Value>>,
     {
         let send = Arc::clone(&self.send);
-        let recv = &mut self.recv;
+        let mut recv = self.recv;
+        // user:“手机端远控电脑连接不稳定，频繁断连”+(读帧以前直接放在 select! 里，另一条
+        // 分支先完成时这个 future 会被取消；QUIC 不接受这种取消，已经读走的那半个帧就丢了，
+        // 下一次把半个体的字节当成帧头，读位置从此错乱，服务端会卡在一个永远读不满的长度
+        // 上。手机端的写窗口随之堵住，心跳发不出去，最后以「对端长时间没有任何帧」收场。
+        // 现在读帧放进独立任务，谁也不取消它；帧通过通道交回主循环)。
+        let (frames, mut incoming) = tokio::sync::mpsc::channel::<Result<Frame>>(8);
+        let reader = tokio::spawn(async move {
+            loop {
+                let frame = read_frame(&mut recv).await;
+                let failed = frame.is_err();
+                if frames.send(frame).await.is_err() {
+                    break;
+                }
+                if failed {
+                    break;
+                }
+            }
+        });
+
         let mut inflight: FuturesUnordered<_> = FuturesUnordered::new();
-        loop {
+        // 诊断：服务端到底有没有收到心跳。
+        let mut pings: u64 = 0;
+        // 写也走独立任务：一条几十 MB 的回复不该把读循环按在写上。
+        let (outbox, mut outbox_rx) = tokio::sync::mpsc::channel::<Frame>(32);
+        let send_for_writer = Arc::clone(&send);
+        let writer = tokio::spawn(async move {
+            while let Some(frame) = outbox_rx.recv().await {
+                let mut send = send_for_writer.lock().await;
+                if write_frame(&mut send, &frame).await.is_err() {
+                    return;
+                }
+            }
+        });
+
+        let outcome: Result<()> = loop {
             tokio::select! {
-                frame = tokio::time::timeout(IDLE_TIMEOUT, read_frame(recv)) => {
-                    let frame = match frame {
+                incoming_frame = tokio::time::timeout(IDLE_TIMEOUT, incoming.recv()) => {
+                    match incoming_frame {
                         // 两分钟一个帧都没有：对端已经不在了，收掉这条连接等它重连。
-                        Err(_) => bail!("对端长时间没有任何帧（心跳超时）"),
-                        // A clean close is not an error worth logging as one.
-                        Ok(Err(_)) => return Ok(()),
-                        Ok(Ok(frame)) => frame,
-                    };
-                    match frame {
-                        Frame::Call { id, method, params } => {
-                            let answer = handler(method, params);
-                            inflight.push(async move { (id, answer.await) });
-                        }
-                        Frame::Ping => {
-                            let mut send = send.lock().await;
-                            write_frame(&mut send, &Frame::Pong).await?;
-                        }
-                        Frame::Hello { .. } | Frame::Welcome { .. } => bail!("在一次连接里重复握手"),
-                        other => bail!("意外的帧：{other:?}"),
+                        Err(_) => break Err(anyhow::anyhow!("对端长时间没有任何帧（心跳超时）")),
+                        // 读任务结束：对端干净关闭，或读失败，都不值得记成错误。
+                        Ok(None) => break Ok(()),
+                        Ok(Some(Err(_))) => break Ok(()),
+                        Ok(Some(Ok(frame))) => match frame {
+                            Frame::Call { id, method, params } => {
+                                let answer = handler(method, params);
+                                inflight.push(async move { (id, answer.await) });
+                            }
+                            Frame::Ping => {
+                                // 队列满说明对端根本没在读：当场收掉，总比在这里等到超时好。
+                                if outbox.try_send(Frame::Pong).is_err() {
+                                    break Err(anyhow::anyhow!("对端来不及接收，先断开让它重连"));
+                                }
+                                pings += 1;
+                                if pings % 6 == 1 {
+                                    println!("[sunday-p2p] ping #{pings} received");
+                                }
+                            }
+                            Frame::Hello { .. } | Frame::Welcome { .. } => {
+                                break Err(anyhow::anyhow!("在一次连接里重复握手"));
+                            }
+                            other => break Err(anyhow::anyhow!("意外的帧：{other:?}")),
+                        },
                     }
                 }
                 Some((id, answer)) = inflight.next(), if !inflight.is_empty() => {
@@ -425,11 +525,18 @@ impl ServerLink {
                             message: error.to_string(),
                         },
                     };
-                    let mut send = send.lock().await;
-                    write_frame(&mut send, &reply).await?;
+                    if outbox.try_send(reply).is_err() {
+                        break Err(anyhow::anyhow!("对端来不及接收，先断开让它重连"));
+                    }
                 }
             }
-        }
+        };
+
+        drop(outbox);
+        writer.abort();
+        reader.abort();
+        self.conn.close(0u32.into(), b"done");
+        outcome
     }
 
     pub fn close(&self) {

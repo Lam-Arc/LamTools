@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use iroh::{endpoint::presets, Endpoint, SecretKey};
+use iroh::endpoint::{presets, IdleTimeout, QuicTransportConfig};
+use iroh::{Endpoint, SecretKey};
 
 /// user:“共享设备管理、配对、认证和通信协议，避免 Windows 与 Android 分别维护两套实现”+
 /// (同一个 ALPN，同一套帧，两端互为客户端与服务端)。
@@ -70,7 +71,19 @@ impl Identity {
                 builder = builder.relay_mode(iroh::RelayMode::custom(urls));
             }
         }
+        // user:“手机端远控电脑连接不稳定，频繁断连”+(iroh 默认 30 秒空闲就关连接。手机端
+        // 一条大回复正把写方向占住时，应用层心跳排在锁后面发不出去，28 秒后 QUIC 自己把
+        // 连接关掉，电脑侧日志就是 cannot write a frame: timed out。这里把空闲上限抬到
+        // 120 秒，并让 QUIC 自己每 10 秒保活一次：业务层的锁再忙，链路层也有真实流量)。
+        let transport = QuicTransportConfig::builder()
+            .keep_alive_interval(std::time::Duration::from_secs(10))
+            .max_idle_timeout(Some(
+                IdleTimeout::try_from(std::time::Duration::from_secs(120))
+                    .context("idle timeout is out of range")?,
+            ))
+            .build();
         builder
+            .transport_config(transport)
             .alpns(vec![ALPN.to_vec()])
             .secret_key(self.key.clone())
             .bind()
