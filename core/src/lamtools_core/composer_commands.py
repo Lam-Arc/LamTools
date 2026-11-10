@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from lamtools_core.skills import SkillRegistry, SkillStateStore
+from lamtools_core.skills import SkillRegistry, SkillStateStore, derive_skill_usage_store
 
 CommandAction = Literal["insert_token", "run_action", "expand_on_send"]
 CommandKind = Literal["action", "skill"]
@@ -185,6 +185,8 @@ def prepare_composer_input(
         registry = create_skill_runtime().registry
     else:
         registry = skill_registry
+    # user:“我希望能够在插件界面中看见 skill 的调用统计”+(用户手动 /技能 也计入，来源记 user)。
+    usage_store = derive_skill_usage_store(skill_state_store)
     visible_items: list[dict[str, Any]] = []
     runtime_items: list[dict[str, Any]] = []
     visible_parts: list[str] = []
@@ -213,6 +215,12 @@ def prepare_composer_input(
                 raise ValueError(f'Skill "{requested_name}" does not allow user invocation')
             source_text = str(item.get("source_text") or f"/{requested_name}")
             content = registry.load_prompt_content(work_root, skill.name)
+            if usage_store is not None:
+                try:
+                    usage_store.record(skill.name, source="user")
+                except (OSError, ValueError):
+                    # 记账失败不影响本次输入的准备。
+                    pass
             visible_items.append({"type": "text", "text": source_text})
             runtime_items.append({"type": "text", "text": content})
             visible_parts.append(source_text)

@@ -203,6 +203,93 @@ def create_core_router(
 
     router = APIRouter()
 
+    # user:“查一下 computer use 功能怎么做”+(界面要能看到 Agent 正在操作电脑，
+    # 并且能随时暂停或结束，所以状态和控制各开一个只读入口)。
+    @router.get("/computer-use/status")
+    async def computer_use_status() -> dict[str, Any]:
+        from lamtools_core.computer_use import session as computer_session
+
+        active = computer_session.current()
+        return {"active": active is not None, "session": active.status() if active else None}
+
+    @router.post("/computer-use/control")
+    async def computer_use_control(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from lamtools_core.computer_use import session as computer_session
+        from lamtools_core.computer_use.session import GuardError
+
+        body = payload or {}
+        action = str(body.get("action") or "").strip().lower()
+        active = computer_session.current()
+        if active is None:
+            raise HTTPException(status_code=404, detail="没有正在运行的桌面任务")
+        try:
+            if action == "pause":
+                active.pause(str(body.get("reason") or "用户从界面暂停"))
+            elif action == "resume":
+                active.resume()
+            elif action == "stop":
+                active.stop(str(body.get("reason") or "用户从界面结束"))
+            else:
+                raise HTTPException(status_code=400, detail=f"不支持的 action: {action}")
+        except GuardError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"active": True, "session": active.status()}
+
+    # user:“AI 直接在屏幕上标记、绘制、互动：箭头、框选、高亮、涂鸦、文字…
+    # 用户能直接点击、圈选、批注，与 Agent 实时互动”+(覆盖层页面读标注状态，
+    # 用户圈选提交走 control；能投递到会话就直接起一轮，投不进去就留在队列里)。
+    @router.get("/overlay/state")
+    async def overlay_state() -> dict[str, Any]:
+        from lamtools_core.overlay import store as overlay_store
+
+        return overlay_store.current().snapshot()
+
+    @router.get("/overlay/assets/{name}")
+    async def overlay_asset(name: str) -> Response:
+        # 表情包图片只按服务端生成的名字读取，不接受路径片段。
+        from lamtools_core.overlay import assets as overlay_assets
+
+        path = overlay_assets.path_for(name)
+        if path is None:
+            raise HTTPException(status_code=404, detail="标注资源不存在")
+        return FileResponse(path)
+
+    @router.post("/overlay/control")
+    async def overlay_control(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from lamtools_core.overlay import store as overlay_store
+
+        body = payload or {}
+        action = str(body.get("action") or "").strip().lower()
+        active = overlay_store.current()
+        if action == "show":
+            # 自动化与联调入口：和桌面工具画的是同一份状态。
+            try:
+                ids = active.apply(body.get("marks") or [])
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return {"ok": True, "ids": ids, **active.snapshot()}
+        if action == "append":
+            try:
+                added = active.append_shapes(body.get("id"), body.get("shapes") or [])
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return {"ok": True, "added": added, **active.snapshot()}
+        if action == "clear":
+            try:
+                removed = active.clear(ids=body.get("ids") or [], all_marks=bool(body.get("all")))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return {"ok": True, "removed": removed, **active.snapshot()}
+        if action == "capture":
+            # user:“对外开放API，可外部调用批注功能”+(外部程序让交互层进框选态；
+            # 页面取走请求后 snapshot 里的 capture_requested 会变回 false)。
+            active.request_capture()
+            return {"ok": True, **active.snapshot()}
+        if action == "capture_ack":
+            active.take_capture_request()
+            return {"ok": True, **active.snapshot()}
+        raise HTTPException(status_code=400, detail=f"不支持的 action: {action}")
+
     def require_export_service() -> ConversationExportService:
         resolved = export_service() if callable(export_service) else export_service
         if resolved is None:

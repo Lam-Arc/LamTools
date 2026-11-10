@@ -316,6 +316,36 @@ async def cmd_skill_list(args: argparse.Namespace) -> int:
     return 0
 
 
+# user:“我希望能够在插件界面中看见 skill 的调用统计”+(与技能页同数据源：
+# skill.usage 直接读用量账本，命令行也能看每个技能的调用次数与最近调用时间。)
+async def cmd_skill_usage(args: argparse.Namespace) -> int:
+    from .connection import _invoke_live
+    result = await _invoke_live(args, lambda client: client.request("skill.usage", {}))
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    skills = result.get("skills") if isinstance(result, dict) else {}
+    summary = result.get("summary") if isinstance(result, dict) else {}
+    if not skills:
+        print("No skill invocations recorded yet.", flush=True)
+        return 0
+    ordered = sorted(
+        skills.items(),
+        key=lambda item: -int(item[1].get("count") or 0) if isinstance(item[1], dict) else 0,
+    )
+    for name, entry in ordered:
+        entry = entry if isinstance(entry, dict) else {}
+        last = entry.get("last_used_at") or "-"
+        print("%s: %d calls (last %s)" % (name, int(entry.get("count") or 0), last), flush=True)
+    if isinstance(summary, dict):
+        print(
+            "Total %d calls across %d skills."
+            % (int(summary.get("total_calls") or 0), int(summary.get("skills_used") or 0)),
+            flush=True,
+        )
+    return 0
+
+
 async def cmd_skill_create(args: argparse.Namespace) -> int:
     from .connection import _invoke_live, _print_live_result
     result = await _invoke_live(

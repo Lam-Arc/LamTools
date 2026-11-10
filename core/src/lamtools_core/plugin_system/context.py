@@ -410,6 +410,12 @@ class PluginContext:
         from .workspace_files import PluginWorkspaceFilesAPI
         return PluginWorkspaceFilesAPI(self, self._active_registration_scope())
 
+    @property
+    def session_controller(self):
+        # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(会话读写绑定原可见性与当前项目)。
+        from .session_controller import PluginSessionController
+        return PluginSessionController(self, self._active_registration_scope())
+
     async def for_session(self, session_id: str) -> "PluginContext":
         # user:“继续，把 2 阶段都做完”+(按持久目录取得固定执行视图，项目配置仍按原项目解析)。
         scope = self._active_registration_scope()

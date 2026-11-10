@@ -444,6 +444,54 @@ class ArtifactStore:
 
         return await self.write_coordinator.run(write)
 
+    async def set_usage(self, artifact_id: str, usage: dict[str, Any]) -> ArtifactRecord:
+        """素材的用法三行：从哪进、依赖什么、最小片段；空对象表示清空。
+
+        user:“素材必须自带用法”+(没有 entry 的素材，取用会退化成重新读源码)。
+        """
+        cleaned = _clean_artifact_usage(usage)
+
+        async def write(db: Any) -> ArtifactRecord:
+            row = await db.get(CoreArtifact, artifact_id)
+            if row is None:
+                raise LookupError(f"Artifact not found: {artifact_id}")
+            row.usage_json = cleaned
+            return _artifact_record(row)
+
+        return await self.write_coordinator.run(write)
+
+    async def record_use(self, artifact_ids: list[str], *, used_in: str) -> list[ArtifactRecord]:
+        """一次取用落痕：次数 +1，记下时间与位置；同一位置只保留最近一次。
+
+        user:“用完没有痕迹”+(代码落地之后回写，人才看得出哪个素材真被用过、用在哪)。
+        """
+        where = " ".join(str(used_in or "").split()).strip()[:512]
+        if not where:
+            raise ValueError("used_in is required")
+        stamp = datetime.now()
+
+        async def write(db: Any) -> list[ArtifactRecord]:
+            updated: list[ArtifactRecord] = []
+            for artifact_id in artifact_ids:
+                row = await db.get(CoreArtifact, artifact_id)
+                if row is None:
+                    alias = await db.get(CoreArtifactAlias, artifact_id)
+                    row = await db.get(CoreArtifact, alias.artifact_id) if alias is not None else None
+                if row is None:
+                    raise LookupError(f"Artifact not found: {artifact_id}")
+                history = [
+                    item for item in _clean_used_in(row.used_in_json)
+                    if item["where"] != where
+                ]
+                history.insert(0, {"at": stamp.isoformat(timespec="seconds"), "where": where})
+                row.used_in_json = history[:20]
+                row.usage_count = int(row.usage_count or 0) + 1
+                row.last_used_at = stamp
+                updated.append(_artifact_record(row))
+            return updated
+
+        return await self.write_coordinator.run(write)
+
     async def set_rating(self, artifact_id: str, rating: int) -> ArtifactRecord:
         """评分 0 到 5，0 表示未评。"""
         value = max(0, min(5, int(rating)))
@@ -631,6 +679,37 @@ def _clean_artifact_tags(values: list[str]) -> list[str]:
     return result
 
 
+#: 用法三行只有这三键，别的一律不落库。
+USAGE_FIELDS = ("entry", "requires", "example")
+
+
+def _clean_artifact_usage(value: Any) -> dict[str, str]:
+    """用法规范化：只留 entry / requires / example，去空白、丢空串、限量。"""
+    if not isinstance(value, dict):
+        return {}
+    cleaned: dict[str, str] = {}
+    for key in USAGE_FIELDS:
+        text = str(value.get(key) or "").strip()
+        if text:
+            cleaned[key] = text[:2000]
+    return cleaned
+
+
+def _clean_used_in(value: Any) -> list[dict[str, str]]:
+    """使用位置列表：只留 {at, where}，丢掉没有位置的行。"""
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        where = str(item.get("where") or "").strip()
+        if not where:
+            continue
+        result.append({"at": str(item.get("at") or ""), "where": where})
+    return result
+
+
 def _clean_artifact_folder(value: str) -> str:
     """资料库的归档层级：相对路径，逐段校验，拒绝越界。"""
     raw = str(value or "").strip().replace("\\", "/").strip("/")
@@ -688,6 +767,10 @@ def _artifact_record(row: CoreArtifact) -> ArtifactRecord:
         folder=row.folder or "",
         tags=[str(item) for item in (row.tags_json or [])],
         rating=int(row.rating or 0),
+        usage=_clean_artifact_usage(row.usage_json),
+        usage_count=int(row.usage_count or 0),
+        last_used_at=row.last_used_at.isoformat() if row.last_used_at else "",
+        used_in=_clean_used_in(row.used_in_json),
         updated_at=row.updated_at.isoformat() if row.updated_at else row.created_at.isoformat(),
     )
 

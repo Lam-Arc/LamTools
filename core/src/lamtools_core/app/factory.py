@@ -15,7 +15,12 @@ from fastapi.staticfiles import StaticFiles
 
 from ..member import MemberManifest, MemberRegistry
 from .security import allowed_origins, is_allowed_origin, is_same_server_origin
-from .api_access import CoreApiAccessMiddleware, CoreApiAccessPolicy
+from .api_access import (
+    CoreApiAccessMiddleware,
+    CoreApiAccessPolicy,
+    apply_response_security_headers,
+    is_plugin_asset_path,
+)
 from .inline_visualization import RUNTIME_PATH, runtime_response
 
 
@@ -123,10 +128,7 @@ def create_app(
         # user:“点击之后没反应”+(分屏页在 Tauri 里用动态 import 从后台取 .mjs；
         # 这是跨源脚本请求，会被下面的 Origin 栅栏拦成 403。插件静态资源是
         # 只读代码，单独放开并补 CORS，不能拿它去放宽其它 Core API。)
-        is_plugin_system_asset = (
-            request.url.path.startswith("/api/core/plugin-system/")
-            and "/assets/" in request.url.path
-        )
+        is_plugin_system_asset = is_plugin_asset_path(request.url.path)
         if (
             origin is not None
             and not is_plugin_system_asset
@@ -142,35 +144,11 @@ def create_app(
         # Security headers (audit 03 S3): the SPA is served inline and file
         # responses use guessable content-types — nosniff + frame/referrer
         # policies shrink the sniffing / clickjacking surface.
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("Referrer-Policy", "no-referrer")
-        if is_plugin_system_asset:
-            # Plugin pages are imported as ES modules by the desktop WebView,
-            # whose origin can differ from the backend port. Module scripts
-            # need CORS plus a cross-origin resource policy; the content is
-            # read-only plugin code, never Core API data.
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
-            # Module scripts are credential-free; a wildcard origin combined
-            # with allow-credentials is invalid and some WebViews reject it.
-            # user:“我看看界面什么的有没有 bug”+(Starlette 响应头不是 dict，删除跨域凭证头不能使插件资源请求崩溃)。
-            if "access-control-allow-credentials" in response.headers:
-                del response.headers["access-control-allow-credentials"]
-            response.headers["Access-Control-Allow-Private-Network"] = "true"
-            response.headers.setdefault("Vary", "Origin")
-        elif request.url.path == RUNTIME_PATH:
-            # The runtime document is intentionally framed by the local Tauri
-            # host, which uses a different loopback port in development and the
-            # Tauri custom origin in packaged builds. Keep every other response
-            # protected by SAMEORIGIN.
-            response.headers.setdefault(
-                "Content-Security-Policy",
-                "frame-ancestors http://127.0.0.1:* http://localhost:* tauri://localhost http://tauri.localhost",
-            )
-            response.headers.setdefault("Cross-Origin-Resource-Policy", "cross-origin")
-        else:
-            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
-            response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        apply_response_security_headers(
+            request.url.path,
+            response.headers,
+            runtime_path=RUNTIME_PATH,
+        )
         return response
 
     # Last added is outermost: do not let CORS preflight, static files, docs,

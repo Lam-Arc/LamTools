@@ -88,7 +88,9 @@ async def dispatch_remote_request(*, host, catalog, plugin, namespace, method, b
         if type(body) is not dict or set(body) != {"args"}:
             raise ValueError("Use one exact args object")
         check_arguments(schema, body["args"])
-    except (ValueError, TypeError, RecursionError):
+        # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(无效Unicode参数在原操作执行前拒绝)。
+        json.dumps(body["args"], ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (ValueError, TypeError, UnicodeError, RecursionError):
         return 400, {"error": "invalid Remote arguments"}
     def pre_dispatch(_manifest, route, spec):
         # user:“复用原宿主权威”+(最后派发前复核实际声明、路由、操作、启动代和既有令牌；未引入新授权体系)。

@@ -212,7 +212,7 @@
         "sessions.wait"
       ],
       "documentation": "agent_docs/plugin_session_control.md",
-      "evidence": "core/tests/test_plugin_session_control.py",
+      "evidence": "core/tests/test_plugin_session_control.py; core/tests/test_plugin_session_invalid_unicode.py",
       "limits": [
         "desktop Python host only",
         "text messages only",
@@ -220,7 +220,8 @@
         "no DSH Agent factory or Typert Remote implementation",
         "create does not bind a workspace or preset",
         "paused input remains queued until explicit resume",
-        "acceptance receipt is not task completion"
+        "acceptance receipt is not task completion",
+        "Session identifiers and prompt/queue text reject invalid Unicode before native dispatch; other fields retain their original validation"
       ]
     },
     "ownedServices": {
@@ -938,10 +939,11 @@
         "context.settings.public"
       ],
       "documentation": "agent_docs/plugin_phase2_public_ports.md",
-      "evidence": "core/tests/test_plugin_settings_access.py",
+      "evidence": "core/tests/test_plugin_settings_access.py; core/tests/test_plugin_settings_array_redaction.py",
       "limits": [
         "managed desktop Python; documented approximation, not DSH runtime compatibility",
-        "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。"
+        "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；无动态namespace/volatile/继承重置/前端接线。",
+        "Array contains and unevaluatedItems subschemas are conservatively applied to every element in public projection; this can redact values outside the applicable subset"
       ]
     },
     "workspaceChanges": {
@@ -1107,7 +1109,7 @@
         "plugin.json http.remote.resultEncoding=ndjson"
       ],
       "documentation": "agent_docs/plugin_phase3_remote.md",
-      "evidence": "core/tests/test_plugin_remote_binary.py; core/tests/test_plugin_remote_auth_before_schema.py; core/tests/test_plugin_remote_dispatch_binding.py",
+      "evidence": "core/tests/test_plugin_remote_binary.py; core/tests/test_plugin_remote_auth_before_schema.py; core/tests/test_plugin_remote_dispatch_binding.py; core/tests/test_plugin_remote_invalid_unicode.py",
       "limits": [
         "Explicit current manifest descriptors only; no fallback to operation names or unmarked methods",
         "Maps only to existing token-authenticated POST routes; native plugin availability, operation ownership and approval checks remain authoritative",
@@ -1124,7 +1126,8 @@
         "Normal ndjson end rechecks original binding after final pull; declaration/token/generation withdrawal during iterator completion emits error, never success end",
         "Remote route validates an existing plugin token before pulling/parsing the body or inspecting method declarations, rechecks after body read and at native route; authentication never provisions or regenerates a revoked token; host availability may still be observable",
         "Immediately before native operation dispatch, compares original manifest, explicit descriptor, native route/operation spec, supervisor generation and existing token; changes reject before handler, but no cross-process atomic authorization lock",
-        "NDJSON also rereads the original operation specification, including external files, before frames and during idle polling; permission/spec withdrawal fails closed and closes the source; synchronous checks are not a strict deadline"
+        "NDJSON also rereads the original operation specification, including external files, before frames and during idle polling; permission/spec withdrawal fails closed and closes the source; synchronous checks are not a strict deadline",
+        "After schema validation, invalid Unicode in arguments is rejected before native operation dispatch; the normal HTTP body bound still applies"
       ]
     },
     "workspaceFiles": {
@@ -1201,19 +1204,20 @@
       ]
     },
     "fileUploads": {
-      "version": 2,
+      "version": 3,
       "status": "verified-python",
       "apis": [
         "context.file_uploads.save_encoded(session_id, filename, content_base64, mime_type)"
       ],
       "documentation": "agent_docs/plugin_file_uploads.md",
-      "evidence": "core/tests/test_plugin_file_upload_encoded.py; core/tests/test_plugin_upload_revalidate.py",
+      "evidence": "core/tests/test_plugin_file_upload_encoded.py; core/tests/test_plugin_upload_revalidate.py; core/tests/test_plugin_upload_uncertain.py",
       "limits": [
         "Canonical standard base64 only, decoded bytes <=512KiB; original HTTP JSON request max 1MiB",
         "Original session_data/attachments host enforces visible session and fixed project and persists the actual file; returns original attachment record",
         "After dispatch original write settles under repeated caller cancellation, which may leave a saved attachment even if caller sees cancellation",
         "No DSH staged receipt/session binding transaction, prompt consumption, streaming/progress/image normalization or generated codec",
-        "After native write settles, rechecks original plugin binding and reads the same attachment through the session-scoped host; changed session or binding rejects stale metadata with may_have_changed=true; cancellation during final read can still leave saved data"
+        "After native write settles, rechecks original plugin binding and reads the same attachment through the session-scoped host; changed session or binding rejects stale metadata with may_have_changed=true; cancellation during final read can still leave saved data",
+        "After local argument validation, errors from original create can occur after file or index persistence; sanitized write-uncertain carries Python may_have_changed, including conservative pre-write failures; HTTP need not expose the attribute"
       ]
     },
     "credentialController": {
@@ -1237,7 +1241,7 @@
       ]
     },
     "settingsController": {
-      "version": 2,
+      "version": 3,
       "status": "verified-python",
       "apis": [
         "context.settings.public()",
@@ -1245,13 +1249,15 @@
         "context.settings_controller.replace(values, expected_revision)"
       ],
       "documentation": "agent_docs/plugin_settings_controller.md",
-      "evidence": "core/tests/test_plugin_settings_controller_remote.py; core/tests/test_plugin_settings_controller_write.py",
+      "evidence": "core/tests/test_plugin_settings_controller_remote.py; core/tests/test_plugin_settings_controller_write.py; core/tests/test_plugin_settings_write_uncertain.py; core/tests/test_plugin_settings_array_redaction.py",
       "limits": [
         "Only current plugin configuration; public projection returns redacted values, revision, validity and sanitized validation locations/rules",
         "Explicit plugin-owned token POST mapping required for HTTP; revoked plugin scope cannot read",
         "No DSH global namespace listing, schema/layer projection, global namespace writes/document opening or generated codec",
         "Original settings access is synchronous; no asynchronous preemption after read starts",
-        "Current-plugin replace uses original schema validation and CAS, returns only redacted public projection; post-commit binding, projection or revision change reports may_have_changed"
+        "Current-plugin replace uses original schema validation and CAS, returns only redacted public projection; post-commit binding, projection or revision change reports may_have_changed",
+        "After original validation, unclassified write errors may follow a committed replacement and report sanitized settings/write-uncertain with may_have_changed; binding changes report host-changed; ordinary HTTP need not expose the Python attribute",
+        "Array contains and unevaluatedItems subschemas are conservatively applied to every element in public projection; this can redact values outside the applicable subset"
       ]
     },
     "jobController": {
@@ -1293,21 +1299,23 @@
       ]
     },
     "pluginMarket": {
-      "version": 2,
+      "version": 3,
       "status": "verified-python",
       "apis": [
         "context.plugin_market.list()",
-        "context.plugin_market.search(text, offset, limit)"
+        "context.plugin_market.search(text, offset, limit)",
+        "context.plugin_market.entry(name)"
       ],
       "documentation": "agent_docs/plugin_market_access.md",
-      "evidence": "core/tests/test_plugin_market_readonly_remote.py; core/tests/test_plugin_market_search_remote.py",
+      "evidence": "core/tests/test_plugin_market_readonly_remote.py; core/tests/test_plugin_market_search_remote.py; core/tests/test_plugin_market_entry.py; core/tests/test_plugin_market_entry_lifecycle.py",
       "limits": [
         "Calls original plugin.market.list provider: fixed Sunday official GitHub catalog with actual validation, installed status, cache and explicit source/error",
         "No configurable DSH indexes, DSH fuzzy/ranked search, stable cross-page snapshots, per-version compatibility/details or install action in this facade",
         "Cancellation waits for original read/cache operation and worker thread to settle; HTTP transport timeouts and fallback are inherited, not a strict overall deadline",
         "Original network failure reports source=unavailable and installable=false; no installed provider yields error, not fake successful empty catalog",
         "HTTP requires explicit plugin-owned token POST mapping; test substitutes deterministic remote responses while exercising actual provider and cache",
-        "Search performs NFKC case-insensitive substring filtering of the original fixed catalog and index-order pagination, preserving source/error/installability; every page fetches the original provider afresh"
+        "Search performs NFKC case-insensitive substring filtering of the original fixed catalog and index-order pagination, preserving source/error/installability; every page fetches the original provider afresh",
+        "Exact case-sensitive id lookup reads the original fixed catalog and returns item or null plus original source/error; unlike DSH entry it has no index argument, version metadata or detail document"
       ]
     },
     "remoteAccess": {
@@ -1356,6 +1364,30 @@
         "Original directory listing bounds all entries before filtering directories; defaults to current project root rather than DSH home, and errors map only to explicit near equivalents",
         "Runs original synchronous picker in a worker; cancellation waits for native operation to settle, changed binding after creation and uncertain create failures report may_have_changed",
         "Native pick explicitly raises directory-picker/unavailable; HTTP requires a plugin-owned token POST mapping, no UI or system dialog"
+      ]
+    },
+    "sessionController": {
+      "version": 5,
+      "status": "verified-python",
+      "apis": [
+        "context.session_controller.state(session_id)",
+        "context.session_controller.events(session_id, after_seq, limit, max_bytes)",
+        "context.session_controller.wait(session_id, timeout)",
+        "context.session_controller.prompt(session_id, request_id, text, mode)",
+        "context.session_controller.update_queue(session_id, queue_item_id, text, delete)",
+        "context.session_controller.cancel(session_id, turn_id)",
+        "context.session_controller.follow(session_id, after_seq, limit, max_bytes, interval)",
+        "context.session_controller.fork(session_id, checkpoint_id, turn_id, new_session_id, title)"
+      ],
+      "documentation": "agent_docs/plugin_session_remote.md",
+      "evidence": "core/tests/test_plugin_scoped_session_controller.py; core/tests/test_plugin_scoped_session_write.py; core/tests/test_plugin_scoped_session_prompt_directory.py; core/tests/test_plugin_scoped_session_follow.py; core/tests/test_plugin_scoped_follow_http_lifecycle.py; core/tests/test_plugin_scoped_session_fork.py",
+      "limits": [
+        "Read-only original SESSIONS state, events and wait; before and after each read checks original session visibility and fixed project through the same working-directory host",
+        "Directory and session services must share their original session provider; scope, project and provider replacement reject stale results",
+        "Explicit plugin-owned token POST mapping required; original dataclasses and event cursor, no DSH wire, Peer roles, or atomic authorization lock",
+        "Writes precheck current visible project and finish dispatched operations despite cancellation; prompt captures the original session execution directory before dispatch and rejects a missing directory; post-dispatch errors conservatively report may_have_changed, which HTTP need not carry",
+        "follow polls original durable event pages with backpressure, checking session visibility and project before each event and while a pull is idle; no background task when not being consumed, no DSH initial snapshot, live tokens or wire protocol",
+        "fork uses original checkpoint or turn boundary, source and resulting session must pass current project visibility; no arbitrary DSH event-sequence cut, migration preflight, file rollback or atomic authorization"
       ]
     }
   },
@@ -1447,14 +1479,16 @@
     {
       "dsh": "pluginMarket",
       "status": "candidate",
-      "sunday": "context.plugin_market.list/search 原Sunday固定官方目录只读",
+      "sunday": "context.plugin_market.list/search/entry 原Sunday固定官方目录只读",
       "phase": 3,
-      "boundary": "复用原固定GitHub发布目录校验、缓存/来源及安装状态，支持NFKC子串过滤与顺序分页；每页重新调用原目录，未固定跨页快照。缺提供方明确报错；不可用时installable=false。非DSH多索引、模糊排名、稳定分页、版本详情或安装；网络验收采用受控响应。",
+      "boundary": "复用原固定GitHub发布目录校验、缓存/来源及安装状态，支持NFKC子串过滤与顺序分页；每页重新调用原目录，未固定跨页快照。缺提供方明确报错；不可用时installable=false。非DSH多索引、模糊排名、稳定分页、版本详情或安装；网络验收采用受控响应。 entry按原id大小写精确查询并返回原source/error，不是上游版本详情或Remote方法。",
       "evidence": [
         "core/src/lamtools_core/plugin_system/market_access.py",
         "core/tests/test_plugin_market_readonly_remote.py",
         "agent_docs/plugin_market_access.md",
-        "core/tests/test_plugin_market_search_remote.py"
+        "core/tests/test_plugin_market_search_remote.py",
+        "core/tests/test_plugin_market_entry.py",
+        "core/tests/test_plugin_market_entry_lifecycle.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/boot/plugin-market"
     },
@@ -1602,12 +1636,13 @@
       "status": "candidate",
       "sunday": "context.file_uploads.save_encoded 原会话附件持久化子集",
       "phase": 3,
-      "boundary": "明确session和标准base64（解码≤512KiB）写入原会话附件，真实HTTP和取消后结算已验收；返回持久附件而非DSH暂存收据，无流式/进度/图像归一化或prompt收据消费。 写入后复核原附件/会话与插件绑定，失效拒绝元数据并标记可能已保存；显式HTTP错误不保证传递该标志。",
+      "boundary": "明确session和标准base64（解码≤512KiB）写入原会话附件，真实HTTP和取消后结算已验收；返回持久附件而非DSH暂存收据，无流式/进度/图像归一化或prompt收据消费。 写入后复核原附件/会话与插件绑定，失效拒绝元数据并标记可能已保存；显式HTTP错误不保证传递该标志。 原写入抛错不能排除文件或索引已保存，非参数错误保守标记可能变更；普通HTTP不保证透传。",
       "evidence": [
         "core/src/lamtools_core/plugin_system/file_uploads.py",
         "core/tests/test_plugin_file_upload_encoded.py",
         "agent_docs/plugin_file_uploads.md",
-        "core/tests/test_plugin_upload_revalidate.py"
+        "core/tests/test_plugin_upload_revalidate.py",
+        "core/tests/test_plugin_upload_uncertain.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/file-upload"
     },
@@ -1684,16 +1719,25 @@
     {
       "dsh": "sessionController",
       "status": "candidate",
-      "sunday": "SESSIONS / sessions 公开契约 + 桌面 live 控制",
+      "sunday": "context.session_controller.state/events/wait/follow/prompt/update_queue/cancel/fork + SESSIONS 原桌面控制",
       "phase": 3,
-      "boundary": "原SESSIONS的state/events/wait及原session_query.query经原插件操作桥/真实HTTP直接返回dataclass记录已验收；原可见性、被动读取及等待后原存储复核保留。字段为Sunday原样投影，非DSH codec/history address/完整summary；query仅标题筛选，不是DSH消息内容search。完整Remote会话控制/开场快照/token/模型/工作区等仍待逐项移植。 原SESSIONS的prompt、update_queue及空闲/活动回合cancel亦经显式HTTP和临时持久事件验收；请求去重保留原语义，仍非DSH参数/响应或Peer授权。 经ServiceRef.call取得的Python异步生成器在每次读取前和结果发布前复核调用代及提供方；请求方或受管提供方启动代撤回时取消等待中的pull并等待清理；无受管代的宿主替换仍须等pull返回才发现。 原follow缓存页逐条复核存储及会话可见性，不提供跨进程原子权限锁。",
+      "boundary": "原SESSIONS的state/events/wait及原session_query.query经原插件操作桥/真实HTTP直接返回dataclass记录已验收；原可见性、被动读取及等待后原存储复核保留。字段为Sunday原样投影，非DSH codec/history address/完整summary；query仅标题筛选，不是DSH消息内容search。完整Remote会话控制/开场快照/token/模型/工作区等仍待逐项移植。 原SESSIONS的prompt、update_queue及空闲/活动回合cancel亦经显式HTTP和临时持久事件验收；请求去重保留原语义，仍非DSH参数/响应或Peer授权。 经ServiceRef.call取得的Python异步生成器在每次读取前和结果发布前复核调用代及提供方；请求方或受管提供方启动代撤回时取消等待中的pull并等待清理；无受管代的宿主替换仍须等pull返回才发现。 原follow缓存页逐条复核存储及会话可见性，不提供跨进程原子权限锁。 会话标识、请求标识、队列标识和消息文本在原读写前拒绝无效Unicode；其他字段保留原校验。 新只读门面读取前后经同一原会话宿主复核可见性及当前项目，拒绝跨项目与失效结果；非跨进程原子授权或DSH Peer策略。 prompt/队列编辑及取消先限当前项目，已派发取消等待原操作结算；prompt派发前捕获原会话执行目录，缺失不派发；写入异常保守标记可能变更，HTTP不保证透传。 follow按原持久事件正向轮询并在每条及空闲拉取时复核当前项目；无DSH开场快照、实时token或完整流协议。 session.rename可人工映射原session_title.get/set，使用原项目可见性及修订CAS；返回revision而非上游持久事件seq。 fork限当前项目，复用原checkpoint或turn边界及对话历史；无任意DSH序号分叉、迁移预检或文件回退。",
       "evidence": [
         "core/src/lamtools_core/app/default_agent.py",
         "core/tests/test_plugin_remote_session_results.py",
         "agent_docs/plugin_session_remote.md",
         "core/tests/test_plugin_session_remote_mutations.py",
         "core/tests/test_plugin_session_service_stream_scope.py",
-        "core/tests/test_plugin_service_stream_revoke.py"
+        "core/tests/test_plugin_service_stream_revoke.py",
+        "core/tests/test_plugin_session_invalid_unicode.py",
+        "core/tests/test_plugin_scoped_session_controller.py",
+        "core/src/lamtools_core/plugin_system/session_controller.py",
+        "core/tests/test_plugin_scoped_session_write.py",
+        "core/tests/test_plugin_scoped_session_prompt_directory.py",
+        "core/tests/test_plugin_scoped_session_follow.py",
+        "core/tests/test_plugin_scoped_follow_http_lifecycle.py",
+        "core/tests/test_plugin_session_title_remote.py",
+        "core/tests/test_plugin_scoped_session_fork.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/session-controller"
     },
@@ -1760,13 +1804,15 @@
       "status": "candidate",
       "sunday": "context.settings_controller.describe/replace 当前插件脱敏设置子集",
       "phase": 3,
-      "boundary": "现有原插件设置脱敏读取及原schema/CAS替换，返回仅脱敏投影；提交后宿主变化、投影失败或并发修订变化明确可能已变更。真实HTTP已验收；无DSH全局命名空间/schema层次/文档打开或精确codec。",
+      "boundary": "现有原插件设置脱敏读取及原schema/CAS替换，返回仅脱敏投影；提交后宿主变化、投影失败或并发修订变化明确可能已变更。真实HTTP已验收；无DSH全局命名空间/schema层次/文档打开或精确codec。 原写入异常可能发生在提交之后，未知错误脱敏并标记可能已变更；普通HTTP不保证透传Python异常属性。 数组contains及unevaluatedItems保密分支保守应用于所有元素，可能额外隐藏。",
       "evidence": [
         "core/src/lamtools_core/plugin_system/settings_access.py",
         "core/tests/test_plugin_settings_controller_remote.py",
         "agent_docs/plugin_settings_controller.md",
         "core/src/lamtools_core/plugin_system/settings_controller.py",
-        "core/tests/test_plugin_settings_controller_write.py"
+        "core/tests/test_plugin_settings_controller_write.py",
+        "core/tests/test_plugin_settings_write_uncertain.py",
+        "core/tests/test_plugin_settings_array_redaction.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/settings-controller"
     },
@@ -1856,7 +1902,7 @@
       "status": "candidate",
       "sunday": "明确http.remote一元映射 + 原插件HTTP操作入口",
       "phase": 3,
-      "boundary": "已验收明确方法/精确扁平参数、一元HTTP入口及原认证/归属/审批；逐次取当前描述符，撤回不降级。非DSH生成codec/Peer/资源lookup、二进制/双向流或完整Gateway。 显式resultEncoding=multipart可返回有界原始字节附件，路径相对Sunday envelope；不是DSH codec/关联ID协议。 显式ndjson服务端JSON流含原认证/代际校验、断连、背压和真实迭代器回收；不是DSH流wire或双向流。 Remote入口在读取请求体和方法/参数前验证已有插件令牌，撤回后复验不自动重建；插件可用性状态仍先可见。 派发原操作前复核原manifest、方法描述、路由/操作声明、启动代和既有令牌；不提供跨进程原子授权锁。 NDJSON帧前和空闲轮询还重读原操作声明文件，权限撤回则关闭流；无严格检测时限。",
+      "boundary": "已验收明确方法/精确扁平参数、一元HTTP入口及原认证/归属/审批；逐次取当前描述符，撤回不降级。非DSH生成codec/Peer/资源lookup、二进制/双向流或完整Gateway。 显式resultEncoding=multipart可返回有界原始字节附件，路径相对Sunday envelope；不是DSH codec/关联ID协议。 显式ndjson服务端JSON流含原认证/代际校验、断连、背压和真实迭代器回收；不是DSH流wire或双向流。 Remote入口在读取请求体和方法/参数前验证已有插件令牌，撤回后复验不自动重建；插件可用性状态仍先可见。 派发原操作前复核原manifest、方法描述、路由/操作声明、启动代和既有令牌；不提供跨进程原子授权锁。 NDJSON帧前和空闲轮询还重读原操作声明文件，权限撤回则关闭流；无严格检测时限。 原操作派发前拒绝参数中的无效Unicode，返回400。",
       "evidence": [
         "core/src/lamtools_core/plugin_system/remote_gateway.py",
         "core/src/lamtools_core/plugin_system/plugin_http.py",
@@ -1868,7 +1914,8 @@
         "core/tests/test_plugin_remote_stream.py",
         "core/tests/test_plugin_remote_stream_completion.py",
         "core/tests/test_plugin_remote_auth_before_schema.py",
-        "core/tests/test_plugin_remote_dispatch_binding.py"
+        "core/tests/test_plugin_remote_dispatch_binding.py",
+        "core/tests/test_plugin_remote_invalid_unicode.py"
       ],
       "source": "https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/gateway"
     },
@@ -2534,7 +2581,7 @@
       "status": "candidate",
       "sunday": "插件 HTTP 路由",
       "phase": 3,
-      "boundary": "已有插件声明的具名HTTP operation路由、归属/审批检查和令牌认证；非ASCII令牌返回401，认证头不转交操作。仅原HTTP接入基础经过验收，缺通用upgrade、index注入和完整DSH协议。 原插件HTTP请求体≤1MiB，声明长度及实际分块均受限，超限413且不派发操作；不是文件上传或Typert流能力。",
+      "boundary": "已有插件声明的具名HTTP operation路由、归属/审批检查和令牌认证；非ASCII令牌返回401，认证头不转交操作。仅原HTTP接入基础经过验收，缺通用upgrade、index注入和完整DSH协议。 原插件HTTP请求体≤1MiB，声明长度及实际分块均受限，超限413且不派发操作；不是文件上传或Typert流能力。 固定上游提供精确优先、最长前缀、唯一回退和GET/HEAD资源、upgrade及监听/TLS生命周期；Sunday具名操作路由不等价，资源Peer准入与断连清理均待实现。",
       "evidence": [
         "core/src/lamtools_core/plugin_system/plugin_http.py",
         "core/tests/test_plugin_http_routes.py",
@@ -3399,7 +3446,7 @@
     "sessions": {
       "state": "verified-approximation",
       "contract": "sessions",
-      "difference": "Python 已公开创建、状态、文本投递、取消、队列和持久事件；Sunday 事件格式不同，仍需 DSH 语义适配，非原样 append 日志。 第三阶段接续修复被动state/events在原存储替换/关闭后仍发布旧结果的问题；准入、metadata及历史读取等待后复核同一原存储/持久化。"
+      "difference": "Python 已公开创建、状态、文本投递、取消、队列和持久事件；Sunday 事件格式不同，仍需 DSH 语义适配，非原样 append 日志。 第三阶段接续修复被动state/events在原存储替换/关闭后仍发布旧结果的问题；准入、metadata及历史读取等待后复核同一原存储/持久化。 会话标识及消息文本先拒绝无效Unicode，不进入原读写。"
     },
     "workspaceChanges": {
       "state": "verified-approximation",
@@ -3424,7 +3471,7 @@
     "settings": {
       "state": "verified-approximation",
       "contract": "settings",
-      "difference": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；声明属性同时应用patternProperties及已触发dependentSchemas中的保密标记。无动态namespace/volatile/继承重置/前端接线。"
+      "difference": "原Config/CAS上的Draft2020-12校验、安全有限错误、默认重置和保守secret投影；声明属性同时应用patternProperties及已触发dependentSchemas中的保密标记。无动态namespace/volatile/继承重置/前端接线。 数组contains/unevaluatedItems保密分支保守应用到全部元素，可能额外隐藏。"
     },
     "subagentModelSelection": {
       "state": "verified-approximation",

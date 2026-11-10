@@ -266,3 +266,23 @@ def test_legacy_shell_env_names_remain_supported(monkeypatch):
     monkeypatch.delenv("SUNDAY_CORE_HOST", raising=False)
     monkeypatch.setenv("LAMCORE_HOST", "127.0.0.2")
     assert desktop_backend._env_setting("SUNDAY_CORE_HOST", "LAMCORE_HOST", "127.0.0.1") == "127.0.0.2"
+
+
+def test_overlay_assets_can_be_embedded_by_the_overlay_page(tmp_path):
+    """标注层页面和 Core 不同源，表情包图片必须允许跨源嵌入。
+
+    user:“图片表情包和 emoji 表情包实际可见”+(覆盖层从 5299 取 5298 的图片，
+    浏览器按 CORP: same-origin 直接拦掉，img 只有 0 高，用户什么都看不到)。
+    """
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "index.html").write_text("<html>Sunday</html>", encoding="utf-8")
+    client = TestClient(create_app(frontend_dir=frontend))
+
+    asset = client.get("/api/core/overlay/assets/0123456789abcdef.png")
+    assert asset.headers["cross-origin-resource-policy"] == "cross-origin"
+
+    # 只有表情包这种只读临时资源放开跨源，状态接口继续按同源保护。
+    state = client.get("/api/core/overlay/state")
+    assert state.headers["cross-origin-resource-policy"] == "same-origin"
+    assert state.headers["x-frame-options"] == "SAMEORIGIN"

@@ -37,13 +37,25 @@ LIBRARY_TOOL_DESCRIPTION = (
     "are (button, card, css, motion) so they can be found again by kind, and put "
     "them in a layer by which part of the project they belong to. Ratings are 0 "
     "to 5, 0 = unrated. "
-    "Actions: list (entry ids, names, roles, layers, tags, ratings, favorites, "
-    "file locations; pass 'tag' to list only the entries carrying it), "
-    "register (file a workspace file into the catalog; optionally assign its "
-    "layer in the same call), favorite (set favorite true/false), folder "
-    "(re-layer one or more entries), tag (add, remove or set tags on existing "
-    "entries), rate (0 to 5), remove (soft-remove; restorable, file untouched), "
-    "restore. "
+    "Tag the way a person speaks, in three questions: what it is (material, "
+    "control, layout, motion, surface), how it looks (glass, low-trans, ring, "
+    "rounded, glow), and where it is used (button, dialog, ping-ring, card, "
+    "composer). Never tag with tokens sliced out of class names — 'head', 'row' "
+    "and 'label' are not retrieval words. "
+    "Every reusable material should carry 'usage': entry (the class name or the "
+    "import path it is reached by), requires (design tokens, parent requirements) "
+    "and example (a minimal snippet). An entry without usage only points at a "
+    "file, which forces the next reader to re-derive the material from source. "
+    "After you land a material in real code, call 'use' with the file you put it "
+    "in — that is the only trace of what has actually been reused. "
+    "Actions: list (entry ids, names, roles, layers, tags, ratings, use counts, "
+    "usage entry, file locations; 'tag' takes one tag or a list where every tag "
+    "must match; 'sort' is rating (default, best first, ties by recent use), used, "
+    "recent or name), register (file a workspace file into the catalog; optionally "
+    "assign its layer and its 'usage' in the same call), favorite (set favorite "
+    "true/false), folder (re-layer one or more entries), tag (add, remove or set "
+    "tags on existing entries), rate (0 to 5), use (record one use: artifact_ids "
+    "plus used_in), remove (soft-remove; restorable, file untouched), restore. "
     "File deliberately: after a turn produces a deliverable worth keeping, "
     "'register' it and give it a fitting layer in the same call — follow the "
     "layers this project already uses (check with 'list' first), otherwise pick "
@@ -59,7 +71,7 @@ LIBRARY_TOOL_SCHEMA: dict[str, object] = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["list", "register", "favorite", "folder", "tag", "rate", "remove", "restore"],
+            "enum": ["list", "register", "favorite", "folder", "tag", "rate", "use", "remove", "restore"],
             "description": "Operation to perform on the project library catalog.",
         },
         "path": {
@@ -102,8 +114,30 @@ LIBRARY_TOOL_SCHEMA: dict[str, object] = {
             "description": "For 'rate': 0 to 5, 0 clears the rating.",
         },
         "tag": {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            ],
+            "description": "For 'list': one tag, or a list of tags where every tag must match (material + shape).",
+        },
+        "sort": {
             "type": "string",
-            "description": "For 'list': only entries carrying this tag.",
+            "enum": ["rating", "used", "recent", "name"],
+            "description": "For 'list': rating (default: highest rating first, ties by recent use), used (most reused), recent (last used/changed), name.",
+        },
+        "usage": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "entry": {"type": "string"},
+                "requires": {"type": "string"},
+                "example": {"type": "string"},
+            },
+            "description": "How to use it: entry (class name or import path), requires (tokens/parent), example (minimal snippet).",
+        },
+        "used_in": {
+            "type": "string",
+            "description": "For 'use': where the material landed — task/session plus file path.",
         },
     },
     "required": ["action"],
@@ -145,6 +179,9 @@ async def _format_records(records: list[Any], artifact_store: Any) -> str:
             location = "file=(missing)"
         tags = ",".join(getattr(record, "tags", []) or [])
         rating = int(getattr(record, "rating", 0) or 0)
+        used = int(getattr(record, "usage_count", 0) or 0)
+        usage = getattr(record, "usage", {}) or {}
+        entry = str(usage.get("entry") or "").strip() if isinstance(usage, dict) else ""
         parts = [
             str(getattr(record, "artifact_id", "") or ""),
             str(getattr(record, "name", "") or ""),
@@ -152,12 +189,48 @@ async def _format_records(records: list[Any], artifact_store: Any) -> str:
             f"folder={getattr(record, 'folder', '') or '-'}",
             f"tags={tags}" if tags else "",
             f"rating={rating}" if rating else "",
+            f"used={used}",
             "favorite" if getattr(record, "favorite", False) else "",
+            f"entry={entry}" if entry else "",
             location,
             *(flags),
         ]
         lines.append("- " + "  ".join(part for part in parts if part))
     return "\n".join(lines)
+
+
+LIBRARY_SORT_KEYS = {"rating", "used", "recent", "name"}
+
+
+def _recency(record: Any) -> str:
+    """最近一次被用到/被改动的时间；三种都没有就排最后。"""
+    return str(
+        getattr(record, "last_used_at", "")
+        or getattr(record, "updated_at", "")
+        or getattr(record, "created_at", "")
+        or ""
+    )
+
+
+def _sorted_records(records: list[Any], sort: str) -> list[Any]:
+    """排序是取用的一部分：先按最近时间排，再按主键稳定排序。
+
+    - rating（默认）：星级从高到低，同分按最近使用/改动；
+    - used：取用次数从多到少；
+    - recent：最近使用/改动；
+    - name：名字。
+    """
+    if sort == "name":
+        return sorted(records, key=lambda item: (
+            str(getattr(item, "name", "") or "").lower(),
+            str(getattr(item, "artifact_id", "") or ""),
+        ))
+    ordered = sorted(records, key=_recency, reverse=True)
+    if sort == "used":
+        return sorted(ordered, key=lambda item: int(getattr(item, "usage_count", 0) or 0), reverse=True)
+    if sort == "recent":
+        return ordered
+    return sorted(ordered, key=lambda item: int(getattr(item, "rating", 0) or 0), reverse=True)
 
 
 class _OutsideWorkspace(ValueError):
@@ -201,15 +274,32 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
         try:
             if action == "list":
                 records = await artifact_store.list(project_id)
-                wanted = str(args.get("tag") or "").strip().lower()
+                raw_tags = args.get("tag")
+                if isinstance(raw_tags, str):
+                    wanted = [raw_tags]
+                elif isinstance(raw_tags, list):
+                    wanted = [str(item) for item in raw_tags]
+                else:
+                    wanted = []
+                wanted = [" ".join(item.split()).strip().lower() for item in wanted]
+                wanted = [item for item in wanted if item]
                 if wanted:
-                    records = [item for item in records if wanted in [str(tag).lower() for tag in getattr(item, "tags", []) or []]]
+                    matched: list[Any] = []
+                    for item in records:
+                        own = {str(tag).lower() for tag in (getattr(item, "tags", []) or [])}
+                        if all(tag in own for tag in wanted):
+                            matched.append(item)
+                    records = matched
+                sort_key = str(args.get("sort") or "rating").strip().lower()
+                if sort_key not in LIBRARY_SORT_KEYS:
+                    return _failed(call, f"Unknown sort '{sort_key}'", "invalid_argument")
+                records = _sorted_records(records, sort_key)
                 return ToolResult(
                     call_id=call.id,
                     name=call.name,
                     status="ok",
                     content=await _format_records(records, artifact_store),
-                    metadata={"count": len(records), "project_id": project_id},
+                    metadata={"count": len(records), "project_id": project_id, "tag": wanted, "sort": sort_key},
                 )
 
             if action == "register":
@@ -221,6 +311,10 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
                 role = str(args.get("role") or "deliverable")
                 if role not in {"deliverable", "intermediate"}:
                     return _failed(call, f"Unknown role '{role}'", "invalid_argument")
+                # 用法先校验：不合格就不登记，避免留下一条半成品。
+                usage = args.get("usage")
+                if usage is not None and not isinstance(usage, dict):
+                    return _failed(call, "'usage' must be an object with entry/requires/example", "invalid_argument")
                 record = await artifact_store.register(
                     project_id=project_id,
                     work_root=root,
@@ -235,6 +329,8 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
                 folder = str(args.get("folder") or "")
                 if folder:
                     record = await artifact_store.set_folder(record.artifact_id, folder)
+                if isinstance(usage, dict) and usage:
+                    record = await artifact_store.set_usage(record.artifact_id, usage)
                 return ToolResult(
                     call_id=call.id,
                     name=call.name,
@@ -314,6 +410,25 @@ def make_library_handler(artifact_store: Any, work_root: str | Path | None):
                     status="ok",
                     content=f"Moved {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} to layer {label}",
                     metadata={"folder": folder, "artifact_ids": ids},
+                )
+            if action == "use":
+                where = " ".join(str(args.get("used_in") or "").split()).strip()
+                if not where:
+                    return _failed(call, "'use' requires used_in — where the material landed", "missing_argument")
+                used = await artifact_store.record_use(ids, used_in=where)
+                lines = [
+                    f"- {item.artifact_id}  used={item.usage_count}  last_used={item.last_used_at}"
+                    for item in used
+                ]
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="ok",
+                    content=(
+                        f"Recorded one use of {len(used)} entr{'y' if len(used) == 1 else 'ies'} in {where}\n"
+                        + "\n".join(lines)
+                    ),
+                    metadata={"used_in": where, "artifact_ids": [item.artifact_id for item in used]},
                 )
             if action == "remove":
                 removed = await artifact_store.soft_remove(ids, project_id=project_id)

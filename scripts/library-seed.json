@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "aliases": {
+    "@": "core/ui/src"
+  },
+  "assets": [
+    {
+      "file": "core/ui/src/styles/optical-glass.css",
+      "name": "光学玻璃材质",
+      "folder": "样式/材质",
+      "tags": ["material", "glass", "low-trans", "surface", "blur"],
+      "rating": 5,
+      "usage": {
+        "entry": ".optical-glass--low-trans",
+        "requires": "--theme-main-solid、--optical-glass-tint、--optical-glass-filter 由主题区提供；父级需要有能透出来的背景，否则玻璃没有可透之物",
+        "example": "<div class=\"optical-glass optical-glass--low-trans\">内容</div>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/sunday-controls.css",
+      "name": "控件基座（按钮 / 开关 / 滑块）",
+      "folder": "样式/控件",
+      "tags": ["control", "button", "switch", "slider", "rounded"],
+      "rating": 4,
+      "usage": {
+        "entry": ".btn--primary",
+        "requires": "先有 .btn 基类；尺寸与焦点环来自 --interaction-height、--focus-ring-color",
+        "example": "<button class=\"btn btn--primary\" type=\"button\">确定</button>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/variables.css",
+      "name": "设计令牌",
+      "folder": "样式/令牌",
+      "tags": ["token", "color", "spacing", "motion"],
+      "rating": 4,
+      "usage": {
+        "entry": "--radius",
+        "requires": "挂在 :root；--theme-* 主题令牌由主题运行时注入，不在这份文件里",
+        "example": "<div style=\"border-radius: var(--radius)\">内容</div>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/library-surface.css",
+      "name": "资料库表面与卡片",
+      "folder": "样式/布局",
+      "tags": ["library", "surface", "card", "preview"],
+      "rating": 4,
+      "usage": {
+        "entry": ".library-surface",
+        "requires": "--radius、--text、--space-*；卡片要放在 .library-surface 里面",
+        "example": "<div class=\"library-surface\"><article class=\"material-card\">素材</article></div>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/session-sidebar.css",
+      "name": "会话侧栏",
+      "folder": "样式/布局",
+      "tags": ["layout", "sidebar", "navigation", "conversation"],
+      "rating": 4,
+      "usage": {
+        "entry": ".conversation",
+        "requires": "--text、--alpha-hover；外层需要会话列表容器，单独一个按钮不会长出侧栏",
+        "example": "<button class=\"conversation\" type=\"button\">会话</button>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/split-workspace.css",
+      "name": "分屏工作区",
+      "folder": "样式/布局",
+      "tags": ["layout", "split", "editor", "preview"],
+      "rating": 4,
+      "usage": {
+        "entry": ".split-workspace",
+        "requires": "--radius、--theme-main-background；左右两栏各自滚动，父级要有确定高度",
+        "example": "<section class=\"split-workspace\">左栏 / 右栏</section>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/workspace-shell.css",
+      "name": "应用外壳与侧轨",
+      "folder": "样式/布局",
+      "tags": ["layout", "shell", "navigation", "app-rail"],
+      "rating": 4,
+      "usage": {
+        "entry": ".app-rail",
+        "requires": "--interaction-height、--optical-glass-*；固定在左缘，主内容在它右边",
+        "example": "<nav class=\"app-rail\">按钮</nav>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/chat-thread-shell.css",
+      "name": "会话消息气泡",
+      "folder": "样式/会话",
+      "tags": ["layout", "chat", "message", "bubble"],
+      "rating": 4,
+      "usage": {
+        "entry": ".assistant-bubble",
+        "requires": "--radius、--text；父级 .chat-thread 提供缩进与滚动",
+        "example": "<div class=\"chat-thread\"><div class=\"assistant-bubble\">回答</div></div>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/plugin-editor-cards.css",
+      "name": "插件市场卡片",
+      "folder": "样式/插件",
+      "tags": ["plugin", "card", "market"],
+      "rating": 3,
+      "usage": {
+        "entry": ".plugin-card",
+        "requires": "--radius、--shadow-md；父级用网格排列",
+        "example": "<article class=\"plugin-card\">插件</article>"
+      }
+    },
+    {
+      "file": "core/ui/src/styles/theme-editor.css",
+      "name": "主题编辑器区域卡",
+      "folder": "样式/设置",
+      "tags": ["theme", "editor", "color", "control"],
+      "rating": 3,
+      "usage": {
+        "entry": ".theme-area-card",
+        "requires": "--radius、--text；一张卡对应一个主题区域",
+        "example": "<section class=\"theme-area-card\">主界面</section>"
+      }
+    },
+    {
+      "file": "core/ui/src/pet/ui/PingRing.vue",
+      "name": "Ping 环",
+      "folder": "交互/Ping",
+      "tags": ["control", "ring", "ping-ring", "interaction", "svg"],
+      "rating": 5,
+      "usage": {
+        "entry": "import PingRing from '@/pet/ui/PingRing.vue'",
+        "requires": "PingRuntime（usePingRuntime()），依赖 ping.overlay 的尺寸；只依赖 ping 运行时，不依赖桌宠",
+        "example": "<PingRing :ping=\"ping\" />"
+      }
+    },
+    {
+      "file": "core/ui/src/components/CoreConfirmDialog.vue",
+      "name": "确认弹窗",
+      "folder": "控件/弹窗",
+      "tags": ["control", "dialog", "modal", "confirm"],
+      "rating": 4,
+      "usage": {
+        "entry": "import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'",
+        "requires": ":open、@cancel、@confirm；输入模式再加 :input-value 与 @update:input-value",
+        "example": "<CoreConfirmDialog :open=\"open\" title=\"确认\" @cancel=\"open = false\" @confirm=\"submit\" />"
+      }
+    }
+  ],
+  "retag": [
+    { "file": "core/ui/src/pet/ui/pet-surface.css", "tags": ["material", "surface", "pet", "rounded"] },
+    { "file": "core/ui/src/study/study.css", "tags": ["layout", "study", "note", "typography"] },
+    { "file": "core/ui/src/styles/app-page.css", "tags": ["layout", "page", "shell"] },
+    { "file": "core/ui/src/styles/auxiliary-chat.css", "tags": ["layout", "chat", "panel"] },
+    { "file": "core/ui/src/styles/base.css", "tags": ["foundation", "reset", "typography"] },
+    { "file": "core/ui/src/styles/chat-thread-cards.css", "tags": ["card", "chat", "tool"] },
+    { "file": "core/ui/src/styles/chat-thread-editing.css", "tags": ["chat", "editor", "input"] },
+    { "file": "core/ui/src/styles/chat-thread-process.css", "tags": ["chat", "process", "timeline"] },
+    { "file": "core/ui/src/styles/chat-thread-reasoning.css", "tags": ["chat", "reasoning", "disclosure"] },
+    { "file": "core/ui/src/styles/chat-thread-tools.css", "tags": ["chat", "tool", "code"] },
+    { "file": "core/ui/src/styles/core-model-catalog.css", "tags": ["settings", "model", "list"] },
+    { "file": "core/ui/src/styles/core-settings-base.css", "tags": ["settings", "form", "layout"] },
+    { "file": "core/ui/src/styles/core-settings-model-editor.css", "tags": ["settings", "form", "model"] },
+    { "file": "core/ui/src/styles/core-settings-models.css", "tags": ["settings", "model", "list"] },
+    { "file": "core/ui/src/styles/core-settings-permissions.css", "tags": ["settings", "permission", "list"] },
+    { "file": "core/ui/src/styles/core-settings-surface.css", "tags": ["settings", "surface", "search"] },
+    { "file": "core/ui/src/styles/core-settings-workspace.css", "tags": ["settings", "workspace", "form"] },
+    { "file": "core/ui/src/styles/layout.css", "tags": ["layout", "grid", "shell"] },
+    { "file": "core/ui/src/styles/library-styles.css", "tags": ["library", "card", "tag", "rating"] },
+    { "file": "core/ui/src/styles/plugin-editor-details.css", "tags": ["plugin", "detail", "panel"] },
+    { "file": "core/ui/src/styles/plugin-editor-shell.css", "tags": ["plugin", "shell", "install"] },
+    { "file": "core/ui/src/styles/plugin-editor-states.css", "tags": ["plugin", "state", "empty"] },
+    { "file": "website/src/styles/sections.css", "tags": ["website", "marketing", "section"] }
+  ]
+}

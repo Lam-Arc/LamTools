@@ -4,8 +4,14 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Callable
+
+
+def _utc_stamp() -> str:
+    """UTC ISO 8601 timestamp the UI can hand straight to ``new Date()``."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 @dataclass(frozen=True)
@@ -433,4 +439,117 @@ class SkillStateStore:
         self._save(data)
 
 
-__all__ = ["Skill", "SkillRegistry", "SkillStateStore"]
+class SkillUsageStore:
+    """Per-skill invocation ledger shared by load_skill and slash commands.
+
+    user:“我希望能够在插件界面中看见 skill 的调用统计”+(用量与启停／分组账本
+    分开存：技能被删除或状态文件被重写都不该抹掉历史用量)。
+    """
+
+    # 记录条数上限：技能总数通常几十个，避免删过大量技能后账本无限增长。
+    MAX_RECORDS = 500
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            raw = self.path.read_text(encoding="utf-8")
+        except OSError:
+            return {"version": 1, "skills": {}}
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            logging.getLogger(__name__).warning("unreadable skill usage: %s", self.path, exc_info=True)
+            return {"version": 1, "skills": {}}
+        return data if isinstance(data, dict) else {"version": 1, "skills": {}}
+
+    def _save(self, data: dict[str, Any]) -> None:
+        from lamtools_core.config.root import atomic_write_text
+
+        atomic_write_text(self.path, json.dumps(data, ensure_ascii=False, indent=2) + chr(10))
+
+    @staticmethod
+    def empty_entry() -> dict[str, Any]:
+        return {"count": 0, "model_count": 0, "user_count": 0, "first_used_at": "", "last_used_at": ""}
+
+    def record(self, name: str, *, source: str = "model", at: str | None = None) -> dict[str, Any]:
+        """Increment one skill's counters; returns the updated entry."""
+        target = str(name).strip()
+        if not target:
+            return {}
+        stamp = at or _utc_stamp()
+        data = self._load()
+        skills = data.setdefault("skills", {})
+        if not isinstance(skills, dict):
+            skills = {}
+            data["skills"] = skills
+        raw_entry = skills.get(target)
+        entry = dict(raw_entry) if isinstance(raw_entry, dict) else {}
+        entry["count"] = int(entry.get("count") or 0) + 1
+        # 两个来源计数都保持存在，界面与 CLI 不必处理缺字段。
+        entry.setdefault("model_count", 0)
+        entry.setdefault("user_count", 0)
+        if source == "user":
+            entry["user_count"] = int(entry.get("user_count") or 0) + 1
+        else:
+            entry["model_count"] = int(entry.get("model_count") or 0) + 1
+        entry.setdefault("first_used_at", stamp)
+        entry["last_used_at"] = stamp
+        skills[target] = entry
+        if len(skills) > self.MAX_RECORDS:
+            ordered = sorted(
+                skills.items(),
+                key=lambda item: str(item[1].get("last_used_at") or "") if isinstance(item[1], dict) else "",
+                reverse=True,
+            )
+            data["skills"] = dict(ordered[: self.MAX_RECORDS])
+        self._save(data)
+        return entry
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        skills = self._load().get("skills", {})
+        if not isinstance(skills, dict):
+            return {}
+        return {str(name): dict(entry) for name, entry in skills.items() if isinstance(entry, dict)}
+
+    def stats_for(self, names: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """Return one entry per requested name, zero-filled when never used."""
+        ledger = self.snapshot()
+        return {str(name): ledger.get(str(name)) or self.empty_entry() for name in names}
+
+    def summary(self) -> dict[str, Any]:
+        total = 0
+        used = 0
+        last = ""
+        for entry in self.snapshot().values():
+            count = int(entry.get("count") or 0)
+            total += count
+            if count > 0:
+                used += 1
+            stamp = str(entry.get("last_used_at") or "")
+            if stamp > last:
+                last = stamp
+        return {"total_calls": total, "skills_used": used, "last_used_at": last}
+
+    def reset(self, name: str | None = None) -> None:
+        data = self._load()
+        skills = data.get("skills", {})
+        if not isinstance(skills, dict):
+            return
+        if name is None:
+            skills.clear()
+        else:
+            skills.pop(str(name).strip(), None)
+        self._save(data)
+
+
+def derive_skill_usage_store(skill_state_store: Any) -> SkillUsageStore | None:
+    """Derive the usage ledger path from the enable/disable ledger path."""
+    path = getattr(skill_state_store, "path", None)
+    if not path:
+        return None
+    return SkillUsageStore(Path(path).with_name("skill_usage.json"))
+
+
+__all__ = ["Skill", "SkillRegistry", "SkillStateStore", "SkillUsageStore", "derive_skill_usage_store"]

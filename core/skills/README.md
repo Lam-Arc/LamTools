@@ -19,6 +19,14 @@ Python package in `scripts/`. It is explicit-only supporting infrastructure rath
 an automatic content-authoring route. Core provides the thin `office validate` /
 `office render` CLI adapter and loads the Skill-owned runtime lazily.
 
+## Built-in task skills
+
+`video-notes` is the non-office built-in: it turns a video link or local file into
+one offline HTML study report. It ships as instructions plus `scripts/` and
+`assets/`, and uses the host's real ffmpeg, yt-dlp, Whisper and Chromium rather
+than bundling media tooling; the skill's own environment step checks and installs
+what is missing before it claims a report exists.
+
 ## Platform class
 
 Every built-in skill declares which host it is for, in the same three words the
@@ -29,9 +37,11 @@ metadata:
   platforms: desktop   # desktop | mobile | universal (absent = universal)
 ```
 
-All fourteen skills here are `desktop`: the Office bundle validates and renders
+All fifteen skills here are `desktop`: the Office bundle validates and renders
 through `py -3.14 -m lamtools_core.cli office …`, `create-plugin` and
-`plugin-manager` end at the desktop plugin installer, and `observe-events` binds
-its observer to a desktop event Arrange. A host that is not `desktop` does not
+`plugin-manager` end at the desktop plugin installer, `observe-events` binds
+its observer to a desktop event Arrange, and `video-notes` runs local media
+tooling (ffmpeg, yt-dlp, Whisper, headless Chromium) that no mobile host has. A
+host that is not `desktop` does not
 offer them at all — no catalog entry, no prompt line, and `load_skill` refuses
 with the reason. Study's own skills declare nothing and are therefore universal.

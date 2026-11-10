@@ -209,7 +209,7 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
                 "thinking_supported": m.thinking_supported,
                 "thinking_budget": m.thinking_budget,
                 "temperature": m.temperature,
-                "capability": m.resolved_capability,
+                "capability": m.resolved_capability, "output_type": m.output_type,
                 "reasoning_off_supported": reasoning_off_supported(adapter_profile),
                 "reasoning_levels": declared_reasoning_levels(adapter_profile),
                 "notes": m.notes,

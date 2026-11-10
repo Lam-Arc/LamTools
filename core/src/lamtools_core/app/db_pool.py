@@ -91,6 +91,18 @@ DEFAULT_MAX_OVERFLOW = _env_int("LAMTOOLS_DB_POOL_OVERFLOW", 8)
 # the queue never drains (measured: one request waited 313s during the incident).
 DEFAULT_POOL_TIMEOUT = _env_float("LAMTOOLS_DB_POOL_TIMEOUT", 8.0)
 
+# Writes used to share the read pool. When concurrent reads filled it (the
+# 2026-10-09 incident: 15/16 checked out by `sub_agent.list` pollers and
+# transcript reads), a turn's next event write could not get a connection at
+# all and the whole turn failed with a pool timeout. Writes are the critical
+# path, they are already serialized by SQLiteWriteCoordinator, and one
+# connection at a time is all they need; this dedicated small pool keeps them
+# out of that contention entirely. The timeout stays generous on purpose: a
+# write should wait for the single writer slot rather than fail a turn.
+WRITE_POOL_SIZE = _env_int("LAMTOOLS_DB_WRITE_POOL_SIZE", 2)
+WRITE_MAX_OVERFLOW = _env_int("LAMTOOLS_DB_WRITE_POOL_OVERFLOW", 2)
+WRITE_POOL_TIMEOUT = _env_float("LAMTOOLS_DB_WRITE_POOL_TIMEOUT", 30.0)
+
 
 class InstrumentedAsyncQueuePool(AsyncAdaptedQueuePool):
     """``AsyncAdaptedQueuePool`` that records how long a checkout had to wait.
@@ -184,6 +196,7 @@ class PoolTelemetry:
         slow_checkout_seconds: float = SLOW_CHECKOUT_WARNING_SECONDS,
         checkout_timeout: float = DEFAULT_POOL_TIMEOUT,
         capture_stacks: bool | None = None,
+        capture_sites: bool = True,
     ) -> None:
         self.engine = engine
         self.sample_interval = max(0.05, float(sample_interval))
@@ -196,6 +209,9 @@ class PoolTelemetry:
             if capture_stacks is None
             else bool(capture_stacks)
         )
+        # 检出点摘要默认开启：只记 文件:行号 + 函数名，单次几十微秒，
+        # 长持有告警就能直接点名是哪个调用把连接拿走的。
+        self.capture_sites = bool(capture_sites)
         # id(dbapi_connection) -> (checked_out_at, stack or "")
         self._held: dict[int, tuple[float, str]] = {}
         # Connection ids already warned about for a long hold.
@@ -221,7 +237,7 @@ class PoolTelemetry:
         def _on_checkout(dbapi_connection, _record, _proxy) -> None:
             self._held[id(dbapi_connection)] = (
                 perf_counter(),
-                "".join(traceback.format_stack(limit=24)) if self.capture_stacks else "",
+                self._checkout_site(),
             )
 
         @event.listens_for(sync_engine, "checkin")
@@ -276,19 +292,29 @@ class PoolTelemetry:
             self._describe_holders(limit=3),
         )
 
+    def _checkout_site(self) -> str:
+        """Where the connection was taken: file:line in function, innermost last."""
+        if not self.capture_sites:
+            return ""
+        frames = [
+            frame
+            for frame in traceback.extract_stack(limit=14)[:-1]
+            if "lamtools_core" in frame.filename.replace("\\", "/")
+        ]
+        picked = frames[-8:] if self.capture_stacks else frames[-4:]
+        return " <- ".join(
+            f"{os.path.basename(frame.filename)}:{frame.lineno} in {frame.name}"
+            for frame in picked
+        )
+
     def _describe_holders(self, *, limit: int = 3) -> str:
         if not self._held:
             return "holders=none"
         now = perf_counter()
         ordered = sorted(self._held.items(), key=lambda item: item[1][0])
         parts: list[str] = []
-        for key, (born, stack) in ordered[:limit]:
-            frames = [
-                line.strip()
-                for line in stack.splitlines()
-                if line.strip().startswith("File ") and "lamtools_core" in line
-            ][-3:]
-            suffix = f" via {' <- '.join(frames)}" if frames else ""
+        for key, (born, site) in ordered[:limit]:
+            suffix = f" via {site}" if site else ""
             parts.append(f"conn={key} held={now - born:.2f}s{suffix}")
         return "holders: " + " | ".join(parts)
 
@@ -326,16 +352,17 @@ class PoolTelemetry:
             # warning per connection here would bury it under 16 look-alikes.
             self._reported_holds.update(self._held.keys())
         else:
-            for key, (born, _stack) in list(self._held.items()):
+            for key, (born, site) in list(self._held.items()):
                 held = now - born
                 if held >= self.long_hold_seconds and key not in self._reported_holds:
                     self._reported_holds.add(key)
                     _logger.warning(
-                        "[db:pool] connection %s held %.2fs (checked_out=%d/%d)",
+                        "[db:pool] connection %s held %.2fs (checked_out=%d/%d)%s",
                         key,
                         held,
                         snapshot.checked_out,
                         snapshot.capacity,
+                        f" via {site}" if site else "",
                     )
         waits = snapshot.waits
         if waits and waits.get("max", 0.0) >= self.slow_checkout_seconds:
@@ -388,5 +415,8 @@ __all__ = [
     "InstrumentedAsyncQueuePool",
     "PoolSnapshot",
     "PoolTelemetry",
+    "WRITE_MAX_OVERFLOW",
+    "WRITE_POOL_SIZE",
+    "WRITE_POOL_TIMEOUT",
     "attach_pool_telemetry",
 ]

@@ -2230,7 +2230,7 @@ def build_core_plugin_operation_catalog(
     from lamtools_core.plugin_system.lifecycle import load_enabled_plugin_backends
     from lamtools_core.plugin_system.operations import register_plugin_system_operations
     from lamtools_core.plugin_system.paths import bundled_plugins_dir
-    from lamtools_core.skills import SkillStateStore
+    from lamtools_core.skills import SkillStateStore, SkillUsageStore
     from lamtools_core.skill_runtime import create_skill_runtime
 
     roots = (
@@ -2290,6 +2290,8 @@ def build_core_plugin_operation_catalog(
         work_root=Path(work_root),
         data_dir=data_path,
         skill_state_store=SkillStateStore(data_path / "skill_state.json"),
+        # user:“我希望能够在插件界面中看见 skill 的调用统计”+(宿主显式注入用量账本)。
+        skill_usage_store=SkillUsageStore(data_path / "skill_usage.json"),
         skill_registry_factory=skill_registry_factory,
         hook_trust_store=HookTrustStore(data_path / "hook_trust.json"),
     )

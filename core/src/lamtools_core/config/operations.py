@@ -92,7 +92,7 @@ def build_config_operation_catalog(
             "thinking_supported": model.thinking_supported,
             "thinking_budget": model.thinking_budget,
             "temperature": model.temperature,
-            "capability": model.capability,
+            "capability": model.capability, "output_type": model.output_type,
             "notes": model.notes,
             "is_default": model.is_default,
             "enabled": model.enabled,
@@ -1026,7 +1026,7 @@ def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: Pro
             if isinstance(extra.get("reasoning"), dict)
             else _dict_value(params, "reasoning")
         ),
-        capability=str(extra.get("capability") or params.get("capability") or "").strip().lower(),
+        capability=str(extra.get("capability") or params.get("capability") or "").strip().lower(), output_type=str(params.get("output_type") or extra.get("output_type") or "text").strip().lower(),
         notes=str(params.get("notes") or "").strip(),
         is_default=bool(params.get("is_default") or False),
         enabled=bool(params.get("enabled", True)),

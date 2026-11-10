@@ -1128,10 +1128,13 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
             "thinking_budget": 10000,
             "temperature": 0.2,
             "capability": "text",
+            "output_type": "text",
             "reasoning_off_supported": True,
             "reasoning_levels": [{"value": "light", "label": "默认"}],
             "notes": "",
             "is_default": False,
+            "enabled": True,
+            "pricing": {},
             "adapter_profile_id": "",
             "extra": {},
         }

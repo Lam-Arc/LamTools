@@ -99,6 +99,42 @@ async def cmd_artifact_show(args: argparse.Namespace) -> int:
         await db.close()
 
 
+async def cmd_artifact_seed(args: argparse.Namespace) -> int:
+    """按清单播种素材：带用法的入库，其余文件重打标签。"""
+    from lamtools_core.artifact.seed import SeedError, seed_library
+
+    try:
+        db, project, root = await _artifact_store_for_cli(args)
+    except LookupError as exc:
+        print(f"[artifact] {exc}", file=sys.stderr)
+        return 1
+    try:
+        report = await seed_library(
+            db.artifact_store,
+            project_id=project.id,
+            work_root=root,
+            manifest_path=Path(args.manifest).resolve(),
+            overwrite=bool(getattr(args, "overwrite", False)),
+        )
+    except SeedError as exc:
+        print(f"[artifact] {exc}", file=sys.stderr)
+        return 1
+    finally:
+        await db.close()
+    print(
+        f"[artifact] 入库 {len(report['assets'])} 份素材，重打 {len(report['retagged'])} 份标签，"
+        f"跳过 {len(report['skipped'])}，失败 {len(report['failed'])}"
+    )
+    for item in report["assets"]:
+        entry = item["entry"] or "-"
+        print(f"  + {item['name']}  {entry}  tags={','.join(item['tags'])}  rating={item['rating']}")
+    for item in report["skipped"]:
+        print(f"  ~ {item['file']}  {item['reason']}")
+    for item in report["failed"]:
+        print(f"  ! {item['file']}  {'；'.join(item['problems'])}")
+    return 1 if report["failed"] else 0
+
+
 async def cmd_artifact_open(args: argparse.Namespace) -> int:
     from lamtools_core.attachment import open_with_default_app
 

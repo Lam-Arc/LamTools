@@ -33,7 +33,7 @@ async def cmd_models_list(args: argparse.Namespace) -> int:
     print(f"[models] {len(models)} configured (default: {default_id or 'none'})")
     for model in models:
         star = "★ " if model.is_default else "  "
-        print(f"{star}{model.model_id}  {model.display_name}  [{model.resolved_capability}]  provider={model.provider or '?'}  ctx={model.context_window}")
+        print(f"{star}{model.model_id}  {model.display_name}  [{model.resolved_capability}→{model.output_type}]  provider={model.provider or '?'}  ctx={model.context_window}")
     return 0
 
 

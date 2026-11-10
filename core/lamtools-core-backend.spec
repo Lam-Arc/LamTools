@@ -124,6 +124,13 @@ _datas: list[tuple[str, str]] = [
     (str(_PROJECT_ROOT / "config" / "llm_adapters"), "config/llm_adapters"),
     # user:“wiki 内置进 library，随版本走”+只读文档集随包分发。
     (str(_PROJECT_ROOT.parent / "wiki"), "resources/wiki"),
+    # user:“查一下 computer use 功能怎么做”+(UIA 助手是 PowerShell 脚本不是 .py，
+    # 必须显式打进后端包，否则安装版读不到无障碍树)。
+    (
+        str(_PROJECT_ROOT / "src" / "lamtools_core" / "computer_use" / "uia_helper.ps1"),
+        "lamtools_core/computer_use",
+    ),
+
 ]
 
 # Built-in Skills and their shared companion runtimes. Add files explicitly so
@@ -257,6 +264,13 @@ _hiddenimports = [
     "lamtools_core.attachment.http",
     "lamtools_core.attachment.service",
     "lamtools_core.attachment.store",
+
+    # === direct/ submodules（调用台：直调服务、执行器、历史、RPC）===
+    "lamtools_core.direct",
+    "lamtools_core.direct.executor",
+    "lamtools_core.direct.operations",
+    "lamtools_core.direct.service",
+    "lamtools_core.direct.store",
 
     # === config/ submodules ===
     "lamtools_core.config.operations",

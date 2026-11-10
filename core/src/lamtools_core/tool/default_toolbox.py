@@ -906,7 +906,7 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                 },
                 "max_width": {
                     "type": "integer",
-                    "description": "截图最长边宽度，默认 2000，超过会等比缩小。",
+                    "description": "截图最长边宽度，默认 2800，只有超宽屏才等比缩小；2K 屏保持原尺寸。",
                 },
                 "annotate": {
                     "type": "string",

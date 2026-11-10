@@ -18,7 +18,7 @@ from lamtools_core.plugins.bundled.workflow.backend import runtime as workflow
 
 
 def test_http_client_keeps_request_defaults_and_normalizes_tool_calls():
-    config = cli.LLMConfig(provider_name="test", provider_api_type="openai", base_url="https://example.invalid/v1",
+    config = cli.LLMConfig(provider_name="test", provider_id="test", provider_api_type="openai", base_url="https://example.invalid/v1",
         api_key="test-key", model_record_id="model", model_id="test-model", display_name="Test", notes="model note")
     client = cli.CoreHttpLLMClient(config=config, adapter_profile=cli._resolve_adapter_profile(config, ()),
         thinking_enabled=False, thinking_budget=100, max_tokens=200, temperature=0.1)
@@ -53,7 +53,7 @@ def test_http_provider_errors_keep_retry_classification():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 async def test_http_client_transport_keeps_complete_and_stream_results(monkeypatch, stream):
-    config = cli.LLMConfig(provider_name="test", provider_api_type="openai", base_url="https://example.invalid/v1",
+    config = cli.LLMConfig(provider_name="test", provider_id="test", provider_api_type="openai", base_url="https://example.invalid/v1",
         api_key="test-key", model_record_id="model", model_id="test-model", display_name="Test")
     client = cli.CoreHttpLLMClient(config=config, adapter_profile=cli._resolve_adapter_profile(config, ()),
         thinking_enabled=False, thinking_budget=100, max_tokens=200, temperature=0.1)

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lamtools_core.app import OperationCatalog, OperationRequest, OperationResult
+from lamtools_core.skills import derive_skill_usage_store
 
 from .engine import read_engine
 from .host import PluginHost
@@ -22,6 +23,16 @@ from .jsonc import strip_jsonc_comments as _strip_jsonc_comments
 from .jsonc import strip_trailing_commas as _strip_trailing_commas
 
 OWNER = "plugin-system"
+
+# 从未被调用过的技能与空账本用同一份零值占位，避免界面处理缺字段。
+_EMPTY_SKILL_USAGE = {
+    "count": 0,
+    "model_count": 0,
+    "user_count": 0,
+    "first_used_at": "",
+    "last_used_at": "",
+}
+_EMPTY_USAGE_SUMMARY = {"total_calls": 0, "skills_used": 0, "last_used_at": ""}
 
 
 def _skill_source(location: Path, work_root: Path | None, manifests: list[Any]) -> str:
@@ -87,8 +98,14 @@ def register_host_operations(
     skill_state_store: Any,
     skill_registry_factory: SkillRegistryFactory,
     hook_trust_store: HookTrustStore,
+    # user:“我希望能够在插件界面中看见 skill 的调用统计”+(宿主显式注入用量账本；
+    # 不传时从启停账本同目录的 skill_usage.json 派生)。
+    skill_usage_store: Any | None = None,
 ) -> None:
     """Register the hook/skill management surface plus legacy aliases."""
+
+    # user:“我希望能够在插件界面中看见 skill 的调用统计”+(未显式注入时与工具箱走同一条派生规则)。
+    usage_store = skill_usage_store or derive_skill_usage_store(skill_state_store)
 
     def hook_registry_factory() -> _LiveHookRegistry:
         return _LiveHookRegistry(host, work_root, hook_trust_store)
@@ -286,27 +303,33 @@ def register_host_operations(
         skills: list[dict[str, object]] = []
         # 一次读盘拿到分组表与每个技能的启用/分组状态；逐技能读账本是 N+1。
         groups, state_entries = skill_state_store.snapshot() if skill_state_store else ([], {})
-        if skill_registry_factory is not None:
-            for skill in skill_registry_factory().available(work_root):
-                state = state_entries.get(skill.name)
-                state = state if isinstance(state, dict) else {}
-                enabled = bool(state.get("enabled", True)) if skill_state_store else True
-                source = "plugin" if skill.location is None else _skill_source(skill.location, work_root, host.discover())
-                skills.append(
-                    {
-                        "name": skill.name,
-                        "description": skill.description,
-                        "location": str(skill.location) if skill.location is not None else "",
-                        "model_invocable": getattr(skill, "model_invocable", True),
-                        "user_invocable": getattr(skill, "user_invocable", True),
-                        "source": source,
-                        "enabled": enabled,
-                        "deletable": _deletable_skill_dir(skill) is not None,
-                        # user:“skill 界面也做成瀑布流，并分组管理”+(列表直接带上
-                        # 每个技能的分组与完整分组表，界面一次拉取即可渲染筛选。)
-                        "group": str(state.get("group") or ""),
-                    }
-                )
+        discovered = list(skill_registry_factory().available(work_root)) if skill_registry_factory is not None else []
+        # user:“我希望能够在插件界面中看见 skill 的调用统计”+(列表一次带上每个技能的用量，界面不用再逐条发请求)。
+        usage_entries = (
+            usage_store.stats_for([skill.name for skill in discovered]) if usage_store is not None else {}
+        )
+        for skill in discovered:
+            state = state_entries.get(skill.name)
+            state = state if isinstance(state, dict) else {}
+            enabled = bool(state.get("enabled", True)) if skill_state_store else True
+            source = "plugin" if skill.location is None else _skill_source(skill.location, work_root, host.discover())
+            skills.append(
+                {
+                    "name": skill.name,
+                    "description": skill.description,
+                    "location": str(skill.location) if skill.location is not None else "",
+                    "model_invocable": getattr(skill, "model_invocable", True),
+                    "user_invocable": getattr(skill, "user_invocable", True),
+                    "source": source,
+                    "enabled": enabled,
+                    "deletable": _deletable_skill_dir(skill) is not None,
+                    # user:“skill 界面也做成瀑布流，并分组管理”+(列表直接带上
+                    # 每个技能的分组与完整分组表，界面一次拉取即可渲染筛选。)
+                    "group": str(state.get("group") or ""),
+                    "usage": usage_entries.get(skill.name) or dict(_EMPTY_SKILL_USAGE),
+                }
+            )
+        summary = usage_store.summary() if usage_store is not None else dict(_EMPTY_USAGE_SUMMARY)
         return OperationResult(
             name=request.name,
             payload={
@@ -314,7 +337,17 @@ def register_host_operations(
                 "groups": groups,
                 "total_count": len(skills),
                 "enabled_count": sum(1 for item in skills if item.get("enabled")),
+                "usage_summary": summary,
             },
+        )
+
+    async def skill_usage(request: OperationRequest) -> OperationResult:
+        """Usage ledger for every skill ever loaded (deleted skills keep history)."""
+        if usage_store is None:
+            return OperationResult(name=request.name, payload={"skills": {}, "summary": dict(_EMPTY_USAGE_SUMMARY)})
+        return OperationResult(
+            name=request.name,
+            payload={"skills": usage_store.snapshot(), "summary": usage_store.summary()},
         )
 
     # ── skill 分组管理 ─────────────────────────────────────────────────────
@@ -485,6 +518,9 @@ def register_host_operations(
             return OperationResult(name=request.name, status="error", payload={"error": f"Delete failed: {exc}"})
         if skill_state_store is not None:
             skill_state_store.remove(skill.name)
+        # 技能删除后历史用量一并清掉：否则同名新建技能会继承旧账。
+        if usage_store is not None:
+            usage_store.reset(skill.name)
         return OperationResult(
             name=request.name,
             payload={"name": skill.name, "location": str(skill.location), "deleted": True},
@@ -577,6 +613,7 @@ def register_host_operations(
     catalog.register("hook.config.get", hook_config_get, owner=OWNER)
     catalog.register("hook.config.update", hook_config_update, owner=OWNER)
     catalog.register("skill.list", skill_list, owner=OWNER)
+    catalog.register("skill.usage", skill_usage, owner=OWNER)
     catalog.register("skill.create", skill_create, owner=OWNER)
     catalog.register("skill.enable", skill_enable, owner=OWNER)
     catalog.register("skill.disable", skill_disable, owner=OWNER)

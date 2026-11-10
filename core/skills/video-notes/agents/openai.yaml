@@ -1,0 +1,6 @@
+interface:
+  display_name: "Video Notes"
+  short_description: "Turn a video into an offline single-page study report"
+  default_prompt: "Use $video-notes to turn this video into an offline study report."
+policy:
+  allow_implicit_invocation: true

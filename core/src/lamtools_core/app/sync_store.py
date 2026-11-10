@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from .core_db import (
     CoreProject,
@@ -17,6 +17,11 @@ from .project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 
 
 SYNC_CURSOR_EXPIRED = "SYNC_CURSOR_EXPIRED"
+
+# user:“Unexpected error: QueuePool limit of size 8 overflow 8 reached”+(同步日志是派生数据：
+# 每条事件都复制一份完整 payload，实测涨到 3.3GB / 21 万行。保留最近这些行就够补差，
+# 更早的让客户端改用一次全量快照，库不再无限膨胀)。
+SYNC_JOURNAL_MAX_ROWS = 20000
 
 
 class CoreSyncJournal:
@@ -53,6 +58,29 @@ class CoreSyncJournal:
         )
         db.add(row)
         return row
+
+    async def prune(self, *, keep: int | None = None) -> int:
+        """Drop the oldest journal rows, keeping a bounded replay window.
+
+        Clients whose cursor falls behind the window get
+        ``SYNC_CURSOR_EXPIRED`` and rebuild from one snapshot, which is the
+        existing contract; the journal was never the durable source of truth.
+        """
+        limit = max(1, int(keep if keep is not None else SYNC_JOURNAL_MAX_ROWS))
+
+        async def action(db: Any) -> int:
+            newest = await db.scalar(select(func.coalesce(func.max(CoreSyncChange.seq), 0)))
+            cutoff = int(newest or 0) - limit
+            if cutoff <= 0:
+                return 0
+            result = await db.execute(
+                delete(CoreSyncChange)
+                .where(CoreSyncChange.seq <= cutoff)
+                .execution_options(synchronize_session=False)
+            )
+            return int(result.rowcount or 0)
+
+        return await self.write_coordinator.run(action)
 
     async def current_cursor(self, db: Any | None = None) -> int:
         statement = select(func.coalesce(func.max(CoreSyncChange.seq), 0))

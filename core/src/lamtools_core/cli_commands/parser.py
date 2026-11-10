@@ -12,7 +12,7 @@ def build_parser(*, plugin_roots: list[Path | str] | tuple[Path | str, ...] | No
     from .parse_preferences import register_ask_auto_continue, register_command_shell, register_keep_awake, register_language, register_load_context, register_memory, register_memory_resume, register_network, register_onboarding
     from .parse_resources import register_artifact, register_attachment, register_command, register_office, register_plugin, register_skill
     from .parse_server import register_maintenance, register_migrate_projects, register_serve, register_setup, register_update
-    from .parse_settings import register_context_compaction, register_imagegen, register_loadtools, register_models, register_permissions, register_providers
+    from .parse_settings import register_context_compaction, register_direct, register_imagegen, register_loadtools, register_models, register_permissions, register_providers
     from .parse_turns import register_approval, register_cancel, register_pause, register_process, register_queue, register_resume, register_run, register_run_local, register_start, register_steer, register_terminate, register_watch
     from .parse_workspace import register_arrange, register_goal, register_plan_library, register_project, register_session, register_subagent
     from .parse_superagent import register_superagent
@@ -42,6 +42,9 @@ def build_parser(*, plugin_roots: list[Path | str] | tuple[Path | str, ...] | No
     register_command(sub)
     register_attachment(sub)
     register_imagegen(sub)
+    # user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+    # +(调用台在命令行里是 direct 命令组，与 GUI 走同一套服务与历史。)
+    register_direct(sub)
     register_update(sub)
     register_office(sub)
     register_artifact(sub)

@@ -64,7 +64,7 @@ export function apply(context) {
     assert {r["name"] for r in report["services"]} >= {"tools", "futureService"}
     assert {r["name"] for r in report["events"]} == {"agent/pre-step"}
     assert report["remotes"][0]["name"] == "session.prompt"
-    assert report["remotes"][0]["suggestedContract"] == "sessions.prompt"
+    assert report["remotes"][0]["suggestedContract"] == "context.session_controller.prompt"
     assert report["remotes"][0]["conversion"] == "agent-required"
     codes = {r["code"] for r in report["findings"]}
     assert {"javascript-runtime", "dynamic-access", "unknown-service"} <= codes

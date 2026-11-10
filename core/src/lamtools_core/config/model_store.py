@@ -39,6 +39,20 @@ from lamtools_core.llm.profiles import load_jsonc
 MODELS_SUBDIR = "models"
 MODEL_FILENAME_SUFFIX = ".jsonc"
 
+#: 模型能直接产出什么。``capability`` 描述输入模态（能不能看图），
+#: 这里描述输出模态，直调台据此切换输入与结果形态。
+OUTPUT_TYPES = ("text", "image", "video", "audio")
+
+
+def normalize_output_type(value: Any) -> str:
+    """把 jsonc/RPC 里的输出类型收敛到四种已知值，未知值按文本处理。
+
+    user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+    +(不认识的类型不能带进调用台，否则界面会去执行一个不存在的调用路径。)
+    """
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in OUTPUT_TYPES else "text"
+
 
 @dataclass
 class ModelConfig:
@@ -60,6 +74,9 @@ class ModelConfig:
     request_body: dict[str, Any] = field(default_factory=dict)  # per-model override
     adapter_profile_override: dict[str, Any] = field(default_factory=dict)
     capability: str = ""          # "text" | "multimodal" | "" (→ builtin table)
+    # user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+    # +(输出类型决定直调台给哪种输入表单、把结果渲染成文本/图片/视频/音频)。
+    output_type: str = "text"     # "text" | "image" | "video" | "audio"
     notes: str = ""               # free-form notes/remarks (optional, user-facing)
     is_default: bool = False
     # user:“能不能启停模型？”+(停用只从可选列表里下线，不删除配置；已有会话仍可继续跑。)
@@ -230,6 +247,7 @@ class ModelStore:
             request_body=request_body,
             adapter_profile_override=copy.deepcopy(profile_override),
             capability=str(data.get("capability") or "").strip().lower(),
+            output_type=normalize_output_type(data.get("output_type")),
             notes=str(data.get("notes") or "").strip(),
             is_default=bool(data.get("is_default") or False),
             enabled=bool(data.get("enabled", True)),
@@ -344,6 +362,7 @@ class ModelStore:
             "thinking": {"supported": model.thinking_supported, "budget": model.thinking_budget},
             "adapter_profile_id": model.adapter_profile_id,
             "capability": model.capability,
+            "output_type": normalize_output_type(model.output_type),
             "notes": model.notes,
             "is_default": model.is_default,
             "enabled": model.enabled,
@@ -405,10 +424,11 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 __all__ = [
     "MODELS_SUBDIR",
     "MODEL_FILENAME_SUFFIX",
+    "OUTPUT_TYPES",
     "ModelConfig",
     "ModelStore",
     "make_model_record_id",
-    "normalize_pricing",
+    "normalize_output_type", "normalize_pricing",
 ]
 
 

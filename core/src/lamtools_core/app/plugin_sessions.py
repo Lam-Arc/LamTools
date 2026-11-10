@@ -33,12 +33,21 @@ RECEIPT_METHODS = {"queue/itemAccepted", "turn/steered", "turn/accepted", "turn/
 def _identifier(value: str, name: str) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > 256:
         raise ValueError(f"{name} must be a non-blank string of at most 256 characters")
+    # user:“完成真实接口、参数/错误、作用域、取消/清理”+(无效Unicode在原会话读写前明确拒绝)。
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise ValueError(f"{name} must be valid UTF-8") from None
     return value.strip()
 
 
 def _text(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("text must contain non-whitespace text")
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise ValueError("text must be valid UTF-8") from None
     return value
 
 

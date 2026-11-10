@@ -194,6 +194,67 @@ async def test_long_mixed_run_never_pins_the_pool(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_writes_survive_a_fully_booked_read_pool(tmp_path: Path) -> None:
+    """写不能被并发的读饿死：读池占满时事件写入仍必须成功。
+
+    这就是 2026-11-09 那次 `Unexpected error: QueuePool limit ...` 的现场：
+    15/16 条连接被界面轮询和会话读取占着，回合的下一次事件写入拿不到连接，
+    整轮对话被判失败。写池独立后，读池再满也不影响落库。
+    """
+    db = await open_core_app_db(tmp_path / "split.db", workspace_id="pool-test")
+    capacity = db.engine.pool.size() + int(getattr(db.engine.pool, "_max_overflow", 0))
+    held = []
+    try:
+        for _ in range(capacity):
+            session = db.session_factory()
+            await session.execute(text("select 1"))
+            held.append(session)
+        assert db.engine.pool.checkedout() == capacity
+
+        started = asyncio.get_running_loop().time()
+        await asyncio.wait_for(_write_one(db, 1), timeout=10)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert elapsed < 5.0, f"write waited {elapsed:.2f}s behind a full read pool"
+        assert db.engine.pool.checkedout() == capacity, "the read pool is still fully booked"
+        assert db.write_engine is not None
+        assert db.write_engine.pool.checkedout() == 0
+    finally:
+        for session in held:
+            await session.close()
+        await db.close()
+    assert db.write_engine.pool.checkedout() == 0
+
+
+@pytest.mark.asyncio
+async def test_long_hold_warning_names_the_checkout_site(caplog: pytest.LogCaptureFixture) -> None:
+    """长持有告警必须点名调用处，否则只能看到“某条连接被占了 8 秒”。"""
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=InstrumentedAsyncQueuePool,
+        pool_size=2,
+        max_overflow=0,
+    )
+    telemetry = attach_pool_telemetry(engine, long_hold_seconds=0.0)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    holder = factory()
+    try:
+        await holder.execute(text("select 1"))
+        await asyncio.sleep(0.02)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="lamtools_core.db.pool"):
+            telemetry._check()
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("held" in message and "via " in message and " in " in message
+                   for message in messages), messages
+    finally:
+        await holder.close()
+        await telemetry.stop()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_saturation_warning_names_the_holders(caplog: pytest.LogCaptureFixture) -> None:
     """池满时日志必须指出占用者数量与最长持有时间，而不是只有超时。"""
     engine = create_async_engine(

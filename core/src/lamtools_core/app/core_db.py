@@ -38,6 +38,9 @@ from .db_pool import (
     DEFAULT_MAX_OVERFLOW,
     DEFAULT_POOL_SIZE,
     DEFAULT_POOL_TIMEOUT,
+    WRITE_MAX_OVERFLOW,
+    WRITE_POOL_SIZE,
+    WRITE_POOL_TIMEOUT,
     InstrumentedAsyncQueuePool,
     PoolTelemetry,
     attach_pool_telemetry,
@@ -886,6 +889,12 @@ class CoreArtifact(CoreDbBase):
     # 检索键与质量评价：标签是自由字符串，评分 0 到 5，0 表示未评。
     tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # user:“素材必须自带用法”“用完没有痕迹”+(取用要能直接落地，用过要留痕：
+    # 用法三行存在 usage_json；次数、最后使用时间、使用位置分开存，排序与展示都要用)。
+    usage_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    usage_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    used_in_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     deleted: Mapped[bool] = mapped_column(nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
@@ -2484,9 +2493,24 @@ class CoreAppDb:
     session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
     artifact_store: Any = None
     pool_telemetry: PoolTelemetry | None = None
+    # 写与读分池，写池只在关闭时释放，见 open_core_app_db。
+    write_engine: AsyncEngine | None = None
+    write_pool_telemetry: PoolTelemetry | None = None
 
     async def close(self) -> None:
         # user:“覆盖异常中断、任务取消、超时、并发竞争、数据库断连及应用退出等场景”+(退出前先停观测并把池的最终占用写进日志，留下“连接有没有回落”的证据，再释放所有池内连接)。
+        write_telemetry = self.write_pool_telemetry
+        if write_telemetry is not None:
+            await write_telemetry.stop()
+            try:
+                write_final = write_telemetry.snapshot()
+            except Exception:  # noqa: BLE001 - shutdown must never fail on diagnostics
+                write_final = None
+            if write_final is not None:
+                log = _logger.warning if write_final.checked_out else _logger.info
+                log("[db:pool] write pool shutdown %s", write_final.as_dict())
+        if self.write_engine is not None:
+            await self.write_engine.dispose()
         telemetry = self.pool_telemetry
         if telemetry is not None:
             await telemetry.stop()
@@ -2525,6 +2549,26 @@ async def open_core_app_db(
         )
         configure_sqlite_engine(engine)
         pool_telemetry = attach_pool_telemetry(engine, checkout_timeout=DEFAULT_POOL_TIMEOUT).start()
+        # user:“Unexpected error: QueuePool limit of size 8 overflow 8 reached”+(写是回合的关键路径，
+        # 不能和并发的读抢同一个池：读占满时写拿不到连接，整轮对话会被判失败)。
+        write_engine = create_async_engine(
+            _sqlite_url(db_path),
+            future=True,
+            poolclass=InstrumentedAsyncQueuePool,
+            pool_size=WRITE_POOL_SIZE,
+            max_overflow=WRITE_MAX_OVERFLOW,
+            pool_timeout=WRITE_POOL_TIMEOUT,
+        )
+        configure_sqlite_engine(write_engine)
+        write_pool_telemetry = attach_pool_telemetry(
+            write_engine, checkout_timeout=WRITE_POOL_TIMEOUT
+        ).start()
+        _logger.info(
+            "[db:pool] write pool configured size=%d overflow=%d timeout=%.1fs",
+            WRITE_POOL_SIZE,
+            WRITE_MAX_OVERFLOW,
+            WRITE_POOL_TIMEOUT,
+        )
         _logger.info(
             "[db:pool] configured size=%d overflow=%d timeout=%.1fs capacity=%d",
             DEFAULT_POOL_SIZE,
@@ -2539,7 +2583,9 @@ async def open_core_app_db(
             connection = await engine.connect()
         except BaseException:
             await pool_telemetry.stop()
+            await write_pool_telemetry.stop()
             await engine.dispose()
+            await write_engine.dispose()
             raise
 
     try:
@@ -2574,14 +2620,18 @@ async def open_core_app_db(
     except BaseException:
         # user:“覆盖异常中断、任务取消、超时、并发竞争、数据库断连及应用退出等场景”+(迁移/建表失败同样必须释放池，不能留下半开的引擎)。
         await pool_telemetry.stop()
+        await write_pool_telemetry.stop()
         await engine.dispose()
+        await write_engine.dispose()
         raise
     finally:
         await connection.close()
 
     async with _database_startup_phase("store assembly"):
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        write_coordinator = SQLiteWriteCoordinator(session_factory)
+        # 写协调器只用自己的连接，读池再满也不影响事件落库。
+        write_session_factory = async_sessionmaker(write_engine, expire_on_commit=False)
+        write_coordinator = SQLiteWriteCoordinator(write_session_factory)
         from .project_store import CoreProjectStore
         from .sync_store import CoreSyncJournal
         from lamtools_core.artifact.store import ArtifactStore
@@ -2646,6 +2696,8 @@ async def open_core_app_db(
             member_defaults=dict(member_defaults or {}),
             session_actors=session_actors,
             pool_telemetry=pool_telemetry,
+            write_engine=write_engine,
+            write_pool_telemetry=write_pool_telemetry,
             artifact_store=ArtifactStore(
                 session_factory,
                 write_coordinator,
@@ -2770,6 +2822,11 @@ _LATE_COLUMNS: dict[str, dict[str, str]] = {
         "folder": "VARCHAR(512) NOT NULL DEFAULT ''",
         "tags_json": "JSON NOT NULL DEFAULT '[]'",
         "rating": "INTEGER NOT NULL DEFAULT 0",
+        # user:“素材必须自带用法”“用完没有痕迹”+(旧库补上用法与使用痕迹四列)。
+        "usage_json": "JSON NOT NULL DEFAULT '{}'",
+        "usage_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_used_at": "DATETIME",
+        "used_in_json": "JSON NOT NULL DEFAULT '[]'",
     },
     "core_projects": {
         "workspace_id": "VARCHAR(128) NOT NULL DEFAULT ''",

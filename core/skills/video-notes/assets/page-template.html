@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+  :root{
+    --ink:#1f2329; --muted:#5b6470; --line:#c9d1da; --bg:#ffffff; --soft:#f5f7fa;
+    --accent:#2f6feb; --accent-soft:#e8f0ff; --warn:#c2410c; --warn-soft:#fdeee6;
+    --ok:#0f7b52; --ok-soft:#e6f5ee;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.75 "Microsoft YaHei","PingFang SC",system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 80px}
+  a{color:var(--accent)}
+  h1{font-size:30px;line-height:1.35;margin:0 0 12px}
+  h2{font-size:23px;margin:0 0 6px}
+  h3{font-size:17px;margin:22px 0 8px}
+  .hero{border:1px solid var(--line);border-radius:14px;padding:22px 24px;background:var(--soft);margin-bottom:26px}
+  .meta-grid{display:flex;flex-wrap:wrap;gap:8px 20px;color:var(--muted);font-size:14px;margin:10px 0 14px}
+  .tags{display:flex;flex-wrap:wrap;gap:6px}
+  .tag{background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:13px;color:var(--muted)}
+  .cover{max-width:280px;border:1px solid var(--line);border-radius:10px;display:block;margin:14px 0}
+  .desc{margin:12px 0;font-size:15px;color:var(--muted)}
+  .desc summary{cursor:pointer;color:var(--accent);font-size:14px}
+  audio{width:100%;margin-top:12px}
+  .toc{border:1px solid var(--line);border-radius:12px;padding:16px 22px;margin-bottom:30px}
+  .toc ol{margin:8px 0 0;padding-left:22px}
+  .toc li{margin:4px 0;font-size:15px}
+  .toc .stamp{margin-left:8px;font-size:13px;color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--line)}
+  section.chapter{border-top:1px solid var(--line);padding:26px 0 10px;margin-top:10px}
+  .stamp{font-variant-numeric:tabular-nums}
+  .block{border-left:3px solid var(--line);padding:2px 0 2px 16px;margin:14px 0}
+  .block.ask{border-color:var(--accent)}
+  .block.trap{border-color:var(--warn);background:var(--warn-soft);padding:12px 16px;border-radius:0 10px 10px 0}
+  .block.conclusion{border-color:var(--ok);background:var(--ok-soft);padding:12px 16px;border-radius:0 10px 10px 0}
+  .block h3{margin-top:0}
+  .quote{margin:14px 0;padding:10px 16px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 10px 10px 0;font-size:15px}
+  .quote .stamp{margin-left:6px;font-size:13px}
+  .anchor{font-size:14px;color:var(--muted);margin:10px 0}
+  figure.fig{margin:18px 0;border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff}
+  figure.fig svg{display:block;width:100%;height:auto}
+  figure.fig img{display:block;width:100%;height:auto;border-radius:8px}
+  figcaption{font-size:13px;color:var(--muted);margin-top:10px}
+  .fig-note{display:inline-block;background:var(--accent-soft);color:var(--accent);border-radius:6px;padding:1px 7px;margin-right:6px;font-size:12px}
+  .fig-note.shot{background:var(--ok-soft);color:var(--ok)}
+  .check{border-collapse:collapse;width:100%;font-size:14px;margin-top:10px}
+  .check th,.check td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+  .check th{background:var(--soft);font-weight:600}
+  footer{margin-top:40px;border-top:1px solid var(--line);padding-top:18px;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>{{TITLE}}</h1>
+    <div class="meta-grid">
+      <span>UP 主：{{UPLOADER}}</span>
+      <span>时长：{{DURATION}}</span>
+      <span>分 P：{{PAGES}}</span>
+      <span><a href="{{SRC_URL}}" target="_blank" rel="noopener">回到原视频</a></span>
+    </div>
+    <div class="tags">{{TAGS}}</div>
+    <img class="cover" src="{{COVER}}" alt="视频封面">
+    <details class="desc"><summary>简介</summary><p>{{DESC}}</p></details>
+    <audio id="player" controls preload="metadata" src="{{AUDIO}}"></audio>
+  </header>
+
+  <nav class="toc">
+    <strong>目录</strong>
+    <ol>{{TOC}}</ol>
+  </nav>
+
+  <!-- 每一章按「正文 → 图解 SVG → 真实截图」三段排列，重复本节结构 -->
+  <section class="chapter" data-start="0" data-end="754">
+    <h2>示例章节：音频怎么抓、时长怎么校验</h2>
+    <p><a class="stamp" href="{{SRC_URL}}?t=0" target="_blank" rel="noopener">00:00</a> –
+       <a class="stamp" href="{{SRC_URL}}?t=754" target="_blank" rel="noopener">12:34</a></p>
+
+    <div class="block ask">
+      <h3>问题</h3>
+      <p>抓下来的音频时长和视频元数据对不上，后面所有时间戳都会错位。</p>
+    </div>
+
+    <div class="block trap">
+      <h3>陷阱</h3>
+      <p>多 P 视频只抓了第 1 个 P，拿整段视频的时长去比对，差异必然超 5%。</p>
+    </div>
+
+    <div class="block steps">
+      <h3>步骤</h3>
+      <ol>
+        <li>用 ffprobe 读音频真实时长。</li>
+        <li>和 info.json 里的 duration 比，差值和元数据比超过 5% 就停下。</li>
+        <li>重下音频，仍然不符就在页头标异常，时间戳以 ffprobe 为准。</li>
+      </ol>
+    </div>
+
+    <div class="block conclusion">
+      <h3>结论</h3>
+      <p>音频时长的唯一基准是 ffprobe，元数据只用来交叉验证。</p>
+    </div>
+
+    <p class="quote">「这里差一点点，后面字幕就全对不上了。」<a class="stamp" href="{{SRC_URL}}?t=742" target="_blank" rel="noopener">12:22</a></p>
+    <p class="anchor">视觉锚点：控制台下半部分的编码信息表，采样率和时长两列。</p>
+
+    <figure class="fig">
+      <!-- 图注前缀固定为「图解」，截图固定为「视频时间戳」，一眼区分来源 -->
+      <svg viewBox="0 0 960 190" width="100%" role="img" aria-label="音频抓取到转写的流程">
+        <defs>
+          <marker id="tmpl-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#2f6feb"/>
+          </marker>
+        </defs>
+        <rect x="20" y="60" width="200" height="70" rx="10" fill="#e8f0ff" stroke="#2f6feb"/>
+        <text x="120" y="90" text-anchor="middle" font-size="15" fill="#1f2329">yt-dlp 抓音频</text>
+        <text x="120" y="112" text-anchor="middle" font-size="12" fill="#5b6470">bestaudio 转 mp3</text>
+        <line x1="220" y1="95" x2="300" y2="95" stroke="#2f6feb" stroke-width="2" marker-end="url(#tmpl-ar)"/>
+        <rect x="310" y="60" width="210" height="70" rx="10" fill="#fff" stroke="#c9d1da"/>
+        <text x="415" y="90" text-anchor="middle" font-size="15" fill="#1f2329">ffprobe 校验时长</text>
+        <text x="415" y="112" text-anchor="middle" font-size="12" fill="#c2410c">差异超 5% 就重下</text>
+        <line x1="520" y1="95" x2="600" y2="95" stroke="#2f6feb" stroke-width="2" marker-end="url(#tmpl-ar)"/>
+        <rect x="610" y="60" width="200" height="70" rx="10" fill="#fff" stroke="#c9d1da"/>
+        <text x="710" y="90" text-anchor="middle" font-size="15" fill="#1f2329">Whisper 转写</text>
+        <text x="710" y="112" text-anchor="middle" font-size="12" fill="#5b6470">turbo / small.en</text>
+      </svg>
+      <figcaption><span class="fig-note">图解</span>音频从抓取到转写的路径，时长校验是卡在中间的判断点，不通过就不往下走。</figcaption>
+    </figure>
+
+    <figure class="fig">
+      <img src="frames/示例-754s.jpg" alt="视频 12:34 处的控制台画面">
+      <figcaption><span class="fig-note shot">视频时间戳 12:34</span>UP 主当时看到的编码信息表，时长一栏就是校验的依据。</figcaption>
+    </figure>
+  </section>
+
+  <footer>
+    <strong>校验记录</strong>
+    <table class="check">
+      <tr><th>检查项</th><th>结果</th></tr>
+      <tr><td>音频时长与元数据差异</td><td>0.3%（通过）</td></tr>
+      <tr><td>转写末段与音频时长差异</td><td>1.2 秒（通过）</td></tr>
+      <tr><td>整页截图自检</td><td>通过，已人工看过</td></tr>
+    </table>
+    <p>生成方式：yt-dlp 抓元数据与音频，Whisper 转写，按视频结构拆章，每章图解由本章内容生成，截图取自对应时间戳。页面可离线打开。</p>
+  </footer>
+
+</div>
+
+<script>
+document.querySelectorAll('a.stamp[data-seek]').forEach(a => {
+  a.addEventListener('click', ev => {
+    if (!a.getAttribute('href').startsWith('audio/')) return;
+    ev.preventDefault();
+    const p = document.getElementById('player');
+    p.currentTime = parseFloat(a.dataset.seek);
+    p.play();
+    p.scrollIntoView({block: 'center', behavior: 'smooth'});
+  });
+});
+</script>
+</body>
+</html>

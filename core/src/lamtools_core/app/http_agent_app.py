@@ -605,6 +605,21 @@ def create_core_agent_http_app(
         _register_missing_operations(agent_operations, build_config_operation_catalog(work_root=resolved_work_root, data_dir=resolved_data_dir))
         _register_missing_operations(agent_operations, build_update_operation_catalog())
 
+        # user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+        # +(直调台复用模型/供应商配置与资料库，只新增 direct.* 这组 RPC，不另造配置体系。)
+        from lamtools_core.direct import DirectCallService, build_direct_operation_catalog
+
+        direct_service = DirectCallService(data_dir=resolved_data_dir, work_root=resolved_work_root)
+        app_state["direct_call_service"] = direct_service
+        _register_missing_operations(
+            agent_operations,
+            build_direct_operation_catalog(
+                direct_service,
+                project_store=core_db_handle.project_store,
+                artifact_store=core_db_handle.artifact_store,
+            ),
+        )
+
         async def _record_superagent_result(job: Any, payload: dict[str, Any], result: Any) -> None:
             """把一次工单执行的结果写回工单。
 
@@ -989,8 +1004,13 @@ def create_core_agent_http_app(
         # 都被一次 0.6-1.0s 的同步检查点挡住)。
         from .sqlite_write import wal_maintenance_loop
 
+        sync_journal = getattr(core_db_handle, "sync_journal", None)
+        prune_journal = getattr(sync_journal, "prune", None)
         app_state["wal_maintenance_task"] = asyncio.create_task(
-            wal_maintenance_loop(core_db_handle.session_factory),
+            wal_maintenance_loop(
+                core_db_handle.session_factory,
+                prune=prune_journal if callable(prune_journal) else None,
+            ),
             name="sqlite-wal-maintenance",
         )
 
@@ -1752,6 +1772,50 @@ def _register_core_artifact_operations(
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(name=request.name, payload={"artifact": updated.to_dict()})
 
+    async def artifact_usage(request: OperationRequest) -> OperationResult:
+        """素材的用法三行：从哪进、依赖什么、最小片段。整体替换，空对象表示清空。"""
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        if not artifact_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "artifact_id is required"})
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        raw = request.payload.get("usage")
+        if raw is not None and not isinstance(raw, dict):
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "usage must be an object with entry/requires/example"},
+            )
+        try:
+            updated = await artifact_store.set_usage(record.artifact_id, dict(raw or {}))
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifact": updated.to_dict()})
+
+    async def artifact_use(request: OperationRequest) -> OperationResult:
+        """取用落痕：次数 +1，记下时间与位置；同一位置只保留最近一次。"""
+        project = await _project_for(request)
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        if not artifact_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "artifact_id is required"})
+        record = await artifact_store.get(artifact_id)
+        if record is None or record.project_id != project.id:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        used_in = str(request.payload.get("used_in") or "").strip()
+        if not used_in:
+            return OperationResult(name=request.name, status="error", payload={"error": "used_in is required"})
+        try:
+            used = await artifact_store.record_use([record.artifact_id], used_in=used_in)
+        except (LookupError, OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"artifacts": [item.to_dict() for item in used]})
+
     async def artifact_stats(request: OperationRequest) -> OperationResult:
         project = await _project_for(request)
         if project is None:
@@ -1798,6 +1862,8 @@ def _register_core_artifact_operations(
         "artifact.tags": artifact_tags,
         "artifact.text": artifact_text,
         "artifact.rating": artifact_rating,
+        "artifact.usage": artifact_usage,
+        "artifact.use": artifact_use,
         "artifact.stats": artifact_stats,
         "artifact.upload": artifact_upload,
     }
@@ -2072,7 +2138,7 @@ def _register_model_operations(
             request_body=request_body,
             adapter_profile_override=dict(profile_override),
             reasoning=dict(reasoning),
-            capability=str(payload.get("capability") or extra.get("capability") or "").strip().lower(),
+            capability=str(payload.get("capability") or extra.get("capability") or "").strip().lower(), output_type=str(payload.get("output_type") or "text").strip().lower(),
             notes=str(payload.get("notes") or "").strip(),
             is_default=bool(payload.get("is_default") or False),
             enabled=bool(payload.get("enabled", True)),

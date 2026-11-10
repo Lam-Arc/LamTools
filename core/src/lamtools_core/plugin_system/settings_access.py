@@ -102,6 +102,11 @@ def _redact(value, schema, root, depth=0):
         prefix = schema.get("prefixItems", [])
         result = [_redact(child, prefix[index] if isinstance(prefix, list) and index < len(prefix) else schema.get("items", {}), root, depth + 1)
                   for index, child in enumerate(result)]
+        # user:“宿主能力补齐和接口完善与文档更新”+(数组约束中的保密声明也须覆盖公开设置投影)。
+        for keyword in ("contains", "unevaluatedItems"):
+            branch = schema.get(keyword)
+            if isinstance(branch, dict):
+                result = [_redact(child, branch, root, depth + 1) for child in result]
     # Conservatively apply all branches: a non-selected branch must never reveal a possible secret.
     for keyword in ("allOf", "anyOf", "oneOf"):
         for branch in schema.get(keyword, []) if isinstance(schema.get(keyword), list) else []:

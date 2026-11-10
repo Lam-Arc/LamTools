@@ -75,6 +75,11 @@ class ArtifactRecord:
     # user:“让库能打 tag 和评分”+(检索键与质量评价，和收藏各自独立)。
     tags: list[str] = field(default_factory=list)
     rating: int = 0
+    # user:“素材必须自带用法”“用完没有痕迹”+(用法跟着素材走；取用痕迹单独记，不另存一张表)。
+    usage: dict[str, str] = field(default_factory=dict)
+    usage_count: int = 0
+    last_used_at: str = ""
+    used_in: list[dict[str, str]] = field(default_factory=list)
     updated_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -107,6 +112,18 @@ class ArtifactRecord:
             availability=str(data.get("availability") or "available"),
             tags=[str(item) for item in data.get("tags") or []],
             rating=int(data.get("rating") or 0),
+            usage={
+                str(key): str(value)
+                for key, value in (data.get("usage") if isinstance(data.get("usage"), dict) else {}).items()
+                if str(value).strip()
+            },
+            usage_count=int(data.get("usage_count") or 0),
+            last_used_at=str(data.get("last_used_at") or ""),
+            used_in=[
+                {"at": str(item.get("at") or ""), "where": str(item.get("where") or "")}
+                for item in (data.get("used_in") or [])
+                if isinstance(item, dict) and str(item.get("where") or "").strip()
+            ],
         )
 
 

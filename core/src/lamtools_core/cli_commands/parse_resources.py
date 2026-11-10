@@ -120,6 +120,7 @@ def register_skill(sub: argparse._SubParsersAction) -> None:
         cmd_skill_group_list,
         cmd_skill_group_rename,
         cmd_skill_list,
+        cmd_skill_usage,
     )
     skill = sub.add_parser("skill", help="Manage Core skills (list/create/enable/disable/delete/group)")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)
@@ -127,6 +128,10 @@ def register_skill(sub: argparse._SubParsersAction) -> None:
     _add_live_connection_arguments(skill_list)
     skill_list.add_argument("--raw", action="store_true")
     skill_list.set_defaults(func=cmd_skill_list)
+    skill_usage = skill_sub.add_parser("usage", help="Show per-skill invocation counts")
+    _add_live_connection_arguments(skill_usage)
+    skill_usage.add_argument("--raw", action="store_true")
+    skill_usage.set_defaults(func=cmd_skill_usage)
     skill_create = skill_sub.add_parser("create", help="Create a user skill")
     skill_create.add_argument("name")
     skill_create.add_argument("--description", required=True)
@@ -308,7 +313,7 @@ def register_office(sub: argparse._SubParsersAction) -> None:
 
 
 def register_artifact(sub: argparse._SubParsersAction) -> None:
-    from .resources import cmd_artifact_delete, cmd_artifact_list, cmd_artifact_open, cmd_artifact_preview, cmd_artifact_restore, cmd_artifact_show
+    from .resources import cmd_artifact_delete, cmd_artifact_list, cmd_artifact_open, cmd_artifact_preview, cmd_artifact_restore, cmd_artifact_seed, cmd_artifact_show
     artifact = sub.add_parser("artifact", help="Manage project artifacts")
     artifact_sub = artifact.add_subparsers(dest="artifact_command", required=True)
     artifact_list = artifact_sub.add_parser("list", help="List artifacts of a project workspace")
@@ -342,3 +347,10 @@ def register_artifact(sub: argparse._SubParsersAction) -> None:
     artifact_restore.add_argument("--work-root", default="")
     artifact_restore.add_argument("--core-db", default="")
     artifact_restore.set_defaults(func=cmd_artifact_restore)
+    # user:“收纳、整理、再利用”+(素材清单可重复执行：带用法的入库，其余文件重打标签)。
+    artifact_seed = artifact_sub.add_parser("seed", help="File reusable project materials with tags and usage")
+    artifact_seed.add_argument("--manifest", required=True, help="Seed manifest (JSON)")
+    artifact_seed.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_seed.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    artifact_seed.add_argument("--overwrite", action="store_true", help="Overwrite existing rating/folder/usage instead of only filling gaps")
+    artifact_seed.set_defaults(func=cmd_artifact_seed)

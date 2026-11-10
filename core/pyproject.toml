@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lamtools-core"
-version = "0.3.39-a2"
+version = "0.3.39"
 description = "LamTools Core SDK - protocols, types, and base interfaces"
 requires-python = ">=3.14"
 dependencies = [
@@ -49,6 +49,8 @@ packages = ["src/lamtools_core", "src/lamtools_boot"]
 "skills" = "lamtools_core/resources/skills"
 # user:“宿主能力补齐和接口完善与文档更新”+(发布包带入已安装且锁定的后端依赖；构建前须独立npm ci，不碰前端)。
 "runtime/windows-sandbox" = "lamtools_core/resources/windows-sandbox"
+# user:“查一下 computer use 功能怎么做”+(UIA 助手脚本不是 .py，wheel 安装也要带上)。
+"src/lamtools_core/computer_use/uia_helper.ps1" = "lamtools_core/computer_use/uia_helper.ps1"
 "src/lamtools_core/plugins/bundled" = "lamtools_core/resources/plugins/bundled"
 
 [tool.pytest.ini_options]

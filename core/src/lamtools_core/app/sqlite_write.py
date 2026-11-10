@@ -26,6 +26,7 @@ SQLITE_WRITE_RETRY_DELAYS = (0.05, 0.15, 0.35)
 SQLITE_WAL_AUTOCHECKPOINT_PAGES = 32768          # 兜底上界，约 128MB（仅在后台巡检卡住时才会用到）
 SQLITE_WAL_MAINTENANCE_PENDING_PAGES = 2048      # 未回写页超过这个水位就报警，约 8MB
 SQLITE_WAL_MAINTENANCE_INTERVAL = 1.0            # 巡检间隔（秒）；被动检查点很快，间隔短才抢得到空档
+SQLITE_PRUNE_INTERVAL = 60.0                     # 派生数据（同步日志）裁剪间隔（秒）
 
 
 def sqlite_database_path(session_factory: Any) -> Path | None:
@@ -71,10 +72,27 @@ async def wal_maintenance_loop(
     *,
     interval: float = SQLITE_WAL_MAINTENANCE_INTERVAL,
     pending_pages: int = SQLITE_WAL_MAINTENANCE_PENDING_PAGES,
+    prune: Any = None,
+    prune_interval: float = SQLITE_PRUNE_INTERVAL,
 ) -> None:
-    """Keep the WAL draining without putting a checkpoint on any request path."""
+    """Keep the WAL draining and the derived tables bounded off the request path.
+
+    ``prune`` is an optional awaitable that trims derived data (the sync
+    journal); it runs on its own slow cadence and never blocks a turn.
+    """
+    next_prune = perf_counter() + prune_interval
     while True:
         await asyncio.sleep(interval)
+        if prune is not None and perf_counter() >= next_prune:
+            next_prune = perf_counter() + prune_interval
+            try:
+                removed = await prune()
+                if removed:
+                    logger.info("[sqlite] pruned %d stale sync journal row(s)", removed)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - maintenance must never kill the host
+                logger.warning("[sqlite] sync journal prune failed", exc_info=True)
         try:
             result = await wal_maintenance_once(session_factory)
         except asyncio.CancelledError:

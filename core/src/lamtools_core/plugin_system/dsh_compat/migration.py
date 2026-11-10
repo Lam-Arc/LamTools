@@ -376,14 +376,14 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                 if kind == "remotes" and name == "settings.describe":
                     # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只推荐当前插件的既有脱敏投影，不把原配置全文映射到Remote)。
                     item.update(suggestedContract="context.settings.public", conversion="agent-required",
-                                difference="仅当前插件的原配置脱敏值、修订和无密值验证信息；不提供DSH全局命名空间、schema/layer投影或自动Remote映射。")
+                                difference="仅当前插件的原配置脱敏值、修订和无密值验证信息；数组保密分支保守作用于全部元素，可能额外隐藏；不提供DSH全局命名空间、schema/layer投影或自动Remote映射。")
                 if kind == "remotes" and name == "settings.replace":
                     # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(写入只返回脱敏投影，避免原始配置通过Remote泄露)。
                     item.update(suggestedContract="context.settings_controller.replace", conversion="agent-required",
-                                difference="原当前插件schema校验和CAS替换后重新读取脱敏投影；提交后失效标记may_have_changed。非DSH全局命名空间/层次或自动Remote映射。")
+                                difference="原当前插件schema校验和CAS替换后重新读取脱敏投影；写入异常可能已经提交，提交后失效标记may_have_changed；普通HTTP不保证透传该属性。非DSH全局命名空间/层次或自动Remote映射。")
                 if kind == "remotes" and name in {"job.list", "job.follow", "job.kill"}:
                     # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(作业只映射真实插件所有者和会话范围，观察流差异仍须移植)。
-                    method = {"job.list": "watch_list", "job.follow": "follow", "job.kill": "kill"}[name]
+                    method = {"job.list": "list", "job.follow": "follow", "job.kill": "kill"}[name]
                     item.update(suggestedContract="context.job_controller." + method, conversion="agent-required",
                                 difference="仅当前插件视图中当前可见会话和无会话标签的作业；watch_list轮询变化快照，follow为轮询非消耗双路独立字节游标及base64帧，kill等待实际退出。非DSH会话全局名册、事件驱动、单一输出游标或人工kill通知协议；HTTP需明确映射。")
                 if kind == "remotes" and name == "terminal.environment":
@@ -400,7 +400,27 @@ def analyze(source: Path | str, *, max_files: int = MAX_FILES, max_bytes: int = 
                                 difference="搜索原Sunday固定官方市场目录并分页，保留缓存来源和可安装状态；简单子串匹配且各页不固定快照，非DSH配置索引、模糊排名或详情，不能自动安装或生成Remote映射。")
                 if kind == "remotes" and name.startswith("session."):
                     method = name.partition(".")[2]
-                    if method in {"create", "state", "prompt", "cancel", "events", "follow", "wait", "updateQueue"}:
+                    if method in {"state", "events", "wait"}:
+                        # user:“复用原宿主权威”+(只读候选先限定原可见会话与当前项目，协议差异仍交agent移植)。
+                        item.update(suggestedContract="context.session_controller." + method, conversion="agent-required",
+                                    difference="复用原SESSIONS dataclass及会话可见性，读取前后限定当前项目；无Peer角色资源锁，字段非DSH codec，events为after_seq正向页；HTTP须显式映射。")
+                    elif method in {"prompt", "cancel", "updateQueue"}:
+                        # user:“复用原宿主权威”+(写入先限定当前项目，原回执和取消结算语义仍须移植)。
+                        item.update(suggestedContract="context.session_controller." + ("update_queue" if method == "updateQueue" else method),
+                                    conversion="agent-required", difference="当前项目可见会话经原SESSIONS写入；prompt使用原请求去重并捕获会话执行目录，已派发取消不代表回滚；参数和回执非DSH协议，非Peer资源授权。")
+                    elif method == "follow":
+                        # user:“复用原宿主权威”+(流按原事件分页且每条复核项目，协议差异交agent处理)。
+                        item.update(suggestedContract="context.session_controller.follow", conversion="agent-required",
+                                    difference="当前项目原持久事件正向轮询流，每条前复核会话可见性；无DSH开场快照/token、Peer授权或精确流协议，HTTP需明确ndjson映射。")
+                    elif method == "rename":
+                        # user:“复用原宿主权威”+(会话标题写入采用原可见性、项目及修订CAS，事件协议交agent移植)。
+                        item.update(suggestedContract="context.session_title.set", conversion="agent-required",
+                                    difference="先用context.session_title.get读取修订，set限当前项目及可见会话并执行原CAS；返回标题与revision，不是DSH标题事件seq，HTTP需显式映射。")
+                    elif method == "fork":
+                        # user:“复用原宿主权威”+(仅映射原检查点或回合边界分叉，不冒充任意事件前缀)。
+                        item.update(suggestedContract="context.session_controller.fork", conversion="agent-required",
+                                    difference="当前项目可见会话经原checkpoint或turn边界分叉；仅对话历史、活动会话拒绝，不支持DSH任意事件序号、迁移preflight或精确codec。")
+                    elif method == "create":
                         item.update(suggestedContract="sessions." + ("update_queue" if method == "updateQueue" else method),
                                     conversion="agent-required",
                                     difference="Python SESSIONS契约经原bind_service调用；原dataclass记录可按真实字段有界JSON投影，不是DSH字段/codec。HTTP仍需本插件token路由及明确映射，参数、回执和持久事件格式需适配；events为after_seq正向页，不是DSH history address/反向页；follow仅原持久事件，无开场快照/token；prompt仅文本，无workspace/preset/附件。")
@@ -544,16 +564,16 @@ def _handoff(report: dict) -> str:
              "- 已验收的凭据引用子集：agent_docs/plugin_credentials.md；context.credentials.resolve/describe/set/unset，当前插件命名空间、同步调用、无环境回退或授权记录协议。",
              "- 已验收的配置文件子集：agent_docs/plugin_config_access.md；context.config.read/validate/replace，带修订号和基础校验，保存不代表运行时应用。",
              # user:“保持迁移脚本、机器清单、文档同步”+(只提供真实一元入口及人工声明方式，不将上游Remote盲映射到任意操作)。
-             "- 已验收的明确Remote一元入口：agent_docs/plugin_phase3_remote.md；人工声明 http.remote，映射到已有token POST路由和精确扁平argsSchema；在读取请求体和方法声明前验证已配置令牌，派发前复核声明/操作/启动代和令牌，撤回时不自动重建；原始字节需显式resultEncoding=multipart并处理附件路径。resultEncoding=ndjson显式服务端JSON流要求顶层可aclose异步迭代器、断连/代际撤回回收，最后pull后也复核原授权再发送end；不是DSH envelope/codec/Peer/资源lookup/双向流；脚本不自动绑定方法。",
+             "- 已验收的明确Remote一元入口：agent_docs/plugin_phase3_remote.md；人工声明 http.remote，映射到已有token POST路由和精确扁平argsSchema，派发前拒绝无效Unicode；在读取请求体和方法声明前验证已配置令牌，派发前复核声明/操作/启动代和令牌，撤回时不自动重建；原始字节需显式resultEncoding=multipart并处理附件路径。resultEncoding=ndjson显式服务端JSON流要求顶层可aclose异步迭代器、断连/代际撤回回收，最后pull后也复核原授权再发送end；不是DSH envelope/codec/Peer/资源lookup/双向流；脚本不自动绑定方法。",
              "- 工作区重命名子集：agent_docs/plugin_workspace_controller.md；context.workspace_controller.rename仅当前项目、要求原修订CAS；不保证DSH全局名称唯一性。",
              "- 工作区注册表只读近似：agent_docs/plugin_workspace_registry.md；context.workspace_registry.get/resolve_by_path仅限当前项目，context.workspace_registry.sessions按原可见会话有界扫描并按固定项目根过滤；非DSH全局列表、会话记账或归档/删除。",
              "- Remote方法清单：agent_docs/plugin_remote_access_inventory.md；context.remote_access.declared_methods只列本插件原声明/归属/审批条件，不代表调用者的Peer资源授权。",
-             "- 插件市场只读子集：agent_docs/plugin_market_access.md；context.plugin_market.search过滤Sunday固定官方目录，非DSH自定义索引/模糊排名/稳定分页/详情，不提供安装。",
+             "- 插件市场只读子集：agent_docs/plugin_market_access.md；context.plugin_market.search/entry过滤或精确读取Sunday固定官方目录；entry不是上游Remote，非DSH自定义索引/模糊排名/稳定分页/详情，不提供安装。",
              "- 会话终端管道子集：agent_docs/plugin_terminal_controller.md；context.terminal_controller.environment/open绑定可见会话执行目录，open交付前复核并在失效时回收，pty=false，无DSH retain/attach/resize/重连或会话销毁回收。",
              "- 会话作业控制子集：agent_docs/plugin_job_controller.md；context.job_controller.list/read/follow/kill仅当前插件作业及可见会话标签，follow轮询base64双路字节游标与DSH事件流不同。",
              "- 设置控制器脱敏读取：agent_docs/plugin_settings_controller.md；context.settings.public及context.settings_controller.replace只返回当前插件脱敏配置，不公开原配置全文或全局命名空间。",
              "- 凭据控制器元数据子集：agent_docs/plugin_credential_controller.md；context.credential_controller.describe/set/unset仅限当前插件；状态及单向写入不返回密值，不推荐Remote读取机密值。",
-             "- 编码文件保存子集：agent_docs/plugin_file_uploads.md；context.file_uploads.save_encoded写入原会话附件，返回持久记录而非DSH暂存凭证；无流式/进度/收据消费。",
+             "- 编码文件保存子集：agent_docs/plugin_file_uploads.md；context.file_uploads.save_encoded写入原会话附件，返回持久记录而非DSH暂存凭证；写入异常可能已保存，HTTP不保证传递不确定标志；无流式/进度/收据消费。",
              "- 会话技能目录近似：agent_docs/plugin_session_skill_catalog.md；context.session_skill_catalog.list复用已安装原注册表/启用账本，按会话执行目录过滤用户可调用项；无预设作用域或Agent恢复。",
              "- 会话文件引用近似：agent_docs/plugin_session_file_references.md；context.session_file_references.list先核对原会话可见性/项目/执行目录，再进行原有限扫描，不自动恢复Agent。",
              "- 会话文件控制器近似：agent_docs/plugin_workspace_files.md；context.workspace_files.read/read_bytes/stat/list/changes复用原会话目录和文件系统；base_file限同根，changes为有界轮询SDK流，取消/aclose/停用回收，HTTP服务端流需显式ndjson映射；bytes需显式Sunday multipart映射，非DSH wire。",

@@ -258,3 +258,125 @@ async def test_artifact_store_resolves_project_by_work_root(tmp_path):
     assert await store.resolve_project_id(work_root) == project.id
     assert await store.resolve_project_id(tmp_path / "nowhere") == ""
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_library_list_requires_every_tag_and_sorts_by_rating(tmp_path):
+    """组合取用：材质 + 形态两个标签同时命中；默认按星级从高到低。"""
+    _db, store, _project, work_root, _uploaded, _generated = await _library_fixture(tmp_path)
+    (work_root / "材料").mkdir()
+    (work_root / "材料" / "glass.css").write_text(".optical-glass { color: red; }", encoding="utf-8")
+    (work_root / "材料" / "ring.css").write_text(".ping-ring { color: blue; }", encoding="utf-8")
+    handler = make_library_handler(store, work_root)
+
+    glass_id = (await handler(_call(action="register", path="材料/glass.css"))).metadata["artifact_id"]
+    ring_id = (await handler(_call(action="register", path="材料/ring.css"))).metadata["artifact_id"]
+    await handler(_call(action="tag", artifact_ids=[glass_id], tags=["material", "glass", "low-trans"]))
+    await handler(_call(action="tag", artifact_ids=[ring_id], tags=["material", "ring"]))
+    await handler(_call(action="rate", artifact_ids=[glass_id], rating=5))
+    await handler(_call(action="rate", artifact_ids=[ring_id], rating=3))
+
+    both = await handler(_call(action="list", tag=["material", "glass"]))
+    assert both.status == "ok"
+    assert glass_id in both.content
+    assert ring_id not in both.content
+
+    # 默认排序：星级高的先出现。
+    listed = await handler(_call(action="list", tag="material"))
+    lines = [line for line in listed.content.splitlines() if glass_id in line or ring_id in line]
+    assert lines[0].startswith(f"- {glass_id}")
+    assert "rating=5" in lines[0]
+
+    bad_sort = await handler(_call(action="list", sort="stars"))
+    assert bad_sort.status == "failed"
+    assert bad_sort.error_code == "invalid_argument"
+
+
+@pytest.mark.asyncio
+async def test_library_usage_and_use_write_back(tmp_path):
+    """素材自带用法；用完回写次数与位置，重启后还在。"""
+    db, store, _project, work_root, _uploaded, generated = await _library_fixture(tmp_path)
+    handler = make_library_handler(store, work_root)
+
+    filed = await handler(_call(
+        action="register",
+        path="result.txt",
+        usage={
+            "entry": ".optical-glass--low-trans",
+            "requires": "--glass-tint",
+            "example": '<div class="optical-glass optical-glass--low-trans"></div>',
+            "noise": "不该落库",
+        },
+    ))
+    assert filed.status == "ok"
+    artifact_id = filed.metadata["artifact_id"]
+    record = await store.get(artifact_id)
+    assert record.usage == {
+        "entry": ".optical-glass--low-trans",
+        "requires": "--glass-tint",
+        "example": '<div class="optical-glass optical-glass--low-trans"></div>',
+    }
+    assert record.usage_count == 0
+
+    listed = await handler(_call(action="list"))
+    assert "entry=.optical-glass--low-trans" in listed.content
+    assert "used=0" in listed.content
+
+    # 没写位置就不算一次使用：宁可报错，也不留一条看不出用在哪的记录。
+    missing = await handler(_call(action="use", artifact_ids=[artifact_id]))
+    assert missing.status == "failed"
+    assert missing.error_code == "missing_argument"
+
+    first = await handler(_call(action="use", artifact_ids=[artifact_id], used_in="悬浮面板 · core/ui/src/components/Panel.vue"))
+    assert first.status == "ok"
+    assert "used=1" in first.content
+    record = await store.get(artifact_id)
+    assert record.usage_count == 1
+    assert record.last_used_at
+    assert record.used_in[0]["where"] == "悬浮面板 · core/ui/src/components/Panel.vue"
+
+    # 同一位置再用一次：次数累加，位置只留最近一次。
+    await handler(_call(action="use", artifact_ids=[artifact_id], used_in="悬浮面板 · core/ui/src/components/Panel.vue"))
+    record = await store.get(artifact_id)
+    assert record.usage_count == 2
+    assert len(record.used_in) == 1
+
+    # 换一个位置：新的排在最前，旧的还在。
+    await handler(_call(action="use", artifact_ids=[artifact_id], used_in="设置页 · core/ui/src/components/Settings.vue"))
+    record = await store.get(artifact_id)
+    assert record.usage_count == 3
+    assert [item["where"] for item in record.used_in] == [
+        "设置页 · core/ui/src/components/Settings.vue",
+        "悬浮面板 · core/ui/src/components/Panel.vue",
+    ]
+
+    # 排序：用过的最先出现。
+    by_use = await handler(_call(action="list", sort="used"))
+    first_line = next(line for line in by_use.content.splitlines() if artifact_id in line)
+    assert "used=3" in first_line
+    assert by_use.content.splitlines()[0].startswith(f"- {artifact_id}")
+
+    await db.close()
+
+    # 换一个会话（同一个库）读回来，痕迹还在。
+    reopened = await open_core_app_db(tmp_path / "core.db")
+    again = await reopened.artifact_store.get(artifact_id)
+    assert again is not None
+    assert again.usage_count == 3
+    assert again.usage["entry"] == ".optical-glass--low-trans"
+    assert again.used_in[0]["where"] == "设置页 · core/ui/src/components/Settings.vue"
+    await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_library_register_rejects_a_non_object_usage(tmp_path):
+    _db, store, _project, work_root, _uploaded, _generated = await _library_fixture(tmp_path)
+    (work_root / "新素材.css").write_text(".x {}", encoding="utf-8")
+    handler = make_library_handler(store, work_root)
+
+    rejected = await handler(_call(action="register", path="新素材.css", usage="entry"))
+    assert rejected.status == "failed"
+    assert rejected.error_code == "invalid_argument"
+    assert await store.resolve_project_id(work_root)
+    listed = await handler(_call(action="list"))
+    assert "新素材.css" not in listed.content

@@ -1152,6 +1152,7 @@ def test_legacy_profile_honors_reasoning_level_and_explicit_off():
 def test_client_forces_reasoning_off_when_model_does_not_support_thinking():
     config = LLMConfig(
         provider_name="gateway",
+        provider_id="gateway",
         provider_api_type="openai",
         base_url="https://gateway.example/v1",
         api_key="secret",
@@ -1370,6 +1371,7 @@ def _http_client_for_test(*, model: str = "deepseek-chat") -> CoreHttpLLMClient:
     return CoreHttpLLMClient(
         config=LLMConfig(
             provider_name="gateway",
+            provider_id="gateway",
             provider_api_type="openai",
             base_url="https://gateway.example/v1",
             api_key="secret",

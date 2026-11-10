@@ -166,6 +166,60 @@ def register_context_compaction(sub: argparse._SubParsersAction) -> None:
     context_compaction_config.set_defaults(func=cmd_context_compaction_config)
 
 
+def register_direct(sub: argparse._SubParsersAction) -> None:
+    """user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+    +(GUI 的调用台必须有等价的命令行入口，脚本与排障才能走同一条链路。)"""
+    from .direct import (
+        cmd_direct_catalog,
+        cmd_direct_import_imagegen,
+        cmd_direct_list,
+        cmd_direct_retry,
+        cmd_direct_run,
+    )
+
+    direct = sub.add_parser("direct", help="Call a model directly without the agent loop (调用台)")
+    direct_sub = direct.add_subparsers(dest="direct_command", required=True)
+
+    catalog = direct_sub.add_parser("catalog", help="List models available for direct calls")
+    catalog.add_argument("--work-root", default="")
+    catalog.add_argument("--json", action="store_true")
+    catalog.set_defaults(func=cmd_direct_catalog)
+
+    run = direct_sub.add_parser("run", help="Run one or more prompts against a model")
+    run.add_argument("--model", required=True, help="Model record id, model id or display name")
+    run.add_argument("--prompt", action="append", required=True, help="Repeat for a batch")
+    run.add_argument("--system", default="", help="Optional system prompt")
+    run.add_argument("--param", action="append", default=[], help="Extra parameter key=value (temperature, size, voice, ...)")
+    run.add_argument("--reference", action="append", default=[], help="Reference image URL or project path for image edits")
+    run.add_argument("--project-id", default="")
+    run.add_argument("--work-root", default="")
+    run.add_argument("--json", action="store_true")
+    run.set_defaults(func=cmd_direct_run)
+
+    listing = direct_sub.add_parser("list", help="Show direct-call history")
+    listing.add_argument("--limit", type=int, default=20)
+    listing.add_argument("--offset", type=int, default=0)
+    listing.add_argument("--output-type", choices=("text", "image", "video", "audio"), default="")
+    listing.add_argument("--status", default="")
+    listing.add_argument("--work-root", default="")
+    listing.add_argument("--json", action="store_true")
+    listing.set_defaults(func=cmd_direct_list)
+
+    retry = direct_sub.add_parser("retry", help="Re-run one prompt from a previous call")
+    retry.add_argument("--call-id", required=True)
+    retry.add_argument("--index", type=int, default=0)
+    retry.add_argument("--work-root", default="")
+    retry.add_argument("--json", action="store_true")
+    retry.set_defaults(func=cmd_direct_retry)
+
+    import_imagegen = direct_sub.add_parser(
+        "import-imagegen",
+        help="Import the generate_image tool configuration as an image model",
+    )
+    import_imagegen.add_argument("--work-root", default="")
+    import_imagegen.set_defaults(func=cmd_direct_import_imagegen)
+
+
 def register_loadtools(sub: argparse._SubParsersAction) -> None:
     from .resources import cmd_loadtools_delete_mode, cmd_loadtools_edit_mode, cmd_loadtools_show
     loadtools = sub.add_parser("loadtools", help="Manage mode tool-set configuration (loadtools.jsonc)")

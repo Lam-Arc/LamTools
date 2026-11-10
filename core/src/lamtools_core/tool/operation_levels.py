@@ -30,6 +30,14 @@ OPERATION_LEVELS = {
     "message": 1,
     "web_search": 1, "web_fetch": 2, "web.search": 1, "web.fetch": 2,
     "generate_image": 2, "check_exports": 1,
+    # user:“无需做安全边界”+(桌面动作全部按 1 级放行，不再每步弹审批；
+    # 任务本身仍可 pause/stop)。
+    "computer_use": 1,
+    "computer_use.start": 1, "computer_use.screenshot": 1, "computer_use.snapshot": 1,
+    "computer_use.status": 1, "computer_use.pause": 1, "computer_use.stop": 1,
+    "computer_use.resume": 1, "computer_use.click": 1, "computer_use.type": 1,
+    "computer_use.key": 1, "computer_use.scroll": 1, "computer_use.drag": 1,
+    "computer_use.focus": 1,
     # Preserve the existing Study/Workflow domain behavior outside this migration's scope.
     "get_knowledge_net": 1, "build_knowledge_net": 1, "sign": 1, "notes": 1, "exam": 1,
     "workflow_graph": 1, "workflow_add_node": 2, "workflow_connect": 2,

@@ -278,6 +278,7 @@ class TestProviderErrorIdentity:
         client = CoreHttpLLMClient(
             config=LLMConfig(
                 provider_name="P",
+                provider_id="p",
                 provider_api_type="openai",
                 base_url="https://example.com/v1",
                 api_key="sk-abc密钥",
@@ -304,6 +305,7 @@ class TestProviderErrorIdentity:
             return CoreHttpLLMClient(
                 config=LLMConfig(
                     provider_name="P",
+                    provider_id="p",
                     provider_api_type=api_type,
                     base_url="https://example.com/v1",
                     api_key="sk-test",
