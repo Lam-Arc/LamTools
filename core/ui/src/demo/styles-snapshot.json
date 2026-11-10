@@ -1,0 +1,424 @@
+[
+ {
+  "name": "PingRing.vue",
+  "tags": [
+   "control",
+   "ring",
+   "ping-ring",
+   "radial",
+   "interaction",
+   "motion"
+  ],
+  "rating": 5,
+  "usage": {
+   "entry": "import PingRing from '@/pet/ui/PingRing.vue'，模板里 <PingRing :ping=\"ping\" />",
+   "requires": "props.ping 必须是 PingRuntime（pet/ping/usePingRuntime）；依赖 --ease-out；扇区用 overlay 坐标除以 window.innerWidth 换算；纯 SVG，不走 CSS 环形布局",
+   "example": "<PingRing :ping=\"ping\" />"
+  },
+  "usage_count": 0
+ },
+ {
+  "name": "app-page.css",
+  "tags": [
+   "layout",
+   "page",
+   "card",
+   "button"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "auxiliary-chat.css",
+  "tags": [
+   "layout",
+   "chat",
+   "button",
+   "auxiliary"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "base.css",
+  "tags": [
+   "base",
+   "reset",
+   "type"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "chat-thread-cards.css",
+  "tags": [
+   "layout",
+   "chat",
+   "card",
+   "tool"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "chat-thread-editing.css",
+  "tags": [
+   "layout",
+   "chat",
+   "form",
+   "button"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "chat-thread-process.css",
+  "tags": [
+   "layout",
+   "chat",
+   "process"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "chat-thread-reasoning.css",
+  "tags": [
+   "layout",
+   "chat",
+   "reasoning",
+   "accordion"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "chat-thread-shell.css",
+  "tags": [
+   "layout",
+   "chat",
+   "shell"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "chat-thread-tools.css",
+  "tags": [
+   "layout",
+   "chat",
+   "tool"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "core-model-catalog.css",
+  "tags": [
+   "layout",
+   "settings",
+   "model",
+   "catalog"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "core-settings-base.css",
+  "tags": [
+   "layout",
+   "settings",
+   "form"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "core-settings-model-editor.css",
+  "tags": [
+   "layout",
+   "settings",
+   "model",
+   "form"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "core-settings-models.css",
+  "tags": [
+   "layout",
+   "settings",
+   "model"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "core-settings-permissions.css",
+  "tags": [
+   "layout",
+   "settings",
+   "permission"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "core-settings-surface.css",
+  "tags": [
+   "layout",
+   "settings",
+   "surface"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "core-settings-workspace.css",
+  "tags": [
+   "layout",
+   "settings",
+   "workspace"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "layout.css",
+  "tags": [
+   "layout",
+   "shell",
+   "composer",
+   "input",
+   "form"
+  ],
+  "rating": 3,
+  "usage": {
+   "entry": ".field-input（输入框）、.btn-primary / .btn-cancel（早期按钮）",
+   "requires": "随外层 --theme-composer-* 令牌走，放进 composer 区域才自然",
+   "example": "<input class=\"field-input\" placeholder=\"名称\" />"
+  },
+  "usage_count": 0
+ },
+ {
+  "name": "library-styles.css",
+  "tags": [
+   "layout",
+   "library",
+   "card",
+   "style"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "library-surface.css",
+  "tags": [
+   "layout",
+   "library",
+   "card",
+   "button",
+   "input"
+  ],
+  "rating": 3,
+  "usage": {
+   "entry": ".library-button / .library-card / .library-search / .icon-button",
+   "requires": "--text 由资料库面板提供，按钮统一 34px 高、圆角 --radius-sm",
+   "example": "<button class=\"library-button library-button--primary\">登记</button>"
+  },
+  "usage_count": 0
+ },
+ {
+  "name": "optical-glass.css",
+  "tags": [
+   "material",
+   "glass",
+   "low-trans",
+   "surface",
+   "depth"
+  ],
+  "rating": 5,
+  "usage": {
+   "entry": ".optical-glass（着色 16%）与 .optical-glass--low-trans（着色 40%），差异只由一个令牌决定",
+   "requires": "父级要有可见底色，否则通透感看不出来；--optical-glass-surface 由所在区域提供；无 backdrop-filter 时走 @supports 回退，只剩着色差",
+   "example": "<div class=\"optical-glass optical-glass--low-trans\">面板内容</div>"
+  },
+  "usage_count": 0
+ },
+ {
+  "name": "pet-surface.css",
+  "tags": [
+   "layout",
+   "pet",
+   "surface"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "plugin-editor-cards.css",
+  "tags": [
+   "layout",
+   "plugin",
+   "editor",
+   "card"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "plugin-editor-details.css",
+  "tags": [
+   "layout",
+   "plugin",
+   "editor",
+   "form"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "plugin-editor-shell.css",
+  "tags": [
+   "layout",
+   "plugin",
+   "editor"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "plugin-editor-states.css",
+  "tags": [
+   "layout",
+   "plugin",
+   "editor",
+   "input",
+   "state"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "session-sidebar.css",
+  "tags": [
+   "layout",
+   "sidebar",
+   "session",
+   "nav"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "split-workspace.css",
+  "tags": [
+   "layout",
+   "split",
+   "workspace",
+   "tab"
+  ],
+  "rating": 3,
+  "usage": {
+   "entry": ".split-icon-button / .split-text-button / .split-pane-tab",
+   "requires": "占位在上层工作区里，按钮用 inset 描边代替 border",
+   "example": "<button class=\"split-icon-button\">×</button>"
+  },
+  "usage_count": 0
+ },
+ {
+  "name": "study.css",
+  "tags": [
+   "layout",
+   "study",
+   "course",
+   "tree"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "sunday-controls.css",
+  "tags": [
+   "control",
+   "button",
+   "input",
+   "form",
+   "base"
+  ],
+  "rating": 5,
+  "usage": {
+   "entry": ".btn 基类 + .btn--primary / --secondary / --quiet / --ghost / --danger",
+   "requires": "min-height 32px、var(--radius-sm)、var(--settings-control-background)；--secondary 与 --primary 目前是同一份声明，选哪个都行",
+   "example": "<button class=\"btn btn--primary\">保存</button>"
+  },
+  "usage_count": 0
+ },
+ {
+  "name": "theme-editor.css",
+  "tags": [
+   "layout",
+   "theme",
+   "editor",
+   "form"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ },
+ {
+  "name": "variables.css",
+  "tags": [
+   "token",
+   "theme",
+   "color",
+   "radius",
+   "space",
+   "glass"
+  ],
+  "rating": 5,
+  "usage": {
+   "entry": "全局令牌表，样式里直接用 var(--token)",
+   "requires": "最先加载；radius 取 --radius-sm 6px / --radius 12px / --radius-lg 18px",
+   "example": "border-radius: var(--radius); padding: var(--space-2);"
+  },
+  "usage_count": 0
+ },
+ {
+  "name": "workspace-shell.css",
+  "tags": [
+   "layout",
+   "shell",
+   "workspace",
+   "nav"
+  ],
+  "rating": 0,
+  "usage": {},
+  "usage_count": 0
+ }
+]

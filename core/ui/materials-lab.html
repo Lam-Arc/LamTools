@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>资料库 · 卡片预览</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111114; }
+    #app { height: 100%; }
+    body { font-family: var(--font-sans, system-ui, sans-serif); }
+
+    .lab-host { position: fixed; inset: 0; overflow: auto; background: var(--theme-backdrop-background); color: var(--theme-backdrop-text); }
+    .lab-host[data-theme='dark'] {
+      --theme-backdrop-background: #3A3B3F; --theme-backdrop-text: #FBF7F0;
+      --theme-main-background: #1B1D22; --theme-main-text: #FBF7F0;
+      --theme-main-soft-background: rgba(255,255,255,.045);
+      --theme-main-subtle-background: rgba(255,255,255,.028);
+      --theme-main-sunken-background: rgba(0,0,0,.32);
+      --theme-main-border: rgba(251,247,240,.16);
+      --theme-composer-background: #22242A; --theme-composer-text: #FBF7F0;
+      --theme-control-background: #FBF7F0; --theme-control-text: #2E3138;
+    }
+    .lab-host[data-theme='light'] {
+      --theme-backdrop-background: #D2D8E6; --theme-backdrop-text: #2E3138;
+      --theme-main-background: #FDFBF7; --theme-main-text: #2E3138;
+      --theme-main-soft-background: rgba(46,49,56,.05);
+      --theme-main-subtle-background: rgba(46,49,56,.03);
+      --theme-main-sunken-background: rgba(46,49,56,.07);
+      --theme-main-border: rgba(46,49,56,.16);
+      --theme-composer-background: #F7F4EE; --theme-composer-text: #2E3138;
+      --theme-control-background: #2E3138; --theme-control-text: #FBF7F0;
+    }
+    .lab-surface { box-sizing: border-box; max-width: 1500px; margin: 0 auto; padding: 26px clamp(18px, 4vw, 48px) 64px; }
+    .lab-chrome { position: fixed; right: 18px; bottom: 18px; z-index: 999; }
+    .lab-chrome button {
+      padding: 7px 14px; border: 1px solid var(--theme-main-border); border-radius: 999px;
+      background: var(--theme-main-background); color: var(--theme-main-text);
+      font: inherit; font-size: 12px; cursor: pointer; box-shadow: 0 8px 28px rgba(0,0,0,.24);
+    }
+    .lab-no-motion *, .lab-no-motion *::before, .lab-no-motion *::after { animation: none !important; transition: none !important; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/demo/materials-lab.ts"></script>
+</body>
+</html>

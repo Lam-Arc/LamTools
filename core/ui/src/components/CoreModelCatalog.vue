@@ -288,6 +288,8 @@
                   <span class="mc-caps" :title="capabilityTitle(model)" aria-hidden="true">
                     <span class="mc-cap-glyph">文</span>
                     <span v-if="isVision(model)" class="mc-cap-glyph">视</span>
+                    <!-- user:“实现...”+(输出类型要在模型列表里看得见，不然只有点进编辑才知道。) -->
+                    <span v-if="outputTypeOf(model) !== 'text'" class="mc-cap-glyph">{{ outputGlyph(model) }}</span>
                     <span v-if="model.thinking_supported" class="mc-cap-glyph">推</span>
                   </span>
                   <svg v-if="usageOfModel(model.id).tokens" class="mc-tile-spark" viewBox="0 0 44 14" preserveAspectRatio="none" aria-hidden="true">
@@ -530,6 +532,18 @@
               :options="capabilityOptions"
               :label="t('能力')"
               @update:model-value="setDraftCapability"
+            />
+          </div>
+
+          <div class="mc-field">
+            <span>{{ t('输出') }}</span>
+            <SundaySegmented
+              class="mc-cap-seg"
+              :model-value="draft.outputType"
+              :options="outputOptions"
+              :label="t('输出')"
+              data-model-output-type
+              @update:model-value="setDraftOutputType"
             />
           </div>
 
@@ -913,7 +927,7 @@ type Draft =
       providerId: string
       modelId: string
       displayName: string
-      capability: 'text' | 'multimodal'
+      capability: 'text' | 'multimodal'; outputType: 'text' | 'image' | 'video' | 'audio'
       enabled: boolean
       isDefault: boolean
       contextWindow: number
@@ -991,6 +1005,29 @@ const capabilityOptions: Array<{ value: 'text' | 'multimodal'; label: string }> 
   { value: 'multimodal', get label() { return t('视觉') } },
 ]
 
+// user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+// +(模型能产出什么要在配置里写清楚，调用台才能给它配对的输入表单与结果区。)
+const outputOptions: Array<{ value: 'text' | 'image' | 'video' | 'audio'; label: string }> = [
+  { value: 'text', get label() { return t('文本') } },
+  { value: 'image', get label() { return t('图片') } },
+  { value: 'video', get label() { return t('视频') } },
+  { value: 'audio', get label() { return t('音频') } },
+]
+
+function normalizeOutputType(value: unknown): 'text' | 'image' | 'video' | 'audio' {
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized === 'image' || normalized === 'video' || normalized === 'audio' ? normalized : 'text'
+}
+
+function outputTypeOf(model: CoreSettingsModel): 'text' | 'image' | 'video' | 'audio' {
+  return normalizeOutputType(model.output_type)
+}
+
+function outputGlyph(model: CoreSettingsModel): string {
+  const type = outputTypeOf(model)
+  return type === 'image' ? '图' : type === 'video' ? '影' : type === 'audio' ? '音' : ''
+}
+
 const apiTypeOptions = [
   { value: 'openai', label: 'OpenAI compatible' },
   { value: 'anthropic', label: 'Anthropic' },
@@ -1066,6 +1103,10 @@ function setRange(value: string): void {
 function setDraftCapability(value: string): void {
   if (draft.value?.kind !== 'model') return
   draft.value.capability = value === 'multimodal' ? 'multimodal' : 'text'
+}
+function setDraftOutputType(value: string): void {
+  if (draft.value?.kind !== 'model') return
+  draft.value.outputType = normalizeOutputType(value)
 }
 const selectedModel = computed(() => selection.value?.kind === 'model'
   ? props.models.find(model => model.id === selection.value!.id) || null
@@ -1589,6 +1630,7 @@ function openModelCreate(providerId: string): void {
     modelId: '',
     displayName: '',
     capability: 'text',
+    outputType: 'text',
     enabled: true,
     isDefault: false,
     contextWindow: 128000,
@@ -1616,6 +1658,7 @@ function openModelEdit(model: CoreSettingsModel): void {
     modelId: model.model_id || '',
     displayName: model.display_name || '',
     capability: model.capability === 'multimodal' ? 'multimodal' : 'text',
+    outputType: normalizeOutputType(model.output_type),
     enabled: model.enabled !== false,
     isDefault: model.is_default === true,
     contextWindow: model.context_window ?? 128000,
@@ -1778,6 +1821,7 @@ async function saveModelDraft(current: Extract<Draft, { kind: 'model' }>): Promi
     thinking_supported: current.thinkingSupported,
     thinking_budget: Number(current.thinkingBudget) || 0,
     capability: current.capability,
+    output_type: current.outputType,
     notes: current.notes,
     enabled: current.enabled,
     is_default: current.enabled ? current.isDefault : false,

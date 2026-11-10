@@ -15,6 +15,7 @@ import {
   frameToClient,
   normalizeRegion,
   pointToFrame,
+  regionToFrame,
   selectionMeta,
 } from '../src/pet/capture/geometry.ts'
 
@@ -310,5 +311,37 @@ describe('前端：退出、发送与旧的整屏标注路径', () => {
     for (const relative of ['pet/capture/geometry.ts', 'pet/ui/CaptureEditor.vue', 'pet/ui/CaptureApp.vue']) {
       expect(statSync(resolve(uiRoot, relative)).size).toBeGreaterThan(200)
     }
+  })
+})
+
+describe('标注层圈选 → 截图选区', () => {
+  // user:“合并，这样更干净”+(圈选直接进截图编辑器，选区必须按截图原点换算，
+  // 否则副屏负坐标或 DPI 缩放会让预置选框整体偏移)。
+  const frame = { x: 100, y: 50, width: 800, height: 600 }
+
+  it('按截图原点换算成截图内像素', () => {
+    expect(regionToFrame([200, 150, 300, 200], frame)).toEqual({
+      x1: 100,
+      y1: 100,
+      x2: 400,
+      y2: 300,
+    })
+  })
+
+  it('超出截图范围的部分被裁掉', () => {
+    expect(regionToFrame([0, 0, 2000, 2000], frame)).toEqual({
+      x1: 0,
+      y1: 0,
+      x2: 800,
+      y2: 600,
+    })
+  })
+
+  it('区域完全不在截图内时返回 null', () => {
+    expect(regionToFrame([2000, 2000, 100, 100], frame)).toBeNull()
+  })
+
+  it('太小的选区返回 null，保持整屏发送', () => {
+    expect(regionToFrame([200, 150, 3, 3], frame)).toBeNull()
   })
 })

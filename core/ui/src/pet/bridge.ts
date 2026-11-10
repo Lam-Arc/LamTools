@@ -145,8 +145,14 @@ export async function setPingInputMode(mode: 'auto' | 'capture' | 'passthrough')
  * user:“重新设计与实现 Ping 的框选工具”+(不再让 Ping 覆盖层吃掉整屏鼠标；
  * 截图窗口可聚焦、可收键盘、可被看门狗强制收起。)
  */
-export async function openPingCapture(): Promise<OverlayBounds> {
-  return await invoke('pet_ping_capture_open')
+export async function openPingCapture(region?: [number, number, number, number]): Promise<OverlayBounds> {
+  // user:“合并，这样更干净”+(标注层圈完直接进截图编辑器，把选区带过去预置)。
+  return await invoke('pet_ping_capture_open', region ? { region } : {})
+}
+
+/** 标注层预置的选区，屏幕物理像素。 */
+export async function fetchPingCaptureRegion(): Promise<[number, number, number, number] | null> {
+  return await invoke<[number, number, number, number] | null>('pet_ping_capture_region')
 }
 
 export async function fetchPingCaptureFrame(): Promise<CapturedFrame> {
@@ -199,6 +205,18 @@ export async function setZMode(mode: 'top' | 'behind' | 'clip'): Promise<void> {
 
 export async function listMonitors(): Promise<MonitorInfo[]> {
   return await invoke<MonitorInfo[]>('pet_monitors')
+}
+
+/**
+ * 设置标注层圈选热键。
+ * user:“把它的入口设成跟 ping 一样”+(和 Ping 共用同一套热键设置与轮询)。
+ */
+export async function notifyOverlaySettingsChanged(): Promise<void> {
+  await invoke('desktop_overlay_settings_changed')
+}
+
+export async function setOverlayCaptureHotkey(accelerator: string | null): Promise<void> {
+  await invoke('desktop_overlay_capture_hotkey_set', { accelerator })
 }
 
 export async function setPingHotkey(accelerator: string | null): Promise<void> {

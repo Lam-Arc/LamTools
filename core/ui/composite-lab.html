@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>复合样式组</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --theme-main-background:#1B1D22; --theme-main-text:#FBF7F0;
+      --theme-main-solid:#f2efeb; --theme-main-border:rgba(251,247,240,.16);
+      --theme-main-soft-background:rgba(255,255,255,.045);
+      --theme-main-subtle-background:rgba(255,255,255,.028);
+      --theme-main-sunken-background:rgba(0,0,0,.32);
+      --theme-backdrop-text:#f2efeb; --theme-backdrop-background:#3A3B3F;
+      --theme-composer-background:#22242A; --theme-composer-text:#FBF7F0;
+      --theme-control-background:#FBF7F0; --theme-control-text:#2E3138;
+      --text:#FBF7F0; --blue:#6aa9ff; --red:#e0605a; --green:#4bc07a; --orange:#e2a04a;
+      --alpha-hover:8%; --alpha-active:12%; --alpha-press:18%;
+    }
+    html, body { margin:0; min-height:100%; background:#141619; color:#eae4da;
+      font-family:var(--font-sans, system-ui, sans-serif); }
+    .composite-lab { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:18px; padding:26px; max-width:1180px; }
+    .composite-lab--single { grid-template-columns:1fr; padding:0; max-width:none; height:100vh; }
+    .block { border:1px solid rgba(234,228,218,.12); border-radius:16px; overflow:hidden; background:rgba(234,228,218,.03); }
+    .composite-lab--single .block { border:0; border-radius:0; background:transparent; height:100%; display:flex; flex-direction:column; }
+    .block-head { padding:16px 18px 0; }
+    .composite-lab--single .block-head { padding:16px 20px 0; }
+    .block-head h2 { margin:0 0 4px; font-size:15px; }
+    .block-head p { margin:0; font-size:11.5px; color:#8b8882; }
+    .stage { padding:22px 18px; display:flex; align-items:center; justify-content:center; min-height:210px; }
+    .composite-lab--single .stage { flex:1; }
+    .composer-stage { align-items:flex-end; }
+    .ping-stage { padding:0; overflow:hidden; }
+    .composite-lab--single .ping-stage { min-height:460px; }
+    .dialog-stage { min-height:120px; }
+    .parts { margin:0; padding:0 18px 16px; list-style:none; display:flex; flex-wrap:wrap; gap:6px; }
+    .parts li { font-size:10px; color:#9cc4ff; background:rgba(127,180,255,.1); padding:2px 7px; border-radius:5px;
+      font-family:ui-monospace, Consolas, monospace; }
+
+    /* 输入栏与会话行的舞台底：给玻璃和透明文字一个可见的面 */
+    .composer-demo { width:100%; max-width:560px; padding:34px 26px 26px;
+      border-radius:18px; background:linear-gradient(180deg,#25282f,#1d2027);
+      border:1px solid rgba(251,247,240,.08); }
+    .session-demo { width:100%; max-width:380px; display:flex; flex-direction:column; gap:8px; }
+    .session-row-wrap { display:flex; align-items:center; gap:10px; padding:9px 10px 9px 12px;
+      border-radius:10px; background:rgba(234,228,218,.04); }
+    .session-row-wrap.is-active { background:rgba(234,228,218,.09); }
+    .session-row-title { flex:1; min-width:0; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .session-row-meta { font-size:10.5px; color:rgba(234,228,218,.42); }
+
+    /* 输入栏：真实组件依赖外层撑开，这里给它一个明确的尺寸 */
+    .composer-demo .composer-root,
+    .composer-demo .floating-composer { width:100%; }
+    .composer-demo .composer-main-card { display:flex; flex-direction:column; gap:8px; }
+    .composer-demo .auto-textarea { display:block; width:100%; min-height:52px; resize:none;
+      border:0; background:transparent; color:var(--theme-composer-text,#FBF7F0);
+      font-family:inherit; font-size:13px; line-height:1.6; outline:none; }
+    .composer-demo .composer-bottom { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .composer-demo .tool-row { display:flex; align-items:center; gap:6px; }
+    .composer-demo .core-send-stop-button { position:static; transform:none; width:30px; height:30px;
+      display:grid; place-items:center; border-radius:999px; }
+
+    /* 输入栏在应用里靠窗口级定位，这里强制回到文档流 */
+    .composer-demo .composer-root,
+    .composer-demo .floating-composer {
+      position:static !important; inset:auto !important; transform:none !important;
+      width:100% !important; max-width:none !important; margin:0 !important;
+      background:#22242A !important; border-radius:16px !important;
+      padding:12px 14px !important; box-shadow:none !important; backdrop-filter:none !important;
+    }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module" src="/src/demo/composite-lab.ts"></script>
+</body>
+</html>

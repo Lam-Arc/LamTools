@@ -167,7 +167,16 @@
           >
             <img v-if="thumbFor(item)" :src="thumbFor(item)" :alt="item.name" loading="lazy" />
             <div v-if="cssPreviewFor(item)" class="material-css-preview" v-html="cssPreviewFor(item)" />
-            <template v-else>
+            <iframe
+              v-if="htmlPreviewFor(item)"
+              class="material-html-preview"
+              :srcdoc="htmlPreviewFor(item)"
+              sandbox=""
+              tabindex="-1"
+              aria-hidden="true"
+              loading="lazy"
+            />
+            <template v-if="!thumbFor(item) && !cssPreviewFor(item)">
               <component :is="kindIcon(item.kind, item.name)" class="material-cover-icon" :size="28" :stroke-width="1.5" aria-hidden="true" />
               <span class="material-cover-ext">{{ coverLabel(item) }}</span>
             </template>
@@ -245,6 +254,7 @@
               @click.stop="setFavorite(item, false)"
             ><Star :size="12" :stroke-width="1.8" aria-hidden="true" /></button>
             <span>{{ t("修改于") }}{{ shortDate(item.updated_at) }}</span>
+            <span v-if="item.usage_count" class="material-used" data-material-used>{{ t("用过 {0} 次", { 0: item.usage_count }) }}</span>
           </p>
         </article>
       </div>
@@ -285,11 +295,61 @@
       <div v-if="selectedSet.size" class="materials-selection" data-materials-selection>
         <span>{{ t("已选") }}{{ selectedSet.size }}{{ t("项") }}</span>
         <button class="library-button" type="button" @click="clearSelection">{{ t("取消") }}</button>
+        <button class="library-button" type="button" :disabled="compareItems.length < 2" data-materials-compare-open @click="comparing = true">{{ t("并排对比") }}</button>
         <button class="library-button" type="button" data-materials-favorite-selected @click="favoriteSelected(true)">{{ t("收藏") }}</button>
         <button class="library-button" type="button" @click="favoriteSelected(false)">{{ t("取消收藏") }}</button>
         <button class="library-button library-button--danger" type="button" data-materials-remove-selected @click="pendingRemove = selectedItems">{{ t("移除") }}</button>
       </div>
     </template>
+
+    <!-- user:“人只做观测和选用”+(挑素材时把候选并排摆开，比一张一张点开快) -->
+    <Teleport to="body">
+    <Transition name="library-dialog">
+      <div v-if="comparing" class="compare-dimmer" @click.self="comparing = false">
+        <div class="compare-panel" role="dialog" aria-modal="true" :aria-label="t('并排对比')" data-materials-compare>
+          <header class="compare-head">
+            <h3 class="compare-title">{{ t("并排对比") }}</h3>
+            <span class="compare-count">{{ compareItems.length }}</span>
+            <button class="library-button" type="button" data-materials-compare-close @click="comparing = false">{{ t("关闭") }}</button>
+          </header>
+          <div class="compare-grid" :style="{ '--compare-columns': String(Math.min(compareItems.length, 4)) }">
+            <figure v-for="item in compareItems" :key="item.artifact_id" class="compare-cell" :data-compare-item="item.artifact_id">
+              <div
+                class="compare-stage"
+                :data-kind="inferredKind(item.kind, item.name)"
+                :data-cover="coverStyle(item.kind, item.name)"
+              >
+                <img v-if="thumbFor(item)" :src="thumbFor(item)" :alt="item.name" />
+                <div v-if="cssPreviewFor(item)" class="material-css-preview" v-html="cssPreviewFor(item)" />
+                <iframe
+                  v-if="htmlPreviewFor(item)"
+                  class="material-html-preview"
+                  :srcdoc="htmlPreviewFor(item)"
+                  sandbox=""
+                  tabindex="-1"
+                  aria-hidden="true"
+                />
+                <span v-if="!thumbFor(item) && !cssPreviewFor(item) && !htmlPreviewFor(item)" class="compare-cover">
+                  <component :is="kindIcon(item.kind, item.name)" :size="26" :stroke-width="1.5" aria-hidden="true" />
+                  <span class="compare-cover-ext">{{ coverLabel(item) }}</span>
+                </span>
+              </div>
+              <figcaption class="compare-meta">
+                <h4 class="compare-name" :title="item.name">{{ item.name }}</h4>
+                <p class="compare-rating" :aria-label="t('{0} 分', { 0: item.rating ?? 0 })">
+                  <span v-for="score in 5" :key="score" :class="{ 'is-on': (item.rating ?? 0) >= score }">★</span>
+                </p>
+                <p v-if="(item.tags ?? []).length" class="compare-tags">{{ (item.tags ?? []).join(" · ") }}</p>
+                <p v-if="item.usage?.entry" class="compare-entry"><code>{{ item.usage.entry }}</code></p>
+                <p v-if="item.usage?.requires" class="compare-requires">{{ item.usage.requires }}</p>
+                <p class="compare-used">{{ item.usage_count ? t("用过 {0} 次", { 0: item.usage_count }) : t("还没被用过") }}</p>
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </Transition>
+    </Teleport>
 
     <!-- ── 移除确认：只改资料库状态，不删文件（沿用成果库既有语义） ── -->
     <Transition name="library-dialog">
@@ -417,6 +477,9 @@ const cssTried = new Set<string>()
 /** 正在输入标签的那张卡，用来决定补全要不要露出来。 */
 const focusedTagId = ref('')
 const tagDrafts = ref<Record<string, string>>({})
+/** HTML 素材的原文，卡片里用 iframe 直接渲染它自己。 */
+const htmlPreviews = ref<Record<string, string>>({})
+const htmlTried = new Set<string>()
 const loading = ref(false)
 const error = ref('')
 const stats = ref<{ count: number; bytes: number }>({ count: 0, bytes: 0 })
@@ -646,12 +709,38 @@ function shortDate(value?: string): string {
 }
 
 /* ---- 导航与动作 ---- */
-/** 全项目出现过的标签，排好序给筛选条。 */
-const allTags = computed(() => {
-  const found = new Set<string>()
-  for (const item of items.value) for (const tag of item.tags ?? []) found.add(tag)
-  return [...found].sort()
+/** 全项目标签的词频，按热度排；补全和筛选条都从这一份派生。 */
+const tagCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const item of items.value) for (const tag of item.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1)
+  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
 })
+
+/** 补全要看得到所有已有的标签，包括只出现过一次的。 */
+const tagPool = computed(() => tagCounts.value.map(([tag]) => tag))
+
+/** 筛选条只列真的复用的标签：只出现过一次的留在卡片上，不占顶部空间。 */
+const allTags = computed(() => tagCounts.value.filter(([, count]) => count >= 2).slice(0, 18).map(([tag]) => tag))
+
+/** HTML 素材：它本身就是一份可渲染的页面，卡片里直接嵌进去。 */
+function htmlPreviewFor(item: ProjectArtifact): string {
+  if (!/\.html?$/i.test(item.name)) return ''
+  if (htmlTried.has(item.artifact_id)) return htmlPreviews.value[item.artifact_id] ?? ''
+  void loadHtmlPreview(item)
+  return ''
+}
+
+async function loadHtmlPreview(item: ProjectArtifact): Promise<void> {
+  if (htmlTried.has(item.artifact_id)) return
+  htmlTried.add(item.artifact_id)
+  try {
+    const result = await props.requestRpc('artifact.text', { artifact_id: item.artifact_id })
+    const text = String(result.text ?? '')
+    if (text) htmlPreviews.value = { ...htmlPreviews.value, [item.artifact_id]: text }
+  } catch {
+    // 读不到就保持原封面。
+  }
+}
 
 /** 样式表的缩略图：解析它的规则，渲染两三段真实片段。 */
 function cssPreviewFor(item: ProjectArtifact): string {
@@ -694,7 +783,7 @@ function setTagDraft(item: ProjectArtifact, value: string): void {
 function suggestionsFor(item: ProjectArtifact): string[] {
   const draft = tagDraftFor(item).trim().toLowerCase()
   const own = new Set(item.tags ?? [])
-  return allTags.value
+  return tagPool.value
     .filter(tag => !own.has(tag) && (!draft || tag.startsWith(draft)))
     .slice(0, 6)
 }
@@ -912,6 +1001,10 @@ onUnmounted(() => { document.body.classList.remove('library-drag-selecting') })
 
 
 const selectedItems = computed(() => items.value.filter(item => selectedSet.value.has(item.artifact_id)))
+
+/** 对比最多摆四件：再多就看不清楚了。 */
+const comparing = ref(false)
+const compareItems = computed(() => selectedItems.value.slice(0, 4))
 
 async function patch(item: ProjectArtifact, method: string, params: Record<string, unknown>): Promise<void> {
   error.value = ''

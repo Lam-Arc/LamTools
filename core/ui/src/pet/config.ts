@@ -53,6 +53,31 @@ export interface PingConfig {
   target: { projectId: string | null; sessionId: string | null }
 }
 
+export interface OverlayDanmakuConfig {
+  /** 弹幕倍速，1 是默认。 */
+  speed: number
+  /** 弹幕字体族，空串表示跟随系统默认。 */
+  fontFamily: string
+  /** 弹幕字号（CSS 像素）。 */
+  fontSize: number
+}
+
+export interface OverlayConfig {
+  /**
+   * 圈选批注的全局热键，空串表示解绑。
+   *
+   * user:“没必要搞那个圈选批注的键，就是把它的入口设成跟 ping 一样就行”+
+   * (屏幕上不再常驻圈选按钮，按键即进框选)。
+   */
+  captureHotkey: string
+  /**
+   * 弹幕显示参数。
+   *
+   * user:“设置中支持调节倍速、字体、字号”+(交互层的弹幕外观跟着这份配置走)。
+   */
+  danmaku: OverlayDanmakuConfig
+}
+
 export type BubblePolicy = 'popup' | 'badge' | 'silent'
 
 export interface BubbleConfig {
@@ -96,6 +121,8 @@ export interface PetConfigV1 {
     velocity: boolean
   }
   ping: PingConfig
+  /** 桌面标注层：圈选入口走全局热键，和 Ping 同一套配置方式。 */
+  overlay: OverlayConfig
   bubbles: BubbleConfig
   pets: PetRecordConfig[]
   /** 内置方块人预设是否已经装过一次；用户删掉后不再自动加回来。 */
@@ -142,6 +169,10 @@ export function defaultConfig(): PetConfigV1 {
     useL3: false,
     zMode: 'top',
     debugOverlay: { terrain: false, colliders: false, path: false, velocity: false },
+    overlay: {
+      captureHotkey: 'Ctrl+Alt+A',
+      danmaku: { speed: 1, fontFamily: '', fontSize: 24 },
+    },
     ping: {
       hotkey: 'Ctrl+Alt+Space',
       radius: 132,
@@ -194,6 +225,11 @@ export function migrateConfig(raw: unknown): MigrationResult {
       // 提示词模板永远补齐，旧配置里没有的用默认模板。
       sectors: mergeSectors(base.ping.sectors, input.ping?.sectors),
       target: { ...base.ping.target, ...(input.ping?.target || {}) },
+    },
+    overlay: {
+      ...base.overlay,
+      ...(input.overlay || {}),
+      danmaku: { ...base.overlay.danmaku, ...((input.overlay || {}).danmaku || {}) },
     },
     bubbles: { ...base.bubbles, ...(input.bubbles || {}) },
     pets: Array.isArray(input.pets) ? input.pets.map(normalizePetRecord).filter(Boolean) as PetRecordConfig[] : [],

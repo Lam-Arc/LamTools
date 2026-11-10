@@ -16,6 +16,15 @@ const sectors = computed(() => props.runtime.config.ping.sectors)
 
 // user:“恢复默认回到 Ctrl+Alt+Space”+(默认值只认 config.ts 一处，界面不再手写 accelerator。)
 const defaultHotkey = defaultConfig().ping.hotkey
+const defaultOverlayHotkey = defaultConfig().overlay.captureHotkey
+/** 字体下拉：只列系统里基本都在的几套。 */
+const danmakuFonts = [
+  { value: '', label: '系统默认' },
+  { value: "'Microsoft YaHei', 'PingFang SC', sans-serif", label: '雅黑' },
+  { value: "'Source Han Sans SC', 'Noto Sans SC', sans-serif", label: '思源黑体' },
+  { value: 'KaiTi, STKaiti, serif', label: '楷体' },
+  { value: "'JetBrains Mono', Consolas, monospace", label: '等宽' },
+]
 
 // user:“这个内外环半径可调节吗”+(内环=中心盘独立可调；未设置时按外径 42% 自动算，
 // 外环继续由「环半径 + 环身宽度」决定。)
@@ -108,6 +117,22 @@ async function applyHotkey(value: string): Promise<void> {
   await bridge.setPingHotkey(value).catch(() => {})
 }
 
+// user:“把它的入口设成跟 ping 一样就行”+(标注层圈选热键和 Ping 同一条通道：
+// 先落盘再让桌面端换键，清空即解绑)。
+async function applyOverlayHotkey(value: string): Promise<void> {
+  props.runtime.config.overlay.captureHotkey = value
+  props.runtime.scheduleSave()
+  const bridge = await import('../bridge.ts')
+  await bridge.setOverlayCaptureHotkey(value).catch(() => {})
+}
+
+// user:“设置中支持调节倍速、字体、字号”+(改完立刻通知交互层重读，不用重启)。
+async function applyOverlayDanmaku(): Promise<void> {
+  props.runtime.scheduleSave()
+  const bridge = await import('../bridge.ts')
+  await bridge.notifyOverlaySettingsChanged().catch(() => {})
+}
+
 function toggleDebug(key: 'terrain' | 'colliders' | 'path' | 'velocity'): void {
   props.runtime.debug[key] = !props.runtime.debug[key]
   props.runtime.scheduleSave()
@@ -197,6 +222,46 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
             <button type="button" @click="toggleDebug('path')">路径</button>
             <button type="button" @click="toggleDebug('velocity')">速度</button>
           </div>
+        </section>
+
+        <section class="settings__group">
+          <h4>交互层</h4>
+          <div class="settings__row">
+            <span>圈选快捷键（按下即进框选）</span>
+            <PetHotkeyField
+              :accelerator="runtime.config.overlay.captureHotkey"
+              :fallback="defaultOverlayHotkey"
+              @commit="applyOverlayHotkey"
+            />
+          </div>
+          <label class="settings__row">
+            <span>弹幕倍速</span>
+            <input
+              v-model.number="runtime.config.overlay.danmaku.speed"
+              type="number"
+              min="0.3"
+              max="3"
+              step="0.1"
+              @change="applyOverlayDanmaku"
+            >
+          </label>
+          <label class="settings__row">
+            <span>弹幕字号</span>
+            <input
+              v-model.number="runtime.config.overlay.danmaku.fontSize"
+              type="number"
+              min="14"
+              max="48"
+              step="1"
+              @change="applyOverlayDanmaku"
+            >
+          </label>
+          <label class="settings__row">
+            <span>弹幕字体</span>
+            <select v-model="runtime.config.overlay.danmaku.fontFamily" @change="applyOverlayDanmaku">
+              <option v-for="font in danmakuFonts" :key="font.value" :value="font.value">{{ font.label }}</option>
+            </select>
+          </label>
         </section>
 
         <section class="settings__group">

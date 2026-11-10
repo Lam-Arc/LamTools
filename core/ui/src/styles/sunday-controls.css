@@ -17,7 +17,6 @@
   --sunday-pad: 3px;
   --sunday-thumb: 16px;
   --sunday-travel: calc(var(--sunday-w) - 2px - (var(--sunday-pad) * 2) - var(--sunday-thumb));
-
   position: relative;
   display: inline-flex;
   flex: none;
@@ -131,7 +130,6 @@
   --sunday-signal: var(--settings-control-solid, var(--theme-control-solid, var(--theme-control-background, #fbf7f0)));
   --sunday-signal-ink: var(--settings-control-text, var(--theme-control-text, #2e3138));
   --sunday-area-text: var(--settings-main-text, var(--theme-main-text, #f2efeb));
-
   position: relative;
   display: inline-flex;
   width: fit-content;
@@ -206,7 +204,6 @@
   --sunday-signal: var(--settings-control-solid, var(--theme-control-solid, var(--theme-control-background, #fbf7f0)));
   --sunday-signal-ink: var(--settings-control-text, var(--theme-control-text, #2e3138));
   --sunday-area-text: var(--settings-main-text, var(--theme-main-text, #f2efeb));
-
   display: grid;
   gap: var(--space-2);
   width: 100%;

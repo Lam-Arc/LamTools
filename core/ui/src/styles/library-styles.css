@@ -1,0 +1,883 @@
+/* user:“什么是这个样式的样式？什么是这个素材库的样式？我把素材库本身当成素材了怎么办？”
+   +(每份素材都放进一个独立舞台，舞台有明确的边框、底色和类型角标；
+   资料库自己的类名绝不允许在舞台里留下底色与描边，只保留它带来的变量)。 */
+
+.library-surface .style-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-bottom: var(--space-5);
+}
+
+/* ── 顶部 ── */
+.library-surface .style-view .style-head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+.library-surface .style-view .style-head-copy { min-width: 0; }
+.library-surface .style-view .style-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.library-surface .style-view .style-usage {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.library-surface .style-view .style-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 360px;
+  min-width: 0;
+  justify-content: flex-end;
+}
+.library-surface .style-view .style-tools .library-view-toggle { margin-left: 0; }
+.library-surface .style-view .style-search { flex: 0 1 300px; margin-left: auto; }
+
+/* ── 一级分类：挑哪一类。选中项反色，比描边更容易一眼认出 ── */
+.library-surface .style-view .style-tagbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+}
+.library-surface .style-view .style-tagbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border: 1px solid color-mix(in srgb, var(--text) 13%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 74%, transparent);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.library-surface .style-view .style-tagbar button:hover {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+.library-surface .style-view .style-tagbar button.active {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--theme-main-background);
+  font-weight: 600;
+}
+.library-surface .style-view .style-tag-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+/* ── 二级：同一类里的变体 ── */
+.library-surface .style-view .style-variants {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: var(--space-3) 0 0;
+}
+.library-surface .style-view .style-variants button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.library-surface .style-view .style-variants button:hover { color: var(--text); }
+.library-surface .style-view .style-variants button.active {
+  border-color: color-mix(in srgb, var(--text) 28%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── 分区 ── */
+.library-surface .style-view .style-group { margin-top: var(--space-5); }
+.library-surface .style-view .style-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.library-surface .style-view .style-group-head h2 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.library-surface .style-view .style-group-count {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 38%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.library-surface .style-view .style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+.library-surface .style-view .style-grid--wide {
+  grid-template-columns: repeat(auto-fill, minmax(288px, 1fr));
+}
+
+.library-surface .style-view .style-more {
+  margin-top: var(--space-2);
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: color-mix(in srgb, var(--text) 56%, transparent);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.library-surface .style-view .style-more:hover { color: var(--text); background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
+
+/* ── 一张卡：上舞台，下名字 ── */
+.library-surface .style-view .spec-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  cursor: pointer;
+}
+.library-surface .style-view .spec-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; border-radius: var(--radius); }
+
+.library-surface .style-view .spec-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 76px;
+  padding: 16px 12px 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 6%, transparent), transparent 46%),
+    color-mix(in srgb, #000 34%, var(--theme-main-background));
+  /* contain:paint 让舞台成为固定定位后代的包含块：样本里任何 position:fixed
+     的规则都会被关在这只盒子里，跑不出去盖住整页。 */
+  contain: layout paint;
+  overflow: hidden;
+  isolation: isolate;
+  transition: border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+}
+.library-surface .style-view .spec-card:hover .spec-stage {
+  border-color: color-mix(in srgb, var(--text) 30%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.library-surface .style-view .spec-stage--composite { height: 230px; align-items: flex-start; justify-content: flex-start; }
+.library-surface .style-view .spec-stage--motion { height: 118px; }
+
+/* 角标：这一格里放的是什么，写在舞台自己的角上。 */
+.library-surface .style-view .spec-stage-tag {
+  position: absolute;
+  top: 7px;
+  left: 10px;
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: color-mix(in srgb, var(--text) 30%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.library-surface .style-view .spec-live {
+  width: 100%;
+  max-height: 66px;
+  overflow: hidden;
+  text-align: center;
+  /* 中文默认逐字断行，盒子一窄就竖排；样本里禁止，宁可溢出也不要看起来像坏了。 */
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+.library-surface .style-view .spec-stage--composite .spec-live {
+  max-height: 200px;
+  text-align: left;
+}
+.library-surface .style-view .spec-live .style-specimen-host {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+.library-surface .style-view .spec-stage--composite .spec-live .style-specimen-host { text-align: left; }
+
+/* 祖先层只保留「让选择器匹配」的作用：变量继续继承，视觉一律清空。 */
+.style-chain-anchor {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  position: static !important;
+  inset: auto !important;
+  display: block !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow: visible !important;
+  transform: none !important;
+  color: inherit !important;
+  font: inherit !important;
+  text-align: inherit !important;
+}
+
+.library-surface .style-view .spec-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 2px;
+  min-width: 0;
+}
+.library-surface .style-view .spec-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.library-surface .style-view .spec-class {
+  flex: 0 0 auto;
+  max-width: 58%;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--text) 40%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.library-surface .style-view .spec-replay {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--theme-main-background) 70%, transparent);
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+  cursor: pointer;
+  z-index: 2;
+}
+.spec-replay--big { right: 12px; bottom: 12px; width: auto; height: 28px; padding: 0 12px; gap: 6px; border-radius: 999px; font-size: 11.5px; }
+
+/* 关键帧演示方块：没有元素在用时也能看这段动效。 */
+.motion-frames-demo {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto;
+  border-radius: 10px;
+  background: var(--blue);
+}
+
+/* ── 索引：给 Agent 的看法 ── */
+.library-surface .style-view .style-index { margin-top: var(--space-3); overflow: auto; max-height: 72vh; }
+.library-surface .style-view .style-index-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+}
+.library-surface .style-view .style-index table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.library-surface .style-view .style-index th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  background: var(--theme-main-background);
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--text) 46%, transparent);
+  white-space: nowrap;
+}
+.library-surface .style-view .style-index td {
+  padding: 6px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  vertical-align: top;
+}
+.library-surface .style-view .style-index tbody tr:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.library-surface .style-view .style-index code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 84%, transparent);
+}
+.library-surface .style-view .style-index-file {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--text) 34%, transparent);
+  white-space: nowrap;
+}
+
+/* ── 详情 ── */
+.style-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  justify-content: flex-end;
+}
+.style-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, #000 48%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  animation: style-scrim-in var(--dur-base) var(--ease-out);
+}
+.style-sheet-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 96vw);
+  height: 100%;
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
+  border-left: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  box-shadow: var(--shadow-lg);
+  animation: style-sheet-in var(--dur-slow) var(--ease-out);
+}
+.style-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+.style-sheet-copy { min-width: 0; flex: 1 1 auto; }
+.style-sheet-kicker {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: color-mix(in srgb, var(--text) 42%, transparent);
+}
+.style-sheet-title { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.style-sheet-actions { display: flex; gap: var(--space-1); flex: 0 0 auto; }
+.style-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 66%, transparent);
+  cursor: pointer;
+}
+.style-icon-btn:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+
+.style-sheet-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.85fr);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.style-sheet-canvas {
+  padding: var(--space-5);
+  overflow: auto;
+  border-right: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+.style-sheet-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  padding: 28px 22px;
+  border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 6%, transparent), transparent 46%),
+    color-mix(in srgb, #000 34%, var(--theme-main-background));
+  overflow: auto;
+  position: relative;
+  contain: layout paint;
+}
+.style-sheet-stage--composite { align-items: flex-start; justify-content: flex-start; max-height: 520px; }
+.style-sheet-stage .spec-live--big { max-height: none; width: 100%; }
+.style-sheet-stage--composite .spec-live--big { text-align: left; }
+
+.style-sheet-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: var(--space-3); }
+.style-tag-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 66%, transparent);
+}
+
+/* 组合的部件：一行一个，右边是同标签的其他原子，点一下就换。 */
+.style-parts { margin-top: var(--space-5); }
+.style-parts h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 46%, transparent);
+}
+.style-part-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 4px var(--space-3);
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+}
+.style-part-name { font-size: 12px; font-weight: 600; }
+.style-part-class {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--text) 38%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.style-part-alts { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px; }
+.style-part-alts button {
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+  font-size: 11px;
+  cursor: pointer;
+}
+.style-part-alts button:hover { color: var(--text); border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+.style-part-alts button.active { background: var(--text); border-color: var(--text); color: var(--theme-main-background); font-weight: 600; }
+
+.style-sheet-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  overflow: auto;
+}
+.style-block { min-width: 0; }
+.style-block h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 46%, transparent);
+}
+.style-class-line code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.style-hint { margin: 6px 0 10px; font-size: 11.5px; line-height: 1.5; color: color-mix(in srgb, var(--text) 46%, transparent); }
+.style-states { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; }
+.style-state-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+  color: var(--blue);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.style-rule {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-sunken-background, color-mix(in srgb, #000 34%, transparent));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.style-feedback { display: flex; flex-direction: column; gap: var(--space-2); }
+.style-feedback textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.style-feedback textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.style-notes { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.style-notes li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border-left: 2px solid color-mix(in srgb, var(--blue) 55%, transparent);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 12.5px;
+}
+.style-notes time { font-size: 10.5px; color: color-mix(in srgb, var(--text) 38%, transparent); }
+
+.style-receipt {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  z-index: var(--z-toast);
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: 999px;
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
+  font-size: 12.5px;
+  box-shadow: var(--shadow-md);
+  transform: translateX(-50%);
+}
+
+@keyframes style-sheet-in {
+  from { opacity: 0; transform: translateX(26px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes style-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.style-sheet-enter-active, .style-sheet-leave-active { transition: opacity var(--dur-base) var(--ease-out); }
+.style-sheet-enter-from, .style-sheet-leave-to { opacity: 0; }
+.style-toast-enter-active, .style-toast-leave-active { transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out); }
+.style-toast-enter-from, .style-toast-leave-to { opacity: 0; transform: translate(-50%, 8px); }
+
+@container app-page (max-width: 960px) {
+  .style-sheet-body { width: 100vw; }
+  .style-sheet-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) auto; }
+  .style-sheet-canvas { border-right: 0; border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+  .style-sheet-side { max-height: 46vh; }
+}
+@container app-page (max-width: 640px) {
+  .library-surface .style-view .style-title { font-size: 19px; }
+  .library-surface .style-view .style-tools { flex-basis: auto; }
+  .library-surface .style-view .style-search { max-width: none; }
+  .library-surface .style-view .style-grid,
+  .library-surface .style-view .style-grid--wide { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .library-surface .style-view .spec-stage { height: 104px; }
+  .style-sheet-head { padding: var(--space-3) var(--space-4); }
+  .style-sheet-canvas, .style-sheet-side { padding: var(--space-4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .style-sheet-body, .style-sheet-scrim { animation: none; }
+}
+
+/* ── 资料卡：标签、评分、样式缩略图 ─────────────────────────────────── */
+
+.library-surface .material-css-preview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, #000 26%, var(--theme-main-background));
+  text-align: center;
+  word-break: keep-all;
+}
+.library-surface .material-css-preview .style-specimen-item {
+  contain: layout paint;
+  overflow: hidden;
+  max-height: 34px;
+  border-radius: var(--radius-sm);
+}
+.library-surface .material-css-preview .style-specimen-item > * { max-width: 100%; }
+.library-surface .material-thumb:has(.material-css-preview) { min-height: 118px; }
+.library-surface .material-thumb:has(.material-css-preview) .material-status { z-index: 2; }
+
+.library-surface .material-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: var(--space-2);
+}
+.library-surface .material-tag {
+  padding: 1px 7px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+  color: var(--blue);
+  font-size: 10px;
+  cursor: pointer;
+}
+.library-surface .material-tag:hover { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
+.library-surface .material-rating { display: inline-flex; margin-left: auto; }
+.library-surface .material-rating-star {
+  padding: 0 1px;
+  border: 0;
+  background: none;
+  color: color-mix(in srgb, var(--text) 22%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.library-surface .material-rating-star.is-on { color: var(--orange); }
+
+.library-surface .material-tag-filter { margin-top: calc(var(--space-3) * -1); }
+.library-surface .material-tag-filter button { font-size: 11px; padding: 3px 10px; }
+
+.library-surface .material-tag-entry { position: relative; display: inline-flex; }
+.library-surface .material-tag-input {
+  width: 58px;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px dashed color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 10px;
+  outline: none;
+  transition: width var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.library-surface .material-tag-input::placeholder { color: color-mix(in srgb, var(--text) 38%, transparent); }
+.library-surface .material-tag-input:focus {
+  width: 104px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--blue) 55%, transparent);
+}
+.library-surface .material-tag-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 88px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  border-radius: 8px;
+  background: var(--theme-main-background);
+  box-shadow: var(--shadow-md);
+}
+.library-surface .material-tag-suggest button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 68%, transparent);
+  font: inherit;
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.library-surface .material-tag-suggest button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+
+.library-surface .material-html-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #111114;
+  pointer-events: none;
+  transform: scale(1);
+}
+.library-surface .material-thumb:has(.material-html-preview) { min-height: 128px; }
+
+
+/* user:“人只做观测和选用”+(卡片上标出被取用次数，选中的几件并排比。) */
+.material-used {
+  margin-left: auto;
+  color: color-mix(in srgb, var(--text) 46%, transparent);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.compare-dimmer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vh 3vw;
+  background: color-mix(in srgb, #000 46%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.compare-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(1240px, 94vw);
+  max-height: 90vh;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--theme-main-background, #1b1d22);
+  color: var(--text);
+  overflow: auto;
+}
+
+.compare-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compare-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.compare-count {
+  color: color-mix(in srgb, var(--text) 48%, transparent);
+  font-size: 11.5px;
+}
+
+.compare-head .library-button {
+  margin-left: auto;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--compare-columns, 2), minmax(0, 1fr));
+  gap: 12px;
+}
+
+.compare-cell {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.compare-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 190px;
+  overflow: hidden;
+  background: color-mix(in srgb, #000 18%, transparent);
+}
+
+.compare-stage img {
+  max-width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+}
+
+.compare-stage .material-html-preview,
+.compare-stage .material-css-preview {
+  width: 100%;
+  height: 190px;
+  border: 0;
+}
+
+/* 对比框里的兜底封面自己居中，别借卡片缩略图那套绝对定位，
+   否则类型名会孤零零贴在左上角。 */
+.compare-cover {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+
+.compare-cover-ext {
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 44%, transparent);
+}
+
+.compare-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px 12px;
+}
+
+.compare-name {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-rating {
+  margin: 0;
+  display: flex;
+  gap: 2px;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 26%, transparent);
+}
+
+.compare-rating .is-on {
+  color: var(--orange, #e2a04a);
+}
+
+.compare-tags {
+  margin: 0;
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--text) 52%, transparent);
+}
+
+.compare-entry,
+.compare-requires {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--text) 66%, transparent);
+  word-break: break-word;
+}
+
+.compare-entry code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text);
+}
+
+.compare-used {
+  margin: 0;
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--text) 44%, transparent);
+}

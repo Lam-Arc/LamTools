@@ -17,6 +17,7 @@ import {
   pointToFrame,
   selectionMeta,
   type CaptureDisplayRect,
+  type CaptureRegion,
 } from '../capture/geometry.ts'
 
 type Tool = 'region' | 'question' | 'exclamation' | 'arrow' | 'text' | 'pen'
@@ -40,6 +41,8 @@ export interface CaptureSelectionMeta {
 const props = defineProps<{
   frame: CapturedFrame
   busy: boolean
+  /** 标注层圈选带过来的区域，截图内像素；有值时打开就框好。 */
+  presetRegion?: CaptureRegion | null
   error: string
 }>()
 
@@ -378,7 +381,7 @@ function onResize(): void {
 }
 
 watch(() => props.frame, () => {
-  region.value = null
+  region.value = props.presetRegion ?? null
   annotations.value = []
   redoStack.value = []
   void nextTick(draw)
@@ -386,6 +389,8 @@ watch(() => props.frame, () => {
 
 onMounted(() => {
   window.addEventListener('resize', onResize)
+  // 标注层圈选进来时 frame 已经有值，watch 不会触发首次初始化，这里补一次。
+  if (props.presetRegion) region.value = props.presetRegion
   void nextTick(() => {
     draw()
     syncInputWidth()

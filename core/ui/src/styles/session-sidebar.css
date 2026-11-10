@@ -103,13 +103,11 @@
   flex: 0 0 var(--sidebar-row-height);
   width: var(--sidebar-row-height);
   height: var(--sidebar-row-height);
-  border: 0;
-  border-radius: var(--sidebar-row-radius);
   background: transparent;
   color: color-mix(in srgb, var(--theme-control-text) 66%, transparent);
   display: grid;
   place-items: center;
-  cursor: pointer;
+
 }
 .sidebar-search-toggle:hover,
 .sidebar-search-toggle:focus-visible {
@@ -183,14 +181,14 @@
   width: 22px;
   height: 22px;
   margin-right: var(--space-1);
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--sidebar-text-muted);
   display: grid;
   place-items: center;
-  cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 .sidebar-section-toggle:hover,
 .sidebar-section-toggle:focus-visible {
@@ -516,14 +514,14 @@
   min-width: 36px;
   min-height: 36px;
   padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--sidebar-text-muted);
-  cursor: pointer;
   display: grid;
   place-items: center;
   transition: background .14s ease, color .14s ease;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 .session-menu-button:hover,
 .session-menu-button:focus-visible {

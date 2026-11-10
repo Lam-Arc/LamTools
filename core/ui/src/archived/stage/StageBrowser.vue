@@ -133,14 +133,17 @@ function onLoad() {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
-  border: 0;
-  border-radius: var(--radius-sm);
+
+
   background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
   color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
-  cursor: pointer;
+
   font-size: 14px;
   display: grid;
   place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 .stage-browser-btn:hover { background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-press), transparent); }
 .stage-browser-frame-wrap {

@@ -6,8 +6,9 @@
  * (Esc/取消/关闭/发送完成都走同一个 close 命令；窗口销毁后宿主状态一起清空。
  *  页面每秒发一次心跳，宿主看门狗据此判断页面是否还活着。)
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import CaptureEditor, { type CaptureSelectionMeta } from './CaptureEditor.vue'
+import { regionToFrame } from '../capture/geometry.ts'
 import type { CapturedFrame } from '../bridge.ts'
 import * as bridge from '../bridge.ts'
 import { defaultConfig, parseConfigText } from '../config.ts'
@@ -17,9 +18,15 @@ import { PetAgentHost } from '../agent/host.ts'
 const props = defineProps<{
   frame: CapturedFrame | null
   bootError: string
+  /** 标注层圈选带过来的屏幕区域，用来预置框选。 */
+  presetRegion?: [number, number, number, number] | null
 }>()
 
 const busy = ref(false)
+// 标注层圈选 → 截图内像素；无效或没带选区时为 null，保持 Ping 原来的空框选。
+const initialRegion = computed(() => (
+  props.frame && props.presetRegion ? regionToFrame(props.presetRegion, props.frame) : null
+))
 const error = ref(props.bootError)
 let heartbeat = 0
 
@@ -96,6 +103,7 @@ onBeforeUnmount(() => {
     v-if="frame"
     :frame="frame"
     :busy="busy"
+    :preset-region="initialRegion"
     :error="error"
     @cancel="cancel"
     @send="send"

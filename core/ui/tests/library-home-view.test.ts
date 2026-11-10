@@ -63,7 +63,7 @@ describe('LibraryHomeView', () => {
     await settle()
 
     expect(wrapper.findAll('[data-library-section]').map(node => node.attributes('data-library-section')))
-      .toEqual(['materials', 'memory', 'plans'])
+      .toEqual(['materials', 'memory', 'plans', 'wiki'])
     expect(wrapper.get('[data-library-section="materials"]').attributes('aria-selected')).toBe('true')
 
     // 资料 = 资料库版式的资料区（成果数据同一份，版式按资料库来）。

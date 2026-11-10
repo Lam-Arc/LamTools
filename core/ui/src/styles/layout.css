@@ -1852,13 +1852,14 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 }
 .btn-primary {
   height: 34px;
-  border-radius: var(--radius-sm);
   padding: 0 16px;
 }
 .btn-primary-sm {
   height: 30px;
-  border-radius: 6px;
   padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 .btn-primary-sm:disabled {
   opacity: .4;
@@ -2533,12 +2534,10 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   width: 20px;
   height: 20px;
   padding: 0;
-  border: none;
-  border-radius: 6px;
   background: transparent;
   color: inherit;
   opacity: 0.65;
-  cursor: pointer;
+
 }
 .core-toast__dismiss:hover {
   opacity: 1;
@@ -3423,14 +3422,14 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   font-size: 13px;
   line-height: 1;
   padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 .editor-popover-close:hover {
   background: color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
@@ -3531,7 +3530,6 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 .settings-surface--narrow .settings-content {
   max-width: none;
 }
-
 
 /* user:“点击任意控件会出现蓝色判断区，隐藏掉”+(触屏默认的点击高亮，以及鼠标/手指点出来的
    焦点框；键盘操作仍然保留 :focus-visible 的可见焦点)。 */

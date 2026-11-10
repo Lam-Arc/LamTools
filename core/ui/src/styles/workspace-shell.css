@@ -924,14 +924,14 @@ body.sidebar-is-resizing .floating-composer {
   width: var(--rail-action-size);
   height: var(--rail-action-size);
   padding: 0;
-  border: 0;
-  border-radius: var(--sidebar-row-radius);
   background: transparent;
   color: var(--sidebar-text-secondary);
   display: grid;
   place-items: center;
-  cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 .rail-action__button:hover,
 .rail-action__button:focus-visible {

@@ -2596,6 +2596,8 @@ function processActionTitle(name: string, target: string): string {
   if (/list|ls|dir/.test(name)) return target ? t("列出 {0}", { 0: target }) : t("列出目录")
   if (/grep|rg|search|find|glob/.test(name)) return target ? t("搜索 {0}", { 0: target }) : t("搜索内容")
   if (/write|create/.test(name)) return target ? t("创建 {0}", { 0: target }) : t("创建文件")
+  // user:“移动文件”+（移动/重命名是常见动作，行标题不该退回成 move_files 这样的裸工具名）。
+  if (/move|rename/.test(name)) return target ? t("移动 {0}", { 0: target }) : t("移动文件")
   if (/edit|patch|apply/.test(name)) return target ? t("编辑 {0}", { 0: target }) : t("编辑文件")
   if (/fetch|browser|http/.test(name)) return target ? t("获取网页 {0}", { 0: target }) : t("获取网页")
   if (/delete|remove/.test(name)) return target ? t("删除 {0}", { 0: target }) : t("删除内容")

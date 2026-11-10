@@ -5,6 +5,7 @@ import type { StudioIssue } from './validate.ts'
 import { validateStudioDocument } from './validate.ts'
 import { migrateStudioDocument } from './migrate.ts'
 import { applyStudioDocument, STUDIO_PREVIEW_STYLE_ID, STUDIO_STYLE_ID, type ApplyStudioOptions } from './runtime.ts'
+import { clearHistory, isEmptyDocument, loadHistory, pushHistory, type ThemeHistoryEntry, type ThemeHistoryStorage } from './history.ts'
 
 /**
  * 草稿与已发布分离。
@@ -22,6 +23,8 @@ export interface StudioStorage {
 export interface StudioStoreOptions {
   themeId?: string
   storage?: StudioStorage
+  /** 发布历史：被替换下来的上一版留在这里，供回滚。 */
+  history?: ThemeHistoryStorage
   applyOptions?: ApplyStudioOptions
   /** 关闭实时预览，只在发布时落样式；默认开启。 */
   preview?: boolean
@@ -34,6 +37,10 @@ export interface StudioStore {
   errors: Ref<StudioIssue[]>
   canUndo: ComputedRef<boolean>
   canRedo: ComputedRef<boolean>
+  /** 发布历史，最新在前。 */
+  history: Ref<ThemeHistoryEntry[]>
+  /** 把某一版历史放回草稿（随后由用户决定是否发布）。 */
+  restoreHistory: (index: number) => boolean
   setNode: (id: string, style: StudioNodeStyle) => void
   /** 写布局几何变量（如 --layout-sidebar-width: 320px），整条布局链一起跟随。 */
   setVariable: (name: string, value: string) => void
@@ -74,6 +81,8 @@ export function createStudioStore(options: StudioStoreOptions = {}): StudioStore
   const errors = ref<StudioIssue[]>([])
   const past = ref<StudioDocument[]>([])
   const future = ref<StudioDocument[]>([])
+  // user:“保留上一版发布主题与版本历史”+(发布只切换当前版本，历史另存一份)
+  const history = ref<ThemeHistoryEntry[]>(loadHistory(options.history))
   const HISTORY_LIMIT = 50
   const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(published.value))
   const canUndo = computed(() => past.value.length > 0)
@@ -241,6 +250,10 @@ export function createStudioStore(options: StudioStoreOptions = {}): StudioStore
       errors.value = validation.errors
       return { ok: false, errors: validation.errors }
     }
+    // 发布前把「正在被替换的那一版」记进历史；空主题不占历史位。
+    if (!isEmptyDocument(published.value)) {
+      history.value = pushHistory(options.history, cloneDocument(published.value))
+    }
     published.value = cloneDocument(draft.value)
     const applied = applyPublished()
     if (applied.length > 0) {
@@ -262,6 +275,9 @@ export function createStudioStore(options: StudioStoreOptions = {}): StudioStore
     clearPreview()
     applyPublished()
     options.storage?.write(published.value)
+    // 恢复默认是明确的破坏性动作：历史一并清空，避免回滚到用户以为已经删掉的东西。
+    clearHistory(options.history)
+    history.value = []
   }
 
   // user:“并加一个编辑模式的开关和一个取消（不保存退出）”+
@@ -272,6 +288,20 @@ export function createStudioStore(options: StudioStoreOptions = {}): StudioStore
     draft.value = cloneDocument(published.value)
     errors.value = []
     clearPreview()
+  }
+
+  /** 把历史里的某一版放回草稿；不动已发布主题，也不动撤销栈。 */
+  function restoreHistory(index: number): boolean {
+    const entry = history.value[index]
+    if (!entry) return false
+    draft.value = cloneDocument(entry.document)
+    const issues = preview()
+    if (issues.length) {
+      errors.value = issues
+      return false
+    }
+    errors.value = []
+    return true
   }
 
   function load(raw: unknown): boolean {
@@ -308,6 +338,8 @@ export function createStudioStore(options: StudioStoreOptions = {}): StudioStore
     errors,
     canUndo,
     canRedo,
+    history,
+    restoreHistory,
     setNode,
     setVariable,
     removeVariable,

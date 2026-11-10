@@ -102,6 +102,8 @@
                   <span v-else class="studio-layer-caret is-empty" aria-hidden="true" />
                   <button class="studio-tree-action" type="button" :data-studio-eye="row.id" :aria-label="t('显示/隐藏图层')" :aria-pressed="!editorHidden.has(row.id)" @click.stop="toggleEditorHidden(row.id)">{{ editorHidden.has(row.id) ? '○' : '●' }}</button>
                   <button class="studio-tree-action" type="button" :data-studio-lock="row.id" :aria-label="t('锁定/解锁图层')" :aria-pressed="editorLocked.has(row.id)" @click.stop="toggleEditorLocked(row.id)">{{ editorLocked.has(row.id) ? '▣' : '□' }}</button>
+                  <!-- user:“独显当前图层及必要祖先”+(方案 §9.3；只影响编辑器可见性，不进主题) -->
+                  <button class="studio-tree-action" type="button" :data-studio-solo="row.id" :aria-label="t('独显图层')" :aria-pressed="soloId === row.id" @click.stop="toggleEditorSolo(row.id)">{{ soloId === row.id ? '◉' : '◎' }}</button>
                 </span>
                 <span class="studio-layer-copy">
                   <span class="studio-tree-label">{{ t(row.label) }}</span>
@@ -134,12 +136,15 @@
           <button class="studio-tool-icon" type="button" data-studio-export :aria-label="t('导出')" :title="t('导出')" @click="exportDocument">
             <svg class="studio-icon-svg" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12V4.5" /><path d="m4.5 8 3.5-3.5L11.5 8" /><path d="M2.5 13.5h11" /></svg>
           </button>
+          <button class="studio-tool-icon" type="button" data-studio-history :aria-label="t('发布历史')" :title="t('发布历史')" @click="historyOpen = !historyOpen">
+            <svg class="studio-icon-svg" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.4" /></svg>
+          </button>
           <button class="studio-tool-icon" type="button" data-studio-reset :aria-label="t('恢复默认')" :title="t('恢复默认')" @click="resetConfirm = true">
             <svg class="studio-icon-svg" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6.5a5 5 0 1 1 .6 4.6" /><path d="M3 2.8v3.7h3.7" /></svg>
           </button>
           <span class="studio-spacer" />
           <span class="studio-status">{{ store.dirty.value ? t('有未发布修改') : t('已同步') }}</span>
-          <input ref="importEl" type="file" accept="application/json,.json" hidden @change="importDocument" />
+          <input ref="importEl" type="file" accept=".sunday-theme,application/zip,application/json,.json" hidden @change="importDocument" />
         </footer>
       </aside>
 
@@ -151,6 +156,8 @@
         aria-hidden="true"
       >
         <div ref="outlineEl" class="studio-outline" :class="{ 'is-visible': Boolean(selectedId) }" />
+        <!-- user:“支持框选”+(方案 §3.5：在空白处拖出矩形，命中即进多选) -->
+        <div v-if="marqueeBox" class="studio-marquee" data-studio-marquee :style="rectStyle(marqueeBox)" />
         <div
           v-for="rect in extraRects"
           :key="`${rect.left}-${rect.top}-${rect.width}`"
@@ -181,9 +188,50 @@
             @pointerdown="onResizePointerDown(dir, $event)"
           />
         </div>
-        <!-- user:“点任意同级项间的标记，实际编辑的是父级列表 gap”+(间距胶囊：滚轮 ±1/Shift ±8/双击输入) -->
+        <!--
+          user:“间距充足：朝上的横向大括号，数值在外侧；较小间距：简化为 >；极小间距：只留单段折线。
+          标注根据缩放后的可见尺寸选择等级；热区与数字保持屏幕级最小尺寸”+(方案 §5.3)
+        -->
+        <svg v-if="gapAnnotation" class="studio-gap-annotation" aria-hidden="true">
+          <path :d="gapAnnotation.path" />
+        </svg>
         <div
-          v-if="spacingTarget && gapPillPos"
+          v-if="gapAnnotation"
+          class="studio-gap-hit"
+          data-studio-gap-pill
+          :data-studio-gap-level="gapAnnotation.level"
+          :style="{
+            left: `${gapAnnotation.hit.left}px`,
+            top: `${gapAnnotation.hit.top}px`,
+            width: `${gapAnnotation.hit.width}px`,
+            height: `${gapAnnotation.hit.height}px`,
+          }"
+          :title="t('滚轮 ±1，Shift ±8，双击输入')"
+          @wheel.prevent="onGapWheel"
+          @dblclick="startGapEditing"
+        />
+        <div
+          v-if="gapAnnotation"
+          class="studio-gap-pill"
+          :data-studio-gap-label="gapAnnotation.level"
+          :style="{ left: `${gapAnnotation.label.x}px`, top: `${gapAnnotation.label.y}px`, transform: gapAnnotation.label.anchor === 'middle' ? 'translate(-50%, -100%)' : 'translate(0, -50%)' }"
+        >
+          <template v-if="!gapEditing">{{ Math.round(gapVisible) }}</template>
+          <input
+            v-else
+            ref="gapInputEl"
+            type="number"
+            min="0"
+            :value="spacingTarget?.gap ?? 0"
+            data-studio-gap-input
+            :aria-label="t('间距')"
+            @blur="commitGapInput"
+            @keydown.enter="commitGapInput"
+          />
+        </div>
+        <!-- 没有同级参照（首个子项）时退回原来的胶囊，仍可改父级间距。 -->
+        <div
+          v-else-if="spacingTarget && gapPillPos"
           class="studio-gap-pill"
           data-studio-gap-pill
           :style="{ left: `${gapPillPos.left}px`, top: `${gapPillPos.top}px` }"
@@ -207,6 +255,7 @@
         <div ref="guideXEl" class="studio-guide studio-guide--x" />
         <div ref="guideYEl" class="studio-guide studio-guide--y" />
         <div v-if="dragHint" class="studio-drag-hint">{{ dragHint }}</div>
+        <div v-if="notice" class="studio-drag-hint studio-notice" data-studio-notice>{{ notice }}</div>
         <div v-if="selectedIds.length > 1" class="studio-align-bar optical-glass optical-glass--low-trans" role="toolbar" :aria-label="t('对齐与分布')">
           <button class="studio-btn" type="button" data-studio-align="left" @click="applyAlign('left')">{{ t('左对齐') }}</button>
           <button class="studio-btn" type="button" data-studio-align="centerX" @click="applyAlign('centerX')">{{ t('水平居中') }}</button>
@@ -217,6 +266,46 @@
           <button class="studio-btn" type="button" data-studio-align="distributeX" @click="applyAlign('distributeX')">{{ t('水平分布') }}</button>
           <button class="studio-btn" type="button" data-studio-align="distributeY" @click="applyAlign('distributeY')">{{ t('垂直分布') }}</button>
         </div>
+      </div>
+
+      <div v-if="preflightIssues.length" class="studio-preflight optical-glass optical-glass--low-trans" data-studio-preflight role="alertdialog" aria-label="发布前检查">
+        <header class="studio-preflight-head">
+          <strong>{{ t('发布前检查') }}</strong>
+          <button class="studio-icon-btn" type="button" data-studio-preflight-close :aria-label="t('关闭')" @click="preflightIssues = []">×</button>
+        </header>
+        <ul>
+          <li v-for="issue in preflightIssues" :key="`${issue.id}:${issue.kind}`" :data-studio-preflight-issue="issue.kind">
+            <span>{{ issue.message }}</span>
+          </li>
+        </ul>
+        <p v-if="blockingCount" class="studio-hint">{{ t('有溢出或关键入口不可达，先修好再发布。') }}</p>
+        <button v-else class="library-button library-button--primary" type="button" data-studio-preflight-continue @click="publishNow">{{ t('仍然发布') }}</button>
+      </div>
+
+      <div v-if="pendingImport" class="studio-preflight optical-glass optical-glass--low-trans" data-studio-import-confirm role="dialog" aria-label="导入主题">
+        <header class="studio-preflight-head">
+          <strong>{{ t('导入主题包') }}</strong>
+          <button class="studio-icon-btn" type="button" :aria-label="t('关闭')" @click="pendingImport = null">×</button>
+        </header>
+        <p class="studio-hint">{{ pendingImport.name }}</p>
+        <p class="studio-hint">{{ t('素材 {0} 个；导入只进草稿，不会直接覆盖已发布主题。', { 0: pendingImport.document.assets.length }) }}</p>
+        <button class="library-button library-button--primary" type="button" data-studio-import-apply @click="applyPendingImport">{{ t('导入到草稿') }}</button>
+      </div>
+
+      <div v-if="historyOpen" class="studio-history optical-glass optical-glass--low-trans" data-studio-history-panel>
+        <header class="studio-preflight-head">
+          <strong>{{ t('发布历史') }}</strong>
+          <button class="studio-icon-btn" type="button" data-studio-history-close :aria-label="t('关闭')" @click="historyOpen = false">×</button>
+        </header>
+        <p v-if="!store.history.value.length" class="studio-hint">{{ t('还没有上一版。发布一次之后这里会留下旧版本。') }}</p>
+        <ul v-else>
+          <li v-for="(entry, index) in store.history.value" :key="entry.at">
+            <button class="studio-secondary" type="button" :data-studio-history-restore="index" @click="restoreHistoryEntry(index)">{{ t('回到这一版') }}</button>
+            <span class="studio-history-time">{{ formatHistoryTime(entry.at) }}</span>
+            <span class="studio-history-summary">{{ summarizeHistoryEntry(entry) }}</span>
+          </li>
+        </ul>
+        <button class="studio-secondary" type="button" data-studio-safe-recover @click="safeRecover">{{ t('安全恢复（清掉自定义主题）') }}</button>
       </div>
 
       <aside
@@ -565,6 +654,11 @@ import { alignDeltas, distributeDeltas } from '@/themeStudio/align.ts'
 import { THEME_STUDIO_DRAFT_STORAGE_KEY, THEME_STUDIO_STORAGE_KEY } from '@/themeStudio/constants.ts'
 import { migrateStudioDocument } from '@/themeStudio/migrate.ts'
 import { validateStudioDocument } from '@/themeStudio/validate.ts'
+import { buildGapAnnotation, measureGap, type GapAnnotation } from '@/themeStudio/annotation.ts'
+import { buildThemePackage, looksLikeThemePackage, readThemeDocumentJson, readThemePackage, ThemePackageError } from '@/themeStudio/package.ts'
+import { PREFLIGHT_WIDTHS, blockingIssues, collectIssues, scanShellWidths, type PreflightIssue, type PreflightTarget } from '@/themeStudio/preflight.ts'
+import { localStorageHistory, summarizeHistoryEntry } from '@/themeStudio/history.ts'
+import { enterSafeThemeMode, exitSafeThemeMode, recoverThemeStorage } from '@/themeStudio/bootstrap.ts'
 import { useThemeStudio } from '@/composables/useThemeStudio.ts'
 import SundaySwitch from '@/components/SundaySwitch.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
@@ -609,6 +703,8 @@ let publishCloseTimer = 0
 // (eye=只在编辑器里隐藏该层，不写主题；lock=禁止画布上的点选/拖动/改尺寸。)
 const editorHidden = ref<Set<string>>(new Set())
 const editorLocked = ref<Set<string>>(new Set())
+// user:“独显当前图层及必要祖先，不影响实际主题”+(方案 §9.3：只作用于编辑器会话)
+const soloId = ref<string | null>(null)
 let editorStateStyleEl: HTMLStyleElement | null = null
 
 function toggleEditorHidden(id: string): void {
@@ -625,9 +721,41 @@ function toggleEditorLocked(id: string): void {
   editorLocked.value = next
 }
 
+function soloScope(id: string): Set<string> {
+  const scope = new Set<string>([id])
+  let parent = UI_REGISTRY.find((entry) => entry.id === id)?.parent
+  while (parent) {
+    scope.add(parent)
+    parent = UI_REGISTRY.find((entry) => entry.id === parent)?.parent
+  }
+  for (const entry of UI_REGISTRY) {
+    let ancestor = entry.parent
+    while (ancestor) {
+      if (ancestor === id) {
+        scope.add(entry.id)
+        break
+      }
+      ancestor = UI_REGISTRY.find((item) => item.id === ancestor)?.parent
+    }
+  }
+  return scope
+}
+
+function toggleEditorSolo(id: string): void {
+  soloId.value = soloId.value === id ? null : id
+}
+
 function syncEditorStateStyles(): void {
   if (!editorStateStyleEl) return
-  const rules = [...editorHidden.value].map((id) => {
+  const hidden = new Set(editorHidden.value)
+  // 独显：只留当前图层与它的祖先/后代，其余全部隐藏；退出编辑器即恢复。
+  if (soloId.value) {
+    const scope = soloScope(soloId.value)
+    for (const entry of UI_REGISTRY) {
+      if (!scope.has(entry.id)) hidden.add(entry.id)
+    }
+  }
+  const rules = [...hidden].map((id) => {
     const kind = UI_REGISTRY.find((entry) => entry.id === id)?.kind
     return kind === 'template'
       ? `[data-ui-template="${id}"] { visibility: hidden }`
@@ -637,6 +765,7 @@ function syncEditorStateStyles(): void {
 }
 
 watch(editorHidden, syncEditorStateStyles)
+watch(soloId, syncEditorStateStyles)
 
 function isEditorLocked(id: string | null | undefined): boolean {
   return Boolean(id && editorLocked.value.has(id))
@@ -664,6 +793,7 @@ const assetUrls = ref<Record<string, string>>({})
 const assetEl = ref<HTMLInputElement | null>(null)
 const store = createStudioStore({
   storage,
+  history: localStorageHistory(),
   themeId: 'studio',
   applyOptions: { assetUrl: (id) => assetUrls.value[id] || null },
 })
@@ -1013,6 +1143,40 @@ let draggingLayerId: string | null = null
 // (每个元素都有层：显式 z 是绝对分层；z:auto 是相对分层——在其层叠上下文里按文档顺序绘制。
 //  面板把两者分开表达：显式层显示数字，auto 层显示文档顺序序号。)
 const domVersion = ref(0)
+
+/** 选中元素与上一个同级之间的可见间距（屏幕 px）；没有同级参照时退回父级 gap。 */
+function visibleGapOf(element: HTMLElement): { gap: number; band: ReturnType<typeof measureGap> } {
+  const parent = element.parentElement
+  if (!parent) return { gap: spacingTarget.value?.gap ?? 0, band: null }
+  const siblings = [...parent.children].filter(
+    (node): node is HTMLElement => node instanceof HTMLElement && Boolean(node.dataset.uiId || node.dataset.uiTemplate),
+  )
+  const index = siblings.indexOf(element)
+  if (index <= 0) return { gap: spacingTarget.value?.gap ?? 0, band: null }
+  const previous = siblings[index - 1].getBoundingClientRect()
+  const current = element.getBoundingClientRect()
+  const band = measureGap(
+    { left: previous.left, top: previous.top, width: previous.width, height: previous.height },
+    { left: current.left, top: current.top, width: current.width, height: current.height },
+  )
+  return { gap: band ? band.gap : spacingTarget.value?.gap ?? 0, band }
+}
+
+const gapVisible = computed(() => {
+  void domVersion.value
+  const element = editMode.value && overlaysVisible.value ? targetElement() : null
+  return element ? visibleGapOf(element).gap : spacingTarget.value?.gap ?? 0
+})
+
+// user:“间距充足画大括号，较小画 >，极小只留折线”+(方案 §5.3；等级按可见间距选)
+const gapAnnotation = computed<GapAnnotation | null>(() => {
+  void domVersion.value
+  if (!editMode.value || !overlaysVisible.value || !spacingTarget.value) return null
+  const element = targetElement()
+  if (!element) return null
+  const { band } = visibleGapOf(element)
+  return band ? buildGapAnnotation({ ...band, scale: 1 }) : null
+})
 
 function elementForEntry(id: string): HTMLElement | null {
   const kind = UI_REGISTRY.find((entry) => entry.id === id)?.kind
@@ -2365,11 +2529,101 @@ function closeEditor(): void {
   emit('close')
 }
 
+const preflightIssues = ref<PreflightIssue[]>([])
+const blockingCount = computed(() => blockingIssues(preflightIssues.value).length)
+
+/**
+ * 元素是否被滚动/裁剪容器收着：这类内容超出外壳是正常的滚动，不是布局溢出。
+ * 从元素往上找到外壳为止，任何一层 overflow 不是 visible 就算收着。
+ */
+function clippedByScrollContainer(node: HTMLElement, shell: HTMLElement): boolean {
+  let parent = node.parentElement
+  while (parent && parent !== shell && parent !== document.body) {
+    const style = getComputedStyle(parent)
+    if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) return true
+    parent = parent.parentElement
+  }
+  return false
+}
+
+/**
+ * 量一遍已登记元素。
+ * - 模板（消息、会话行）是滚动内容，不参与布局溢出检查；
+ * - display/visibility 明确隐藏的元素是刻意的界面状态，不算问题；
+ * - 被滚动容器收着的元素同样跳过。
+ */
+function measurePreflightTargets(shell: HTMLElement): PreflightTarget[] {
+  const shellRectValue = shell.getBoundingClientRect()
+  const byId = new Map<string, PreflightTarget>()
+  for (const node of document.querySelectorAll<HTMLElement>('[data-ui-id], [data-ui-template]')) {
+    const id = node.dataset.uiId || node.dataset.uiTemplate || ''
+    if (!id) continue
+    const entry = UI_REGISTRY.find((item) => item.id === id)
+    if (!entry || entry.kind === 'template') continue
+    const computed = getComputedStyle(node)
+    if (computed.display === 'none' || computed.visibility === 'hidden') continue
+    if (node !== shell && clippedByScrollContainer(node, shell)) continue
+    const rect = node.getBoundingClientRect()
+    // 整块在外壳之外的，是收起抽屉这类界面状态；只报「有一部分露在外面」的真实溢出。
+    const outside = rect.left + rect.width <= shellRectValue.left
+      || rect.left >= shellRectValue.left + shellRectValue.width
+      || rect.top + rect.height <= shellRectValue.top
+      || rect.top >= shellRectValue.top + shellRectValue.height
+    if (node !== shell && outside) continue
+    const candidate: PreflightTarget = {
+      id,
+      label: entry.label,
+      protection: entry.protection,
+      editableSize: entry.properties.includes('size'),
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+    }
+    const existing = byId.get(id)
+    if (!existing || candidate.rect.width * candidate.rect.height < existing.rect.width * existing.rect.height) {
+      byId.set(id, candidate)
+    }
+  }
+  return [...byId.values()]
+}
+
+/**
+ * user:“发布前执行连续宽度扫描和关键节点可达性检查”+
+ * (同步压外壳宽度取样，浏览器不画中间态；异常也会恢复原宽度。)
+ */
+function runPreflight(): PreflightIssue[] {
+  const shell = document.querySelector<HTMLElement>('[data-ui-id="shell.root"]')
+  if (!shell) return []
+  try {
+    const samples = scanShellWidths(shell, PREFLIGHT_WIDTHS, () => {
+      const rect = shell.getBoundingClientRect()
+      return {
+        shell: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+        targets: measurePreflightTargets(shell),
+      }
+    })
+    return collectIssues(samples)
+  } catch {
+    // 量不到就跳过检查，不让检查本身挡住发布。
+    return []
+  }
+}
+
 // user:“确认带反馈动画”+(先落地发布，给确认键一个打勾脉冲反馈，再关闭编辑器)
 function confirmPublish(): void {
   if (publishFeedback.value === 'confirmed') return
+  const issues = runPreflight()
+  preflightIssues.value = issues
+  if (blockingIssues(issues).length) return
+  // 只有触控过小的提醒：等用户点「仍然发布」。
+  if (issues.length) return
+  publishNow()
+}
+
+function publishNow(): void {
+  preflightIssues.value = []
   const result = store.publish()
   if (!result.ok) return
+  // 用户重新发布了一版可用主题：安全模式到此为止，下次启动照常加载。
+  exitSafeThemeMode()
   clearDraftStorage()
   publishFeedback.value = 'confirmed'
   publishCloseTimer = window.setTimeout(() => {
@@ -2377,6 +2631,37 @@ function confirmPublish(): void {
     publishFeedback.value = 'idle'
     closeEditor()
   }, 420)
+}
+
+const historyOpen = ref(false)
+
+function formatHistoryTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+// user:“保留上一版发布主题与版本历史”+(回滚只把那一版放回草稿，确认后再发布)
+function restoreHistoryEntry(index: number): void {
+  if (!store.restoreHistory(index)) return
+  historyOpen.value = false
+  showNotice(t('已回到这一版，确认后发布'))
+  void nextTick(() => {
+    syncOutline()
+    domVersion.value += 1
+  })
+}
+
+// user:“提供与自定义主题无关的安全模式入口/启动参数或等价恢复方法”+
+// (先清内存里的自定义主题，再删存储与样式；最后落安全标记，下次启动也不加载。)
+function safeRecover(): void {
+  historyOpen.value = false
+  clearDraftStorage()
+  store.reset()
+  recoverThemeStorage()
+  enterSafeThemeMode()
+  closeEditor()
 }
 
 // user:“按这个设计方案审…补齐”+(方案 §10.1 恢复默认同时清掉自动保存的草稿)
@@ -2562,43 +2847,59 @@ function onBusinessInputCapture(event: Event): void {
   event.stopPropagation()
 }
 
-function exportDocument(): void {
-  const blob = new Blob([JSON.stringify(store.draft.value, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `sunday-theme-v${THEME_STUDIO_SCHEMA_VERSION}.json`
-  anchor.click()
-  URL.revokeObjectURL(url)
+// user:“版本化主题包（.sunday-theme / ZIP + manifest + assets）”+(方案 §10.3)
+async function exportDocument(): Promise<void> {
+  try {
+    const bytes = await buildThemePackage(store.draft.value)
+    const blob = new Blob([bytes.slice().buffer], { type: 'application/zip' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `sunday-theme-v${THEME_STUDIO_SCHEMA_VERSION}.sunday-theme`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch (cause) {
+    errors.value = [{ path: '', message: cause instanceof Error ? cause.message : t('导出失败') }]
+  }
 }
 
 function pickImport(): void {
   importEl.value?.click()
 }
 
+// user:“导入时先隔离解包与验证，允许预览，不直接覆盖现行主题”+
+// (先落到待确认面板；确认后只进草稿，发布仍由人决定。)
+const pendingImport = ref<{ document: StudioDocument; name: string } | null>(null)
+
 async function importDocument(event: Event): Promise<void> {
-  const file = (event.target as HTMLInputElement).files?.[0]
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
   if (!file) return
-  if (file.size > 4_000_000) {
+  if (file.size > 8_000_000) {
     errors.value = [{ path: '', message: t('主题文件过大，请检查是否误选了其他文件') }]
     return
   }
   try {
-    // user:“按这个设计方案审…补齐”+(独立审查 P1：导入失败必须给提示，非法文档不进草稿、不静默)
-    const migrated = migrateStudioDocument(JSON.parse(await file.text()))
-    if (!migrated.ok) {
-      errors.value = [{ path: '', message: migrated.error }]
-      return
-    }
-    const validation = validateStudioDocument(migrated.document)
-    if (!validation.ok) {
-      errors.value = validation.errors
-      return
-    }
-    store.replaceDraft(migrated.document)
-  } catch {
-    errors.value = [{ path: '', message: t('文件不是有效的主题 JSON') }]
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const document = looksLikeThemePackage(bytes)
+      ? (await readThemePackage(bytes)).document
+      : readThemeDocumentJson(new TextDecoder().decode(bytes))
+    pendingImport.value = { document, name: file.name }
+  } catch (cause) {
+    errors.value = [{
+      path: '',
+      message: cause instanceof ThemePackageError ? cause.message : t('文件不是有效的主题包'),
+    }]
   }
+}
+
+function applyPendingImport(): void {
+  const pending = pendingImport.value
+  pendingImport.value = null
+  if (!pending) return
+  store.replaceDraft(pending.document)
+  showNotice(t('已导入到草稿，确认后发布'))
 }
 
 function snapTargetsFor(element: HTMLElement): { x: number[]; y: number[] } {
@@ -2626,12 +2927,105 @@ function showGuides(x: number | null, y: number | null): void {
   }
 }
 
+// user:“支持框选”+(方案 §3.5：在空白处拖出矩形，命中即进多选；拖选不抢按钮与浮层的点击)
+interface MarqueeState {
+  startX: number
+  startY: number
+  pointerId: number
+  additive: boolean
+}
+let marqueeState: MarqueeState | null = null
+const marqueeBox = ref<Rect | null>(null)
+
+function startMarquee(event: PointerEvent): void {
+  marqueeState = {
+    startX: event.clientX,
+    startY: event.clientY,
+    pointerId: event.pointerId,
+    additive: event.ctrlKey || event.metaKey,
+  }
+  marqueeBox.value = { left: event.clientX, top: event.clientY, width: 0, height: 0 }
+  window.addEventListener('pointermove', onMarqueeMove)
+  window.addEventListener('pointerup', onMarqueeUp, { once: true })
+  window.addEventListener('pointercancel', cancelMarquee, { once: true })
+  event.preventDefault()
+}
+
+function onMarqueeMove(event: PointerEvent): void {
+  const state = marqueeState
+  if (!state) return
+  marqueeBox.value = {
+    left: Math.min(state.startX, event.clientX),
+    top: Math.min(state.startY, event.clientY),
+    width: Math.abs(event.clientX - state.startX),
+    height: Math.abs(event.clientY - state.startY),
+  }
+}
+
+function marqueeHits(rect: Rect): string[] {
+  const hits: string[] = []
+  const seen = new Set<string>()
+  for (const node of document.querySelectorAll<HTMLElement>('[data-ui-id], [data-ui-template]')) {
+    const id = node.dataset.uiId || node.dataset.uiTemplate || ''
+    if (!id || seen.has(id) || isEditorLocked(id)) continue
+    const box = node.getBoundingClientRect()
+    if (box.width < 1 || box.height < 1) continue
+    if (box.right < rect.left || box.left > rect.left + rect.width) continue
+    if (box.bottom < rect.top || box.top > rect.top + rect.height) continue
+    seen.add(id)
+    hits.push(id)
+  }
+  return hits
+}
+
+function onMarqueeUp(): void {
+  const state = marqueeState
+  const rect = marqueeBox.value
+  marqueeState = null
+  marqueeBox.value = null
+  window.removeEventListener('pointermove', onMarqueeMove)
+  window.removeEventListener('pointercancel', cancelMarquee)
+  if (!state || !rect) return
+  // 没拖动就只是点了一下空白：不改选中，避免误清。
+  if (rect.width < 3 && rect.height < 3) return
+  const hits = marqueeHits(rect)
+  if (!hits.length) {
+    if (!state.additive) {
+      selectedId.value = null
+      extraIds.value = []
+    }
+    return
+  }
+  const merged = state.additive ? [...new Set([...selectedIds.value, ...hits])] : hits
+  const [first, ...rest] = merged
+  selectedId.value = first ?? null
+  extraIds.value = rest
+  if (scope.value === 'instance') scope.value = 'base'
+  instanceKey.value = null
+  instanceElement.value = null
+  void nextTick(() => syncOutline())
+}
+
+function cancelMarquee(): void {
+  marqueeState = null
+  marqueeBox.value = null
+  window.removeEventListener('pointermove', onMarqueeMove)
+  window.removeEventListener('pointercancel', cancelMarquee)
+}
+
 function onPointerDown(event: PointerEvent): void {
   // 浏览态不进入拖拽：编辑模式关闭时按住元素就是普通按压。
   if (!editMode.value) return
   // user:“装文字它本身就是一个容器，它是可以被拖动拉伸的”+(样式类型/模板同样可拖)
   const target = (event.target as Element | null)?.closest<HTMLElement>('[data-ui-id], [data-ui-template]')
-  if (!target) return
+  if (!target) {
+    if (event.button !== 0) return
+    const element = event.target as Element | null
+    // 按钮、输入框、浮层与编辑器自己的手柄都自己管指针；只有真正的界面空白处才起框选。
+    if (element?.closest('button, input, select, textarea, a, [data-theme-studio]')) return
+    startMarquee(event)
+    return
+  }
   const id = target.dataset.uiId || target.dataset.uiTemplate || ''
   if (!id) return
   // user:“锁定”+(锁定的图层不参与点选与拖动)
@@ -2803,6 +3197,48 @@ function updateOffset(axis: 'x' | 'y', event: Event): void {
   pullSelectedInsideShell()
 }
 
+// user:“复制粘贴”+(方案 §3.5：复制的是样式，不是实例；模板样式只能贴到同类模板)
+let styleClipboard: { style: StudioNodeStyle; template: boolean } | null = null
+const notice = ref('')
+let noticeTimer = 0
+
+function showNotice(value: string): void {
+  notice.value = value
+  if (noticeTimer) window.clearTimeout(noticeTimer)
+  noticeTimer = window.setTimeout(() => {
+    noticeTimer = 0
+    notice.value = ''
+  }, 1600)
+}
+
+function isTemplateId(id: string): boolean {
+  return UI_REGISTRY.find((entry) => entry.id === id)?.kind === 'template'
+}
+
+function copySelectedStyle(): void {
+  if (!selectedId.value) return
+  styleClipboard = {
+    style: JSON.parse(JSON.stringify(styleAt(selectedId.value))) as StudioNodeStyle,
+    template: isTemplateId(selectedId.value),
+  }
+  showNotice(t('已复制样式'))
+}
+
+function pasteStyleToSelection(): void {
+  if (!styleClipboard || !selectedId.value) return
+  if (styleClipboard.template !== isTemplateId(selectedId.value)) {
+    showNotice(t('模板样式只能贴到同类模板'))
+    return
+  }
+  writeStyle(selectedId.value, JSON.parse(JSON.stringify(styleClipboard.style)) as StudioNodeStyle)
+  if (scope.value !== 'base') refreshPreview()
+  showNotice(t('已粘贴样式'))
+  void nextTick(() => {
+    syncOutline()
+    domVersion.value += 1
+  })
+}
+
 function onKeydown(event: KeyboardEvent): void {
   // 浏览态方向键还给界面（滚动、光标移动等），不做元素微调。
   if (!editMode.value) return
@@ -2810,6 +3246,10 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     if (miniInspector.value) {
       miniInspector.value = false
+      return
+    }
+    if (marqueeState) {
+      cancelMarquee()
       return
     }
     if (dragState) {
@@ -2831,6 +3271,21 @@ function onKeydown(event: KeyboardEvent): void {
     }
     void nextTick(() => syncOutline())
     return
+  }
+  const focusTarget = event.target as HTMLElement | null
+  const inField = Boolean(focusTarget && ['INPUT', 'TEXTAREA', 'SELECT'].includes(focusTarget.tagName))
+  if (!inField && (event.ctrlKey || event.metaKey) && !event.altKey) {
+    const key = event.key.toLowerCase()
+    if (key === 'c' && selectedId.value) {
+      event.preventDefault()
+      copySelectedStyle()
+      return
+    }
+    if (key === 'v' && styleClipboard && selectedId.value) {
+      event.preventDefault()
+      pasteStyleToSelection()
+      return
+    }
   }
   if (!selectedId.value || !allowsId(selectedId.value, 'position')) return
   const target = event.target as HTMLElement | null
@@ -2888,6 +3343,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   flushPendingAutosave()
+  if (noticeTimer) {
+    window.clearTimeout(noticeTimer)
+    noticeTimer = 0
+  }
   if (publishCloseTimer) {
     window.clearTimeout(publishCloseTimer)
     publishCloseTimer = 0
@@ -3508,5 +3967,94 @@ onBeforeUnmount(() => {
 .studio-btn--primary { background: var(--theme-control-background, #fbf7f0); color: var(--theme-control-text, #2e3138); }
 .studio-spacer { width: 8px; }
 .studio-status { color: var(--muted, #a7a29b); font-size: var(--type-2xs, 10px); }
-</style>
 
+/* ── 框选、三级间距标注、发布前检查、发布历史 ─────────────────────────── */
+.studio-marquee {
+  position: fixed;
+  border: 1px solid var(--blue, #79bcff);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--blue, #79bcff) 12%, transparent);
+  pointer-events: none;
+}
+.studio-gap-annotation {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.studio-gap-annotation path {
+  fill: none;
+  stroke: var(--blue, #79bcff);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.studio-gap-hit {
+  position: fixed;
+  border-radius: 4px;
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+.studio-gap-hit:hover { background: color-mix(in srgb, var(--blue, #79bcff) 10%, transparent); }
+.studio-gap-pill[data-studio-gap-label='segment'] { opacity: 0.82; }
+.studio-notice { top: 76px; }
+.studio-canvas.is-browsing .studio-marquee,
+.studio-canvas.is-browsing .studio-gap-annotation,
+.studio-canvas.is-browsing .studio-gap-hit { display: none; }
+.studio-canvas.is-overlay-hidden .studio-gap-annotation,
+.studio-canvas.is-overlay-hidden .studio-gap-hit { display: none; }
+.studio-preflight,
+.studio-history {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(520px, calc(100vw - 32px));
+  max-height: 44vh;
+  overflow: auto;
+  padding: var(--space-3, 12px);
+  border-radius: var(--radius-lg, 18px);
+  color: var(--theme-main-text, #f2efeb);
+  pointer-events: auto;
+}
+.studio-history {
+  left: auto;
+  right: 16px;
+  bottom: 72px;
+  transform: none;
+  width: 300px;
+}
+.studio-preflight-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 8px);
+  margin-bottom: var(--space-2, 8px);
+}
+.studio-preflight ul,
+.studio-history ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 var(--space-2, 8px);
+  padding: 0;
+  list-style: none;
+}
+.studio-preflight li {
+  font-size: var(--type-2xs, 10px);
+  line-height: 1.5;
+}
+.studio-preflight li[data-studio-preflight-issue='touch-target'] { opacity: 0.72; }
+.studio-history li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: center;
+  font-size: var(--type-2xs, 10px);
+}
+.studio-history-time { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 62%, transparent); }
+.studio-history-summary { grid-column: 1 / -1; opacity: 0.72; }
+</style>

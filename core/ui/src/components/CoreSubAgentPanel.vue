@@ -464,16 +464,16 @@ onBeforeUnmount(() => {
   align-items: center;
   column-gap: .5rem;
   row-gap: .1rem;
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   padding: .3rem .5rem;
   text-align: left;
-  cursor: pointer;
   transition:
     background var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 
 /* 带删除入口的行留出按钮位置，名字与状态都不被遮住。 */
@@ -705,14 +705,14 @@ onBeforeUnmount(() => {
   grid-template-columns: 1rem minmax(0, 1fr);
   align-items: center;
   gap: .5rem;
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--text) 62%, transparent);
   padding: 0 .5rem;
   font: inherit;
   font-size: .75rem;
   text-align: left;
+  border: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 

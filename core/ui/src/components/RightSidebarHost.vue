@@ -388,12 +388,15 @@ const activeModule = computed<RailModule | null>(() => (
   justify-content: center;
   width: 32px;
   height: 32px;
-  border: 0;
-  border-radius: var(--radius);
+
+
   background: transparent;
   color: color-mix(in srgb, var(--host-text) 62%, transparent);
-  cursor: pointer;
+
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
 }
 .right-sidebar-rail-btn:hover { background: color-mix(in srgb, var(--host-text) var(--alpha-hover), transparent); color: var(--host-text); }
 .right-sidebar-rail-btn.active { background: color-mix(in srgb, var(--host-text) var(--alpha-active), transparent); color: var(--host-text); }

@@ -37,6 +37,7 @@ export interface CoreSettingsModel {
   is_default?: boolean
   enabled?: boolean
   capability?: string
+  output_type?: string
   notes?: string
   pricing?: CoreModelPricing
   extra?: Record<string, unknown> | null
@@ -85,6 +86,7 @@ export interface CoreSettingsModelPayload {
   is_default?: boolean
   enabled?: boolean
   capability?: string
+  output_type?: string
   notes?: string
   pricing?: CoreModelPricing
   extra?: Record<string, unknown>

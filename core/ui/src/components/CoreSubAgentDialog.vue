@@ -373,14 +373,11 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   width: 2rem;
   height: 2rem;
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, currentColor) 64%, transparent);
   font: inherit;
   font-size: 1.25rem;
   line-height: 1;
-  cursor: pointer;
   transition:
     background var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out),

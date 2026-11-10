@@ -376,10 +376,10 @@ defineExpose({ fetchProcesses })
   justify-content: center;
   min-width: 26px;
   min-height: 26px;
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--text) 58%, transparent);
+  border: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -444,17 +444,17 @@ defineExpose({ fetchProcesses })
   grid-template-columns: auto auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: .45rem;
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   padding: 0 .5rem;
   text-align: left;
   font: inherit;
-  cursor: pointer;
   transition:
     background var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 
 .core-process-panel__main:hover {
@@ -523,11 +523,9 @@ defineExpose({ fetchProcesses })
   justify-content: center;
   min-width: 26px;
   min-height: 26px;
-  border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--text) 58%, transparent);
-  cursor: pointer;
+
 }
 
 .core-process-panel__action:hover:not(:disabled) {

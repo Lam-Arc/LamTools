@@ -79,6 +79,18 @@
         aria-hidden="true"
       />
     </button>
+    <!-- user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
+         (「?」常驻在竖栏底部：忘了怎么用、想重看一遍，找它就是，不必翻设置)。 -->
+    <button
+      class="app-rail__button"
+      type="button"
+      :aria-label="t('新手引导')"
+      :title="t('新手引导')"
+      data-rail-guide
+      @click="emit('guide')"
+    >
+      <CircleHelp :size="20" :stroke-width="1.8" aria-hidden="true" />
+    </button>
     <button
       class="app-rail__button"
       type="button"
@@ -112,10 +124,10 @@ import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { contributionState } from '@/plugins/contributions'
 import type { PluginPageEntry } from '@/plugins/pages'
 import { openContextMenu } from '@/components/context-menu/context-menu'
-import { Bot, CalendarClock, Download, House, MonitorSmartphone, MoreHorizontal, Network, PackageCheck, Settings } from 'lucide-vue-next'
+import { Bot, CalendarClock, CircleHelp, Download, House, MonitorSmartphone, MoreHorizontal, Network, PackageCheck, Settings, Sparkles } from 'lucide-vue-next'
 import { BookOne, Receive } from '@icon-park/vue-next'
 
-export type AppRailView = 'chat' | 'superagent' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
+export type AppRailView = 'chat' | 'direct' | 'superagent' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
 
 const props = defineProps<{
   /** 当前所处的整界面分区；'chat' 表示在聊天界面。 */
@@ -134,6 +146,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   open: [view: AppRailView]
   update: []
+  /** 打开新手引导：竖栏底部那枚「?」的唯一职责。 */
+  guide: []
   'open-split': [view: AppRailView, edge: 'right' | 'bottom']
   'open-plugin-page': [page: PluginPageEntry]
   'split-plugin-page': [page: PluginPageEntry, edge: 'right' | 'bottom']
@@ -238,6 +252,9 @@ interface RailEntry {
 
 const topItems: RailEntry[] = [
   { id: 'chat', get label() { return t("聊天") }, icon: House },
+  // user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+  // +(调用台是绕过对话直接问模型的地方，紧挨聊天，避免用户去设置里找入口。)
+  { id: 'direct', get label() { return t("调用台") }, icon: Sparkles },
   // user:“让用户能直观地发起任务、查看进度、干预执行和查看成果”+(Super-agent 是交付入口，
   // 排在聊天之后、定时任务之前：它是把复杂目标交出去的地方，不是又一个管理面板)。
   { id: 'superagent', get label() { return t("Super-agent") }, icon: Bot },

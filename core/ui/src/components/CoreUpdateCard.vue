@@ -255,12 +255,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
+
+
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, var(--text)) 62%, transparent);
-  cursor: pointer;
+
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 .core-update-card__dismiss:hover {
   background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent);

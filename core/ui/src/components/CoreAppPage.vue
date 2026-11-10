@@ -5,6 +5,9 @@ import CoreConfirmDialog from './CoreConfirmDialog.vue'
 import '@/styles/app-page.css'
 const pages: Record<string, Component> = {
   library: defineAsyncComponent(() => import('./LibraryHomeView.vue')),
+  // user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+  // +(调用台与资料库、设置并列，是一个独立整版页面，不是塞进设置里的一小块。)
+  direct: defineAsyncComponent(() => import('./DirectCallView.vue')),
   settings: defineAsyncComponent(() => import('./CoreSettings.vue')),
   superagent: defineAsyncComponent(() => import('./CoreSuperAgentPanel.vue')),
   arrange: defineAsyncComponent(() => import('./CoreArrangeManager.vue')),

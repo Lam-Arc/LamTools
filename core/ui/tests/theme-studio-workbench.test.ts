@@ -631,7 +631,7 @@ describe('编辑器补齐：属性面板与流程', () => {
   it('导入非法主题文件给出明确错误', async () => {
     const wrapper = mount(ThemeStudio, { attachTo: document.body, global: { stubs: { teleport: true } } })
     await flushPromises()
-    const input = wrapper.get('input[accept="application/json,.json"]').element as HTMLInputElement
+    const input = wrapper.get('input[type="file"]').element as HTMLInputElement
 
     const broken = new File(['{"schemaVersion":99}'], 'broken.json', { type: 'application/json' })
     Object.defineProperty(input, 'files', { value: [broken] })
@@ -905,7 +905,7 @@ describe('编辑器补齐：属性面板与流程', () => {
   it('非法颜色令牌在导入时被拒绝', async () => {
     const wrapper = mount(ThemeStudio, { attachTo: document.body, global: { stubs: { teleport: true } } })
     await flushPromises()
-    const input = wrapper.get('input[accept="application/json,.json"]').element as HTMLInputElement
+    const input = wrapper.get('input[type="file"]').element as HTMLInputElement
     const evilDoc = {
       schemaVersion: 1,
       themeId: 'evil',

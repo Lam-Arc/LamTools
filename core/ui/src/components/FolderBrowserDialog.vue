@@ -337,12 +337,14 @@ function confirm() {
 .fb-dialog-close {
   width: 30px;
   height: 30px;
-  border: 0;
-  border-radius: var(--radius-sm);
+
+
   background: transparent;
   color: color-mix(in srgb, var(--text) 60%, transparent);
   display: grid;
   place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 

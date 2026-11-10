@@ -178,6 +178,12 @@ export interface ProjectArtifact {
   tags?: string[]
   /** 0 到 5，0 表示未评。 */
   rating?: number
+  /** 怎么用：entry 从哪进、requires 依赖什么、example 最小片段。Agent 取用靠它落地。 */
+  usage?: { entry?: string; requires?: string; example?: string }
+  /** 被取用次数；质量只用星级时，这个数字代表到底有没有人在用。 */
+  usage_count?: number
+  last_used_at?: string
+  used_in?: { at?: string; where?: string }[]
   artifact_id: string;
   name: string;
   kind: string;
@@ -514,6 +520,14 @@ export interface ProjectGroup {
 // Skills
 // ---------------------------------------------------------------------------
 
+export interface CoreSkillUsage {
+  count: number;
+  model_count?: number;
+  user_count?: number;
+  first_used_at?: string;
+  last_used_at?: string;
+}
+
 export interface CoreSkillItem {
   name: string;
   description: string;
@@ -523,6 +537,8 @@ export interface CoreSkillItem {
   deletable: boolean;
   /** 用户自定义分组名；空串表示未分组。 */
   group?: string;
+  /** 调用统计：次数与最近一次调用时间（旧后端可能不返回）。 */
+  usage?: CoreSkillUsage;
 }
 
 export interface CoreSkillListPayload {
@@ -531,6 +547,8 @@ export interface CoreSkillListPayload {
   groups?: string[];
   total_count: number;
   enabled_count: number;
+  /** 全量调用汇总（技能页顶部展示）。 */
+  usage_summary?: { total_calls: number; skills_used: number; last_used_at?: string };
 }
 
 // ---------------------------------------------------------------------------

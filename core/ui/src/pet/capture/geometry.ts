@@ -107,3 +107,22 @@ export function selectionMeta(
     scale: frame.scale,
   }
 }
+
+/**
+ * 标注层带过来的屏幕选区 → 截图内像素。
+ *
+ * user:“合并，这样更干净”+(Ping 自己框选时是窗口坐标；标注层已经给出屏幕
+ * 物理像素，必须按截图原点换算一次，DPI 和副屏负坐标都靠这一步对齐。)
+ */
+export function regionToFrame(
+  region: readonly [number, number, number, number],
+  frame: Pick<CapturedFrame, 'x' | 'y' | 'width' | 'height'>,
+  min = 8,
+): CaptureRegion | null {
+  const x1 = Math.max(0, region[0] - frame.x)
+  const y1 = Math.max(0, region[1] - frame.y)
+  const x2 = Math.min(frame.width, region[0] + region[2] - frame.x)
+  const y2 = Math.min(frame.height, region[1] + region[3] - frame.y)
+  if (x2 - x1 < min || y2 - y1 < min) return null
+  return { x1, y1, x2, y2 }
+}

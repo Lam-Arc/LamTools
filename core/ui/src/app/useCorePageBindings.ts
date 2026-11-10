@@ -100,6 +100,14 @@ export function useCorePageBindings(context: {
     'onBack': unref(closeFullArea),
     'onHeading': ($event: any) => { arrangeHeading.value = $event }
   },
+  // user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
+  // +(调用台复用同一个配置 RPC 与当前项目；保存到资料库需要项目身份，所以项目一起传。)
+  direct: {
+    'class': 'full-area-view',
+    'requestRpc': unref(requestConfigOperation),
+    'projectId': activeProjectId.value ?? selectedProjectId.value,
+    'workRoot': currentWorkRoot(),
+  },
   search: {
     'class': 'full-area-view',
     'bandActions': appRuntime.platform !== 'mobile',

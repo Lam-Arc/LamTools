@@ -8,7 +8,10 @@
     <p v-if="error" class="skill-error">{{ error }}</p>
 
     <div class="subhead">
-      <span class="muted">{{ loading ? t("加载中…") : t('共 {0} 个 · 已启用 {1}', { 0: skills.length, 1: enabledCount }) }}</span>
+      <span class="muted">
+        {{ loading ? t("加载中…") : t('共 {0} 个 · 已启用 {1}', { 0: skills.length, 1: enabledCount }) }}
+        <template v-if="!loading && usageSummary"> · <span data-skill-usage-summary>{{ t("总调用 {0} 次", { 0: usageSummary.total_calls }) }}</span></template>
+      </span>
       <div class="row-actions">
         <button
           v-if="!showCreateForm"
@@ -186,6 +189,14 @@
         </div>
         <p class="skill-card-desc">{{ skill.description }}</p>
         <p v-if="skill.location" class="skill-card-path" :title="skill.location">{{ skill.location }}</p>
+        <!-- user:“我希望能够在插件界面中看见 skill 的调用统计”+(卡片直接写清被用了几次、最近一次是什么时候)。 -->
+        <p class="skill-card-usage" data-skill-usage>
+          <template v-if="skill.usage && skill.usage.count > 0">
+            <span>{{ t('调用 {0} 次', { 0: skill.usage.count }) }}</span>
+            <span v-if="skill.usage.last_used_at" class="skill-card-usage-time">· {{ when(skill.usage.last_used_at) }}</span>
+          </template>
+          <span v-else class="skill-card-usage-empty">{{ t("尚未调用") }}</span>
+        </p>
         <div class="skill-card-foot">
           <span class="skill-card-group" data-skill-group-select>
             <UiSelect
@@ -260,6 +271,8 @@ const emit = defineEmits<{
 }>()
 
 const skills = ref<CoreSkillItem[]>([])
+// user:“我希望能够在插件界面中看见 skill 的调用统计”+(采用后端一次返回的全量用量汇总)。
+const usageSummary = ref<{ total_calls: number; skills_used: number } | null>(null)
 const groups = ref<string[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -303,6 +316,17 @@ const visibleSkills = computed(() => {
   return skills.value.filter((s) => s.group === filter.value)
 })
 
+function when(value?: string): string {
+  if (!value) return ''
+  const stamp = new Date(value)
+  if (Number.isNaN(stamp.getTime())) return ''
+  const diff = Date.now() - stamp.getTime()
+  if (diff < 60_000) return t('刚刚')
+  if (diff < 3_600_000) return t('{0} 分钟前', { 0: Math.floor(diff / 60_000) })
+  if (diff < 86_400_000) return t('{0} 小时前', { 0: Math.floor(diff / 3_600_000) })
+  return t('{0} 天前', { 0: Math.floor(diff / 86_400_000) })
+}
+
 function sourceLabel(source: string): string {
   return ({ project: t('项目'), user: t('用户'), core: t('核心'), plugin: t('插件') } as Record<string, string>)[source] || source
 }
@@ -314,6 +338,7 @@ async function fetchSkills() {
     const skillResult = await props.requestRpc('skill.list')
     skills.value = (skillResult.skills as CoreSkillItem[]) || []
     groups.value = (skillResult.groups as string[]) || []
+    usageSummary.value = (skillResult.usage_summary as { total_calls: number; skills_used: number } | undefined) || null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -692,6 +717,22 @@ code {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: color-mix(in srgb, var(--settings-main-text, #fff) 45%, transparent);
+}
+
+.skill-card-usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 56%, transparent);
+}
+
+.skill-card-usage-time,
+.skill-card-usage-empty {
+  color: color-mix(in srgb, var(--settings-main-text, #fff) 38%, transparent);
 }
 
 .skill-card-foot {

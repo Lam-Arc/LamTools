@@ -73,11 +73,13 @@ function save() {
 .icon-btn {
   width: 28px;
   height: 28px;
-  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, currentColor) 8%, transparent);
   color: var(--theme-main-text, currentColor);
   font-size: 18px;
   line-height: 1;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 
 .core-agents-actions {

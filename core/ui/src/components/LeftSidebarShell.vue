@@ -425,7 +425,6 @@ defineExpose({ close, togglePinned })
   flex: 0 0 auto;
   width: var(--sidebar-row-height);
   height: var(--sidebar-row-height);
-  border-radius: var(--sidebar-row-radius);
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
   color: color-mix(in srgb, var(--theme-backdrop-text) 56%, transparent);
   display: grid;

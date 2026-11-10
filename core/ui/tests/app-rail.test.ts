@@ -27,7 +27,7 @@ describe('AppRail', () => {
 
     const entries = wrapper.findAll('[data-rail-entry]')
     expect(entries.map(entry => entry.attributes('data-rail-entry'))).toEqual([
-      'chat', 'arrange', 'library', 'plugins', 'settings', 'account',
+      'chat', 'direct', 'superagent', 'arrange', 'library', 'plugins', 'settings', 'account',
     ])
     // 仅图标：按钮内没有可见文字，靠 aria-label/title 说明。
     for (const entry of entries) {

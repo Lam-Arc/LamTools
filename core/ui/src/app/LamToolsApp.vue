@@ -30,6 +30,16 @@
     @skip="skipOnboarding"
     @finish="finishOnboarding"
   />
+  <!-- user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
+       (引导覆盖在整个应用之上，但聚光灯那一步会把中间挖空：被指到的按钮仍然能点，
+        学到的是真实位置，而不是看一张截图)。 -->
+  <GuideHost
+    ref="guideRef"
+    :has-provider="hasConfiguredProvider"
+    :theme="theme"
+    @open-area="onRailOpen"
+    @configure-provider="onGuideConfigureProvider"
+  />
   <WorkspaceShell
     ref="shellRef"
     product-name="Sunday"
@@ -92,6 +102,7 @@
         @open-plugin-page="openMainPluginPage"
         @split-plugin-page="openPluginPageSplit"
         @update="onRailUpdate"
+        @guide="openGuide"
       />
       <!-- 更新卡片：点竖栏那枚图标后从它身上长出来（动效在组件内部，走 GSAP）。 -->
       <CoreUpdateCard
@@ -800,6 +811,7 @@ import { selectionEvents } from '@/study/annotations.ts'
 import { openContextMenu } from '@/components/context-menu/context-menu.ts'
 import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import OnboardingWizard from '@/components/OnboardingWizard.vue'
+import GuideHost from '@/guide/GuideHost.vue'
 import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
 import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
 import { installOverlayAction } from '@/core-app/overlayAction.ts'
@@ -1343,6 +1355,7 @@ function handleGlobalSearchKeydown(event: KeyboardEvent): void {
 
 }
 const showOnboarding = ref(false)
+const guideRef = ref<InstanceType<typeof GuideHost> | null>(null)
 const wizardLoading = ref(false)
 const wizardError = ref('')
 // Rust 监视线程发现后端进程退出时置位，顶部横幅提示（audit 20 S3）。
@@ -1559,6 +1572,21 @@ const modelGroups = ref<RawModelGroup[]>([])
 const modelGroupsRevision = ref<number | undefined>(undefined)
 const modelCatalogView = ref<CoreModelCatalogView>('provider')
 const defaultModelId = ref('')
+
+/** user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
+ * (有没有配过模型决定引导讲“怎么配”还是“在哪换”；入口常驻在左竖栏底部)。 */
+const hasConfiguredProvider = computed(() => availableProviders.value.some(provider => provider.has_api_key === true))
+function openGuide(): void {
+  // 引导讲的是聊天界面的布局：不管现在停在哪一页，先回到对话再开始。
+  closeFullArea()
+  guideRef.value?.open()
+}
+
+/** 从引导里点「现在去配置」：先收起引导，否则两层浮层会叠在一起谁也点不动。 */
+function onGuideConfigureProvider(): void {
+  guideRef.value?.dismiss()
+  void reopenOnboarding()
+}
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
 const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
 const allowAccessOutsideWorkdir = ref(false)
@@ -3523,15 +3551,15 @@ async function persistSettingsCatalog(operation: import('@/components/CoreSettin
 
 // ---- 首次启动引导 ----
 
-async function checkOnboarding() {
+async function checkOnboarding(): Promise<boolean> {
   try {
     const result = await requestConfigOperation('settings.get', { namespace: 'core.onboarding' })
     const value = result.value && typeof result.value === 'object' ? result.value as Record<string, unknown> : {}
-    if (value.completed === true) return
+    if (value.completed === true) return false
   } catch {
-    return // 配置服务不可用时 fail-open，不阻塞老用户
+    return false // 配置服务不可用时 fail-open，不阻塞老用户
   }
-  if (availableProviders.value.some((provider) => provider.has_api_key)) return
+  if (availableProviders.value.some((provider) => provider.has_api_key)) return false
   showOnboarding.value = true
   // 弹过一次就算“谈过”：立即标记 completed，下次不再自动弹出
   // （除非用户通过“再次显示引导”主动清除标记）。
@@ -3543,10 +3571,13 @@ async function checkOnboarding() {
   } catch {
     // 标记失败不阻塞引导展示
   }
+  return true
 }
 
 async function skipOnboarding() {
   showOnboarding.value = false
+  // 配置向导让位后，接着把“怎么用”讲完，避免两套引导互相盖住。
+  setTimeout(() => guideRef.value?.autoStart(), 400)
   // 跳过也算谈过：与 checkOnboarding 的自动标记保持一致。
   try {
     await requestConfigOperation('settings.update', {
@@ -3576,6 +3607,8 @@ async function onboardingCreateProvider(payload: CoreSettingsProviderPayload) {
 
 async function finishOnboarding() {
   showOnboarding.value = false
+  // 配置向导让位后，接着把“怎么用”讲完，避免两套引导互相盖住。
+  setTimeout(() => guideRef.value?.autoStart(), 400)
   try {
     await requestConfigOperation('settings.update', {
       namespace: 'core.onboarding',
@@ -4495,7 +4528,13 @@ onMounted(() => {
     threadScroll.reset()
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
-  void loadInitialData().then(() => checkOnboarding())
+  void loadInitialData().then(async () => {
+    const wizardShown = await checkOnboarding()
+    // user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
+    // (先让配置向导说完；没配过模型的人，接下来直接进入“怎么用”的引导。
+    //  手机端没有左竖栏与桌面控件，这套讲解只对桌面有意义，不在手机上弹。)
+    if (!wizardShown && appRuntime.platform !== 'mobile') setTimeout(() => guideRef.value?.autoStart(), 900)
+  })
   // user:“类似的时序问题不要再犯，检查”+(手机从后台回来时隧道可能已经断了、数据可能
   // 还是启动前那份：给没读到的启动数据一次立刻补齐的机会，而不是等用户重开应用)。
   document.addEventListener('visibilitychange', () => {

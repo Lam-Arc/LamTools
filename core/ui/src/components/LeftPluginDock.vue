@@ -107,13 +107,10 @@ function initial(plugin: string): string {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
-  border: 0;
-  border-radius: var(--radius);
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text) 62%, transparent);
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
