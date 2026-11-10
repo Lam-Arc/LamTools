@@ -106,3 +106,5 @@ Sunday在单个http.remote声明中显式添加"resultEncoding":"multipart"，�
 14项新增验收通过真实FastAPI/ASGI和原操作目录覆盖声明撤回、schema修改、启动代变化、外部操作声明变更、令牌撤回、JSON/NDJSON正常调用、空闲/发帧中的外部权限撤回、容量回收及迁移说明；只使用临时测试令牌。不是DSH Peer principal、资源授权或双向wire。
 
 NDJSON流存续期间在每帧前和空闲轮询时重新读取原操作声明，含外部operations文件；声明或auto_allow变化、文件读取失败均关闭流并拒绝后续帧。读取是同步文件I/O，0.5秒轮询不是严格截止时间；检查与其他进程修改之间仍无原子锁。
+
+明确Remote参数经原schema验证后还须能编码为有效UTF-8；包含孤立代理字符时返回400且不派发原操作，合法Unicode继续可用。2项新增验收经实际ASGI HTTP、原令牌与操作目录确认。

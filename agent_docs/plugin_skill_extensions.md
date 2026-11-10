@@ -48,9 +48,12 @@ def create_plugin(context):
 | `load_skill` | 沿原工具箱与审批链按需返回正文；每次重新检查当前可用性 |
 | `command.catalog` 的技能项 | 只包含允许用户调用且已启用的技能 |
 | 用户选择技能 | 沿原 composer 输入准备路径展开，检查用户策略与启用状态 |
-| `skill.list` | 管理目录，包含 `model_invocable/user_invocable`，内存项 `source="plugin"`、`location=""`、`deletable=false` |
+| `skill.list` | 管理目录，包含 `model_invocable/user_invocable`、每个技能的 `usage`（调用次数与最近一次时间）以及 `usage_summary` 汇总；内存项 `source="plugin"`、`location=""`、`deletable=false` |
+| `skill.usage` | 只读用量账本，返回每个技能的历史调用记录（含已删除技能），供技能页与 CLI 查看 |
 | `skill.enable/disable` | 使用原持久账本；不会停止插件其他能力 |
 | `skill.delete` | 内存项只读，拒绝删除文件；由注册方撤销或插件停用清理 |
+
+用量账本：`load_skill` 与用户手动展开技能成功后各记一次到 `<data>/skill_usage.json`，模型与用户分别计 `model_count`/`user_count`，并保留首次与最近调用时间。删除技能会清掉它的同名记录；技能页顶部展示总调用次数，卡片展示每个技能的次数与最近调用时间，命令行 `skill usage` 查看同一份账本。
 
 内存正文沿原长度上限截断，超过上限时明确标注。不会输出虚假的 Base directory，也不会给 `read_file/run_command` 增加资源目录，或因加载内存技能解锁清单中的其他惰性工具。依赖相对路径、脚本或资源文件的技能应继续使用已有静态技能目录，不能仅把 SKILL.md 正文复制到内存注册。
 
