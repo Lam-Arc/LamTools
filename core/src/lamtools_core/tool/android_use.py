@@ -33,6 +33,9 @@ ACTIONS = frozenset(
         "global",
         "open_app",
         "list_apps",
+        # user:“读取能力加上”+(截图给模型自己看界面/验证码图片，通知给模型自己读短信与推送)。
+        "screenshot",
+        "notifications",
     }
 )
 
@@ -112,7 +115,19 @@ def make_android_use_handler():
             )
 
         payload: dict[str, Any] = {"action": action}
-        for key in ("x", "y", "ref", "text", "name", "package", "query", "duration_ms", "max_nodes"):
+        for key in (
+            "x",
+            "y",
+            "ref",
+            "text",
+            "name",
+            "package",
+            "query",
+            "duration_ms",
+            "max_nodes",
+            "max_width",
+            "limit",
+        ):
             value = args.get(key)
             if value is not None and value != "":
                 payload[key] = value
@@ -154,6 +169,54 @@ def make_android_use_handler():
                 name=call.name,
                 content=content or "没有匹配的应用",
                 metadata={"count": len(apps)},
+            )
+        if action == "screenshot":
+            # user:“读取能力加上”+(把画面原样交给模型自己看；缩放压缩在手机侧做完，
+            # 原图只挂在 model_image_data_url 上，不落盘)。
+            data = str(result.get("image_base64") or "")
+            if not data:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    error="截图没有拿到画面",
+                )
+            mime = str(result.get("mime") or "image/jpeg")
+            width = int(result.get("width") or 0)
+            height = int(result.get("height") or 0)
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                content=f"[android_use] 截屏 {width}x{height}",
+                metadata={"width": width, "height": height},
+                model_image_data_url=f"data:{mime};base64,{data}",
+            )
+        if action == "notifications":
+            connected = bool(result.get("connected"))
+            items = result.get("notifications") or []
+            if not items:
+                hint = (
+                    "最近没有收到通知"
+                    if connected
+                    else "通知读取没有开启：在系统设置 → 通知 → 通知使用权里把 Sunday 打开，然后重新调用"
+                )
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    content=hint,
+                    metadata={"count": 0, "connected": connected},
+                )
+            lines = []
+            for item in items:
+                title = str(item.get("title") or "").strip()
+                text = str(item.get("text") or "").strip()
+                body = " / ".join(part for part in (title, text) if part)
+                lines.append(f"{item.get('package') or '?'}  {body}")
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                content="\n".join(lines),
+                metadata={"count": len(items), "connected": connected},
             )
         if action == "status":
             return ToolResult(

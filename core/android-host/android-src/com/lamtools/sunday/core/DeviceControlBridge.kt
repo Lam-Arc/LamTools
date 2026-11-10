@@ -35,6 +35,16 @@ object DeviceControlBridge {
   /** 一个请求做一个动作，返回 `{"ok":bool,"result":{...}}` 或 `{"ok":false,"error":"..."}`。 */
   @JvmStatic
   fun action(request: String): String {
+    // user:“读取能力加上”+(通知和无障碍是两套系统授权：无障碍没开不该连通知一起读不到，
+    // 所以 notifications 直接走监听服务，不经过无障碍)。
+    val parsed = try {
+      JSONObject(request)
+    } catch (error: Exception) {
+      null
+    }
+    if (parsed?.optString("action") == "notifications") {
+      return SundayNotificationListenerService.recentJson(parsed.optInt("limit", 20))
+    }
     val service = SundayAccessibilityService.service()
       ?: return JSONObject()
         .put("ok", false)

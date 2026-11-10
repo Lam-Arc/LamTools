@@ -6,6 +6,7 @@
     android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/sunday_accessibility_description"
     android:notificationTimeout="100"
     android:settingsActivity="com.lamtools.sunday.core.MainActivity" />

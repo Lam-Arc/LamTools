@@ -4,15 +4,19 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
+import android.view.Display
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -135,6 +139,8 @@ class SundayAccessibilityService : AccessibilityService() {
     val action = json.optString("action")
     return when (action) {
       "snapshot" -> snapshotJson(json.optInt("max_nodes", 80))
+      // user:“读取能力加上”+(让模型自己看屏幕，而不是我们替它写识别；截图只做缩放与压缩)。
+      "screenshot" -> screenshotJson(json.optInt("max_width", 900))
       "status" -> okJson(JSONObject().put("connected", true))
       "tap" -> tap(json.optInt("x"), json.optInt("y"), 0)
       "long_press" -> tap(json.optInt("x"), json.optInt("y"), json.optLong("duration_ms", 700))
@@ -170,7 +176,16 @@ class SundayAccessibilityService : AccessibilityService() {
     val node = resolve(ref) ?: return errorJson("找不到这个元素：$ref")
     val bounds = Rect()
     node.getBoundsInScreen(bounds)
-    if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+    // user:“加，安卓控制，上模拟器里把它跑通”+(WebView 里的输入框在 performAction(CLICK)
+    // 时会抛异常（length=1; index=1），以前一次异常就把整个 tap_node 变成失败；这里按
+    // 「系统动作不行就点中心」处理，不让一个实现细节挡住点击)。
+    val clicked = try {
+      node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    } catch (error: Throwable) {
+      Log.w(TAG, "performAction(CLICK) failed on $ref", error)
+      false
+    }
+    if (clicked) {
       return okJson(JSONObject().put("clicked", ref))
     }
     // 不可点击的容器很常见：退回到点它的中心。
@@ -180,24 +195,32 @@ class SundayAccessibilityService : AccessibilityService() {
 
   private fun setText(ref: String, text: String): String {
     val node = resolve(ref) ?: return errorJson("找不到这个元素：$ref")
+    // user:“加，安卓控制，上模拟器里把它跑通”+(WebView 的输入框对 ACTION_SET_TEXT 也会抛
+    // 异常；一次异常不该让「写文本」这件事变成永远失败，先试系统动作，再退到聚焦后重试)。
+    val args = Bundle().apply {
+      putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+    }
     if (node.isEditable) {
-      val args = Bundle().apply {
-        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+      val written = try {
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+      } catch (error: Throwable) {
+        Log.w(TAG, "performAction(SET_TEXT) failed on $ref", error)
+        false
       }
-      if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+      if (written) {
         return okJson(JSONObject().put("text", text))
       }
     }
     // 有些输入框只认粘贴：先聚焦，再用系统的“设置文本”动作。
-    node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-    val args = Bundle().apply {
-      putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+    try {
+      node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+      if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+        return okJson(JSONObject().put("text", text))
+      }
+    } catch (error: Throwable) {
+      Log.w(TAG, "performAction(FOCUS) failed on $ref", error)
     }
-    return if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-      okJson(JSONObject().put("text", text))
-    } else {
-      errorJson("这个控件不接受直接写文本，先点进输入框再试，或者换一个可编辑的元素")
-    }
+    return errorJson("这个控件不接受直接写文本，先点进输入框再试，或者换一个可编辑的元素")
   }
 
   private fun global(name: String): String {
@@ -241,6 +264,62 @@ class SundayAccessibilityService : AccessibilityService() {
       apps.put(JSONObject().put("label", label).put("package", info.packageName))
     }
     return okJson(JSONObject().put("apps", apps))
+  }
+
+  /**
+   * 截一张屏幕，缩到指定宽度后压成 JPEG。
+   *
+   * user:“读取能力加上”+(给模型一张图，让它自己看拼图、看图片验证码、看界面画得对不对；
+   * 这一层只负责取图，不做任何识别)。
+   */
+  private fun screenshotJson(maxWidth: Int): String {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+      return errorJson("截图需要 Android 11 及以上")
+    }
+    var bitmap: Bitmap? = null
+    val latch = CountDownLatch(1)
+    takeScreenshot(
+      Display.DEFAULT_DISPLAY,
+      mainExecutor,
+      object : TakeScreenshotCallback {
+        override fun onSuccess(result: ScreenshotResult) {
+          try {
+            val buffer = result.hardwareBuffer
+            val wrapped = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
+            bitmap = wrapped?.copy(Bitmap.Config.ARGB_8888, false)
+            buffer.close()
+          } catch (error: Throwable) {
+            Log.w(TAG, "screenshot copy failed", error)
+            bitmap = null
+          }
+          latch.countDown()
+        }
+
+        override fun onFailure(errorCode: Int) {
+          Log.w(TAG, "screenshot failed: $errorCode")
+          latch.countDown()
+        }
+      },
+    )
+    if (!latch.await(7, TimeUnit.SECONDS)) return errorJson("截图超时")
+    val shot = bitmap ?: return errorJson("截图失败，系统没有给出画面")
+    val target = if (maxWidth > 0) maxWidth else 900
+    val scale = minOf(1f, target.toFloat() / shot.width)
+    val scaled = if (scale < 1f) {
+      Bitmap.createScaledBitmap(shot, (shot.width * scale).toInt(), (shot.height * scale).toInt(), true)
+    } else {
+      shot
+    }
+    val out = ByteArrayOutputStream()
+    scaled.compress(Bitmap.CompressFormat.JPEG, 82, out)
+    val bytes = out.toByteArray()
+    return okJson(
+      JSONObject()
+        .put("mime", "image/jpeg")
+        .put("width", scaled.width)
+        .put("height", scaled.height)
+        .put("image_base64", Base64.encodeToString(bytes, Base64.NO_WRAP)),
+    )
   }
 
   /** 执行一次手势并等它真的完成；回调走主线程，所以调用方必须在后台线程上。 */

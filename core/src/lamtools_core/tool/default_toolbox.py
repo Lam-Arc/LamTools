@@ -1005,13 +1005,15 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     deepcopy(SUB_AGENT_TOOL_SPEC),
     deepcopy(SUB_AGENT_MESSAGE_TOOL_SPEC),
     # user:“加，安卓控制，上模拟器里把它跑通”+(手机上的设备控制：读屏、点按、滑动、输入、
-    # 返回桌面、打开应用；截图不在这一版里，界面树已经把文字和位置给全了)。
+    # 返回桌面、打开应用；读取能力再加上截图与通知，交给模型自己判断)。
     {
         "name": "android_use",
         "description": (
-            "操作这台安卓手机：读屏、点按、长按、滑动、输入、返回/回桌面、打开应用，一次调用做一个动作。"
+            "操作这台安卓手机：读屏、点按、长按、滑动、输入、返回/回桌面、打开应用、截图、读通知，一次调用做一个动作。"
             "固定流程是先 snapshot 看界面，优先用 ref 做 tap_node/set_text，坐标只在没有 ref 时用，"
             "动作之后再用 snapshot 确认结果。ref 只对刚拿到的 snapshot 有效，界面变了就重新 snapshot。"
+            "snapshot 只有文字和位置；要看画面、图片、验证码图片就用 screenshot。"
+            "短信验证码和平台推送用 notifications 读，读到什么由你自己判断。"
         ),
         "input_schema": _schema(
             {
@@ -1020,6 +1022,7 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                     "enum": [
                         "status", "snapshot", "tap", "long_press", "swipe",
                         "tap_node", "set_text", "global", "open_app", "list_apps",
+                        "screenshot", "notifications",
                     ],
                     "description": "要做的动作。",
                 },
@@ -1054,6 +1057,14 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                 "max_nodes": {
                     "type": "integer",
                     "description": "snapshot 最多返回多少个元素，默认 80。",
+                },
+                "max_width": {
+                    "type": "integer",
+                    "description": "screenshot 的图片宽度，默认 900，越大越清楚也越费 token。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "notifications 最多读多少条，默认 20，最多 40。",
                 },
             },
             ["action"],

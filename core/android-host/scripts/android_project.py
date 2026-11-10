@@ -254,6 +254,7 @@ def sync_manifest() -> int:
     text = inject_small_window_flag(text, nl)
     text = inject_overlay_service(text, nl)
     text = inject_accessibility_service(text, nl)
+    text = inject_notification_listener(text, nl)
     text = inject_qr_scanner(text, nl)
     if text != original:
         MANIFEST.write_text(text, encoding="utf-8", newline="")
@@ -400,6 +401,40 @@ def inject_accessibility_service(text: str, nl: str) -> str:
             '                android:resource="@xml/sunday_accessibility" />',
             "        </service>",
             "        <!-- <<< Sunday accessibility -->",
+            "",
+        ]
+    )
+    return text.replace(anchor, block + anchor, 1)
+
+
+NOTIFICATION_MARKER = "<!-- >>> Sunday notifications -->"
+
+
+def inject_notification_listener(text: str, nl: str) -> str:
+    """声明通知读取服务。
+
+    user:“读取能力加上”+(短信验证码、平台推送都落在通知栏里；只留最近若干条交给模型自己
+    读，不做验证码特化)。系统要求声明 BIND_NOTIFICATION_LISTENER_SERVICE，用户还要在
+    「通知使用权」里手动允许一次。
+    """
+    if NOTIFICATION_MARKER in text:
+        return text
+    anchor = "    </application>"
+    if anchor not in text:
+        return text
+    block = nl.join(
+        [
+            "        " + NOTIFICATION_MARKER,
+            "        <service",
+            '            android:name=".SundayNotificationListenerService"',
+            '            android:exported="false"',
+            '            android:label="Sunday 通知读取"',
+            '            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">',
+            "            <intent-filter>",
+            '                <action android:name="android.service.notification.NotificationListenerService" />',
+            "            </intent-filter>",
+            "        </service>",
+            "        <!-- <<< Sunday notifications -->",
             "",
         ]
     )
