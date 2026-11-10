@@ -8,14 +8,14 @@
 
 | 文件 | 用途 | 大小 | 交付名（Downloads） |
 | --- | --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 413 MB | `02-sunday-m-arm64-debug.apk` |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 305 MB | `02-sunday-m-arm64-debug.apk` |
 | `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 411 MB | `02-sunday-m-x86_64-debug.apk` |
 
-校验和（arm64 为 2026-11-09 04:12 构建，含内置运行时、远程链路修复；交付时文件名带
-`02-` 前缀，内容与这里列出的一致。x86_64 包是 2026-11-06 的旧构建，本轮没有重打）：
+校验和（arm64 为 2026-11-09 13:29 构建，含内置运行时、远程链路修复与设备控制；交付时
+文件名带 `02-` 前缀，内容与这里列出的一致。x86_64 包是 2026-11-06 的旧构建，本轮没有重打）：
 
 ```
-6507af5c85b92448c88ab0c5da27da5c36ec8407dd189e0fe1b309b2d345456a  sunday-m-arm64-debug.apk
+8f36165b026cbad51be2b8e3b6a888386234afd1ebbc3e0b768284b10409c55a  sunday-m-arm64-debug.apk
 d797ab438c9d67a4ccbec8483cb074ecf02d52250d3b95cd7e54f1dc31d099a6  sunday-m-x86_64-debug.apk
 ```
 
@@ -266,6 +266,48 @@ user:“铺满屏幕，渐变流动，高级而令人舒适，要这种效果，
 - 电脑端传输进程现在由我手动起在 `%APPDATA%\Sunday\p2p`，直连 Core 的 59928 端口；
   重启桌面应用之后请打开一次「设备连接」让宿主自己拉起传输进程，避免指向已经死掉的端口。
 - 真机还没有安装这一版 APK：无线调试当前是关的（5555 / 34127 都拒绝连接）。
+
+## 2026-11-09：安卓设备控制（android_use）
+
+user:“加，安卓控制，上模拟器里把它跑通”+(让 Sunday 自己读手机界面、点按、滑动、输入、
+返回桌面、打开应用)。
+
+**怎么开**：系统设置 → 无障碍 → 「Sunday 设备控制」打开。重装 APK 之后这个开关会失效，
+需要在设置里重新打开一次（两次重装都这样）；也可以直接用 adb：
+
+```
+adb shell settings put secure enabled_accessibility_services   com.lamtools.sunday.core/com.lamtools.sunday.core.SundayAccessibilityService
+adb shell settings put secure accessibility_enabled 1
+```
+
+**结构**：
+
+| 位置 | 作用 |
+| --- | --- |
+| `SundayAccessibilityService.kt` | 读屏（文字、描述、位置、可点击/可编辑/可滚动）与点按、长按、滑动、写文本、全局动作、打开应用、列出可启动应用 |
+| `DeviceControlBridge.kt` | Rust 与服务的唯一入口；服务没开时如实回答「无障碍服务没有开启」 |
+| `device_control.rs` | 宿主在 127.0.0.1 随机端口开一条只认令牌的通道，端口与一次性令牌写进 `files/runtime/userdata/device-control.json`，guest 看到 `/root/.sunday/device-control.json` |
+| `android_use.py` | Core 的工具；只在 `SUNDAY_HOST_PLATFORM=android` 时注册，桌面与远程模式不出现 |
+
+**模拟器验收（x86_64 / API 36）**，全部是真实动作：
+
+| 动作 | 结果 |
+| --- | --- |
+| status | `connected: true` |
+| snapshot | 读到系统对话框与设置页的完整树（包名、1080x1920、每个元素的文字与 bounds） |
+| tap_node（Wait） | 关掉了 System UI 的 ANR 对话框 |
+| open_app com.android.settings | 前台切到设置 |
+| tap_node（网络和互联网） | 进入二级页，标题变成 Internet / Networks available / SIMs |
+| global back | 回到设置首页 |
+| 点搜索 → set_text 「battery」 | 输入框里出现 battery |
+| 桌面侧调用同一个 Python handler | snapshot 返回 14 行可读树，global home 返回 ok |
+
+**限制**：
+
+- 这一版没有截图；界面树已带文字与位置，够点，需要「看画」再加 `takeScreenshot`。
+- 只能读到系统无障碍愿意暴露的节点；密码框、部分自绘界面读不到文字。
+- 工具只出现在手机本机的 Core；「远程模式」跑在电脑上的 Core 没有它。
+- 手机 App 里还没有「去开无障碍」的引导页，目前要用户自己去系统设置。
 
 ## 未验证（不得当作通过）
 
