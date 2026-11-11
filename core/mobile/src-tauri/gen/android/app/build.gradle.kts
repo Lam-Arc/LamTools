@@ -69,8 +69,8 @@ android {
         applicationId = "com.lamtools.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1049").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "0.1.49")
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1048").toInt()
+        versionName = tauriProperties.getProperty("tauri.android.versionName", "0.1.48")
     }
     signingConfigs {
         if (releaseSigningReady) {

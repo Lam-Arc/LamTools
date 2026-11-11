@@ -10,7 +10,7 @@ const icon = computed(() => props.theme === 'ivory' ? iconLight : iconDark)
 const version = import.meta.env.VITE_SUNDAY_VERSION || '0.3.31'
 const linuxVersion = import.meta.env.VITE_LINUX_VERSION || '0.3.17'
 const downloadUrl = import.meta.env.VITE_WINDOWS_DOWNLOAD_URL || '/downloads/Sunday-latest-x64-setup.exe'
-const mobileVersion = import.meta.env.VITE_SUNDAY_MOBILE_VERSION || '0.1.49'
+const mobileVersion = import.meta.env.VITE_SUNDAY_MOBILE_VERSION || '0.1.48'
 // user:“接 GitHub release”+(安卓包走 GitHub Release 的固定地址：同一个 tag 下同名资产
 // 每次构建覆盖，官网链接不用跟着版本号改，扫码之后永远是最新那一个)。
 const androidDownloadUrl = import.meta.env.VITE_ANDROID_DOWNLOAD_URL
