@@ -6,18 +6,21 @@
 
 ## 交付物
 
-| 文件 | 用途 | 大小 | 交付名（Downloads） |
+| 文件 | 用途 | 大小 | 说明 |
 | --- | --- | --- | --- |
-| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 305 MB | `02-sunday-m-arm64-debug.apk` |
-| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 319 MB | — |
+| `artifacts/android/sunday-m-arm64-debug.apk` | 手机（arm64-v8a） | 346 MB | 宿主 0.1.1（versionCode 1001），内置 Python 核心 0.3.39 |
+| `artifacts/android/sunday-m-arm64-0.1.0.apk` | 回滚用 | 305 MB | 上一版 0.1.0，内置核心 0.3.38 |
+| `artifacts/android/sunday-m-x86_64-debug.apk` | 模拟器（x86_64） | 319 MB | 2026-11-09 构建，核心较旧 |
 
-校验和（2026-11-09 17:36 / 17:40 构建，含内置运行时、截图与通知读取、远程链路的稳定性修复；交付时
-文件名带 `02-` 前缀，内容与这里列出的一致）：
+校验和（2026-11-11 构建，运行时由 WSL 里的 `build-runtime.sh aarch64` 重出，缓存
+`~/.cache/sunday-rt`）：
 
 ```
-0bbb2dc9bf83d2f44fbed1531efe5a64072f6a14a1e3672788f041be5be97388  sunday-m-arm64-debug.apk
-b5ba8abcb1c434385a34fb8571c09a9c88197ad3a957d6d80f3af8e5ec486b67  sunday-m-x86_64-debug.apk
+bf7fb4b74f631df3815086206d4f84dafec892700e8d747b45e8be7f27f4f39d  sunday-m-arm64-debug.apk
 ```
+
+`Sunday M` 就是 `core/android-host`（包名 `com.lamtools.sunday.core`）。`core/mobile`
+（`com.lamtools.mobile`，0.1.x）是另一条老远程客户端线，不打进 rootfs，别和 Sunday M 混用。
 
 ## 下载渠道（2026-11-10）
 
