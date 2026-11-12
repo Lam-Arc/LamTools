@@ -7,6 +7,7 @@ user:“但是用压缩后自动追加用户消息里面剔除”+提醒带标�
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from lamtools_core.llm import ChatMessage
@@ -14,9 +15,22 @@ from lamtools_core.llm import ChatMessage
 GOAL_CONTINUATION_KEY = "goal_continuation"
 
 
-def goal_continuation_text(objective: str) -> str:
-    """Return the fixed reminder appended to the next turn."""
-    return f"存在目标：{str(objective or '').strip()} 未完成，请继续。"
+def goal_continuation_text(
+    objective: str, completion_criteria: Iterable[str] = ()
+) -> str:
+    """Return the reminder appended to the next turn, or "" without an objective.
+
+    user:“完成标准”+(标准没有外部校验，但要随提醒回到模型眼前，否则它没法判断该不该收口)。
+    """
+    clean = str(objective or "").strip()
+    if not clean:
+        return ""
+    reminder = f"存在目标：{clean} 未完成，请继续。"
+    criteria = [str(item or "").strip() for item in completion_criteria]
+    criteria = [item for item in criteria if item]
+    if criteria:
+        reminder += "完成标准：" + "；".join(criteria)
+    return reminder
 
 
 def goal_continuation_message(reminder: str) -> ChatMessage:

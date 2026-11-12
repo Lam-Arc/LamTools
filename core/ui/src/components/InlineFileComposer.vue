@@ -14,6 +14,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { activeCompletion, referenceSpans } from '@/composer/fileReferences'
 import { composerEditorMaxHeight } from '@/composer/editorHeight'
 import { fileTypeBadge } from '@/helpers/fileTypeBadge'
+import { fileTypeIconMarkup } from '@/helpers/fileTypeIcon'
 import type { CoreAttachment, CoreCommandCatalogItem } from '@/types'
 import CommandPalette from './CommandPalette.vue'
 import { useReferenceActions } from '@/helpers/referenceActions'
@@ -66,17 +67,19 @@ class FileWidget extends WidgetType {
     span.title = this.path.startsWith('pending://') ? `${this.name} · ${this.status === 'failed' ? '处理失败，可移除后重新添加' : '正在处理'}` : `${this.name}\n${this.path}`
     span.setAttribute('aria-label', span.title)
     // user:“把那个@的符号去掉 换成对应的文件图标”+(引用不再显示 @，改成
-    // 按扩展名取色的文件类型徽标 + 文件名；失败/上传中仍用红色 ! 或 … 标出状态)。
+    // 按扩展名取色的文件类型图标 + 文件名；失败/上传中仍用红色 ! 或 … 标出状态)。
+    // user:“@渲染仅渲染图标即可，不再需要文字了”+(输入框内只留一枚类型图标，
+    // 文件名与路径放在悬浮提示里；附件本体在输入框上方以大缩略图展示)。
     const badgeData = fileTypeBadge(this.name, this.status === 'failed')
     const badge = document.createElement('span')
     badge.className = 'composer-file-badge'
     badge.dataset.label = this.status === 'failed' ? '!' : this.status === 'uploading' ? '…' : badgeData.label
     badge.style.background = this.status === 'failed' ? '#F5555D' : badgeData.background
     badge.style.color = this.status === 'failed' ? '#FFFFFF' : badgeData.color
-    const label = document.createElement('span')
-    label.className = 'composer-file-name'
-    label.textContent = this.name
-    span.replaceChildren(badge, label)
+    badge.innerHTML = this.status === 'failed'
+      ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 7v6M12 17h.01"/></svg>'
+      : fileTypeIconMarkup(this.name, 12)
+    span.replaceChildren(badge)
     span.dataset.status = this.status
     if (this.status === 'uploading') span.setAttribute('aria-busy', 'true')
     span.addEventListener('mousedown', e => { e.preventDefault(); if (this.status === 'failed') emit('retry-file', this.path); else if (!this.path.startsWith('pending://')) emit('preview-file', this.path) })
@@ -178,10 +181,9 @@ defineExpose({
 :deep(.cm-placeholder) { pointer-events: none; user-select: none; }
 /* user:“我怀疑点击附件或者@link 后会出现样式错位的 bug”+(token 之前是 inline-block 加内边距，
    插进编辑器后行盒高度跟着变，正文与光标一起跳；固定高度与行高，超长名省略)。 */
-:deep(.composer-file-token) { display: inline-flex; align-items: center; gap: 3px; height: 18px; line-height: 18px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--radius-sm); padding: 0 var(--space-1); background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--text) 85%, transparent); font: inherit; vertical-align: -2px; cursor: pointer; }
+:deep(.composer-file-token) { display: inline-flex; align-items: center; justify-content: center; height: 18px; line-height: 18px; border-radius: var(--radius-sm); padding: 0 2px; background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--text) 85%, transparent); font: inherit; vertical-align: -2px; cursor: pointer; }
 :deep(.composer-file-badge) { display: inline-grid; flex: 0 0 auto; place-items: center; width: 14px; height: 14px; border-radius: 30%; overflow: hidden; font-family: var(--font-sans); font-size: 6.5px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
-:deep(.composer-file-badge::before) { content: attr(data-label); }
-:deep(.composer-file-name) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:deep(.composer-file-badge svg) { display: block; }
 :deep(.composer-file-token:hover) { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
 :deep(.composer-file-token[data-status=failed]) { color: var(--red); }
 </style>

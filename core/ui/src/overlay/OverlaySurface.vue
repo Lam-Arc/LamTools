@@ -7,6 +7,10 @@
     @mousemove="onPointerMove"
     @mouseup="onPointerUp"
   >
+    <!-- user:“这个边框为什么没有包含整个屏幕边框？仅 bar 有边框”+(整屏也画同一圈
+         2px 流光，胶囊压在上沿，和 Computer Use 覆盖层连成同一条线)。 -->
+    <div class="overlay-frame hud-screen-frame" aria-hidden="true" />
+
     <svg class="overlay-canvas" :width="viewport.width" :height="viewport.height" aria-hidden="true">
       <g
         v-for="mark in canvasMarks"
@@ -72,19 +76,24 @@
       :asset-url="assetUrl"
     />
 
-    <!-- 工具条是覆盖层唯一吃鼠标的地方；其余位置全部穿透。 -->
-    <div ref="barRef" class="overlay-bar" data-overlay-hit>
+    <!-- 工具条是覆盖层唯一吃鼠标的地方；其余位置全部穿透。
+         user:“那个『收起』也去掉”+(只留清空；没有标记时整条不渲染，
+         桌面上不留一条空药丸)。 -->
+    <div
+      v-if="marks.length"
+      ref="barRef"
+      class="overlay-bar hud-pill hud-pill-flow"
+      data-overlay-hit
+    >
+      <span class="hud-pill__ring" aria-hidden="true" />
+      <span class="hud-pill__text">Sunday 标注中</span>
       <button
-        v-if="marks.length"
         type="button"
-        class="overlay-action overlay-action--quiet"
+        class="overlay-action hud-pill__btn hud-pill__btn--text"
         :disabled="busy"
         @click="clearAllMarks"
       >
         清空
-      </button>
-      <button type="button" class="overlay-action overlay-action--quiet" @click="closeLayer">
-        收起
       </button>
     </div>
 
@@ -102,6 +111,8 @@
  *  互不影响；默认整屏穿透，只有工具条和圈选态吃鼠标。)
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+// user:“上方那个条和电脑使用时候的样式用同一个”+(和 Computer Use 共用一份胶囊外观)。
+import '@/styles/hud-pill.css'
 import { useOverlayTheme } from '@/pet/ui/overlayTheme.ts'
 import * as bridge from './bridge.ts'
 import FloaterMarks from './FloaterMarks.vue'
@@ -386,10 +397,6 @@ async function clearAllMarks(): Promise<void> {
   await reportInteractiveRects()
 }
 
-async function closeLayer(): Promise<void> {
-  await bridge.closeOverlay().catch(() => undefined)
-}
-
 function onResize(): void {
   viewport.width = window.innerWidth
   viewport.height = window.innerHeight
@@ -469,6 +476,13 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+/* 整屏流光边框在 styles/hud-pill.css，压在标记下面、工具条下面。 */
+.overlay-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+
 /* 标记默认不接收鼠标：整层靠命中矩形决定穿透。 */
 .overlay-mark {
   pointer-events: none;
@@ -543,50 +557,17 @@ onBeforeUnmount(() => {
   animation: none;
 }
 
+/* user:“上方那个条和电脑使用时候的样式用同一个”+(只在这里定位，外观全在
+   styles/hud-pill.css：贴屏幕上沿、黑底、2px 暗彩流光边，两边共用一份)。 */
 .overlay-bar {
   position: fixed;
   left: 50%;
-  top: 22px;
+  top: 0;
   transform: translateX(-50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(18, 18, 22, 0.86);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.4);
-  pointer-events: auto;
+  z-index: 2;
 }
 
-.overlay-action {
-  appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  padding: 7px 14px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #f2f2f4;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background 0.16s ease, border-color 0.16s ease, opacity 0.16s ease;
-}
-
-.overlay-action:hover {
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.26);
-}
-
-.overlay-action.is-active {
-  background: rgba(255, 122, 182, 0.2);
-  border-color: rgba(255, 122, 182, 0.55);
-  color: #ffd0e3;
-}
-
-.overlay-action--quiet {
-  background: transparent;
-  color: rgba(242, 242, 244, 0.68);
-}
+/* 按钮外观同样来自 hud-pill__btn，这里不再重复定义。 */
 
 @keyframes overlay-draw-in {
   from {

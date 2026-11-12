@@ -211,6 +211,9 @@
       <template #status>
         <slot v-if="!workflowMode" name="composer-status" />
       </template>
+      <template #attachments>
+        <slot v-if="!workflowMode" name="composer-attachments" />
+      </template>
       <template #textarea>
         <slot name="composer-textarea">
           <textarea

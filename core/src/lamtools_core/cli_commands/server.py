@@ -183,6 +183,8 @@ async def cmd_maintenance_prune_checkpoints(args: argparse.Namespace) -> int:
             db_path,
             apply=bool(args.apply),
             keep_recent=int(args.keep_recent or 1),
+            allow_non_dev=bool(getattr(args, "allow_installed", False)),
+            backup=not bool(getattr(args, "no_backup", False)),
         )
     except MaintenanceScopeError as exc:
         print(

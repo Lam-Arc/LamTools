@@ -555,7 +555,9 @@ class CoreLiveConnection:
             # events have a positive sequence and keep the normal sync lookup.
             if event_id and event_seq and journal is not None:
                 try:
-                    change = await journal.get_change(str(event_id))
+                    # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(避免每条事件都从数据库读取并重复发送完整工具输出)。
+                    lookup = getattr(journal, "get_change_header", journal.get_change)
+                    change = await lookup(str(event_id))
                 except Exception:
                     change = None
                 if change is not None:
@@ -1058,7 +1060,10 @@ def _snapshot_for_notification(snapshot: dict[str, Any]) -> dict[str, Any]:
     排队几十秒；超过阈值时只推最近 10 个回合、2MB 以内的一页，并带上
     ``history_page`` 让客户端按页往前翻，其余字段保持不变。)
     """
-    if _snapshot_item_count(snapshot) <= SNAPSHOT_NOTIFICATION_MAX_ITEMS:
+    # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(条目少也可能超过客户端单帧限制，分页同时按大小判断)。
+    if (_snapshot_item_count(snapshot) <= SNAPSHOT_NOTIFICATION_MAX_ITEMS
+            and len(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            <= DEFAULT_THREAD_HISTORY_PAGE_BYTES):
         return snapshot
     return _character_page_snapshot(
         snapshot,

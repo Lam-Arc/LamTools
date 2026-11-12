@@ -257,16 +257,35 @@ async def _read_request_body(request: Request):
 def create_plugin_http_router(host_provider, catalog_provider) -> APIRouter:
     router = APIRouter()
 
+    @router.post("/plugin-upload/{plugin}/{name}")
+    async def plugin_upload(plugin: str, name: str, request: Request):
+        from .remote_upload import dispatch_upload
+        return await dispatch_upload(host_provider, catalog_provider, plugin, name, request)
+
+    # user:“第二阶段结束后 就继续开展第三阶段”+(显式资源入口复用插件令牌及原操作归属)。
+    @router.api_route("/plugin-resource/{plugin}/{path:path}", methods=["GET", "HEAD"])
+    async def plugin_resource(plugin: str, path: str, request: Request):
+        from .remote_resource import HeadOnlyResponse, dispatch_resource
+        response = await dispatch_resource(host_provider, catalog_provider, plugin, path, request)
+        return HeadOnlyResponse(response) if request.method == "HEAD" else response
+
     @router.post("/plugin-remote/{plugin}/{namespace}/{method}")
     async def plugin_remote(plugin: str, namespace: str, method: str, request: Request):
         from .remote_gateway import authenticate_remote, dispatch_remote_request, remote_response
         # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(无有效令牌先拒绝，不读取或解析请求体)。
-        if catalog_provider() is None:
+        host, catalog = host_provider(), catalog_provider()
+        if catalog is None:
             return remote_response(503, {"error": "plugin system is not ready"})
-        rejection = authenticate_remote(host_provider(), plugin, dict(request.headers))
+        rejection = authenticate_remote(host, plugin, dict(request.headers))
         if rejection is not None:
             return remote_response(*rejection)
-        status, payload = await dispatch_remote_request(host=host_provider(), catalog=catalog_provider(),
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(请求期间绑定原应用宿主与目录，不发布已替换提供方的结果)。
+        def app_binding():
+            try:
+                return host_provider() is host and catalog_provider() is catalog
+            except Exception:
+                return False
+        status, payload = await dispatch_remote_request(host=host, catalog=catalog, binding_valid=app_binding,
             plugin=plugin, namespace=namespace, method=method, body=await _read_request_body(request),
             headers=dict(request.headers), remote=str(request.client.host if request.client else ""))
         return remote_response(status, payload)

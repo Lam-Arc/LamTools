@@ -1,5 +1,6 @@
 import { absoluteReference } from './referenceActions'
 import { fileTypeBadge } from './fileTypeBadge'
+import { fileTypeIconMarkup } from './fileTypeIcon'
 import { normalizeWebLink } from './webLinks'
 
 const FILE_END = /\.(?:md|txt|pdf|png|jpe?g|webp|gif|svg|xlsx?|csv|pptx?|docx?|zip|jsonc?|ya?ml|toml|py|rs|ts|tsx|js|jsx|vue|html?|css|log|mp[34]|wav|webm)(?::\d+(?::\d+)?)?$/i
@@ -61,6 +62,7 @@ export function renderFileReferenceNodes(root: HTMLElement, workRoot: string): v
     badge.dataset.label = badgeData.label
     badge.style.background = badgeData.background
     badge.style.color = badgeData.color
+    badge.innerHTML = fileTypeIconMarkup(name, 11)
     icon.appendChild(badge)
     anchor.replaceChildren(icon, document.createTextNode(name))
   }

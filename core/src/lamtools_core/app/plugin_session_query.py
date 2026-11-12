@@ -74,6 +74,23 @@ class PluginSessionQueryService:
             if len(items) == limit:
                 more = more or index + 1 < len(rows)
                 break
+        if project_root is not None:
+            # user:“复用原宿主权威”+(发布前再次读取已选会话，过滤扫描后隐藏或移出项目的记录)。
+            verified = []
+            for item in items:
+                try:
+                    record = await read_current(item.session_id)
+                    self._context()
+                    root = record.metadata.get("work_root") if record is not None else None
+                    in_project = (type(root) is str and bool(root) and "\x00" not in root
+                                  and Path(root).is_absolute() and str(Path(root).resolve()) == project_root)
+                except SessionQueryError:
+                    raise
+                except Exception:
+                    raise SessionQueryError("session-query/read-failed", "Session query failed") from None
+                if in_project and title_contains.casefold() in record.title.casefold():
+                    verified.append(SessionSummary(record.id, record.title[:1024], record.status, len(record.title) > 1024))
+            items = verified
         next_cursor = None
         if more:
             while len(self._cursors) >= 128:

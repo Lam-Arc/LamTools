@@ -182,14 +182,14 @@ describe('artifact references load lazily', () => {
       part('p1', [referenceArtifact('art-one', 'workspace://.lam/artifacts/one.png')]),
       part('p2', [referenceArtifact('art-two', 'workspace://.lam/artifacts/two.png')]),
     ], transport)
-    expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(2)
+    expect(wrapper.findAll('.message-artifacts .reference-item--media')).toHaveLength(2)
 
     // 同一张引用图在多个 part 重复出现：只保留一项。
     const wrapper2 = mountView([
       part('p1', [referenceArtifact('art-one', 'workspace://.lam/artifacts/one.png')]),
       part('p2', [referenceArtifact('art-one', 'workspace://.lam/artifacts/one.png')]),
     ], transport)
-    expect(wrapper2.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(1)
+    expect(wrapper2.findAll('.message-artifacts .reference-item--media')).toHaveLength(1)
     wrapper.unmount()
     wrapper2.unmount()
   })

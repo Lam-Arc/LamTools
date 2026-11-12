@@ -96,7 +96,7 @@ def test_session_remote_handoff_reports_native_projection_and_real_method_limits
     methods = {row["name"]: row for row in report["remotes"]}
     assert "dataclass" in methods["session.state"]["difference"]
     assert methods["session.list"]["suggestedContract"] == "context.session_query.query"
-    assert "标题" in methods["session.search"]["difference"]
+    assert "单会话" in methods["session.search"]["difference"]
     assert report["runtimeVerified"] is False
 
 

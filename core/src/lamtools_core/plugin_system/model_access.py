@@ -51,10 +51,13 @@ class PluginModelAPI:
     def _records(self):
         self._scope.check_open()
         try:
-            return list(self._store_factory().list_sync(work_root=self._work_root))
+            records = list(self._store_factory().list_sync(work_root=self._work_root))
         except Exception as error:
             # user:“接口完善”+(发现失败不能伪装成空目录，也不把底层异常中的配置数据暴露给调用方)。
             raise ModelAccessError("model/store-error", "Unable to read configured model records") from error
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(原读取结束后撤回的启动代不得发布旧模型目录)。
+        self._scope.check_open()
+        return records
 
     @staticmethod
     def _descriptor(record):
@@ -119,6 +122,8 @@ class PluginModelAPI:
             usable = model_selection.model_is_usable(record, work_root=self._work_root)
         except Exception as error:
             raise ModelAccessError("model/store-error", "Unable to read model provider configuration") from error
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(提供方检查后再次确认调用代仍有效)。
+        self._scope.check_open()
         if not usable:
             raise ModelAccessError("model/unavailable", "Selected model is disabled, or its provider is missing or has an invalid endpoint")
         return ModelSelection(scene=scene, model=self._descriptor(record), replaced_from=replaced_from, notice=notice)

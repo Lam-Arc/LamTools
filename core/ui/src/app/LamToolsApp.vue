@@ -512,6 +512,20 @@
       <PluginSystemContributions :request-rpc="requestConfigOperation" region="composer" />
     </template>
 
+    <template #composer-attachments>
+      <!-- user:“还有输入框内，也需要显示”+(待发附件在输入框内以媒体卡片/文档胶囊展示，
+           文本里的 @ 位置只保留类型图标)。 -->
+      <AttachmentTray
+        v-if="pendingAttachments.length"
+        :attachments="pendingAttachments"
+        :transport="transport"
+        @preview="previewComposerAttachment"
+        @open="openPendingAttachment"
+        @remove="removeComposerAttachment"
+        @retry="retryComposerAttachment"
+      />
+    </template>
+
     <template #composer-queue-panel>
       <!-- user:“你悬浮的胶囊应该在它的上方，它不存在时在输入栏的上方”+(发送状态胶囊
            与目标/排队托盘共用输入栏上沿的同一挂载点，胶囊排在最上面)。 -->
@@ -690,6 +704,7 @@
 <script setup lang="ts">
 import { encodeMultipartFile } from '@/composer/upload'
 import ReferenceItems from '@/components/ReferenceItems.vue'
+import AttachmentTray from '@/components/AttachmentTray.vue'
 import InlineFileComposer, { type ComposerEditorHandle } from '@/components/InlineFileComposer.vue'
 import { fileReference, insertReferences, replaceReference, referenceSpans, type ReferenceSelection } from '@/composer/fileReferences'
 import { readComposerDraft, writeComposerDraft, resolveComposerDraftStorage } from '@/composer/drafts'
@@ -3143,6 +3158,28 @@ async function loadComposerReferenceSuggestions(trigger: string, query: string) 
 const composerPreview = ref<InstanceType<typeof ReferenceItems> | null>(null)
 const failedReferenceSources = new Map<string, File | { path: string; name: string }>()
 function previewComposerPath(path: string) { composerPreview.value?.previewPath(path) }
+// user:“还有输入框内，也需要显示”+(输入框上方的附件组件：预览、移除与重试都作用于
+// 同一条待发附件；移除时同步删掉文本里的图标占位)。
+function previewComposerAttachment(id: string) {
+  const item = pendingAttachments.value.find(entry => entry.id === id)
+  if (!item || item.status === 'uploading' || !item.path || item.path.startsWith('pending://')) return
+  previewComposerPath(item.path)
+}
+function removeComposerAttachment(id: string) {
+  const item = pendingAttachments.value.find(entry => entry.id === id)
+  if (item?.path) {
+    const update = replaceReference(composerText.value, item.path, '')
+    if (update.replaced) {
+      composerText.value = update.text
+      return
+    }
+  }
+  removeAttachment(id)
+}
+function retryComposerAttachment(id: string) {
+  const item = pendingAttachments.value.find(entry => entry.id === id)
+  if (item?.path) retryComposerReference(item.path)
+}
 function retryComposerReference(path: string) {
   const source = failedReferenceSources.get(path)
   const span = referenceSpans(composerText.value).find(s => s.path === path)

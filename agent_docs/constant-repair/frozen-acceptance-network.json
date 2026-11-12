@@ -1,0 +1,24 @@
+{
+  "exe": "E:\\LamTools\\agent_docs\\constant-repair\\build\\dist\\SundayCore\\SundayCore.exe",
+  "data_dir": "E:\\LamTools\\agent_docs\\constant-repair\\build\\frozen-acceptance-rm6r9bzj",
+  "ok": true,
+  "probe": {
+    "ok": true,
+    "requests_version": "2.34.0",
+    "checks": [
+      "requests import/session",
+      "rotating log handler",
+      "cross-thread terminal isolation",
+      "idempotent reconciliation",
+      "small live change header",
+      "complete historical replay"
+    ],
+    "origins": {
+      "lamtools_core.logging_setup": "E:\\LamTools\\agent_docs\\constant-repair\\build\\dist\\SundayCore\\_internal\\lamtools_core\\logging_setup.py",
+      "lamtools_core.app.event_store": "E:\\LamTools\\agent_docs\\constant-repair\\build\\dist\\SundayCore\\_internal\\lamtools_core\\app\\event_store.py",
+      "lamtools_core.app.sync_store": "E:\\LamTools\\agent_docs\\constant-repair\\build\\dist\\SundayCore\\_internal\\lamtools_core\\app\\sync_store.py"
+    }
+  },
+  "websocket": true,
+  "network_controller": true
+}

@@ -40,6 +40,7 @@ def binding_check(host, catalog, plugin, manifest, path):
     declaration = copy.deepcopy(manifest.raw)
     operation = next(route.operation for route in read_http_routes(manifest) if route.method == "POST" and route.path == path)
     token = plugin_http_token(host, plugin, create=False)
+    operation_token = catalog.binding_token(operation)
     try:
         expected_spec = next((item for item in read_operations(manifest) if item.name == operation), None)
     except Exception:
@@ -54,6 +55,8 @@ def binding_check(host, catalog, plugin, manifest, path):
                 and getattr(host, "backend_manager", None) is manager
                 and (manager is None or manager.generation.get(plugin) == generation)
                 and catalog.has(operation) and catalog.owner_of(operation) == "plugin:" + plugin
+                # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(同所有者重新注册也撤回旧流及上传)。
+                and operation_token is not None and catalog.binding_token(operation) is operation_token
                 and bool(token) and plugin_http_token(host, plugin, create=False) == token)
         except Exception:
             return False
@@ -71,25 +74,35 @@ def encode_frame(value):
 class RemoteStreamResponse(Response):
     media_type = "application/x-ndjson"
 
-    def __init__(self, source, valid, release):
+    def __init__(self, source, valid, release, *, async_valid=None):
         super().__init__(status_code=200, media_type=self.media_type,
             headers={"cache-control": "no-store", "x-content-type-options": "nosniff"})
         self.raw_headers = [(key, value) for key, value in self.raw_headers if key != b"content-length"]
-        self.source, self.valid, self.release = source, valid, release
+        self.source, self.valid, self.release, self.async_valid = source, valid, release, async_valid
 
     async def __call__(self, scope, receive, send):
         tasks = []
         revoked = False
+        async def allowed():
+            if not self.valid():
+                return False
+            if self.async_valid is not None:
+                try:
+                    await self.async_valid()
+                except Exception:
+                    return False
+            return self.valid()
         async def produce():
             await send({"type": "http.response.start", "status": 200, "headers": self.raw_headers})
             try:
                 async for value in self.source:
-                    if not self.valid():
+                    # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(每帧发布前复核原资源准入)。
+                    if not await allowed():
                         raise ValueError("stream binding changed")
                     frame = encode_frame({"kind": "item", "payload": value})
                     await send({"type": "http.response.body", "body": frame, "more_body": True})
                 # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(最后一次pull也可能撤回原授权；正常end与数据帧同样必须复核，不能依赖轮询及时抢占)。
-                if not self.valid():
+                if not await allowed():
                     raise ValueError("stream binding changed before completion")
                 frame = encode_frame({"kind": "end"})
             except (asyncio.CancelledError, OSError):
@@ -103,7 +116,8 @@ class RemoteStreamResponse(Response):
                 pass
 
         async def withdrawn():
-            while self.valid():
+            # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(流空闲时仍复核资源授权并在撤回时回收)。
+            while await allowed():
                 await asyncio.sleep(POLL_INTERVAL)
 
         async def close():
@@ -116,12 +130,24 @@ class RemoteStreamResponse(Response):
                 self.release()
 
         try:
-            if not self.valid():
+            if self.async_valid is not None:
+                check_task = asyncio.create_task(allowed(), name="plugin-remote-resource-initial")
+                disconnect_task = asyncio.create_task(disconnected(), name="plugin-remote-stream-disconnected")
+                tasks = [check_task, disconnect_task]
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                if disconnect_task in done:
+                    return
+                ready = check_task.result()
+            else:
+                disconnect_task = None
+                ready = self.valid()
+            if not ready:
                 await send({"type": "http.response.start", "status": 409, "headers": []})
                 await send({"type": "http.response.body", "body": b"", "more_body": False})
                 return
-            tasks = [asyncio.create_task(work(), name="plugin-remote-stream-" + work.__name__)
-                for work in (produce, disconnected, withdrawn)]
+            tasks = [asyncio.create_task(produce(), name="plugin-remote-stream-produce"),
+                     disconnect_task or asyncio.create_task(disconnected(), name="plugin-remote-stream-disconnected"),
+                     asyncio.create_task(withdrawn(), name="plugin-remote-stream-withdrawn")]
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             revoked = tasks[2] in done and tasks[0] not in done and tasks[1] not in done
             for task in done:

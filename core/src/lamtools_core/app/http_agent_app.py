@@ -1440,7 +1440,7 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         if "color_key" in payload or "colorKey" in payload:
             visual["color_key"] = payload.get("color_key", payload.get("colorKey"))
         try:
-            project, session, _ = await project_store.create_with_initial_session(
+            project, session, created = await project_store.create_with_initial_session(
                 work_root,
                 name=payload.get("name") if "name" in payload else None,
                 **visual,
@@ -1449,7 +1449,8 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(
             name=request.name,
-            payload={"project": project.to_dict(), "session": session.to_dict()},
+            # user:“复用原宿主权威”+(返回原事务判定的新建状态，避免并发时根据读取猜测)。
+            payload={"project": project.to_dict(), "session": session.to_dict(), "created": created},
         )
 
     async def project_get(request: OperationRequest) -> OperationResult:

@@ -28,7 +28,7 @@ def test_migration_handoff_exposes_verified_remote_transport_without_blind_mappi
     output = tmp_path / "ported"
     report = export_port(root, output)
     contract = report["sundayHostContracts"]["remoteGateway"]
-    assert contract["version"] == 5
+    assert contract["version"] == 9
     assert "POST /api/core/plugin-remote/{plugin}/{namespace}/{method}" in contract["apis"]
     handoff = (output / "PORTING.md").read_text(encoding="utf8")
     assert "plugin_phase3_remote.md" in handoff and "http.remote" in handoff

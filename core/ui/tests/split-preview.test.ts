@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import CoreSplitPreview from '../src/components/CoreSplitPreview.vue'
 import ReferenceItems from '../src/components/ReferenceItems.vue'
+import UserReferenceText from '../src/components/UserReferenceText.vue'
 import { SplitWorkspaceKey } from '../src/split/useSplitWorkspace'
 import { createSplitState, openTab, splitPane, restoreSplitState } from '../src/split/layout'
 import { openFileInSplit } from '../src/split/openFile'
@@ -113,6 +114,58 @@ describe('split file preview routing', () => {
     expect(add).toHaveBeenCalledWith('preview', 'E:/p/README.md', 'README.md', undefined, undefined, 'E:/p', undefined)
     expect(document.querySelector('.reference-preview')).toBeNull()
     wrapper.unmount()
+  })
+
+  it('opens a message file link in the split preview instead of the system app', async () => {
+    // user:“把附件预览给做好”+(点击正文里的文件链接先走内置预览；
+    // 只有预览器不可用或实验开关关闭时才交给系统默认应用)。
+    const add = vi.fn(() => 'tab-1')
+    const request = vi.fn(async (input: { path: string }) => input.path.startsWith('/files/resolve-reference')
+      ? { status: 200, headers: {}, body: new TextEncoder().encode(JSON.stringify({ path: 'E:/p/photo.png' })) }
+      : { status: 200, headers: {}, body: new Uint8Array() })
+    const wrapper = mount(UserReferenceText, {
+      props: { text: '@"E:/p/photo.png"' },
+      global: {
+        provide: {
+          'lamtools-reference-transport': { request },
+          [SplitWorkspaceKey as symbol]: { tabs: { value: [] }, state: { activePane: 'main' }, split: () => null, add },
+        },
+      },
+    })
+    await flushPromises()
+    await wrapper.get('.user-file-reference').trigger('click')
+    await flushPromises()
+    expect(add).toHaveBeenCalledWith('preview', 'E:/p/photo.png', 'photo.png', undefined, undefined, '', undefined)
+    expect(request.mock.calls.some(([input]) => input.path === '/files/open-reference')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps project text in the editor but previews attachment text outside the project read-only', () => {
+    // user:“把附件预览给做好”+(受管附件副本在项目目录外，编辑器会因权限拒绝；
+    // 这类文本改为只读预览，项目内文本仍进编辑器)。
+    const add = vi.fn((...args: unknown[]) => args)
+    const controller: any = { tabs: { value: [] }, state: { activePane: 'main' }, split: () => null, add }
+    openFileInSplit(controller, 'E:/project/notes.txt', { workRoot: 'E:/project' })
+    expect(add).toHaveBeenLastCalledWith('editor', 'E:/project/notes.txt', 'notes.txt', undefined, undefined, 'E:/project', undefined)
+    openFileInSplit(controller, 'E:/managed/attachments/notes.txt', { workRoot: 'E:/project' })
+    expect(add).toHaveBeenLastCalledWith('preview', 'E:/managed/attachments/notes.txt', 'notes.txt', undefined, undefined, 'E:/project', undefined)
+  })
+
+  it('renders an outside-root text attachment as a read-only text preview', async () => {
+    const request = vi.fn().mockResolvedValue({
+      status: 200, headers: { 'content-type': 'text/plain' },
+      body: new TextEncoder().encode('附件正文\n第二行'),
+    })
+    const wrapper = mount(CoreSplitPreview, {
+      props: {
+        tab: { id: 'txt', kind: 'preview', title: 'notes.txt', resource: 'E:/managed/notes.txt', root: 'E:/project' },
+        root: 'E:/project',
+        transport: { request } as never,
+      },
+    })
+    await flushPromises()
+    expect(wrapper.get('.split-preview-text').text()).toContain('附件正文')
+    expect(wrapper.get('.split-preview-kind').text()).toBe('文本')
   })
 
   it('renders Markdown in the preview pane and keeps an edit entry', async () => {

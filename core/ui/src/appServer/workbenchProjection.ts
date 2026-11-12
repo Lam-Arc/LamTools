@@ -182,6 +182,16 @@ export function selectCoreWorkbenchMessagesWindow(
   for (let index = startIndex; index < sourceMessages.length; index += 1) {
     const message = sourceMessages[index]
     const activeAssistant = Boolean(options.active && message.role === 'assistant' && index === lastAssistantIndex)
+    // user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
+    // 收到首字，使用样式 2”+(阶段属于回合而不是某条内容；只盖在运行中回合的
+    // 最后一条助手消息上，历史消息保持缓存)。
+    const modelPhase = activeAssistant && message.turnId
+      ? String(
+          snapshot.core?.turns?.[message.turnId]?.model_phase
+          ?? snapshot.turns?.[message.turnId]?.model_phase
+          ?? '',
+        )
+      : ''
     const content = splitShallowCached(message.content, cache)
     const parts = buildMessageParts(
       snapshot,
@@ -195,18 +205,25 @@ export function selectCoreWorkbenchMessagesWindow(
         : undefined,
     )
     if (cache) {
-      const fingerprint = messageFingerprint(message, parts, content, activeAssistant, options.shallowThinkingPending)
+      const fingerprint = messageFingerprint(
+        message,
+        parts,
+        content,
+        activeAssistant,
+        options.shallowThinkingPending,
+        modelPhase,
+      )
       const entry = cache.messagesById.get(message.id)
       if (entry && fingerprintEquals(entry.fingerprint, fingerprint)) {
         messages[index - startIndex] = entry.message
         continue
       }
-      const built = buildWorkbenchMessage(message, content, parts, options, activeAssistant)
+      const built = buildWorkbenchMessage(message, content, parts, options, activeAssistant, modelPhase)
       cache.messagesById.set(message.id, { fingerprint, message: built })
       messages[index - startIndex] = built
       continue
     }
-    messages[index - startIndex] = buildWorkbenchMessage(message, content, parts, options, activeAssistant)
+    messages[index - startIndex] = buildWorkbenchMessage(message, content, parts, options, activeAssistant, modelPhase)
   }
   cache?.prune()
   return { messages, total: sourceMessages.length, startIndex }
@@ -309,6 +326,7 @@ function buildWorkbenchMessage(
   parts: MessagePart[],
   options: CoreWorkbenchMessageOptions,
   activeAssistant: boolean,
+  modelPhase = '',
 ): CoreMessage {
   const answerProjection = projectAssistantMessageParts(parts, shallow.content, {
     live: activeAssistant || message.metadata?.live === true,
@@ -332,6 +350,7 @@ function buildWorkbenchMessage(
       // metadata.live for main-line messages).
       live: activeAssistant || message.metadata?.live,
       shallowThinkingPending: activeAssistant && options.shallowThinkingPending ? true : undefined,
+      ...(activeAssistant && modelPhase ? { modelPhase } : {}),
     },
   } satisfies CoreMessage
 }
@@ -346,6 +365,7 @@ function messageFingerprint(
   shallow: { thinking: string; content: string },
   activeAssistant: boolean,
   shallowThinkingPending?: boolean,
+  modelPhase = '',
 ): unknown[] {
   const meta = message.metadata || {}
   return [
@@ -356,6 +376,8 @@ function messageFingerprint(
     // user:“我发消息的一瞬间也是”“修，不要出错”+(思考占位仅改变当前助手消息，
     // 与 buildWorkbenchMessage 的实际输出一致，历史消息不能因此失去缓存)。
     activeAssistant && shallowThinkingPending === true,
+    // 阶段切换只重建运行中的那条助手消息（等待指示器的动画）。
+    activeAssistant ? modelPhase : '',
     meta.live === true,
     meta.initialWaiting === true,
     // A machine-authored row renders as a system event instead of a bubble; the

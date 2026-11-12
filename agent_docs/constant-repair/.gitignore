@@ -1,0 +1,6 @@
+*inventory.json
+grouped.json
+*.exe
+*.log
+*.patch
+build/

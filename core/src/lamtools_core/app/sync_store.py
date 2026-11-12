@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -125,6 +126,21 @@ class CoreSyncJournal:
         async with self.session_factory() as db:
             row = await db.scalar(select(CoreSyncChange).where(CoreSyncChange.change_id == change_id))
             return self._to_dict(row) if row is not None else None
+
+    async def get_change_header(self, change_id: str) -> dict[str, Any] | None:
+        # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(实时事件已传正文，同步通知只需版本与游标，读取时也不装载大字段)。
+        columns = [c for c in CoreSyncChange.__table__.columns if c.name != "entity_json"]
+        async with self.session_factory() as db:
+            row = (await db.execute(select(*columns).where(
+                CoreSyncChange.change_id == change_id))).mappings().one_or_none()
+        if row is None:
+            return None
+        if row["entity_type"] != "thread.event":
+            return await self.get_change(change_id)
+        header = self._to_dict(SimpleNamespace(**row, entity_json={}))
+        header.pop("payload", None)
+        header.pop("entity", None)
+        return header
 
     async def build_snapshot(self, db: Any) -> dict[str, Any]:
         projects = (await db.execute(

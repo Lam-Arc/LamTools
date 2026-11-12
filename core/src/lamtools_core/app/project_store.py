@@ -802,6 +802,8 @@ def _project_entity(project: CoreProject) -> dict[str, Any]:
 
 
 def _thread_entity(session: SessionRecord, state: dict[str, Any], project_id: str) -> dict[str, Any]:
+    # user:“同步日志不存整份快照，只存版本/游标”+(会话正文按需拉取，
+    # snapshot_required 标记告诉客户端该去取权威快照)。
     return {
         "id": session.id,
         "project_id": project_id,
@@ -810,8 +812,8 @@ def _thread_entity(session: SessionRecord, state: dict[str, Any], project_id: st
         "created_at": session.created_at.isoformat(),
         "updated_at": session.updated_at.isoformat(),
         "metadata": dict(session.metadata),
-        "snapshot": state,
         "revision": int(state.get("revision") or 0),
+        "snapshot_required": True,
         "deleted": False,
     }
 

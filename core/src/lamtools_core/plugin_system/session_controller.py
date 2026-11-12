@@ -1,7 +1,10 @@
 """user:“第二阶段结束后 就继续开展第三阶段”+(会话只读复用原可见性和项目身份)。"""
 import asyncio
+import base64
 import copy
 import hashlib
+import io
+import json
 import math
 from pathlib import Path
 
@@ -68,6 +71,105 @@ class PluginSessionController:
 
     async def state(self, session_id):
         return await self._read("state", session_id)
+
+    async def history_page(self, session_id, *, before_seq=None, turn_limit=10, max_bytes=262144):
+        if before_seq is not None and (type(before_seq) is not int or not 1 <= before_seq <= 2**63 - 1):
+            raise ValueError("Use a positive history cursor")
+        if type(turn_limit) is not int or not 1 <= turn_limit <= 50:
+            raise ValueError("Use a turn limit from 1 to 50")
+        if type(max_bytes) is not int or not 65536 <= max_bytes <= 524288:
+            raise ValueError("Use a history byte limit from 65536 to 524288")
+        async def read_page():
+            self._scope.acquire()
+            try:
+                await self._admit(session_id)
+                service = self._sessions.get()
+                native = service._context()
+                persistence = native.persistence
+                if not callable(getattr(persistence, "load_page", None)):
+                    raise SessionControllerError("session-controller/unavailable", "Bounded native history is unavailable")
+                from lamtools_core.app.live import threads
+                from lamtools_core.app.thread_history import _character_page_snapshot
+                params = {} if before_seq is None else {"before_seq": before_seq}
+                # user:“复用原宿主权威”+(调用桌面原有的有界倒序历史页，不复制持久化实现)。
+                async with native.session_factory() as db:
+                    snapshot = await threads._load_thread_page(context=native, db=db, thread_id=session_id,
+                        params=params, page_bytes=max_bytes)
+                await self._admit(session_id)
+                if self._sessions.get() is not service or service._context().persistence is not persistence:
+                    raise SessionControllerError("session-controller/host-changed", "History provider changed")
+                page = _character_page_snapshot(snapshot, before_item_id=None, before_seq=before_seq,
+                    char_limit=200000, turn_limit=turn_limit, byte_limit=max_bytes)
+                core = page.get("core") if type(page.get("core")) is dict else {}
+                result = {"items": page.get("items", {}), "item_order": page.get("item_order", []),
+                    "core_items": core.get("items", {}), "core_item_order": core.get("item_order", []),
+                    "page": page.get("history_page", {})}
+                try:
+                    size = len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+                except (TypeError, ValueError, UnicodeError):
+                    raise SessionControllerError("session-controller/invalid-history", "Native history page is not serializable") from None
+                if size > max_bytes:
+                    raise SessionControllerError("session-controller/history-too-large", "Native history item exceeds byte limit")
+                await self._admit(session_id)
+                # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(组装后仍复核原会话宿主，不能发布替换前的历史)。
+                if self._sessions.get() is not service or service._context().persistence is not persistence:
+                    raise SessionControllerError("session-controller/host-changed", "History provider changed")
+                return result
+            finally:
+                self._scope.release()
+        return await _cancel_owned_read(read_page(), name="scoped-session-history-page")
+
+    async def attachment(self, session_id, attachment_id):
+        from .session_data import identifier
+        identifier(attachment_id)
+        try:
+            attachment_id.encode("utf-8")
+        except UnicodeError:
+            raise ValueError("Use a valid attachment identifier") from None
+        async def read_image():
+            self._scope.acquire()
+            try:
+                await self._admit(session_id)
+                host = self._context.require_service("session_data")
+                if getattr(host, "_sessions", None) is not self._sessions.get() or getattr(host, "_data_dir", None) is None:
+                    raise SessionControllerError("session-controller/unavailable", "Original attachment provider is unavailable")
+                attachments = self._context.attachments
+                item = await attachments.get(session_id, attachment_id)
+                await self._admit(session_id)
+                if self._context.service("session_data") is not host:
+                    raise SessionControllerError("session-controller/host-changed", "Attachment provider changed")
+                metadata = item.get("metadata") if type(item) is dict else None
+                mime = item.get("mime_type") if type(item) is dict else None
+                formats = {"image/png": "PNG", "image/jpeg": "JPEG", "image/gif": "GIF", "image/webp": "WEBP"}
+                if (type(metadata) is not dict or metadata.get("managed") is not True or mime not in formats
+                        or type(item.get("path")) is not str or type(item.get("size")) is not int
+                        or not 0 <= item["size"] <= 512 * 1024 or type(metadata.get("sha256")) is not str):
+                    raise SessionControllerError("session-controller/invalid-attachment", "Choose a bounded managed image")
+                from .filesystem_access import PluginFilesystemAPI
+                root = Path(host._data_dir).resolve() / "artifact" / "attachments"
+                try:
+                    # user:“复用原宿主权威”+(读取原托管目录内登记的实际字节并核对原内容指纹)。
+                    raw = PluginFilesystemAPI(root, self._scope).read_bytes(item["path"], max_bytes=512 * 1024)
+                    if len(raw) != item["size"] or hashlib.sha256(raw).hexdigest() != metadata["sha256"]:
+                        raise ValueError("Image content changed")
+                    from PIL import Image
+                    with Image.open(io.BytesIO(raw)) as image:
+                        if image.format != formats[mime] or image.width * image.height > 16000000:
+                            raise ValueError("Invalid image")
+                        image.verify()
+                except ImportError:
+                    raise SessionControllerError("session-controller/unavailable", "Image validation is unavailable") from None
+                except Exception:
+                    raise SessionControllerError("session-controller/invalid-attachment", "Attachment image is unavailable or invalid") from None
+                current = await attachments.get(session_id, attachment_id)
+                await self._admit(session_id)
+                if self._context.service("session_data") is not host or current != item:
+                    raise SessionControllerError("session-controller/host-changed", "Attachment binding changed")
+                self._check()
+                return {"id": attachment_id, "mime_type": mime, "data_base64": base64.b64encode(raw).decode("ascii")}
+            finally:
+                self._scope.release()
+        return await _cancel_owned_read(read_image(), name="scoped-session-attachment-read")
 
     async def observe_state(self, session_id, *, interval=0.1):
         if type(interval) not in {int, float} or not math.isfinite(interval) or not 0.01 <= interval <= 2:
@@ -308,6 +410,66 @@ class PluginSessionController:
 
     async def prompt(self, session_id, *, request_id, text, mode="queue"):
         return await self._write("prompt", session_id, request_id=request_id, text=text, mode=mode)
+
+    async def select_model(self, session_id, model_id, *, expected_revision):
+        if type(model_id) is not str or not model_id.strip() or len(model_id) > 256:
+            raise ValueError("Use a bounded model record id")
+        if type(expected_revision) is not int or not 0 <= expected_revision <= 2**63 - 1:
+            raise ValueError("Use a valid session revision")
+        try:
+            model_id.encode("utf-8")
+        except UnicodeError:
+            raise ValueError("Use a valid model record id") from None
+        self._scope.acquire()
+        try:
+            await self._admit(session_id)
+            provider = self._context.require_service("model_catalog")
+            model = self._context.models.select("chat", ref=model_id).model
+            # user:“复用原宿主权威”+(只接受明确原模型记录ID，避免别名或提供方变化时误选)。
+            if model.id != model_id or self._context.service("model_catalog") is not provider:
+                raise SessionControllerError("session-controller/model-unavailable", "Model record is unavailable")
+            service = self._sessions.get()
+            native = service._context()
+            store = getattr(native.host, "session_store", None)
+            if not callable(getattr(store, "get_readonly_revision", None)):
+                raise SessionControllerError("session-controller/unavailable", "Original session store is unavailable")
+            from lamtools_core.app.live import composer
+            async def write():
+                await self._admit(session_id)
+                if self._sessions.get() is not service or self._context.service("model_catalog") is not provider:
+                    raise SessionControllerError("session-controller/host-changed", "Session model provider changed")
+                # user:“不用静态扫描、空壳或未安装提供方冒充可用”+(等待会话准入后重新核对原模型及提供方，再派发写入)。
+                if self._context.models.select("chat", ref=model.id).model != model:
+                    raise SessionControllerError("session-controller/model-unavailable", "Model record changed")
+                return await composer.handle_session_composer_set_operation(request_id=None,
+                    params={"thread_id": session_id, "model_id": model.id, "expected_revision": expected_revision,
+                            "apply_to_running": False}, context=native, release_approvals=False)
+            try:
+                result = await finish_on_cancel(write(), name="scoped-session-model-selection")
+                if result.response.get("error") or not isinstance(result.response.get("result"), dict):
+                    raise ValueError("Original session update rejected")
+                await self._admit(session_id)
+                if self._sessions.get() is not service or self._context.service("model_catalog") is not provider:
+                    raise ValueError("Session model provider changed")
+                record, revision = await store.get_readonly_revision(session_id)
+                from lamtools_core.app.composer_state import composer_state_from_metadata
+                if record is None or composer_state_from_metadata(record.metadata)["model_id"] != model.id:
+                    raise ValueError("Session model changed")
+                await self._admit(session_id)
+                if self._sessions.get() is not service or self._context.service("model_catalog") is not provider:
+                    raise ValueError("Session model provider changed")
+                self._context.models.select("chat", ref=model.id)
+                # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(模型检查结束后仍须复核原提供方绑定)。
+                self._check()
+                if self._sessions.get() is not service or self._context.service("model_catalog") is not provider:
+                    raise ValueError("Session model provider changed")
+                return {"model_id": model.id, "revision": revision}
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise SessionControllerError("session-controller/write-uncertain", "Model selection may have changed; inspect current state", may_have_changed=True) from None
+        finally:
+            self._scope.release()
 
     async def update_queue(self, session_id, queue_item_id, *, text=None, delete=False):
         return await self._write("update_queue", session_id, queue_item_id=queue_item_id, text=text, delete=delete)

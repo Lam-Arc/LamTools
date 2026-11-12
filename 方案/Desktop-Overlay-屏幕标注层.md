@@ -237,3 +237,23 @@
 - 表情包坐标：物理中心 [1280,720] 换算后落在 CSS [692.0,389.5]，实测中心 [691.99,389.49]，偏差 0.0 像素。
 - 外部 API：`POST /overlay/control {"action":"capture"}` 之后页面进 `overlay-root--annotating`，`capture_requested` 变回 false。
 - 证据图：`.lam/artifacts/interaction-layer-final.png`。
+
+## 工具条只剩清空（2026-11-11）
+
+用户原话：“那个『收起』也去掉”。
+
+- 工具条里只保留“清空”，没有标记时整条不渲染，桌面上不留一条空药丸。
+- 收起窗口改走 Esc（宿主全局轮询）和托盘入口，页面不再自己关窗；只为收起写的 `closeLayer` 一并删掉。
+- 回归测试 `core/ui/tests/overlay-surface-toolbar.test.ts` 钉住三条：工具条只有一个按钮、关窗函数已删、空状态整条不渲染。
+- 之后补上左侧状态文字「Sunday 标注中」，胶囊里是「Sunday 标注中 + 清空」。
+
+## 工具条与 Computer Use 共用外观（2026-11-11）
+
+用户原话：“上方那个条和电脑使用时候的样式用同一个，可行吗？”“左边加一句 sunday 标注中”“这个边框为什么没有包含整个屏幕边框？仅 bar 有边框”。
+
+- 新增 `core/ui/src/styles/hud-pill.css`，把胶囊外观抽成一份：贴屏幕上沿、只圆下方两角、黑底 `#08080a`、2px 暗彩流光边（`@property --hud-pill-angle` 驱动）、22px 图标按钮、12px 白字。
+- Computer Use 状态条与交互层工具条都 `import '@/styles/hud-pill.css'`，组件里不再各写一份；`ComputerUseBar.vue` 删掉了自己的胶囊、流光边和按钮样式。
+- 整屏 2px 流光边框（`.hud-screen-frame`）也进共用样式：Computer Use 用它画窗口四边，交互层用它画屏幕四边，胶囊压在边框上沿，交界处连成一条线。之前只有胶囊有边框，是因为整屏边框当时只存在于 Computer Use 那侧。
+- 胶囊贴到 y=0 会盖住最早那条弹幕轨道，所以弹幕轨道起始留白改成 `DANMAKU_TOP_INSET = 44`，整体下移到胶囊下方。
+- 真机验收：胶囊矩形 `[504,0,145,30]`、圆角 `0 0 12 12`、底色 `rgb(8,8,10)`、文字 `Sunday 标注中`、按钮只有 `清空`、边线顶边 0 左右下 1.8；整屏边框占满 1154×649、遮罩 `exclude`、动画 `hud-pill-breathe`。
+- 用户又提：“屏幕边框的角加上 6px 圆角并填充角落”。`.hud-screen-frame` 加 `border-radius: 6px`，再用 `::before` 在四个角各画一块 6×6 的渐变方块（`background-attachment: fixed`，和边框同色同相位），圆角外侧不再露出缺口。

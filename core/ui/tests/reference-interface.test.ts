@@ -10,12 +10,16 @@ import { contextMenuState, closeContextMenu } from '../src/components/context-me
 const mounted: ReturnType<typeof mount>[] = []
 afterEach(() => { mounted.splice(0).forEach(w => w.unmount()); closeContextMenu(); vi.restoreAllMocks() })
 describe('file references in the real interface', () => {
-  it('renders the full path as an atomic filename and keeps selection and undo available', async () => {
+  it('renders the full path as an icon-only atomic reference and keeps selection and undo available', async () => {
     const wrapper = mount(InlineFileComposer, { attachTo: document.body, props: { modelValue: 'check @"C:/资料/a.png" please' } })
     mounted.push(wrapper)
-    expect(wrapper.find('.composer-file-token').text()).toContain('a.png')
+    // user:“@渲染仅渲染图标即可，不再需要文字了”+(输入框只留类型图标，
+    // 文件名与完整路径放在悬浮提示里)。
+    expect(wrapper.find('.composer-file-token').text()).toBe('')
     expect(wrapper.find('.composer-file-token').text()).not.toContain('@')
     expect(wrapper.find('.composer-file-token .composer-file-badge').exists()).toBe(true)
+    expect(wrapper.find('.composer-file-token .composer-file-badge svg').exists()).toBe(true)
+    expect(wrapper.find('.composer-file-token').attributes('title')).toContain('a.png')
     expect(wrapper.find('.composer-file-token').attributes('title')).toContain('C:/资料/a.png')
     const handle = wrapper.vm as unknown as { setSelectionRange(a: number, b: number): void; selectionStart: number; select(): void; selectionEnd: number }
     handle.setSelectionRange(0, 5)
@@ -24,7 +28,7 @@ describe('file references in the real interface', () => {
     handle.select()
     expect(handle.selectionEnd).toBe('check @"C:/资料/a.png" please'.length)
     await wrapper.setProps({ modelValue: 'check @"C:/资料/b.png" please' })
-    expect(wrapper.find('.composer-file-token').text()).toContain('b.png')
+    expect(wrapper.find('.composer-file-token').attributes('title')).toContain('b.png')
     expect(wrapper.find('.composer-file-token').text()).not.toContain('@')
   })
   it('confirms file completion without sending the message on Enter or its keyup', async () => {
@@ -39,14 +43,40 @@ describe('file references in the real interface', () => {
     expect(wrapper.emitted('keydown')).toBeUndefined()
     expect(wrapper.emitted('keyup')).toBeUndefined()
   })
-  it('puts only small icons beneath a user bubble and exposes file missing clearly', async () => {
+  it('shows image attachments as large thumbnails and exposes file missing clearly', async () => {
     const request = vi.fn(async () => ({ status: 200, headers: {}, body: new TextEncoder().encode(JSON.stringify({ path: 'C:/gone.png', error_code: 'file_missing' })) }))
     const wrapper = mount(ReferenceItems, { props: { compact: true, attachments: [{ id: 'a', filename: 'gone.png', mime_type: 'image/png', preview_type: 'image', size: 1 }], transport: { request } as never } })
     mounted.push(wrapper)
     await flushPromises()
+    // user:“图片和视频附件以大缩略显示”+(媒体卡片比普通图标大，文件名覆盖在缩略图上)。
     expect(wrapper.findAll('.reference-item')).toHaveLength(1)
+    expect(wrapper.find('.reference-item--media').exists()).toBe(true)
     expect(wrapper.find('.reference-item').attributes('title')).toContain('原文件不存在')
-    expect(wrapper.text()).not.toContain('gone.png')
+    expect(wrapper.find('.reference-item-media-name').text()).toContain('gone.png')
+    expect(wrapper.find('.reference-item-error').exists()).toBe(true)
+  })
+  it('renders video attachments as large thumbnails while documents stay compact icons', async () => {
+    const createObjectURL = vi.fn(() => 'blob:video-thumb')
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() })
+    const request = vi.fn(async (input: { path: string }) => input.path.endsWith('/preview')
+      ? { status: 200, headers: {}, body: new TextEncoder().encode(JSON.stringify({ path: 'C:/clip.mp4' })) }
+      : { status: 200, headers: { 'content-type': 'video/mp4' }, body: new Uint8Array([0, 1, 2]) })
+    const wrapper = mount(ReferenceItems, {
+      props: {
+        compact: true,
+        attachments: [
+          { id: 'v', filename: 'clip.mp4', mime_type: 'video/mp4', preview_type: 'video', size: 3 },
+          { id: 'd', filename: 'manual.pdf', mime_type: 'application/pdf', preview_type: 'pdf', size: 3 },
+        ],
+        transport: { request } as never,
+      },
+    })
+    mounted.push(wrapper)
+    await flushPromises()
+    expect(wrapper.find('.reference-item--media video').exists()).toBe(true)
+    expect(wrapper.find('.reference-item--media video').attributes('src')).toContain('blob:video-thumb')
+    expect(wrapper.findAll('.reference-item--media')).toHaveLength(1)
+    expect(wrapper.findAll('.reference-item')).toHaveLength(2)
   })
   it('does not refetch previews on each parent render and opens restored path-only icons with the default app', async () => {
     const request = vi.fn(async (input: { path: string }) => input.path.startsWith('/files/resolve-reference')

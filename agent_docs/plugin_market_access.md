@@ -22,3 +22,11 @@ user:“继续，自动值守，非必要不停歇，自己不断找下一步做
 `await context.plugin_market.entry(name)`按大小写精确匹配原目录id，返回`item`（未找到为null）及原`source/error`。它沿用list的启动代检查和取消结算，不安装插件；上游`entry(url, name)`不是Remote方法且支持已配置索引，此处没有索引参数、版本兼容投影或详细介绍。8项新增验收覆盖真实原目录、缺失和参数拒绝、明确HTTP、缓存及不可用状态；网络响应受控。
 
 另3项新增验收直接验证entry在重复取消、启动代撤回和原操作目录替换时等待原读取线程结束，不发布旧条目。
+
+## 原固定索引来源
+
+`await context.plugin_market.list_indexes()`仅在原`plugin.market.list`由plugin-system挂载且当前作用域有效时，返回原市场固定`CATALOG_URL`；缺提供方或归属不符明确拒绝。此查询不访问网络，不表示目录健康或包可安装；原市场实际先尝试同一GitHub发布的API资产，失败再回退此URL。5项新增验收覆盖原提供方、无提供方/错误归属、作用域与目录替换、显式Remote和迁移，不安装插件。上游[源码](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/boot/plugin-market/src/index.ts)允许多个配置来源及缓存标题/错误，此处只报告固定来源，不提供配置、缓存元数据或Peer协议。
+
+市场`list/search/entry`调用原操作前后也检查`plugin-system`归属；不同所有者不能冒充原市场，读取期间归属撤回不会发布旧结果。5项新增验收覆盖三种入口、在途替换及真实Remote，所有网络数据受控。归属和原注册身份检查不是跨线程原子锁。
+
+原操作目录为每次注册分配不透明身份；市场读取在异步派发开始前及完成后核对身份，因此同所有者重新注册也不会被当作原操作。4项新增验收包含受控原市场、派发前替换不执行新处理器、等待中替换、正常读取及真实Remote。身份检查不提供跨线程原子锁。

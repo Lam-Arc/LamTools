@@ -40,7 +40,7 @@ def test_binary_remote_contract_and_handoff_are_explicit_without_automatic_opt_i
     output = tmp_path / "ported"
     report = export_port(root, output)
     contract = report["sundayHostContracts"]["remoteGateway"]
-    assert contract["version"] == 5
+    assert contract["version"] == 9
     assert "plugin.json http.remote.resultEncoding" in contract["apis"]
     assert "resultEncoding" in (output / "PORTING.md").read_text(encoding="utf8")
     assert not json.loads((output / "plugin.json").read_text(encoding="utf8")).get("http", {}).get("remote")

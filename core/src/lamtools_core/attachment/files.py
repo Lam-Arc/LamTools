@@ -9,6 +9,16 @@ from pathlib import Path
 
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".csv", ".tsv", ".log", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".ps1", ".bat", ".sh", ".toml", ".ini", ".cfg", ".sql"}
 TEXT_MIME_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml"}
+# user:“附件预览给做好”+(很多上传通道用通用二进制 MIME 兜底；它不能
+# 覆盖扩展名，否则 PDF、Office 与音视频都会退化成“外部文件”)。
+GENERIC_MIME_TYPES = frozenset({
+    "",
+    "application/octet-stream",
+    "binary/octet-stream",
+    "application/unknown",
+})
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".oga", ".m4a", ".flac", ".aac", ".opus"}
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".m4v", ".ogv", ".mkv", ".avi"}
 DANGEROUS_OPEN_EXTENSIONS = frozenset({
     ".exe", ".bat", ".cmd", ".com", ".scr", ".lnk", ".ps1", ".msi", ".reg",
     ".vbs", ".vbe", ".js", ".jse", ".hta", ".sh", ".jar", ".dll", ".sys",
@@ -19,6 +29,35 @@ DANGEROUS_OPEN_EXTENSIONS = frozenset({
 def safe_filename(filename: str) -> str:
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(filename or "attachment").name.strip()).strip(". ")
     return name or "attachment"
+
+
+def decode_transport_filename(filename: str) -> str:
+    """Undo the latin-1 decode that RFC 7613 header parsing applies to filenames.
+
+    user:“附件预览给做好”+(浏览器把中文文件名按 UTF-8 字节塞进 multipart 头，
+    ASGI 按 latin-1 解出来就是乱码；保存前还原成用户真正看到的文件名)。
+    Windows 下的旧式客户端/命令行会把文件名按 GBK 发送，同样在这里还原。
+    """
+    if not filename:
+        return filename
+    try:
+        raw = filename.encode("latin-1")
+    except UnicodeEncodeError:
+        # Already a real Unicode string (JSON/API callers), nothing to undo.
+        return filename
+    try:
+        return raw.decode("utf-8") or filename
+    except UnicodeDecodeError:
+        pass
+    # A genuine latin-1 filename such as café.txt must stay as typed; only take
+    # the GB18030 reading when it actually produces CJK text.
+    try:
+        decoded = raw.decode("gb18030")
+    except UnicodeDecodeError:
+        return filename
+    if any("\u3400" <= char <= "\u9fff" or "\uf900" <= char <= "\ufaff" for char in decoded):
+        return decoded
+    return filename
 
 
 def unique_path(path: Path) -> Path:
@@ -32,7 +71,11 @@ def unique_path(path: Path) -> Path:
 
 
 def detect_mime(filename: str, supplied: str | None = None) -> str:
-    return supplied or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    # user:“附件预览给做好”+(通用二进制 MIME 视为“没给”：优先按扩展名判断，
+    # 否则 PDF/Office/音视频都会显示成外部文件)。
+    if supplied and supplied.strip().lower() not in GENERIC_MIME_TYPES:
+        return supplied
+    return mimetypes.guess_type(filename)[0] or supplied or "application/octet-stream"
 
 
 def preview_type(filename: str, mime_type: str) -> str:
@@ -41,11 +84,11 @@ def preview_type(filename: str, mime_type: str) -> str:
         return "text"
     if mime_type.startswith("image/"):
         return "image"
-    if mime_type.startswith("audio/"):
+    if mime_type.startswith("audio/") or suffix in AUDIO_EXTENSIONS:
         return "audio"
-    if mime_type.startswith("video/"):
+    if mime_type.startswith("video/") or suffix in VIDEO_EXTENSIONS:
         return "video"
-    if mime_type == "application/pdf":
+    if mime_type == "application/pdf" or suffix == ".pdf":
         return "pdf"
     return "external"
 
@@ -97,4 +140,4 @@ def open_with_default_app(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
-__all__ = ["assert_safe_default_open", "attachment_modality", "detect_mime", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path"]
+__all__ = ["assert_safe_default_open", "attachment_modality", "decode_transport_filename", "detect_mime", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path"]

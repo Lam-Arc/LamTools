@@ -87,6 +87,12 @@ def runtime_summary_from_event_name(event_name: str, payload: dict[str, Any]) ->
         return "生成最终回复。"
     if event_name == "runtime.reply_delta":
         return str(payload.get("summary") or payload.get("message") or "")
+    if event_name == "runtime.model_phase":
+        return {
+            "request_building": "正在准备模型请求。",
+            "request_sent": "请求已发送，等待模型回应。",
+            "first_token": "模型开始返回内容。",
+        }.get(str(payload.get("phase") or ""), "模型请求进行中。")
     return str(payload.get("summary") or payload.get("message") or event_name)
 
 
@@ -256,6 +262,27 @@ def runtime_fact_to_run_item_events(
             **({"sub_agent": sub_agent} if sub_agent is not None else {}),
         },
     }
+
+    if phase == "runtime.model_phase":
+        model_phase = str(payload.get("phase") or "").strip()
+        if not model_phase:
+            return None
+        phase_payload: dict[str, Any] = {"phase": model_phase}
+        for key in ("response_index", "at_ms", "elapsed_ms", "ttft_ms"):
+            value = payload.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                phase_payload[key] = value
+        # Turn-level live fact: no item_id, so clients must not materialize a
+        # transcript row for it. The app store applies it to the owning turn.
+        return [
+            RunItemEvent(
+                kind="model_phase",
+                item_id="",
+                status="running",
+                payload=phase_payload,
+                **base,
+            )
+        ]
 
     if phase == "runtime.reply_delta":
         text = _text_from_event(fact, payload)

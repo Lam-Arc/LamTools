@@ -109,6 +109,14 @@ export const DEFAULT_DANMAKU_SETTINGS: DanmakuSettings = {
 /** user:“弹幕位置调整一下，30%上方屏幕”+(只在屏幕上方这条带子里排轨道)。 */
 export const DANMAKU_BAND_RATIO = 0.3
 
+/**
+ * 轨道起始留白：工具条是贴屏幕上沿的胶囊，弹幕不该从它下面穿过去。
+ *
+ * user:“上方那个条和电脑使用时候的样式用同一个”+(胶囊贴到 y=0 之后会盖住
+ * 最早那条轨道，轨道整体下移到胶囊下方)。
+ */
+export const DANMAKU_TOP_INSET = 44
+
 export interface DanmakuLayout {
   /** 轨道顶边（页面 CSS 像素）。 */
   top: number
@@ -176,10 +184,10 @@ export function danmakuLayout(
   const ratio = physicalHeight > 0 ? viewport.cssHeight / physicalHeight : 1
   const anchorCss = Math.max(0, (mark.points[0]?.[1] ?? 0) * ratio)
   const pitch = danmakuTrackPitch(fontSize)
-  const maxTop = Math.max(10, band - lineHeight - 10)
-  const maxTrack = Math.max(0, Math.floor((maxTop - 10) / pitch))
-  const track = Math.min(maxTrack, Math.floor(anchorCss / pitch))
-  const top = Math.min(maxTop, 10 + track * pitch)
+  const maxTop = Math.max(DANMAKU_TOP_INSET, band - lineHeight)
+  const maxTrack = Math.max(0, Math.floor((maxTop - DANMAKU_TOP_INSET) / pitch))
+  const track = Math.min(maxTrack, Math.max(0, Math.round((anchorCss - DANMAKU_TOP_INSET) / pitch)))
+  const top = Math.min(maxTop, DANMAKU_TOP_INSET + track * pitch)
   const speed = danmakuSpeed(mark.text || '', fontSize, settings.speed, width)
   const distance = viewportWidth + width
   const crossing = distance / Math.max(20, speed)

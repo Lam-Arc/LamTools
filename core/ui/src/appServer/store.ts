@@ -1334,6 +1334,28 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
       },
     }
   }
+  if (kind === 'model_phase') {
+    // user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
+    // 收到首字，使用样式 2”+(阶段是现有回合的实时属性，不生成聊天条目；
+    // 界面的等待指示器据此切换两段动画)。
+    const phase = typeof runPayload.phase === 'string' ? runPayload.phase.trim() : ''
+    const turn = turnId ? currentCore.turns?.[turnId] : undefined
+    // Only an existing turn can own a phase. Inventing one here would leave a
+    // phantom turn nothing ever closes (same rule as approval/member facts).
+    if (!phase || !turn) return snapshot
+    const atMs = numericField(runPayload.at_ms)
+    const elapsedMs = numericField(runPayload.elapsed_ms)
+    const ttftMs = numericField(runPayload.ttft_ms)
+    const turns = { ...(currentCore.turns ?? {}) }
+    turns[turnId] = {
+      ...turn,
+      model_phase: phase,
+      ...(atMs !== undefined ? { model_phase_at_ms: atMs } : {}),
+      ...(elapsedMs !== undefined ? { model_phase_elapsed_ms: elapsedMs } : {}),
+      ...(ttftMs !== undefined ? { model_phase_ttft_ms: ttftMs } : {}),
+    }
+    return { ...snapshot, core: { ...currentCore, seen_event_ids: seen, turns } }
+  }
   if (kind === 'usage') {
     const turns = { ...(currentCore.turns ?? {}) }
     if (turnId) {

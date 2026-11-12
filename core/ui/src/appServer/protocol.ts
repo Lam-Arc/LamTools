@@ -257,6 +257,17 @@ export interface CoreRuntimeTurn {
   waiting_on_members?: boolean
   /** See `CoreAppTurn.running_members`. */
   running_members?: string[]
+  /** user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
+   *  收到首字，使用样式 2”+(回合级实时阶段：request_building / request_sent /
+   *  first_token，只用于等待指示器切换动画，不落成聊天记录)。
+   */
+  model_phase?: string
+  /** 阶段事实到达时的墙钟毫秒，供需要计时展示的界面使用。 */
+  model_phase_at_ms?: number
+  /** 该阶段已经过的毫秒：request_sent 是本地构造+发送耗时，first_token 是首字延迟。 */
+  model_phase_elapsed_ms?: number
+  /** 等待首字阶段的供应商首字延迟（毫秒）。 */
+  model_phase_ttft_ms?: number
   [key: string]: unknown
 }
 

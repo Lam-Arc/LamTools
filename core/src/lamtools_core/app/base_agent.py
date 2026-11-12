@@ -1612,6 +1612,39 @@ class CoreBaseAgentKit:
         if hook_additional:
             evidence = f"{evidence}\n\n{hook_additional}"
         image_data_url = _find_image_data_url(result)
+        # user:“一旦涉及到其他的附件，应该用的是指针或者说是地址来表示，而不是
+        # 直接放什么 base64 或者源文件”+(落盘的历史行会剥掉内联图片，这里留下
+        # 地址：相对路径、mime 和内容指纹，模型需要细节时按地址重新 read_file)。
+        image_ref: dict[str, Any] = {}
+        if image_data_url:
+            artifact = next(
+                (
+                    item for item in result.artifacts
+                    if isinstance(item.metadata, dict)
+                    and (
+                        item.metadata.get("path")
+                        or item.metadata.get("file_hash")
+                        or item.metadata.get(IMAGE_DATA_URL_METADATA_KEY)
+                    )
+                ),
+                None,
+            )
+            artifact_metadata = (
+                artifact.metadata
+                if artifact is not None and isinstance(artifact.metadata, dict)
+                else {}
+            )
+            mime = ""
+            if image_data_url.startswith("data:") and ";" in image_data_url:
+                mime = image_data_url[5:image_data_url.index(";")]
+            image_ref = {
+                "path": str(
+                    artifact_metadata.get("path")
+                    or (artifact.uri if artifact is not None else "")
+                ),
+                "mime": mime,
+                "sha256": str(artifact_metadata.get("file_hash") or ""),
+            }
         if image_data_url and (self.config.capability or "").strip().lower() == "multimodal":
             # 多模态模型：图片以 image_url 块随文本 evidence 一起发送（text 块不含 base64，
             # 12K 截断照旧只作用于文本）。文本模型不发图片块，仅保留 read_file 的说明文字。
@@ -1626,6 +1659,7 @@ class CoreBaseAgentKit:
             name=call.name,
             tool_call_id=call.id,
             content=content,
+            metadata={"image_ref": image_ref} if image_ref else {},
         )
 
     async def verify(

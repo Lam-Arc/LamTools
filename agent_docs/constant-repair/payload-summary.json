@@ -1,0 +1,17 @@
+{
+  "payload": "E:\\LamTools\\agent_docs\\constant-repair\\build\\payload",
+  "files": 4312,
+  "bytes": 328342761,
+  "executables": [
+    {
+      "path": "sunday-backend/sunday-core.exe",
+      "size": 35942263,
+      "sha256": "ea20a96b9e18a648b885962fd868cb14d829b24815aecef9382cf34c24f370ad"
+    },
+    {
+      "path": "Sunday.exe",
+      "size": 19601920,
+      "sha256": "bddfaae327c5c3be986fab402c0ca9042352c5e43972477a0534c8d24d549126"
+    }
+  ]
+}

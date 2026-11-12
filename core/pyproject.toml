@@ -4,11 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lamtools-core"
-version = "0.3.39"
+version = "0.3.40"
 description = "LamTools Core SDK - protocols, types, and base interfaces"
 requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
+    # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(安装版须提供已安装作业插件使用的同步 HTTP 运行依赖)。
+    "requests>=2.32.5",
     # user:“继续，无人值守模式，不要停下来”+(插件设置使用标准JSON Schema校验器，声明运行依赖以保证打包/新安装可用)。
     "jsonschema>=4.25.1",
     # user:“从 GitHub 等平台下载并安装”+(市场 CLI 的实际连接客户端使用 aiohttp，干净安装也必须可用)。

@@ -474,6 +474,9 @@ def _session_state(session: SessionRecord, *, messages=None) -> dict:
 
 
 def _thread_entity(session: SessionRecord, state: dict[str, Any]) -> dict[str, Any]:
+    # user:“同步日志不存整份快照，只存版本/游标”+(会话正文按需通过
+    # thread.resume / thread.history 拉取；客户端只用 revision 推进 CAS，
+    # snapshot_required 告诉它需要时去取一份权威快照)。
     return {
         "id": session.id,
         "title": session.title,
@@ -483,7 +486,7 @@ def _thread_entity(session: SessionRecord, state: dict[str, Any]) -> dict[str, A
         "metadata": dict(session.metadata),
         "project_id": session.metadata.get("project_id"),
         "revision": int(state.get("revision") or 0),
-        "snapshot": state,
+        "snapshot_required": True,
         "deleted": False,
     }
 

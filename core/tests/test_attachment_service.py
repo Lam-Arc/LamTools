@@ -190,3 +190,57 @@ async def test_open_refuses_executable_types(tmp_path, monkeypatch):
     record = await service.create("session-ok", "notes.txt", b"hello")
     result = await service.open(record["id"])
     assert result["status"] == "opened"
+
+
+@pytest.mark.asyncio
+async def test_upload_restores_utf8_filename_decoded_as_latin1(tmp_path):
+    """user:“附件预览给做好”+(上传通道按 RFC 7613 用 latin-1 解头字段，
+    中文文件名会变成乱码；保存与索引必须还原成用户看到的文件名)。"""
+    repository = MemoryAttachmentRepository(tmp_path)
+    service = AttachmentService(repository)
+    # A browser/curl sends the UTF-8 filename bytes; the ASGI layer decodes the
+    # header as latin-1, so the service receives a mojibake string.
+    transport_name = "示例文档.pdf".encode("utf-8").decode("latin-1")
+    record = await service.create("session-utf8", transport_name, b"%PDF-1.4 test", "application/pdf")
+
+    assert record["filename"] == "示例文档.pdf"
+    assert Path(record["path"]).name == "示例文档.pdf"
+    assert record["preview_type"] == "pdf"
+    # Windows命令行/旧客户端按 GBK 发送文件名时同样还原。
+    gbk_name = "示例文档.pdf".encode("gbk").decode("latin-1")
+    gbk = await service.create("session-utf8", gbk_name, b"%PDF-1.4 test", "application/pdf")
+    assert gbk["filename"] == "示例文档.pdf"
+    # A genuine latin-1 name that is not valid UTF-8 must survive untouched.
+    latin = await service.create("session-utf8", "café.txt", b"hello", "text/plain")
+    assert latin["filename"] == "café.txt"
+
+
+@pytest.mark.asyncio
+async def test_upload_uses_extension_when_transport_mime_is_generic(tmp_path):
+    """user:“附件预览给做好”+(浏览器常用 application/octet-stream 兜底；
+    不能让它覆盖扩展名，否则 PDF、Office、音视频都退化成“外部文件”)。"""
+    repository = MemoryAttachmentRepository(tmp_path)
+    service = AttachmentService(repository)
+    cases = {
+        "report.pdf": ("application/pdf", "pdf"),
+        "brief.docx": (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "external",
+        ),
+        "sheet.xlsx": (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "external",
+        ),
+        "slides.pptx": (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "external",
+        ),
+        "voice.wav": ("audio/vnd.wave", "audio"),
+        "clip.mp4": ("video/mp4", "video"),
+        "readme.md": ("text/markdown", "text"),
+    }
+    for filename, (mime, preview) in cases.items():
+        record = await service.create("session-mime", filename, b"payload", "application/octet-stream")
+        assert record["mime_type"] == mime, filename
+        assert record["preview_type"] == preview, filename
+

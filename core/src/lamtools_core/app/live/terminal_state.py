@@ -4,6 +4,8 @@ from __future__ import annotations
 # user:“拆分后依旧很大”+(按业务职责分组，保留兼容入口，避免大文件再次集中。)
 
 from collections.abc import Callable
+import hashlib
+import json
 from typing import Any
 from lamtools_core.event import RunItemEvent
 from lamtools_core.runtime import RuntimeState, RuntimeStateConflictError, RuntimeStateStore
@@ -19,6 +21,12 @@ from ..event_store import AppEventEnvelope
 from ..queue_state import latest_active_turn_id
 from ..turn_acceptance import build_cancelled_turn_event
 from .context import CoreLiveContext
+
+
+def _terminal_event_id(thread_id: str, turn_id: str, run_id: str, reason: str) -> str:
+    # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(执行编号可跨会话复用；终态幂等键必须包含会话、逻辑回合及执行代次)。
+    identity = json.dumps([thread_id, turn_id, run_id, reason], ensure_ascii=False)
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 def _paused_turn_id(snapshot: dict[str, Any]) -> str:
@@ -139,7 +147,7 @@ async def _persist_cancelled_terminal(
         terminal = build_cancelled_turn_event(thread_id=thread_id, turn_id=turn_id)
         execution_id = _turn_execution_id(snapshot, turn_id)
         terminal.run_id = execution_id
-        terminal.event_id = f"{execution_id}:cancelled"
+        terminal.event_id = _terminal_event_id(thread_id, turn_id, execution_id, "cancelled")
         terminal.item_id = f"{turn_id}:terminal"
         event = await _append_run_item(db, context=context, event=terminal)
         return event
@@ -307,7 +315,7 @@ async def _close_active_turns(
             event=RunItemEvent(
                 kind="status",
                 thread_id=thread_id,
-                event_id=f"{execution_id}:{reason}",
+                event_id=_terminal_event_id(thread_id, active, execution_id, reason),
                 run_id=execution_id,
                 turn_id=active,
                 # Same identity as the kernel's terminal projection: the

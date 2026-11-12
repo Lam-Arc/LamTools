@@ -16,16 +16,46 @@ class PluginMarketAPI:
         if self._context._registration_scope is not self._scope or self._context.resolved_operation_catalog() is not self._catalog:
             raise HostOperationError("host/changed", "Market operation catalog changed")
 
+    async def list_indexes(self):
+        self._scope.acquire()
+        try:
+            self._check()
+            if (self._catalog is None or not self._catalog.has("plugin.market.list")
+                    or self._catalog.owner_of("plugin.market.list") != "plugin-system"):
+                raise HostOperationError("host/unavailable", "Original market provider is unavailable")
+            # user:“第二阶段结束后 就继续开展第三阶段”+(只报告已挂载原市场的固定来源，不声称网络或安装包可用)。
+            from .market import CATALOG_URL
+            result = [{"url": CATALOG_URL}]
+            self._check()
+            return result
+        finally:
+            self._scope.release()
+
     async def list(self):
         self._scope.acquire()
         try:
             self._check()
-            if self._catalog is None or not self._catalog.has("plugin.market.list"):
+            # user:“不用静态扫描、空壳或未安装提供方冒充可用”+(读取和搜索只使用原插件系统拥有的市场操作)。
+            if (self._catalog is None or not self._catalog.has("plugin.market.list")
+                    or self._catalog.owner_of("plugin.market.list") != "plugin-system"):
                 raise HostOperationError("host/unavailable", "Original market provider is unavailable")
+            token = self._catalog.binding_token("plugin.market.list")
             # user:“复用原宿主权威”+(原市场可能在线程中取索引和写缓存；取消后等待真实读取结算再释放租约)。
-            result = await finish_on_cancel(self._catalog.execute("plugin.market.list", {},
-                metadata={"source": "plugin-sdk", "plugin": self._scope.owner}), name="plugin-market-read")
+            async def call_original():
+                # user:“不用静态扫描、空壳或未安装提供方冒充可用”+(异步派发实际开始前再核对原操作绑定)。
+                self._check()
+                if (not self._catalog.has("plugin.market.list")
+                        or self._catalog.owner_of("plugin.market.list") != "plugin-system"
+                        or self._catalog.binding_token("plugin.market.list") is not token):
+                    raise HostOperationError("host/changed", "Market provider changed")
+                return await self._catalog.execute("plugin.market.list", {},
+                    metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
+            result = await finish_on_cancel(call_original(), name="plugin-market-read")
             self._check()
+            if (not self._catalog.has("plugin.market.list")
+                    or self._catalog.owner_of("plugin.market.list") != "plugin-system"
+                    or self._catalog.binding_token("plugin.market.list") is not token):
+                raise HostOperationError("host/changed", "Market provider changed")
             if result.status != "ok":
                 raise HostOperationError("host/operation-rejected", "Original market lookup failed", status=result.status)
             return _json(result.payload)

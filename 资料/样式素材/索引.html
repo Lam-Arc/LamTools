@@ -1,0 +1,46 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8" />
+<title>素材库与控件清点 · 索引</title><style>
+:root { color-scheme: dark; }
+body { margin: 0; padding: 44px 28px 90px; background:
+  radial-gradient(1000px 500px at 15% -10%, rgba(106,169,255,.12), transparent 60%),
+  radial-gradient(800px 400px at 95% 0%, rgba(226,160,74,.10), transparent 55%),
+  #14161a;
+  color: #eae4da; font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+main { max-width: 1080px; margin: 0 auto; }
+h1 { font-size: 27px; margin: 0 0 6px; letter-spacing: -.01em; }
+p.lead { margin: 0 0 34px; color: #8f8d88; font-size: 13px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: #8f8d88;
+  margin: 34px 0 12px; font-weight: 600; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+a.card { display: flex; flex-direction: column; gap: 6px; padding: 16px 16px 18px;
+  border: 1px solid rgba(234,228,218,.14); border-radius: 12px; text-decoration: none;
+  background: rgba(234,228,218,.035); color: inherit; transition: border-color .15s, background .15s, transform .15s; }
+a.card:hover { border-color: rgba(127,180,255,.55); background: rgba(127,180,255,.08); transform: translateY(-1px); }
+a.card b { font-size: 14px; font-weight: 600; }
+a.card span { font-size: 12px; color: #98948e; line-height: 1.55; }
+a.card em { font-style: normal; font-size: 11px; color: #7fb4ff; letter-spacing: .04em; }
+.tag { display: inline-block; font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  background: rgba(127,180,255,.16); color: #9cc4ff; margin-right: 6px; }
+.note { margin: 18px 0 0; font-size: 12px; color: #7f7c77; }
+</style></head>
+<body><main>
+<h1>素材库与控件清点</h1>
+<p class="lead">控件对照页每个候选都在独立框里加载它自己的样式文件，互不影响；文档是同一份结论的浏览器版本。</p>
+
+<h2>按风格看</h2>
+<div class="grid"><a class="card" href="风格库.html"><b>样式库 · 全部</b><span>89 种长相，可搜索、可试用，按用途与材质分组</span></a><a class="card" href="风格-按钮.html"><b>按钮 · 17 种</b><span>63 个类收敛成 17 种长相，同类只留代表</span></a><a class="card" href="风格-输入框.html"><b>输入框 · 7 种</b><span>30 个类收敛成 7 种</span></a><a class="card" href="风格-卡片.html"><b>卡片 · 12 种</b><span>110 个类收敛成 12 种</span></a><a class="card" href="风格-胶囊.html"><b>胶囊 · 6 种</b><span>30 个类收敛成 6 种</span></a><a class="card" href="风格-开关.html"><b>开关 · 11 种</b><span>25 个类收敛成 11 种</span></a></div>
+
+<h2>全部类名</h2>
+<div class="grid"><a class="card" href="控件-按钮.html"><b>按钮</b><span>63 个根类各自独立渲染，按引用次数排序</span></a><a class="card" href="控件-输入框.html"><b>输入框</b><span>30 个类名，15 个是同一份配方</span></a><a class="card" href="控件-卡片.html"><b>卡片</b><span>110 个类名，实色与半透明两条线</span></a><a class="card" href="控件-胶囊.html"><b>胶囊与标签</b><span>30 个类名，跨文件复用为 0</span></a><a class="card" href="控件-开关.html"><b>开关</b><span>25 个类名，11 种长相</span></a></div>
+
+<h2>材质与规范</h2>
+<div class="grid"><a class="card" href="控件-按钮八种.html"><b>按钮八种</b><span>2 材质乘 4 形状的规范对照</span></a><a class="card" href="控件-常用四件.html"><b>常用四件</b><span>胶囊、输入、卡片、弹窗</span></a><a class="card" href="材质-玻璃.html"><b>玻璃两种</b><span>高透着色 16% 与低透着色 40%</span></a></div>
+
+<h2>交互演示</h2>
+<div class="grid"><a class="card" href="http://127.0.0.1:5199/materials-lab.html" target="_blank"><b>资料库 · 交互演示</b><span>真实组件，可点标签、打星、勾两件看并排对比</span><em>需要本地开发服务 5199</em></a><a class="card" href="http://127.0.0.1:5199/thinking-lab.html" target="_blank"><b>两套滑条对照</b><span>竖向思考等级条与横向通用滑条，真实组件并排</span><em>需要本地开发服务 5199</em></a><a class="card" href="http://127.0.0.1:5199/materials-lab.html?compare=1" target="_blank"><b>并排对比（直达）</b><span>自动选中两件并打开对比面板</span><em>需要本地开发服务 5199</em></a></div>
+
+<h2>结论文档</h2>
+<div class="grid"><a class="card" href="文档-场景.html"><b>界面场景与复用结论</b><span>按用户在做的事重排，含滑条实测</span></a><a class="card" href="文档-素材库.html"><b>素材库：收纳整理再利用</b><span>需求、取用链路、数据模型、实施顺序</span></a><a class="card" href="文档-控件清点.html"><b>界面控件清点与去重结论</b><span>每个控件的种类数、重复清单、合并顺序</span></a></div>
+
+<p class="note">对照页里的数目是「根类个数」，一个根类可能带若干变体。独立渲染用的是项目真实 CSS，所以颜色、圆角、描边都是真的。</p>
+</main></body></html>

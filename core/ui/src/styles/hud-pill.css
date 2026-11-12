@@ -1,0 +1,202 @@
+/**
+ * 屏幕贴边胶囊：Computer Use 状态条与交互层工具条共用同一套外观。
+ *
+ * user:“上方那个条和电脑使用时候的样式用同一个，可行吗？”+(可行：黑底、贴屏幕上沿、
+ * 只圆下方两角、2px 暗彩流光边、白色 12px 字，两边用同一份样式，不各写一遍)。
+ *
+ * 用法：
+ * - 外层容器加 `hud-pill hud-pill-flow`，流光角度由容器自己跑。
+ * - 胶囊里放一个 `<span class="hud-pill__ring">` 画 2px 边，按钮用 `hud-pill__btn`，
+ *   纯文字按钮再加 `hud-pill__btn--text`。
+ */
+
+@property --hud-pill-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  /* 继承：容器跑一次流转，胶囊的边与同一层里其它消费方拿到的角度永远同步。 */
+  inherits: true;
+}
+
+.hud-pill-flow {
+  animation: hud-pill-flow 6.5s linear infinite;
+}
+
+/* 胶囊贴在屏幕上沿：上沿直角，只圆下面两角，黑色实底盖住穿过去的线。 */
+.hud-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 6px 0 10px;
+  border-radius: 0 0 12px 12px;
+  background: #08080a;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  user-select: none;
+}
+
+/* 2px 暗彩流光边：上沿不画线，左右从 y=0 起画，正好接住屏幕顶边。
+   background-attachment: fixed 让渐变按视口坐标取色，交界处连续同色。 */
+.hud-pill__ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid transparent;
+  border-top: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+      from var(--hud-pill-angle),
+      #7b62c9,
+      #2f8f84,
+      #a4566d,
+      #4f68b8,
+      #7b62c9
+    )
+    border-box;
+  background-attachment: fixed;
+  -webkit-mask:
+    linear-gradient(#000 0 0) padding-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) padding-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: hud-pill-breathe 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 整圈屏幕边框：和胶囊共用同一套颜色、节奏与角度，胶囊压在上沿时连成一条线。 */
+/* user:“屏幕边框的角加上 6px 圆角并填充角落”+(外圈收圆 6px，四个角用同一套
+   渐变填满，角落不再是透出去的缺口)。 */
+.hud-screen-frame {
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: 6px;
+  background: conic-gradient(
+    from var(--hud-pill-angle),
+    #7b62c9,
+    #2f8f84,
+    #a4566d,
+    #4f68b8,
+    #7b62c9
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: hud-pill-breathe 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 角落填充：四个 6×6 的方块，渐变按视口取色，和边框同色同相位，接缝看不出来。 */
+.hud-screen-frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--hud-pill-angle),
+    #7b62c9,
+    #2f8f84,
+    #a4566d,
+    #4f68b8,
+    #7b62c9
+  );
+  background-attachment: fixed;
+  -webkit-mask:
+    linear-gradient(#000 0 0) left top / 6px 6px no-repeat,
+    linear-gradient(#000 0 0) right top / 6px 6px no-repeat,
+    linear-gradient(#000 0 0) left bottom / 6px 6px no-repeat,
+    linear-gradient(#000 0 0) right bottom / 6px 6px no-repeat;
+  mask:
+    linear-gradient(#000 0 0) left top / 6px 6px no-repeat,
+    linear-gradient(#000 0 0) right top / 6px 6px no-repeat,
+    linear-gradient(#000 0 0) left bottom / 6px 6px no-repeat,
+    linear-gradient(#000 0 0) right bottom / 6px 6px no-repeat;
+  pointer-events: none;
+}
+
+/* 胶囊里的状态文字：不换行，和按钮同一个字号。 */
+.hud-pill__text {
+  white-space: nowrap;
+}
+
+.hud-pill__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.hud-pill__btn svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+.hud-pill__btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+/* 文字按钮：宽度跟着字走，高度和图标按钮一致。 */
+.hud-pill__btn--text {
+  width: auto;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.hud-pill__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.hud-pill__btn:disabled:hover {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+@keyframes hud-pill-flow {
+  to {
+    --hud-pill-angle: 360deg;
+  }
+}
+
+@keyframes hud-pill-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-pill-flow,
+  .hud-pill__ring,
+  .hud-screen-frame {
+    animation: none;
+  }
+}

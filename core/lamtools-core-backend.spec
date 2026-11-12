@@ -172,6 +172,8 @@ _hiddenimports = [
     "lamtools_boot.overrides",
     # === 3rd-party runtime dependencies ===
     "httpx",
+    # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(插件动态导入的 requests 必须进入冻结桌面包)。
+    "requests",
     "httpcore",
     "sqlalchemy",
     "sqlalchemy.ext.asyncio",

@@ -17,9 +17,12 @@ export interface SplitOpenScope {
  * user:“默认打开也跟文本文件一样 用分屏预览打开”+
  * (文件打开只有一个入口：文本进编辑器，其余进预览器；已有同类标签就复用那块屏)。
  * user:“设置中把它标记为实验性功能”+(关掉实验性开关后预览类文件不在这里接管，交回调用方)。
+ * user:“把附件预览给做好”+(会话附件的受管副本在项目目录之外，文本编辑器会拒绝读取；
+ * 这类文本文件改走只读文本预览，项目内文件仍进编辑器)。
  */
 export function openFileInSplit(controller: SplitWorkspaceController, path: string, scope: SplitOpenScope = {}) {
-  const kind = splitContentFor(path)
+  let kind = splitContentFor(path)
+  if (kind === 'editor' && isOutsideWorkRoot(path, scope.workRoot)) kind = 'preview'
   if (!scope.force && kind === 'preview' && !splitPreviewEnabled()) return null
   const sameKind = controller.tabs.value.find(({ tab }) => tab.kind === kind)?.pane
   const from = scope.fromPane
@@ -33,6 +36,15 @@ export function openFileInSplit(controller: SplitWorkspaceController, path: stri
     scope.workRoot,
     scope.projectId,
   )
+}
+
+function isOutsideWorkRoot(path: string, workRoot = ''): boolean {
+  if (!path || !workRoot) return false
+  const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const candidate = normalize(path)
+  const root = normalize(workRoot)
+  if (!/^[a-z]:\//.test(candidate) && !candidate.startsWith('/')) return false
+  return candidate !== root && !candidate.startsWith(`${root}/`)
 }
 
 /** 预览开关关闭或分屏不可用时，文件回到稳定的“默认应用打开”通道。 */

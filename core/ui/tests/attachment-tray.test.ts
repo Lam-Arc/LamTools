@@ -94,6 +94,44 @@ describe('AttachmentTray', () => {
     expect(wrapper.get('.reference-items').classes()).toContain('reference-items--icons');
   });
 
+  it('keeps upload order while stacking consecutive small files between media cards', () => {
+    // user:“比如说，我上传了一个附件图片，再上传了4个附件，再上传了一个视频，
+    // 再上传了一个附件，再上传了一个视频”+(媒体各占一列；连续小附件每 3 个叠一列，
+    // 第 4 个另起一列但仍夹在原来的图片和视频之间)。
+    const doc = (id: string): CoreAttachment => ({
+      id, filename: `${id}.txt`, label: `${id}.txt`, mime_type: 'text/plain', size: 10,
+      preview_type: 'text', status: 'uploaded',
+    })
+    const media = (id: string, kind: 'image' | 'video'): CoreAttachment => ({
+      id, filename: `${id}.${kind === 'image' ? 'png' : 'mp4'}`, label: `${id}.${kind === 'image' ? 'png' : 'mp4'}`,
+      mime_type: kind === 'image' ? 'image/png' : 'video/mp4', size: 10,
+      preview_type: kind, status: 'uploaded',
+    })
+    const wrapper = mountAttachmentTray({
+      props: {
+        attachments: [
+          media('img', 'image'),
+          doc('a'), doc('b'), doc('c'), doc('d'),
+          media('vid1', 'video'),
+          doc('e'),
+          media('vid2', 'video'),
+        ],
+      },
+    })
+    const columns = wrapper.findAll('.attachment-column')
+    expect(columns.map(column => column.classes().find(name => name.startsWith('attachment-column--')))).toEqual([
+      'attachment-column--media',
+      'attachment-column--stack',
+      'attachment-column--stack',
+      'attachment-column--media',
+      'attachment-column--stack',
+      'attachment-column--media',
+    ])
+    expect(columns.map(column => column.findAll('.attachment-entry').length)).toEqual([1, 3, 1, 1, 1, 1])
+    // 第 4 个附件没有被排到视频后面。
+    expect(columns[2]!.text()).toContain('d.txt')
+  });
+
   it('renders image attachments as thumbnail-only cards', async () => {
     const transport = createFakeTransport({
       status: 200,
@@ -114,10 +152,12 @@ describe('AttachmentTray', () => {
       },
     });
 
-    expect(wrapper.find('.attachment-card--image').exists()).toBe(true);
-    expect(wrapper.find('.attachment-copy').exists()).toBe(false);
+    // user:“图片和视频附件以大缩略显示”+(媒体条目直接铺大缩略图，不再显示文字胶囊)。
+    expect(wrapper.find('.attachment-entry--media').exists()).toBe(true);
+    expect(wrapper.find('.attachment-pill').exists()).toBe(false);
+    expect(wrapper.find('.attachment-preview--media').exists()).toBe(true);
     await flushPromises();
-    await vi.waitFor(() => expect(wrapper.find('.attachment-thumbnail').exists()).toBe(true));
-    expect(wrapper.get('.attachment-thumbnail').attributes('src')).toMatch(/^data:image\/png;base64,/);
+    await vi.waitFor(() => expect(wrapper.find('img.attachment-media').exists()).toBe(true));
+    expect(wrapper.get('img.attachment-media').attributes('src')).toMatch(/^data:image\/png;base64,/);
   });
 });

@@ -47,7 +47,8 @@ def _goal_reminder(active_goal: dict[str, Any] | None) -> str:
     if not isinstance(active_goal, dict):
         return ""
     objective = str(active_goal.get("objective") or "").strip()
-    return goal_continuation_text(objective) if objective else ""
+    criteria = active_goal.get("completion_criteria") or []
+    return goal_continuation_text(objective, criteria) if objective else ""
 
 
 @complete_turn_handoff
@@ -92,7 +93,11 @@ async def _dispatch_next_queue_item(
         if manager is not None and isinstance(current_goal, dict):
             goal = await manager.get(str(current_goal.get("id") or ""))
             current_goal = (
-                {"id": goal.id, "objective": goal.objective}
+                {
+                    "id": goal.id,
+                    "objective": goal.objective,
+                    "completion_criteria": list(goal.completion_criteria),
+                }
                 if goal is not None and goal.status == "active" and goal.thread_id == thread_id
                 else None
             )

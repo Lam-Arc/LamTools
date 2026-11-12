@@ -1,0 +1,97 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8" />
+<title>素材库：收纳整理再利用</title><style>
+:root { color-scheme: dark; }
+body { margin: 0; padding: 40px 24px 80px; background: #14161a; color: #e8e2d8;
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.7; }
+main { max-width: 900px; margin: 0 auto; }
+h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -.01em; }
+h2 { font-size: 19px; margin: 34px 0 10px; padding-top: 14px; border-top: 1px solid rgba(232,226,216,.12); }
+h3 { font-size: 15px; margin: 24px 0 8px; color: #f6efe2; }
+p, li { font-size: 14px; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+blockquote { margin: 14px 0; padding: 10px 14px; border-left: 2px solid #6aa9ff;
+  background: rgba(106,169,255,.08); color: #cfd6e2; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+th, td { border: 1px solid rgba(232,226,216,.14); padding: 7px 10px; text-align: left; }
+th { background: rgba(232,226,216,.06); font-weight: 600; }
+code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px;
+  background: rgba(232,226,216,.08); padding: 1px 5px; border-radius: 4px; }
+pre { background: #1b1d22; border: 1px solid rgba(232,226,216,.12); border-radius: 8px;
+  padding: 12px 14px; overflow: auto; }
+pre code { background: none; padding: 0; }
+hr { border: 0; border-top: 1px solid rgba(232,226,216,.1); margin: 26px 0; }
+a { color: #7fb4ff; }
+a.back { display: inline-block; margin-bottom: 18px; font-size: 12.5px; text-decoration: none; }
+</style></head>
+<body><main><a class="back" href="索引.html">← 回索引</a>
+<h1>素材库：收纳、整理、再利用</h1>
+<blockquote>本文替换 <code>方案/Library增强-样式展示与标签评分.md</code>。旧文档只覆盖了「收纳」的一半，把「挑按钮」当成了终点。这一版把三件事写全。</blockquote>
+<h2>一、需求</h2>
+<p>用户原话：</p>
+<blockquote>让现有库通过添加一部分能力，能够实现对素材的收纳、整理与再利用。</blockquote>
+<blockquote>再利用是 agent 来再利用，人只做观测和选用，比如说，我现在告诉你，去给我做一个什么什么什么东西，用低透玻璃材质和 ping 环的环形交互样式，质量按照星级就行。</blockquote>
+<blockquote>本项目的所有 UI 是对这个功能的一个测试。</blockquote>
+<p>三条落点：</p>
+<ol><li>收纳：项目里所有能复用的东西进库，不只样式，也包括材质、控件、布局、动效、页面。</li><li>整理：进库的东西能被「人话」检索，而不是靠翻文件名。</li><li>再利用：Agent 按人的一句话去库里取，取到能直接用的东西，用完之后这次使用被记下来。</li></ol>
+<p>分工是固定的：<strong>人观测和选用，Agent 取用和落地。</strong></p>
+<p>质量只用星级，0 到 5，0 表示没评。不引入第二套质量状态。</p>
+<h2>二、一次真实的再利用长什么样</h2>
+<p>这就是验收脚本，不需要别的场景。</p>
+<p>人说的话：</p>
+<blockquote>给我做一个悬浮操作面板，用低透玻璃材质和 ping 环的环形交互样式，质量按星级。</blockquote>
+<p>Agent 要做完的五步：</p>
+<ol><li>把这句话拆成两个取用意图：材质 <code>低透玻璃</code>，交互 <code>环形</code>。</li><li>在库里按标签找，每个意图给出候选，按星级从高到低排。</li><li>候选必须自带「怎么用」：从哪个类名或组件进、依赖哪些设计令牌、需要什么父级、有没有最小示例。</li><li>把两个素材组合落地到新代码里。</li><li>把这次使用回写到这两个素材上：用在哪、什么时候、和谁一起用的。</li></ol>
+<p>人这一侧只做两件事：在库里看这两个素材长什么样、多少分、被用过几次；以及需要人工定夺时并排对比候选。</p>
+<h2>三、现在的差距</h2>
+<p>有证据，不是猜测。</p>
+<h3>3.1 标签是从文件名反推的碎片，不是使用时的说法</h3>
+<p>库里 32 份样式表，实际标签长这样：</p>
+<pre><code>css,head,row,icon,label,actions,card
+css,thread,head,row,icon,label,dot
+css,settings,base,row,label,actions,card</code></pre>
+<p><code>head</code>、<code>row</code>、<code>label</code>、<code>actions</code> 这些词来自样式表里出现频率最高的类名，对人没有检索价值，对 Agent 也没有。真正的取用词 <code>glass</code>、<code>ring</code>、<code>button</code> 覆盖极差。</p>
+<p>实测：按 <code>tag=glass</code> 能查到 3 条，按 <code>tag=ring</code> 返回空。也就是说，用户举的那个例子，今天连候选都拿不到。</p>
+<h3>3.2 只有位置，没有用法</h3>
+<p><code>list</code> 的输出是 <code>名称 + 层 + 标签 + 评分 + 文件路径</code>。Agent 拿到 <code>.css</code> 路径之后仍然要自己读文件猜类名、猜依赖、猜适用场景。这不是「取用」，这是「给它一个线索让它重新研究一遍」。</p>
+<h3>3.3 没有排序，没有多意图</h3>
+<p><code>list</code> 只接受一个 <code>tag</code> 参数，不支持多个标签同时命中，也不按星级排序。用户说「质量按星级就行」，这句话现在没有地方生效。</p>
+<h3>3.4 用完没有痕迹</h3>
+<p>没有使用记录。人看不出哪个素材真的被用过、用在哪，也就没法判断该给谁加分、该淘汰谁。</p>
+<h3>3.5 人看不见「长什么样」以外的东西</h3>
+<p>卡片有星级和标签，但没有用法、没有使用记录、没有并排对比。观测这条腿只有一半。</p>
+<h2>四、设计</h2>
+<h3>4.1 标签只留一个自由数组，但改打标签的方式</h3>
+<p>不引入类型枚举，不写死分类。分类和同类一律靠标签匹配，这是已经定下的原则。</p>
+<p>变的是打标签时问什么。每份素材按三个问法各给一到三个标签：</p>
+<table><thead><tr><th>问法</th><th>举例</th></tr></thead><tbody><tr><td>它是什么</td><td><code>material</code> <code>control</code> <code>layout</code> <code>motion</code> <code>surface</code></td></tr><tr><td>它看起来怎样</td><td><code>glass</code> <code>low-trans</code> <code>ring</code> <code>rounded</code> <code>glow</code> <code>outline</code></td></tr><tr><td>它用在哪</td><td><code>button</code> <code>dialog</code> <code>ping-ring</code> <code>card</code> <code>composer</code></td></tr></tbody></table>
+<p>存储上仍然是 <code>tags: string[]</code>，三个问法只是打标签时的提示，不是数据结构。这样既满足「按 tag 匹配」，又不会退回写死分类。</p>
+<p>判断标准一条：<strong>人用嘴说得出这个标签，Agent 才查得到。</strong> <code>head</code>、<code>row</code> 这种从类名里切出来的词一律不算。</p>
+<h3>4.2 素材必须自带用法</h3>
+<p>新增一列 <code>usage</code>，JSON，三件事：</p>
+<table><thead><tr><th>字段</th><th>说明</th><th>例子</th></tr></thead><tbody><tr><td><code>entry</code></td><td>从哪进</td><td><code>.optical-glass--low-trans</code> / <code>import PingRing from &#x27;@/pet/ui/PingRing.vue&#x27;</code></td></tr><tr><td><code>requires</code></td><td>依赖</td><td><code>--glass-tint</code>、父级需要有定位、需要 <code>variables.css</code></td></tr><tr><td><code>example</code></td><td>最小可用片段</td><td>五行以内的 HTML 或模板</td></tr></tbody></table>
+<p><code>entry</code> 是 Agent 落地的直接抓手。没有 <code>entry</code> 的素材，取用会退化成重新阅读源码，也就是这次要消灭的东西。</p>
+<h3>4.3 一次取用可以是一组</h3>
+<p>用户的例子是两个素材组合：材质负责观感，环形组件负责交互。所以回写不是单条，是「一组里的每一条都记上这次使用」。</p>
+<h3>4.4 使用记录</h3>
+<p>三个字段，够用：</p>
+<table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>usage_count</code></td><td>被取用次数</td></tr><tr><td><code>last_used_at</code></td><td>最后一次时间</td></tr><tr><td><code>used_in</code></td><td>最近若干次的使用位置，形如 <code>会话/任务 + 文件路径</code></td></tr></tbody></table>
+<p>记录由 Agent 在代码落地之后写，不是点一下就写。写成独立动作 <code>use</code>。</p>
+<h3>4.5 工具</h3>
+<p><code>library</code> 现在八个动作，两个要改，一个要加：</p>
+<ul><li><code>list</code> 增强：</li><li><code>tag</code> 支持数组，语义取「全部命中」，因为组合取用通常要求同时满足材质和形态。</li><li>增加 <code>sort</code>，默认按星级从高到低，同分按最近使用。</li><li>输出补 <code>entry</code> 一行和 <code>used=N</code>，让 Agent 一眼看到怎么用、用得多不多。</li><li><code>register</code> 增强：接受 <code>usage</code> 对象。</li><li>新增 <code>use</code>：参数 <code>artifact_ids</code>、<code>used_in</code>，累加计数与时间。</li></ul>
+<h3>4.6 人这一侧</h3>
+<p>只做观测和选用，不做第二套浏览器。</p>
+<ul><li>卡片：样子、名字、星级、<code>used=N</code>。标签胶囊显示全部，按三问法顺序排，便于扫。</li><li>详情：用法三行原文，加使用记录列表。人要看的是「这东西怎么用、谁用过」，不是再抄一遍 CSS。</li><li>对比：勾选两到多个条目，并排显示它们的实际渲染与星级。这是人做最终选择时唯一需要的新交互。</li><li>不再新开分区。仍然只有资料、记忆、方案、Wiki 四个入口。</li></ul>
+<h2>五、实施顺序</h2>
+<p>按「同样工作量，谁先让验收脚本能跑通」排序，不按代码层次排序。</p>
+<ol><li><strong>重打标签</strong>。把已入库的 35 条按三问法重打，同时把 ping 环、玻璃两种、按钮八种这些真会用到的素材补进库。做完这一步，<code>tag=ring</code> 和 <code>tag=glass</code> 同时命中就成立了。这一步不写代码，收益最大。</li><li><strong>补用法</strong>。给已入库素材填 <code>usage</code>，先填会用到的十几条，不求全。</li><li><strong>排序与多标签</strong>。<code>list</code> 加 <code>sort</code> 与数组 <code>tag</code>，让星级真正生效。</li><li><strong><code>use</code> 动作</strong>。跑通回写，先用工具验证，不动界面。</li><li><strong>人端展示</strong>。卡片加 <code>used=N</code>，详情加用法与记录。</li><li><strong>并排对比</strong>。勾选、并排、退出。</li><li><strong>预览真实化</strong>。卡片里的预览目前是从选择器反推的骨架，文字是占位词。改成真实渲染，用带测试的模板扫描实现，不达标不接入。</li><li><strong>按钮八种迁移</strong>。24 个存量按钮类按材质乘形状收敛到八种，涉及 43 个 <code>.vue</code> 文件，放最后。</li></ol>
+<p>第 1 到 4 步做完，「用低透玻璃和 ping 环做一个面板」这条链路就能端到端跑通，界面还是原来的样子。第 5 到 6 步补人的观测面。</p>
+<h2>六、验收</h2>
+<p>一条主链，四条支链。</p>
+<p>主链：<code>用低透玻璃材质和 ping 环的环形交互样式做一个悬浮面板，质量按星级</code>，Agent 能从库里取到两个素材、按星级排序、拿到类名与组件路径、落到代码、并回写使用记录。</p>
+<p>支链：</p>
+<ol><li><code>tag=ring</code>、<code>tag=glass</code> 都能命中，且候选按星级从高到低。</li><li>任一素材的 <code>entry</code> 直接可粘进代码，不需要再读源文件确认类名。</li><li>用完打开库，该素材显示 <code>used=1</code> 与使用位置。</li><li>勾选玻璃两种，并排渲染，能看出着色差别。</li></ol>
+<h2>七、已知问题与风险</h2>
+<ul><li>玻璃对照页在无 GPU 环境下 <code>backdrop-filter</code> 不生效，只剩着色差。并排对比要换不依赖 GPU 的底座，否则人看不出「低透」和「普通」的区别，对比功能等于废。</li><li>预览占位词未解决，第 7 步之前卡片显示的不是真样子，人的观测面不完整。</li><li>标签仍是自由字符串，会有 <code>ring</code> 和 <code>annular</code> 两套写法。靠打标签时统一用词，不做同义合并，积累后再定。</li><li><code>usage</code> 需要人工或 Agent 填，填不全就会退化成空字段。取舍是先填真会用的十几条，不追求 35 条全填。</li><li>24 个按钮类的迁移面很大，属于独立工程，不在本次链路内，但八种按钮的素材必须先入库才有迁移目标。</li></ul>
+</main></body></html>

@@ -29,10 +29,14 @@ class PluginWorkspaceRegistryAPI:
             self._check()
             if self._catalog is None or not self._catalog.has("project.get"):
                 raise WorkspaceRegistryError("workspace-registry/unavailable", "Native project lookup is unavailable")
+            binding = self._catalog.binding_token("project.get")
             result = await self._catalog.execute("project.get", {"project_id": project_id},
                 metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
             # user:“复用原宿主权威”+(等待后重新检查当前项目、原操作目录和启动代；其他项目不可见)。
             self._check()
+            # user:“复用原宿主权威”+(原项目操作重注册后不发布旧查询结果)。
+            if binding is None or self._catalog.binding_token("project.get") is not binding or not self._catalog.has("project.get"):
+                raise WorkspaceRegistryError("workspace-registry/host-changed", "Native project lookup changed")
             if result.status != "ok":
                 if result.status == "error" and result.payload == {"error": "Project not found"}:
                     return None
@@ -56,10 +60,14 @@ class PluginWorkspaceRegistryAPI:
                 return None
             if self._catalog is None or not self._catalog.has("project.resolve"):
                 raise WorkspaceRegistryError("workspace-registry/unavailable", "Native project lookup is unavailable")
+            binding = self._catalog.binding_token("project.resolve")
             result = await self._catalog.execute("project.resolve", {"work_root": str(self._root)},
                 metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
             # user:“复用原宿主权威”+(等待原只读查询后再次检查根、目录和启动代)。
             self._check()
+            # user:“复用原宿主权威”+(同名替换原目录解析器后拒绝旧结果)。
+            if binding is None or self._catalog.binding_token("project.resolve") is not binding or not self._catalog.has("project.resolve"):
+                raise WorkspaceRegistryError("workspace-registry/host-changed", "Native project lookup changed")
             if result.status != "ok" or type(result.payload) is not dict:
                 raise WorkspaceRegistryError("workspace-registry/rejected", "Native project lookup failed")
             project = result.payload.get("project")
@@ -74,6 +82,9 @@ class PluginWorkspaceRegistryAPI:
             self._scope.release()
 
     async def sessions(self, project_id, *, limit=50, cursor=None):
+        return await self._sessions_page(project_id, limit=limit, cursor=cursor, binding=None)
+
+    async def _sessions_page(self, project_id, *, limit, cursor, binding):
         self._scope.acquire()
         try:
             self._check()
@@ -84,7 +95,9 @@ class PluginWorkspaceRegistryAPI:
             if host is None or not callable(getattr(host, "query", None)):
                 raise WorkspaceRegistryError("workspace-registry/unavailable", "Native bounded session query is unavailable")
             # user:“复用原宿主权威”+(只用固定项目根过滤原可见会话扫描，游标绑定项目与插件代)。
-            result = await host.query((self._scope.owner, self._scope.epoch, project_id), limit=limit, cursor=cursor,
+            # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(不同搜索词的分页游标不能互用)。
+            owner = (self._scope.owner, self._scope.epoch, project_id) if binding is None else (self._scope.owner, self._scope.epoch, project_id, binding)
+            result = await host.query(owner, limit=limit, cursor=cursor,
                                       title_contains="", project_root=str(self._root))
             self._check()
             if self._context.service("session_query") is not host:

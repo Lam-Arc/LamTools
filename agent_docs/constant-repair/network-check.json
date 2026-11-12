@@ -1,0 +1,12 @@
+[
+  {
+    "url": "https://api.github.com/repos/Lam-Arc/LamTools/releases/latest",
+    "status": 200,
+    "tls_verification": true
+  },
+  {
+    "url": "https://ainarit.com/downloads/desktop-update.json",
+    "status": 200,
+    "tls_verification": true
+  }
+]

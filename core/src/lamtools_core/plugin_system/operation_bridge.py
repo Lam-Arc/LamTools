@@ -236,10 +236,11 @@ def build_handler(spec: PluginOperationSpec, host: PluginHost, consent: Any = No
             try:
                 value = await backend.call_operation(spec.name, request.payload or {}, request.metadata or {})
             except Exception as exc:  # noqa: BLE001 - a dead process must not kill the catalog
+                # user:“第二阶段结束后 就继续开展第三阶段”+(外部进程调用失败无法排除它已经提交副作用)。
                 return OperationResult(
                     name=spec.name,
                     status="error",
-                    payload={"error": f"{type(exc).__name__}: {exc}"},
+                    payload={"error": f"{type(exc).__name__}: {exc}", "may_have_changed": True},
                 )
             if isinstance(value, OperationResult):
                 return value
@@ -288,10 +289,14 @@ def build_handler(spec: PluginOperationSpec, host: PluginHost, consent: Any = No
             if inspect.isawaitable(value):
                 value = await value
         except Exception as exc:  # noqa: BLE001
+            payload = {"error": f"{type(exc).__name__}: {exc}"}
+            # user:“第二阶段结束后 就继续开展第三阶段”+(只传递明确的可能已写入标志，避免客户端误以为失败等于回滚)。
+            if vars(exc).get("may_have_changed") is True:
+                payload["may_have_changed"] = True
             return OperationResult(
                 name=spec.name,
                 status="error",
-                payload={"error": f"{type(exc).__name__}: {exc}"},
+                payload=payload,
             )
         if isinstance(value, OperationResult):
             return value

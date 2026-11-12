@@ -1,19 +1,19 @@
 <template>
   <Transition name="cu-bar">
-    <div v-if="visible" class="cu-layer">
+    <div v-if="visible" class="cu-layer hud-pill-flow">
       <!-- user:“胶囊与屏幕边框使用连续的呼吸感暗彩流光边框 2px”+
            (整圈窗口边框也画流光，胶囊坐在上沿，两边连成一条线。) -->
-      <div class="cu-screen-frame" aria-hidden="true" />
+      <div class="cu-screen-frame hud-screen-frame" aria-hidden="true" />
 
       <div class="cu-bar-slot">
-        <div class="cu-bar" :class="{ 'cu-bar--paused': paused }" role="status">
+        <div class="cu-bar hud-pill" :class="{ 'cu-bar--paused': paused }" role="status">
           <!-- user:“既有缝也有颜色跳变”+(胶囊边线从 y=0 起画接住屏幕顶边，
                渐变与屏幕边框共用同一个视口色场，交界处不许断、不许跳色。) -->
-          <span class="cu-bar-ring" aria-hidden="true" />
-          <span class="cu-bar-text">{{ paused ? '已暂停操作' : '正在控制电脑' }}</span>
+          <span class="cu-bar-ring hud-pill__ring" aria-hidden="true" />
+          <span class="cu-bar-text hud-pill__text">{{ paused ? '已暂停操作' : '正在控制电脑' }}</span>
           <button
             type="button"
-            class="cu-bar-btn"
+            class="cu-bar-btn hud-pill__btn"
             :title="paused ? '继续' : '暂停'"
             :aria-label="paused ? '继续' : '暂停'"
             @click="togglePause"
@@ -26,7 +26,7 @@
               <rect x="13.4" y="5" width="3.6" height="14" rx="1.2" fill="currentColor" />
             </svg>
           </button>
-          <button type="button" class="cu-bar-btn" title="结束" aria-label="结束" @click="stop">
+          <button type="button" class="cu-bar-btn hud-pill__btn" title="结束" aria-label="结束" @click="stop">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M6.6 6.6l10.8 10.8M17.4 6.6L6.6 17.4"
@@ -52,6 +52,8 @@
  * 胶囊上沿压在边框上，重合处不再重复画线)。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+// user:“上方那个条和电脑使用时候的样式用同一个”+(外观只有一份，交互层工具条也用这套)。
+import '@/styles/hud-pill.css'
 
 interface ComputerUseSession {
   state?: string
@@ -169,34 +171,10 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 59;
   pointer-events: none;
-  /* 流光角度只在共同父层跑，边框和胶囊继承同一个值，两边相位永远一致。 */
-  animation: cu-bar-flow 6.5s linear infinite;
+  /* 流光角度只在共同父层跑（hud-pill-flow），边框和胶囊继承同一个值，相位永远一致。 */
 }
 
-/* 整圈窗口边框：2px 流光，和胶囊共用同一套颜色与节奏。 */
-.cu-screen-frame {
-  position: absolute;
-  inset: 0;
-  padding: 2px;
-  background: conic-gradient(
-    from var(--cu-bar-angle),
-    #7b62c9,
-    #2f8f84,
-    #a4566d,
-    #4f68b8,
-    #7b62c9
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: cu-bar-breathe 2.8s ease-in-out infinite;
-  pointer-events: none;
-}
+/* 整圈窗口边框在 styles/hud-pill.css（.hud-screen-frame），和交互层共用一份。 */
 
 /* 胶囊横向居中槽位：不上 transform，避免 fixed 背景被降级成局部坐标系。 */
 .cu-bar-slot {
@@ -209,94 +187,17 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-/* 胶囊压在顶部边框上：黑底盖住穿过去的那条线，只画左右和下。 */
-.cu-bar {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 6px 0 10px;
-  border-radius: 0 0 12px 12px;
-  background: #08080a;
-  color: #ffffff;
-  font-size: 12px;
-  line-height: 1;
-  letter-spacing: 0.01em;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-  pointer-events: auto;
-  user-select: none;
-}
-
-/* 胶囊边线：左右从 y=0 起画，正好接住屏幕顶边；上沿不画线。
-   background-attachment: fixed 让渐变按视口坐标取色，圆心与屏幕边框同源，
-   交界处连续同色。 */
-.cu-bar-ring {
-  position: absolute;
-  inset: 0;
-  border: 2px solid transparent;
-  border-top: 0;
-  border-radius: inherit;
-  background: conic-gradient(
-      from var(--cu-bar-angle),
-      #7b62c9,
-      #2f8f84,
-      #a4566d,
-      #4f68b8,
-      #7b62c9
-    )
-    border-box;
-  background-attachment: fixed;
-  -webkit-mask:
-    linear-gradient(#000 0 0) padding-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) padding-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: cu-bar-breathe 2.8s ease-in-out infinite;
-  pointer-events: none;
-}
+/* 胶囊压在顶部边框上：黑底盖住穿过去的那条线，只画左右和下。
+   外观在 styles/hud-pill.css，和交互层工具条共用一份。 */
 
 .cu-layer:has(.cu-bar--paused) {
   animation-play-state: paused;
 }
 
 .cu-layer:has(.cu-bar--paused) .cu-screen-frame,
-.cu-bar--paused .cu-bar-ring {
+.cu-bar--paused .hud-pill__ring {
   animation-play-state: paused;
   opacity: 0.45;
-}
-
-.cu-bar-text {
-  white-space: nowrap;
-}
-
-.cu-bar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.82);
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.cu-bar-btn svg {
-  width: 13px;
-  height: 13px;
-  display: block;
-}
-
-.cu-bar-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
 }
 
 .cu-bar-btn:last-child:hover {
@@ -314,33 +215,9 @@ onBeforeUnmount(() => {
   opacity: 0;
 }
 
-@property --cu-bar-angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  /* 继承：父层跑一次流转，边框和胶囊拿到的角度永远同步，交界处不会一快一慢。 */
-  inherits: true;
-}
-
-@keyframes cu-bar-flow {
-  to {
-    --cu-bar-angle: 360deg;
-  }
-}
-
-@keyframes cu-bar-breathe {
-  0%,
-  100% {
-    opacity: 0.72;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .cu-layer,
-  .cu-screen-frame,
-  .cu-bar-ring {
+  .cu-screen-frame {
     animation: none;
   }
 }

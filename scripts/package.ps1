@@ -125,6 +125,16 @@ if (-not $SkipTauri) {
     Copy-Item -LiteralPath $TauriBinary -Destination (Join-Path $StageDir "Sunday.exe")
     Copy-Item -LiteralPath $BackendBundle -Destination (Join-Path $StageDir "sunday-backend") -Recurse
 
+    # user:“在这一次的 setup 里头再打一个清理脚本”+(安装包带上 Constant 数据库
+    # 清理入口：停进程、剥历史内联图片、裁掉过期同步日志、VACUUM)。
+    foreach ($CleanupFile in @("cleanup-constant-db.ps1", "cleanup_constant_db.py")) {
+        $CleanupSource = Join-Path "$Root\scripts" $CleanupFile
+        if (-not (Test-Path -LiteralPath $CleanupSource -PathType Leaf)) {
+            throw "Cleanup script is missing: $CleanupSource"
+        }
+        Copy-Item -LiteralPath $CleanupSource -Destination (Join-Path $StageDir $CleanupFile)
+    }
+
     $InstallerOutput = Join-Path $ReleaseDir "bundle\inno"
     $InstallerBuildArgs = @{
         Version = $Version

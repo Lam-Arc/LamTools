@@ -613,15 +613,14 @@
 }
 .inline-file-composer .composer-file-token {
   box-sizing: border-box;
-  min-width: 32px;
-  max-width: 64px;
+  min-width: 18px;
+  max-width: 18px;
   overflow: hidden;
-  text-overflow: ellipsis;
   vertical-align: bottom;
   white-space: nowrap;
 }
 /* user:“把那个@的符号去掉 换成对应的文件图标”+(消息正文里的文件引用也统一用
-   30% 圆角的类型徽标；徽标文字由 CSS content 提供，复制时仍只有文件名)。 */
+   30% 圆角的类型图标；图形不进入文本节点，复制时仍只有文件名)。 */
 .file-reference-badge {
   display: inline-grid;
   place-items: center;
@@ -631,14 +630,9 @@
   overflow: hidden;
   border-radius: 30%;
   font-family: var(--font-sans);
-  font-size: 6.5px;
-  font-weight: 800;
   line-height: 1;
-  letter-spacing: -0.02em;
 }
-.file-reference-badge::before {
-  content: attr(data-label);
-}
+.file-reference-badge svg { display: block; }
 /* 显式链接（非自动识别）核实失败时仍保留错误态；自动识别的路径在
    canonicalize 里直接退回原文，不生成这个红色链接。 */
 a.file-reference-link[data-reference-error='true'] {
@@ -2947,6 +2941,83 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   min-height: 18px;
   padding: 1px 0 4px;
 }
+/* user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
+   收到首字，使用样式 2，可以做到吗？”+(等待位按后端实时阶段换动画：
+   sending = 三段小格依次前移，表示本地正在整理并发出请求；
+   waiting = 单点慢呼吸 + 光圈扩散，表示请求已送达、在等模型吐首字)。
+   两个动画只替换等待指示器里的图形，尺寸与配色沿用原有行。 */
+.request-phase {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 14px;
+  margin-left: 2px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, gray);
+}
+.request-phase__send,
+.request-phase__wait {
+  display: none;
+}
+.request-phase[data-phase='sending'] .request-phase__send {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.request-phase__send span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.2;
+  animation: request-phase-send 1.05s ease-in-out infinite;
+}
+.request-phase__send span:nth-child(2) {
+  animation-delay: 0.14s;
+}
+.request-phase__send span:nth-child(3) {
+  animation-delay: 0.28s;
+}
+@keyframes request-phase-send {
+  0% { opacity: 0.14; transform: translateX(-2px) scale(0.85); }
+  35% { opacity: 0.95; transform: translateX(0) scale(1); }
+  70% { opacity: 0.35; transform: translateX(2px) scale(0.9); }
+  100% { opacity: 0.12; transform: translateX(3px) scale(0.8); }
+}
+.request-phase[data-phase='waiting'] .request-phase__wait {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+.request-phase__wait > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: request-phase-breathe 1.9s ease-in-out infinite;
+}
+/* 一圈很淡的扩散光环：强调“请求已经发出去，在等对面回应”。 */
+.request-phase__wait::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  animation: request-phase-ring 1.9s ease-out infinite;
+}
+@keyframes request-phase-breathe {
+  0%, 100% { opacity: 0.45; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes request-phase-ring {
+  0% { opacity: 0; transform: scale(0.45); }
+  35% { opacity: 0.5; }
+  100% { opacity: 0; transform: scale(1.25); }
+}
 .shallow-thinking-pending {
   display: inline-flex;
   align-items: baseline;
@@ -2979,6 +3050,26 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 }
 .shallow-thinking-dots span:nth-child(3) {
   animation-delay: .3s;
+}
+/* 浅层思考行沿用同一套阶段语言驱动原有的三个句点：
+   sending = 句点依次前移（本地整理/发送）；waiting = 句点缓慢呼吸（等模型）。 */
+.shallow-thinking-pending[data-phase='sending'] .shallow-thinking-dots span {
+  animation: request-phase-send 1.05s ease-in-out infinite;
+}
+.shallow-thinking-pending[data-phase='sending'] .shallow-thinking-dots span:nth-child(2) {
+  animation-delay: .14s;
+}
+.shallow-thinking-pending[data-phase='sending'] .shallow-thinking-dots span:nth-child(3) {
+  animation-delay: .28s;
+}
+.shallow-thinking-pending[data-phase='waiting'] .shallow-thinking-dots span {
+  animation: request-phase-breathe 1.9s ease-in-out infinite;
+}
+.shallow-thinking-pending[data-phase='waiting'] .shallow-thinking-dots span:nth-child(2) {
+  animation-delay: .18s;
+}
+.shallow-thinking-pending[data-phase='waiting'] .shallow-thinking-dots span:nth-child(3) {
+  animation-delay: .36s;
 }
 
 /* 消息文字区域最下方：输出中三个圆点逐个显现循环 */
@@ -3030,6 +3121,24 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   .streaming-dots span {
     animation: none;
     opacity: 1;
+  }
+  /* 阶段仍要可区分：发送态三段小格静止并保持可见，等待态单点+静态光圈。 */
+  .request-phase__send span {
+    animation: none;
+    opacity: 0.8;
+  }
+  .request-phase__wait > span {
+    animation: none;
+    opacity: 0.9;
+  }
+  .request-phase__wait::after {
+    animation: none;
+    opacity: 0.35;
+    transform: none;
+  }
+  .shallow-thinking-pending[data-phase] .shallow-thinking-dots span {
+    animation: none;
+    opacity: 0.9;
   }
 }
 

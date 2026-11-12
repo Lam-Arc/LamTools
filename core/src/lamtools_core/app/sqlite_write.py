@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from time import perf_counter
@@ -52,8 +53,15 @@ async def wal_maintenance_once(session_factory: Any) -> dict[str, int]:
     wal = path.with_name(f"{path.name}-wal")
     if not wal.exists():
         return {"state": "no_wal"}
-    async with session_factory() as session:
-        row = (await session.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))).first()
+    # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(维护不能等待已耗尽的业务读池；独立短连接在工作线程执行被动检查点，既不堵事件循环也不创建丢失的数据库)。
+    def checkpoint():
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=0)
+        try:
+            return connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        finally:
+            connection.close()
+
+    row = await asyncio.to_thread(checkpoint)
     values = [int(value or 0) for value in (row or (0, 0, 0))]
     while len(values) < 3:
         values.append(0)

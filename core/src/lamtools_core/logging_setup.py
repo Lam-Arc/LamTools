@@ -24,10 +24,14 @@ Step timings the kernel emits and their meaning:
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 
 BACKEND_LOG_FILENAME = "backend.log"
+# user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(限制日志磁盘占用，并保留最近五份历史供排查)。
+BACKEND_LOG_MAX_BYTES = 16 * 1024 * 1024
+BACKEND_LOG_BACKUP_COUNT = 5
 
 #: Millisecond precision: step timings are compared across lines.
 LOG_FORMAT = "%(asctime)s.%(msecs)03d [%(levelname)s] [%(name)s] %(message)s"
@@ -59,7 +63,10 @@ def attach_backend_file_logger(data_dir: Path | str) -> Path | None:
         if existing and os.path.normcase(os.path.abspath(str(existing))) == resolved:
             return target
     try:
-        handler = logging.FileHandler(str(target), encoding="utf-8")
+        handler = RotatingFileHandler(
+            str(target), maxBytes=BACKEND_LOG_MAX_BYTES,
+            backupCount=BACKEND_LOG_BACKUP_COUNT, encoding="utf-8",
+        )
     except OSError:
         return None
     handler.setLevel(logging.INFO)

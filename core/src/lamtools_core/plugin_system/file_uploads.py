@@ -4,9 +4,33 @@ import base64
 import binascii
 from pathlib import Path
 
-from .session_data import PluginAttachmentAPI, SessionDataError
+from lamtools_core.async_tasks import finish_on_cancel
+from .session_data import PluginAttachmentAPI, SessionDataError, identifier
 
 MAX_ENCODED_UPLOAD_BYTES = 512 * 1024
+MAX_CHUNK_UPLOAD_BYTES = 8 * 1024 * 1024
+MAX_UPLOAD_CHUNK_BYTES = 256 * 1024
+MAX_UPLOAD_CHUNKS = 4096
+
+
+async def _next_chunk(iterator, scope, validate):
+    task = asyncio.ensure_future(anext(iterator))
+    revoked = asyncio.create_task(scope._revoked.wait())
+    async def cleanup():
+        for pending in (task, revoked):
+            if not pending.done():
+                pending.cancel()
+        await asyncio.gather(task, revoked, return_exceptions=True)
+    try:
+        while True:
+            await asyncio.wait((task, revoked), timeout=0.2, return_when=asyncio.FIRST_COMPLETED)
+            scope.check_open()
+            if task.done():
+                return task.result()
+            # user:“继续”+(空闲分块读取也复核会话，撤回后取消读取并等待清理)。
+            await validate()
+    finally:
+        await finish_on_cancel(cleanup(), name="file-upload-chunk-pull-cleanup")
 
 
 class FileUploadError(ValueError, RuntimeError):
@@ -43,6 +67,61 @@ class PluginFileUploadsAPI:
             raise FileUploadError("file-upload/invalid-content", "Use bounded canonical base64") from None
         if len(raw) > MAX_ENCODED_UPLOAD_BYTES or base64.b64encode(raw).decode("ascii") != content_base64:
             raise FileUploadError("file-upload/invalid-content", "Use bounded canonical base64")
+        return await self._save(session_id, filename=filename, raw=raw, mime_type=mime_type)
+
+    async def save_chunks(self, session_id, *, filename, source, size, mime_type=None):
+        self._check()
+        identifier(session_id)
+        if type(filename) is not str or not filename.strip() or len(filename) > 256 or "\x00" in filename:
+            raise SessionDataError("session-data/invalid-filename", "Use a bounded filename")
+        if mime_type is not None and (type(mime_type) is not str or len(mime_type) > 256):
+            raise SessionDataError("session-data/invalid-mime", "Use a bounded MIME type")
+        if type(size) is not int or not 0 <= size <= MAX_CHUNK_UPLOAD_BYTES:
+            raise FileUploadError("file-upload/invalid-content", "Use a declared size up to 8 MiB")
+        try:
+            iterator = aiter(source)
+        except TypeError:
+            raise FileUploadError("file-upload/invalid-content", "Use a closeable async byte stream") from None
+        if not callable(getattr(iterator, "aclose", None)):
+            raise FileUploadError("file-upload/invalid-content", "Use a closeable async byte stream")
+        self._scope.acquire()
+        try:
+            data = bytearray()
+            try:
+                await self._host._read(session_id, self._root)
+                self._check()
+                count = 0
+                async def validate():
+                    self._check()
+                    await self._host._read(session_id, self._root)
+                    self._check()
+                while True:
+                    try:
+                        chunk = await _next_chunk(iterator, self._scope, validate)
+                    except StopAsyncIteration:
+                        break
+                    # user:“继续”+(每个分块后复核原会话和启动代；未完整接收前不创建持久附件)。
+                    self._check()
+                    await self._host._read(session_id, self._root)
+                    self._check()
+                    count += 1
+                    if (type(chunk) is not bytes or len(chunk) > MAX_UPLOAD_CHUNK_BYTES
+                            or count > MAX_UPLOAD_CHUNKS or len(data) + len(chunk) > size):
+                        raise FileUploadError("file-upload/invalid-content", "Invalid upload chunk or declared size")
+                    data.extend(chunk)
+                if len(data) != size:
+                    raise FileUploadError("file-upload/invalid-content", "Upload ended before declared size")
+            finally:
+                async def close_source():
+                    await iterator.aclose()
+                await finish_on_cancel(close_source(), name="file-upload-source-close")
+            self._check()
+            return await self._save(session_id, filename=filename, raw=bytes(data), mime_type=mime_type)
+        finally:
+            self._scope.release()
+
+    async def _save(self, session_id, *, filename, raw, mime_type):
+        self._check()
         self._scope.acquire()
         try:
             picker = PluginAttachmentAPI(self._host, self._scope, self._root, "attachments")

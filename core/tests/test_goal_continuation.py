@@ -17,8 +17,16 @@ def test_goal_continuation_text_uses_objective() -> None:
     assert goal_continuation_text("整理本周会议记录") == "存在目标：整理本周会议记录 未完成，请继续。"
 
 
+def test_goal_continuation_text_lists_completion_criteria() -> None:
+    """user:“完成标准”+(标准要随提醒回到模型眼前，它才知道自己为什么还没做完)。"""
+    assert goal_continuation_text("写报告", ["数据核对完", "结论有出处"]) == (
+        "存在目标：写报告 未完成，请继续。完成标准：数据核对完；结论有出处"
+    )
+
+
 def test_goal_continuation_text_ignores_blank_objective() -> None:
-    assert goal_continuation_text("   ") == "存在目标： 未完成，请继续。"
+    """user:“边界情况”+(没有目标就不要发一条空提醒去骗模型继续干)。"""
+    assert goal_continuation_text("   ") == ""
 
 
 def test_goal_continuation_message_is_separate_and_marked() -> None:

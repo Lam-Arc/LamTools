@@ -13,8 +13,9 @@ from .durable_access import _json
 
 
 class JobAccessError(RuntimeError):
-    def __init__(self, code, message):
+    def __init__(self, code, message, *, may_have_changed=False):
         self.code = code
+        self.may_have_changed = may_have_changed
         super().__init__(message)
 
 

@@ -1,7 +1,7 @@
 {
   "name": "goal",
   "title": "目标",
-  "description": "查看、取消或创建一个持续监管当前任务的 Goal",
+  "description": "/goal 查看当前目标，/goal <目标> 新建，/goal cancel 取消。目标在跑完一轮后不会结束，会自动续下一轮，直到标记完成或阻塞",
   "icon": "target",
   "kind": "action",
   "action": "run_action",

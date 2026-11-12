@@ -367,6 +367,12 @@ async def test_multimodal_agent_formats_image_tool_result_with_image_url_block(t
         "type": "image_url",
         "image_url": {"url": expected_data_url, "detail": "auto"},
     }
+    # 内存消息保留原图；落盘行只保留这个地址，供模型之后重新 read_file。
+    assert message.metadata["image_ref"] == {
+        "path": "shot.png",
+        "mime": "image/png",
+        "sha256": "",
+    }
 
 
 @pytest.mark.asyncio

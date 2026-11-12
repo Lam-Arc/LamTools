@@ -1,20 +1,16 @@
-"""Durable, product-neutral Goal lifecycle."""
+"""Durable goal lifecycle: a model-controlled gate against stopping early.
+
+The agent itself decides when a goal is done (archived), blocked, or
+dropped; nothing here calls a model to judge completion.
+"""
 
 from __future__ import annotations
 
-import inspect
-import json
-import re
-from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, runtime_checkable
 import uuid
-
-from lamtools_core.llm import ChatMessage, LLMRequest
-
-from . import CompletionResult, RuntimeState
 
 
 GoalStatus = Literal["active", "blocked", "archived"]
@@ -123,6 +119,18 @@ class GoalManager:
         if not clean_objective:
             raise ValueError("goal objective is required")
         criteria = tuple(value for item in completion_criteria if (value := str(item or "").strip()))
+        # user:“边界情况”+(一个会话同时只能有一个在跑的目标，否则续跑指向谁就说不清了；
+        # 重复创建直接报错，让模型先把旧的收口，而不是留下一个永远没人管的目标)。
+        live = [
+            goal
+            for goal in await self.store.list(thread_id=clean_thread)
+            if goal.status != "archived"
+        ]
+        if live:
+            raise ValueError(
+                "A goal is already in progress in this thread: "
+                f"{live[0].id}. Complete, block, or cancel it first."
+            )
         now = _utcnow()
         return await self.store.insert(Goal(
             id=str(goal_id or "").strip() or f"goal_{uuid.uuid4().hex}",
@@ -189,212 +197,10 @@ class GoalManager:
         return await self.store.replace(updated, expected_revision=current.revision)
 
 
-GoalEvaluator = Callable[[Goal, dict[str, Any]], CompletionResult | Awaitable[CompletionResult]]
-
-
-class GoalCompletionGate:
-    """Binds one explicit Goal to Kernel's natural completion boundary."""
-
-    def __init__(
-        self,
-        manager: GoalManager,
-        goal_id: str | GoalEvaluator = "",
-        evaluator: GoalEvaluator | None = None,
-        *,
-        max_repair_attempts: int = 10,
-    ) -> None:
-        if callable(goal_id) and evaluator is None:
-            evaluator = goal_id
-            goal_id = ""
-        if evaluator is None:
-            raise ValueError("Goal evaluator is required")
-        self.manager = manager
-        self.goal_id = str(goal_id or "").strip()
-        self.evaluator = evaluator
-        self.max_repair_attempts = max(1, max_repair_attempts)
-
-    def should_verify(self, state: RuntimeState) -> bool:
-        return bool(str(state.metadata.get("goal_id") or self.goal_id or "").strip())
-
-    async def verify(self, state: RuntimeState, context: dict[str, Any]) -> CompletionResult:
-        goal_id = str(state.metadata.get("goal_id") or self.goal_id or "").strip()
-        if not goal_id:
-            return CompletionResult(passed=True, summary="no goal bound")
-        goal = await self.manager.get(goal_id)
-        if goal is None:
-            return CompletionResult(
-                passed=False,
-                blocked=True,
-                summary=f"Goal not found: {goal_id}",
-            )
-        if goal.thread_id != state.session_id:
-            return CompletionResult(
-                passed=False,
-                blocked=True,
-                summary="Goal belongs to a different thread",
-            )
-        if goal.status == "archived":
-            return CompletionResult(passed=True, summary=goal.status_reason or "goal archived")
-        if goal.status == "blocked":
-            goal = await self.manager.update(goal.id, status="active", status_reason="")
-
-        evaluated = self.evaluator(goal, {**context, "state": state})
-        if inspect.isawaitable(evaluated):
-            evaluated = await evaluated
-        if not isinstance(evaluated, CompletionResult):
-            raise TypeError("Goal evaluator must return CompletionResult")
-
-        attempts_key = f"goal_completion_attempts:{goal.id}"
-        attempts = int(state.metadata.get(attempts_key) or 0)
-        result = evaluated
-        if not evaluated.passed and not evaluated.blocked:
-            attempts += 1
-            state.metadata[attempts_key] = attempts
-            if attempts >= self.max_repair_attempts:
-                result = CompletionResult(
-                    passed=False,
-                    blocked=True,
-                    summary=(
-                        evaluated.summary
-                        or f"Goal remains incomplete after {attempts} completion checks"
-                    ),
-                    checks=evaluated.checks,
-                    repair_instruction=evaluated.repair_instruction,
-                )
-        elif evaluated.passed:
-            state.metadata.pop(attempts_key, None)
-
-        status: GoalStatus = "archived" if result.passed else "blocked" if result.blocked else "active"
-        await self.manager.update(
-            goal.id,
-            status=status,
-            status_reason=result.summary,
-            metadata={
-                **goal.metadata,
-                "last_completion": result.to_dict(),
-                "completion_attempts": attempts,
-            },
-        )
-        return result
-
-
-class ModelGoalEvaluator:
-    """Uses the configured model only for explicitly Goal-bound turns."""
-
-    def __init__(self, llm_client: Any, *, model_id: str = "") -> None:
-        self.llm_client = llm_client
-        self.model_id = str(model_id or "")
-
-    async def __call__(self, goal: Goal, context: dict[str, Any]) -> CompletionResult:
-        evidence = _completion_evidence(context)
-        session_id = str(context.get("session_id") or context.get("thread_id") or "").strip()
-        request = LLMRequest(
-            model=self.model_id,
-            temperature=0,
-            max_tokens=600,
-            response_format={"type": "json_object"},
-            metadata={"_runtime_session_id": session_id} if session_id else {},
-            messages=[
-                ChatMessage(
-                    role="system",
-                    content=(
-                        "Evaluate whether the explicit goal is complete from the supplied evidence. "
-                        "Do not infer unshown work. Return JSON only with status equal to complete, "
-                        "continue, or blocked; summary; and repair_instruction. Use blocked only when "
-                        "external input, permission, or unavailable evidence prevents progress."
-                    ),
-                ),
-                ChatMessage(
-                    role="user",
-                    content=json.dumps(
-                        {
-                            "goal": goal.to_dict(),
-                            "evidence": evidence,
-                        },
-                        ensure_ascii=False,
-                        default=str,
-                    ),
-                ),
-            ],
-        )
-        response = await self.llm_client.complete(request)
-        payload = _json_object(str(getattr(response, "content", "") or ""))
-        if payload is None:
-            return CompletionResult(
-                passed=False,
-                summary="Goal completion evaluation returned invalid JSON",
-                repair_instruction="Continue the goal and retry its completion check",
-            )
-        status = str(payload.get("status") or "").strip().lower()
-        summary = str(payload.get("summary") or "").strip()
-        repair = str(payload.get("repair_instruction") or "").strip()
-        if status == "complete":
-            return CompletionResult(passed=True, summary=summary or "goal complete")
-        if status == "continue":
-            return CompletionResult(
-                passed=False,
-                summary=summary or "goal incomplete",
-                repair_instruction=repair,
-            )
-        if status == "blocked":
-            return CompletionResult(
-                passed=False,
-                blocked=True,
-                summary=summary or "goal completion is blocked",
-                repair_instruction=repair,
-            )
-        return CompletionResult(
-            passed=False,
-            summary=summary or "goal completion evaluator returned an invalid status",
-            repair_instruction=repair or "Continue the goal and retry its completion check",
-        )
-
-
-def _completion_evidence(context: dict[str, Any]) -> dict[str, Any]:
-    turn = context.get("turn")
-    verification = context.get("verification")
-    tool_results = context.get("tool_results")
-    state = context.get("state")
-    metadata = getattr(state, "metadata", {})
-    kernel_steps = metadata.get("kernel_steps") if isinstance(metadata, dict) else None
-    return {
-        "final_reply": str(getattr(turn, "reply", "") or "")[-12000:],
-        "verification": {
-            "passed": bool(getattr(verification, "passed", False)),
-            "summary": str(getattr(verification, "summary", "") or "")[-2000:],
-        },
-        "tool_results": [
-            {
-                "name": str(getattr(item, "name", "") or ""),
-                "status": str(getattr(item, "status", "") or ""),
-                "content": str(getattr(item, "content", "") or "")[-2000:],
-                "error": str(getattr(item, "error", "") or "")[-1000:],
-            }
-            for item in (tool_results or [])[-20:]
-        ],
-        "recent_steps": deepcopy(kernel_steps[-12:]) if isinstance(kernel_steps, list) else [],
-    }
-
-
-def _json_object(content: str) -> dict[str, Any] | None:
-    candidate = content.strip()
-    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", candidate, flags=re.DOTALL | re.IGNORECASE)
-    if fenced:
-        candidate = fenced.group(1)
-    try:
-        value = json.loads(candidate)
-    except (TypeError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
 __all__ = [
     "Goal",
-    "GoalCompletionGate",
-    "GoalEvaluator",
     "GoalManager",
     "GoalStatus",
     "GoalStore",
     "InMemoryGoalStore",
-    "ModelGoalEvaluator",
 ]

@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8" />
+<title>界面场景与复用结论</title><style>
+:root { color-scheme: dark; }
+body { margin: 0; padding: 40px 24px 80px; background: #14161a; color: #e8e2d8;
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.7; }
+main { max-width: 900px; margin: 0 auto; }
+h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -.01em; }
+h2 { font-size: 19px; margin: 34px 0 10px; padding-top: 14px; border-top: 1px solid rgba(232,226,216,.12); }
+h3 { font-size: 15px; margin: 24px 0 8px; color: #f6efe2; }
+p, li { font-size: 14px; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+blockquote { margin: 14px 0; padding: 10px 14px; border-left: 2px solid #6aa9ff;
+  background: rgba(106,169,255,.08); color: #cfd6e2; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+th, td { border: 1px solid rgba(232,226,216,.14); padding: 7px 10px; text-align: left; }
+th { background: rgba(232,226,216,.06); font-weight: 600; }
+code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px;
+  background: rgba(232,226,216,.08); padding: 1px 5px; border-radius: 4px; }
+pre { background: #1b1d22; border: 1px solid rgba(232,226,216,.12); border-radius: 8px;
+  padding: 12px 14px; overflow: auto; }
+pre code { background: none; padding: 0; }
+hr { border: 0; border-top: 1px solid rgba(232,226,216,.1); margin: 26px 0; }
+a { color: #7fb4ff; }
+a.back { display: inline-block; margin-bottom: 18px; font-size: 12.5px; text-decoration: none; }
+</style></head>
+<body><main><a class="back" href="索引.html">← 回索引</a>
+<h1>界面场景与复用结论</h1>
+<p>上一版按类名统计，数出「按钮 63 个类」这种结论。这次换成按「用户在界面上要做的一件事」来排，一件事一套实现，重复的是场景不是类名。</p>
+<h2>一、上一版哪里不成立</h2>
+<p>三个问题，都已经确认并撤回。</p>
+<p><strong>按类名数，不是按用处数。</strong> <code>collapse-btn</code> 只有 <code>display: none</code>，<code>tool-card-body--row</code> 只是个布局类，它们都被算进了「按钮 63 个」。数字看着大，对维护没有指导意义。</p>
+<p><strong>没截图验证，脱离上下文就画不出来。</strong> 竖向思考滑条单独摆进一个空容器，整根条根本长不出来，只剩一个圆点；给它 300px 高度才恢复原样。这说明它依赖卡片给的高度，不能当成一个独立样式来归档。上一版的对照页把每个类塞进固定 108px 的框里，看到的已经不是真实长相。</p>
+<p><strong>合并是假的。</strong> <code>controls.css</code> 把 <code>.study-sidebar-icon-button</code> 的声明提走，但 <code>study.css</code> 里同名选择器仍在，加载更晚，一样盖住共用规则，等于多了一份看不懂的 CSS。<code>.site-btn</code> 只在旧工作树里存在，现役代码没有引用。这一轮已经撤销，声明放回原处，<code>controls.css</code> 删掉。</p>
+<h2>二、按场景重排</h2>
+<table><thead><tr><th>场景</th><th>用户在做什么</th><th>现役实现</th><th>几套</th><th>判断</th></tr></thead><tbody><tr><td>确认一件事</td><td>删除、放弃修改、移除条目</td><td><code>CoreConfirmDialog</code> 14 处调用；另有 3 个页面自己搓了 7 个遮罩弹窗</td><td>2 套</td><td>该合并，手搓的 7 个并进组件</td></tr><tr><td>选一个值</td><td>选模型、选分组、切权限、切模式</td><td>11 个菜单/浮层组件，各自实现定位与卡片</td><td>11 套</td><td>外壳该合并，内容各自保留</td></tr><tr><td>调一个数值</td><td>调思考强度、调尺寸、调透明度</td><td><code>ThinkingIntensitySlider</code>（竖向等级条）、<code>SundayRange</code>（横向连续条）、6 处直接写 <code>&lt;input type=&quot;range&quot;&gt;</code></td><td>3 套</td><td>两种范式该保留，6 处原生散件该并进 <code>SundayRange</code></td></tr><tr><td>输入一段话</td><td>发消息、搜索、重命名、填配置</td><td>composer 一层，表单输入 30 个类，跨文件复用只有 2 个</td><td>大量</td><td>该抽一个 <code>.field</code> 基座</td></tr><tr><td>看一条会话或项目</td><td>左栏列表选会话</td><td>侧栏行，已有 <code>sidebar-row</code> 一族</td><td>1 套</td><td>不动</td></tr><tr><td>看一个工具结果</td><td>展开/收起工具输出</td><td>13 个文件用 <code>details</code>，26 个组件各自写 toggle 样式</td><td>2 套</td><td>折叠的展开态该共用</td></tr><tr><td>打标签评分</td><td>资料库挑素材</td><td>资料库卡片</td><td>1 套</td><td>不动</td></tr><tr><td>空态与加载</td><td>加载中、空列表</td><td>36 个进度类、32 个转圈写法</td><td>多</td><td>骨架与转圈各留一个</td></tr><tr><td>看提示</td><td>悬停提示、键位提示</td><td>19 个提示类</td><td>多</td><td>键帽两种该合成一种</td></tr></tbody></table>
+<h2>三、思考滑条这一处能复用出什么</h2>
+<p>它不是一个样式，是三样东西叠在一起：</p>
+<ol><li><strong>竖向等级条</strong>：<code>ThinkingIntensitySlider</code>，584 行，刻度点、拖拽、键盘、极限档粒子。它绑定「思考等级」语义，不是通用滑条。</li><li><strong>浮层卡片</strong>：<code>CoreModelThinkingMenu</code> 里自己写的面板，还有悬停时拉平成一条浮在按钮上方的预览态。这一层和另外 10 个菜单各写各的。</li><li><strong>入场动画</strong>：卡片飞入、悬浮预览拉平、极限档粒子延后出现，都只在这一处出现，没有第二处复用。</li></ol>
+<p>真实截图对比（<code>.lam/artifacts/control-catalog/sliders.png</code>）：竖向等级条是「点阵刻度 + 滑块 + 有色进度」；<code>SundayRange</code> 是「标签在左、数值在右、一条细轨 + 实心滑块」。两者不是同一个东西，硬合并会把连续数值变成等级选择。</p>
+<p>所以可复用的是一个组件，不是一套 CSS；真正值得抽出来的是<strong>浮层卡片外壳</strong>，思考卡、模型菜单、分组下拉、权限菜单都能用同一套定位、遮罩、入场动画。</p>
+<h2>四、下一步顺序</h2>
+<p>按「用户碰到的频率」排，不按代码整齐度排。</p>
+<ol><li>7 个手搓确认弹窗并进 <code>CoreConfirmDialog</code>。改 3 个文件，三个页面的确认长得一样。</li><li>6 处原生 <code>input[type=range]</code> 并进 <code>SundayRange</code>。改 3 个文件。</li><li>抽浮层卡片外壳，11 个菜单逐步换上去。</li><li>输入框收一个 <code>.field</code> 基座。</li><li>键帽两种合成一种。</li></ol>
+<h2>五、验收方式</h2>
+<p>每一步都按同一个标准：改一处、截真实界面一张、跑测试。不再用类名数量当成绩，也不再拿脱离上下文的渲染当证据。</p>
+<h2>六、现有证据</h2>
+<ul><li>滑条对照截图：<code>.lam/artifacts/control-catalog/sliders.png</code></li><li>场景实测入口：<code>http://127.0.0.1:5199/thinking-lab.html</code>（两套滑条并排，真实组件）</li><li>撤销记录：<code>.lam/scripts/revert-controls.py</code></li></ul>
+</main></body></html>

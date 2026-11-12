@@ -109,6 +109,9 @@ class SqlAlchemyAppEventStore:
     async def _append_once(self, db: AsyncSession, event: AppEventInput, *, event_id: str) -> AppEventEnvelope:
         existing = await db.get(self.event_model, event_id)
         if existing is not None:
+            # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(去重只能返回本会话事件，禁止把其他会话的终态当作写入成功)。
+            if existing.thread_id != event.thread_id:
+                raise ValueError("Event identity belongs to another thread")
             return self._to_envelope(existing)
 
         last_error: IntegrityError | None = None
@@ -134,6 +137,8 @@ class SqlAlchemyAppEventStore:
                 last_error = exc
                 existing = await db.get(self.event_model, event_id)
                 if existing is not None:
+                    if existing.thread_id != event.thread_id:
+                        raise ValueError("Event identity belongs to another thread")
                     return self._to_envelope(existing)
                 if attempt < self.max_seq_allocate_attempts - 1:
                     continue

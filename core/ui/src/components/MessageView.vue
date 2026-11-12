@@ -215,11 +215,22 @@
             <span>{{ terminalErrorText(msg) }}</span>
           </div>
 
-          <div v-if="isInitialWaitingMessage(msg)" class="initial-waiting-indicator" :aria-label="t('请求中')">
-            <span v-if="shouldShowShallowThinkingPending(msg)" class="shallow-thinking-pending" role="status" aria-live="polite">
+          <!-- user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
+               收到首字，使用样式 2”+(同一个等待位按阶段换动画：三段小格前移=正在
+               整理并发出；单点慢呼吸+光环=已送达，等模型开口)。 -->
+          <div
+            v-if="isInitialWaitingMessage(msg)"
+            class="initial-waiting-indicator"
+            :data-phase="modelRequestPhase(msg)"
+            :aria-label="modelRequestPhaseLabel(msg)"
+          >
+            <span v-if="shouldShowShallowThinkingPending(msg)" class="shallow-thinking-pending" :data-phase="modelRequestPhase(msg)" role="status" aria-live="polite">
               shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
             </span>
-            <span v-else class="stream-spinner" />
+            <span v-else class="request-phase" :data-phase="modelRequestPhase(msg)" aria-hidden="true">
+              <span class="request-phase__send"><span></span><span></span><span></span></span>
+              <span class="request-phase__wait"><span></span></span>
+            </span>
           </div>
 
           <!-- One process renderer for both live and completed messages. The
@@ -230,7 +241,7 @@
               class="process-step process-step--reasoning shallow-thinking-pending-row"
             >
               <div class="reasoning-body reasoning-body--pending">
-                <span class="shallow-thinking-pending" role="status" aria-live="polite">
+                <span class="shallow-thinking-pending" :data-phase="modelRequestPhase(msg)" role="status" aria-live="polite">
                   shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
                 </span>
               </div>
@@ -2033,6 +2044,20 @@ function shouldShowShallowThinkingPending(msg: CoreMessage): boolean {
     && !hasAnswerContent(msg)
 }
 
+/**
+ * user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
+ * 收到首字，使用样式 2”+(阶段由后端实时事实推进；没有阶段标记时按阶段一
+ * 处理，因为消息刚发出、请求还没确认送达)。
+ */
+function modelRequestPhase(msg: CoreMessage): 'sending' | 'waiting' {
+  const phase = String((msg.metadata as Record<string, unknown> | undefined)?.modelPhase || '')
+  return phase === 'request_sent' || phase === 'first_token' ? 'waiting' : 'sending'
+}
+
+function modelRequestPhaseLabel(msg: CoreMessage): string {
+  return modelRequestPhase(msg) === 'waiting' ? t("等待模型回应") : t("正在发送请求")
+}
+
 function hasReasoningContent(msg: CoreMessage): boolean {
   return processParts(msg).some(part => (
     part.partType === 'reasoning'
@@ -3086,9 +3111,14 @@ async function verifyReportPaths(): Promise<void> {
       const response = await props.transport.request<TransportHttpResponse>({
         kind: 'http',
         method: 'GET',
-        path: `/projects/${encodeURIComponent(projectId)}/files/content?path=${encodeURIComponent(reference)}`,
+        path: `/projects/${encodeURIComponent(projectId)}/files/exists?path=${encodeURIComponent(reference)}`,
       })
-      const exists = response.status >= 200 && response.status < 300
+      // user:“成果登记处登记胶囊”+(存在性要在任意文件类型上成立；读取正文接口
+      // 对二进制返回 422，会把图片、PDF、Office 误判成不存在)。
+      let exists = false
+      if (response.status >= 200 && response.status < 300) {
+        try { exists = JSON.parse(new TextDecoder().decode(response.body)).exists === true } catch { exists = false }
+      }
       reportPathStates.value = { ...reportPathStates.value, [reference]: exists ? 'exists' : 'missing' }
     } catch {
       // 网络/传输失败不算"不存在"：放掉这次，下次内容变化时再问。

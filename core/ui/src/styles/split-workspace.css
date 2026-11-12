@@ -140,11 +140,16 @@
 .split-preview-body--markdown { padding: var(--space-4) var(--space-5); background: var(--theme-main-background); }
 .split-preview-markdown { max-width: 920px; margin: 0 auto; }
 .split-preview-markdown img { max-width: 100%; height: auto; }
+/* user:“把附件预览给做好”+(项目外的文本附件用只读预览，按等宽正文铺满，不暴露编辑器权限错误)。 */
+.split-preview-body--text { padding: 0; }
+.split-preview-text { min-height: 100%; margin: 0; padding: var(--space-4) var(--space-5); color: var(--text); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
 .split-preview-pager { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin-bottom: var(--space-2); font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-preview-canvas { display: block; margin: 0 auto; border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); }
 .split-preview-docx { padding: 0; }
-.split-preview-docx .docx-wrapper { padding: 0; background: transparent; }
-.split-preview-docx .docx-wrapper > section.docx { margin: 0 auto var(--space-3); box-shadow: var(--shadow-sm); }
+.split-preview-docx .docx-wrapper,
+.split-preview-docx .split-docx-page-wrapper { padding: 0; background: transparent; }
+.split-preview-docx .docx-wrapper > section.docx,
+.split-preview-docx .split-docx-page-wrapper > section.split-docx-page { margin: 0 auto var(--space-3); box-shadow: var(--shadow-sm); }
 .split-preview-sheet-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin-bottom: var(--space-2); }
 .split-preview-sheet-tabs button { padding: 4px var(--space-3); border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 65%, transparent); font: inherit; font-size: 12.5px; cursor: pointer; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .split-preview-sheet-tabs button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }

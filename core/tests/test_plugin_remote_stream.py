@@ -278,7 +278,7 @@ def test_stream_handoff_names_explicit_transport_without_auto_mapping(tmp_path):
     root = source(tmp_path, {"index.ts": "export function apply(ctx) { ctx.workspaceFiles.changes(); }"})
     output = tmp_path / "ported"
     report = export_port(root, output)
-    assert report["sundayHostContracts"]["remoteGateway"]["version"] == 5
+    assert report["sundayHostContracts"]["remoteGateway"]["version"] == 9
     assert "ndjson" in (output / "PORTING.md").read_text(encoding="utf8")
     assert "ndjson" in report["workspaceFileMethods"][0]["difference"]
     assert not json.loads((output / "plugin.json").read_text(encoding="utf8")).get("http", {}).get("remote")

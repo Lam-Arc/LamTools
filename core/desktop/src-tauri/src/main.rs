@@ -39,6 +39,7 @@ use tauri::{
 };
 
 mod computer_use_overlay;
+mod backend_startup;
 mod desktop_overlay;
 mod tray_panel;
 mod migration;
@@ -973,6 +974,17 @@ fn start_backend(
     app: &tauri::AppHandle,
     state: &BackendState,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let result = backend_startup::retry_port_conflict(
+        || start_backend_attempt(app, state), || stop_backend(state),
+    );
+    if result.is_err() { stop_backend(state); }
+    result
+}
+
+fn start_backend_attempt(
+    app: &tauri::AppHandle,
+    state: &BackendState,
+) -> Result<String, Box<dyn std::error::Error>> {
     let started_at = Instant::now();
     // user:“你给开发版改一下端口吧”+(开发实例优先用固定端口，被占时才退回随机空闲端口，
     // 避免和其它实例抢同一个监听。)
@@ -1279,6 +1291,17 @@ fn wait_for_health(port: u16, state: &BackendState) -> Result<(), Box<dyn std::e
     while Instant::now() < deadline {
         if state.quitting.load(Ordering::SeqCst) {
             return Err("app is quitting".into());
+        }
+        // user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(子进程已退出时立即识别端口冲突，不继续等待90秒或误认其他进程的健康响应)。
+        let exited = {
+            let mut child_slot = state.child.lock().map_err(|_| "backend state lock failed")?;
+            match child_slot.as_mut() {
+                Some(child) => child.try_wait()?,
+                None => return Err("backend process is missing".into()),
+            }
+        };
+        if let Some(status) = exited {
+            return Err(backend_startup::exited_backend_error(port, status));
         }
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));

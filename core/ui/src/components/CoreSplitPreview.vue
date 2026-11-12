@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue'
 import { ExternalLink, FileQuestion, Minus, Pencil, Plus, RefreshCw, RotateCcw } from 'lucide-vue-next'
 import MarkdownRenderer from './MarkdownRenderer.vue'
-import { baseName, previewKindFor, type SplitPreviewKind } from '@/split/preview'
+import { baseName, isTextPath, previewKindFor } from '@/split/preview'
 import type { SplitTab } from '@/split/layout'
 import type { SplitWorkspaceController } from '@/split/useSplitWorkspace'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
@@ -15,11 +15,11 @@ provide('lamtools-reference-root', () => props.root)
 const MAX_PREVIEW_BYTES = 256 * 1024 * 1024
 const MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
 const MAX_SHEET_ROWS = 500, MAX_SHEET_COLUMNS = 60
-const kind = computed<SplitPreviewKind | null>(() => previewKindFor(props.tab.resource))
+const kind = computed(() => previewKindFor(props.tab.resource) ?? (isTextPath(props.tab.resource) ? 'text' : null))
 const name = computed(() => baseName(props.tab.resource))
-const kindLabel = computed(() => ({ image: '图片', video: '视频', audio: '音频', pdf: 'PDF', docx: 'Word 文档', xlsx: '表格', pptx: '演示文稿', markdown: 'Markdown' } as Record<string, string>)[kind.value || ''] || '文件')
+const kindLabel = computed(() => ({ image: '图片', video: '视频', audio: '音频', pdf: 'PDF', docx: 'Word 文档', xlsx: '表格', pptx: '演示文稿', markdown: 'Markdown', text: '文本' } as Record<string, string>)[kind.value || ''] || '文件')
 const loading = ref(false), error = ref(''), notice = ref('')
-const blobUrl = ref(''), imageZoom = ref(100), markdownText = ref('')
+const blobUrl = ref(''), imageZoom = ref(100), markdownText = ref(''), textPreview = ref('')
 const pdf = shallowRef<{ numPages: number; getPage: (n: number) => Promise<any>; destroy: () => Promise<void> } | null>(null)
 const pdfPages = ref(0), pdfPage = ref(1), pdfZoom = ref(100), pdfBusy = ref(false), canvas = ref<HTMLCanvasElement | null>(null)
 const docxHost = ref<HTMLElement | null>(null)
@@ -29,6 +29,7 @@ const slideImageUrls: string[] = []
 let buffer: Uint8Array | null = null
 let pdfTask: { cancel: () => void; promise: Promise<unknown> } | null = null
 let mounted = false, generation = 0
+let docxResizeObserver: ResizeObserver | null = null
 
 function mediaType(path: string): string {
   const ext = path.replace(/\\/g, '/').split('.').pop()?.toLowerCase() || ''
@@ -49,7 +50,7 @@ function releaseVisual() {
   void pdf.value?.destroy().catch(() => {})
   pdf.value = null
   buffer = null
-  sheets.value = []; activeSheet.value = ''; slides.value = []; markdownText.value = ''
+  sheets.value = []; activeSheet.value = ''; slides.value = []; markdownText.value = ''; textPreview.value = ''
   for (const url of slideImageUrls.splice(0)) URL.revokeObjectURL(url)
   if (docxHost.value) docxHost.value.replaceChildren()
 }
@@ -105,6 +106,10 @@ async function render() {
     if (bytes.byteLength > MAX_MARKDOWN_BYTES) throw new Error('Markdown 超过 4 MB，预览已停用，请用文本编辑器或默认应用打开')
     try { markdownText.value = new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
     catch { throw new Error('文件不是 UTF-8 文本，无法按 Markdown 预览') }
+  }
+  if (kind.value === 'text') {
+    if (bytes.byteLength > MAX_MARKDOWN_BYTES) throw new Error('文本超过 4 MB，预览已停用，请用默认应用打开')
+    textPreview.value = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
   }
 }
 
@@ -173,6 +178,32 @@ async function renderDocx() {
     renderHeaders: true, renderFooters: true, renderFootnotes: true, renderEndnotes: true,
     useBase64URL: true, className: 'split-docx-page',
   })
+  ensureDocxResizeObserver(host)
+  fitDocxPages()
+}
+
+/**
+ * user:“把附件预览给做好”+(Word 页按固定纸张宽度渲染，窄分屏会左右各裁掉一截；
+ * 按面板宽度等比缩放，拖动分屏时跟着重新适配)。
+ */
+function fitDocxPages(): void {
+  const host = docxHost.value
+  if (!host) return
+  const pages = host.querySelectorAll<HTMLElement>('section.split-docx-page, section.docx')
+  if (!pages.length) return
+  const available = Math.max(240, host.clientWidth - 12)
+  for (const page of pages) {
+    page.style.zoom = ''
+    const natural = page.offsetWidth || 794
+    page.style.zoom = natural > available ? String(Math.max(0.35, available / natural)) : ''
+  }
+}
+
+function ensureDocxResizeObserver(host: HTMLElement): void {
+  if (typeof ResizeObserver === 'undefined') return
+  docxResizeObserver?.disconnect()
+  docxResizeObserver = new ResizeObserver(() => fitDocxPages())
+  docxResizeObserver.observe(host)
 }
 
 async function renderSheet() {
@@ -286,7 +317,7 @@ function zoomBy(delta: number) { kind.value === 'pdf' ? changePdfZoom(delta) : c
 
 onMounted(() => { mounted = true; void open() })
 watch(() => [props.tab.resource, props.root], () => { if (mounted) void open() })
-onBeforeUnmount(() => { generation++; releaseVisual() })
+onBeforeUnmount(() => { generation++; docxResizeObserver?.disconnect(); docxResizeObserver = null; releaseVisual() })
 </script>
 <template>
   <div class="split-preview" tabindex="-1" @keydown="onKeydown">
@@ -309,6 +340,9 @@ onBeforeUnmount(() => { generation++; releaseVisual() })
     <div v-else-if="!tab.resource" class="split-empty"><FileQuestion :size="22" /><span>从文件树选择文件后在这里预览</span></div>
     <div v-else-if="kind === 'markdown'" class="split-preview-body split-preview-body--markdown">
       <MarkdownRenderer class="split-preview-markdown" :content="markdownText" />
+    </div>
+    <div v-else-if="kind === 'text'" class="split-preview-body split-preview-body--text">
+      <pre class="split-preview-text">{{ textPreview }}</pre>
     </div>
     <div v-else-if="kind === 'image' && blobUrl" class="split-preview-body split-preview-body--media">
       <img :src="blobUrl" :alt="name" :style="{ width: `${imageZoom}%` }" @error="error = '图片解码失败，原文件可能格式不受支持或内容已损坏'">

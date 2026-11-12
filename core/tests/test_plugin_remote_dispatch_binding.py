@@ -143,7 +143,7 @@ def test_migration_reports_gateway_binding_contract(tmp_path):
     from lamtools_core.plugin_system.dsh_compat import export_port
     root = source(tmp_path, {'index.ts': 'export function apply(ctx) { ctx.remote.session.state(); }'})
     report = export_port(root, tmp_path / 'ported')
-    assert report['sundayHostContracts']['remoteGateway']['version'] == 5
+    assert report['sundayHostContracts']['remoteGateway']['version'] == 9
     assert '派发前' in (tmp_path / 'ported' / 'PORTING.md').read_text(encoding='utf8')
     assert report['runtimeVerified'] is False
 

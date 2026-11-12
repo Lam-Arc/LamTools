@@ -709,6 +709,27 @@ def create_core_router(
             raise HTTPException(status_code=403, detail="Permission denied")
         return {"entries": entries, "path": path}
 
+    @router.get("/projects/{project_id}/files/exists")
+    async def project_file_exists(project_id: str, path: str) -> dict[str, bool]:
+        """Existence check for the turn-outcome registry.
+
+        user:“成果登记处登记胶囊”+(汇报文本里提到的二进制文件也要能进本轮产出，
+        不能再用“能按 UTF-8 读出正文”当作存在性判断)。
+        """
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        root = Path(project.work_root).resolve()
+        target = (root / path).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path escapes project root") from None
+        return {"exists": target.is_file()}
+
     @router.get("/projects/{project_id}/files/content")
     async def read_project_file_content(project_id: str, path: str) -> dict[str, str]:
         if not path:

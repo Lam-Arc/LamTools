@@ -65,9 +65,21 @@ class PluginJobController:
     async def kill(self, session_id, job_id):
         await self._admit(session_id)
         self._visible(session_id, job_id)
-        result = await self._jobs.kill(job_id)
-        self._check()
-        return result
+        try:
+            result = await self._jobs.kill(job_id)
+            # user:“第二阶段结束后 就继续开展第三阶段”+(停止结算后复核原会话和作业标签，失效不发布旧结果)。
+            await self._admit(session_id)
+            self._visible(session_id, job_id)
+            self._check()
+            return result
+        except asyncio.CancelledError:
+            raise
+        except JobAccessError as error:
+            if error.code == "job/self-stop":
+                raise
+            raise JobAccessError("job/write-uncertain", "Job may have changed; inspect current state", may_have_changed=True) from None
+        except Exception:
+            raise JobAccessError("job/write-uncertain", "Job may have changed; inspect current state", may_have_changed=True) from None
 
     async def follow(self, session_id, job_id, *, stdout_after=0, stderr_after=0, interval=0.1):
         if type(interval) not in {int, float} or not math.isfinite(interval) or not 0.01 <= interval <= 2:

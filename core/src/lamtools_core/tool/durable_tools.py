@@ -16,26 +16,50 @@ from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW
 OperationExecutor = Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]]
 
 
+# user:“如果这个 Agent 遇到什么极重大的问题必须停下来，那就标记成阻塞”
+# +(模型侧三种收口动作都收敛到 goal.update 的两个状态上)。
+_GOAL_ACTION_STATUS: dict[str, dict[str, str]] = {
+    "complete": {"status": "archived", "status_reason": "completed by agent request"},
+    "block": {"status": "blocked", "status_reason": "blocked by agent request"},
+    "cancel": {"status": "archived", "status_reason": "cancelled by agent request"},
+}
+
+
 def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
     specs: list[ToolSpec] = []
     if goal:
         specs.append(ToolSpec(
             name="goal",
+            # user:“任何一个人看见这个工具描述，能够在 5 秒内看懂并理解这是个什么、怎么操作”
+            # +(先讲它是什么闸门，再讲三种收口方式，最后讲什么时候别用)。
             description=(
-                "Create, inspect, list, complete, or cancel an explicit Goal. Creating a Goal immediately binds it "
-                "to the current run. While it stays active, ending a turn starts the next turn with a reminder "
-                "to continue; call complete when its completion criteria are met. Use create only when the user "
-                "explicitly asks to set or track a Goal; an Arrange task does not need a Goal."
+                "目标不是任务清单，是一道防偷懒闸门：这件事没做完，不许收工。\n"
+                "什么时候调用：用户要你把一件需要多步、且能自己判断做完没有的事做完，"
+                "或明确让你盯住别提前交差时，create 一个；普通问答、闲聊、排定时任务都不要建。\n"
+                "active 期间你自然收尾不算结束，系统会开下一回合并追问「存在目标：… 未完成，请继续」。\n"
+                "收口由你判断：complete 真做完；block 标阻塞，必须用户拍板才能继续；cancel 放弃。"
             ),
             input_schema=_schema({
-                "action": {"type": "string", "enum": ["create", "list", "get", "complete", "cancel"]},
-                "objective": {"type": "string", "description": "Goal objective for create"},
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "list", "get", "complete", "block", "cancel"],
+                    "description": "create 建目标；list/get 查看；complete 标记完成；block 标记阻塞；cancel 放弃",
+                },
+                "objective": {
+                    "type": "string",
+                    "description": "一句话目标，会原样出现在续跑提醒里",
+                },
                 "completion_criteria": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Observable completion criteria",
+                    "description": (
+                        "你自己判断完成用的标准，会随提醒一起列出来。没有外部校验，做完与否由你决定"
+                    ),
                 },
-                "goal_id": {"type": "string", "description": "Goal id for get or cancel"},
+                "goal_id": {
+                    "type": "string",
+                    "description": "complete/block/cancel 省略时作用于本会话当前目标；其它动作按需填写",
+                },
             }, required=["action"]),
             permission=AUTO_ALLOW,
             metadata={"category": "control"},
@@ -111,25 +135,24 @@ def durable_tool_handlers(
         elif action == "list":
             operation = "goal.list"
             payload = {"thread_id": session_id}
-        elif action == "get":
-            operation = "goal.get"
-            payload = {"goal_id": str(args.get("goal_id") or "").strip()}
-        elif action == "complete":
-            operation = "goal.update"
-            payload = {
-                "goal_id": str(args.get("goal_id") or "").strip(),
-                "status": "archived",
-                "status_reason": "completed by agent request",
-            }
-        elif action == "cancel":
-            operation = "goal.update"
-            payload = {
-                "goal_id": str(args.get("goal_id") or "").strip(),
-                "status": "archived",
-                "status_reason": "cancelled by agent request",
-            }
+        elif action in {"get", "complete", "block", "cancel"}:
+            goal_id = str(args.get("goal_id") or "").strip()
+            if not goal_id:
+                # user:“complete/block/cancel 省略时作用于本会话当前目标”
+                # +(模型通常不知道目标 id，让它不必先 list 再猜；一个会话同时只有一个在跑的目标)。
+                goal_id, lookup_error = await _current_goal_id(
+                    execute_operation, session_id, call
+                )
+                if lookup_error:
+                    return _failed(call, lookup_error)
+            if action == "get":
+                operation = "goal.get"
+                payload = {"goal_id": goal_id}
+            else:
+                operation = "goal.update"
+                payload = {"goal_id": goal_id, **_GOAL_ACTION_STATUS[action]}
         else:
-            return _failed(call, "goal action must be create, list, get, complete, or cancel")
+            return _failed(call, "goal action must be create, list, get, complete, block, or cancel")
         result = await execute_operation(operation, payload, _operation_metadata(call))
         tool_result = _from_operation(call, result)
         if tool_result.status == "ok" and action == "create":
@@ -262,9 +285,42 @@ def _session_id(call: ToolCall) -> str:
     return str(call.metadata.get("_runtime_session_id") or "").strip()
 
 
+async def _current_goal_id(
+    execute_operation: OperationExecutor, session_id: str, call: ToolCall
+) -> tuple[str, str]:
+    """Resolve the session's single live goal, or an explanation for the model."""
+    if not session_id:
+        return "", "无法确定当前会话，不能操作目标；请显式传入 goal_id。"
+    result = await execute_operation(
+        "goal.list", {"thread_id": session_id}, _operation_metadata(call)
+    )
+    if str(getattr(result, "status", "")) != "ok":
+        failed_payload = getattr(result, "payload", None)
+        detail = (
+            str(failed_payload.get("error") or "")
+            if isinstance(failed_payload, dict)
+            else ""
+        )
+        return "", detail or "目标列表读取失败，请稍后重试。"
+    payload = getattr(result, "payload", None)
+    goals = payload.get("goals") if isinstance(payload, dict) else None
+    live = [
+        goal
+        for goal in (goals or [])
+        if isinstance(goal, dict) and str(goal.get("status") or "") in {"active", "blocked"}
+    ]
+    if not live:
+        return "", "本会话当前没有进行中的目标；确实需要盯住一件事时先用 create 建一个。"
+    if len(live) > 1:
+        return "", "本会话有多个进行中的目标，请用 goal_id 指定要操作哪一个。"
+    return str(live[0].get("id") or ""), ""
+
+
 def _operation_metadata(call: ToolCall) -> dict[str, Any]:
     return {
         "source": "agent_tool",
+        # user:“边界情况”+(操作层要靠它判断目标是否属于本会话，避免误改别人的目标)。
+        "session_id": _session_id(call),
         "run_id": str(call.metadata.get("_runtime_run_id") or ""),
         "tool_call_id": call.id,
     }

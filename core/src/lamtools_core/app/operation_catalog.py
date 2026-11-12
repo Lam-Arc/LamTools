@@ -38,6 +38,7 @@ class OperationCatalog:
         self._handlers: dict[str, OperationHandler] = {}
         self._owners: dict[str, str] = {}
         self._availability: dict[str, OperationAvailability] = {}
+        self._binding_tokens: dict[str, object] = {}
         # G 组：插件 operations 注册失败明细（hard_block/导入失败/同名冲突），
         # catalog 构建方写入，供上层（RPC 面 / 调试）检查；缺省空列表。
         self.plugin_operation_errors: list[dict[str, Any]] = []
@@ -55,6 +56,8 @@ class OperationCatalog:
         if name in self._handlers:
             raise ValueError(f"operation '{name}' already registered")
         self._handlers[name] = handler
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(同名重新注册也拥有新的不透明绑定身份)。
+        self._binding_tokens[name] = object()
         if owner:
             self._owners[name] = str(owner)
         if availability is not None:
@@ -89,10 +92,14 @@ class OperationCatalog:
     def owner_of(self, name: str) -> str:
         return self._owners.get(name, "")
 
+    def binding_token(self, name: str) -> object | None:
+        return self._binding_tokens.get(name)
+
     def unregister_owner(self, owner: str) -> None:
         # user:“该重建就重建”+(切换插件代际时一次撤销其全部入口，不动其他所有者)。
         for name in [key for key, value in self._owners.items() if value == owner]:
             self._handlers.pop(name, None)
+            self._binding_tokens.pop(name, None)
             self._availability.pop(name, None)
             self._owners.pop(name, None)
 

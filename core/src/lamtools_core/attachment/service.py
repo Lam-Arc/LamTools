@@ -13,7 +13,7 @@ from typing import Any, Protocol
 
 from lamtools_core.tool.document_normalize import DocumentNormalizationError, normalize_document
 
-from .files import assert_safe_default_open, attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
+from .files import assert_safe_default_open, attachment_modality, decode_transport_filename, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
 
 # Uploads are read fully into memory and written to disk; bound the size so a
 # caller cannot exhaust memory/disk (audit 03 S2 / 11 S2).
@@ -76,7 +76,7 @@ class AttachmentService:
             raise ValueError(
                 f"Attachment exceeds the {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB size limit"
             )
-        safe_name = safe_filename(filename)
+        safe_name = safe_filename(decode_transport_filename(filename))
         # user:“完全相同的文件不重复保存”+(临时文件按内容指纹跨会话复用，索引仍属于各自消息)。
         digest = hashlib.sha256(content).hexdigest()
         def persist():

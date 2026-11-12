@@ -102,6 +102,10 @@ from lamtools_core.runtime.member_wake import (
     clear_member_wake_streak,
     consume_member_wake_autostart,
 )
+# user:“一旦涉及到其他的附件，应该用的是指针或者说是地址来表示，而不是直接放
+# 什么 base64 或者源文件”+(落盘的历史行剥掉内联图片，只保留 image_ref 地址；
+# 4MB 只做常态告警，超大图片等特殊情况仍允许落盘)。
+from lamtools_core.runtime.payload_policy import persistable_message, warn_if_oversized
 from lamtools_core.runtime_owner import LIVE_RUN_STATES, is_own_token, read_owner
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
@@ -532,6 +536,10 @@ class CoreLoopKernel:
     model_context_sink: Callable[[RuntimeState, LLMRequest], Awaitable[None] | None] | None = field(default=None, repr=False)
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _run_started_at: float = field(default=0.0, init=False, repr=False)
+    # user:“阶段一应该是从 turn start 开始”+(首个模型请求的第一阶段锚定在本回合
+    # 入口，包含状态/历史装载与请求构造；后续步骤从该步入口重新计时)。
+    _model_phase_anchor: float = field(default=0.0, init=False, repr=False)
+    _model_phase_first_index: int = field(default=-1, init=False, repr=False)
     # Monotonic instant the previous model response arrived (0.0 before the
     # run's first call).  Feeds the per-step "gap_since_last_result" log line,
     # which is the only way to tell provider wait apart from the local work
@@ -886,6 +894,16 @@ class CoreLoopKernel:
         # the cumulative step count across resumes.
         steps_log = state.metadata.get("kernel_steps")
         index = len(steps_log) if isinstance(steps_log, list) else 0
+        # user:“阶段一应该是从 turn start 开始”+(这个回合的第一个请求，其
+        # “整理并发送”从本回合入口计时，而不是从 _stream_model 进入时才开始；
+        # 后续步骤由 _stream_model 在步入口重新锚定)。
+        self._model_phase_anchor = self._run_started_at
+        self._model_phase_first_index = index
+        await self._emit_model_phase(
+            state,
+            response_index=index,
+            phase="request_building",
+        )
         while True:
             step = KernelStep(index=index, state_before=self._copy_state(state))
             steps.append(step)
@@ -2466,7 +2484,12 @@ class CoreLoopKernel:
 
     async def _append_durable_messages(self, state: RuntimeState, messages: list[ChatMessage]) -> None:
         # user:“去重构吧”+(原始消息持续追加，使用存储实际分配的序号锚定摘要视图)。
-        rows = [message.to_dict() for message in messages]
+        # user:“一旦涉及到其他的附件，应该用的是指针或者说是地址来表示，而不是
+        # 直接放什么 base64 或者源文件”+(内存里的原图仍供紧随其后的请求查看，
+        # 落盘行只保留文字与 image_ref 地址；超过 4MB 的常态上限时记录告警)。
+        rows = [persistable_message(message.to_dict()) for message in messages]
+        for message, row in zip(messages, rows):
+            warn_if_oversized("history", f"{state.session_id}:{message.role}", row)
         await self.state_store.append_history(state.session_id, rows)
         # Production stores return assigned sequences through each row. The
         # high-water fallback keeps legacy test/plugin stores compatible.
@@ -2536,9 +2559,16 @@ class CoreLoopKernel:
                 )
             ]
             self._recompute_compaction_boundary(state, persisted_history)
-            await self.state_store.replace_history(
-                state.session_id, [m.to_dict() for m in persisted_history]
-            )
+            # user:“一旦涉及到其他的附件，应该用的是指针或者说是地址来表示”
+            # +(压缩后的整份重写与增量追加走同一条落盘策略：内联图片换成
+            # image_ref 地址，超 4MB 的常态上限记录告警)。
+            replace_rows = [
+                persistable_message(message.to_dict())
+                for message in persisted_history
+            ]
+            for message, row in zip(persisted_history, replace_rows):
+                warn_if_oversized("history", f"{state.session_id}:{message.role}", row)
+            await self.state_store.replace_history(state.session_id, replace_rows)
             # ``replace_history`` assigns fresh row sequence numbers.  The
             # manual-compaction filter set belongs to the old numbering and
             # must not survive a successful rewrite; keeping it until after
@@ -2589,24 +2619,26 @@ class CoreLoopKernel:
         _logger.info("[kernel:_stream_model] starting stream sid=%s run=%s model=%s",
                       state.session_id, state.run_id, request.model)
         # user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
-        # 收到首字，使用样式 2”+(阶段一从本步开始整理请求算起；阶段二从供应商
-        # 2xx 响应头到达算起，两段分开上报，界面才能指出慢在哪一段)。
-        phase_started_at = time_module.monotonic()
-        await self._emit_model_phase(
-            state,
-            response_index=response_index,
-            phase="request_building",
-        )
+        # 收到首字，使用样式 2”+(阶段一从本回合入口计时；后续步骤的“整理请求”
+        # 从该步入口重新开始，界面才能看出每段慢在哪)。
+        if response_index != self._model_phase_first_index:
+            self._model_phase_anchor = time_module.monotonic()
+            await self._emit_model_phase(
+                state,
+                response_index=response_index,
+                phase="request_building",
+            )
         sent_at: float | None = None
 
         async def _on_request_sent() -> None:
             nonlocal sent_at
             sent_at = time_module.monotonic()
+            anchor = self._model_phase_anchor or sent_at
             await self._emit_model_phase(
                 state,
                 response_index=response_index,
                 phase="request_sent",
-                elapsed_ms=round((sent_at - phase_started_at) * 1000),
+                elapsed_ms=round((sent_at - anchor) * 1000),
             )
 
         # The HTTP client calls this after the provider answered with 2xx

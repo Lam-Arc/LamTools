@@ -38,15 +38,29 @@ class PluginRemoteAccess:
         except (ValueError, TypeError, CapabilityError, UnicodeError, RecursionError):
             raise HostOperationError("host/invalid-declaration", "Remote declaration is invalid") from None
         result = []
+        bindings = {}
         for (namespace, method), (path, _, encoding) in methods.items():
             route = routes[path]
             spec = specs.get(route.operation)
             # user:“复用原宿主权威”+(只列原目录已挂载、同插件所有且无需交互审批的明确方法；资源授权仍由处理器负责)。
             if spec is not None and spec.permission == "auto_allow" and self._catalog.owner_of(route.operation) == "plugin:" + self._scope.owner and self._catalog.has(route.operation):
+                bindings[route.operation] = self._catalog.binding_token(route.operation)
                 result.append({"namespace": namespace, "method": method, "result_encoding": encoding})
         self._check()
         current = self._host.get(self._scope.owner)
         # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(读取期间声明被撤回时不发布旧方法清单)。
         if current is None or current.raw != declaration:
             raise HostOperationError("host/changed", "Remote declaration changed during read")
+        # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(外部操作文件的审批变化也必须撤回旧清单)。
+        try:
+            if {spec.name: spec for spec in read_operations(current)} != specs:
+                raise HostOperationError("host/changed", "Remote operations changed during read")
+        except (ValueError, TypeError, CapabilityError, UnicodeError, RecursionError):
+            raise HostOperationError("host/changed", "Remote operations changed during read") from None
+        self._check()
+        # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(最终读取期间同名操作重注册不能发布旧名单)。
+        if any(token is None or self._catalog.binding_token(name) is not token
+               or not self._catalog.has(name) or self._catalog.owner_of(name) != "plugin:" + self._scope.owner
+               for name, token in bindings.items()):
+            raise HostOperationError("host/changed", "Remote operation binding changed during read")
         return {"methods": sorted(result, key=lambda row: (row["namespace"], row["method"]))}

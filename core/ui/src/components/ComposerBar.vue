@@ -15,6 +15,7 @@
       <slot name="popover" />
       <slot name="preamble" />
       <div class="composer-main-card">
+        <slot name="attachments" />
         <slot name="status" />
         <slot name="textarea">
           <textarea

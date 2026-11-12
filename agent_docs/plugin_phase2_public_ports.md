@@ -250,3 +250,5 @@ CLI重复取消收尾补充：整组插件/任务/MCP/数据库清理在原finis
 
 
 子代理模型策略绑定补充：read/set/select在原父会话读取前后复核同一session_data宿主及启动代。等待期间替换宿主返回subagent-model/host-changed，撤回启动代返回service/scope-closed，不发布旧策略、不继续选模或向旧存储派发修改。六项新增真实SQLite/模型目录验收覆盖三操作与两失效，确认原记录/修订不变及租约释放。已派发写入沿原finish_on_cancel提交收尾，不新增原子绑定/提交保证或全局模型ACL。
+
+`context.session_projections.get/events`返回前再次通过原只读会话核验可见性与绑定项目；等待期间隐藏或迁移时不发布旧摘要/事件。5项新增验收覆盖两种接口、隐藏/迁移及真实Remote；不是原子授权快照。

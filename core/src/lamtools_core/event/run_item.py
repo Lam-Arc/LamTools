@@ -25,6 +25,9 @@ RunItemKind = Literal[
     "usage",
     "error",
     "status",
+    # Live-only model-request progress (building / sent / first token). It is
+    # not a transcript row; clients apply it to the turn that owns it.
+    "model_phase",
 ]
 
 RunItemStatus = Literal[

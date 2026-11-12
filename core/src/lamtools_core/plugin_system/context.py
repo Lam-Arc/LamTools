@@ -222,6 +222,12 @@ class PluginContext:
         return PluginWorkspaceChangesAPI(self, self._active_registration_scope())
 
     @property
+    def plugin_resources(self):
+        # user:“第二阶段结束后 就继续开展第三阶段”+(进程内读取限定当前插件并复用原资源路由)。
+        from .resource_access import PluginResourceAccess
+        return PluginResourceAccess(self, self._active_registration_scope())
+
+    @property
     def workspace_registry(self):
         # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(原项目查询固定当前插件项目和启动代)。
         from .workspace_registry_access import PluginWorkspaceRegistryAPI

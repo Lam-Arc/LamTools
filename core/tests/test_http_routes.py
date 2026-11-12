@@ -691,6 +691,43 @@ class TestUsageRoutes:
 
 
 # ------------------------------------------------------------------
+# Project file existence
+# ------------------------------------------------------------------
+
+
+class TestProjectFileExistence:
+    """user:“成果登记处登记胶囊”+(二进制文件也能登记进本轮产出)。"""
+
+    def test_exists_accepts_binary_files_and_rejects_path_escape(self, tmp_path):
+        (tmp_path / "报告.pdf").write_bytes(b"%PDF-1.4 test")
+        (tmp_path / "note.txt").write_text("hi", encoding="utf-8")
+
+        class _Project:
+            work_root = tmp_path
+
+        class _Store:
+            async def get(self, project_id):
+                return _Project() if project_id == "p1" else None
+
+        client = _make_app_with_core(project_store=_Store())
+        assert client.get(
+            "/api/core/projects/p1/files/exists", params={"path": "报告.pdf"}
+        ).json() == {"exists": True}
+        assert client.get(
+            "/api/core/projects/p1/files/exists", params={"path": "note.txt"}
+        ).json() == {"exists": True}
+        assert client.get(
+            "/api/core/projects/p1/files/exists", params={"path": "missing.png"}
+        ).json() == {"exists": False}
+        assert client.get(
+            "/api/core/projects/p1/files/exists", params={"path": "../outside.txt"}
+        ).status_code == 403
+        assert client.get(
+            "/api/core/projects/nope/files/exists", params={"path": "note.txt"}
+        ).status_code == 404
+
+
+# ------------------------------------------------------------------
 # create_app integration
 # ------------------------------------------------------------------
 

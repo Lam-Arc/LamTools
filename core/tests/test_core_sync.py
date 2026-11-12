@@ -478,3 +478,40 @@ async def test_reappending_an_event_reuses_its_existing_sync_change(tmp_path: Pa
         assert rows[0].entity_json["event"]["event_id"] == "event-replayed"
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_thread_sync_change_carries_revision_not_full_snapshot(tmp_path: Path) -> None:
+    """user:“同步日志不存整份快照，只存版本/游标”+(thread 变更只带标题/状态/
+    revision 和 snapshot_required，正文由客户端按需拉取)。"""
+    from sqlalchemy import select
+
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        _project, session, _created = await db.project_store.create_with_initial_session(
+            tmp_path / "workspace",
+            name="Workspace",
+        )
+        async with db.session_factory() as connection:
+            row = (
+                await connection.execute(
+                    select(CoreSyncChange)
+                    .where(CoreSyncChange.entity_type == "thread")
+                    .where(CoreSyncChange.entity_id == session.id)
+                    .order_by(CoreSyncChange.seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+
+        entity = dict(row.entity_json or {})
+        assert "snapshot" not in entity
+        assert entity["snapshot_required"] is True
+        assert entity["id"] == session.id
+        assert int(entity["revision"]) >= 0
+
+        change = db.sync_journal._to_dict(row)
+        assert change["snapshot_required"] is True
+        assert "snapshot" not in change["entity"]
+        assert "snapshot" not in change["payload"]
+    finally:
+        await db.close()

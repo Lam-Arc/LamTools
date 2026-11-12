@@ -66,6 +66,9 @@ def register_durable_operations(
         if goal is None:
             # user:“继续，把 2 阶段都做完”+(公开 SDK 需要区分缺失与存储失败，不能按错误文案猜测)。
             return OperationResult(request.name, status="error", payload={"code": "not-found", "error": "Goal not found"})
+        denied = _goal_scope_denied(request, goal)
+        if denied is not None:
+            return denied
         return OperationResult(name=request.name, payload={"goal": goal.to_dict()})
 
     async def goal_list(request: OperationRequest) -> OperationResult:
@@ -84,6 +87,12 @@ def register_durable_operations(
 
     async def goal_update(request: OperationRequest) -> OperationResult:
         payload = request.payload
+        # user:“边界情况”+(模型拿到的 goal_id 可能属于别的会话，写之前先核对归属)。
+        existing = await goal_manager.get(_goal_id(payload))
+        if existing is not None:
+            denied = _goal_scope_denied(request, existing)
+            if denied is not None:
+                return denied
         try:
             goal = await goal_manager.update(
                 _goal_id(payload),
@@ -371,6 +380,18 @@ def register_durable_operations(
 
 def _thread_id(payload: dict[str, Any]) -> str:
     return str(payload.get("thread_id") or payload.get("threadId") or payload.get("session_id") or "").strip()
+
+
+def _goal_scope_denied(request: OperationRequest, goal: Any) -> OperationResult | None:
+    """Reject goal writes aimed at another session when the caller names one."""
+    session_id = str(request.metadata.get("session_id") or "").strip()
+    if not session_id or str(getattr(goal, "thread_id", "") or "") == session_id:
+        return None
+    return OperationResult(
+        request.name,
+        status="error",
+        payload={"code": "forbidden", "error": "Goal belongs to a different thread"},
+    )
 
 
 def _goal_id(payload: dict[str, Any]) -> str:

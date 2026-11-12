@@ -25,3 +25,7 @@ user:“继续，自动值守，非必要不停歇，自己不断找下一步做
 ## 当前插件名册变化流
 
 `context.job_controller.watch_list(session_id, interval=0.1)`消费驱动轮询，先发送完整当前可见快照，后续仅在快照变化时发送；每次轮询重新检查原会话和项目。间隔为0.01–2秒，期间多次变化可能合并，无法保证观察每个中间状态。快照中的可变结果与内部比较副本隔离。取消或HTTP断连停止观察，不停止原作业。显式NDJSON映射已验证；这是当前插件视图的轮询近似，非上游事件驱动的跨插件全局名册。11项新增验收覆盖增删、完成、隔离、撤回、取消、快照修改、无效间隔、实际HTTP断连和迁移提示。
+
+## 停止结算后的准入
+
+`job_controller.kill`按原作业stop/join等待回调实际清理，再次核对原会话可见性、项目和作业标签，失效时不返回旧作业视图，报`job/write-uncertain`及`may_have_changed=True`。自停在派发前保留`job/self-stop`，重复取消仍等待原清理后传播取消。进程内Python处理器未捕获该异常时，显式Remote原错误payload可带此标志；其他处理器或传输不保证。6项新增验收覆盖隐藏、迁移、标签变化、实际Remote、重复取消及自停。固定上游[源码](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/job-controller/src/index.ts)同步返回停止请求受理并记录人工取消通知；Sunday等待清理且不提供该通知，检查不是原子授权锁。

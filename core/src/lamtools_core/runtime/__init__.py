@@ -1,6 +1,7 @@
 """Runtime protocol types and interfaces."""
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Mapping
 from copy import deepcopy
@@ -463,6 +464,14 @@ class RuntimeTaskRegistry:
         entry.task = task
 
         def _cleanup(done_task: asyncio.Task[Any]) -> None:
+            # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(即使运行认领已提前释放，登记表仍负责取回后台失败结果并记录完整原因)。
+            if not done_task.cancelled():
+                error = done_task.exception()
+                if error is not None:
+                    logging.getLogger(__name__).error(
+                        "Runtime task failed thread=%s run=%s: %s", thread_id, run_id, error,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
             current = self._entries.get(thread_id)
             if current is not None and current.run_id == run_id and current.task is done_task:
                 self._entries.pop(thread_id, None)

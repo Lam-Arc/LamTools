@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -33,6 +35,8 @@ from lamtools_core.llm.profiles import (
 )
 
 # user:“审查后端大文件并拆分”+(按职责独立维护实现，原模块保留导入入口以兼容现有调用。)
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -287,6 +291,7 @@ class CoreHttpLLMClient:
                 await response.aread()
         if response.status_code >= 400:
             raise self._provider_error(response.status_code, response.text[:300], response)
+        await self._notify_request_sent(prepared)
         normalized = self._normalize_response(response.json(), model=prepared.model)
         result = LLMResponse(
             content=str(normalized.get("content") or ""),
@@ -328,6 +333,10 @@ class CoreHttpLLMClient:
                         text.decode("utf-8", errors="replace")[:300],
                         response,
                     )
+                # user:“请求发送成功到收到首字，使用样式 2”+(2xx 响应头已到，
+                # 请求体确实发出并被供应商接收；从这里到第一条 SSE 数据之间
+                # 才是供应商自己的首字延迟)。
+                await self._notify_request_sent(prepared)
                 route = {**self._cache_diagnostic_route(), "forensic_record_id": record_id(response)}
                 terminal_event = None
                 last_usage = None
@@ -502,7 +511,27 @@ class CoreHttpLLMClient:
             response_format=request.response_format,
             timeout=request.timeout,
             metadata=dict(request.metadata),
+            # The sent-notification belongs to the caller's bookkeeping, not to
+            # the wire payload; carry it across the defaults rewrite.
+            on_request_sent=request.on_request_sent,
         )
+
+    @staticmethod
+    async def _notify_request_sent(request: LLMRequest) -> None:
+        """Call the kernel's "request accepted by the provider" hook once.
+
+        Hook failures are observational only: a broken progress callback must
+        never fail or retry an otherwise healthy model call.
+        """
+        callback = request.on_request_sent
+        if callback is None:
+            return
+        try:
+            result = callback()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 — progress notification is best effort
+            _logger.warning("model request-sent hook failed", exc_info=True)
 
     def _auth_scheme(self) -> str:
         """Name the auth header shape used for this provider.

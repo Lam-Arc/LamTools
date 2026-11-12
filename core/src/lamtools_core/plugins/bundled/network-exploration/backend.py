@@ -22,6 +22,7 @@ class NetworkRuntime:
         self._stopping = False
         self._engine_lock = asyncio.Lock()
         self._job = None
+        self._protocol_failed = False
 
     @property
     def lifecycle_processes(self):
@@ -108,6 +109,7 @@ class NetworkRuntime:
         if await permissions.wait() != 0:
             raise RuntimeError('无法保护插件凭据目录，未启动网络服务')
         self._stopping = False
+        self._protocol_failed = False
         self.process = await asyncio.create_subprocess_exec(str(binary), str(self.data_dir), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=5 * 1024 * 1024, creationflags=subprocess.CREATE_NO_WINDOW)
         try:
             from .process_job import ProcessJob
@@ -131,7 +133,7 @@ class NetworkRuntime:
                 await ensure_bundled_engine(ROOT, self.data_dir, 'mihomo' if method == 'proxy.start' else 'aria2')
         async with self._lock:
             process = self.process
-            if process is None or process.returncode is not None:
+            if process is None or process.returncode is not None or self._protocol_failed:
                 raise RuntimeError('网络控制器未运行，请重新启用插件；原有状态会保留')
             self._sequence += 1
             request = json.dumps({'id': self._sequence, 'method': method, 'params': params}, ensure_ascii=False).encode() + b'\n'
@@ -141,15 +143,25 @@ class NetworkRuntime:
                 async with asyncio.timeout(90):
                     process.stdin.write(request)
                     await process.stdin.drain()
-                    response = json.loads(await process.stdout.readline())
+                    # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(EOF 是进程退出，非 JSON；异常帧会破坏请求对应关系，必须废弃这条流)。
+                    raw = await process.stdout.readline()
+                    if not raw:
+                        raise RuntimeError('网络控制器提前退出，未返回响应；请检查是否重复启动或控制器状态异常')
+                    try:
+                        response = json.loads(raw)
+                    except (ValueError, UnicodeError) as exc:
+                        raise RuntimeError('网络控制器响应格式无效') from exc
+                    if not isinstance(response, dict) or not ('result' in response or 'error' in response):
+                        raise RuntimeError('网络控制器响应格式无效')
+                    if response.get('id') != self._sequence:
+                        raise RuntimeError('网络控制器响应不匹配')
             except BaseException:
                 # A cancelled read must never leave a response for the next call.
                 # Closing stdin lets Rust restore its owned network settings.
                 if process.stdin:
                     process.stdin.close()
+                self._protocol_failed = True
                 raise
-            if response.get('id') != self._sequence:
-                raise RuntimeError('网络控制器响应不匹配')
             if 'error' in response:
                 raise ValueError(response['error'])
             result = response['result']

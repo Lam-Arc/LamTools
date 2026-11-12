@@ -1,0 +1,78 @@
+{
+  "base_commit": "cbeeba38",
+  "worktree": "E:\\SundayWorktrees\\constant-repair-20261111",
+  "files": [
+    {
+      "path": "core/pyproject.toml",
+      "sha256": "93e842fb87b0f60ed0fd30f5c135c3816bd2afb2bb657cd896cb7c89801c3d70"
+    },
+    {
+      "path": "core/lamtools-core-backend.spec",
+      "sha256": "17cdfeb4aa55e863ca56569bccd499e68e1f8d6a8653dba239947a5e81b14a65"
+    },
+    {
+      "path": "core/desktop/src-tauri/src/main.rs",
+      "sha256": "bc37bd30ad07290c7bc44af3468c26de6ee183cd9f937dbd6c5b95c378d4b560"
+    },
+    {
+      "path": "core/desktop/src-tauri/src/backend_startup.rs",
+      "sha256": "56f173b4fba19f53535821e63aa7f09ea2028dabeb6ac07afdc8a080aa2c0b88"
+    },
+    {
+      "path": "core/src/lamtools_core/logging_setup.py",
+      "sha256": "cefe0b7818914db4a6913c50980905f2e85bc89c105082c99fbcd51791445756"
+    },
+    {
+      "path": "core/src/lamtools_core/app/event_store.py",
+      "sha256": "6fac3ea11154d586b6405bb88789bc370255163aac5a9f43ff00427e9cc3ac5d"
+    },
+    {
+      "path": "core/src/lamtools_core/app/live/terminal_state.py",
+      "sha256": "06f2b1ec82e8eecf45c3fb035d99c6b895f03089e0fe6ee11f88eff7041eaf3a"
+    },
+    {
+      "path": "core/src/lamtools_core/app/live_router.py",
+      "sha256": "9a81e228fa4ad40f5429c18fbe1baa29950e68088a658a99bc6c79851e2dbac1"
+    },
+    {
+      "path": "core/src/lamtools_core/app/sync_store.py",
+      "sha256": "75545e2167f7989c98a6dda0ee5507493b0b36c6848fc1a967f3c7e238619e5d"
+    },
+    {
+      "path": "core/src/lamtools_core/app/sqlite_write.py",
+      "sha256": "9e83b882d90480047dadae4eb43c6bdc326387d051ce9a69a6eb8d091eb19618"
+    },
+    {
+      "path": "core/src/lamtools_core/runtime/__init__.py",
+      "sha256": "3940b5d585125265efc357fce40f29dbd497804206194e8f7d9732d2b7678e0a"
+    },
+    {
+      "path": "core/src/lamtools_core/plugins/bundled/network-exploration/backend.py",
+      "sha256": "61e4d0a6dcbd60f21c6607d8a533753d88ba26787d6ed703ae3ecd3db35e9f49"
+    },
+    {
+      "path": "core/tests/test_constant_backend_log_rotation.py",
+      "sha256": "35fdd172aeddb6759f76960f326d3bd773e90050b31ab4579772f5865b3fcc8a"
+    },
+    {
+      "path": "core/tests/test_constant_live_payloads.py",
+      "sha256": "fd0cfc862c822a7f70095aeed6f6e57f50a95acc3c2fcb109bad586124e9f8e0"
+    },
+    {
+      "path": "core/tests/test_constant_plugin_failures.py",
+      "sha256": "4004ca4d9d4f6b357bc81d97d9c433bdddbb4163760b09a2c16822ef17c741cc"
+    },
+    {
+      "path": "core/tests/test_constant_task_ownership.py",
+      "sha256": "2c8e49079e83444fd025ed2e9b64eacd8e11f9af0620201e4ed2e702f13b4290"
+    },
+    {
+      "path": "core/tests/test_constant_terminal_identity.py",
+      "sha256": "1b5a8bf7a2f544f8f554918b60ecd0852898e82c6181f7316712508f58255f6e"
+    },
+    {
+      "path": "core/tests/test_constant_wal_maintenance.py",
+      "sha256": "f184e95597459ea97c9d0cb5747d0786a00d74723b0f92a81a6961e908609fc7"
+    }
+  ]
+}

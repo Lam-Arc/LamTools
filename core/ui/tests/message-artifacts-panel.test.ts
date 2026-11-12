@@ -108,7 +108,7 @@ describe('「本轮产出」面板：内部去重', () => {
         }),
       },
     })
-    expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(1)
+    expect(wrapper.findAll('.message-artifacts .reference-item--media')).toHaveLength(1)
     // 保留的是带 id 的条目：src 走 artifact 端点而非 files/raw
     await vi.waitFor(() => {
       expect(createObjectURL).toHaveBeenCalled()
@@ -122,7 +122,7 @@ describe('「本轮产出」面板：内部去重', () => {
       part('p2', [artifact(undefined, { dataUrl: 'data:image/png;base64,AAAA' })]),
     ])
     const wrapper = mountMessageView( { props: { msg: m } })
-    expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(1)
+    expect(wrapper.findAll('.message-artifacts .reference-item--media')).toHaveLength(1)
   })
 
   it('不同图正常保留', () => {
@@ -131,7 +131,7 @@ describe('「本轮产出」面板：内部去重', () => {
       part('p2', [artifact('workspace://.lam/artifacts/b.png')]),
     ])
     const wrapper = mountMessageView( { props: { msg: m } })
-    expect(wrapper.findAll('.message-artifacts .message-attachment-deck__card')).toHaveLength(2)
+    expect(wrapper.findAll('.message-artifacts .reference-item--media')).toHaveLength(2)
   })
 
   it('展示代码/配置/文档 file_change，并排除 command/file-read 证据', () => {
@@ -152,7 +152,7 @@ describe('「本轮产出」面板：内部去重', () => {
       content: '本轮产物：`src/app.ts`、`settings.jsonc`、`README.md`。',
     }
     const wrapper = mountMessageView({ props: { msg: m } })
-    const cards = wrapper.findAll('.message-artifacts .message-attachment-deck__card')
+    const cards = wrapper.findAll('.message-artifacts .reference-item:not(.reference-item--media):not(.reference-item--more)')
     expect(cards).toHaveLength(3)
     expect(wrapper.text()).toContain('本轮产出')
     expect(wrapper.text()).not.toContain('legacy.png')

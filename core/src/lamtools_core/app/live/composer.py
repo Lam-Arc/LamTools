@@ -30,6 +30,7 @@ async def handle_session_composer_set_operation(
     request_id: int | str | None,
     params: dict[str, Any],
     context: CoreLiveContext,
+    release_approvals: bool = True,
 ) -> CoreLiveOperationOutcome:
     """Persist the composer parameter group and notify the active run."""
     from ..runtime_permissions import normalize_permission_preset
@@ -147,11 +148,10 @@ async def handle_session_composer_set_operation(
         }
     )
 
+    # user:“不要提交、推送、发布、重启健康应用、操作无关会话或修改用户密钥”+(模型选择不连带处理无关审批)。
     approval_status = await release_pending_approval_for_preset(
-        context=context,
-        thread_id=thread_id,
-        preset=composer["permission_preset"],
-    )
+        context=context, thread_id=thread_id, preset=composer["permission_preset"],
+    ) if release_approvals else None
 
     raw_apply = _first_present(
         params.get("apply_to_running"),

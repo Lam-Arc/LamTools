@@ -8,7 +8,7 @@ Sub-modules:
 
 import copy
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Literal, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Callable, Literal, Protocol, runtime_checkable
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 
@@ -111,6 +111,11 @@ class LLMRequest:
     response_format: dict[str, Any] | None = None
     timeout: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到收到首字，
+    # 使用样式 2，可以做到吗？”+(供应商已接受 HTTP 请求、2xx 响应头已到达时回调一次，
+    # 让内核能区分“本地构造/发送”和“等供应商吐第一个字”两段耗时)。
+    # 只做本机通知，不参与序列化、比较或模型请求体。
+    on_request_sent: Callable[[], Any] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {

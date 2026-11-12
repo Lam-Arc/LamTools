@@ -28,6 +28,11 @@ class PluginSessionDataAPI:
             # user:“完成真实接口、参数/错误、作用域、取消/清理”+(只读结果返回前复核原启动代与宿主，写入仍沿原已接收短提交收尾规则)。
             self._scope.check_open()
             self._host._context()
+            if self._kind == "projections":
+                # user:“第二阶段结束后 就继续开展第三阶段”+(投影读取后再次核对原会话可见性和项目归属)。
+                await self._host._read(session_id, self._root)
+                self._scope.check_open()
+                self._host._context()
             return result
         finally:
             self._scope.release()

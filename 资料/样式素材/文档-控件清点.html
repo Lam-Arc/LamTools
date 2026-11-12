@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8" />
+<title>界面控件清点与去重结论</title><style>
+:root { color-scheme: dark; }
+body { margin: 0; padding: 40px 24px 80px; background: #14161a; color: #e8e2d8;
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.7; }
+main { max-width: 900px; margin: 0 auto; }
+h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -.01em; }
+h2 { font-size: 19px; margin: 34px 0 10px; padding-top: 14px; border-top: 1px solid rgba(232,226,216,.12); }
+h3 { font-size: 15px; margin: 24px 0 8px; color: #f6efe2; }
+p, li { font-size: 14px; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+blockquote { margin: 14px 0; padding: 10px 14px; border-left: 2px solid #6aa9ff;
+  background: rgba(106,169,255,.08); color: #cfd6e2; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+th, td { border: 1px solid rgba(232,226,216,.14); padding: 7px 10px; text-align: left; }
+th { background: rgba(232,226,216,.06); font-weight: 600; }
+code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px;
+  background: rgba(232,226,216,.08); padding: 1px 5px; border-radius: 4px; }
+pre { background: #1b1d22; border: 1px solid rgba(232,226,216,.12); border-radius: 8px;
+  padding: 12px 14px; overflow: auto; }
+pre code { background: none; padding: 0; }
+hr { border: 0; border-top: 1px solid rgba(232,226,216,.1); margin: 26px 0; }
+a { color: #7fb4ff; }
+a.back { display: inline-block; margin-bottom: 18px; font-size: 12.5px; text-decoration: none; }
+</style></head>
+<body><main><a class="back" href="索引.html">← 回索引</a>
+<h1>界面控件清点与去重结论</h1>
+<p>清点时间 2026-11-09。范围是整个前端的样式源：<code>core/ui/src</code>、<code>website</code>、<code>core/src/lamtools_core/plugins</code> 下的插件 UI。</p>
+<h2>一、结论先说</h2>
+<p>主应用里真正挂在按钮、输入框、卡片这些元素上的控件类名有 748 个。按「填充 × 描边 × 圆角」归一之后，它们只落成 138 种视觉组合。也就是说 154 个类名写的是同一个东西，只是名字不同。</p>
+<table><thead><tr><th>控件</th><th>主应用类名</th><th>跨文件复用</th><th>视觉组合</th><th>同格重复</th><th>重复最多的一格</th></tr></thead><tbody><tr><td>卡片</td><td>110</td><td>6</td><td>12</td><td>19</td><td>实色 / 描边 / 大圆角，9 个</td></tr><tr><td>表格与清单</td><td>97</td><td>8</td><td>12</td><td>15</td><td>半透明 / 无描边 / 圆角，7 个</td></tr><tr><td>导航</td><td>79</td><td>4</td><td>8</td><td>17</td><td>半透明 / 无描边 / 圆角，12 个</td></tr><tr><td>表单杂项</td><td>64</td><td>0</td><td>5</td><td>3</td><td>无底 / 描边 / 圆角，2 个</td></tr><tr><td>按钮</td><td>63</td><td>17</td><td>17</td><td>40</td><td>半透明 / 无描边 / 圆角，22 个</td></tr><tr><td>表面与材质</td><td>63</td><td>6</td><td>15</td><td>9</td><td>无底 / 无描边 / 直角，6 个</td></tr><tr><td>图片与缩略</td><td>47</td><td>1</td><td>8</td><td>7</td><td>实色 / 无描边 / 圆角，3 个</td></tr><tr><td>进度与加载</td><td>36</td><td>1</td><td>11</td><td>3</td><td>半透明 / 无描边 / 胶囊，3 个</td></tr><tr><td>输入框</td><td>30</td><td>2</td><td>7</td><td>19</td><td>半透明 / 描边 / 圆角，15 个</td></tr><tr><td>胶囊与标签</td><td>30</td><td>0</td><td>6</td><td>7</td><td>半透明 / 无描边 / 胶囊，6 个</td></tr><tr><td>对话框</td><td>30</td><td>4</td><td>6</td><td>4</td><td>实色 / 无描边 / 未设，3 个</td></tr><tr><td>开关</td><td>25</td><td>0</td><td>11</td><td>5</td><td>半透明 / 无描边 / 圆角，3 个</td></tr><tr><td>菜单</td><td>25</td><td>0</td><td>2</td><td>0</td><td>无重复</td></tr><tr><td>提示气泡</td><td>19</td><td>0</td><td>5</td><td>1</td><td>实色 / 无描边 / 胶囊，2 个</td></tr><tr><td>页签</td><td>13</td><td>1</td><td>8</td><td>5</td><td>半透明 / 无描边 / 圆角，6 个</td></tr><tr><td>滑块</td><td>9</td><td>0</td><td>1</td><td>0</td><td>无重复</td></tr><tr><td>折叠</td><td>4</td><td>0</td><td>2</td><td>0</td><td>无重复</td></tr><tr><td>头像</td><td>3</td><td>0</td><td>1</td><td>0</td><td>无重复</td></tr><tr><td>分隔</td><td>1</td><td>0</td><td>1</td><td>0</td><td>无重复</td></tr></tbody></table>
+<p>「跨文件复用」这一列比总数更能说明问题：输入框 30 个类名里只有 2 个被两个以上文件用过，胶囊 30 个、开关 25 个、菜单 25 个全是零。等于每个组件都在自己文件里重写一遍同样的东西。</p>
+<h2>二、口径</h2>
+<p>两个口径交叉核对，避免拿类名猜。</p>
+<p><strong>元素口径</strong>：扫 213 个 <code>.vue</code> 的模板，只认真的写在 <code>&lt;button&gt;</code>、<code>&lt;input&gt;</code>、<code>&lt;textarea&gt;</code>、<code>&lt;select&gt;</code>、<code>&lt;div&gt;</code>、<code>&lt;span&gt;</code> 这些标签 <code>class</code> 属性上的类名。<code>is-active</code>、<code>is-open</code>、<code>has-detail</code> 这类状态类不计入。这样 <code>core-queued-input-row</code> 这种带 input 字样的容器不会被误算成输入框。</p>
+<p><strong>配方口径</strong>：先解析全部 CSS 变量（<code>--radius-sm</code> 就是 6px，不是字符串），再把每个类的样式归一成三个维度：</p>
+<ul><li>填充：无底、半透明、实色、渐变</li><li>描边：无描边、描边、内描边、虚线</li><li>圆角：直角、微圆、圆角（4 到 9px）、大圆角（10 到 19px）、圆（20px 以上）、胶囊（100px 以上）</li></ul>
+<p>同一组三个值就是一个视觉组合。同一格里出现多个类名，就是同一件东西被写了多遍。</p>
+<p><strong>为什么分主应用、官网、插件</strong>：插件 UI 有一套自己的 <code>nx-*</code> 类名（<code>nx-button</code>、<code>nx-input</code>、<code>nx-quiet</code>），官网有一套 <code>site-*</code>。它们是独立设计系统，混进主应用统计会把数字撑大。上表只统计主应用。</p>
+<h2>三、按钮：63 个名字，17 种长相</h2>
+<p>最大的两格吃掉了 33 个类名：</p>
+<p><strong>第一格 半透明填充、无描边、圆角，22 个</strong></p>
+<pre><code>btn--ghost  icon-btn  artifact-icon-button  dc-text-btn  dc-icon-btn
+fb-btn-cancel  pin-btn  plugin-icon-button  primary-btn  session-menu-button
+sidebar-pin-button  small-btn  split-icon-button  split-text-button
+stage-browser-btn  study-sidebar-icon-button  text-btn  user-edit-button
+wf-category-btn  wf-filter-btn  wf-human-task-icon-btn  wf-icon-btn</code></pre>
+<p><strong>第二格 半透明填充、描边、圆角，11 个</strong></p>
+<pre><code>library-button  icon-button  artifact-open-button  card-menu-btn  cu-bar-btn
+mc-insp-provider-btn  quiet-button  stage-save-btn  stage-toggle-btn
+style-icon-btn  wiki-head-btn</code></pre>
+<p>剩下 15 格里，大部分只有一到两个类名，是真正独立的形态：<code>.btn--primary</code> 与 <code>.btn--secondary</code> 的实色大圆角、<code>core-send-stop-button</code> 的胶囊发送键、<code>btn-cancel</code> 的纯描边、<code>mode-create-btn</code> 的虚线描边。</p>
+<p><strong>和「八种按钮」的关系</strong>：上一版方案写的是 2 种材质乘 4 种形状等于 8 种。清点数据不支持这个简化，实际用到的材质是三种：实色、半透明、无底（透明），描边是三种：无描边、描边、虚线。真正决定长相的是这三个维度，形状只是圆角半径一个字段。</p>
+<p><strong>已经有一个基座，但没被用起来</strong>：<code>sunday-controls.css</code> 里 <code>.btn</code> 已经写了基类，带 5 个角色修饰 <code>--primary</code>、<code>--secondary</code>、<code>--quiet</code>、<code>--ghost</code>、<code>--danger</code>，被 32 个文件引用了 171 次。但 <code>.btn--primary</code> 和 <code>.btn--secondary</code> 的声明是同一份，两个名字一个样。另外 40 多个按钮类完全没走这个基座。</p>
+<h2>四、输入框：30 个名字，7 种长相</h2>
+<p><strong>15 个类名是同一个配方</strong>（半透明底 + 1px 描边 + 6px 圆角）：</p>
+<pre><code>field-input  config-input  auto-textarea  behavior-input  core-project-input
+core-queued-input-edit  decision-guide-input  hook-config-textarea  lc-input
+role-assignment-input  sa-input  skill-group-rename-input  studio-layer-input
+studio-select  wf-create-input</code></pre>
+<p>跨文件复用的只有 <code>field-input</code> 和 <code>hook-config-textarea</code> 两个。剩下 13 个各自只在一个组件里出现，等于每个表单都把这段配方抄了一遍。</p>
+<p>另有 4 个是「无底、无描边、直角」，都是标题类输入（改名、改标题），它们本来就不该有框。</p>
+<h2>五、卡片：110 个名字，12 种长相</h2>
+<p>两种材质是主线：</p>
+<ul><li>实色底 + 描边 + 大圆角，9 个：<code>attachment-card</code> <code>dialog-card</code> <code>material-card</code> <code>mobile-overlay-card</code> <code>onboarding-card</code> <code>plugin-card</code> <code>sa-card</code> <code>setting-card</code> <code>wf-create-card</code></li><li>半透明底 + 描边 + 大圆角，8 个：<code>arrange-card</code> <code>decision-card</code> <code>folder-card</code> <code>hook-card</code> <code>pair-card</code> <code>plan-card</code> <code>skill-card</code> <code>wf-convo-card</code></li></ul>
+<p>跨文件复用的只有 6 个：<code>setting-card</code>、<code>folder-card</code>、<code>dialog-card</code>、<code>plan-card</code>、<code>plan-card-preview</code>、<code>plan-card-foot</code>。</p>
+<p>110 个类名里剩下的多是「卡片的某个位置」这一类纯布局类（没有底色、没有描边），它们不算重复，但命名上分不清哪个是卡片本体、哪个是卡片内部的一行。</p>
+<h2>六、其他控件</h2>
+<ul><li><strong>胶囊与标签</strong>：30 个类名 6 种长相，跨文件复用 0。最大格 6 个都是「半透明、无描边、胶囊」，只是颜色不同。</li><li><strong>页签</strong>：13 个类名 8 种长相，<code>filter-tabs</code> 是唯一被复用的。</li><li><strong>开关</strong>：25 个类名 11 种长相，跨文件复用 0。这里问题不在长得像，而在每处都自己画一遍圆角和滑块。</li><li><strong>对话框</strong>：30 个类名 6 种长相，其中一半是遮罩层（<code>dialog-dimmer</code>、<code>dialog-backdrop</code>、<code>scrim</code>），不是对话框本体。</li><li><strong>菜单</strong>：25 个类名只落成 2 种，没有重复，是最干净的一类。</li><li><strong>按键显示</strong>（键盘快捷键、快捷键提示）：3 种写法，<code>.hotkey</code> 和 <code>.search-row-shortcut</code> 是带底、带框、带圆角的键帽，<code>.context-menu-item-shortcut</code> 是纯文字。键帽只有两种，可以合成一个。</li><li><strong>进度与加载</strong>：36 个类名 11 种，多为骨架条和转圈，重复度不高。</li></ul>
+<h2>七、重复有三种，不是一种</h2>
+<p>一、同格不同名。这是最容易处理的，两个类名的填充、描边、圆角、尺寸全一样，合并成一个是纯收益。按钮那两格 33 个、输入框那格 15 个，都属于这一类。</p>
+<p>二、同名多定义。同一选择器在多个文件里出现 249 次，其中 240 次内容不同。最终长什么样取决于文件加载顺序。这不是美观问题，是风险：换一个入口进来，可能看到不同的样子。</p>
+<p>三、配方片段复制。伪元素小圆点抄了 4 遍，文本截断抄了 4 遍，网格布局抄了 5 遍。这类不体现在类名数量上，但改一处要同步改四处。</p>
+<h2>八、去重方案与顺序</h2>
+<p>按「改完不改变当前样子」排优先级，每一步都能单独验收。</p>
+<ol><li><strong>合并按钮第一格那 22 个</strong>。抽一个基类（材质、圆角、过渡、禁用态），只留尺寸字段。改完对涉及的界面截图比对。</li><li><strong>合并按钮第二格那 11 个</strong>。这类需要保留描边那一条声明，其余共用。</li><li><strong>合并输入框那 15 个</strong>。抽一个 <code>.field</code>，尺寸和圆角作为字段。</li><li><strong>合并 <code>.btn--primary</code> 与 <code>.btn--secondary</code></strong>。两者声明相同，留一个名字。</li><li><strong>卡片收成两种材质</strong>。实色一种、半透明一种，其余差异用字段表达。</li><li><strong>按键帽合并</strong>。<code>hotkey</code> 与 <code>search-row-shortcut</code> 留一个。</li><li><strong>同名多定义收敛</strong>。先定「谁赢」，再把散在多文件的选择器归到它所属组件的文件里。这一步风险最高，必须放最后。</li></ol>
+<p>前六步做完，同类控件的类名数大概能从 748 降到 200 以内，视觉上不会有任何变化。</p>
+<h2>九、风险</h2>
+<ul><li>合并会碰到 <code>:hover</code>、<code>:disabled</code>、<code>:active</code> 和主题变量的挂钩，光看静态配方判断不了，必须逐个界面对比。</li><li>240 个同名多定义的选择器，改之前要先确定加载顺序和谁覆盖谁，否则会悄悄变样。</li><li>插件 UI 的 <code>nx-*</code> 和官网的 <code>site-*</code> 是两套独立系统，不要并进主应用，也不要用主应用的令牌去替换。</li><li>这次统计把图标按钮并进了按钮族（<code>icon-button</code> 与 <code>button</code> 命中同一条规则），所以不存在单独的图标按钮计数，看按钮那张表就行。</li></ul>
+<h2>十、产物位置</h2>
+<ul><li>清点脚本：<code>.lam/scripts/style-inventory.py</code>、<code>style-families.py</code>、<code>control-inventory.py</code>、<code>controls-final.py</code>、<code>tag-controls.py</code></li><li>原始数据：<code>.lam/artifacts/style-inventory/rules.json</code>（7439 条规则）、<code>controls-final.json</code>、<code>control-matrix.md</code>、<code>control-report.md</code></li><li>人眼可核对的对照页：<code>资料/样式素材/控件-按钮.html</code>、<code>控件-输入框.html</code>、<code>控件-卡片.html</code>、<code>控件-胶囊.html</code>、<code>控件-开关.html</code>。每个候选在独立框里加载它自己的样式文件，互不污染，按实际引用次数排序。</li></ul>
+<h2>十一、复现方式</h2>
+<pre><code>python .lam/scripts/style-inventory.py    # 抽规则与类名
+python .lam/scripts/controls-final.py     # 按元素与配方两个口径出表
+python .lam/scripts/build-control-catalog.py button   # 出对照页，button/input/card/pill/switch</code></pre>
+<h2>十二、关于上一轮的合并（已撤回）</h2>
+<p>上一轮按「区域 + 材质 × 描边 × 圆角」把 22 个类的声明提进 <code>controls.css</code>。核对后撤回，原因两条：</p>
+<ul><li><code>.study-sidebar-icon-button</code> 这类，<code>study.css</code> 里同名选择器的声明还在，加载更晚，共用规则被盖住，合并等于没发生。</li><li><code>.site-btn</code>、<code>.stage-browser-btn</code> 这类选择器在现役代码里没有引用，是从旧工作树带出来的死类。</li></ul>
+<p><code>controls.css</code> 已删除，被提走的声明放回原处。这件事的教训写在 <code>方案/界面场景与复用结论.md</code>：按类名合并会得到假收益，要按用户实际场景核对。</p>
+</main></body></html>
