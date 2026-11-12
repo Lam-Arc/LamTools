@@ -63,12 +63,20 @@ def read_remote_methods(manifest):
             raise ValueError("Remote v1 requires at most 32 exact required primitive fields")
         resource = row.get("resource")
         if "resource" in row:
-            if (type(resource) is not dict or set(resource) != {"kind", "argument"}
-                    or resource.get("kind") not in {"session", "workspace"} or type(resource.get("argument")) is not str
-                    or resource["argument"] not in properties
-                    or type(properties[resource["argument"]]) is not dict
-                    or properties[resource["argument"]].get("type") != "string"):
-                raise ValueError("Resource requires one explicit string resource argument")
+            resources = [resource] if type(resource) is dict else resource
+            if type(resources) is not list or not 1 <= len(resources) <= 4:
+                raise ValueError("Declare one to four resources")
+            seen = set()
+            for entry in resources:
+                if (type(entry) is not dict or set(entry) != {"kind", "argument"}
+                        or entry.get("kind") not in {"session", "workspace"} or type(entry.get("argument")) is not str
+                        or entry["argument"] not in properties or type(properties[entry["argument"]]) is not dict
+                        or properties[entry["argument"]].get("type") != "string"):
+                    raise ValueError("Resource requires an explicit string resource argument")
+                resource_key = (entry["kind"], entry["argument"])
+                if resource_key in seen:
+                    raise ValueError("Resource declarations must be unique")
+                seen.add(resource_key)
         methods[key] = (route.path, copy.deepcopy(schema), encoding)
     return methods
 
@@ -143,7 +151,12 @@ async def dispatch_remote_request(*, host, catalog, plugin, namespace, method, b
     resource = row.get("resource")
     if resource is not None:
         try:
-            admit_resource = resource_admission(host, plugin, resource["kind"], arguments[resource["argument"]])
+            specs = [resource] if type(resource) is dict else resource
+            checks = [resource_admission(host, plugin, spec["kind"], arguments[spec["argument"]]) for spec in specs]
+            async def admit_resource():
+                # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(所有明确列出的资源都须通过原宿主准入)。
+                for check in checks:
+                    await check()
             await admit_resource()
         except Exception:
             return 403, {"error": "Remote resource unavailable"}
@@ -181,7 +194,8 @@ async def dispatch_remote_request(*, host, catalog, plugin, namespace, method, b
     try:
         status, result = await dispatch_http_request(host=host, catalog=catalog, plugin=plugin, method="POST", path=path,
             # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(业务处理器的可变参数副本不能改变后续资源准入依据)。
-            body=dict(arguments), headers=headers, remote=remote, create_token=False, pre_dispatch=pre_dispatch)
+            body=dict(arguments), headers=headers, remote=remote, create_token=False, pre_dispatch=pre_dispatch,
+            resource_checked=("remote", resource) if resource is not None else None)
         if resource is not None and "status" in result:
             try:
                 await admit_resource()

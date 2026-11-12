@@ -137,6 +137,47 @@ def _safe_headers(headers: dict[str, str]) -> dict[str, str]:
     return {str(key).lower(): str(value) for key, value in headers.items() if str(key).lower() not in hidden}
 
 
+def resource_guarded_operation(manifest, operation, routes=None, admitted=None):
+    # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(同一操作的其他入口不能绕过明确声明的资源准入)。
+    http = manifest.raw.get("http") if isinstance(manifest.raw, dict) else None
+    if not isinstance(http, dict):
+        return False
+    routes = routes if routes is not None else read_http_routes(manifest)
+    protected = []
+    for key in ("remote", "uploads"):
+        entries = http.get(key, [])
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or "resource" not in entry:
+                continue
+            try:
+                path = _normalize_path(entry.get("route"))
+            except ValueError:
+                # Invalid protected declarations fail closed for all operations.
+                return True
+            if any(route.method == "POST" and route.path == path and route.operation == operation for route in routes):
+                value = entry["resource"]
+                if key == "remote" and isinstance(value, dict):
+                    value = [value]
+                try:
+                    protected.append((key, json.dumps(value, sort_keys=True, ensure_ascii=True)))
+                except (TypeError, ValueError, RecursionError):
+                    return True
+    if not protected:
+        return False
+    if admitted is None:
+        return True
+    key, value = admitted
+    if key == "remote" and isinstance(value, dict):
+        value = [value]
+    try:
+        signature = (key, json.dumps(value, sort_keys=True, ensure_ascii=True))
+    except (TypeError, ValueError, RecursionError):
+        return True
+    return any(item != signature for item in protected)
+
+
 async def dispatch_http_request(
     *,
     host: Any,
@@ -150,6 +191,7 @@ async def dispatch_http_request(
     remote: str = "",
     create_token: bool = True,
     pre_dispatch=None,
+    resource_checked=None,
 ) -> tuple[int, dict[str, Any]]:
     """Resolve one plugin HTTP request. Returns ``(status_code, payload)``."""
     if host is None or catalog is None:
@@ -198,6 +240,9 @@ async def dispatch_http_request(
     if spec.permission != "auto_allow":
         # ask_user / hard_block cannot be approved from an HTTP request.
         return 403, {"error": "route operation requires interactive approval"}
+
+    if resource_guarded_operation(manifest, route.operation, routes, resource_checked):
+        return 403, {"error": "route operation requires resource admission"}
 
     # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(Remote分发前复核最初的方法声明与启动代)。
     if pre_dispatch is not None:

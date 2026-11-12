@@ -236,6 +236,15 @@ jobs:
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
           Copy-Item -LiteralPath (Join-Path $releaseDir "Sunday.exe") -Destination (Join-Path $stageDir "Sunday.exe")
           Copy-Item -LiteralPath "core/dist/SundayCore" -Destination (Join-Path $stageDir "sunday-backend") -Recurse
+          # user:“在这一次的 setup 里头再打一个清理脚本”+(CI 与本地 package.ps1
+          # 共用同一份安装器清单：数据库清理脚本随安装包分发)。
+          foreach ($cleanupFile in @("cleanup-constant-db.ps1", "cleanup_constant_db.py")) {
+            $cleanupSource = Join-Path "scripts" $cleanupFile
+            if (-not (Test-Path -LiteralPath $cleanupSource -PathType Leaf)) {
+              throw "Cleanup script is missing: $cleanupSource"
+            }
+            Copy-Item -LiteralPath $cleanupSource -Destination (Join-Path $stageDir $cleanupFile)
+          }
 
           $outputDir = Join-Path $releaseDir "bundle/inno"
           & "core/desktop/installer/build-installer.ps1" -Version $version -SourceRoot $stageDir -OutputDir $outputDir

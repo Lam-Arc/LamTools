@@ -5,7 +5,7 @@ import re
 from lamtools_core.async_tasks import finish_on_cancel
 from .capabilities import CapabilityError
 from .file_uploads import MAX_CHUNK_UPLOAD_BYTES, MAX_UPLOAD_CHUNK_BYTES
-from .plugin_http import _normalize_path, dispatch_http_request, read_http_routes
+from .plugin_http import _normalize_path, dispatch_http_request, read_http_routes, resource_guarded_operation
 from .remote_gateway import authenticate_remote, remote_response, resource_admission
 from .remote_binary import RemotePayload
 from .remote_stream import binding_check, reserve
@@ -133,6 +133,10 @@ async def dispatch_upload(host_provider, catalog_provider, plugin, name, request
         return remote_response(404, {"error": "Upload method is not declared"})
     entry = next(item for item in manifest.raw["http"]["uploads"] if item["name"] == name)
     kind = entry.get("resource")
+    # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(读取上传体前阻止无资源准入的别名)。
+    operation = next(route.operation for route in read_http_routes(manifest) if route.method == "POST" and route.path == path)
+    if resource_guarded_operation(manifest, operation, admitted=("uploads", kind) if kind is not None else None):
+        return remote_response(403, {"error": "route operation requires resource admission"})
     resource_id = None
     resource_check = None
     if kind is not None:
@@ -189,7 +193,8 @@ async def dispatch_upload(host_provider, catalog_provider, plugin, name, request
             upload_body["resource_id"] = resource_id
         dispatch = asyncio.create_task(dispatch_http_request(host=host, catalog=catalog, plugin=plugin, method="POST", path=path,
             query=dict(request.query_params), body=upload_body, headers=headers,
-            remote=str(request.client.host if request.client else ""), create_token=False, pre_dispatch=pre_dispatch))
+            remote=str(request.client.host if request.client else ""), create_token=False, pre_dispatch=pre_dispatch,
+            resource_checked=("uploads", kind) if resource_check is not None else None))
         consumed = False
         try:
             # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(处理器空闲未读取时仍检查撤回，等待其真实清理)。

@@ -1114,11 +1114,11 @@
         "plugin.json http.uploads.resource session/workspace guard"
       ],
       "documentation": "agent_docs/plugin_phase3_remote.md",
-      "evidence": "core/tests/test_plugin_remote_binary.py; core/tests/test_plugin_remote_auth_before_schema.py; core/tests/test_plugin_remote_dispatch_binding.py; core/tests/test_plugin_remote_invalid_unicode.py; core/tests/test_plugin_remote_uncertain_write.py; core/tests/test_plugin_process_remote_uncertain.py; core/tests/test_plugin_raw_upload_stream.py; core/tests/test_plugin_upload_rejected_stream_cleanup.py; core/tests/test_plugin_upload_idle_revocation.py; core/tests/test_plugin_remote_operation_replacement.py; core/tests/test_plugin_remote_unary_revalidation.py; core/tests/test_plugin_remote_session_guard.py; core/tests/test_plugin_remote_resource_stream.py; core/tests/test_plugin_upload_resource_guard.py",
+      "evidence": "core/tests/test_plugin_remote_binary.py; core/tests/test_plugin_remote_auth_before_schema.py; core/tests/test_plugin_remote_dispatch_binding.py; core/tests/test_plugin_remote_invalid_unicode.py; core/tests/test_plugin_remote_uncertain_write.py; core/tests/test_plugin_process_remote_uncertain.py; core/tests/test_plugin_raw_upload_stream.py; core/tests/test_plugin_upload_rejected_stream_cleanup.py; core/tests/test_plugin_upload_idle_revocation.py; core/tests/test_plugin_remote_operation_replacement.py; core/tests/test_plugin_remote_unary_revalidation.py; core/tests/test_plugin_remote_session_guard.py; core/tests/test_plugin_remote_resource_stream.py; core/tests/test_plugin_upload_resource_guard.py; core/tests/test_plugin_remote_multi_resource_guard.py; core/tests/test_plugin_remote_guard_bypass.py",
       "limits": [
         "Explicit current manifest descriptors only; no fallback to operation names or unmarked methods",
         "Maps only to existing token-authenticated POST routes; native plugin availability, operation ownership and approval checks remain authoritative",
-        "Optional resource declaration binds one required string argument to original visible current-project session or workspace admission before and after dispatch; NDJSON rechecks before frames and while idle; denies missing scope/provider, no Peer roles or atomic authorization",
+        "Optional resource declaration binds one to four required string arguments to original visible current-project session/workspace admission before and after dispatch; NDJSON rechecks before frames and while idle; guarded operations reject weak HTTP aliases and incompatible resource declarations; denies missing scope/provider, no Peer roles or atomic authorization",
         "Guarded NDJSON rechecks before headers, watches disconnect during admission, and joins original source/admission cleanup on cancellation; checks are polling, not a strict deadline",
         "Optional http.uploads resource=session/workspace requires one bounded ASCII x-resource-id, admits before reading and rechecks each chunk, idle and completion; handler receives fixed resource_id and remains responsible for all accessed resources",
         "At most 64 methods, 32 exact required primitive fields and 32 KiB schema; 1 MiB bounded HTTP request body",
@@ -1358,9 +1358,9 @@
         "context.remote_access.declared_methods()"
       ],
       "documentation": "agent_docs/plugin_remote_access_inventory.md",
-      "evidence": "core/tests/test_plugin_remote_access_inventory.py; core/tests/test_plugin_remote_access_external_revocation.py",
+      "evidence": "core/tests/test_plugin_remote_access_inventory.py; core/tests/test_plugin_remote_access_external_revocation.py; core/tests/test_plugin_remote_access_guard_inventory.py",
       "limits": [
-        "Only current plugin; reads current host manifest and explicit Remote methods, authenticated POST routes, operation ownership/availability and auto_allow",
+        "Only current plugin; reads current host manifest and explicit Remote methods, authenticated POST routes, operation ownership/availability, auto_allow and same-operation resource declaration restrictions",
         "Declaration and original host/catalog/scope are checked again before publication; invalid or unavailable provider returns error",
         "Inventory is not a permission decision: valid token, Core authentication and resource authorization are checked separately by original request and business handler",
         "No DSH Peer principal, role/action/resource bindings, decision policy, grant snapshots or follow stream",

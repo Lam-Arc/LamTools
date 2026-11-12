@@ -4,7 +4,7 @@ import copy
 from .capabilities import CapabilityError
 from .management_access import HostOperationError
 from .operation_bridge import read_operations
-from .plugin_http import read_http_routes
+from .plugin_http import read_http_routes, resource_guarded_operation
 from .remote_gateway import read_remote_methods
 
 
@@ -42,6 +42,13 @@ class PluginRemoteAccess:
         for (namespace, method), (path, _, encoding) in methods.items():
             route = routes[path]
             spec = specs.get(route.operation)
+            row = next(item for item in manifest.raw["http"]["remote"]
+                       if item["namespace"] == namespace and item["method"] == method)
+            resource = row.get("resource")
+            # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(不发布同操作资源门禁必然拒绝的别名)。
+            if resource_guarded_operation(manifest, route.operation,
+                                          admitted=("remote", resource) if resource is not None else None):
+                continue
             # user:“复用原宿主权威”+(只列原目录已挂载、同插件所有且无需交互审批的明确方法；资源授权仍由处理器负责)。
             if spec is not None and spec.permission == "auto_allow" and self._catalog.owner_of(route.operation) == "plugin:" + self._scope.owner and self._catalog.has(route.operation):
                 bindings[route.operation] = self._catalog.binding_token(route.operation)
