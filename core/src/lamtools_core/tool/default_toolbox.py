@@ -31,7 +31,6 @@ from lamtools_core.tool.durable_tools import (
     durable_tool_specs,
 )
 from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
-from lamtools_core.computer_use import make_computer_use_handler
 from lamtools_core.tool.android_use import android_control_available, make_android_use_handler
 # user:“AI 直接在屏幕上标记、绘制、互动”+(标注层是独立能力：Agent 画标记，
 # 用户圈选批注，状态归 Core，覆盖层只负责显示)。
@@ -2725,6 +2724,10 @@ class CoreToolbox:
                     "reasoning_level": effective_reasoning_level,
                 },
             )
+
+        # user:“启动有变的异常之久了”+(PIL/截屏栈只在真正装配桌面操作工具时导入，
+        # 不再让每次启动都付这份导入成本。)
+        from lamtools_core.computer_use import make_computer_use_handler
 
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),

@@ -73,18 +73,6 @@ async def test_boundary_does_not_inherit_future_summary(tmp_path, mode):
         await db.close()
 
 
-@pytest.mark.asyncio
-async def test_legacy_restore_without_runtime_discards_orphan_history(tmp_path):
-    db = await open_core_app_db(tmp_path / "absent.db")
-    store = db.runtime_state_store
-    try:
-        # A partially deleted/migrated session can have rows without a runtime shell.
-        await store.append_history("orphan", [{"role": "user", "content": "Discarded branch"}])
-        backend = CoreCheckpointConversationBackend(db.session_factory)
-        await store.write_coordinator.run(lambda session: backend.restore(session, "orphan", {"runtime": None}))
-        assert await store.get_history("orphan") == []
-    finally:
-        await db.close()
 
 
 @pytest.mark.asyncio
@@ -112,20 +100,3 @@ async def test_sparse_fork_survives_appends_and_reload(tmp_path):
         await db.close()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("history", [[], [{"role": "user", "content": "Restored branch"}]])
-async def test_legacy_restore_replaces_authoritative_history(tmp_path, history):
-    db = await open_core_app_db(tmp_path / "legacy.db")
-    store = db.runtime_state_store
-    try:
-        await store.save(RuntimeState(session_id="source"))
-        await store.append_history("source", [{"role": "user", "content": "Discarded branch"}])
-        backend = CoreCheckpointConversationBackend(db.session_factory)
-        await store.write_coordinator.run(lambda session: backend.restore(session, "source", {
-            "runtime": {"runtime_state_json": {"session_id": "source", "metadata": {}}, "history_json": history},
-        }))
-        assert [m["content"] for m in await store.get_history("source")] == [m["content"] for m in history]
-        await store.append_history("source", [{"role": "user", "content": "Next input"}])
-        assert [m["content"] for m in await store.get_history("source")] == [m["content"] for m in history] + ["Next input"]
-    finally:
-        await db.close()

@@ -47,7 +47,7 @@ def register_migrate_projects(sub: argparse._SubParsersAction) -> None:
 
 
 def register_maintenance(sub: argparse._SubParsersAction) -> None:
-    from .server import cmd_maintenance_checkpoint_baseline, cmd_maintenance_compact_sync_journal, cmd_maintenance_dialogue_records, cmd_maintenance_prune_checkpoints, cmd_maintenance_strip_snapshot_images
+    from .server import cmd_maintenance_compact_sync_journal, cmd_maintenance_dialogue_records, cmd_maintenance_strip_snapshot_images
     maintenance = sub.add_parser(
         "maintenance",
         help="Run one-shot data maintenance on the local development database",
@@ -71,41 +71,6 @@ def register_maintenance(sub: argparse._SubParsersAction) -> None:
         help="Back up, migrate and verify (default is a dry-run preview)",
     )
     strip_images.set_defaults(func=cmd_maintenance_strip_snapshot_images)
-
-    checkpoint_baseline = maintenance_sub.add_parser(
-        "checkpoint-baseline",
-        help=(
-            "Capture (or compare) the shape and size baseline of every checkpoint; "
-            "read-only, local development database only"
-        ),
-    )
-    checkpoint_baseline.add_argument("--core-db", default="")
-    checkpoint_baseline.add_argument(
-        "--out", default="", help="Write the baseline JSON document to this path"
-    )
-    checkpoint_baseline.add_argument(
-        "--compare", default="", help="Compare the current database against a baseline JSON file"
-    )
-    checkpoint_baseline.set_defaults(func=cmd_maintenance_checkpoint_baseline)
-
-    prune_checkpoints = maintenance_sub.add_parser(
-        "prune-checkpoints",
-        help=(
-            "Delete superseded checkpoints, keeping the newest per session "
-            "(default is a dry-run preview; local development database only)"
-        ),
-    )
-    prune_checkpoints.add_argument("--core-db", default="")
-    prune_checkpoints.add_argument(
-        "--apply", action="store_true", help="Back up, delete and verify (default is a preview)"
-    )
-    prune_checkpoints.add_argument(
-        "--keep-recent",
-        type=int,
-        default=1,
-        help="How many newest checkpoints to keep per session (default 1)",
-    )
-    prune_checkpoints.set_defaults(func=cmd_maintenance_prune_checkpoints)
 
     dialogue_records = maintenance_sub.add_parser(
         "dialogue-records",

@@ -209,9 +209,7 @@ from lamtools_core.cli_commands.resources import (
     cmd_memory,
 )
 from lamtools_core.cli_commands.server import (
-    cmd_maintenance_checkpoint_baseline,
     cmd_maintenance_dialogue_records,
-    cmd_maintenance_prune_checkpoints,
     cmd_maintenance_strip_snapshot_images,
     cmd_migrate_projects,
     cmd_serve,
@@ -219,7 +217,6 @@ from lamtools_core.cli_commands.server import (
     cmd_update_check,
 )
 from lamtools_core.cli_commands.sessions import (
-    cmd_session_checkpoints,
     cmd_session_export,
     cmd_session_fork,
     cmd_session_list,

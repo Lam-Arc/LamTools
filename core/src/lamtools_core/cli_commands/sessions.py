@@ -33,33 +33,11 @@ async def cmd_session_list(args: argparse.Namespace) -> int:
     return 0
 
 
-async def cmd_session_checkpoints(args: argparse.Namespace) -> int:
-    from .connection import _invoke_live, _print_live_result
-    result = await _invoke_live(
-        args,
-        lambda client: client.request(
-            "session.checkpoints.list",
-            {"session_id": args.thread_id},
-        ),
-    )
-    message = "\n".join(
-        f"{item.get('id', '-')} {item.get('actor_kind', '-')} turn={item.get('turn_id', '-')}"
-        for item in result.get("checkpoints", [])
-        if isinstance(item, dict)
-    )
-    _print_live_result(args, result, message)
-    return 0
-
-
 async def cmd_session_rollback(args: argparse.Namespace) -> int:
     from .connection import _invoke_live, _print_live_result
-    payload = {"session_id": args.thread_id}
-    if args.turn_id:
-        payload["turn_id"] = args.turn_id
-    elif args.checkpoint_id:
-        payload["checkpoint_id"] = args.checkpoint_id
-    else:
-        raise ValueError("rollback requires a checkpoint_id or --turn-id")
+    if not args.turn_id:
+        raise ValueError("rollback requires --turn-id")
+    payload = {"session_id": args.thread_id, "turn_id": args.turn_id}
     result = await _invoke_live(
         args,
         lambda client: client.request(
@@ -73,13 +51,9 @@ async def cmd_session_rollback(args: argparse.Namespace) -> int:
 
 async def cmd_session_fork(args: argparse.Namespace) -> int:
     from .connection import _invoke_live, _print_live_result
-    payload = {"session_id": args.thread_id}
-    if args.turn_id:
-        payload["turn_id"] = args.turn_id
-    elif args.checkpoint_id:
-        payload["checkpoint_id"] = args.checkpoint_id
-    else:
-        raise ValueError("fork requires a checkpoint_id or --turn-id")
+    if not args.turn_id:
+        raise ValueError("fork requires --turn-id")
+    payload = {"session_id": args.thread_id, "turn_id": args.turn_id}
     result = await _invoke_live(
         args,
         lambda client: client.request(

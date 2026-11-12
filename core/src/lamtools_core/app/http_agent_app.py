@@ -924,19 +924,33 @@ def create_core_agent_http_app(
         # unexpected shutdown, mirroring arrange job recovery. Without this the
         # durable-snapshot guard in turn.start blocks the thread with
         # "active turn already exists" until a manual turn.cancel.
-        try:
-            await recover_stale_active_turns(context=live_context())
-        except BaseException:
-            _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
-        try:
-            from .live_operations import reconcile_open_interactions
+        #
+        # user:“启动有变的异常之久了”+(恢复 5 个残留回合要 26 秒；先把服务起起来，
+        # 恢复放到后台，恢复事件写完后界面自然更新。)
+        async def _recover_stale_in_background() -> None:
+            started = perf_counter()
+            try:
+                await recover_stale_active_turns(context=live_context())
+            except BaseException:
+                _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
+            try:
+                from .live_operations import reconcile_open_interactions
 
-            await reconcile_open_interactions(context=live_context())
-        except BaseException:
-            _logger.exception(
-                "[startup] decision pool reconciliation failed (non-fatal)"
+                await reconcile_open_interactions(context=live_context())
+            except BaseException:
+                _logger.exception(
+                    "[startup] decision pool reconciliation failed (non-fatal)"
+                )
+            _logger.info(
+                "[startup:background] stale-turn recovery ready in %.3fs",
+                perf_counter() - started,
             )
-        _logger.info("[startup] stale-turn recovery ready in %.3fs", perf_counter() - phase_started)
+
+        stale_recovery_task = asyncio.create_task(
+            _recover_stale_in_background(), name="startup-stale-turn-recovery"
+        )
+        app_state["stale_recovery_task"] = stale_recovery_task
+        # 恢复在后台完成；它自己的日志带 [startup:background]，不再计入启动耗时。
         # Approval/question continuations are durable jobs. A process that
         # died after claiming one leaves a leased row; reopen it now and run
         # each job in its own task so the runtime registry keeps one claim per

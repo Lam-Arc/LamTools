@@ -658,6 +658,7 @@ async def prune_superseded_checkpoints(
     keep_recent: int = 1,
     backup_root: Path | str | None = None,
     allow_non_dev: bool = False,
+    backup: bool = True,
 ) -> CheckpointPruneReport:
     """Delete superseded checkpoints, keeping the newest per session.
 
@@ -721,12 +722,15 @@ async def prune_superseded_checkpoints(
             report.db_file_bytes_after = report.db_file_bytes_before
             return report
 
-        report.backup = backup_database_files(
-            db_path,
-            backup_root=backup_root,
-            label="prune-checkpoints",
-            purpose="prune-checkpoints: file-level backup taken before deleting superseded checkpoints",
-        )
+        if backup:
+            # user:“无需备份”+(安装版整库动辄十几 GB，复制一份只会把维护时间翻倍；
+            # 删除是单事务、可重复的，需要时显式加 --backup。)
+            report.backup = backup_database_files(
+                db_path,
+                backup_root=backup_root,
+                label="prune-checkpoints",
+                purpose="prune-checkpoints: file-level backup taken before deleting superseded checkpoints",
+            )
         await _apply_prune(db, plans)
         for result, plan in zip(report.sessions, plans):
             if plan.in_flight:

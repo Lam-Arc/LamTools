@@ -1152,6 +1152,7 @@ class CoreCheckpointConversationBackend:
             boundary_seq=boundary_seq,
             include_turn=include_turn,
             last_event_seq=int(events[-1].seq or 0) if events else 0,
+            turn_id=normalized_turn_id,
         )
         return {
             "session_id": session_id,
@@ -1170,6 +1171,49 @@ class CoreCheckpointConversationBackend:
             "events": [event.to_dict() for event in kept_events],
         }, boundary_seq
 
+    async def _history_cutoff_for_turn(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        turn_id: str,
+        include_turn: bool,
+    ) -> int | None:
+        """History seq that ends the transcript before/inside ``turn_id``.
+
+        user:“我不是很早之前就决策说要把它取消掉 删掉了吗，没有任何必要保存完整历史”
+        +(检查点不再需要自带历史副本：每条用户消息的 metadata.turn_id 就是锚点，
+        分叉/回退/编辑按它从权威历史表截断；返回 None 表示这是没有 turn_id 的旧数据。)
+        """
+        start = await db.scalar(
+            select(func.min(CoreHistoryEntry.seq)).where(
+                CoreHistoryEntry.thread_id == session_id,
+                func.json_extract(CoreHistoryEntry.message_json, "$.metadata.turn_id") == turn_id,
+            )
+        )
+        if start is None:
+            return None
+        first = int(start)
+        if not include_turn:
+            return first - 1
+        # The whole turn: everything up to the next turn's user message.
+        next_start = await db.scalar(
+            select(func.min(CoreHistoryEntry.seq)).where(
+                CoreHistoryEntry.thread_id == session_id,
+                CoreHistoryEntry.seq > first,
+                func.json_extract(CoreHistoryEntry.message_json, "$.role") == "user",
+                func.json_extract(CoreHistoryEntry.message_json, "$.metadata.turn_id") != turn_id,
+            )
+        )
+        if next_start is not None:
+            return int(next_start) - 1
+        latest = await db.scalar(
+            select(func.max(CoreHistoryEntry.seq)).where(
+                CoreHistoryEntry.thread_id == session_id
+            )
+        )
+        return int(latest or first)
+
     async def _context_at_boundary(
         self,
         db: Any,
@@ -1178,6 +1222,7 @@ class CoreCheckpointConversationBackend:
         boundary_seq: int,
         include_turn: bool,
         last_event_seq: int,
+        turn_id: str = "",
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Return the model-visible transcript as it stood at ``boundary_seq``.
 
@@ -1190,6 +1235,29 @@ class CoreCheckpointConversationBackend:
         returned an empty transcript — every rollback and turn-fork started the
         model from nothing.
         """
+        if turn_id:
+            # Authoritative source first: the transcript rows themselves.
+            cutoff = await self._history_cutoff_for_turn(
+                db, session_id=session_id, turn_id=turn_id, include_turn=include_turn
+            )
+            if cutoff is not None:
+                if cutoff <= 0:
+                    history: list[dict[str, Any]] = []
+                else:
+                    rows = list((await db.execute(
+                        select(CoreHistoryEntry).where(
+                            CoreHistoryEntry.thread_id == session_id,
+                            CoreHistoryEntry.seq <= cutoff,
+                        ).order_by(CoreHistoryEntry.seq.asc())
+                    )).scalars())
+                    history = [copy.deepcopy(dict(row.message_json or {})) for row in rows]
+                runtime = await db.get(CoreRuntimeSession, session_id)
+                state = (
+                    copy.deepcopy(dict(runtime.runtime_state_json or {}))
+                    if runtime is not None and isinstance(runtime.runtime_state_json, dict)
+                    else {}
+                )
+                return history, state
         if boundary_seq <= 0:
             # Nothing precedes the removed turn, and "before the first turn"
             # cannot have a boundary checkpoint.
@@ -2059,10 +2127,8 @@ def register_checkpoint_operations(
             return await rollback_to_turn(request, session_id=session_id, turn_id=turn_id)
         return await restore_checkpoint(request)
 
-    catalog.register("session.checkpoints.create", checkpoint_create)
-    catalog.register("session.checkpoints.graph", checkpoints_graph)
-    catalog.register("session.checkpoints.list", checkpoints_list)
-    catalog.register("session.checkpoints.restore", restore_checkpoint)
+    # user:“我不是很早之前就决策说要把它取消掉 删掉了吗”+(检查点恢复/列表/创建不再
+    # 对外暴露；回退与分叉只按消息/回合锚点工作。)
     catalog.register("session.rollback", rollback_session)
     catalog.register("session.fork", fork_session)
 

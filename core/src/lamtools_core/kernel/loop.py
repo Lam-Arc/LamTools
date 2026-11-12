@@ -806,17 +806,8 @@ class CoreLoopKernel:
         state.loop_state = "continue"
         state.position = ""
 
-        # A checkpoint belongs to the accepted agent turn, not to an
-        # individual model/tool step.  Keeping this seam in Kernel means main
-        # and delegated agents cannot accidentally drift into two policies.
-        if self.checkpoint_coordinator is not None:
-            actor_kind = str(turn_input.metadata.get("actor_kind") or "main")
-            _logger.info("[kernel:_run] checkpoint begin_turn sid=%s actor=%s", state.session_id, actor_kind)
-            await self.checkpoint_coordinator.begin_turn(
-                session_id=state.session_id,
-                turn_id=turn_id,
-                actor_kind=actor_kind,
-            )
+        # user:“我不是很早之前就决策说要把它取消掉 删掉了吗”+(检查点不再创建：
+        # 分叉/回退/编辑都按用户消息的 turn_id 从权威历史表截断，启动不再写整份历史。)
 
         # Start root trace span for this run (after state is loaded so we have ids).
         # Keep a self reference so the external-cancellation path (which unwinds
@@ -2597,6 +2588,30 @@ class CoreLoopKernel:
         or None when streaming is not available so the caller can fall back."""
         _logger.info("[kernel:_stream_model] starting stream sid=%s run=%s model=%s",
                       state.session_id, state.run_id, request.model)
+        # user:“消息发送成功到请求构造并发送成功时，使用动画样式 1，请求发送成功到
+        # 收到首字，使用样式 2”+(阶段一从本步开始整理请求算起；阶段二从供应商
+        # 2xx 响应头到达算起，两段分开上报，界面才能指出慢在哪一段)。
+        phase_started_at = time_module.monotonic()
+        await self._emit_model_phase(
+            state,
+            response_index=response_index,
+            phase="request_building",
+        )
+        sent_at: float | None = None
+
+        async def _on_request_sent() -> None:
+            nonlocal sent_at
+            sent_at = time_module.monotonic()
+            await self._emit_model_phase(
+                state,
+                response_index=response_index,
+                phase="request_sent",
+                elapsed_ms=round((sent_at - phase_started_at) * 1000),
+            )
+
+        # The HTTP client calls this after the provider answered with 2xx
+        # headers — i.e. the request really crossed the wire.
+        request.on_request_sent = _on_request_sent
         stream = stream_with_retry(
             self.llm_client,
             request,
@@ -2639,6 +2654,7 @@ class CoreLoopKernel:
         # stalled gateway shows up as a large ttft, never as a large elapsed.
         _dispatch_at = time_module.monotonic()
         _first_event_seen = False
+        _first_token_seen = False
         try:
             stream_iterator = stream.__aiter__()
             while True:
@@ -2653,6 +2669,22 @@ class CoreLoopKernel:
                         "kind=%s ttft=%.2fs",
                         response_index, state.session_id, event.kind,
                         time_module.monotonic() - _dispatch_at,
+                    )
+                # user:“请求发送成功到收到首字”+(思考或正文的第一个可见片段
+                # 才算“首字”；纯 usage / finish 块不结束等待阶段)。
+                if (
+                    not _first_token_seen
+                    and event.kind in {"content_delta", "thinking_delta", "refusal_delta"}
+                    and (event.content or event.refusal)
+                ):
+                    _first_token_seen = True
+                    await self._emit_model_phase(
+                        state,
+                        response_index=response_index,
+                        phase="first_token",
+                        ttft_ms=round(
+                            (time_module.monotonic() - (sent_at if sent_at is not None else _dispatch_at)) * 1000
+                        ),
                     )
                 # Cooperative cancel during streaming: the app-layer Stop
                 # button sets the registry cancel event. Abort the stream
@@ -3137,6 +3169,40 @@ class CoreLoopKernel:
                 await supervisor.report_members_drained()
         except BaseException:
             pass
+
+    async def _emit_model_phase(
+        self,
+        state: RuntimeState,
+        *,
+        response_index: int,
+        phase: str,
+        elapsed_ms: int | None = None,
+        ttft_ms: int | None = None,
+    ) -> None:
+        """Publish one live-only model-request phase fact.
+
+        ``request_building`` / ``request_sent`` / ``first_token`` are UI
+        progress facts, not transcript history: they are transient so a
+        reloaded session never grows synthetic rows from them.
+        """
+        payload: dict[str, Any] = {
+            "phase": phase,
+            "response_index": response_index,
+            "at_ms": int(time_module.time() * 1000),
+        }
+        if elapsed_ms is not None:
+            payload["elapsed_ms"] = max(0, int(elapsed_ms))
+        if ttft_ms is not None:
+            payload["ttft_ms"] = max(0, int(ttft_ms))
+        await self.event_sink.emit(CoreEvent(
+            name="runtime.model_phase",
+            category="progress",
+            payload=payload,
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tags=["model", "phase", phase],
+            metadata={"delivery": "transient"},
+        ))
 
     async def _next_stream_event(self, stream_iterator: Any) -> LLMStreamEvent:
         timeout = self.policy.model_stream_idle_timeout_seconds

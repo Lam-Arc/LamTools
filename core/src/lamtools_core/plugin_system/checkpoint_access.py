@@ -78,26 +78,18 @@ class PluginCheckpointAPI:
         finally:
             self._scope.release()
 
-    async def list(self, session_id):
-        return await self._call("session.checkpoints.list", session_id)
-
-    async def create(self, session_id, *, label=""):
-        if type(label) is not str or len(label) > 256 or "\x00" in label:
-            raise CheckpointAccessError("checkpoint/invalid-label", "Label must be text of at most256 characters")
-        return await self._call("session.checkpoints.create", session_id, label=label, reason="plugin-manual", actor_kind="tool")
-
-    async def restore(self, session_id, checkpoint_id):
-        return await self._call("session.checkpoints.restore", session_id, checkpoint_id=_id(checkpoint_id), scope="conversation")
-
+    # user:“我不是很早之前就决策说要把它取消掉 删掉了吗”+(检查点列表/创建/恢复接口已移除，
+    # 插件只剩按消息锚点的分叉与回退。)
     async def rollback(self, session_id, *, turn_id):
         return await self._call("session.rollback", session_id, turn_id=_id(turn_id))
 
-    async def fork(self, session_id, *, checkpoint_id=None, turn_id=None, new_session_id=None, title=""):
-        if (checkpoint_id is None) == (turn_id is None):
-            raise CheckpointAccessError("checkpoint/invalid-boundary", "Choose exactly one checkpoint or turn boundary")
+    async def fork(self, session_id, *, turn_id=None, new_session_id=None, title=""):
+        if turn_id is None:
+            # user:“我不是很早之前就决策说要把它取消掉 删掉了吗”+(检查点边界已移除，分叉只接受回合锚点)。
+            raise CheckpointAccessError("checkpoint/invalid-boundary", "A turn boundary is required")
         if type(title) is not str or len(title) > 256 or "\x00" in title:
             raise CheckpointAccessError("checkpoint/invalid-title", "Title must be text of at most256 characters")
-        fields = {"checkpoint_id": _id(checkpoint_id)} if checkpoint_id is not None else {"turn_id": _id(turn_id)}
+        fields = {"turn_id": _id(turn_id)}
         if new_session_id is not None:
             fields["new_session_id"] = _id(new_session_id)
         return await self._call("session.fork", session_id, **fields, title=title)

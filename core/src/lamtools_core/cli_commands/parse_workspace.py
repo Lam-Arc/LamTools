@@ -10,7 +10,7 @@ from lamtools_core.app.project_visuals import PROJECT_COLOR_KEYS, PROJECT_ICON_K
 
 def register_session(sub: argparse._SubParsersAction) -> None:
     from .connection import _add_live_connection_arguments
-    from .sessions import cmd_session_checkpoints, cmd_session_export, cmd_session_fork, cmd_session_list, cmd_session_outline, cmd_session_permissions, cmd_session_rollback, cmd_session_show
+    from .sessions import cmd_session_export, cmd_session_fork, cmd_session_list, cmd_session_outline, cmd_session_permissions, cmd_session_rollback, cmd_session_show
     session = sub.add_parser("session", help="Query Sunday sessions")
     session_sub = session.add_subparsers(dest="session_command", required=True)
     session_list = session_sub.add_parser("list", help="List Sunday sessions")
@@ -50,25 +50,18 @@ def register_session(sub: argparse._SubParsersAction) -> None:
     session_export.add_argument("--output", default="", help="Destination file; omit for text stdout")
     session_export.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_export.set_defaults(func=cmd_session_export)
-    session_checkpoints = session_sub.add_parser("checkpoints", help="List session rollback checkpoints")
-    session_checkpoints.add_argument("thread_id")
-    _add_live_connection_arguments(session_checkpoints)
-    session_checkpoints.add_argument("--raw", action="store_true")
-    session_checkpoints.set_defaults(func=cmd_session_checkpoints)
-    session_rollback = session_sub.add_parser("rollback", help="Rollback to a turn, or restore a checkpoint")
+    session_rollback = session_sub.add_parser("rollback", help="Clear a turn and every later message")
     session_rollback.add_argument("thread_id")
-    session_rollback.add_argument("checkpoint_id", nargs="?", default="", help="Legacy checkpoint id")
     session_rollback.add_argument(
         "--turn-id",
         default="",
-        help="Clear this turn and later conversation; restore files when a boundary checkpoint exists",
+        help="Clear this turn and later conversation (anchor: the turn's user message)",
     )
     _add_live_connection_arguments(session_rollback)
     session_rollback.add_argument("--raw", action="store_true")
     session_rollback.set_defaults(func=cmd_session_rollback)
-    session_fork = session_sub.add_parser("fork", help="Fork at a turn, or from a checkpoint")
+    session_fork = session_sub.add_parser("fork", help="Fork at a turn")
     session_fork.add_argument("thread_id")
-    session_fork.add_argument("checkpoint_id", nargs="?", default="", help="Legacy checkpoint id")
     session_fork.add_argument(
         "--turn-id",
         default="",
