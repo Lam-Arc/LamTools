@@ -1485,7 +1485,14 @@ def test_health_reports_absent_global_default_model_honestly(
             model_id="",
         )
         with TestClient(app) as client:
-            health = client.get("/api/health").json()
+            # user:“setup/constant 打不开了”+(端口先服务、上次中断的修复在后台跑：
+            # 修复完成前健康检查如实返回 starting，完成之后才是 ok)。
+            deadline = time.time() + 10
+            while True:
+                health = client.get("/api/health").json()
+                if health.get("startup", {}).get("state") == "done" or time.time() > deadline:
+                    break
+                time.sleep(0.05)
 
     assert health["status"] == "ok"
     assert health["model"] == ""

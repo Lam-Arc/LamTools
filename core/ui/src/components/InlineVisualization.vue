@@ -5,7 +5,10 @@ import { t } from '@/i18n'
 
 const props = defineProps<{ source: string }>()
 const frame = ref<HTMLIFrameElement | null>(null)
-const height = ref(320), generation = ref(0), error = ref('')
+// user:“交互式的 UI 都大于聊天区高度了…我并没有观测到实际真的需要这么大”
+// +(交互块按内容高度自适应，但上限压到 560px：整块不该比聊天区还高。)
+const MAX_HEIGHT = 560
+const height = ref(300), generation = ref(0), error = ref('')
 let deadline: ReturnType<typeof setTimeout> | undefined
 let themeObserver: MutationObserver | undefined
 let initialized = false
@@ -27,7 +30,7 @@ function receive(event: MessageEvent) {
   } else if (data.type === 'sunday-visualization:loaded') {
     clearTimeout(deadline); sendTheme()
   } else if (data.type === 'sunday-visualization:resize' && typeof data.height === 'number' && Number.isFinite(data.height)) {
-    height.value = Math.min(800, Math.max(160, data.height))
+    height.value = Math.min(MAX_HEIGHT, Math.max(160, data.height))
   } else if (data.type === 'sunday-visualization:error') {
     clearTimeout(deadline); error.value = t('交互内容运行失败，可查看代码或重试')
   }
@@ -55,14 +58,14 @@ onBeforeUnmount(() => { clearTimeout(deadline); themeObserver?.disconnect(); win
     <div v-if="error" class="inline-visualization-error" role="status">
       <span>{{ error }}</span><button type="button" @click="start">{{ t('重试') }}</button>
     </div>
-    <iframe v-else :key="generation" ref="frame" :src="inlineVisualizationRuntimeUrl()" sandbox="allow-scripts" referrerpolicy="no-referrer" :title="t('交互内容')" :style="{ height: `${height}px` }" />
+    <iframe v-else :key="generation" ref="frame" :src="inlineVisualizationRuntimeUrl()" sandbox="allow-scripts" referrerpolicy="no-referrer" :title="t('交互内容')" class="inline-visualization-frame" :style="{ height: `${height}px` }" />
     <details><summary>{{ t('查看代码') }}</summary><pre><code>{{ source }}</code></pre></details>
   </section>
 </template>
 
 <style scoped>
 .inline-visualization { --text: var(--theme-main-text); color: var(--text); }
-iframe { width: 100%; display: block; border: 0; background: var(--theme-main-soft-background); border-radius: var(--radius); }
+iframe { width: 100%; display: block; max-height: 60vh; border: 0; background: var(--theme-main-soft-background); border-radius: var(--radius); }
 summary { padding: var(--space-2) 0; color: color-mix(in srgb, var(--text) 65%, transparent); }
 .inline-visualization-error { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); }
 button { background: var(--theme-control-background); color: var(--theme-control-text); border: 0; border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); }

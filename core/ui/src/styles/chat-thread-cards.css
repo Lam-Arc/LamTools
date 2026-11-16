@@ -13,10 +13,20 @@
 /* Command-run output — the one tool card styled as a dark terminal (all other
    tool cards stay line-based/borderless). Also contains long output lines
    horizontally instead of stretching the message column. */
+/* user:“直接把自带的那层给处理掉 为新系统让位”+(窗框交给容器后，终端靠这条窗栏的
+   浅色底维持辨识度：它不被容器覆盖，也不抢容器的描边。) */
+.command-terminal-chrome {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -10px -12px 8px;
+  padding: 6px 10px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
+}
 .command-output {
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 18%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--theme-main-sunken-background, rgba(0, 0, 0, 0.32));
+  /* user:“直接把自带的那层给处理掉 为新系统让位”+(窗框交给「消息流」的容器配置，
+     内层不再自带底色/描边/圆角；选「无」时这里就真的没有框。) */
   width: 100%;
   min-width: 0;
   max-width: 100%;

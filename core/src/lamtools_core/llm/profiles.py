@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -2053,23 +2054,70 @@ def _anthropic_image_block_from_url(url: str) -> dict[str, Any] | None:
     return None
 
 
+# 一次只取一个事件时沿用的优先级：保持旧行为不变（错误 > 工具 > 思考 > 正文）。
+_LEGACY_STREAM_EVENT_PRIORITY = (
+    "error",
+    "tool_call_delta",
+    "thinking_delta",
+    "content_delta",
+    "finish",
+    "usage",
+)
+
+
 def normalize_stream_chunk_with_profile(
     chunk: dict[str, Any],
     profile: dict[str, Any],
 ) -> LLMStreamEvent | None:
+    """Return the single most important event a chunk carries (legacy entry).
+
+    Callers that can consume more than one event per chunk must use
+    ``normalize_stream_chunk_events_with_profile``: 一个 chunk 同时带正文与思考/工具时，
+    这里只会交出一个事件，另一个会被丢弃。
+    """
+    events = normalize_stream_chunk_events_with_profile(chunk, profile)
+    for kind in _LEGACY_STREAM_EVENT_PRIORITY:
+        for event in events:
+            if event.kind != kind:
+                continue
+            if event is events[-1]:
+                return event
+            # 单事件视图沿用旧契约：finish_reason / usage 仍要随这个事件一起交出去。
+            tail = events[-1]
+            return replace(
+                event,
+                finish_reason=event.finish_reason or tail.finish_reason,
+                usage=event.usage if event.usage is not None else tail.usage,
+                metadata={**dict(tail.metadata or {}), **dict(event.metadata or {})},
+            )
+    return None
+
+
+def normalize_stream_chunk_events_with_profile(
+    chunk: dict[str, Any],
+    profile: dict[str, Any],
+) -> list[LLMStreamEvent]:
+    """Return every event one wire chunk carries, in the order the model produced it.
+
+    user:“查询 constant 近期日志，有时会丢失回复开头的部分信息，请确认为 sunday 侧原因
+    还是 API 侧原因”+(OpenAI 兼容网关会把思考尾部与第一段正文、或把整段旁白与
+    tool_call 合并进同一个 chunk。一个 chunk 只产出一个事件，就等于把同一块里的正文
+    静默丢掉，表现为回复开头缺字或整段旁白消失；这里按 思考 → 正文 → 工具 的顺序把
+    全部载荷都交出去)。
+    """
     if "error" in chunk and isinstance(chunk["error"], dict):
         err = chunk["error"]
-        return LLMStreamEvent(
+        return [LLMStreamEvent(
             kind="error",
             error=str(err.get("message", "Unknown error")),
             raw=chunk,
             metadata={"error": err},
-        )
+        )]
 
     finish_reason = get_path(chunk, response_path(profile, "stream_response", "finish_reason", "choices.0.finish_reason"))
     usage = get_path(chunk, response_path(profile, "stream_response", "usage", "usage"))
     if usage and not get_path(chunk, "choices.0.delta") and not finish_reason:
-        return LLMStreamEvent(kind="usage", usage=_usage_from_raw(usage), raw=chunk)
+        return [LLMStreamEvent(kind="usage", usage=_usage_from_raw(usage), raw=chunk)]
 
     # Delta extraction must happen BEFORE the finish_reason check: some
     # providers send the final tool_call arguments fragment in the same
@@ -2077,18 +2125,6 @@ def normalize_stream_chunk_with_profile(
     # that last fragment is silently dropped and the tool-call JSON ends up
     # truncated (→ arguments_parse_error).
     tool_calls_delta = get_path(chunk, response_path(profile, "stream_response", "tool_calls_delta", "choices.0.delta.tool_calls"))
-    if tool_calls_delta:
-        return LLMStreamEvent(
-            kind="tool_call_delta",
-            content="",
-            raw=chunk,
-            finish_reason=str(finish_reason) if finish_reason else None,
-            usage=_usage_from_raw(usage) if usage else None,
-            metadata={
-                "tool_calls_delta": tool_calls_delta,
-                **({"finish_reason": finish_reason} if finish_reason else {}),
-            },
-        )
 
     reasoning = get_path(chunk, response_path(profile, "stream_response", "reasoning_delta", "choices.0.delta.reasoning_content"))
     if reasoning in (None, ""):
@@ -2100,39 +2136,50 @@ def normalize_stream_chunk_with_profile(
         reasoning = get_path(chunk, "choices.0.delta.reasoning")
     if reasoning in (None, ""):
         reasoning = get_path(chunk, "choices.0.delta.thinking")
-    if reasoning:
-        return LLMStreamEvent(
-            kind="thinking_delta",
-            content=str(reasoning),
-            raw=chunk,
-            finish_reason=str(finish_reason) if finish_reason else None,
-            usage=_usage_from_raw(usage) if usage else None,
-            metadata={"finish_reason": finish_reason} if finish_reason else {},
-        )
 
     content = get_path(chunk, response_path(profile, "stream_response", "content_delta", "choices.0.delta.content"))
+
+    # 同一块里的载荷按模型真实的产出顺序排队：先思考，再正文，最后才是工具调用。
+    events: list[LLMStreamEvent] = []
+    if reasoning:
+        events.append(LLMStreamEvent(kind="thinking_delta", content=str(reasoning), raw=chunk))
     if content:
-        return LLMStreamEvent(
-            kind="content_delta",
-            content=str(content),
+        events.append(LLMStreamEvent(kind="content_delta", content=str(content), raw=chunk))
+    if tool_calls_delta:
+        events.append(LLMStreamEvent(
+            kind="tool_call_delta",
+            content="",
             raw=chunk,
+            metadata={"tool_calls_delta": tool_calls_delta},
+        ))
+
+    if events:
+        # finish_reason / usage 只挂在最后一个事件上：同一份用量如果挂在每个事件上，
+        # 下游按事件累计就会重复记账。
+        tail = events[-1]
+        events[-1] = replace(
+            tail,
             finish_reason=str(finish_reason) if finish_reason else None,
             usage=_usage_from_raw(usage) if usage else None,
-            metadata={"finish_reason": finish_reason} if finish_reason else {},
+            metadata={
+                **dict(tail.metadata or {}),
+                **({"finish_reason": finish_reason} if finish_reason else {}),
+            },
         )
+        return events
 
     # A provider finish reason is not the end of the transport.  Usage may be
     # delivered in a later usage-only chunk before [DONE].
     if finish_reason:
-        return LLMStreamEvent(
+        return [LLMStreamEvent(
             kind="finish",
             raw=chunk,
             usage=_usage_from_raw(usage) if usage else None,
             finish_reason=str(finish_reason),
             metadata={"finish_reason": finish_reason},
-        )
+        )]
 
-    return None
+    return []
 
 
 def normalize_response_with_profile(
@@ -2353,6 +2400,7 @@ __all__ = [
     "normalize_responses_response_with_profile",
     "normalize_responses_stream_event",
     "normalize_stream_chunk_with_profile",
+    "normalize_stream_chunk_events_with_profile",
     "reasoning_off_supported",
     "resolve_adapter_profile_from_profiles",
     "response_path",

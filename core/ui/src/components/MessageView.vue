@@ -235,19 +235,6 @@
             </span>
           </div>
 
-          <!-- user:“连纯文本都没有”+(提问组不能放进可折叠的过程流：消息完成后过程区
-               默认收起，卡片会随之消失。它固定渲染在消息主体里，任何折叠状态都可见。) -->
-          <div v-if="questionParts(msg).length > 0" class="question-group-block">
-            <CoreQuestionGroup
-              v-for="part in questionParts(msg)"
-              :key="part.id"
-              :part="part"
-              :disabled="decisionsDisabled"
-              @submit="onQuestionSubmit"
-              @skip="onQuestionSkip(part)"
-            />
-          </div>
-
           <!-- One process renderer for both live and completed messages. The
                projection has already removed the unique final answer part. -->
           <template v-if="processParts(msg).length > 0 || shouldShowShallowThinkingPending(msg)">
@@ -286,12 +273,15 @@
                       :aria-label="group.summary"
                       @click="toggleGroupExpand(processGroupId(group))"
                     >
-                      <component
-                        :is="processIcon(processGroupCurrentPart(group))"
+                      <ProcessIcon
                         class="process-card-state-icon"
                         :class="processIconStateClass(processGroupCurrentPart(group))"
-                        :size="15"
-                        :stroke-width="1.8"
+                        :part-type="processGroupCurrentPart(group).partType"
+                        :tool-name="processGroupCurrentPart(group).toolName"
+                        :label="processGroupCurrentPart(group).label"
+                        :args="processGroupCurrentPart(group).toolArgs"
+                        :result="processGroupCurrentPart(group).toolError || processGroupCurrentPart(group).toolResult"
+                        :status="processGroupCurrentPart(group).status"
                         aria-hidden="true"
                       />
                       <Transition name="process-caption" mode="out-in">
@@ -329,17 +319,23 @@
                             :aria-label="processAccessibleLabel(part)"
                             @click="togglePartExpand(part, isLiveMessage(msg))"
                           >
-                            <component :is="processIcon(part)" class="process-card-state-icon" :class="processIconStateClass(part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                            <ProcessIcon class="process-card-state-icon" :class="processIconStateClass(part)" :kind="processIconKindOverride(part)" :part-type="part.partType" :tool-name="part.toolName" :label="processIconLabel(part)" :args="processIconArgs(part)" :result="part.toolError || part.toolResult" :status="part.status" aria-hidden="true" />
                             <Transition name="process-caption" mode="out-in">
                               <span :key="processTitleSnapshot(part)" v-beam="part.status === 'running'" class="process-step-title process-card-preview">{{ processTitleSnapshot(part) }}</span>
                             </Transition>
+                              <span class="process-card-chevron" :class="{ 'is-expanded': isPartExpanded(part, isLiveMessage(msg)) }" aria-hidden="true">
+                                <component :is="ProcessChevron" v-if="ProcessChevron" :expanded="isPartExpanded(part, isLiveMessage(msg))" :size="13" />
+                              </span>
                             <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                           </button>
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div
                             v-if="isPartExpanded(part, isLiveMessage(msg))"
                             class="reasoning-body"
-                            :class="processCardBodyStateClass(part, isLiveMessage(msg))"
+                            :class="[processCardBodyStateClass(part, isLiveMessage(msg)), { 'process-card-body--masked': processBodyMaskIds.has(part.id) }]"
+                            v-process-body="{ partId: part.id, preview: isProcessBodyPreview(part, isLiveMessage(msg)), running: part.status === 'running' }"
+                            @pointerdown="markProcessBodyPointerDown(part.id, $event)"
+                            @scroll="onProcessBodyScroll(part.id, $event)"
                             @click="promotePartCard(part.id, $event)"
                           >
                             <slot name="reasoning-content" :content="part.content ?? ''" :live="isLiveMessage(msg)">
@@ -358,27 +354,39 @@
                           <button
                             type="button"
                             class="tool-card-header process-card-header"
-                            :class="[{ 'has-detail': hasToolDisplay(part), 'has-flag': Boolean(toolRowFlagTone(part)), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
+                            :class="[{ 'has-detail': hasToolDisplay(part), 'has-flag': Boolean(toolRowFlagTone(part)), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part), 'process-row--failed': toolRowFlagTone(part) === 'bad' }, toolColorClass(part)]"
                             :aria-expanded="isSubAgentToolRow(part) ? undefined : (hasToolDisplay(part) ? shouldShowToolBody(part, isLiveMessage(msg)) : undefined)"
                             :aria-label="processAccessibleLabel(part)"
                             :disabled="subAgentRowsInert && isSubAgentToolRow(part)"
                             @click="activateToolRow(part, isLiveMessage(msg))"
                           >
-                            <component :is="processIcon(part)" class="process-card-state-icon" :class="processIconStateClass(part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                            <ProcessIcon class="process-card-state-icon" :class="processIconStateClass(part)" :kind="processIconKindOverride(part)" :part-type="part.partType" :tool-name="part.toolName" :label="processIconLabel(part)" :args="processIconArgs(part)" :result="part.toolError || part.toolResult" :status="part.status" aria-hidden="true" />
                             <Transition name="process-caption" mode="out-in">
                               <span :key="processTitleSnapshot(part)" v-beam="part.status === 'running'" class="process-step-title tool-row-summary process-card-preview">{{ processTitleSnapshot(part) }}</span>
                             </Transition>
+                              <span class="process-card-chevron" :class="{ 'is-expanded': isPartExpanded(part, isLiveMessage(msg)) }" aria-hidden="true">
+                                <component :is="ProcessChevron" v-if="ProcessChevron" :expanded="isPartExpanded(part, isLiveMessage(msg))" :size="13" />
+                              </span>
                             <span
                               v-if="toolRowFlagTone(part)"
                               class="process-tool-flag"
                               :class="`process-tool-flag--${toolRowFlagTone(part)}`"
-                            ><template v-if="toolRowFlagTone(part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(part).removed }}</span></template><template v-else><component :is="toolRowFlagIcon(part)" v-if="toolRowFlagIcon(part)" class="process-tool-flag-icon" :size="12" :stroke-width="2.2" aria-hidden="true" /><span v-if="toolRowFlagText(part)">{{ toolRowFlagText(part) }}</span></template></span>
+                            ><template v-if="toolRowFlagTone(part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(part).removed }}</span></template><template v-else><span v-if="toolRowFlagText(part)" class="process-tool-flag-text">{{ toolRowFlagText(part) }}</span></template></span>
                           </button>
+                          <ProcessMediaPreview
+                            v-if="mediaFilesOf(part).length"
+                            :files="mediaFilesOf(part)"
+                            @preview="(file) => openArtifactPreview(part, file)"
+                            @select="(file) => retryArtifactPreview(part, file)"
+                          />
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div
                             v-if="shouldShowToolBody(part, isLiveMessage(msg))"
                             class="tool-card-body"
-                            :class="[{ 'tool-card-body--row': !isCommandTool(part) }, processCardBodyStateClass(part, isLiveMessage(msg))]"
+                            :class="[{ 'tool-card-body--row': !isCommandTool(part) }, processCardBodyStateClass(part, isLiveMessage(msg)), { 'process-card-body--masked': processBodyMaskIds.has(part.id) }]"
+                            v-process-body="{ partId: part.id, preview: isProcessBodyPreview(part, isLiveMessage(msg)), running: part.status === 'running' }"
+                            @pointerdown="markProcessBodyPointerDown(part.id, $event)"
+                            @scroll="onProcessBodyScroll(part.id, $event)"
                             @click="promotePartCard(part.id, $event)"
                           >
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
@@ -427,16 +435,24 @@
                               </div>
                               <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
                             </div>
-                            <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
+                            <div v-else-if="isCommandTool(part)" class="command-output">
                               <div class="command-terminal-chrome" aria-hidden="true">
                                 <span class="command-terminal-light command-terminal-light--close" />
                                 <span class="command-terminal-light command-terminal-light--minimize" />
                                 <span class="command-terminal-light command-terminal-light--maximize" />
                                 <span class="command-terminal-title">run command</span>
+                                <span class="command-terminal-lang">shell</span>
+                                <button
+                                  type="button"
+                                  class="command-terminal-copy"
+                                  :title="copiedActionId === `command:${part.id}` ? t('已复制') : t('复制命令与输出')"
+                                  :aria-label="copiedActionId === `command:${part.id}` ? t('已复制') : t('复制命令与输出')"
+                                  @click.stop="copyCommandBlock(part)"
+                                >{{ copiedActionId === `command:${part.id}` ? t('已复制') : t('复制') }}</button>
                               </div>
                               <div class="command-terminal-body">
                                 <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
-                                <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
+                                <pre class="command-output-result">{{ commandOutputText(part) || (part.status === 'running' ? t("运行中…") : '') }}</pre>
                               </div>
                             </div>
                             <div v-else-if="displayToolResult(part)" class="tool-output">
@@ -445,33 +461,16 @@
                               </div>
                               <pre class="tool-output-content">{{ toolOutputContent(part) }}</pre>
                             </div>
-                            <div v-if="imageArtifacts(part).length" class="tool-image-row">
-                              <figure
-                                v-for="artifact in imageArtifacts(part)"
-                                :key="artifactKey(artifact)"
-                                class="tool-image-card"
-                                :class="{ 'tool-image-card--placeholder': !imageSrc(artifact) }"
-                                :ref="(element) => registerImageCard(element, artifact)"
-                                @click="openImagePreview(artifact)"
-                              >
-                                <img v-if="imageSrc(artifact)" :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
-                                <div v-else class="tool-image-placeholder">
-                                  <ImageIcon :size="18" :stroke-width="1.7" aria-hidden="true" />
-                                  <span class="tool-image-placeholder__name">{{ imageAlt(artifact) }}</span>
-                                  <span v-if="artifactSizeLabel(artifact)" class="tool-image-placeholder__size">{{ artifactSizeLabel(artifact) }}</span>
-                                  <button
-                                    v-if="artifactLoadFailedFor(artifact)"
-                                    type="button"
-                                    class="tool-image-placeholder__retry"
-                                    @click.stop="retryArtifactSource(artifact)"
-                                  >{{ t("图片暂时取不到，重试") }}</button>
-                                </div>
-                              </figure>
-                            </div>
                             <!-- 兜底明细只在既无错误块、也无任何结果块（命中清单/网页卡/文件 diff/
                                  测试卡/输入预览/终端窗/通用结果，凡有结果文本必有其一）时才补位；
                                  图片行另起一条 v-if 链，这条曾与它们并存，同一段内容被画两遍。 -->
-                            <pre v-else-if="!isContentSearchTool(part) && !isWebFetchTool(part) && !displayToolInputPreview(part) && !displayToolError(part) && !displayToolResult(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+<div v-else-if="searchPills(part).length" class="tool-pill-row">
+                              <ProcessResultPills :results="searchPills(part)" />
+                            </div>
+                            <div v-else-if="kvEntries(part).length" class="tool-pill-row">
+                              <ProcessKvPill :entries="kvEntries(part)" :status="kvStatus(part)" :duration-ms="kvDurationMs(part)" />
+                            </div>
+                                                        <pre v-else-if="!isContentSearchTool(part) && !isWebFetchTool(part) && !displayToolInputPreview(part) && !displayToolError(part) && !displayToolResult(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                           </div>
                           </Transition>
                         </div>
@@ -513,17 +512,23 @@
                       :aria-label="processAccessibleLabel(group.part)"
                       @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
-                      <component :is="processIcon(group.part)" class="process-card-state-icon" :class="processIconStateClass(group.part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                      <ProcessIcon class="process-card-state-icon" :class="processIconStateClass(group.part)" :kind="processIconKindOverride(group.part)" :part-type="group.part.partType" :tool-name="group.part.toolName" :label="processIconLabel(group.part)" :args="processIconArgs(group.part)" :result="group.part.toolError || group.part.toolResult" :status="group.part.status" aria-hidden="true" />
                       <Transition name="process-caption" mode="out-in">
                         <span :key="processTitleSnapshot(group.part)" v-beam="group.part.status === 'running'" class="process-step-title process-card-preview">{{ processTitleSnapshot(group.part) }}</span>
                       </Transition>
+                        <span class="process-card-chevron" :class="{ 'is-expanded': isPartExpanded(group.part, isLiveMessage(msg)) }" aria-hidden="true">
+                          <component :is="ProcessChevron" v-if="ProcessChevron" :expanded="isPartExpanded(group.part, isLiveMessage(msg))" :size="13" />
+                        </span>
                       <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div
                       v-if="isPartExpanded(group.part, isLiveMessage(msg))"
                       class="reasoning-body"
-                      :class="processCardBodyStateClass(group.part, isLiveMessage(msg))"
+                      :class="[processCardBodyStateClass(group.part, isLiveMessage(msg)), { 'process-card-body--masked': processBodyMaskIds.has(group.part.id) }]"
+                      v-process-body="{ partId: group.part.id, preview: isProcessBodyPreview(group.part, isLiveMessage(msg)), running: group.part.status === 'running' }"
+                      @pointerdown="markProcessBodyPointerDown(group.part.id, $event)"
+                      @scroll="onProcessBodyScroll(group.part.id, $event)"
                       @click="promotePartCard(group.part.id, $event)"
                     >
                       <slot name="reasoning-content" :content="group.part.content ?? ''" :live="isLiveMessage(msg)">
@@ -543,28 +548,40 @@
                     <button
                       type="button"
                       class="tool-card-header process-card-header"
-                      :class="[{ 'has-detail': hasToolDisplay(group.part), 'has-flag': Boolean(toolRowFlagTone(group.part)), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part) }, toolColorClass(group.part)]"
+                      :class="[{ 'has-detail': hasToolDisplay(group.part), 'has-flag': Boolean(toolRowFlagTone(group.part)), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part), 'process-row--failed': toolRowFlagTone(group.part) === 'bad' }, toolColorClass(group.part)]"
                       :aria-expanded="isSubAgentToolRow(group.part) ? undefined : (!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, isLiveMessage(msg)) : undefined)"
                       :aria-label="processAccessibleLabel(group.part)"
                       :disabled="subAgentRowsInert && isSubAgentToolRow(group.part)"
                       @click="activateToolRow(group.part, isLiveMessage(msg))"
                     >
-                      <component :is="processIcon(group.part)" class="process-card-state-icon" :class="processIconStateClass(group.part)" :size="15" :stroke-width="1.8" aria-hidden="true" />
+                      <ProcessIcon class="process-card-state-icon" :class="processIconStateClass(group.part)" :kind="processIconKindOverride(group.part)" :part-type="group.part.partType" :tool-name="group.part.toolName" :label="processIconLabel(group.part)" :args="processIconArgs(group.part)" :result="group.part.toolError || group.part.toolResult" :status="group.part.status" aria-hidden="true" />
                       <Transition name="process-caption" mode="out-in">
                         <span :key="processTitleSnapshot(group.part)" v-beam="group.part.status === 'running'" class="process-step-title tool-row-summary process-card-preview">{{ processTitleSnapshot(group.part) }}</span>
                       </Transition>
+                        <span class="process-card-chevron" :class="{ 'is-expanded': isPartExpanded(group.part, isLiveMessage(msg)) }" aria-hidden="true">
+                          <component :is="ProcessChevron" v-if="ProcessChevron" :expanded="isPartExpanded(group.part, isLiveMessage(msg))" :size="13" />
+                        </span>
                       <span
                         v-if="toolRowFlagTone(group.part)"
                         class="process-tool-flag"
                         :class="`process-tool-flag--${toolRowFlagTone(group.part)}`"
-                      ><template v-if="toolRowFlagTone(group.part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(group.part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(group.part).removed }}</span></template><template v-else><component :is="toolRowFlagIcon(group.part)" v-if="toolRowFlagIcon(group.part)" class="process-tool-flag-icon" :size="12" :stroke-width="2.2" aria-hidden="true" /><span v-if="toolRowFlagText(group.part)">{{ toolRowFlagText(group.part) }}</span></template></span>
+                      ><template v-if="toolRowFlagTone(group.part) === 'stat'"><span class="process-tool-flag-add">+{{ toolRowFlagStat(group.part).added }}</span><span class="process-tool-flag-del">−{{ toolRowFlagStat(group.part).removed }}</span></template><template v-else><span v-if="toolRowFlagText(group.part)" class="process-tool-flag-text">{{ toolRowFlagText(group.part) }}</span></template></span>
                     </button>
+                    <ProcessMediaPreview
+                      v-if="mediaFilesOf(group.part).length"
+                      :files="mediaFilesOf(group.part)"
+                      @preview="(file) => openArtifactPreview(group.part, file)"
+                      @select="(file) => retryArtifactPreview(group.part, file)"
+                    />
                     <span v-if="!displayToolInputPreview(group.part) && !hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div
                       v-if="shouldShowToolBody(group.part, isLiveMessage(msg))"
                       class="tool-card-body"
-                      :class="[{ 'tool-card-body--row': !isCommandTool(group.part) }, processCardBodyStateClass(group.part, isLiveMessage(msg))]"
+                      :class="[{ 'tool-card-body--row': !isCommandTool(group.part) }, processCardBodyStateClass(group.part, isLiveMessage(msg)), { 'process-card-body--masked': processBodyMaskIds.has(group.part.id) }]"
+                      v-process-body="{ partId: group.part.id, preview: isProcessBodyPreview(group.part, isLiveMessage(msg)), running: group.part.status === 'running' }"
+                      @pointerdown="markProcessBodyPointerDown(group.part.id, $event)"
+                      @scroll="onProcessBodyScroll(group.part.id, $event)"
                       @click="promotePartCard(group.part.id, $event)"
                     >
                       <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
@@ -615,46 +632,37 @@
                         <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ displayToolInputPreview(group.part) }}</pre>
                       </div>
                       <!-- Non-file tools: plain code block -->
-                      <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
+                      <div v-else-if="isCommandTool(group.part)" class="command-output">
                         <div class="command-terminal-chrome" aria-hidden="true">
                           <span class="command-terminal-light command-terminal-light--close" />
                           <span class="command-terminal-light command-terminal-light--minimize" />
                           <span class="command-terminal-light command-terminal-light--maximize" />
                           <span class="command-terminal-title">run command</span>
+                          <span class="command-terminal-lang">shell</span>
+                          <button
+                            type="button"
+                            class="command-terminal-copy"
+                            :title="copiedActionId === `command:${group.part.id}` ? t('已复制') : t('复制命令与输出')"
+                            :aria-label="copiedActionId === `command:${group.part.id}` ? t('已复制') : t('复制命令与输出')"
+                            @click.stop="copyCommandBlock(group.part)"
+                          >{{ copiedActionId === `command:${group.part.id}` ? t('已复制') : t('复制') }}</button>
                         </div>
                         <div class="command-terminal-body">
                           <strong class="command-output-command">$ {{ commandDisplayText(group.part) }}</strong>
-                          <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
+                          <pre class="command-output-result">{{ commandOutputText(group.part) || (group.part.status === 'running' ? t("运行中…") : '') }}</pre>
                         </div>
+                      </div>
+                      <div v-else-if="searchPills(group.part).length" class="tool-pill-row">
+                        <ProcessResultPills :results="searchPills(group.part)" />
+                      </div>
+                      <div v-else-if="kvEntries(group.part).length" class="tool-pill-row">
+                        <ProcessKvPill :entries="kvEntries(group.part)" :status="kvStatus(group.part)" :duration-ms="kvDurationMs(group.part)" />
                       </div>
                       <div v-else-if="displayToolResult(group.part) && !isFileTool(group.part)" class="tool-output">
                         <div v-if="toolMetaItems(group.part).length > 0" class="tool-output-meta">
                           <span v-for="item in toolMetaItems(group.part)" :key="item">{{ item }}</span>
                         </div>
                           <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ toolOutputContent(group.part) }}</pre>
-                      </div>
-                      <div v-if="imageArtifacts(group.part).length" class="tool-image-row">
-                        <figure
-                          v-for="artifact in imageArtifacts(group.part)"
-                          :key="artifactKey(artifact)"
-                          class="tool-image-card"
-                          :class="{ 'tool-image-card--placeholder': !imageSrc(artifact) }"
-                          :ref="(element) => registerImageCard(element, artifact)"
-                          @click="openImagePreview(artifact)"
-                        >
-                          <img v-if="imageSrc(artifact)" :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
-                          <div v-else class="tool-image-placeholder">
-                            <ImageIcon :size="18" :stroke-width="1.7" aria-hidden="true" />
-                            <span class="tool-image-placeholder__name">{{ imageAlt(artifact) }}</span>
-                            <span v-if="artifactSizeLabel(artifact)" class="tool-image-placeholder__size">{{ artifactSizeLabel(artifact) }}</span>
-                            <button
-                              v-if="artifactLoadFailedFor(artifact)"
-                              type="button"
-                              class="tool-image-placeholder__retry"
-                              @click.stop="retryArtifactSource(artifact)"
-                            >{{ t("图片暂时取不到，重试") }}</button>
-                          </div>
-                        </figure>
                       </div>
                       <!-- 同上：既无错误块也无任何结果块时才补兜底明细。 -->
                       <pre v-else-if="!isContentSearchTool(group.part) && !isWebFetchTool(group.part) && !displayToolInputPreview(group.part) && !displayToolError(group.part) && !displayToolResult(group.part) && readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
@@ -870,12 +878,12 @@
                       :aria-label="compactionAccessibleLabel(group.part)"
                       @click="canToggleCompaction(group.part) && toggleToolExpand(group.part.id)"
                     >
-                      <component
-                        :is="processIcon(group.part)"
+                      <ProcessIcon
                         class="process-card-state-icon"
                         :class="compactionIconStateClass(group.part)"
-                        :size="15"
-                        :stroke-width="1.8"
+                        :part-type="group.part.partType"
+                        :label="group.part.label"
+                        :status="group.part.status"
                         aria-hidden="true"
                       />
                       <Transition name="process-caption" mode="out-in">
@@ -902,6 +910,19 @@
             </Transition>
 
           </template>
+
+          <!-- user:“这个询问框始终被挂在最下，而不是它的正确位置即对应步的最下方”
+               +(问在正文之前的卡片排在这里：过程区之下、正文之上。) -->
+          <div v-if="questionPartsSplit(msg).before.length > 0" class="question-group-block">
+            <CoreQuestionGroup
+              v-for="part in questionPartsSplit(msg).before"
+              :key="questionGroupKey(part)"
+              :part="part"
+              :disabled="decisionsDisabled"
+              @submit="onQuestionSubmit"
+              @skip="onQuestionSkip(part)"
+            />
+          </div>
 
           <!-- user:“支持开启或关闭自动气泡拆分”+(正文是唯一渲染入口：过程区在上、结论在下；
                拆分只发生在这里，多个气泡底层仍是一条消息、一份 parts，不改会话历史) -->
@@ -932,6 +953,19 @@
             <MarkdownRenderer v-else class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
           </div>
 
+
+          <!-- user:“question 出现时是否将其它的东西都折叠起来了？能否按正常位置出现？”
+               +(问在正文之后的卡片排在这里；仍然不放进可折叠的过程流，任何折叠状态都可见。) -->
+          <div v-if="questionPartsSplit(msg).after.length > 0" class="question-group-block">
+            <CoreQuestionGroup
+              v-for="part in questionPartsSplit(msg).after"
+              :key="questionGroupKey(part)"
+              :part="part"
+              :disabled="decisionsDisabled"
+              @submit="onQuestionSubmit"
+              @skip="onQuestionSkip(part)"
+            />
+          </div>
 
           <!-- 本轮 artifact 产出统一挂到消息结尾；父级抑制避免子代理嵌套重复。 -->
           <Transition :css="false" @enter="artifactsEnter" @leave="fadeSlideLeave">
@@ -1019,34 +1053,17 @@ import { t, uiLanguage } from '@/i18n/index.ts'
 
 import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '@/types.ts'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type DirectiveBinding } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component, type DirectiveBinding } from 'vue'
 import { gsap } from 'gsap'
 import {
-  Brain,
   Check,
   CircleHelp,
   Copy,
-  FilePenLine,
-  FileText,
-  Folder,
-  GitBranch,
   GitFork,
-  Globe,
   Hourglass,
-  Image as ImageIcon,
   Info,
-  Inbox,
-  Minimize2,
   Pencil,
-  Power,
-  PowerOff,
-  Search,
-  Send,
-  Terminal,
-  TriangleAlert,
   Undo2,
-  UserRoundPlus,
-  Wrench,
   X,
   type LucideIcon,
 } from 'lucide-vue-next'
@@ -1067,7 +1084,7 @@ import { coreSubAgentRef, type CoreSubAgentRef } from '@/agents/subAgentProjecti
 import { formatSubAgentElapsed, normalizeSubAgentType } from '@/agents/subAgentDisplay.ts'
 import { copyText } from '@/helpers/clipboard.ts'
 import { autoGrowTextarea } from '@/helpers/autoGrowTextarea.ts'
-import { workspaceRelativePath } from '@/helpers/workspacePath.ts'
+import { artifactSourcePath } from '@/helpers/artifactSource.ts'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
 import { useNarrowViewport } from '@/composables/useNarrowViewport.ts'
 import { useProcessSummaryClock } from '@/composables/useProcessSummaryClock.ts'
@@ -1087,6 +1104,10 @@ import { artifactListingReference, artifactPathsInText, normalizeArtifactReferen
 import { isNativeContextTarget, openContextMenu } from '@/components/context-menu/context-menu.ts'
 import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import MessageView from '@/components/MessageView.vue'
+import ProcessIcon, { ProcessChevron } from '@/components/process/ProcessIcon.vue'
+import ProcessMediaPreview from '@/components/process/ProcessMediaPreview.vue'
+import ProcessResultPills from '@/components/process/ProcessResultPills.vue'
+import ProcessKvPill from '@/components/process/ProcessKvPill.vue'
 import { autoFollowScrollDirective as vAutoFollowScroll } from '@/directives/autoFollowScroll.ts'
 import { panelEnter, panelLeave } from '@/motion/expandPanel.ts'
 import { fadeSlideEnter, fadeSlideLeave } from '@/motion/fadeSlide.ts'
@@ -1245,7 +1266,45 @@ const emit = defineEmits<{
 }>()
 
 function questionParts(msg: CoreMessage): MessagePart[] {
-  return (msg.parts || []).filter(part => part.partType === 'questionGroup')
+  // 同一问组被重复投影时只留一张卡：用组 id 去重，避免"已回答的那张 + 又冒出一张未回答的"。
+  const seen = new Set<string>()
+  const result: MessagePart[] = []
+  for (const part of msg.parts || []) {
+    if (part.partType !== 'questionGroup') continue
+    const key = questionGroupId(part) || part.id
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(part)
+  }
+  return result
+}
+
+/** 卡片的稳定身份：问组 id 优先，换了分片 id 也不会被当成新卡重新挂载。 */
+function questionGroupKey(part: MessagePart): string {
+  return questionGroupId(part) || part.id
+}
+
+/**
+ * user:“这个询问框始终被挂在最下，而不是它的正确位置即对应步的最下方”
+ * +(卡片按自己在分片序列里的位置落位：排在正文分片之前就问的放正文前，
+ * 之后问的放正文后。回合恢复后正文继续变长，卡片也不会被挤到最下面。)
+ */
+function questionPartsSplit(msg: CoreMessage): { before: MessagePart[]; after: MessagePart[] } {
+  const parts = msg.parts || []
+  const answerId = msg.answerPart?.id
+  const answerIndex = answerId ? parts.findIndex(part => part.id === answerId) : -1
+  // user:“提问卡…点完输入之后，它应该出现在什么位置”+(卡片停在它打断正文的那个接缝上：
+  // 有最终答案分片时排在它之前；还没有分片时（问完那一刻）排在正文之后，也就是紧挨着
+  // 你提交的那条回答上方。两处换算都不改变语义，重挂载的问题由卡片按问组 id 记住已答状态解决。)
+  const seamIndex = answerIndex >= 0 ? answerIndex : -1
+  const before: MessagePart[] = []
+  const after: MessagePart[] = []
+  parts.forEach((part, index) => {
+    if (part.partType !== 'questionGroup') return
+    if (index < seamIndex) before.push(part)
+    else after.push(part)
+  })
+  return { before, after }
 }
 
 function decisionQuestions(part: MessagePart): unknown[] {
@@ -1459,6 +1518,8 @@ function partMemo(part: MessagePart, live: boolean): unknown[] {
     live,
     props.autoPlotMath,
     fullyExpandedPartIds.value.has(part.id),
+    // 遮罩类由测量结果驱动，漏了它一级展开溢出时类名不会更新
+    processBodyMaskIds.value.has(part.id),
     processTitleSnapshot(part),
     toolExpandedIds.value.has(part.id),
     isToolWrapEnabled(part.id),
@@ -1497,17 +1558,169 @@ function togglePartExpand(part: MessagePart, live = false) {
   }
 }
 
+// user:“交互防冲突：区分「点击」与「文本划选」。拖动选中文字松手不得触发展开/收起；只有无选区且位移 < 4px 的点击才切换”+
+//   (pointerdown 记起点、click 时比位移；有选区直接放弃；点按钮/链接的老守卫保留)
+const processBodyPointerDown = new Map<string, { x: number; y: number }>()
+/** 位移小于这个像素数才算「点击」，达到即视为拖拽/划选 */
+const PROCESS_CARD_CLICK_SLOP = 4
+
+function markProcessBodyPointerDown(partId: string, event: PointerEvent | MouseEvent) {
+  const x = Number(event?.clientX)
+  const y = Number(event?.clientY)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return
+  processBodyPointerDown.set(partId, { x, y })
+}
+
 function promotePartCard(partId: string, event: MouseEvent) {
   const target = event.target instanceof Element ? event.target : null
   if (target?.closest('button, a, input, textarea, select, [role="button"]')) return
-  if (!userExpandedPartIds.value.has(partId) || fullyExpandedPartIds.value.has(partId)) return
-  fullyExpandedPartIds.value = new Set([...fullyExpandedPartIds.value, partId])
+  // user:“拖动选中文字松手不得触发展开/收起”+(选完一段话顺手把卡片切掉最烦人，有选区就不响应)
+  const selected = typeof window !== 'undefined' && window.getSelection ? window.getSelection()?.toString().trim() : ''
+  if (selected) return
+  const down = processBodyPointerDown.get(partId)
+  processBodyPointerDown.delete(partId)
+  if (down) {
+    const x = Number(event.clientX)
+    const y = Number(event.clientY)
+    if (Number.isFinite(x) && Number.isFinite(y) && Math.hypot(x - down.x, y - down.y) >= PROCESS_CARD_CLICK_SLOP) return
+  }
+  // 只有一级展开的正文才响应「点内容区」，标题栏的折叠归 togglePartExpand
+  if (!userExpandedPartIds.value.has(partId)) return
+  // user:“状态循环：再点内容区收起回一级（6 行）”+(内容区点击在 preview ↔ expanded 之间来回切，不再只升不降)
+  const next = new Set(fullyExpandedPartIds.value)
+  if (next.has(partId)) next.delete(partId)
+  else next.add(partId)
+  fullyExpandedPartIds.value = next
 }
 
 function processCardBodyStateClass(part: MessagePart, live = false): string {
   return isPartExpanded(part, live) && fullyExpandedPartIds.value.has(part.id)
     ? 'process-card-body--expanded'
     : 'process-card-body--preview'
+}
+
+/** 正文是否停在一级展开（6 行）；二级展开返回 false。 */
+function isProcessBodyPreview(part: MessagePart, live = false): boolean {
+  return !(isPartExpanded(part, live) && fullyExpandedPartIds.value.has(part.id))
+}
+
+// user:“超出底部显示渐隐遮罩（gradient mask）提示可继续展开”+
+//   (只有一级展开且内容实际溢出时才挂 .process-card-body--masked；二级展开不加、没溢出也不加)
+const processBodyMaskIds = ref<Set<string>>(new Set())
+/** partId → 当前挂遮罩的那个节点，卸载时据此判断该不该撤掉遮罩 */
+const processBodyMaskOwners = new Map<string, HTMLElement>()
+/** 每个正文节点的测量状态：preview/running 决定要不要跟随到底部 */
+const processBodyStates = new WeakMap<HTMLElement, ProcessBodyState>()
+const processBodyObservers = new WeakMap<HTMLElement, ResizeObserver>()
+const processBodyMutationObservers = new WeakMap<HTMLElement, MutationObserver>()
+/** 底部锚定：false = 用户手动上滚过，不再强行拉回；滚回底部才恢复 */
+const processBodyAnchored = new Map<string, boolean>()
+/** 距底部多少像素内算「还贴在底部」 */
+const PROCESS_BODY_BOTTOM_SLACK = 24
+/** 工具正文真正滚动的内层容器：外层没超高度也要能给出遮罩 */
+const PROCESS_BODY_SCROLL_SELECTOR = '.diff-lines, .test-result-output, .tool-output-content, .command-output-result, .tool-output'
+
+interface ProcessBodyState {
+  partId: string
+  preview: boolean
+  running: boolean
+}
+
+interface ProcessBodyBinding {
+  partId: string
+  preview: boolean
+  running: boolean
+}
+
+function setProcessBodyMasked(partId: string, masked: boolean, el: HTMLElement) {
+  const has = processBodyMaskIds.value.has(partId)
+  if (!masked) {
+    // 同一 part 重新挂载的新节点已经接管，别把它刚挂上的遮罩撤掉
+    if (processBodyMaskOwners.get(partId) !== el) return
+    processBodyMaskOwners.delete(partId)
+  } else {
+    processBodyMaskOwners.set(partId, el)
+  }
+  if (has === masked) return
+  const next = new Set(processBodyMaskIds.value)
+  if (masked) next.add(partId)
+  else next.delete(partId)
+  processBodyMaskIds.value = next
+}
+
+function processBodyOverflowing(el: HTMLElement): boolean {
+  if (el.scrollHeight > el.clientHeight + 1) return true
+  for (const child of el.querySelectorAll<HTMLElement>(PROCESS_BODY_SCROLL_SELECTOR)) {
+    if (child.scrollHeight > child.clientHeight + 1) return true
+  }
+  return false
+}
+
+function measureProcessBody(el: HTMLElement) {
+  const state = processBodyStates.get(el)
+  if (!state) return
+  const overflowing = processBodyOverflowing(el)
+  setProcessBodyMasked(state.partId, state.preview && overflowing, el)
+  if (!state.preview || !state.running || !overflowing) return
+  if (processBodyAnchored.get(state.partId) === false) return
+  // user:“流式输出：模型仍在输出思考内容时，一级展开自动锚定底部滚动”+
+  //   (内容长高就贴到最新一行；用户上滚过就不再拉回)
+  el.scrollTop = el.scrollHeight
+}
+
+function onProcessBodyScroll(partId: string, event: Event) {
+  const el = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  if (!el) return
+  // user:“用户手动向上滚动就解除锚定，不再强行拉回”+(离开底部超过 24px 记脱离，滚回底部再恢复锚定)
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  processBodyAnchored.set(partId, distance <= PROCESS_BODY_BOTTOM_SLACK)
+}
+
+function mountProcessBody(el: HTMLElement, value: ProcessBodyBinding) {
+  const state = processBodyStates.get(el)
+  if (state) {
+    state.preview = value.preview
+    state.running = value.running
+  } else {
+    processBodyStates.set(el, { partId: value.partId, preview: value.preview, running: value.running })
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => measureProcessBody(el))
+      observer.observe(el)
+      processBodyObservers.set(el, observer)
+    }
+    // 流式输出的内容是往节点里追加的，容器自身尺寸不变，只能盯 DOM 变化
+    if (typeof MutationObserver !== 'undefined') {
+      const mutations = new MutationObserver(() => measureProcessBody(el))
+      mutations.observe(el, { childList: true, subtree: true, characterData: true })
+      processBodyMutationObservers.set(el, mutations)
+    }
+  }
+  measureProcessBody(el)
+}
+
+function releaseProcessBody(el: HTMLElement) {
+  const state = processBodyStates.get(el)
+  processBodyObservers.get(el)?.disconnect()
+  processBodyObservers.delete(el)
+  processBodyMutationObservers.get(el)?.disconnect()
+  processBodyMutationObservers.delete(el)
+  processBodyStates.delete(el)
+  if (!state) return
+  processBodyAnchored.delete(state.partId)
+  setProcessBodyMasked(state.partId, false, el)
+}
+
+/** 过程卡正文：量溢出挂遮罩，running 的一级展开跟随到底部。 */
+const vProcessBody = {
+  mounted(el: HTMLElement, binding: DirectiveBinding<ProcessBodyBinding>) {
+    mountProcessBody(el, binding.value)
+  },
+  updated(el: HTMLElement, binding: DirectiveBinding<ProcessBodyBinding>) {
+    mountProcessBody(el, binding.value)
+  },
+  unmounted(el: HTMLElement) {
+    releaseProcessBody(el)
+  },
 }
 
 function toggleGroupExpand(groupId: string) {
@@ -1715,8 +1928,12 @@ function isToolWrapEnabled(partId: string): boolean {
 }
 
 function hasToolDisplay(part: MessagePart): boolean {
+  // user:“runcommand 过程中，此行无法打开”+(命令刚发出去、还没有结果时也要能展开，
+  // 展开后先看正在跑的那条命令，不能因为"暂时没有输出"就整行点不动。)
+  const runningCommand = isCommandTool(part) && Boolean(commandDisplayText(part))
   if (
     part.status === 'running'
+    && !runningCommand
     && !part.toolResult
     && !part.toolError
     && !part.inputPreview?.content
@@ -1842,6 +2059,21 @@ function commandElapsedLabel(part: MessagePart): string {
   return seconds >= 1 ? `${seconds}s` : ''
 }
 
+/**
+ * user:“代码执行/终端 → 卡片式，顶部带语言标签与复制按钮”+(终端窗头补上 shell 标签与
+ * 复制入口，复制的是"命令 + 输出"整段，便于把失败现场直接贴出去。)
+ */
+function copyCommandBlock(part: MessagePart): void {
+  const payload = [`$ ${commandDisplayText(part)}`, commandOutputText(part)]
+    .filter(text => Boolean(String(text || '').trim()))
+    .join('\n')
+  if (!payload) return
+  void Promise.resolve(copyText(payload)).catch(() => {})
+  copiedActionId.value = `command:${part.id}`
+  if (copiedActionTimer) clearTimeout(copiedActionTimer)
+  copiedActionTimer = setTimeout(() => { copiedActionId.value = '' }, 1400)
+}
+
 function commandExitCode(part: MessagePart): number | null {
   const meta = (part.metadata || {}) as Record<string, unknown>
   const raw = meta.exit_code ?? meta.exitCode
@@ -1883,13 +2115,6 @@ function toolRowFlagTone(part: MessagePart): ToolRowFlagTone | '' {
 }
 
 // user:“工具行那个✔和✕，用图标，不要纯勾纯 x”+(成败标记改用 Check/X 图标，文字只保留结论)。
-function toolRowFlagIcon(part: MessagePart): LucideIcon | null {
-  const tone = toolRowFlagTone(part)
-  if (tone === 'good') return Check
-  if (tone === 'bad') return X
-  return null
-}
-
 function toolRowFlagText(part: MessagePart): string {
   const memory = memoryRowDirection(part)
   if (memory) return memory === 'read' ? t("读") : t("写")
@@ -2242,6 +2467,10 @@ function isProcessExpanded(msg: CoreMessage): boolean {
   // 若按完成态折叠，用户正看着的那段过程文字会当场收进卡里——回合还在跑就保持
   // 展开，回合结束后仍旧回落到完成态折叠。
   if (isActiveTurnMessage(msg)) return true
+  // user:“暂停不折东西，只有正常完成才折，中断也不折”+(折叠是「这一轮正常跑完」
+  // 的结论：暂停、中断、失败都保持展开，别让内容在用户还想看的时候收走。)
+  const turnStatus = String((props.msg.metadata as Record<string, unknown> | undefined)?.turnStatus || '')
+  if (turnStatus && turnStatus !== 'completed' && turnStatus !== 'idle') return true
   // Compaction is already a concise status row. Keep it visible so native
   // summary deltas and the terminal result are never hidden by a second,
   // redundant process disclosure.
@@ -2525,27 +2754,26 @@ function processGroupCurrentPart(group: PartGroupProcessGroup): MessagePart {
     || group.parts[group.parts.length - 1]
 }
 
-function processIcon(part: MessagePart): LucideIcon {
-  if (part.status === 'error') return TriangleAlert
-  if (part.status === 'pending') return Hourglass
-  if (part.partType === 'reasoning') return Brain
-  if (part.partType === 'compaction') return Minimize2
-  const subAgentEvent = subAgentEventKind(part)
-  if (subAgentEvent === 'created') return UserRoundPlus
-  if (subAgentEvent === 'enabled') return Power
-  if (subAgentEvent === 'closed') return PowerOff
-  if (subAgentEvent === 'message_sent') return Send
-  if (subAgentEvent === 'message_received') return Inbox
-  const name = String(part.toolName || part.label || '').toLowerCase()
-  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return Terminal
-  if (/write|edit|patch|apply|create/.test(name)) return FilePenLine
-  if (/read|cat|get-content|open/.test(name)) return FileText
-  if (/list|ls|dir/.test(name)) return Folder
-  if (/grep|rg|search|find|glob/.test(name)) return Search
-  if (/fetch|browser|http|web/.test(name)) return Globe
-  if (/git|commit|branch/.test(name)) return GitBranch
-  if (/question|ask|decision/.test(name)) return CircleHelp
-  return Wrench
+/**
+ * 子代理事件行按事件类型取图形（创建 / 启用 / 关闭 / 收发消息各有专属图标），
+ * 其余行照旧按工具名与部件类型判定。
+ */
+/**
+ * 子代理事件行的图形按事件类型区分：把事件当成 lifecycle/action 交给图标解析，
+ * 创建 / 启用 / 关闭 / 收发消息各走各的图形，不再一律画成"新建成员"。
+ */
+function processIconArgs(part: MessagePart): unknown {
+  const event = subAgentEventKind(part)
+  if (!event) return part.toolArgs
+  return { ...(part.toolArgs || {}), lifecycle_action: event, action: event }
+}
+
+function processIconKindOverride(part: MessagePart): 'subagent' | undefined {
+  return subAgentEventKind(part) ? 'subagent' : undefined
+}
+
+function processIconLabel(part: MessagePart): string {
+  return subAgentEventKind(part) || String(part.label || '')
 }
 
 function processIconStateClass(part: MessagePart): string {
@@ -3074,47 +3302,124 @@ function compactionAccessibleLabel(part: MessagePart): string {
   return detail ? `${compactionTitle(part)}，${detail}` : compactionTitle(part)
 }
 
-function artifactPath(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
-  let path = typeof artifact.uri === 'string' && artifact.uri
-    ? artifact.uri
-    : (typeof (artifact as { path?: string }).path === 'string' ? String((artifact as { path?: string }).path) : '')
-  if (props.projectId && artifact.artifact_id) {
-    const query = path ? `?path=${encodeURIComponent(path)}` : ''
-    return `/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}/file${query}`
-  }
-  if (path.startsWith('attachment://')) {
-    return `/attachments/${encodeURIComponent(path.slice('attachment://'.length))}/download`
-  }
-  if (props.projectId && path.startsWith('workspace://')) path = path.slice('workspace://'.length)
-  if (props.projectId && path) {
-    return `/projects/${encodeURIComponent(props.projectId)}/files/raw?path=${encodeURIComponent(path)}`
-  }
-  return ''
+function artifactPath(artifact: { uri?: string; path?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
+  // user:“多媒体图片全部加载失败”+(路径解析统一交给 artifactSource：附件库的绝对存储
+  // 路径、没有项目上下文时的相对路径都有兜底通道，不再解析成空串让人只看到"取不到"。)
+  return artifactSourcePath(artifact, { projectId: props.projectId, workRoot: props.workRoot })
 }
 
 function imageSrc(artifact: { uri?: string; path?: string; artifact_id?: string; availability?: string; metadata?: Record<string, unknown> }): string {
   // read_file 图片结果：只有内联的 base64 data URL 才直接内联渲染；被换成引用的
-  // 条目没有内联正文，落到下面的按需取字节（path/uri → 本地文件或 HTTP）。
+  // 条目没有内联正文，落到按需取字节（见 loadArtifactSource）。
   const dataUrl = inlineImageDataUrl(artifact)
   if (dataUrl) return dataUrl
-  let path = typeof artifact.uri === 'string' ? artifact.uri : (artifact.path || '')
-  if (path.startsWith('workspace://')) path = path.slice('workspace://'.length)
-  // Tauri 桌面端：work_root 内相对路径（.lam/artifacts/...）直接读本地文件
-  // （asset protocol），不绕后端 HTTP——新旧消息的 uri 均为无前缀相对路径
-  const localFileSrc = (window as { __LAMTOOLS_FILE_SRC__?: (abs: string) => string }).__LAMTOOLS_FILE_SRC__
-  const relative = workspaceRelativePath(path)
-  if (
-    typeof localFileSrc === 'function'
-    && props.workRoot
-    && relative
-    && !relative.startsWith('attachment://')
-    && !/^https?:\/\//i.test(relative)
-  ) {
-    const abs = `${String(props.workRoot).replace(/\\+$/, '')}\\${relative.replace(/\//g, '\\')}`
-    const src = localFileSrc(abs)
-    if (src) return src
-  }
   return artifactUrls[artifactKey(artifact)] || ''
+}
+
+/**
+ * 结构化结果才换容器：结果本身是 JSON 对象/数组时才认，散文与日志继续走原文。
+ * user:“联网搜索/知识库 → 胶囊式列表，内部横向流式排列多个结果胶囊（Favicon + 截断标题），
+ * 点击跳转原文”+(只有真的带 title+url 的结果才转胶囊，避免把普通文本硬拆成卡片。)
+ */
+function parsedToolJson(part: MessagePart): unknown {
+  const raw = displayToolResult(part)
+  if (!raw) return null
+  const text = raw.trim()
+  if (!text.startsWith('{') && !text.startsWith('[')) return null
+  if (text.length > 20000) return null
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return null
+  }
+}
+
+function searchPills(part: MessagePart): Array<{ title: string; url: string; snippet?: string }> {
+  const value = parsedToolJson(part)
+  if (!Array.isArray(value) || value.length === 0) return []
+  const results: Array<{ title: string; url: string; snippet?: string }> = []
+  for (const item of value.slice(0, 20)) {
+    if (!item || typeof item !== 'object') return []
+    const row = item as Record<string, unknown>
+    const title = String(row.title || row.name || '').trim()
+    const url = String(row.url || row.link || row.href || '').trim()
+    if (!title || !url) return []
+    const snippet = String(row.snippet || row.description || row.summary || '').trim()
+    results.push({ title, url, ...(snippet ? { snippet } : {}) })
+  }
+  return results
+}
+
+/** user:“API/状态查询 → 胶囊式，键值对横向紧凑展示入参摘要与状态徽章”+(扁平 JSON 才转键值胶囊。) */
+function kvEntries(part: MessagePart): Array<{ key: string; value: string }> {
+  const value = parsedToolJson(part)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  const entries: Array<{ key: string; value: string }> = []
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw !== null && typeof raw === 'object') return []
+    const text = String(raw ?? '').trim()
+    if (!text || text.length > 120) return []
+    entries.push({ key, value: text })
+  }
+  return entries.length > 0 && entries.length <= 8 ? entries : []
+}
+
+function kvStatus(part: MessagePart): 'success' | 'error' | 'running' {
+  if (part.status === 'error') return 'error'
+  if (part.status === 'running') return 'running'
+  return 'success'
+}
+
+function kvDurationMs(part: MessagePart): number | undefined {
+  const start = part.startedAt ? new Date(part.startedAt).getTime() : Number.NaN
+  const end = part.completedAt ? new Date(part.completedAt).getTime() : Number.NaN
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return undefined
+  return Math.max(0, end - start)
+}
+
+const MEDIA_MIME_RE = /^(image|video|audio)\//
+const MEDIA_EXT_RE = /\.(png|jpe?g|webp|gif|svg|mp4|webm|mov|m4v|mp3|wav|m4a|ogg|flac|pdf)$/i
+
+function isMediaArtifact(artifact: ToolArtifact): boolean {
+  const mime = String(artifact.mime_type || '').toLowerCase()
+  if (MEDIA_MIME_RE.test(mime) || mime === 'application/pdf') return true
+  return MEDIA_EXT_RE.test(String(artifact.uri || artifact.path || ''))
+}
+
+/**
+ * user:“当过程行触发文件读取且 MIME 类型属于多媒体时，在过程行标题下方直接挂载内联预览区，
+ * 无需用户二次点击展开即可直观确认上下文”+(读文件行的图片/音视频/PDF 直接挂在标题下面，
+ * 不再藏在展开体里；地址解析与灯箱都复用既有通道，坏图走徽章降级。)
+ */
+function mediaFilesOf(part: MessagePart): Array<{ path: string; name?: string; mime?: string; sizeLabel?: string; url?: string; error?: boolean }> {
+  const files: Array<{ path: string; name?: string; mime?: string; sizeLabel?: string; url?: string; error?: boolean }> = []
+  for (const artifact of part.artifacts || []) {
+    if (!isMediaArtifact(artifact)) continue
+    const key = artifactKey(artifact)
+    if (!key) continue
+    const failed = artifactLoadFailedFor(artifact)
+    files.push({
+      path: key,
+      name: imageAlt(artifact),
+      mime: String(artifact.mime_type || ''),
+      sizeLabel: artifactSizeLabel(artifact) || undefined,
+      url: failed ? '' : imageSrc(artifact),
+      error: failed,
+    })
+  }
+  return files
+}
+
+/** 缩略图点开：走既有的图片灯箱通道，取字节与降级都由它负责。 */
+function openArtifactPreview(part: MessagePart, file: { path?: string }): void {
+  const artifact = (part.artifacts || []).find(item => artifactKey(item) === file.path)
+  if (artifact) void openImagePreview(artifact)
+}
+
+/** 降级徽章被点：重新取一次字节，失败仍留在降级态。 */
+function retryArtifactPreview(part: MessagePart, file: { path?: string }): void {
+  const artifact = (part.artifacts || []).find(item => artifactKey(item) === file.path)
+  if (artifact) retryArtifactSource(artifact)
 }
 
 function imageAlt(artifact: { name?: string; uri?: string }): string {
@@ -4533,13 +4838,18 @@ function formatContextSummary(c: ContextCounts): string {
     ". args flag";
 }
 .tool-card-header.has-flag .process-tool-flag {
-  grid-area: flag;
+  grid-area: meta;
+  justify-self: end;
+  white-space: nowrap;
   margin-left: 0;
   padding-left: 0;
 }
 
-/* 折叠组头的步骤计数：第三列小字，展开后随行列表一并隐藏。 */
+/* user:“那个 xx 步和折叠的标识符号，右对齐，同时不要被挤到”+(步骤计数与折叠箭头
+   都贴住右侧，各自占一列 max-content，长标题只能挤压中间那列，不能把它们挤没。) */
 .process-group-count {
+  grid-area: meta;
+  justify-self: end;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 45%, transparent);
   font-size: 11px;
   font-variant-numeric: tabular-nums;

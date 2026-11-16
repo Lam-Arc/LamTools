@@ -4679,6 +4679,7 @@ onUnmounted(() => {
 <style>
 @import '../styles/variables.css';
 @import '../styles/base.css';
+@import '../styles/message-stream.css';
 @import '../styles/layout.css';
 @import '../styles/theme-editor.css';
 @import '../styles/library-surface.css';

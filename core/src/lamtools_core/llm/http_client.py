@@ -29,6 +29,7 @@ from lamtools_core.llm.profiles import (
     normalize_response_with_profile,
     normalize_responses_response_with_profile,
     normalize_responses_stream_event,
+    normalize_stream_chunk_events_with_profile,
     normalize_stream_chunk_with_profile,
     finalize_provider_stream_state,
     update_provider_stream_state,
@@ -383,8 +384,9 @@ class CoreHttpLLMClient:
                         protocol=protocol,
                         model=prepared.model,
                     )
-                    event = self._normalize_stream_event(chunk)
-                    if event is not None:
+                    # 一个 chunk 可以同时带思考、正文和工具增量：逐个交出，不能只取一个。
+                    stream_closed = False
+                    for event in self._normalize_stream_events(chunk):
                         if event.usage is not None:
                             last_usage = event.usage
                         metadata = dict(event.metadata) if isinstance(event.metadata, dict) else {}
@@ -399,9 +401,11 @@ class CoreHttpLLMClient:
                             terminal_event = event
                             await drain_recording(response)
                             flush_usage()
+                            stream_closed = True
                             break
-                        else:
-                            yield event
+                        yield event
+                    if stream_closed:
+                        break
                 flush_usage()
                 if terminal_event is not None:
                     yield terminal_event
@@ -488,15 +492,28 @@ class CoreHttpLLMClient:
             return normalize_responses_response_with_profile(response, self.adapter_profile, model=model)
         return normalize_response_with_profile(response, self.adapter_profile, model=model)
 
-    def _normalize_stream_event(self, chunk: dict[str, Any]) -> LLMStreamEvent | None:
+    def _normalize_stream_events(self, chunk: dict[str, Any]) -> list[LLMStreamEvent]:
+        """Normalize one wire chunk into every event it carries.
+
+        user:“有时会丢失回复开头的部分信息”+(OpenAI 兼容网关会把思考尾部与第一段正文、
+        或把整段旁白与 tool_call 合并进同一个 chunk；只要每块只交出一个事件，同一块里的
+        正文就会被丢掉。这里一律交出整块的全部事件，其他协议仍是一块一个事件)。
+        """
         protocol = self._protocol()
         if protocol == "anthropic-messages":
-            return _normalize_anthropic_stream_event(chunk, self.adapter_profile)
+            event = _normalize_anthropic_stream_event(chunk, self.adapter_profile)
+            return [event] if event is not None else []
         if protocol in {"gemini", "gemini-generative-language"}:
-            return normalize_gemini_stream_event(chunk, self.adapter_profile)
+            event = normalize_gemini_stream_event(chunk, self.adapter_profile)
+            return [event] if event is not None else []
         if protocol in {"openai-responses", "responses"}:
-            return normalize_responses_stream_event(chunk, self.adapter_profile)
-        return normalize_stream_chunk_with_profile(chunk, self.adapter_profile)
+            event = normalize_responses_stream_event(chunk, self.adapter_profile)
+            return [event] if event is not None else []
+        return normalize_stream_chunk_events_with_profile(chunk, self.adapter_profile)
+
+    def _normalize_stream_event(self, chunk: dict[str, Any]) -> LLMStreamEvent | None:
+        events = self._normalize_stream_events(chunk)
+        return events[0] if events else None
 
     def _request_with_defaults(self, request: LLMRequest) -> LLMRequest:
         return LLMRequest(

@@ -46,6 +46,7 @@ class SubAgentEventForwardingSink:
         reasoning_level: str = "",
         started_at: float | None = None,
         invocation_id: str = "",
+        parent_source_provider: Any = None,
     ) -> None:
         self._parent_sink = (
             CallableEventSink(parent_sink)
@@ -68,10 +69,41 @@ class SubAgentEventForwardingSink:
         # events update the items the run already created (an answered question
         # resolves the card that asked it instead of orphaning it).
         self._invocation_id = str(invocation_id or "").strip() or uuid.uuid4().hex
+        # 谁算这次子代理输出的“来源指令”：父代理运行中途补的指令由内核在下一个
+        # 步边界消化，之后产生的事件属于那条补充的调用行，而不是本回合开头那条。
+        self._parent_source_provider = parent_source_provider
 
     @property
     def invocation_id(self) -> str:
         return self._invocation_id
+
+    def _follow_delivery_source(self) -> None:
+        """Follow the instruction the child is working on right now.
+
+        user:“修”+(补充消息被消化后，子代理后续事件必须归属到这条补充的调用行：
+        界面按 ``sub_agent.parent_call_id`` 认亲，归属不切换就会把补充画在它触发的
+        输出后面，读起来像父代理在事后补充)。
+        """
+        provider = self._parent_source_provider
+        if provider is None:
+            return
+        try:
+            source = provider()
+        except Exception:  # noqa: BLE001 — 归属只是记账，绝不能吞掉子代理事件
+            return
+        if isinstance(source, dict):
+            call_id = str(source.get("call_id") or source.get("parent_call_id") or "")
+            run_id = str(source.get("run_id") or source.get("parent_run_id") or "")
+            turn_id = str(source.get("turn_id") or source.get("parent_turn_id") or "")
+        elif isinstance(source, (tuple, list)) and len(source) >= 3:
+            call_id, run_id, turn_id = (str(value or "") for value in source[:3])
+        else:
+            return
+        if not call_id:
+            return
+        self._parent_call_id = call_id
+        self._parent_run_id = run_id or self._parent_run_id
+        self._parent_turn_id = turn_id or self._parent_turn_id
 
     async def emit(self, event: CoreEvent) -> None:
         # Events are forwarded, not retained. The previous buffer appended
@@ -79,6 +111,7 @@ class SubAgentEventForwardingSink:
         # entire stream in memory for the duration of the run.
         if self._parent_sink is None or not _is_visible_child_event(event):
             return
+        self._follow_delivery_source()
         payload = dict(event.payload or {})
         payload["sub_agent"] = {
             "agent": self._agent,

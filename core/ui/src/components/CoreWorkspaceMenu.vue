@@ -1,6 +1,7 @@
 <template>
   <div ref="root" class="core-workspace-menu" data-core-workspace-menu>
     <button
+      ref="trigger"
       class="core-workspace-menu__trigger"
       type="button"
       :disabled="disabled || options.length === 0"
@@ -14,7 +15,7 @@
       <ChevronDown :size="12" :stroke-width="2" aria-hidden="true" />
     </button>
 
-    <section v-if="open" ref="card" class="core-workspace-menu__card" :style="viewportStyle" role="menu" :aria-label="t('选择工作环境')">
+    <section v-if="open" ref="card" class="core-workspace-menu__card" :style="viewportStyle" role="menu" :aria-label="t('选择工作环境')" @keydown="onMenuKeydown">
       <div class="core-workspace-menu__heading">{{ t("工作环境") }}</div>
       <button
         v-for="option in options"
@@ -23,6 +24,7 @@
         :class="{ active: option.id === activeId }"
         type="button"
         role="menuitemradio"
+        tabindex="-1"
         :aria-checked="option.id === activeId"
         :data-workspace-option="option.id"
         @click="selectOption(option.id)"
@@ -44,7 +46,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Check, ChevronDown, Monitor, Smartphone } from 'lucide-vue-next'
 import type { RuntimeWorkspaceOption } from '@/app/runtime.ts'
 import { useComposerMenuMotion } from '@/motion/composerMenu.ts'
@@ -62,6 +64,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ select: [id: string] }>()
 const root = ref<HTMLElement | null>(null)
+const trigger = ref<HTMLButtonElement | null>(null)
 const card = ref<HTMLElement | null>(null)
 const open = ref(false)
 const { animatePrimaryCard, cancel } = useComposerMenuMotion(root)
@@ -81,17 +84,40 @@ function toggle(): void {
   open.value = !open.value
   if (!open.value) return cancel()
   updateViewportPosition()
-  void nextTick(() => animatePrimaryCard(card.value, ':scope > .core-workspace-menu__heading, :scope > .core-workspace-menu__option'))
+  void nextTick(() => {
+    if (!open.value || props.disabled) return
+    animatePrimaryCard(card.value, ':scope > .core-workspace-menu__heading, :scope > .core-workspace-menu__option', () => {
+      if (!open.value || props.disabled || document.activeElement !== trigger.value) return
+      const options = card.value?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')
+      ;(card.value?.querySelector<HTMLButtonElement>('[aria-checked="true"]') || options?.[0])?.focus({ preventScroll: true })
+    })
+  })
 }
 
-function close(): void {
+function close(returnFocus = false): void {
   cancel()
   open.value = false
+  if (returnFocus && !props.disabled) trigger.value?.focus({ preventScroll: true })
 }
 
+// user:“确保视觉、功能和交互不退化”+(环境不可选或列表清空时关闭菜单，避免选择过期环境)。
+watch(() => [props.disabled, props.options.length], ([disabled, count]) => { if (disabled || !count) close() }, { flush: 'sync' })
+
 function selectOption(id: string): void {
+  if (props.disabled || !props.options.some(option => option.id === id)) return
   emit('select', id)
-  close()
+  close(true)
+}
+
+// user:“确保视觉、功能和交互不退化”+(工作环境菜单支持方向键及首尾跳转)。
+function onMenuKeydown(event: KeyboardEvent): void {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  const options = [...(card.value?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') || [])]
+  if (!options.length) return
+  event.preventDefault()
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : event.key === 'ArrowDown' ? (current + 1 + options.length) % options.length : (current - 1 + options.length) % options.length
+  options[index]?.focus({ preventScroll: true })
 }
 
 function onPointerDown(event: PointerEvent): void {
@@ -100,7 +126,7 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && open.value) close()
+  if (event.key === 'Escape' && open.value) { event.preventDefault(); close(true) }
 }
 
 onMounted(() => {
@@ -108,6 +134,7 @@ onMounted(() => {
   document.addEventListener('keydown', onKeydown)
 })
 onUnmounted(() => {
+  cancel()
   document.removeEventListener('pointerdown', onPointerDown)
   document.removeEventListener('keydown', onKeydown)
 })

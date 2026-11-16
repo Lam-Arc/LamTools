@@ -1,0 +1,265 @@
+/**
+ * 消息流（Message Stream）样式的兜底层与动效层。
+ *
+ * user:“把配置落成全局 CSS 变量 + 根元素 data 属性，供会话内过程行与正文消费”
+ * +(这一层只做两件事：未配置时给 :root 一套完全正常的默认值；
+ *   以及 [data-ms-shimmer="1"] 下的边缘流光动效。具体排版由消费方读 --ms-* 决定。)
+ *
+ * 约定：data-ms-* 属性写在 document.documentElement 上，所以选择器一律以 :root[...] 开头，
+ * 不要写成 .thread[...]，否则属性写到根上就选不中了。
+ */
+
+:root {
+  /* —— 消息正文 —— */
+  --ms-body-font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ms-body-font-size: 14px;
+  --ms-body-line-height: 1.6;
+  --ms-body-para-gap: 12px;
+
+  /* —— 过程行标题（固定单行垂直居中）—— */
+  --ms-proc-title-font-family: inherit;
+  --ms-proc-title-font-size: 12px;
+  --ms-proc-title-icon: 1;
+
+  /* —— 过程行展开内容 —— */
+  --ms-proc-body-font-family: inherit;
+  --ms-proc-body-font-size: 12px;
+  --ms-proc-body-line-height: 1.65;
+  --ms-proc-lines-1: 6;
+  --ms-proc-lines-2: 10;
+  --ms-proc-body-pad-y: 10px;
+
+  /* —— 容器共用 —— */
+  --ms-proc-radius-sm: 8px;
+  --ms-proc-radius-lg: 12px;
+  /* 胶囊 / 卡片恒为 2px（签名粗细，不给用户调）。 */
+  --ms-proc-border-width: 2px;
+  /* 「边框」模式自己的粗细：1 / 1.5 / 2 / 3，与上面那条互不影响。 */
+  --ms-proc-border-width-bordered: 1px;
+  --ms-proc-border-style: solid;
+  --ms-proc-border-color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 22%, transparent);
+  --ms-proc-fill-color: var(--panel-2, #1d1e1e);
+  /* 百分比字符串（"40%"），消费示例：
+     background-color: color-mix(in srgb, var(--ms-proc-fill-color) var(--ms-proc-fill-alpha), transparent); */
+  --ms-proc-fill-alpha: 40%;
+  --ms-proc-blur: none;
+  --ms-proc-shimmer-color: color-mix(in srgb, var(--blue, #79bcff) 60%, #ffffff);
+
+  /* —— 幻彩色阶与嵌套降级 —— */
+  --ms-proc-fill-gradient: none;
+  --ms-proc-fill-color-inner: var(--panel-2, #1d1e1e);
+  --ms-proc-fill-alpha-inner: 40%;
+
+  /* 过程行高度公式（唯一真源）：行数 × 行距 × 1em + 2 × 上下内边距。
+     用 1em 而不是 var(--ms-proc-body-font-size)：自定义属性在被消费的元素上才求值，
+     1em 跟着那个元素自己的 font-size 走，与它的行高天然一致。
+     一级/二级高度都从这里取，改行数或内边距时高度自动跟上。 */
+  --ms-proc-height-1: calc(var(--ms-proc-lines-1) * var(--ms-proc-body-line-height) * 1em + 2 * var(--ms-proc-body-pad-y));
+  --ms-proc-height-2: calc(var(--ms-proc-lines-2) * var(--ms-proc-body-line-height) * 1em + 2 * var(--ms-proc-body-pad-y));
+}
+
+/* ── 流光：沿边缘循环流动的高光扫过 ────────────────────────────── */
+
+@keyframes ms-shimmer-flow {
+  from {
+    background-position: 160% 0;
+  }
+  to {
+    background-position: -60% 0;
+  }
+}
+
+/**
+ * 消费方给需要流光的容器加 .ms-shimmer-edge 即可（正文卡片、过程行胶囊/卡片都适用）。
+ * 描边粗细跟随 --ms-proc-border-width，颜色跟随 --ms-proc-shimmer-color。
+ */
+:root[data-ms-shimmer="1"] .ms-shimmer-edge {
+  position: relative;
+}
+
+:root[data-ms-shimmer="1"] .ms-shimmer-edge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  /* 胶囊 / 卡片用 2px；边框模式的元素请自行覆盖成 --ms-proc-border-width-bordered。 */
+  padding: var(--ms-proc-border-width, 2px);
+  background-image: linear-gradient(
+    100deg,
+    transparent 34%,
+    var(--ms-proc-shimmer-color) 50%,
+    transparent 66%
+  );
+  background-repeat: no-repeat;
+  background-size: 240% 100%;
+  /* 只留描边那一圈：内容盒与边框盒做异或遮罩。 */
+  -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  -webkit-mask-clip: content-box, border-box;
+  -webkit-mask-composite: xor;
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-clip: content-box, border-box;
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  animation: ms-shimmer-flow 3.2s linear infinite;
+  animation-play-state: paused;
+}
+
+/* 「常驻」：只要开着流光就一直扫。 */
+:root[data-ms-shimmer="1"][data-ms-shimmer-scope="always"] .ms-shimmer-edge::after {
+  opacity: 1;
+  animation-play-state: running;
+}
+
+/* 「仅生成中/执行中」：由消费方给正在跑的那一行打 data-ms-running="1"（或 .is-running）。 */
+:root[data-ms-shimmer="1"][data-ms-shimmer-scope="running"] .ms-shimmer-edge[data-ms-running="1"]::after,
+:root[data-ms-shimmer="1"][data-ms-shimmer-scope="running"] .ms-shimmer-edge.is-running::after {
+  opacity: 1;
+  animation-play-state: running;
+}
+
+/* 减少动态效果：流光整块关掉，不能靠它表达状态。 */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-ms-shimmer="1"] .ms-shimmer-edge::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ── 会话侧消费：把设置项真正落到消息流上 ──────────────────────────────
+   上面那一节只声明变量与默认值，这里才是读它们的地方。所有规则都以
+   :root[data-ms-*] 或变量默认值兜底开头，默认值下与改设置前完全一致。 */
+
+/* 1) 消息正文排版 */
+.thread .markdown-renderer > .markdown-renderer__content {
+  font-family: var(--ms-body-font-family, inherit);
+  font-size: var(--ms-body-font-size, 14px);
+  line-height: var(--ms-body-line-height, 1.5);
+}
+.thread .markdown-renderer > .markdown-renderer__content > p,
+.thread .markdown-renderer > .markdown-renderer__content > ul,
+.thread .markdown-renderer > .markdown-renderer__content > ol,
+.thread .markdown-renderer > .markdown-renderer__content > blockquote {
+  margin-block: var(--ms-body-para-gap, 12px);
+}
+
+/* 2) 消息正文容器形态 */
+:root[data-ms-body-container="bordered"] .thread .markdown-renderer > .markdown-renderer__content {
+  border: var(--ms-proc-border-width-bordered, 1px) var(--ms-proc-border-style, solid) var(--ms-proc-border-color);
+  border-radius: var(--ms-proc-radius-sm, 8px);
+  padding: 10px 12px;
+}
+:root[data-ms-body-container="card"] .thread .markdown-renderer > .markdown-renderer__content {
+  border: 2px solid var(--ms-proc-border-color);
+  border-radius: var(--ms-proc-radius-lg, 12px);
+  background-color: color-mix(in srgb, var(--ms-proc-fill-color) var(--ms-proc-fill-alpha, 40%), transparent);
+  background-image: var(--ms-proc-fill-gradient, none);
+  backdrop-filter: var(--ms-proc-blur, none);
+  padding: 10px 12px;
+}
+
+/* 3) 过程行标题：排版 + 图标显隐 + 容器形态 */
+.thread .process-card-header .process-card-preview {
+  font-family: var(--ms-proc-title-font-family, inherit);
+  font-size: var(--ms-proc-title-font-size, 12px);
+}
+.thread .process-card-header .process-card-state-icon {
+  opacity: var(--ms-proc-title-icon, 1);
+}
+:root[data-ms-proc-title-container="bordered"] .thread .process-card-header {
+  border: var(--ms-proc-border-width-bordered, 1px) var(--ms-proc-border-style, solid) var(--ms-proc-border-color);
+  border-radius: var(--ms-proc-radius-sm, 8px);
+  padding-inline: 8px;
+}
+/* user:“胶囊仅限单行过程行标题使用；边框粗细强制锁定为 2px”+(标题行本来就是单行，
+   所以胶囊只作用在这一层，正文不跟着变圆。) */
+:root[data-ms-proc-title-container="pill"] .thread .process-card-header {
+  border: 2px solid var(--ms-proc-border-color);
+  border-radius: 9999px;
+  padding-inline: 10px;
+}
+
+/* 4) 过程行展开内容：排版 + 容器形态 */
+.thread .reasoning-body,
+.thread .tool-card-body {
+  font-family: var(--ms-proc-body-font-family, inherit);
+}
+:root[data-ms-proc-body-container="bordered"] .thread .reasoning-body,
+:root[data-ms-proc-body-container="bordered"] .thread .tool-card-body {
+  border: var(--ms-proc-border-width-bordered, 1px) var(--ms-proc-border-style, solid) var(--ms-proc-border-color);
+  border-radius: var(--ms-proc-radius-sm, 8px);
+  padding-inline: 8px;
+}
+:root[data-ms-proc-body-container="card"] .thread .reasoning-body,
+:root[data-ms-proc-body-container="card"] .thread .tool-card-body {
+  border: 2px solid var(--ms-proc-border-color);
+  border-radius: var(--ms-proc-radius-lg, 12px);
+  background-color: color-mix(in srgb, var(--ms-proc-fill-color) var(--ms-proc-fill-alpha, 40%), transparent);
+  background-image: var(--ms-proc-fill-gradient, none);
+  backdrop-filter: var(--ms-proc-blur, none);
+  padding-inline: 10px;
+}
+
+/* user:“若消息正文设为卡片，同时过程行展开内容也设为卡片，嵌套卡片的阴影与背景色容易
+   产生视觉脏乱——建议嵌套内层卡片自动降低一级背景明度对比”+(两层都是卡片时内层降一级，
+   用更低的不透明度与更淡的描边把层次拉开，不再两层一样重。) */
+/* user:“命令的卡片内容也没用这个样式生效”+(终端窗、diff、搜索结果这些内层块自己带
+   底色与描边，会盖住外层容器；选中边框/卡片时让它们让位，容器才看得见。)*/
+:root[data-ms-proc-body-container="card"] .thread .tool-card-body > .command-output,
+:root[data-ms-proc-body-container="card"] .thread .tool-card-body > .diff-block,
+:root[data-ms-proc-body-container="card"] .thread .tool-card-body > .tool-output,
+:root[data-ms-proc-body-container="card"] .thread .tool-card-body > .search-hit-list,
+:root[data-ms-proc-body-container="card"] .thread .tool-card-body > .web-fetch-card,
+:root[data-ms-proc-body-container="card"] .thread .tool-card-body > .test-result-card,
+:root[data-ms-proc-body-container="bordered"] .thread .tool-card-body > .command-output,
+:root[data-ms-proc-body-container="bordered"] .thread .tool-card-body > .diff-block,
+:root[data-ms-proc-body-container="bordered"] .thread .tool-card-body > .tool-output,
+:root[data-ms-proc-body-container="bordered"] .thread .tool-card-body > .search-hit-list,
+:root[data-ms-proc-body-container="bordered"] .thread .tool-card-body > .web-fetch-card,
+:root[data-ms-proc-body-container="bordered"] .thread .tool-card-body > .test-result-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+:root[data-ms-body-container="card"][data-ms-proc-body-container="card"] .thread .reasoning-body,
+:root[data-ms-body-container="card"][data-ms-proc-body-container="card"] .thread .tool-card-body {
+  background-color: color-mix(in srgb, var(--ms-proc-fill-color-inner, var(--ms-proc-fill-color)) var(--ms-proc-fill-alpha-inner, var(--ms-proc-fill-alpha, 40%)), transparent);
+  border-color: color-mix(in srgb, var(--ms-proc-border-color) 65%, transparent);
+  box-shadow: none;
+}
+
+/* 5) 流光：常驻或仅在执行中的那一行出现 */
+:root[data-ms-shimmer="1"] .thread .process-card-header::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(110deg, transparent 25%, var(--ms-proc-shimmer-color) 50%, transparent 75%);
+  background-size: 260% 100%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: ms-proc-shimmer-sweep 2.4s linear infinite;
+}
+:root[data-ms-shimmer="1"][data-ms-shimmer-scope="running"] .thread .process-card-header::after {
+  display: none;
+}
+:root[data-ms-shimmer="1"][data-ms-shimmer-scope="running"] .thread .process-step--running .process-card-header::after {
+  display: block;
+}
+@keyframes ms-proc-shimmer-sweep {
+  from { background-position: 200% 0; }
+  to { background-position: -120% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-ms-shimmer="1"] .thread .process-card-header::after {
+    animation: none;
+    opacity: 0.5;
+  }
+}
+

@@ -16,6 +16,7 @@
 <script setup lang="ts">
 import { linkifyTextNodes } from '@/helpers/webLinks'
 import { renderFileReferenceNodes, isAutoFileReferenceCandidate, isLocalFileReference } from '@/helpers/fileReferenceRendering'
+import { partitionMosaicRows, rowItemWidths } from '@/helpers/mosaicLayout'
 import { useReferenceActions } from '@/helpers/referenceActions'
 
 import { t, uiLanguage } from '@/i18n/index.ts'
@@ -168,6 +169,35 @@ async function hydrateLocalImage(image: HTMLImageElement, generation: number): P
   }
 }
 
+const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+
+/**
+ * 净化器的默认 URI 白名单不认识盘符路径（`E:/…` 被当成未知协议），会把 `src` 整个剥掉，
+ * 剥掉之后连"这是本地图"都看不出来。这里在默认白名单前补上盘符与几种本地引用方案，
+ * 让路径活到净化之后，再由 adoptRawLocalImages 收编成待加载标记。
+ * 放行的只是"指到一个本地文件"，不含任何可执行能力。
+ */
+const SANITIZE_OPTIONS = {
+  ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[a-z]:[\\/]|workspace:|asset:|blob:|data:|file:|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+}
+
+/**
+ * user:“宫格式和 HTML img 就媒体全部加载失败”+(回复里直接写的 <img src="E:/…"> 从来没走过
+ * 取图通道：只有 Markdown 的 ![]() 会被改成待加载图片，裸 HTML 图会被浏览器按相对地址
+ * 去 404，宫格里的图自然全破。这里把裸 HTML 的本地图统一收编成同一个待加载标记。)
+ */
+function adoptRawLocalImages(host: HTMLElement): void {
+  if (!props.fileReferences) return
+  for (const image of Array.from(host.querySelectorAll<HTMLImageElement>('img'))) {
+    if (image.hasAttribute('data-local-image-path')) continue
+    const src = (image.getAttribute('src') || '').trim()
+    if (!src || !isLocalFileReference(src)) continue
+    // 先换成透明占位再摘掉原地址：既不留破图图标，也避免浏览器按相对地址白跑一次请求。
+    image.setAttribute('data-local-image-path', src)
+    image.setAttribute('src', TRANSPARENT_PIXEL)
+  }
+}
+
 async function hydrateLocalReferences() {
   const root = contentRoot.value
   if (!root || !props.fileReferences) return
@@ -187,7 +217,48 @@ let replyBlockSequence = 0
 function disposeInteractiveBlocks() {
   replyBlocks.value = []
 }
+/**
+ * user:“右侧空了一块，并没有铺满”+(half 只在相邻成对时才占一半：落单的块如果也
+ * 按 50% 排版，右边就会空出一条。这里在每次静态渲染后把连续的两块标成一对。)
+ */
+function pairHalfBlocks(): void {
+  const root = contentRoot.value
+  if (!root) return
+  // 先拆掉上一轮的配对行，保证重复调用是幂等的
+  for (const row of Array.from(root.querySelectorAll<HTMLElement>('[data-half-row]'))) {
+    const parent = row.parentNode
+    if (!parent) continue
+    while (row.firstChild) parent.insertBefore(row.firstChild, row)
+    row.remove()
+  }
+  const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-half]'))
+  for (const node of nodes) node.classList.remove('is-paired', 'is-pair-start')
+  // 连续相邻的 half 块归成一排：两块的、三块的都能成行，具体一行放几个交给网格按宽度算。
+  let index = 0
+  while (index < nodes.length) {
+    const run = [nodes[index]]
+    let next = index + 1
+    while (next < nodes.length && run[run.length - 1].nextElementSibling === nodes[next]) {
+      run.push(nodes[next])
+      next += 1
+    }
+    if (run.length >= 2) {
+      const row = document.createElement('div')
+      row.className = 'half-row'
+      row.setAttribute('data-half-row', '')
+      run[0].parentNode?.insertBefore(row, run[0])
+      for (const node of run) {
+        row.appendChild(node)
+        node.classList.add('is-paired')
+      }
+      run[0].classList.add('is-pair-start')
+    }
+    index = next
+  }
+}
+
 function mountInteractiveBlocks() {
+  pairHalfBlocks()
   if (props.streaming) return
   const blocks: ReplyBlock[] = []
   // user:“图表落地，柱状，折线，饼图都支持”+(图表是只读可视化，和 mermaid 同级，
@@ -319,6 +390,32 @@ function adaptStudySvgPaintToTheme(elements: Element[]): void {
   }
 }
 
+/**
+ * user:“矢量乌漆麻黑一大坨，什么什么都看不清”+(模型习惯把样式写在元素的
+ * style 属性里，而 style 属性会被清洗掉；一掉就退回 SVG 默认的黑色填充，
+ * 于是整块变成黑疙瘩。这里先把 style 里的安全声明转成同名表现属性再清洗。)
+ */
+function applySafeSvgDeclarations(element: Element, declarations: string[]): void {
+  for (const declaration of declarations) {
+    const separator = declaration.indexOf(':')
+    if (separator < 0) continue
+    const property = declaration.slice(0, separator).trim().toLowerCase()
+    const value = declaration.slice(separator + 1).trim()
+    if (property === 'font') {
+      const font = value.match(/^([0-9.]+(?:px|pt|em|rem|%))\s+([\w\s,'"-]+)$/i)
+      if (font) {
+        if (!element.getAttribute('font-size')) element.setAttribute('font-size', font[1])
+        if (!element.getAttribute('font-family')) element.setAttribute('font-family', font[2])
+      }
+      continue
+    }
+    if (!STUDY_SVG_STYLE_PROPERTIES.has(property)) continue
+    if (!value || /[<>{}]/.test(value)) continue
+    if (/(?:url\s*\(|javascript:|data:|https?:|@import|expression\s*\()/i.test(value)) continue
+    if (!element.getAttribute(property)) element.setAttribute(property, value)
+  }
+}
+
 function inlineSafeSvgStyles(source: string): string | null {
   const documentNode = new DOMParser().parseFromString(source, 'image/svg+xml')
   const svg = documentNode.documentElement
@@ -362,11 +459,20 @@ function inlineSafeSvgStyles(source: string): string | null {
     }
     style.remove()
   }
+  // 元素级 style 属性：转成表现属性后移除，否则会被清洗器整条丢掉。
+  for (const element of [svg, ...Array.from(svg.querySelectorAll('*'))]) {
+    const inline = element.getAttribute('style')
+    if (!inline) continue
+    applySafeSvgDeclarations(element, inline.split(';'))
+    element.removeAttribute('style')
+  }
   return new XMLSerializer().serializeToString(svg)
 }
 
 function sanitizeStudySvg(source: string): string | null {
-  if (!props.autoPlotMath || !source.trim() || source.length > STUDY_SVG_MAX_LENGTH) return null
+  // user:“矢量渲染失败”+(放不放行由调用方决定，函数本身不再二次拦截，
+  // 否则聊天里即使放行也会被这里判成 null。)
+  if (!source.trim() || source.length > STUDY_SVG_MAX_LENGTH) return null
   const normalized = inlineSafeSvgStyles(source)
   if (!normalized) return null
   const sanitized = DOMPurify.sanitize(normalized, {
@@ -408,7 +514,7 @@ function sanitizeStudySvg(source: string): string | null {
   svg.setAttribute('role', 'img')
   if (!svg.getAttribute('aria-label')) {
     const title = svg.querySelector('title')?.textContent?.trim()
-    svg.setAttribute('aria-label', title || t("教学示意图"))
+    svg.setAttribute('aria-label', title || t("示意图"))
   }
   return new XMLSerializer().serializeToString(svg)
 }
@@ -437,24 +543,25 @@ function copyButtonHtml(source: string): string {
 // diagrams, Study fenced SVG, automatic math plots — is left out (mermaid and
 // svg stay plain code blocks, formulas stay plain formulas). Those appear once,
 // in the authoritative end-of-stream render.
-function renderSegmentHtml(source: string, heavy: boolean): string {
+function renderSegmentHtml(source: string, heavy: boolean, progressive = false): string {
   try {
     const math = protectMath(source, heavy)
-    const renderer = createMermaidRenderer(heavy)
+    const renderer = createMermaidRenderer(heavy, progressive)
     const parser = new Marked({ extensions: [messageStyleExtension(
-      body => renderSegmentHtml(body, heavy), props.interactive && heavy,
+      body => renderSegmentHtml(body, heavy, progressive), props.interactive && (heavy || progressive),
       body => math.tokens.reduce((value, item) => value.replaceAll(item.token, () => item.source), body),
     )] })
-    addAlertRenderer(renderer, body => renderSegmentHtml(body, heavy))
+    addAlertRenderer(renderer, body => renderSegmentHtml(body, heavy, progressive))
     const html = parser.parse(math.content, {
       renderer,
       async: false,
       breaks: false,
       gfm: true,
     }) as string
-    const clean = DOMPurify.sanitize(restoreMath(html, math.tokens))
+    const clean = DOMPurify.sanitize(restoreMath(html, math.tokens), SANITIZE_OPTIONS)
     const host = document.createElement('div')
     host.innerHTML = clean
+    adoptRawLocalImages(host)
     linkifyTextNodes(host)
     if (props.fileReferences) renderFileReferenceNodes(host, referenceActions.absolute(''))
     return host.innerHTML
@@ -463,7 +570,9 @@ function renderSegmentHtml(source: string, heavy: boolean): string {
   }
 }
 
-function createMermaidRenderer(heavy: boolean): Renderer {
+// `progressive` 只提前放出已闭合的交互块/样式块；mermaid、矢量图与公式自动作图仍
+// 留给收尾那一次，因为它们依赖解析期收集的队列，缓存命中的分段会拿不到。
+function createMermaidRenderer(heavy: boolean, progressive = false): Renderer {
   const renderer = new marked.Renderer()
   // user:“不要出错”+(内部挂载标记仅由专用块产生，原始 HTML 不能伪造可执行内容)。
   renderer.html = ({ text }) => text.replace(/\bdata-(inline-visualization|writing-block)\b/gi, 'data-disabled-$1')
@@ -496,33 +605,49 @@ function createMermaidRenderer(heavy: boolean): Renderer {
   }
 
   renderer.code = function ({ text, lang, raw }: { text: string; lang?: string; raw?: string }): string {
+    // user:“每个图表 SVG 或多媒体都要单独一行吗？不能自适应或者并列展示吗？”
+    // +(围栏信息串除了语言，还可以带布局标记：```chart half 两块相邻就并排，
+    // 窄屏自动退回整宽；语言名取第一个词，其余当标记。)
+    const fenceInfo = String(lang || '').trim().toLowerCase()
+    const fenceName = fenceInfo.split(/\s+/)[0] || ''
+    const fenceHalf = /(^|\s)half(\s|$)/.test(fenceInfo)
     // user:“Sunday也可以实现吗？去实现”+(仅显式交互块在回复完成后启动，原始脚本始终作为转义文本经过净化)。
     const fence = /^ {0,3}(`{3,}|~{3,})/.exec(raw || '')?.[1]
     const closed = fence && new RegExp(`\\n {0,3}${fence[0]}{${fence.length},}[ \\t]*(?:\\r?\\n)?$`).test(raw || '')
-    if (props.interactive && heavy && lang === 'interactive-html' && closed) {
+    if (props.interactive && (heavy || progressive) && fenceName === 'interactive-html' && closed) {
       return `<div class="code-block" data-inline-visualization>${copyButtonHtml(text)}</div>`
     }
     // user:“图表落地”+(```chart 里是 JSON 规格，由 CoreChart 用 echarts 渲染；
     // 源码仍走复制按钮的隐藏节点，复制出来就是可直接改的 JSON。)
-    if (heavy && lang === 'chart') {
-      return `<div class="code-block"><div class="chart-placeholder" data-chart-block></div>${copyButtonHtml(text)}</div>`
+    if (heavy && fenceName === 'chart') {
+      const layout = fenceHalf ? ' code-block--half' : ''
+      const halfAttr = fenceHalf ? ' data-half="true"' : ''
+      return `<div class="code-block code-block--chart${layout}"${halfAttr}><div class="chart-placeholder" data-chart-block></div>${copyButtonHtml(text)}</div>`
     }
-    if (props.mermaid && heavy && lang === 'mermaid') {
+    if (props.mermaid && heavy && fenceName === 'mermaid') {
       const id = `mermaid-${mermaidSeq++}`
       mermaidBlocks.push({ id, code: text })
       // The placeholder is later replaced by the rendered diagram (or the
       // error fallback); the copy button is its sibling and survives that.
       return `<div class="code-block"><div class="mermaid-placeholder" data-mermaid-id="${id}"></div>${copyButtonHtml(text)}</div>`
     }
-    if (lang === 'markdown' || lang === 'md') {
-      return `<div class="code-block"><div class="nested-markdown">${renderSegmentHtml(text, heavy)}</div>${copyButtonHtml(text)}</div>`
+    if (fenceName === 'markdown' || fenceName === 'md') {
+      return `<div class="code-block"><div class="nested-markdown">${renderSegmentHtml(text, heavy, progressive)}</div>${copyButtonHtml(text)}</div>`
     }
-    if (lang?.toLowerCase() === 'svg' && props.autoPlotMath && heavy) {
+    // user:“矢量渲染失败”+(svg 围栏不该只在 Study 生效：聊天里同样是只读图形，
+    // 清洗后直接内联；autoPlotMath 只负责数学自动绘图，不再兼任这个开关。)
+    // user:“SVG 现在还不是流式渲染”+(矢量图不依赖解析期队列，原地清洗就能出图，
+    // 所以围栏一闭合就渲染，和交互块同一档；mermaid 仍留给收尾，它要解析期收集的队列。)
+    if (fenceName === 'svg' && (heavy || progressive)) {
       const svg = sanitizeStudySvg(text)
-      if (svg) return `<figure class="study-inline-svg">${svg}</figure>`
+      if (svg) {
+        const layout = fenceHalf ? ' md-inline-svg--half' : ''
+        const halfAttr = fenceHalf ? ' data-half="true"' : ''
+        return `<figure class="study-inline-svg md-inline-svg${layout}"${halfAttr}>${svg}</figure>`
+      }
     }
     // Default code block
-    const langAttr = lang ? ` class="language-${lang}"` : ''
+    const langAttr = fenceName ? ` class="language-${fenceName}"` : ''
     return `<div class="code-block"><pre><code${langAttr}>${escapeHtml(text)}</code></pre>${copyButtonHtml(text)}</div>`
   }
 
@@ -709,14 +834,17 @@ const streamingStats = {
   segmentCacheHits: 0,
 }
 
-function cachedSegmentHtml(text: string): string {
-  const key = `${uiLanguage.value}:${props.autoPlotMath ? 'p1' : 'p0'}:${text}`
+// user:“交互式 UI 不要正文完全落定再显示，流式出来了闭合了就显示”+(流式分段也用
+// 渐进档渲染：已闭合的围栏当场挂载交互块与本地图片，还没闭合的那截自然没有占位
+// 节点，所以一个围栏什么时候闭合，它就在那一刻出现，而不是等整条回复收尾。)
+function cachedSegmentHtml(text: string, progressive = true): string {
+  const key = `${progressive ? 'p' : 'l'}:${uiLanguage.value}:${props.autoPlotMath ? 'p1' : 'p0'}:${text}`
   const cached = streamedSegmentCache.get(key)
   if (cached !== undefined) {
     streamingStats.segmentCacheHits += 1
     return cached
   }
-  const html = renderSegmentHtml(text, false)
+  const html = renderSegmentHtml(text, false, progressive)
   if (streamedSegmentCache.size >= SEGMENT_CACHE_LIMIT) {
     const oldest = streamedSegmentCache.keys().next().value
     if (oldest !== undefined) streamedSegmentCache.delete(oldest)
@@ -742,7 +870,70 @@ function appendSegmentNodes(container: HTMLElement, html: string): ChildNode[] {
 
 function disposeSegment(segment: StreamedSegment): void {
   for (const node of segment.nodes) disposeTableEnhancementsIn(node)
+  // 段被替换或回收时，它自己取回的本地图片地址要一起放掉，交互块也要跟着离开。
+  for (const node of segment.nodes) {
+    if (!(node instanceof Element)) continue
+    for (const image of node.querySelectorAll<HTMLImageElement>('img')) releaseLocalImage(image)
+  }
   for (const node of segment.nodes) node.remove()
+  if (replyBlocks.value.some(block => !block.target.isConnected)) {
+    replyBlocks.value = replyBlocks.value.filter(block => block.target.isConnected)
+  }
+}
+
+/** 已挂过组件的占位节点：闭合段重复追加时不会把同一块挂两遍。 */
+const mountedReplyPlaceholders = new WeakSet<Element>()
+
+/**
+ * user:“流式出来了闭合了就显示”+(闭合段刚追加进 DOM 就把里面的交互块与样式块挂上，
+ * 不等收尾重渲染。)
+ */
+function mountProgressiveBlocks(nodes: ChildNode[]): void {
+  const blocks: ReplyBlock[] = []
+  for (const node of nodes) {
+    if (!(node instanceof Element)) continue
+    const found: HTMLElement[] = []
+    if (node.matches('[data-inline-visualization], [data-writing-block]')) found.push(node as HTMLElement)
+    found.push(...Array.from(node.querySelectorAll<HTMLElement>('[data-inline-visualization], [data-writing-block]')))
+    for (const placeholder of found) {
+      if (mountedReplyPlaceholders.has(placeholder)) continue
+      mountedReplyPlaceholders.add(placeholder)
+      if (placeholder.hasAttribute('data-inline-visualization')) {
+        const source = placeholder.querySelector('.code-source')?.textContent || ''
+        if (!source) continue
+        const mount = document.createElement('div')
+        placeholder.prepend(mount)
+        blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'interactive', source })
+        continue
+      }
+      const source = placeholder.querySelector('.writing-source')?.textContent || ''
+      if (!source) continue
+      const mount = document.createElement('div')
+      placeholder.prepend(mount)
+      blocks.push({
+        id: ++replyBlockSequence, target: mount, kind: 'writing', source,
+        title: placeholder.dataset.writingTitle, variant: placeholder.dataset.writingVariant,
+      })
+    }
+  }
+  if (blocks.length) replyBlocks.value = [...replyBlocks.value, ...blocks]
+}
+
+/** 闭合段里的本地图片立刻取字节，不等收尾；失败仍走既有的 error 事件降级。 */
+function hydrateImagesInNodes(nodes: ChildNode[], generation: number): void {
+  if (!props.fileReferences) return
+  for (const node of nodes) {
+    if (!(node instanceof Element)) continue
+    const images: HTMLImageElement[] = []
+    if (node.matches('img[data-local-image-path]')) images.push(node as HTMLImageElement)
+    images.push(...Array.from(node.querySelectorAll<HTMLImageElement>('img[data-local-image-path]')))
+    for (const image of images) {
+      void hydrateLocalImage(image, generation).then((ok) => {
+        if (ok || generation !== localImageGeneration || !image.isConnected) return
+        image.dispatchEvent(new Event('error'))
+      })
+    }
+  }
 }
 
 function cancelTailParse(): void {
@@ -757,6 +948,8 @@ function parseTailSegment(index: number, text: string, container: HTMLElement, a
   const existing = streamedSegments[index]
   if (existing) disposeSegment(existing)
   const nodes = appendSegmentNodes(container, cachedSegmentHtml(text))
+  mountProgressiveBlocks(nodes)
+  hydrateImagesInNodes(nodes, localImageGeneration)
   const segment: StreamedSegment = {
     text,
     nodes,
@@ -828,6 +1021,8 @@ function syncStreamingSegments(content: string, forceTail: boolean): void {
     const previousFade = streamedSegments.length === reuse ? previousTail : undefined
     streamingStats.closedParses += 1
     const nodes = appendSegmentNodes(container, cachedSegmentHtml(text))
+    mountProgressiveBlocks(nodes)
+    hydrateImagesInNodes(nodes, localImageGeneration)
     streamedSegments.push({
       text,
       nodes,
@@ -897,6 +1092,47 @@ const renderedHtml = computed(() => {
   return html
 })
 
+/**
+ * user:“总而言之，它最后出来的东西一定是一个矩形”+(连续图片按宽高比铺成若干行，
+ * 每行宽度正好等于容器，行高由本行比例和反算；所以整块永远是个矩形，不会出现
+ * 最后一行只剩一张、右边空一截的参差。)
+ */
+function layoutImageMosaics(): void {
+  const root = contentRoot.value
+  if (!root) return
+  const GAP = 6
+  for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>('p'))) {
+    const images = Array.from(paragraph.querySelectorAll<HTMLImageElement>('img'))
+    if (images.length < 2) continue
+    // 只处理「整段都是图」的段落：图与文字混排时按行内流走，不强行切格
+    if ((paragraph.textContent || '').trim()) continue
+    if (images.some(image => !image.naturalWidth || !image.naturalHeight)) continue
+    const width = paragraph.clientWidth
+    if (!width) continue
+
+    const aspects = images.map(image => image.naturalWidth / image.naturalHeight)
+    const rows = partitionMosaicRows(aspects, width)
+    if (rows.length === 0) continue
+    paragraph.classList.add('image-mosaic')
+
+    for (const row of rows) {
+      const count = row.end - row.start
+      const usable = Math.max(40, width - GAP * (count - 1))
+      const widths = rowItemWidths(aspects, row, usable)
+      const slice = aspects.slice(row.start, row.end)
+      const sumAspect = slice.reduce((sum, value) => sum + Math.min(6, Math.max(0.25, value)), 0) || 1
+      const rowHeight = Math.max(96, usable / sumAspect)
+      for (let index = row.start; index < row.end; index += 1) {
+        const image = images[index]
+        const cellWidth = widths[index - row.start]
+        image.style.width = `${Math.round(cellWidth)}px`
+        image.style.height = `${Math.round(rowHeight)}px`
+        image.style.objectFit = 'cover'
+      }
+    }
+  }
+}
+
 function renderStaticHtml(html: string): void {
   if (!contentRoot.value) return
   disposeLocalImages()
@@ -907,7 +1143,8 @@ function renderStaticHtml(html: string): void {
   mountInteractiveBlocks()
   renderInlineMathPlots()
   enhanceTables()
-  void hydrateLocalReferences()
+  layoutImageMosaics()
+  void hydrateLocalReferences().then(() => layoutImageMosaics())
 }
 
 function renderInlineMathPlots(): void {
@@ -1192,7 +1429,15 @@ function onRootImageError(event: Event) {
   showImageFallback(image)
 }
 
+// 窗口宽度变了，图片组的行宽要重算：内联宽度是 px，不重算就会溢出或留白。
+let mosaicResizeTimer: ReturnType<typeof setTimeout> | undefined
+function scheduleMosaicLayout(): void {
+  clearTimeout(mosaicResizeTimer)
+  mosaicResizeTimer = setTimeout(() => layoutImageMosaics(), 120)
+}
+
 onMounted(async () => {
+  window.addEventListener('resize', scheduleMosaicLayout)
   contentRoot.value?.addEventListener('click', onRootClick, true)
   contentRoot.value?.addEventListener('contextmenu', onReferenceContextMenu, true)
   contentRoot.value?.addEventListener('error', onRootImageError, true)
@@ -1206,6 +1451,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(mosaicResizeTimer)
+  window.removeEventListener('resize', scheduleMosaicLayout)
   themeObserver?.disconnect()
   themeObserver = null
   disposeLocalImages()
@@ -1333,9 +1580,51 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
   display: none;
 }
 
+/* 图片组：整段都是图时按比例铺满每一行（宽度/高度由 layoutImageMosaics 计算）。 */
+/* user:“分格全部都是居中对齐哦，不要让它左对齐了，否则看着就会很不对称”+(行内居中：
+   最后一行不满时居中收口，整块左右对称。) */
+.markdown-body :deep(p.image-mosaic) {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+/* 单张图也居中，避免独占一行时贴在左边。 */
+.markdown-body :deep(p:has(> img:only-child)),
+.markdown-body :deep(p:has(> a:only-child > img)) {
+  display: flex;
+  justify-content: center;
+}
+
+.markdown-body :deep(p.image-mosaic img) {
+  max-width: none;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--theme-main-border);
+}
+
 /* 流式期间图表占位：给一点高度，避免代码块在渲染前塌成一条线。 */
 .markdown-body :deep(.chart-placeholder) {
   min-height: 20px;
+}
+
+/* user:“对于这个图片的缩略图，我认为有一个最小尺寸…如果满足大于这个最小尺寸，
+   那就把它们合成一排”+(不再固定两列：给每块一个最小可用宽度，由容器宽度决定一行
+   放几个。1000px 能放三块就放三块，600px 放两块，360px 自然退成一列。) */
+.markdown-body :deep(.half-row) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 8px;
+  align-items: start;
+  /* 行内同样居中收口，和图片组保持同一种对称观感。 */
+  justify-content: center;
+}
+
+.markdown-body :deep(.half-row > [data-half]) {
+  display: block;
+  min-width: 0;
+  width: auto;
 }
 .markdown-body :deep(.code-copy) {
   position: absolute;

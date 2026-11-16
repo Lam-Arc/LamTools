@@ -370,9 +370,11 @@ describe('ChatThread process cards', () => {
     expect(processToolRowRule).toContain('justify-content: flex-start');
     expect(processToolRowRule).toContain('flex-wrap: nowrap');
 
-    expect(commandOutputRule).toContain('border: 1px solid');
-    expect(commandOutputRule).toContain('border-radius: var(--radius-sm)');
-    expect(commandOutputRule).toContain('background: var(--theme-main-sunken-background, rgba(0, 0, 0, 0.32))');
+    // user:“直接把自带的那层给处理掉 为新系统让位”+“不然的话 我选了无，结果命令还是带个框”
+    // +(命令窗不再自带窗框：底色/描边/圆角只由「消息流」的容器配置给，选「无」就没有框。)
+    expect(commandOutputRule).not.toContain('border:');
+    expect(commandOutputRule).not.toContain('border-radius:');
+    expect(commandOutputRule).not.toContain('background:');
   });
 
   it('renders compaction rows with a status icon and compact k-token detail', () => {
@@ -970,11 +972,15 @@ describe('ChatThread process cards', () => {
 
     // user:“工具行那个✔和✕，用图标，不要纯勾纯 x”+(成败标记改成图标，文字里不再出现 ✓/✗)。
     // 命令成功：绿勾图标；命令失败：红叉图标带退出码。
+    // user:“对的不用显示勾，错的直接标红，也不要显示叉”+(成败一律不画图标：成功只留
+    // 结论文字（这里为空），失败只把摘要置红。)
     const okFlag = rowWith('运行 echo ok')!.find('.process-tool-flag--good');
-    expect(okFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(okFlag.find('.process-tool-flag-icon').exists()).toBe(false);
     expect(okFlag.text()).toBe('');
+    // user:“把过程行的对勾给失败去掉，失败直接把那一行的摘要置红就行了”+(失败行不留
+    // 勾叉图标，成败只看摘要颜色与结论文字。)
     const failFlag = rowWith('运行 exit 3')!.find('.process-tool-flag--bad');
-    expect(failFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(failFlag.find('.process-tool-flag-icon').exists()).toBe(false);
     expect(failFlag.text()).toBe('退出码 3');
     // 命令运行中：显示已运行时长（取整秒）。
     expect(rowWith('运行 sleep 60')!.find('.process-tool-flag--muted').text()).toMatch(/^\d+s$/);
@@ -984,10 +990,10 @@ describe('ChatThread process cards', () => {
     expect(editRow.find('.process-tool-flag--stat .process-tool-flag-del').text()).toBe('−1');
     // 测试结论：通过绿、失败红，同样用图标，文字只留结论。
     const testPassFlag = rowWith('运行 vitest run')!.find('.process-tool-flag--good');
-    expect(testPassFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(testPassFlag.find('.process-tool-flag-icon').exists()).toBe(false);
     expect(testPassFlag.text()).toBe('通过');
     const testFailFlag = rowWith('运行 vitest run --bail')!.find('.process-tool-flag--bad');
-    expect(testFailFlag.find('.process-tool-flag-icon').exists()).toBe(true);
+    expect(testFailFlag.find('.process-tool-flag-icon').exists()).toBe(false);
     expect(testFailFlag.text()).toBe('失败');
   });
 
@@ -2485,7 +2491,7 @@ describe('ChatThread process cards', () => {
     expect(wrapper.findAll('.tool-card-body')).toHaveLength(0);
   });
 
-  it('uses one-line titles, scrollable three-line previews, scrollable five-line expanded cards, and animated running icons', () => {
+  it('uses one-line titles, scrollable six-line previews, scrollable ten-line expanded cards, and animated running icons', () => {
     const source = readChatThreadSource(resolve(__dirname, '../src'));
     const headerRule = source.match(/\.thread \.process-card-header\s*\{[^}]+\}/)?.[0] || '';
     const titleRule = source.match(/\.process-card-preview,[\s\S]*?\{[^}]+\}/)?.[0] || '';
@@ -2495,13 +2501,20 @@ describe('ChatThread process cards', () => {
     const toolExpandedRule = source.match(/\.tool-card-body\.process-card-body--expanded \.diff-lines,[\s\S]*?\{[^}]+\}/)?.[0] || '';
     expect(headerRule).toContain('padding: 4px 0');
     expect(titleRule).toContain('white-space: nowrap');
-    expect(reasoningPreviewRule).toContain('calc(3 * 1.65em)');
+    // 高度先吃设置项的真源变量，没有才回落到行数公式（一级默认 6 行）
+    expect(reasoningPreviewRule).toContain('var(--ms-proc-height-1,');
+    expect(reasoningPreviewRule).toContain('var(--ms-proc-lines-1, 6)');
+    expect(reasoningPreviewRule).toContain('var(--ms-proc-body-line-height, 1.65)');
+    expect(reasoningPreviewRule).toContain('var(--ms-proc-body-pad-y, 10px)');
     expect(reasoningPreviewRule).toContain('overflow: auto');
-    expect(reasoningExpandedRule).toContain('calc(5 * 1.65em)');
+    // 二级同样走真源变量，回落默认 10 行
+    expect(reasoningExpandedRule).toContain('var(--ms-proc-height-2,');
+    expect(reasoningExpandedRule).toContain('var(--ms-proc-lines-2, 10)');
     expect(reasoningExpandedRule).toContain('overflow: auto');
-    expect(toolPreviewRule).toContain('calc(3 * 1.5em)');
+    // 工具正文内层滚动容器跟着一级/二级行数走（一级 6 行、二级 10 行）
+    expect(toolPreviewRule).toContain('var(--ms-proc-lines-1, 6)');
     expect(toolPreviewRule).toContain('overflow: auto');
-    expect(toolExpandedRule).toContain('calc(5 * 1.5em)');
+    expect(toolExpandedRule).toContain('var(--ms-proc-lines-2, 10)');
     expect(toolExpandedRule).toContain('overflow: auto');
     expect(toolPreviewRule).toContain('.command-output-result');
     expect(toolPreviewRule).not.toContain('max-height: 800px');

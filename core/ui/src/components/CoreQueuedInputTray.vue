@@ -147,13 +147,14 @@ function onDragEnd(): void {
       </div>
       <div class="core-queued-input-actions">
         <!-- 折叠态：省略号指示器 -->
-        <button class="core-queued-input-ellipsis" tabindex="-1" aria-hidden="true">
+        <!-- user:“确保视觉、功能和交互不退化”+(省略号只是装饰，不应成为可点击或提交表单的控件)。 -->
+        <span class="core-queued-input-ellipsis" aria-hidden="true">
           <svg viewBox="0 0 16 4" aria-hidden="true" class="ellipsis-icon">
             <circle cx="2" cy="2" r="1.5" fill="currentColor" />
             <circle cx="8" cy="2" r="1.5" fill="currentColor" />
             <circle cx="14" cy="2" r="1.5" fill="currentColor" />
           </svg>
-        </button>
+        </span>
         <!-- 展开态：三个操作按钮 -->
         <div class="core-queued-input-buttons">
           <button
@@ -390,7 +391,8 @@ function onDragEnd(): void {
   height: 4px;
 }
 
-.core-queued-input-actions:hover .core-queued-input-ellipsis {
+.core-queued-input-actions:hover .core-queued-input-ellipsis,
+.core-queued-input-actions:focus-within .core-queued-input-ellipsis {
   opacity: 0;
   pointer-events: none;
   transition: opacity 80ms ease;

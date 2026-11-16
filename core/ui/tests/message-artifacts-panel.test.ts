@@ -108,6 +108,8 @@ describe('「本轮产出」面板：内部去重', () => {
         }),
       },
     })
+    // 本轮产出默认全部折叠，先展开再看条目。
+    await wrapper.get('[data-reference-toggle]').trigger('click')
     expect(wrapper.findAll('.message-artifacts .reference-item--media')).toHaveLength(1)
     // 保留的是带 id 的条目：src 走 artifact 端点而非 files/raw
     await vi.waitFor(() => {
@@ -116,25 +118,27 @@ describe('「本轮产出」面板：内部去重', () => {
     })
   })
 
-  it('read_file base64 图（无 id/uri）按内容去重', () => {
+  it('read_file base64 图（无 id/uri）按内容去重', async () => {
     const m = msg('assistant:t3', [
       part('p1', [artifact(undefined, { dataUrl: 'data:image/png;base64,AAAA' })]),
       part('p2', [artifact(undefined, { dataUrl: 'data:image/png;base64,AAAA' })]),
     ])
     const wrapper = mountMessageView( { props: { msg: m } })
+    await wrapper.get('[data-reference-toggle]').trigger('click')
     expect(wrapper.findAll('.message-artifacts .reference-item--media')).toHaveLength(1)
   })
 
-  it('不同图正常保留', () => {
+  it('不同图正常保留', async () => {
     const m = msg('assistant:t4', [
       part('p1', [artifact('workspace://.lam/artifacts/a.png')]),
       part('p2', [artifact('workspace://.lam/artifacts/b.png')]),
     ])
     const wrapper = mountMessageView( { props: { msg: m } })
+    await wrapper.get('[data-reference-toggle]').trigger('click')
     expect(wrapper.findAll('.message-artifacts .reference-item--media')).toHaveLength(2)
   })
 
-  it('展示代码/配置/文档 file_change，并排除 command/file-read 证据', () => {
+  it('展示代码/配置/文档 file_change，并排除 command/file-read 证据', async () => {
     // file_change 现在要"被汇报文本以路径提到"或"本回合进了资料库"才进面板，
     // 所以这份夹具的汇报文本报出这三个产物路径（旧写法是写过的文件全进）。
     const m: CoreMessage = {
@@ -152,6 +156,7 @@ describe('「本轮产出」面板：内部去重', () => {
       content: '本轮产物：`src/app.ts`、`settings.jsonc`、`README.md`。',
     }
     const wrapper = mountMessageView({ props: { msg: m } })
+    await wrapper.get('[data-reference-toggle]').trigger('click')
     const cards = wrapper.findAll('.message-artifacts .reference-item:not(.reference-item--media):not(.reference-item--more)')
     expect(cards).toHaveLength(3)
     expect(wrapper.text()).toContain('本轮产出')

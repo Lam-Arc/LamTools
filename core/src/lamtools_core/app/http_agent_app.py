@@ -260,6 +260,8 @@ def _runtime_health(app_state: dict[str, Any]) -> dict[str, Any]:
         alive = alive and bool(watch.get("alive"))
     failing = bool(arrange.get("consecutive_failures")) or bool(watch.get("consecutive_failures"))
     lease = app_state.get("scheduler_lease")
+    startup = app_state.get("startup_recovery") or {}
+    startup_state = str(startup.get("state") or "")
     lease_state = (
         "acquired"
         if lease is not None and getattr(lease, "acquired", False)
@@ -267,12 +269,20 @@ def _runtime_health(app_state: dict[str, Any]) -> dict[str, Any]:
         if lease is not None
         else "unknown"
     )
-    if lease_state == "held-by-another-process":
+    if startup_state == "running":
+        # user:“setup/constant 打不开了”+(端口已经能服务，但上次中断的修复还在后台跑：
+        # 如实说“启动中”，既不谎报 ok，也不让调用方误以为调度循环死了)。
+        status = "starting"
+    elif lease_state == "held-by-another-process":
         status = "failed" if not alive else "degraded"
     else:
         status = "failed" if not alive else "degraded" if failing else "ok"
+    if startup_state == "failed" and status == "ok":
+        # 修复失败只降级：接口仍可用，但残留可能还没修完，重试前要知道。
+        status = "degraded"
     return {
         "status": status,
+        "startup": startup,
         "arrange": arrange,
         "observer": watch,
         "scheduler_lease": lease_state,
@@ -907,87 +917,33 @@ def create_core_agent_http_app(
         # starts bind their dependencies. Reuse the normal readiness join.
         await await_plugin_backends(app_state["plugin_runtimes"])
         _logger.info("[startup] operation catalog ready in %.3fs", perf_counter() - phase_started)
-        phase_started = perf_counter()
         app_state["plugin_system_host"] = getattr(agent_operations, "plugin_system_host", None)
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
+        # user:“setup/constant 打不开了”+(上次中断留下的修复不再挡在“服务就绪”前面：
+        # 先把端口开起来，健康检查通过、界面先出来；释放残留所有权、恢复残留回合、
+        # 重排未完成任务、对账子代理仍按原顺序在后台完成。顺序不能反：被死进程占着的
+        # 会话若先被 reaper 看到，会被当成「别的进程还在跑」直接跳过，用户重试也起不来)。
+        #
         # user:“服务器重启后，应能够识别已死亡的执行进程，安全释放旧任务占用，使用户
-        # 可以继续或重试”+(必须先回收失效所有权，再让下面的 reaper 收尾快照：顺序反了的话，
-        # 被死进程占着的会话会被 reaper 当成「别的进程还在跑」直接跳过，用户重试也起不来)。
-        try:
-            released = await core_db_handle.runtime_state_store.release_orphaned_owners()
-            if released:
-                _logger.warning("[startup] released %d orphaned run(s)", released)
-        except BaseException:
-            _logger.exception("[startup] orphaned run release failed (non-fatal)")
-        # Reap turns left durably "running"/"waiting"/"interrupting" by an
-        # unexpected shutdown, mirroring arrange job recovery. Without this the
-        # durable-snapshot guard in turn.start blocks the thread with
-        # "active turn already exists" until a manual turn.cancel.
+        # 可以继续或重试”+(修复仍然要做，只是不再计入启动耗时；每一步失败都只降级，
+        # 不阻止服务提供接口)。
         #
         # user:“启动有变的异常之久了”+(恢复 5 个残留回合要 26 秒；先把服务起起来，
         # 恢复放到后台，恢复事件写完后界面自然更新。)
-        async def _recover_stale_in_background() -> None:
-            started = perf_counter()
-            try:
-                await recover_stale_active_turns(context=live_context())
-            except BaseException:
-                _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
-            try:
-                from .live_operations import reconcile_open_interactions
-
-                await reconcile_open_interactions(context=live_context())
-            except BaseException:
-                _logger.exception(
-                    "[startup] decision pool reconciliation failed (non-fatal)"
-                )
-            _logger.info(
-                "[startup:background] stale-turn recovery ready in %.3fs",
-                perf_counter() - started,
-            )
-
-        stale_recovery_task = asyncio.create_task(
-            _recover_stale_in_background(), name="startup-stale-turn-recovery"
-        )
-        app_state["stale_recovery_task"] = stale_recovery_task
-        # 恢复在后台完成；它自己的日志带 [startup:background]，不再计入启动耗时。
-        # Approval/question continuations are durable jobs. A process that
-        # died after claiming one leaves a leased row; reopen it now and run
-        # each job in its own task so the runtime registry keeps one claim per
-        # run (the same contract as a live RPC continuation).
-        try:
-            recovery_context = live_context()
-            await recovery_context.turn_store.requeue_running_jobs()
-            recovery_worker = recovery_context.turn_worker
-            recovery_tasks: list[asyncio.Task[Any]] = []
-            for recovery_thread_id in await recovery_context.turn_store.list_pending_job_threads():
-                for recovery_job in await recovery_context.turn_store.list_jobs(
-                    recovery_thread_id, status="pending"
-                ):
-                    recovery_tasks.append(
-                        asyncio.create_task(
-                            recovery_worker.run_job(str(recovery_job.get("job_id") or "")),
-                            name=f"turn-recovery:{recovery_job.get('job_id')}",
-                        )
-                    )
-            app_state["turn_recovery_tasks"] = recovery_tasks
-        except BaseException:
-            _logger.exception("[startup] continuation job recovery failed (non-fatal)")
-        from .sub_agent_recovery import reconcile_sub_agent_state
-        try:
-            await reconcile_sub_agent_state(
-                context=live_context(), data_dir=resolved_data_dir, acknowledge_legacy_mail=True,
-            )
-        except Exception:
-            _logger.exception("[startup] sub-agent state reconciliation failed; watchdog will retry")
+        recovery_state: dict[str, Any] = {
+            "state": "running",
+            "phase": "orphaned-owners",
+            "elapsed_seconds": 0.0,
+        }
+        app_state["startup_recovery"] = recovery_state
         # user:“全局并发限制（单实例运行）”+(同一份数据目录只能有一个调度器在跑；
         # 第二个进程照常提供接口，但不再领任务，避免并发上限被进程数放大)。
+        # 取锁只是文件操作，放在前台：健康检查要能立刻说清“谁在调度”。
         scheduler_lease = SchedulerLease(resolved_data_dir / "arrange-scheduler.lock")
         app_state["scheduler_lease"] = scheduler_lease
-        if scheduler_lease.acquire():
-            await arrange_runner.start()
-            await observer_supervisor.start()
-        else:
+        scheduler_lease_acquired = scheduler_lease.acquire()
+        if not scheduler_lease_acquired:
             _logger.warning(
                 "[startup] arrange scheduler disabled: another instance holds %s (pid=%s)",
                 scheduler_lease.path,
@@ -996,16 +952,115 @@ def create_core_agent_http_app(
         # Watches host memory so a turn stopped by memory exhaustion continues by
         # itself once the machine can afford it, and closes the turns whose
         # recorded ending never reached the snapshot (a memory crash usually
-        # stops the writer between the two).
+        # stops the writer between the two). 构造放在前台，启动放到修复之后：
+        # 它会把“结尾没写进快照”的回合收掉，和残留回合恢复碰同一个会话时必须排在后面。
         memory_resume_supervisor = MemoryResumeSupervisor(
             context=live_context(),
             sub_agent_data_dir=resolved_data_dir,
         )
         app_state["memory_resume_supervisor"] = memory_resume_supervisor
-        try:
-            await memory_resume_supervisor.start()
-        except BaseException:
-            _logger.exception("[startup] memory resume supervisor failed to start (non-fatal)")
+
+        async def _recover_after_startup() -> None:
+            started = perf_counter()
+
+            def enter_phase(name: str) -> None:
+                recovery_state["phase"] = name
+                recovery_state["elapsed_seconds"] = round(perf_counter() - started, 3)
+
+            try:
+                enter_phase("orphaned-owners")
+                try:
+                    released = await core_db_handle.runtime_state_store.release_orphaned_owners()
+                    if released:
+                        _logger.warning("[startup] released %d orphaned run(s)", released)
+                except Exception:
+                    _logger.exception("[startup] orphaned run release failed (non-fatal)")
+                # Reap turns left durably "running"/"waiting"/"interrupting" by an
+                # unexpected shutdown, mirroring arrange job recovery. Without this the
+                # durable-snapshot guard in turn.start blocks the thread with
+                # "active turn already exists" until a manual turn.cancel.
+                enter_phase("stale-turns")
+                try:
+                    await recover_stale_active_turns(context=live_context())
+                except Exception:
+                    _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
+                try:
+                    from .live_operations import reconcile_open_interactions
+
+                    await reconcile_open_interactions(context=live_context())
+                except Exception:
+                    _logger.exception(
+                        "[startup] decision pool reconciliation failed (non-fatal)"
+                    )
+                _logger.info(
+                    "[startup:background] stale-turn recovery ready in %.3fs",
+                    perf_counter() - started,
+                )
+                # Approval/question continuations are durable jobs. A process that
+                # died after claiming one leaves a leased row; reopen it now and run
+                # each job in its own task so the runtime registry keeps one claim per
+                # run (the same contract as a live RPC continuation).
+                enter_phase("continuation-jobs")
+                try:
+                    recovery_context = live_context()
+                    await recovery_context.turn_store.requeue_running_jobs()
+                    recovery_worker = recovery_context.turn_worker
+                    recovery_tasks: list[asyncio.Task[Any]] = []
+                    for recovery_thread_id in await recovery_context.turn_store.list_pending_job_threads():
+                        for recovery_job in await recovery_context.turn_store.list_jobs(
+                            recovery_thread_id, status="pending"
+                        ):
+                            recovery_tasks.append(
+                                asyncio.create_task(
+                                    recovery_worker.run_job(str(recovery_job.get("job_id") or "")),
+                                    name=f"turn-recovery:{recovery_job.get('job_id')}",
+                                )
+                            )
+                    app_state["turn_recovery_tasks"] = recovery_tasks
+                except Exception:
+                    _logger.exception("[startup] continuation job recovery failed (non-fatal)")
+                enter_phase("sub-agents")
+                from .sub_agent_recovery import reconcile_sub_agent_state
+
+                try:
+                    await reconcile_sub_agent_state(
+                        context=live_context(), data_dir=resolved_data_dir, acknowledge_legacy_mail=True,
+                    )
+                except Exception:
+                    _logger.exception("[startup] sub-agent state reconciliation failed; watchdog will retry")
+                enter_phase("memory-resume")
+                try:
+                    await memory_resume_supervisor.start()
+                except Exception:
+                    _logger.exception("[startup] memory resume supervisor failed to start (non-fatal)")
+                enter_phase("scheduler")
+                if scheduler_lease_acquired:
+                    await arrange_runner.start()
+                    await observer_supervisor.start()
+                recovery_state["state"] = "done"
+                recovery_state["phase"] = "done"
+                recovery_state["elapsed_seconds"] = round(perf_counter() - started, 3)
+                _logger.info(
+                    "[startup:background] interruption recovery ready in %.3fs",
+                    perf_counter() - started,
+                )
+            except asyncio.CancelledError:
+                recovery_state["state"] = "cancelled"
+                recovery_state["elapsed_seconds"] = round(perf_counter() - started, 3)
+                raise
+            except Exception:
+                # 修复是尽力而为：失败只标记降级，服务继续提供接口。
+                recovery_state["state"] = "failed"
+                recovery_state["elapsed_seconds"] = round(perf_counter() - started, 3)
+                _logger.exception("[startup:background] interruption recovery failed")
+
+        startup_recovery_task = asyncio.create_task(
+            _recover_after_startup(), name="startup-interruption-recovery"
+        )
+        app_state["startup_recovery_task"] = startup_recovery_task
+        # 旧键保留：关机路径与既有巡检按这个名字找恢复任务。
+        app_state["stale_recovery_task"] = startup_recovery_task
+        # 恢复在后台完成；它自己的日志带 [startup:background]，不再计入启动耗时。
         _logger.info("[startup] backend ready in %.3fs", perf_counter() - startup_started)
 
         # Optional plugin backends are loaded and started by
@@ -1043,6 +1098,12 @@ def create_core_agent_http_app(
         set_agent_run_store_factory(None)
         for recovery_task in app_state.get("turn_recovery_tasks") or []:
             recovery_task.cancel()
+        # user:“setup/constant 打不开了”+(修复在后台跑，退出时必须先停它：
+        # 否则数据库已经关了，恢复任务还在写，关机变成半截状态)。
+        startup_recovery_task = app_state.get("startup_recovery_task")
+        if startup_recovery_task is not None and not startup_recovery_task.done():
+            startup_recovery_task.cancel()
+            await asyncio.gather(startup_recovery_task, return_exceptions=True)
         wal_maintenance_task = app_state.get("wal_maintenance_task")
         if wal_maintenance_task is not None:
             wal_maintenance_task.cancel()
@@ -1094,17 +1155,17 @@ def create_core_agent_http_app(
             ),
         )
 
-    app = create_app(
-        access_policy=access_policy,
-        members=members,
-        title=runtime_spec.name,
-        enable_core_routes=False,
-        frontend_dir=frontend_dir,
-        health_payload=lambda: {
+    def _health_payload() -> dict[str, Any]:
+        # 只算一次：同一份运行时状态同时供 status / startup / runtime 使用。
+        runtime_health = _runtime_health(app_state)
+        return {
             # user:“后台调度器异常自愈及健康检查”+(不能只看 HTTP 是否活着：
             # 调度循环死掉时接口必须自己说出来)。
-            "status": _runtime_health(app_state)["status"],
-            "runtime": _runtime_health(app_state),
+            "status": runtime_health["status"],
+            # user:“setup/constant 打不开了”+(启动阶段可被外部观察：界面/巡检能区分
+            # “还在恢复残留”和“调度循环真的挂了”，不用再靠固定超时猜)。
+            "startup": runtime_health.get("startup", {}),
+            "runtime": runtime_health,
             "agent": runtime_spec.member_id,
             "agent_id": runtime_spec.id,
             "agent_name": runtime_spec.name,
@@ -1118,7 +1179,15 @@ def create_core_agent_http_app(
             # Internal absolute paths (work_root / core_db) were previously
             # exposed to any loopback caller — auxiliary info for targeted
             # attacks (audit 03 S4). Nothing depends on those fields.
-        },
+        }
+
+    app = create_app(
+        access_policy=access_policy,
+        members=members,
+        title=runtime_spec.name,
+        enable_core_routes=False,
+        frontend_dir=frontend_dir,
+        health_payload=_health_payload,
         on_startup=[startup_core_agent],
         on_shutdown=[shutdown_core_agent],
     )

@@ -1,0 +1,212 @@
+/**
+ * 过程行多媒体内联预览（ProcessMediaPreview 的全局样式）。
+ *
+ * user:“过程行读取文件且 MIME 属于多媒体时，在过程行标题下方直接挂内联预览区”+
+ * (缩略图直接长在过程行里：单文件按原图比例、多文件横向轨，尺寸与配色统一收口在这里。)
+ *
+ * 契约变量（设置项那边定义，这里只消费，全部带兜底默认值）：
+ *   --ms-proc-radius-sm 8px / --ms-proc-radius-lg 12px / --ms-proc-border-color /
+ *   --ms-proc-fill-color / --ms-proc-fill-alpha 0 / --ms-proc-blur 0px /
+ *   --ms-proc-body-font-size 12px
+ * 颜色一律取主题变量，本文件不出现任何字面量色值。
+ */
+
+.process-media {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 6px;
+}
+
+/* 单文件：高度由组件锁定，宽度按原图比例算出，60% 封顶在组件的内联样式里。 */
+.process-media--single {
+  justify-content: flex-start;
+}
+
+/* 多文件：横向可滑动缩略图轨，单张 72×72 裁切铺满。 */
+.process-media--track {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.process-media--track .process-media__cell {
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+}
+
+.process-media__cell {
+  position: relative;
+  display: block;
+  flex: 0 1 auto;
+  box-sizing: border-box;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--ms-proc-border-color, var(--line, currentColor));
+  border-radius: var(--ms-proc-radius-lg, 12px);
+  background: color-mix(
+    in srgb,
+    var(--ms-proc-fill-color, var(--theme-main-text, currentColor)) calc(var(--ms-proc-fill-alpha, 0) * 100%),
+    transparent
+  );
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  backdrop-filter: blur(var(--ms-proc-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--ms-proc-blur, 0px));
+  transition: border-color 0.16s ease, transform 0.16s ease;
+}
+
+.process-media__cell:hover {
+  border-color: color-mix(in srgb, var(--blue, currentColor) 46%, transparent);
+}
+
+.process-media__cell:focus-visible {
+  outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, currentColor);
+  outline-offset: var(--focus-ring-offset, 2px);
+}
+
+.process-media__cell img,
+.process-media__cell video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 右下角角标：体积 / 分辨率，压在图上但不挡点击。 */
+.process-media__meta {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  box-sizing: border-box;
+  max-width: calc(100% - 8px);
+  padding: 1px 5px;
+  border-radius: var(--ms-proc-radius-sm, 8px);
+  background: color-mix(in srgb, black 62%, transparent);
+  color: var(--text, currentColor);
+  font-size: calc(var(--ms-proc-body-font-size, 12px) - 2px);
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* user:“超过 5 张时末位显示 +N 遮罩”+(末位整块盖住，剩余张数一眼可见)。 */
+.process-media__more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, black 56%, transparent);
+  color: var(--text, currentColor);
+  font-size: var(--ms-proc-body-font-size, 12px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* user:“音视频……首帧缩略图或波形图占位”+(首帧图铺满，中央叠播放三角；不加载解码器)。 */
+.process-media__poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.process-media__poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.process-media__play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, black 26%, transparent);
+}
+
+.process-media__play-triangle {
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 11px solid color-mix(in srgb, var(--text, currentColor) 92%, transparent);
+}
+
+/* PDF 首页缩略图上的格式角标，与类型徽章保持同一套圆角。 */
+.process-media__doc-chip {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  padding: 1px 4px;
+  border-radius: var(--ms-proc-radius-sm, 8px);
+  background: color-mix(in srgb, black 58%, transparent);
+  color: var(--text, currentColor);
+  font-size: calc(var(--ms-proc-body-font-size, 12px) - 3px);
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+}
+
+/* 音频没有首帧：静态波形占位，不额外拉解码器。 */
+.process-media__wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0 6px;
+  background: color-mix(in srgb, var(--purple, currentColor) 16%, transparent);
+}
+
+.process-media__wave span {
+  flex: 1 1 auto;
+  min-height: 2px;
+  max-width: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-main-text, currentColor) 58%, transparent);
+}
+
+/* user:“平滑降级成对应格式的文件类型徽章卡片，绝不出现破图图标”+
+   (坏文件/超时/无地址都落到这里：类型徽章 + 文件名 + 体积，和正常缩略图同尺寸同圆角)。 */
+.process-media__fallback {
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  text-align: center;
+  font-size: var(--ms-proc-body-font-size, 12px);
+  color: color-mix(in srgb, var(--theme-main-text, currentColor) 66%, transparent);
+}
+
+.process-media__fallback-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-media__fallback-meta {
+  font-size: calc(var(--ms-proc-body-font-size, 12px) - 2px);
+  opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .process-media__cell {
+    transition: none;
+  }
+}

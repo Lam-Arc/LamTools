@@ -557,22 +557,32 @@ function close(returnFocus = false): void {
   })
 }
 
+// user:“确保视觉、功能和交互不退化”+(禁用时立即收起已打开或悬浮的模型菜单，停止动画并禁止更改)。
+watch(() => props.disabled, value => {
+  if (!value) return
+  cancel(); clearHoverPose(); flightTimeline?.kill(); flightTimeline = null
+  leaveTween?.kill(); leaveTween = null; resetFlightProps()
+  panel.value?.hidePopover?.(); open.value = false; closing = false; groupMenuOpen.value = false
+}, { flush: 'sync' })
+
 function selectModel(option: CoreSelectOption): void {
-  if (option.disabled) return
+  if (props.disabled || option.disabled) return
   emit('update:modelValue', option.value)
   void nextTick(scrollSelectedModel)
 }
 
 function selectThinking(value: string): void {
+  if (props.disabled) return
   emit('update:thinkingMode', value)
 }
 
 function toggleGroupMenu(): void {
-  if (!modelOptionGroups.value.length) return
+  if (props.disabled || !modelOptionGroups.value.length) return
   groupMenuOpen.value = !groupMenuOpen.value
 }
 
 function selectGroup(group: { key: string }): void {
+  if (props.disabled) return
   activeGroupKey.value = group.key
   groupMenuOpen.value = false
   void nextTick(() => {

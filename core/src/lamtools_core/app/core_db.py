@@ -51,7 +51,7 @@ from .project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from .session_actor import SessionActorRegistry
 from ..superagent.store import SqlAlchemySuperagentStore
-from .sqlite_write import SQLiteWriteCoordinator, configure_sqlite_engine
+from .sqlite_write import SQLiteWriteCoordinator, configure_sqlite_engine, wal_maintenance_once
 
 if TYPE_CHECKING:
     from .project_store import CoreProjectStore
@@ -2513,6 +2513,11 @@ class CoreAppDb:
             if write_final is not None:
                 log = _logger.warning if write_final.checked_out else _logger.info
                 log("[db:pool] write pool shutdown %s", write_final.as_dict())
+        # user:“WAL 不允许持续无界增长”+(退出前收口一次：不让本轮留下的 WAL 跨会话累积)。
+        try:
+            await wal_maintenance_once(self.session_factory, aggressive=True)
+        except Exception:  # noqa: BLE001 - shutdown must never fail on housekeeping
+            _logger.warning("[db:pool] WAL truncate on shutdown failed", exc_info=True)
         if self.write_engine is not None:
             await self.write_engine.dispose()
         telemetry = self.pool_telemetry
@@ -2630,6 +2635,15 @@ async def open_core_app_db(
         raise
     finally:
         await connection.close()
+
+    # user:“WAL 不允许持续无界增长”+(上次异常退出可能留下几百 MB 的 WAL；启动时还没有并发读，
+    # 是唯一能安全截断的时刻，也让崩溃恢复不必从巨大的 WAL 重放)。
+    try:
+        await wal_maintenance_once(
+            async_sessionmaker(engine, expire_on_commit=False), aggressive=True
+        )
+    except Exception:  # noqa: BLE001 - startup must not fail on WAL housekeeping
+        _logger.warning("[startup:database] WAL truncate on startup failed", exc_info=True)
 
     async with _database_startup_phase("store assembly"):
         session_factory = async_sessionmaker(engine, expire_on_commit=False)

@@ -172,6 +172,11 @@ export function useCorePageBindings(context: {
     'onUpdateImage': uiPreferences.updateThemeImage,
     'onUpdateImageFit': uiPreferences.updateThemeImageFit,
     'onUpdateProcessIconColor': uiPreferences.updateProcessIconColor,
+    // user:“把配置落成全局 CSS 变量 + 根元素 data 属性”+(设置页只负责改配置；
+    // 根元素上的 --ms-* 变量与 data-ms-* 属性由 useCoreUiPreferences 统一写入)。
+    'messageStream': unref(uiPreferences.messageStream),
+    'onUpdate:messageStream': uiPreferences.setMessageStream,
+    'onResetMessageStream': uiPreferences.resetMessageStream,
     'onAddStop': uiPreferences.addStop,
     'onRemoveStop': uiPreferences.removeStop,
     'onSortStops': uiPreferences.sortStops,

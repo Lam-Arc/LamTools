@@ -132,6 +132,28 @@ describe('AttachmentTray', () => {
     expect(columns[2]!.text()).toContain('d.txt')
   });
 
+  it('lets a lone pill keep its natural height until a media card shares the tray', () => {
+    // user:“假如输入框就只有一个胶囊呢，也要被叠到像是三行那么高的位置吗”+
+    // (没有媒体时不撑高；有媒体时胶囊列才与媒体卡同高并居中)。
+    const pillOnly = mountAttachmentTray({ props: { attachments: [uploaded] } })
+    expect(pillOnly.find('.attachment-tray').classes()).not.toContain('attachment-tray--with-media')
+    expect(pillOnly.findAll('.attachment-column--stack')).toHaveLength(1)
+
+    const withMedia = mountAttachmentTray({
+      props: {
+        attachments: [{
+          ...uploaded,
+          id: 'image-1',
+          filename: 'preview.png',
+          label: 'preview.png',
+          mime_type: 'image/png',
+          preview_type: 'image',
+        }, uploaded],
+      },
+    })
+    expect(withMedia.find('.attachment-tray').classes()).toContain('attachment-tray--with-media')
+  })
+
   it('renders image attachments as thumbnail-only cards', async () => {
     const transport = createFakeTransport({
       status: 200,

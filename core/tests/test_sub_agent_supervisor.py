@@ -1051,3 +1051,70 @@ async def test_supervisor_mirrors_durable_records_into_agent_runs(tmp_path):
         assert store.runs["parent:agent:reader"].status == "running"
     finally:
         await supervisor.shutdown()
+
+
+@dataclass
+class SourceProbeRunner:
+    """Records which parent call the child's next events belong to.
+
+    The parent's mid-run supplement is consumed at a step boundary, so every
+    event after that boundary belongs to the supplement's own call row, not to
+    the call that started the turn. The renderer nests child rows under the tool
+    item named by ``sub_agent.parent_call_id``; if this never changes, the
+    supplement is drawn *after* the work it triggered.
+    """
+
+    work_root: object
+
+    def __post_init__(self) -> None:
+        self.started = asyncio.Event()
+        self.gate = asyncio.Event()
+        self.sources: list[tuple[str, str, str]] = []
+
+    async def run(self, **kwargs):
+        provider = kwargs["parent_source_provider"]
+        self.sources.append(("start", *provider()))
+        self.started.set()
+        await self.gate.wait()
+        kwargs["guidance_source"]()
+        self.sources.append(("after_guidance", *provider()))
+        return SubAgentRunResult(
+            session_id=f"parent:sub:{kwargs['agent']}", run_id="child-run", decision="done",
+            model_id=kwargs["model"], message="done", ended_with_final_response=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_mid_run_message_rebinds_following_child_events_to_its_own_call(tmp_path):
+    """A next-boundary supplement owns the child work it actually triggered.
+
+    user:“修”+(补上渲染顺序：子代理面板里每条补充必须带着它触发的过程，不能
+    让补充排在自己触发的输出后面)。
+    """
+    seed_model(tmp_path)
+    runner = SourceProbeRunner(tmp_path)
+    supervisor = SubAgentSupervisor(
+        parent_thread_id="parent", runner=runner, database_path=tmp_path / "state.sqlite3"
+    )
+    await supervisor.create(type="execute", name="worker", model="test-model", reasoning_level="max")
+
+    await supervisor.message(
+        type="execute", name="worker", prompt="initial work",
+        source_ids={"call_id": "call-start", "run_id": "run-1", "turn_id": "turn-1"},
+    )
+    await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+    accepted = await supervisor.message(
+        type="execute", name="worker", prompt="steer the next step",
+        source_ids={"call_id": "call-steer", "run_id": "run-1", "turn_id": "turn-2"},
+    )
+    assert accepted["delivery_mode"] == "next_boundary"
+
+    runner.gate.set()
+    await asyncio.wait_for(supervisor._tasks["worker"], timeout=1)
+
+    assert runner.sources == [
+        ("start", "call-start", "run-1", "turn-1"),
+        ("after_guidance", "call-steer", "run-1", "turn-2"),
+    ]
+    await supervisor.shutdown()

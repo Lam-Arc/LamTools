@@ -400,19 +400,27 @@ def runtime_fact_to_run_item_events(
             option_text = " / ".join(options) if options else "自由输入"
             lines.append(f"{index}. {title}{suffix}：{option_text}")
         content = ("需要你回答：" + "\n".join(lines)) if lines else "需要你回答（题目数据缺失）"
+        # user:“它确实收到了我的回答”+(组关掉之后要发一条同一身份的事件：这里把关闭原因与
+        # 题目上的答案一起投影进分片，界面据此判定"已回答"；没关的仍然是 waiting。)
+        closed_reason = str(payload.get("closed_reason") or "").strip()
+        group_status = str(payload.get("status") or "pending").strip().lower()
+        is_closed = bool(closed_reason) or group_status in {"done", "closed", "completed"}
+        question_payload: dict[str, Any] = {
+            "type": "questionGroup",
+            "content": content,
+            "question_group_id": str(payload.get("group_id") or ""),
+            "questions": list(questions),
+        }
+        if is_closed:
+            question_payload["closed_reason"] = closed_reason or "done"
         return [
             RunItemEvent(
                 # user:“为什么显示已回答？”+(提问在等用户，它的行状态是 waiting；
-                # 写成 completed 会让卡片一出现就自称已回答。)
+                # 写成 completed 会让卡片一出现就自称已回答——只有真的关闭了才转 completed。)
                 kind="message",
                 item_id=f"{_tool_item_id(fact, payload)}:question",
-                status="waiting",
-                payload={
-                    "type": "questionGroup",
-                    "content": content,
-                    "question_group_id": str(payload.get("group_id") or ""),
-                    "questions": list(questions),
-                },
+                status="completed" if is_closed else "waiting",
+                payload=question_payload,
                 **base,
             )
         ]

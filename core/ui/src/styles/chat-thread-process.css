@@ -170,8 +170,10 @@
    semantic tail; tool titles stay as stable action-and-target labels. */
 .thread .process-card-header {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
-  grid-template-areas: "state preview meta";
+  /* user:“右对齐，同时不要被挤到”+(中间文字列可压缩，行尾的标记与箭头各占 max-content，
+     永远不会被长标题挤没。) */
+  grid-template-columns: 16px minmax(0, 1fr) max-content max-content;
+  grid-template-areas: "state preview meta chevron";
   align-items: center;
   column-gap: var(--space-2);
   row-gap: 0;
@@ -181,6 +183,25 @@
   position: relative;
   border-radius: 4px;
   transition: color var(--dur-base) var(--ease-out);
+}
+/* user:“折叠态补「展开指示箭头」：在标题文字之后加一个箭头，随展开状态旋转 90°”+
+   (尺寸 13、颜色跟随 currentColor；不做 hover 额外效果。旋转挂在包装节点上，
+    若 ProcessChevron 自己也做旋转，落地时删掉下面的 rotate 一行即可，避免转 180°)。 */
+.process-card-chevron {
+  grid-area: chevron;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  color: currentColor;
+  opacity: .55;
+  transform: rotate(0deg);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.process-card-chevron.is-expanded {
+  transform: rotate(90deg);
 }
 .thread .process-card-header::before {
   content: "";
@@ -250,29 +271,57 @@
   color: color-mix(in srgb, var(--theme-main-text, #fff) 70%, transparent);
 }
 .thread .reasoning-body.process-card-body--preview {
-  max-height: calc(3 * 1.65em);
+  /* user:“一级展开（点标题栏触发）：卡片容器包裹，内部 overflow-y:auto；高度默认 6 行（6 × 行高 + 上下内边距）”+
+     (高度＝行数 × 行高 + 上下内边距，全部从 --ms-proc-* 变量读，未配置时用默认值兜底，界面照旧可用)。 */
+  /* user:“高度改为消费设置项给的唯一真源变量，并保留兜底”+(--ms-proc-height-1 没配置时按行数算) */
+  max-height: var(--ms-proc-height-1, calc(var(--ms-proc-lines-1, 6) * 1em * var(--ms-proc-body-line-height, 1.65) + 2 * var(--ms-proc-body-pad-y, 10px)));
+  /* user:“--ms-proc-body-pad-y 要真正驱动内边距”+(上下留白跟着设置走；高度公式里已含 2×pad-y，这里不再叠加) */
+  padding-top: var(--ms-proc-body-pad-y, 10px);
+  padding-bottom: var(--ms-proc-body-pad-y, 10px);
+  font-size: var(--ms-proc-body-font-size, 12px);
   overflow: auto;
   overscroll-behavior: contain;
   cursor: pointer;
 }
 .thread .reasoning-body.process-card-body--expanded {
-  max-height: calc(5 * 1.65em);
+  /* user:“二级展开（点卡片内容区触发）：高度平滑过渡（200ms ease-out）到 10 行”+(与一级同一套变量算高度，默认 10 行)。 */
+  /* user:“高度改为消费设置项给的唯一真源变量，并保留兜底”+(二级用 --ms-proc-height-2，没配置时按行数算) */
+  max-height: var(--ms-proc-height-2, calc(var(--ms-proc-lines-2, 10) * 1em * var(--ms-proc-body-line-height, 1.65) + 2 * var(--ms-proc-body-pad-y, 10px)));
+  font-size: var(--ms-proc-body-font-size, 12px);
   /* user:“已展开时鼠标悬浮自动增高，最多 15 行；移出恢复原高度”+(高度按当前字号的行高计算，切换只做短过渡，避免频繁跳动)。 */
-  transition: max-height 140ms var(--ease-out);
+  transition: max-height 200ms var(--ease-out);
   overflow: auto;
   overscroll-behavior: contain;
 }
 .tool-card-body.process-card-body--preview,
 .tool-card-body.process-card-body--expanded {
-  max-height: 800px;
+  /* user:“tool-card-body 的 800px 也改成按行数算”+(这里先按一级展开的 6 行算，二级展开由下面的 --expanded 规则覆盖成 10 行)。 */
+  /* user:“高度改为消费设置项给的唯一真源变量，并保留兜底”+(工具正文同样走 --ms-proc-height-1) */
+  max-height: var(--ms-proc-height-1, calc(var(--ms-proc-lines-1, 6) * 1em * var(--ms-proc-body-line-height, 1.65) + 2 * var(--ms-proc-body-pad-y, 10px)));
+  /* user:“--ms-proc-body-pad-y 要真正驱动内边距”+(工具正文上下留白也跟随设置) */
+  padding-top: var(--ms-proc-body-pad-y, 10px);
+  padding-bottom: var(--ms-proc-body-pad-y, 10px);
+  font-size: var(--ms-proc-body-font-size, 12px);
   overflow: auto;
+}
+/* user:“二级展开（点卡片内容区触发）：高度平滑过渡（200ms ease-out）到 10 行”+(覆盖上面合并规则里的 6 行上限)。 */
+.tool-card-body.process-card-body--expanded {
+  /* user:“高度改为消费设置项给的唯一真源变量，并保留兜底”+(工具正文二级展开走 --ms-proc-height-2) */
+  max-height: var(--ms-proc-height-2, calc(var(--ms-proc-lines-2, 10) * 1em * var(--ms-proc-body-line-height, 1.65) + 2 * var(--ms-proc-body-pad-y, 10px)));
+  font-size: var(--ms-proc-body-font-size, 12px);
+  transition: max-height 200ms var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-card-body.process-card-body--expanded {
+    transition: none;
+  }
 }
 .tool-card-body.process-card-body--preview .diff-lines,
 .tool-card-body.process-card-body--preview .test-result-output,
 .tool-card-body.process-card-body--preview .tool-output-content,
 .tool-card-body.process-card-body--preview .command-output-result,
 .tool-card-body.process-card-body--preview > .tool-output {
-  max-height: calc(3 * 1.5em);
+  max-height: calc(var(--ms-proc-lines-1, 6) * 1em * 1.5);
   overflow: auto;
   overscroll-behavior: contain;
   cursor: pointer;
@@ -282,14 +331,18 @@
 .tool-card-body.process-card-body--expanded .tool-output-content,
 .tool-card-body.process-card-body--expanded .command-output-result,
 .tool-card-body.process-card-body--expanded > .tool-output {
-  max-height: calc(5 * 1.5em);
+  max-height: calc(var(--ms-proc-lines-2, 10) * 1em * 1.5);
   overflow: auto;
   overscroll-behavior: contain;
 }
-/* user:“已展开时鼠标悬浮自动增高，最多 15 行；移出恢复原高度”+(悬停临时长到内容高度并封顶 15 行，超出仍走内部滚动；未展开态没有悬停规则，悬停不改高度)。 */
-.thread .reasoning-body.process-card-body--expanded:hover {
-  max-height: calc(15 * 1.65em);
+/* user:“超出底部显示渐隐遮罩（gradient mask）提示可继续展开”+
+   (只有一级展开且内容实际溢出时才由 JS 挂 .process-card-body--masked，二级展开不加、未溢出不加)。 */
+.thread .process-card-body--masked {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
 }
+/* user:“鼠标 hover 和不 hover 它的长度不一样，在这次改动之后不应该出现这种情况了”
+   +(高度只由一级/二级展开决定，悬停不再改高度，同一个块不会时高时低)。 */
 @media (prefers-reduced-motion: reduce) {
   .thread .reasoning-body.process-card-body--expanded {
     transition: none;
@@ -606,4 +659,39 @@
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* user:“联网搜索/知识库 → 胶囊式列表；API/状态查询 → 键值胶囊”+(结构化结果换容器后只留
+   一点上下留白，容器形态与描边由组件自己给，这里不再套第二层卡片。)*/
+.thread .tool-pill-row {
+  margin: 6px 0 2px;
+  min-width: 0;
+}
+
+/* user:“代码执行/终端 → 顶部带语言标签与复制按钮”+(标签与复制放在终端窗头部右侧，
+   复制按钮沿用低调按钮观感，不抢命令本身的注意力。)*/
+.thread .command-terminal-lang {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: .55;
+}
+.thread .command-terminal-copy {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  padding: 0 2px;
+  opacity: .6;
+  cursor: pointer;
+}
+.thread .command-terminal-copy:hover {
+  opacity: 1;
+}
+
+/* user:“失败直接把那一行的摘要置红就行了”+(失败行的结论只用颜色表达：
+   摘要文字转警戒红，不再额外画勾叉图标。)*/
+.thread .process-row--failed .process-card-preview {
+  color: color-mix(in srgb, var(--red) 82%, var(--theme-main-text, #fff) 18%);
 }

@@ -131,11 +131,12 @@ Prefer plain Markdown prose. Escalate to rich blocks ONLY when structure or inte
 - **Drafts**: `:::writing{variant="standard|document|email|chat_message|social_post" title="Title" subject="Email Subject"}` ... `:::` for reusable copy/edit drafts. Local-only; never implies sending or saving.
 - **Diagrams & Charts**:
   - ` ```mermaid `: ONLY for flows/trees with >3 nodes (≤3 steps → numbered list).
+  - **Layout flag**: append `half` to a `chart` or `svg` fence (` ```chart half `) to let consecutive blocks share a responsive row — the row fits as many as the width allows with a 280px minimum per block.
   - ` ```chart `: JSON spec rendered natively — bar / line / pie / radar. Shape: `{"type":"bar|line|pie|radar","title":"…","unit":"%","categories":["A","B"],"smooth":false,"area":false,"series":[{"name":"…","data":[1,2],"type":"bar|line"}]}`. bar/line need `categories`; pie uses one series and `categories` as slice labels; radar uses `categories` as axes (≥3) with one series per entity; `smooth` curves a line, `area` fills it with a gradient, and a per-series `type` mixes bars and lines in one frame.
   - ` ```svg `: only for geometry a chart cannot express.
   - **Theme & Contrast**: Use CSS variables/tokens only (never hardcode hex colors; no emoji as icons). Keep node text ≥50% opacity, edges ≥35%, chart bars ≥30%.
 - **Interactive HTML**: Output a fenced `interactive-html` block ONLY at the very end of the reply when user manipulation (simulators, calculators, drag/animate) is needed or requested.
-  - Self-contained HTML/CSS/JS (<256KB), fits within one screen, semantic labeled controls.
+  - Self-contained HTML/CSS/JS (<256KB), semantic labeled controls. Keep it 260–360px tall and size it to its content: never use `100vh` or a full-height layout — the block is capped at 560px, so an oversized stage just gets cropped.
   - Style exclusively with `--background`, `--foreground`, `--control`, `--control-text`, `--border`.
   - Strict sandbox: NO network, external libs, storage, files, or Sunday APIs. Never imply form submission or app actions.
 - **Hard Bans**: No 2-step Mermaid; no tables for <2 dimensions; no carousels, popovers, or click-to-reveal answers; max nesting depth ≤ 2.\

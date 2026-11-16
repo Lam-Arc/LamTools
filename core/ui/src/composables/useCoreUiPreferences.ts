@@ -1,4 +1,11 @@
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
+import {
+  DEFAULT_MESSAGE_STREAM,
+  messageStreamCssVars,
+  messageStreamRootAttrs,
+  normalizeMessageStream,
+  type MessageStreamSettings,
+} from '@/helpers/messageStreamStyle.ts'
 import {
   DEFAULT_THEME_SCHEDULE,
   SUNDAY_DARK_THEME,
@@ -28,6 +35,8 @@ export type CoreUiDensity = 'compact' | 'standard' | 'loose'
 export interface CoreUiPreferencesValue {
   density: CoreUiDensity
   contentWidth: number
+  // user:“在「设置 → 界面」新增「消息流（Message Stream）」配置模块”+(消息流样式与其它界面偏好一起持久化)。
+  messageStream: MessageStreamSettings
   theme: ThemeData
   themeMode: ThemeMode
   themeSchedule: ThemeSchedule
@@ -62,6 +71,8 @@ function runThemeTransition(update: () => void) {
 export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferencesAdapter = {}) {
   const density = ref<CoreUiDensity>('standard')
   const contentWidth = ref(780)
+  // user:“老数据缺字段回落默认值，不能报错”+(normalize 对 undefined 直接给默认配置)。
+  const messageStream = ref<MessageStreamSettings>(normalizeMessageStream(DEFAULT_MESSAGE_STREAM))
   const themeMode = ref<ThemeMode>('system')
   const themeSchedule = ref<ThemeSchedule>({ ...DEFAULT_THEME_SCHEDULE })
   const scheduledThemeMode = ref<ResolvedThemeMode>(resolveScheduledThemeMode(DEFAULT_THEME_SCHEDULE))
@@ -113,6 +124,7 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     if (!value) return
     if (value.density === 'compact' || value.density === 'standard' || value.density === 'loose') density.value = value.density
     contentWidth.value = clampWidth(value.contentWidth)
+    messageStream.value = normalizeMessageStream(value.messageStream)
     if (value.themeMode === 'system' || value.themeMode === 'light' || value.themeMode === 'dark' || value.themeMode === 'scheduled') themeMode.value = value.themeMode
     themeSchedule.value = normalizeThemeSchedule(value.themeSchedule)
     scheduledThemeMode.value = resolveScheduledThemeMode(themeSchedule.value)
@@ -142,6 +154,7 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     return {
       density: density.value,
       contentWidth: contentWidth.value,
+      messageStream: messageStream.value,
       theme: theme.value,
       themeMode: themeMode.value,
       themeSchedule: { ...themeSchedule.value },
@@ -151,6 +164,9 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   }
   function setDensity(value: CoreUiDensity) { density.value = value; void save() }
   function setContentWidth(value: number) { contentWidth.value = clampWidth(value); void save() }
+  // user:“把配置落成全局 CSS 变量 + 根元素 data 属性”+(设置页只改这一份配置，写库后由下面的 watchEffect 落到根元素)。
+  function setMessageStream(value: MessageStreamSettings) { messageStream.value = normalizeMessageStream(value); void save() }
+  function resetMessageStream() { messageStream.value = normalizeMessageStream(DEFAULT_MESSAGE_STREAM); void save() }
   function setThemeMode(value: ThemeMode) {
     if (themeMode.value === value) return
     runThemeTransition(() => {
@@ -210,6 +226,19 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     void save()
   }
 
+  // user:“变量应用时机：在 useCoreUiPreferences 里 watchEffect 写到 document.documentElement，
+  // 随 effectiveThemeMode 同步 data-ms-theme-mode”+(属性写在根元素上，所以样式表里的选择器
+  // 一律用 :root[data-ms-*]，不要写成 .thread[...])。
+  watchEffect(() => {
+    if (typeof document === 'undefined') return
+    const root = document.documentElement
+    const mode = effectiveThemeMode.value
+    const vars = messageStreamCssVars(messageStream.value, { themeMode: mode })
+    for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
+    const attrs = messageStreamRootAttrs(messageStream.value, mode)
+    for (const [name, value] of Object.entries(attrs)) root.setAttribute(name, value)
+  })
+
   onMounted(() => {
     if (typeof window === 'undefined') return
     scheduleTimer = setInterval(() => { syncScheduledTheme() }, SCHEDULE_TICK_MS)
@@ -229,6 +258,7 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   return {
     density, contentWidth, theme, themeMode, themeSchedule, effectiveThemeMode, load, save, snapshot, setDensity,
     setContentWidth, setThemeMode, setThemeSchedule,
+    messageStream, setMessageStream, resetMessageStream,
     resetTheme, applyThemePreset, updateThemeStops, updateThemeAngle, updateThemeOpacity,
     updateThemeText, updateProcessIconColor, addStop, removeStop, sortStops,
     updateThemeFill, updateThemeGlass, updateThemeImage, updateThemeImageFit,

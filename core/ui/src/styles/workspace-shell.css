@@ -45,7 +45,9 @@
   --content-width: 780px;
   /* user:“消息区自适应填满宽度”+(主题里的内容宽度只约束整版界面；聊天正文列与输入栏
      改吃这条填满上限，容器窄就铺满，宽屏才收到 1040px，不再固定 780px 留出大片空白)。 */
-  --content-fill-width: 1040px;
+  /* user:“整条消息的范围应该是左对齐 但是铺满全屏”+(内容列不再收在 1040px：
+     消息、输入栏、设置页一起按可用宽度铺开；想收窄改这一个变量即可。) */
+  --content-fill-width: 100%;
   --keyboard-inset: 0px;
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   /* --native-keyboard-inset is published by a host whose window does not shrink

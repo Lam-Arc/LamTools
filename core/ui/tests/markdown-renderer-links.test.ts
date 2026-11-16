@@ -23,14 +23,15 @@ describe('MarkdownRenderer link click interception', () => {
 
     const link = wrapper.find('a')
     expect(link.exists()).toBe(true)
-    expect(link.attributes('href')).toBe('https://example.com')
+    // marked 18 会把裸域名补成带斜杠的规范形式，两种写法等价。
+    expect(link.attributes('href')).toBe('https://example.com/')
 
     const spy = vi.spyOn(Event.prototype, 'preventDefault')
 
     await link.trigger('click')
 
     expect(openUrl).toHaveBeenCalledTimes(1)
-    expect(openUrl).toHaveBeenCalledWith('https://example.com')
+    expect(openUrl).toHaveBeenCalledWith('https://example.com/')
     expect(spy).toHaveBeenCalled()
   })
 

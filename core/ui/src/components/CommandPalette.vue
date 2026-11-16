@@ -1,6 +1,6 @@
 <template>
   <div v-if="commands.length" class="command-palette" role="listbox" :aria-label="t('命令')">
-    <div class="command-list">
+    <div ref="listEl" class="command-list">
       <section v-for="group in groupedCommands" :key="group.kind" class="command-group">
         <div v-if="!commands.some(c => c.metadata?.reference_path)" class="command-group-label">{{ group.label }}</div>
         <button
@@ -38,7 +38,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import { computed, nextTick, watch, type Component } from 'vue'
+import { computed, nextTick, ref, watch, type Component } from 'vue'
 import { resolveComposerCommandKind } from '@/composer/syntax.ts'
 import { coreCommandIcon } from '@/composer/commandIcons.ts'
 import type { CoreCommandCatalogItem, CoreCommandKind } from '@/types.ts'
@@ -51,6 +51,7 @@ const props = defineProps<{
 defineEmits<{
   select: [command: CoreCommandCatalogItem]
 }>()
+const listEl = ref<HTMLElement | null>(null)
 
 const groupedCommands = computed(() => {
   const groups: Array<{
@@ -72,8 +73,8 @@ watch(
   () => props.activeIndex,
   () => {
     void nextTick(() => {
-      const list = document.querySelector('.command-palette .command-list')
-      const active = list?.querySelector('.command-item.active')
+      // user:“确保视觉、功能和交互不退化”+(多个输入区同时显示建议时只滚动当前菜单)。
+      const active = listEl.value?.querySelector('.command-item.active')
       active?.scrollIntoView({ block: 'nearest' })
     })
   },
@@ -95,7 +96,9 @@ function commandSourceLabel(command: CoreCommandCatalogItem): string {
 
 function commandLabel(command: CoreCommandCatalogItem): string {
   const detail = command.description || command.title || command.name
-  return `${command.metadata?.reference_path ? '@' : '/'}${command.name}: ${detail}`
+  // user:“确保视觉、功能和交互不退化”+(读屏标签与实际文件 / 上下文触发符一致)。
+  const prefix = command.metadata?.reference_path ? (command.metadata.context ? '#' : '@') : '/'
+  return `${prefix}${command.name}: ${detail}`
 }
 </script>
 

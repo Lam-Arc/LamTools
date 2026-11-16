@@ -15,7 +15,7 @@ from typing import Any
 
 _logger = logging.getLogger(__name__)
 
-from lamtools_core.event import CollectingEventSink, EventSink
+from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink
 from lamtools_core.llm import ChatMessage, reasoning_level_from_legacy
 from lamtools_core.config.model_store import resolve_model_capability
 from lamtools_core.composer_commands import (
@@ -476,13 +476,45 @@ def create_core_agent_operations(
                 parsed = _question_answers_from_message(message, group)
                 if isinstance(parsed, dict):
                     resolved[str(group.get("group_id") or "")] = parsed
+        closed_groups: list[dict[str, Any]] = []
         closed = close_pending_question_groups(
             state,
             reason="user_message",
             answers=resolved or None,
+            closed_out=closed_groups,
         )
         if closed:
             await runtime_state_store.save(state)
+            # user:“根据模型的回复它确实收到了我的回答”+(关闭必须成为可投影的事实：
+            # 同一 run_id + call_id 再发一次 question 事件，投影就会更新原来那张卡，
+            # 而不是让它在刷新后退回"待回答"。)
+            for group in closed_groups:
+                # 关闭事实走这一处既有的"落库 + 广播"通道：投影从事件存储读到它，
+                # 才能把原卡从 waiting 改成已完成并带上答案。
+                await _persist_core_event_live(
+                    CoreEvent(
+                        name="runtime.question_group",
+                        category="decision",
+                        payload={
+                            "group_id": str(group.get("group_id") or ""),
+                            "call_id": str(group.get("call_id") or ""),
+                            "run_id": str(group.get("run_id") or ""),
+                            "questions": list(group.get("questions") or []),
+                            "status": "done",
+                            "closed_reason": str(group.get("closed_reason") or ""),
+                            "asked_at_ms": int(group.get("asked_at_ms") or 0),
+                        },
+                        session_id=thread_id,
+                        run_id=str(group.get("run_id") or state.run_id or ""),
+                        tags=["question"],
+                    ),
+                    thread_id=thread_id,
+                    db_session_factory=db_session_factory,
+                    app_event_store=app_event_store,
+                    thread_snapshot_store=thread_snapshot_store,
+                    app_event_hub=app_event_hub,
+                    write_coordinator=write_coordinator,
+                )
 
     async def turn_start(request: OperationRequest) -> OperationResult:
         thread_id = str(request.payload.get("thread_id") or request.payload.get("session_id") or "").strip()
@@ -2483,7 +2515,11 @@ def create_core_agent_operations(
 
     async def command_catalog(request: OperationRequest) -> OperationResult:
         work_root = request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root
-        commands = build_composer_command_catalog(
+        # user:“setup/constant 打不开了”+(命令目录要扫技能目录、读插件清单、解析 JSON，
+        # 这些同步文件工作不能再跑在事件循环上：一次冷扫描曾阻塞 39.8 秒，
+        # 健康检查、会话读取全部跟着排队。放进工作线程，事件循环继续服务)。
+        commands = await asyncio.to_thread(
+            build_composer_command_catalog,
             core_roots=resolved_command_core_roots,
             member_roots=resolved_command_member_roots,
             work_root=work_root,
@@ -2511,16 +2547,19 @@ def create_core_agent_operations(
                 status="error",
                 payload={"error": "thread_id and command are required"},
             )
+        # 同 command_catalog：执行命令也要建目录，同样不能堵事件循环。
+        available_commands = await asyncio.to_thread(
+            build_composer_command_catalog,
+            core_roots=resolved_command_core_roots,
+            member_roots=resolved_command_member_roots,
+            work_root=request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root,
+            skill_registry=command_skill_registry(),
+            skill_state_store=command_skill_state_store,
+            plugin_manifests=command_plugin_manifests(),
+        )
         available = {
             item.name: item
-            for item in merge_owned_commands(build_composer_command_catalog(
-                core_roots=resolved_command_core_roots,
-                member_roots=resolved_command_member_roots,
-                work_root=request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root,
-                skill_registry=command_skill_registry(),
-                skill_state_store=command_skill_state_store,
-                plugin_manifests=command_plugin_manifests(),
-            ), request.payload)
+            for item in merge_owned_commands(available_commands, request.payload)
         }
         definition = available.get(command)
         if definition is None:

@@ -379,9 +379,9 @@ describe('MarkdownRenderer incremental streaming', () => {
     expect(wrapper.find('.math-auto-plot-anchor').exists()).toBe(false)
     expect(wrapper.find('.mermaid-placeholder').exists()).toBe(false)
     expect(wrapper.find('.mermaid-diagram').exists()).toBe(false)
-    expect(wrapper.find('.study-inline-svg').exists()).toBe(false)
+    // user:“SVG 现在还不是流式渲染”+(矢量图围栏闭合就出图，不再等收尾；mermaid 仍延后)
+    expect(wrapper.find('.study-inline-svg').exists()).toBe(true)
     expect(wrapper.find('code.language-mermaid').text()).toBe(mermaidSource)
-    expect(wrapper.find('code.language-svg').text()).toBe(svgSource)
 
     await wrapper.setProps({ streaming: false })
     await wrapper.vm.$nextTick()

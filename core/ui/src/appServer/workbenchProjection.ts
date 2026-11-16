@@ -192,6 +192,15 @@ export function selectCoreWorkbenchMessagesWindow(
           ?? '',
         )
       : ''
+    // user:“暂停不折东西，只有正常完成才折，中断也不折”+(回合状态随消息一起下发：
+    // 折叠与否是这一轮的结论，不能靠会话级状态去猜，也不能把 paused 当成结束。)
+    const turnStatus = message.turnId
+      ? String(
+          snapshot.core?.turns?.[message.turnId]?.status
+          ?? snapshot.turns?.[message.turnId]?.status
+          ?? '',
+        )
+      : ''
     const content = splitShallowCached(message.content, cache)
     const parts = buildMessageParts(
       snapshot,
@@ -212,18 +221,19 @@ export function selectCoreWorkbenchMessagesWindow(
         activeAssistant,
         options.shallowThinkingPending,
         modelPhase,
+        turnStatus,
       )
       const entry = cache.messagesById.get(message.id)
       if (entry && fingerprintEquals(entry.fingerprint, fingerprint)) {
         messages[index - startIndex] = entry.message
         continue
       }
-      const built = buildWorkbenchMessage(message, content, parts, options, activeAssistant, modelPhase)
+      const built = buildWorkbenchMessage(message, content, parts, options, activeAssistant, modelPhase, turnStatus)
       cache.messagesById.set(message.id, { fingerprint, message: built })
       messages[index - startIndex] = built
       continue
     }
-    messages[index - startIndex] = buildWorkbenchMessage(message, content, parts, options, activeAssistant, modelPhase)
+    messages[index - startIndex] = buildWorkbenchMessage(message, content, parts, options, activeAssistant, modelPhase, turnStatus)
   }
   cache?.prune()
   return { messages, total: sourceMessages.length, startIndex }
@@ -327,6 +337,7 @@ function buildWorkbenchMessage(
   options: CoreWorkbenchMessageOptions,
   activeAssistant: boolean,
   modelPhase = '',
+  turnStatus = '',
 ): CoreMessage {
   const answerProjection = projectAssistantMessageParts(parts, shallow.content, {
     live: activeAssistant || message.metadata?.live === true,
@@ -351,6 +362,7 @@ function buildWorkbenchMessage(
       live: activeAssistant || message.metadata?.live,
       shallowThinkingPending: activeAssistant && options.shallowThinkingPending ? true : undefined,
       ...(activeAssistant && modelPhase ? { modelPhase } : {}),
+      ...(turnStatus ? { turnStatus } : {}),
     },
   } satisfies CoreMessage
 }
@@ -366,6 +378,7 @@ function messageFingerprint(
   activeAssistant: boolean,
   shallowThinkingPending?: boolean,
   modelPhase = '',
+  turnStatus = '',
 ): unknown[] {
   const meta = message.metadata || {}
   return [
@@ -378,6 +391,7 @@ function messageFingerprint(
     activeAssistant && shallowThinkingPending === true,
     // 阶段切换只重建运行中的那条助手消息（等待指示器的动画）。
     activeAssistant ? modelPhase : '',
+    turnStatus,
     meta.live === true,
     meta.initialWaiting === true,
     // A machine-authored row renders as a system event instead of a bubble; the

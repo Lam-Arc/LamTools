@@ -116,9 +116,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { t } from '@/i18n/index.ts'
 import type { MessagePart } from '@/types.ts'
+import { answeredGroupAnswers, rememberAnsweredGroup } from '@/helpers/questionGroupAnswered.ts'
 
 interface QuestionOption {
   label: string
@@ -151,6 +152,55 @@ const submitted = ref(false)
 const collapsed = ref(false)
 const confirming = ref(false)
 const collapsing = ref(false)
+
+/**
+ * user:“我这一张卡明明回答了…随后又出现在我的回答下方，且变成了未回答，但是根据模型的回复
+ * 它确实收到了我的回答”+(已回答此前只存在组件本地态里：卡片一旦被重新挂载（位置换算、
+ * 同一组再发一次事件），状态就丢了，回到未回答。这里按问组 id 记在模块级，
+ * 同一次会话里重新挂上来仍然是「已回答」，并回填当时的答案。)
+ */
+// 记录放在模块级（helpers/questionGroupAnswered.ts）：<script setup> 顶层是每个实例
+// 各一份，卡片重新挂载就留不住，这里必须用模块级的。
+const restoredGroupIds = new Set<string>()
+
+/** 后端把答案写在题目上（question.answer）：这是比本地记录更权威的来源。 */
+function answersFromPart(): Record<string, string> {
+  const result: Record<string, string> = {}
+  const nested = asRecord(metadata.value.payload)
+  for (const source of [metadata.value.questions, nested ? nested.questions : undefined]) {
+    if (!Array.isArray(source)) continue
+    for (const record of source) {
+      const item = asRecord(record)
+      if (!item) continue
+      const id = String(item.id || '').trim()
+      const answer = String(item.answer ?? item.value ?? '').trim()
+      if (id && answer) result[id] = answer
+    }
+  }
+  return result
+}
+
+function applyStoredAnswers(groupKey: string): void {
+  if (!groupKey || restoredGroupIds.has(groupKey)) return
+  const stored = answeredGroupAnswers(groupKey)
+  // 后端已把关闭原因写进分片，或把答案写在题目上：以数据为准。
+  const closedByBackend = Boolean(metadata.value.closed_reason)
+  if (!stored && !closedByBackend) return
+  restoredGroupIds.add(groupKey)
+  if (stored) {
+    for (const [questionId, answer] of Object.entries(stored)) {
+      const question = questions.value.find(item => item.id === questionId)
+      if (!question) continue
+      const options = question.options.map(option => option.label)
+      if (options.includes(answer)) selections[questionId] = [answer]
+      else if (options.length > 0 && answer.split('、').every(part => options.includes(part))) {
+        selections[questionId] = answer.split('、').filter(Boolean)
+      } else custom[questionId] = answer
+    }
+  }
+  submitted.value = true
+  collapsed.value = true
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null
@@ -228,6 +278,11 @@ const canSubmit = computed(() => requiredLeft.value === 0)
 const answeredCount = computed(() => questions.value.filter(q => answerFor(q)).length)
 const pillLabel = computed(() => t('已回答 {0} 个问题', { 0: answeredCount.value }))
 const hintText = computed(() => (requiredLeft.value > 0 ? t('还差 {0} 道必答', { 0: requiredLeft.value }) : ''))
+
+// 挂载即回填：同一次会话里这张卡重新挂上来时，仍然是「已回答」并带回当时的答案。
+watch([groupId, questions], () => {
+  applyStoredAnswers(groupId.value)
+}, { immediate: true })
 
 /* ── 输入框：胶囊内自动换行，最高 84px，再多内部滚动 ─────────────── */
 const entries: Record<string, HTMLTextAreaElement | null> = {}
@@ -348,6 +403,13 @@ function submit() {
   if (lines.length === 0) return
 
   snapshot = takeSnapshot()
+  const answeredKey = groupId.value
+  if (answeredKey) {
+    // user:“已回答过的卡展开之后再补充回答”+(补答要合并进已有记录，覆盖会让先前的答案
+    // 从摘要与回填里消失。)
+    rememberAnsweredGroup(answeredKey, { ...(answeredGroupAnswers(answeredKey) || {}), ...answers })
+    restoredGroupIds.add(answeredKey)
+  }
   submitted.value = true
   confirming.value = true
 

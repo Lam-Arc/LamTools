@@ -138,8 +138,10 @@ describe('MarkdownRenderer source-backed images', () => {
     ].join('')
     const outsideStudy = mount(MarkdownRenderer, { props: { content: `\`\`\`svg\n${source}\n\`\`\`` } })
     await outsideStudy.vm.$nextTick()
-    expect(outsideStudy.find('.study-inline-svg').exists()).toBe(false)
-    expect(outsideStudy.find('pre code').text()).toBe(source)
+    // user:“矢量乌漆麻黑一大坨”+(svg 围栏不再只在 Study 生效：聊天里同样是只读图形，
+    // 清洗后直接内联，不再退化成代码块。)
+    expect(outsideStudy.find('.study-inline-svg').exists()).toBe(true)
+    expect(outsideStudy.find('pre code').exists()).toBe(false)
     outsideStudy.unmount()
 
     const inStudy = mount(MarkdownRenderer, {
@@ -181,7 +183,8 @@ describe('MarkdownRenderer source-backed images', () => {
       props: { content, autoPlotMath: true, streaming: true },
     })
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('.study-inline-svg').exists()).toBe(false)
+    // user:“SVG 现在还不是流式渲染”+(闭合即渲染，所以流式阶段就该出图)
+    expect(wrapper.find('.study-inline-svg').exists()).toBe(true)
 
     await wrapper.setProps({ streaming: false })
     await flushPromises()
@@ -192,7 +195,7 @@ describe('MarkdownRenderer source-backed images', () => {
     expect(svg.attributes()).toMatchObject({
       viewBox: '0 0 520 300',
       role: 'img',
-      'aria-label': '教学示意图',
+      'aria-label': '示意图',
     })
     expect(svg.findAll('text')).toHaveLength(11)
     expect(svg.find('text').attributes('fill')).toBe('currentColor')

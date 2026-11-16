@@ -117,7 +117,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ChevronDown, ChevronRight, ShieldCheck } from 'lucide-vue-next'
 import {
   CORE_PERMISSION_PRESET_DESCRIPTIONS,
@@ -229,13 +229,17 @@ function close(): void {
   activeSection.value = null
 }
 
+// user:“确保视觉、功能和交互不退化”+(运行时禁用后立即关闭菜单，不能继续修改权限或模式)。
+watch(() => props.disabled, value => { if (value) close() }, { flush: 'sync' })
+
 function selectMode(option: CoreSelectOption): void {
-  if (option.disabled) return
+  if (props.disabled || option.disabled) return
   emit('update:activeMode', option.value)
   close()
 }
 
 function selectPermission(value: string): void {
+  if (props.disabled) return
   emit('update:permissionPreset', normalizeCorePermissionPreset(value))
   close()
 }

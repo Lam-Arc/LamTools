@@ -7,9 +7,28 @@ import { hostBlockedByOverlay, obscuresHostNode } from '@/split/browserOverlay'
 import { openExternalUrl } from '@/helpers/openUrl'
 import { contextMenuState } from './context-menu/context-menu'
 import type { SplitTab } from '@/split/layout'
-const props = defineProps<{ tab: SplitTab; visible: boolean }>()
+export interface SplitBrowserServices {
+  available: () => boolean
+  call: (id: string, action: string, options?: Record<string, unknown>) => Promise<void>
+  subscribe: (callback: (event: { id: string; url: string; loading: boolean }) => void) => Promise<UnlistenFn>
+  openExternal: (url: string) => Promise<void>
+}
+const props = defineProps<{ tab: SplitTab; visible: boolean; services?: SplitBrowserServices }>()
+// user:“交互测试”+(可注入隔离浏览器服务；未提供时继续使用桌面原生接口)。
+const services: SplitBrowserServices = props.services ?? {
+  available: hasSplitNative,
+  call: browserNative,
+  subscribe: callback => listen<{ id: string; url: string; loading: boolean }>('lamtools://split-browser', ({ payload }) => callback(payload)),
+  openExternal: async url => { if (!await openExternalUrl(url)) throw new Error('无法打开默认浏览器') },
+}
 const address = ref(props.tab.resource), host = ref<HTMLElement | null>(null), error = ref(''), loading = ref(false), created = ref(false)
 let resizeObserver: ResizeObserver | undefined, classObserver: MutationObserver | undefined, childObserver: MutationObserver | undefined, unlisten: UnlistenFn | undefined, disposed = false, creating = false
+let eventListenerFailed = false
+let listenerReady: Promise<void> = Promise.resolve()
+let eventRevision = 0
+let closing = false
+// user:“确保视觉、功能和交互不退化”+(关闭期间完成的导航不能重复关闭或改写已退出的标签)。
+async function closeOnce() { if (closing) return; closing = true; await services.call(props.tab.id, 'close') }
 let syncing = false, needsSync = false, lastBounds = ''
 let syncFrame = 0
 function queueSync() { if (!syncFrame) syncFrame = requestAnimationFrame(() => { syncFrame = 0; void sync() }) }
@@ -21,7 +40,7 @@ async function sync() {
   const next = options(), serialized = JSON.stringify(next)
   if (serialized === lastBounds) return
   syncing = true
-  try { await browserNative(props.tab.id, 'bounds', next); lastBounds = serialized }
+  try { await services.call(props.tab.id, 'bounds', next); lastBounds = serialized }
   catch (e) { if (!disposed) error.value = String(e) }
   finally { syncing = false; if (needsSync) { needsSync = false; void sync() } }
 }
@@ -29,22 +48,29 @@ async function navigate() {
   if (creating) return
   try {
     const target = url(address.value.trim()); error.value = ''; loading.value = true
-    if (!hasSplitNative()) throw Error('内置浏览器需要在桌面应用中使用；也可以在默认浏览器中打开')
+    if (!services.available()) throw Error('内置浏览器需要在桌面应用中使用；也可以在默认浏览器中打开')
+    // user:“确保视觉、功能和交互不退化”+(等事件监听就绪后再创建网页，关闭期间不再创建)。
     creating = true
-    await browserNative(props.tab.id, created.value ? 'navigate' : 'create', { ...options(), url: target })
-    created.value = true; props.tab.resource = target; address.value = target; props.tab.title = new URL(target).hostname
-    if (disposed) await browserNative(props.tab.id, 'close')
+    await listenerReady
+    if (disposed) return
+    if (eventListenerFailed) throw Error('浏览器事件监听不可用，请关闭后重新打开分屏')
+    const before = eventRevision
+    await services.call(props.tab.id, created.value ? 'navigate' : 'create', { ...options(), url: target })
+    if (disposed) { await closeOnce(); return }
+    created.value = true
+    // user:“确保视觉、功能和交互不退化”+(原生浏览器先报告重定向时，不用旧请求地址覆盖它)。
+    if (eventRevision === before) { props.tab.resource = target; address.value = target; props.tab.title = new URL(target).hostname }
   } catch (e) { error.value = String(e); loading.value = false } finally { creating = false }
 }
-async function action(action: string) { try { await browserNative(props.tab.id, action) } catch (e) { error.value = String(e) } }
+async function action(action: string) { try { await services.call(props.tab.id, action) } catch (e) { error.value = String(e) } }
 // user:“审查分屏代码，并优化”+(地址不合法时留在原地提示，而不是在点击处理里抛出无人接收的异常)。
-function openExternal() {
-  try { if (address.value.trim()) void openExternalUrl(url(address.value.trim())) }
+async function openExternal() {
+  try { if (address.value.trim()) await services.openExternal(url(address.value.trim())) }
   catch (e) { error.value = String(e) }
 }
 // user:“审查分屏代码，并优化”+(恢复布局时先不创建原生网页，等标签真正可见再加载，避免后台标签各开一个子 WebView)。
 async function ensureBrowser() {
-  if (!props.visible || created.value || creating || disposed || !props.tab.resource || !hasSplitNative()) return
+  if (!props.visible || created.value || creating || disposed || !props.tab.resource || !services.available()) return
   await navigate()
 }
 watch(() => props.visible, visible => { if (visible) void nextTick(ensureBrowser); void nextTick(sync) })
@@ -58,17 +84,21 @@ onMounted(async () => {
     childObserver.observe(document.body, { childList: true, subtree: true })
   }
   window.addEventListener('resize', queueSync)
-  if (hasSplitNative()) {
-    unlisten = await listen<{ id: string; url: string; loading: boolean }>('lamtools://split-browser', ({ payload }) => {
-      if (payload.id !== props.tab.id) return
-      address.value = payload.url; props.tab.resource = payload.url; loading.value = payload.loading
-      try { props.tab.title = new URL(payload.url).hostname } catch { /* Keep the existing title for transient URLs. */ }
-    })
-    if (disposed) { unlisten(); return }
+  if (services.available()) {
+    // user:“确保视觉、功能和交互不退化”+(监听失败时明确提示，避免无状态的浏览器或未处理异常)。
+    listenerReady = services.subscribe(payload => {
+        if (disposed || payload.id !== props.tab.id) return
+        eventRevision++
+        address.value = payload.url; props.tab.resource = payload.url; loading.value = payload.loading
+        try { props.tab.title = new URL(payload.url).hostname } catch { /* Keep the existing title for transient URLs. */ }
+      }).then(stop => { if (disposed) stop(); else unlisten = stop })
+      .catch(cause => { eventListenerFailed = true; if (!disposed) error.value = String(cause) })
+    await listenerReady
+    if (disposed || eventListenerFailed) return
   }
   await ensureBrowser()
 })
-onBeforeUnmount(() => { disposed = true; cancelAnimationFrame(syncFrame); resizeObserver?.disconnect(); classObserver?.disconnect(); childObserver?.disconnect(); unlisten?.(); window.removeEventListener('resize', queueSync); if (created.value) void browserNative(props.tab.id, 'close').catch(() => {}) })
+onBeforeUnmount(() => { disposed = true; cancelAnimationFrame(syncFrame); resizeObserver?.disconnect(); classObserver?.disconnect(); childObserver?.disconnect(); unlisten?.(); window.removeEventListener('resize', queueSync); if (created.value) void closeOnce().catch(() => {}) })
 </script>
 <template>
   <div class="split-browser">

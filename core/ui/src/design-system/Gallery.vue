@@ -11,6 +11,15 @@ import SundaySegmented from '@/components/SundaySegmented.vue'
 import UiSelect from '@/components/UiSelect.vue'
 import AutoTextarea from '@/components/AutoTextarea.vue'
 import FileTypeBadge from '@/components/FileTypeBadge.vue'
+// user:“过程行读取文件且 MIME 属于多媒体时，在过程行标题下方直接挂内联预览区”+(三个过程行结果容器直接渲染生产组件)。
+import ProcessMediaPreview from '@/components/process/ProcessMediaPreview.vue'
+import ProcessResultPills from '@/components/process/ProcessResultPills.vue'
+import ProcessKvPill from '@/components/process/ProcessKvPill.vue'
+// user:“展品里的图片请用工作区内真实存在的图片文件路径，别用外链、别用 base64 占位”
+// +(展厅用项目自带图片资源演示比例与多图，构建时由 Vite 处理成真实地址)。
+import galleryMediaIconDark from '@/assets/sunday-app-icon-dark.png'
+import galleryMediaIconLight from '@/assets/sunday-app-icon-light.png'
+import galleryMediaSkin from '@/pet/assets/sunday-skin.png'
 import ProjectVisualIcon from '@/components/ProjectVisualIcon.vue'
 import ProjectVisualPicker from '@/components/ProjectVisualPicker.vue'
 import CoreProjectPicker from '@/components/CoreProjectPicker.vue'
@@ -75,6 +84,10 @@ import selectSource from '@/components/UiSelect.vue?raw'
 import selectStyleSource from '@/styles/ui-select.css?raw'
 import textareaSource from '@/components/AutoTextarea.vue?raw'
 import badgeSource from '@/components/FileTypeBadge.vue?raw'
+import processMediaPreviewSource from '@/components/process/ProcessMediaPreview.vue?raw'
+import processResultPillsSource from '@/components/process/ProcessResultPills.vue?raw'
+import processKvPillSource from '@/components/process/ProcessKvPill.vue?raw'
+import processMediaStyleSource from '@/styles/process-media.css?raw'
 import projectIconSource from '@/components/ProjectVisualIcon.vue?raw'
 import projectPickerSource from '@/components/ProjectVisualPicker.vue?raw'
 import coreProjectPickerSource from '@/components/CoreProjectPicker.vue?raw'
@@ -113,6 +126,7 @@ import buttonSource from '@/styles/sunday-button.css?raw'
 import tokenSource from '@/styles/variables.css?raw'
 import settingsThemeSource from '@/helpers/settingsTheme.ts?raw'
 import componentInventory from './component-inventory.json'
+import { copyText } from '@/helpers/clipboard'
 
 // user:“直接渲染项目真实组件，支持分类、搜索、筛选、实时预览、交互测试、参数调整、变体对比及源码定位”+(展厅直接使用生产组件，提供可操作参数和可查看的实际源码)
 // user:“提高前端一致性与开发效率”+(大型组合预览按需加载，避免打开展厅时同时初始化整个模型目录)
@@ -121,6 +135,11 @@ const MaterialsView = defineAsyncComponent(() => import('@/components/MaterialsV
 const WorkflowCanvas = defineAsyncComponent(() => import('../../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue'))
 const SplitWorkspacePreview = defineAsyncComponent(() => import('./SplitWorkspacePreview.vue'))
 const SplitFilePreview = defineAsyncComponent(() => import('./SplitFilePreview.vue'))
+const SplitBrowserPreview = defineAsyncComponent(() => import('./SplitBrowserPreview.vue'))
+const CoreSplitFileTree = defineAsyncComponent(() => import('@/components/CoreSplitFileTree.vue'))
+const ComposerPreview = defineAsyncComponent(() => import('./ComposerPreview.vue'))
+const QueuedInputPreview = defineAsyncComponent(() => import('./QueuedInputPreview.vue'))
+const ExecutionControlsPreview = defineAsyncComponent(() => import('./ExecutionControlsPreview.vue'))
 const MemoryView = defineAsyncComponent(() => import('@/components/MemoryView.vue'))
 const PlanLibraryView = defineAsyncComponent(() => import('@/components/PlanLibraryView.vue'))
 import { createLibraryPreviewData } from './libraryPreviewData'
@@ -140,7 +159,6 @@ const CorePetEditor = defineAsyncComponent(() => import('@/components/CorePetEdi
 const CoreLoadToolsEditor = defineAsyncComponent(() => import('@/components/CoreLoadToolsEditor.vue'))
 const CorePluginSystemEditor = defineAsyncComponent(() => import('@/components/CorePluginSystemEditor.vue'))
 const RightSidebarProcesses = defineAsyncComponent(() => import('@/components/RightSidebarProcesses.vue'))
-const CoreSuperAgentPanel = defineAsyncComponent(() => import('@/components/CoreSuperAgentPanel.vue'))
 const CoreArrangeManager = defineAsyncComponent(() => import('@/components/CoreArrangeManager.vue'))
 const entries = [
   // user:“直接渲染项目真实组件”+(资料库使用隔离文件示例)。
@@ -168,6 +186,11 @@ const entries = [
   { name: 'WorkflowCanvas', category: '组合', description: '真实工作流画布；节点、布局和复制仅作用于本地示例', source: workflowCanvasSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue' },
   { name: 'CoreSplitWorkspace', category: '组合', description: '工作区分屏、标签与文本编辑；仅使用本地示例', alsoPreviews: ['core/ui/src/components/CoreSplitTextEditor.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreSplitWorkspace.vue?raw'), import('@/components/CoreSplitTextEditor.vue?raw'), import('./SplitWorkspacePreview.vue?raw')]).then(([view, editor, preview]) => ({ default: `${view.default}\n\n/* src/components/CoreSplitTextEditor.vue */\n${editor.default}\n\n/* src/design-system/SplitWorkspacePreview.vue */\n${preview.default}` })) },
   { name: 'CoreSplitPreview', category: '组合', description: '分屏文件预览、失败和重试；仅使用本地示例', source: '', loadSource: () => Promise.all([import('@/components/CoreSplitPreview.vue?raw'), import('./SplitFilePreview.vue?raw')]).then(([view, preview]) => ({ default: `${view.default}\n\n/* src/design-system/SplitFilePreview.vue */\n${preview.default}` })) },
+  { name: 'CoreSplitBrowser', category: '组合', description: '分屏浏览器地址、导航和错误；不打开真实网页', source: '', loadSource: () => Promise.all([import('@/components/CoreSplitBrowser.vue?raw'), import('./SplitBrowserPreview.vue?raw')]).then(([view, preview]) => ({ default: `${view.default}\n\n/* src/design-system/SplitBrowserPreview.vue */\n${preview.default}` })) },
+  { name: 'CoreSplitFileTree', category: '组合', description: '分屏文件树及键盘导航；仅使用本地目录', source: '', loadSource: () => import('@/components/CoreSplitFileTree.vue?raw') },
+  { name: 'InlineFileComposer', category: '组合', description: '输入区文本、文件与上下文补全；发送仅记录本地示例', alsoPreviews: ['core/ui/src/components/ComposerBar.vue', 'core/ui/src/components/CommandPalette.vue'], source: '', loadSource: () => Promise.all([import('@/components/InlineFileComposer.vue?raw'), import('@/components/ComposerBar.vue?raw'), import('@/components/CommandPalette.vue?raw'), import('./ComposerPreview.vue?raw')]).then(([input, bar, palette, preview]) => ({ default: `${input.default}\n\n/* src/components/ComposerBar.vue */\n${bar.default}\n\n/* src/components/CommandPalette.vue */\n${palette.default}\n\n/* src/design-system/ComposerPreview.vue */\n${preview.default}` })) },
+  { name: 'CoreQueuedInputTray', category: '组合', description: '待发送队列的编辑、排序与引导；只操作本地示例', source: '', loadSource: () => Promise.all([import('@/components/CoreQueuedInputTray.vue?raw'), import('./QueuedInputPreview.vue?raw')]).then(([tray, preview]) => ({ default: `${tray.default}\n\n/* src/design-system/QueuedInputPreview.vue */\n${preview.default}` })) },
+  { name: 'CoreExecutionControls', category: '组合', description: '输入区模型、思考等级、权限和工作环境；仅操作本地示例', alsoPreviews: ['core/ui/src/components/CoreRuntimeMenu.vue', 'core/ui/src/components/CoreModelThinkingMenu.vue', 'core/ui/src/components/CoreWorkspaceMenu.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreExecutionControls.vue?raw'), import('@/components/CoreRuntimeMenu.vue?raw'), import('@/components/CoreModelThinkingMenu.vue?raw'), import('@/components/CoreWorkspaceMenu.vue?raw')]).then(([controls, runtime, model, workspace]) => ({ default: `${controls.default}\n\n/* CoreRuntimeMenu.vue */\n${runtime.default}\n\n/* CoreModelThinkingMenu.vue */\n${model.default}\n\n/* CoreWorkspaceMenu.vue */\n${workspace.default}` })) },
   { name: 'ContextMenuHost', category: '基础', description: '共享菜单、键盘导航和子菜单；操作仅记录在本地', source: '', sourcePath: 'src/components/context-menu/ContextMenuHost.vue', alsoPreviews: ['core/ui/src/components/context-menu/ContextMenuPanel.vue'], loadSource: () => Promise.all([import('@/components/context-menu/ContextMenuHost.vue?raw'), import('@/components/context-menu/ContextMenuPanel.vue?raw'), import('@/components/context-menu/context-menu.ts?raw')]).then(([host, panel, logic]) => ({ default: `${host.default}\n\n/* ContextMenuPanel.vue */\n${panel.default}\n\n/* context-menu.ts */\n${logic.default}` })) },
   // user:“直接渲染项目真实组件”+(草稿选择仅修改展厅示例)。
   { name: 'WorkflowSwitchGuard', category: '反馈', description: '工作流草稿的保存、放弃或取消；仅为本地示例', source: `${workflowGuardSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}`, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowSwitchGuard.vue' },
@@ -177,8 +200,7 @@ const entries = [
   { name: 'WorkflowNodeRuntimeDock', category: '反馈', description: '工作流节点运行状态和详情；使用本地示例', source: `${workflowRuntimeSource}\n\n/* src/styles/sunday-spinner.css */\n${spinnerSource}`, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNodeRuntimeDock.vue' },
   // user:“直接渲染项目真实组件”+(附件操作只影响本地示例)。
   { name: 'AttachmentTray', category: '组合', description: '输入区附件、上传失败和重试；使用本地示例', source: attachmentSource },
-  // user:“直接渲染项目真实组件”+(任务与定时任务预览只读取空示例，真实提交操作不可用)。
-  { name: 'CoreSuperAgentPanel', category: '组合', description: '目标任务及权限表单；仅使用本地示例', source: '', loadSource: () => import('@/components/CoreSuperAgentPanel.vue?raw').then(module => ({ default: `${module.default}\n\n/* src/styles/full-area-buttons.css */\n${fullAreaButtonsSource}` })) },
+  // user:“直接渲染项目真实组件”+(定时任务预览只读取空示例，真实提交操作不可用)。
   { name: 'CoreArrangeManager', category: '组合', description: '定时任务列表与表单；仅使用本地示例', source: '', loadSource: () => import('@/components/CoreArrangeManager.vue?raw').then(module => ({ default: `${module.default}\n\n/* src/styles/full-area-buttons.css */\n${fullAreaButtonsSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` })) },
   // user:“直接渲染项目真实组件”+(进程面板使用纯本地进程与日志，不访问系统进程)。
   { name: 'RightSidebarProcesses', category: '组合', description: '后台进程与日志；操作仅作用于本地示例，旋转样式见 src/styles/sunday-spinner.css', source: '', loadSource: () => import('@/components/RightSidebarProcesses.vue?raw').then(module => ({ default: `${module.default}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` })) },
@@ -250,6 +272,13 @@ const entries = [
   // user:“直接渲染项目真实组件，支持分类、搜索、筛选、实时预览、交互测试、参数调整、变体对比及源码定位”+(项目图标以真实组件展示图案与颜色变体)。
   { name: 'ProjectVisualIcon', category: '展示', description: '项目图标、颜色和色块', source: projectIconSource },
   { name: 'FileTypeBadge', category: '展示', description: '按文件类型显示图标，支持失败状态', source: badgeSource },
+  // user:“过程行读取文件且 MIME 属于多媒体时，在过程行标题下方直接挂内联预览区”+
+  // (预览区各态在展厅直接对照：单图比例、多图轨道、+N、坏图降级、音频波形、视频首帧、PDF 徽章)。
+  { name: 'ProcessMediaPreview', category: '展示', description: '过程行多媒体内联预览：单图比例、多图轨道、+N、坏图降级、音频波形、视频首帧与 PDF 徽章', source: `${processMediaPreviewSource}\n\n/* src/styles/process-media.css */\n${processMediaStyleSource}`, sourcePath: 'src/components/process/ProcessMediaPreview.vue' },
+  // user:“胶囊式（Pill）列表：横向流式排列多个结果胶囊（Favicon + 截断标题），点击跳转原文”+(结果胶囊的降级与截断在展厅可见)。
+  { name: 'ProcessResultPills', category: '展示', description: '搜索与知识库结果胶囊：favicon 首字母降级、标题单行截断、点击打开原文', source: processResultPillsSource, sourcePath: 'src/components/process/ProcessResultPills.vue' },
+  // user:“超过 N 个键值折叠成「+N」（展开可看全部）”+(键值胶囊的折叠与三种状态徽章在展厅可切换)。
+  { name: 'ProcessKvPill', category: '展示', description: 'API 与状态查询的键值胶囊：折叠 +N、成功/失败/进行中徽章与耗时', source: processKvPillSource, sourcePath: 'src/components/process/ProcessKvPill.vue' },
   // user:“提高前端一致性与开发效率”+(大型源码按需载入并缓存，避免打开整个展厅时先加载)。
   { name: 'CoreModelCatalog', category: '组合', description: '模型目录、筛选与详情；示例数据仅在本地', source: '', loadSource: () => import('@/components/CoreModelCatalog.vue?raw') },
 ]
@@ -341,7 +370,7 @@ async function sampleProcessRpc(method: string, params?: Record<string, unknown>
 // user:“交互测试”+(权限确认与执行结果只记录在本地，不调用插件)。
 // user:“交互测试”+(上下文设置只读写本地内存，其他设置动作不支持)。
 // user:“提高前端一致性与开发效率”+(大型示例默认延迟初始化，搜索或手动打开时再加载)。
-const deferredPreviewNames = new Set(['MaterialsView', 'MemoryView', 'PlanLibraryView', 'WorkflowCanvas', 'CoreSplitWorkspace', 'CoreSplitPreview', 'CoreProjectSettings', 'SearchShell', 'CoreSettings', 'PluginRegionBlocks', 'PluginConfigPanel', 'PluginMarket', 'MessageView'])
+const deferredPreviewNames = new Set(['MaterialsView', 'MemoryView', 'PlanLibraryView', 'WorkflowCanvas', 'CoreSplitWorkspace', 'CoreSplitPreview', 'CoreSplitBrowser', 'CoreSplitFileTree', 'InlineFileComposer', 'CoreProjectSettings', 'SearchShell', 'CoreSettings', 'PluginRegionBlocks', 'PluginConfigPanel', 'PluginMarket', 'MessageView'])
 const requestedPreviews = ref(new Set<string>())
 function requestPreview(name: string) { requestedPreviews.value = new Set([...requestedPreviews.value, name]) }
 const galleryNetworkEmpty = ref(false)
@@ -528,6 +557,14 @@ const galleryCanvas = ref<WorkflowDef>({ ...sampleWorkflow.value, nodes: [
 const galleryCanvasStates: Record<string, NodeStateStatus> = {}
 const galleryCanvasLocked = ref(false)
 const galleryCanvasUpdates = ref(0)
+const galleryTreeOpened = ref('')
+const galleryTreeFailure = ref(false)
+// user:“交互测试”+(文件树读取和打开仅使用本地示例)。
+async function galleryTreeList(_root: string, path: string) {
+  if (galleryTreeFailure.value) throw new Error('示例目录读取失败')
+  return path === '示例项目' ? [{ name: '示例目录', path: '示例项目/示例目录', directory: true }, { name: '说明.txt', path: '示例项目/说明.txt', directory: false }]
+    : path === '示例项目/示例目录' ? [{ name: '笔记.md', path: '示例项目/示例目录/笔记.md', directory: false }] : []
+}
 const galleryMenuResult = ref('')
 // user:“交互测试”+(菜单动作只记录本地示例结果)。
 function openGalleryMenu(event: MouseEvent) {
@@ -550,6 +587,41 @@ const captureResult = ref('')
 const captureFrame = { width: 320, height: 180, x: 0, y: 0, scale: 1, capturedAt: 0, data: new Uint8ClampedArray(320 * 180 * 4).fill(200) }
 const submissionState = ref<'preparing' | 'sending' | 'failed' | 'unknown'>('sending')
 const submissionStates = [{ value: 'preparing', label: '准备中' }, { value: 'sending', label: '发送中' }, { value: 'failed', label: '发送失败' }, { value: 'unknown', label: '接收待确认' }]
+// user:“展品里的图片请用工作区内真实存在的图片文件路径”+(图片走项目自带资源，path 仍是真实工作区路径，url 由 Vite 解析)。
+const galleryMediaPreviewRequested = ref('')
+function galleryMediaFile(path: string, name: string, url: string, extra: Record<string, unknown> = {}) {
+  return { path, name, url, ...extra }
+}
+const galleryMediaWide = [galleryMediaFile('core/ui/src/assets/sunday-app-icon-dark.png', 'sunday-app-icon-dark.png', galleryMediaIconDark, { mime: 'image/png', size: 51200, width: 1600, height: 900 })]
+const galleryMediaSquare = [galleryMediaFile('core/ui/src/assets/sunday-app-icon-light.png', 'sunday-app-icon-light.png', galleryMediaIconLight, { mime: 'image/png', size: 48128, width: 512, height: 512 })]
+const galleryMediaThree = [
+  galleryMediaFile('core/ui/src/assets/sunday-app-icon-dark.png', 'sunday-app-icon-dark.png', galleryMediaIconDark, { mime: 'image/png', size: 51200, width: 512, height: 512 }),
+  galleryMediaFile('core/ui/src/assets/sunday-app-icon-light.png', 'sunday-app-icon-light.png', galleryMediaIconLight, { mime: 'image/png', size: 48128, width: 512, height: 512 }),
+  galleryMediaFile('core/ui/src/pet/assets/sunday-skin.png', 'sunday-skin.png', galleryMediaSkin, { mime: 'image/png', size: 96256, width: 1024, height: 1024 }),
+]
+// user:“多文件……超过 5 张时末位显示 +N 遮罩”+(7 张只画 5 格，末格盖 +2)。
+const galleryMediaSeven = Array.from({ length: 7 }, (_, index) => ({ ...galleryMediaThree[index % 3] }))
+const galleryMediaBroken = [{ path: 'core/ui/src/assets/process-preview-missing.png', name: 'process-preview-missing.png', mime: 'image/png', error: true }]
+const galleryMediaAudio = [{ path: 'core/ui/src/assets/process-preview-voice.mp3', name: 'process-preview-voice.mp3', mime: 'audio/mpeg', size: 48213 }]
+const galleryMediaVideo = [{ path: 'core/ui/src/pet/assets/sunday-skin.png', name: 'clip.mp4', mime: 'video/mp4', size: 2202009, thumb: galleryMediaSkin }]
+const galleryMediaPdf = [{ path: 'core/ui/src/assets/process-preview-report.pdf', name: 'process-preview-report.pdf', mime: 'application/pdf', size: 204800 }]
+// user:“胶囊式（Pill）列表……点击跳转原文”+(示例域名固定 example.com，展厅里点开也只是文档域名)。
+const galleryPillOpened = ref('')
+const galleryPillResults = [
+  { title: 'Sunday 桌面端过程行：工具结果与多媒体预览的分层', url: 'https://example.com/sunday/process-row', favicon: galleryMediaIconDark, source: 'docs' },
+  { title: '胶囊列表为什么比整块卡片更适合扫读搜索结果', url: 'https://example.com/sunday/pills', source: 'notes' },
+  { title: 'favicon 加载失败降级成首字母圆点', url: 'https://example.com/sunday/favicon-fallback', favicon: './no-such-favicon.ico', source: 'fallback' },
+  { title: '过程行样式契约：--ms-proc-* 变量与主题语义色', url: 'https://example.com/sunday/tokens', favicon: galleryMediaIconLight, source: 'design' },
+  { title: '这是一个用于验证单行截断与 title 属性是否同时生效的超长搜索结果标题，正常情况下应该被省略号截断', url: 'https://example.com/sunday/truncate', source: 'truncate' },
+]
+// user:“超过 N 个键值折叠成「+N」（展开可看全部）”+(展厅可切换状态与耗时，验证折叠与分钟级进位)。
+const galleryKvStatus = ref<'success' | 'error' | 'running'>('success')
+const galleryKvStatusOptions = [{ value: 'success', label: '成功' }, { value: 'error', label: '失败' }, { value: 'running', label: '进行中' }]
+const galleryKvDuration = ref('125300')
+const galleryKvDurationOptions = [{ value: '87', label: '87ms' }, { value: '1234', label: '1.2s' }, { value: '65400', label: '65s → 1m05s' }, { value: '125300', label: '125.3s → 2m05s' }]
+const galleryKvDurationMs = computed(() => Number(galleryKvDuration.value) || 0)
+const galleryKvFew = [{ key: 'model', value: 'sunday-v4' }, { key: 'top_k', value: '8' }, { key: 'scope', value: 'workspace' }]
+const galleryKvMany = [{ key: 'query', value: '过程行多媒体预览' }, { key: 'model', value: 'sunday-v4' }, { key: 'top_k', value: '8' }, { key: 'scope', value: 'workspace' }, { key: 'lang', value: 'zh-CN' }]
 const submissionRetries = ref(0)
 const submissionEdits = ref(0)
 const historyLoadingActive = ref(false)
@@ -582,6 +654,19 @@ const openSource = ref('')
 const sourceCache = ref<Record<string, string>>({})
 const sourceErrors = ref<Record<string, string>>({})
 const sourcePending = new Set<string>()
+const copiedSource = ref(''), copySourceError = ref('')
+// user:“源码定位”+(统一展示项目相对路径，让开发者可直接检索和复制)。
+function sourcePath(item: (typeof entries)[number]): string {
+  return ('sourcePath' in item ? `core/ui/${item.sourcePath}` : `core/ui/src/components/${item.name}.vue`).replace(/^core\/ui\/\.\.\//, 'core/')
+}
+// user:“源码定位”+(组合预览列出每个真实组件的路径，不把子组件指向主组件)。
+function sourcePaths(item: (typeof entries)[number]): string[] {
+  return [...new Set([sourcePath(item), ...('alsoPreviews' in item ? item.alsoPreviews : [])])]
+}
+async function copySource(path: string): Promise<void> {
+  try { await copyText(path); copiedSource.value = path; copySourceError.value = '' }
+  catch { copiedSource.value = ''; copySourceError.value = path }
+}
 function toggleSource(item: (typeof entries)[number]): void {
   if (openSource.value === item.name) { openSource.value = ''; return }
   openSource.value = item.name
@@ -596,7 +681,7 @@ const safeSelectWidth = computed(() => Math.max(80, Number(selectWidth.value) ||
 const safeMinRows = computed(() => Math.min(5, Math.max(1, Math.trunc(Number(minRows.value) || 1))))
 const safeMaxRows = computed(() => Math.max(safeMinRows.value, Math.min(10, Math.trunc(Number(maxRows.value) || 1))))
 // user:“支持分类、搜索、筛选、实时预览”+(组合预览中真实展示的组件也能按名称和路径检索)。
-const visible = computed(() => entries.filter(item => (category.value === '全部' || item.category === category.value) && `${item.name} ${item.category} ${item.description} ${'alsoPreviews' in item ? item.alsoPreviews.join(' ') : ''}`.toLowerCase().includes(query.value.trim().toLowerCase())))
+const visible = computed(() => entries.filter(item => (category.value === '全部' || item.category === category.value) && `${item.name} ${item.category} ${item.description} ${sourcePath(item)} ${'alsoPreviews' in item ? item.alsoPreviews.join(' ') : ''}`.toLowerCase().includes(query.value.trim().toLowerCase())))
 // user:“建立组件目录、使用说明与复用规范，让后续开发及 Agent 能快速检索”+(按源码线索、静态调用方和预览状态检索，索引不代表运行时完整调用关系)。
 const matchedInventory = computed(() => componentInventory.filter(item => {
   const available = previewByPath.has(item.path)
@@ -605,8 +690,7 @@ const matchedInventory = computed(() => componentInventory.filter(item => {
   return matchesStatus && matchesSignal && `${item.name} ${item.path} ${item.signals.join(' ')} ${item.callers.join(' ')} ${item.previewCallers.join(' ')}`.toLowerCase().includes(query.value.trim().toLowerCase())
 }))
 const previewByPath = new Map(entries.flatMap(item => [
-  'sourcePath' in item ? `core/ui/${item.sourcePath}`.replace('core/ui/../', 'core/') : `core/ui/src/components/${item.name}.vue`,
-  ...('alsoPreviews' in item ? item.alsoPreviews : []),
+  ...sourcePaths(item),
 ].map(path => [path, item.name] as const)))
 // user:“让后续开发及 Agent 能快速检索、选用和组合已有组件”+(源码目录直接跳到对应的真实预览)。
 async function openInventoryPreview(path: string) {
@@ -650,11 +734,11 @@ onBeforeUnmount(() => {
     <section v-if="showInventory" class="inventory" aria-label="源码组件目录">
       <div class="inventory-filters"><UiSelect v-model="inventorySignal" :options="inventorySignals" aria-label="源码线索筛选" :menu-min-width="150" /><UiSelect v-model="inventoryPreview" :options="inventoryPreviewOptions" aria-label="预览状态筛选" :menu-min-width="150" /></div>
       <p>匹配 {{ matchedInventory.length }} 个源码文件；线索和引用来自静态索引，可能包括仅导出且遗漏动态入口。待接入的条目只提供定位。</p>
-      <ul><li v-for="component in matchedInventory" :key="component.path" :data-inventory-path="component.path"><div><code>{{ component.path }}</code><p class="inventory-signals">{{ component.signals.join(' · ') || '无线索' }}</p><details v-if="component.callers.length || component.previewCallers.length"><summary>静态引用 {{ component.callers.length }} · 预览引用 {{ component.previewCallers.length }}</summary><div v-for="caller in component.callers" :key="caller"><code>{{ caller }}</code></div><div v-for="caller in component.previewCallers" :key="caller"><code>{{ caller }}</code>（预览）</div></details></div><button v-if="previewByPath.has(component.path)" type="button" class="source-button" @click="openInventoryPreview(component.path)">已有预览</button><span v-else>待接入预览</span></li></ul>
+      <ul><li v-for="component in matchedInventory" :key="component.path" :data-inventory-path="component.path"><div><code>{{ component.path }}</code><p class="inventory-signals">{{ component.signals.join(' · ') || '无线索' }}</p><details v-if="component.callers.length || component.previewCallers.length"><summary>静态引用 {{ component.callers.length }} · 预览引用 {{ component.previewCallers.length }}</summary><div v-for="caller in component.callers" :key="caller"><code>{{ caller }}</code></div><div v-for="caller in component.previewCallers" :key="caller"><code>{{ caller }}</code>（预览）</div></details></div><div><button type="button" class="source-button" @click="copySource(component.path)">复制路径</button><button v-if="previewByPath.has(component.path)" type="button" class="source-button" @click="openInventoryPreview(component.path)">已有预览</button><span v-else>待接入预览</span><span v-if="copiedSource === component.path" role="status">路径已复制</span><span v-else-if="copySourceError === component.path" role="status">复制失败，请手动选择路径</span></div></li></ul>
     </section>
     <p v-if="!visible.length">没有匹配的交互预览；可调整筛选条件或搜索源码目录。</p>
-    <section v-for="item in visible" :key="item.name" class="specimen" :class="{ 'specimen--wide': item.name === 'MaterialsView' || item.name === 'CoreSplitWorkspace' || item.name === 'CoreSplitPreview' || item.name === 'WorkflowCanvas' || item.name === 'CoreProjectSettings' || item.name === 'SearchShell' || item.name === 'CoreSettings' || item.name === 'CoreModelCatalog' || item.name === 'CoreLoadToolsEditor' || item.name === 'CorePluginSystemEditor' || item.name === 'CoreSuperAgentPanel' || item.name === 'CoreArrangeManager' || item.name === 'CaptureEditor' || item.name === 'CorePetEditor' || item.name === 'SettingsShell' || item.name === 'CorePendingDecisionPanel' }">
-      <div><span class="category">{{ item.category }}</span><h2 :id="`specimen-${item.name}`" tabindex="-1">{{ item.name }}</h2><p>{{ item.description }}</p><code>{{ 'sourcePath' in item ? item.sourcePath : `src/components/${item.name}.vue` }}</code><div><button class="source-button" type="button" :data-source="item.name" :aria-expanded="openSource === item.name" @click="toggleSource(item)">{{ openSource === item.name ? '收起源码' : '查看源码' }}</button></div></div>
+    <section v-for="item in visible" :key="item.name" class="specimen" :class="{ 'specimen--wide': item.name === 'MaterialsView' || item.name === 'CoreSplitWorkspace' || item.name === 'CoreSplitPreview' || item.name === 'WorkflowCanvas' || item.name === 'CoreProjectSettings' || item.name === 'SearchShell' || item.name === 'CoreSettings' || item.name === 'CoreModelCatalog' || item.name === 'CoreLoadToolsEditor' || item.name === 'CorePluginSystemEditor' || item.name === 'CoreArrangeManager' || item.name === 'CaptureEditor' || item.name === 'CorePetEditor' || item.name === 'SettingsShell' || item.name === 'CorePendingDecisionPanel' }">
+      <div><span class="category">{{ item.category }}</span><h2 :id="`specimen-${item.name}`" tabindex="-1">{{ item.name }}</h2><p>{{ item.description }}</p><div v-for="path in sourcePaths(item)" :key="path" :data-source-path="path"><code>{{ path }}</code><button class="source-button" type="button" @click="copySource(path)">复制源码路径</button><span v-if="copiedSource === path" role="status">路径已复制</span><span v-else-if="copySourceError === path" role="status">复制失败，请手动选择路径</span></div><div><button class="source-button" type="button" :data-source="item.name" :aria-expanded="openSource === item.name" @click="toggleSource(item)">{{ openSource === item.name ? '收起源码' : '查看源码' }}</button></div></div>
       <!-- user:“实时预览、参数调整、变体对比”+(启用材质时提供本地主题渐变示例，不改应用主题)。 -->
       <div class="preview" :style="item.name === 'SundayButton' && buttonMaterial ? { '--theme-control-image': 'linear-gradient(135deg, var(--theme-control-solid), color-mix(in srgb, var(--theme-control-solid) 80%, var(--theme-control-text)))' } : undefined">
         <button v-if="deferredPreviewNames.has(item.name) && !query.trim() && !requestedPreviews.has(item.name)" type="button" class="btn btn--secondary" :data-load-preview="item.name" @click="requestPreview(item.name)">加载预览</button>
@@ -674,6 +758,11 @@ onBeforeUnmount(() => {
         </template>
         <SplitWorkspacePreview v-else-if="item.name === 'CoreSplitWorkspace'" />
         <SplitFilePreview v-else-if="item.name === 'CoreSplitPreview'" />
+        <SplitBrowserPreview v-else-if="item.name === 'CoreSplitBrowser'" />
+        <template v-else-if="item.name === 'CoreSplitFileTree'"><label><input v-model="galleryTreeFailure" type="checkbox" class="sunday-checkbox" />模拟目录读取失败</label><div class="loadtools-preview" style="width: 100%; height: 360px"><CoreSplitFileTree root="示例项目" :list-files="galleryTreeList" @open="galleryTreeOpened = $event.replace(/^示例项目\//, '')" /></div><span v-if="galleryTreeOpened">本地打开：{{ galleryTreeOpened }}</span></template>
+        <ComposerPreview v-else-if="item.name === 'InlineFileComposer'" />
+        <QueuedInputPreview v-else-if="item.name === 'CoreQueuedInputTray'" />
+        <ExecutionControlsPreview v-else-if="item.name === 'CoreExecutionControls'" />
         <template v-else-if="item.name === 'ContextMenuHost'"><button type="button" class="btn btn--secondary" @click="openGalleryMenu">打开示例菜单</button><span v-if="galleryMenuResult">本地选择：{{ galleryMenuResult }}</span></template>
         <template v-else-if="item.name === 'CoreProjectSettings'">
           <div class="loadtools-preview" style="width: 100%; height: 650px"><CoreProjectSettings :project="galleryProject" :project-name-draft="galleryProject.name" :theme="theme === 'light' ? SUNDAY_LIGHT_THEME : SUNDAY_DARK_THEME" :request-rpc="async () => ({})" :agents-content="galleryProjectRules" :agents-loading="false" :agents-error="''" :project-action-loading="false" :project-action-error="''" :persist-agents="saveGalleryProjectRules" @rename-project="galleryProject = { ...galleryProject, name: $event }" @update-project-visual="updateGalleryProjectVisual" /></div>
@@ -739,9 +828,9 @@ onBeforeUnmount(() => {
           <button type="button" class="btn btn--secondary" data-attachment-reset @click="galleryAttachments = initialGalleryAttachments(); galleryAttachmentResult = ''">重置示例</button>
           <span v-if="galleryAttachmentResult">{{ galleryAttachmentResult }}</span>
         </template>
-        <template v-else-if="item.name === 'CoreSuperAgentPanel' || item.name === 'CoreArrangeManager'">
+        <template v-else-if="item.name === 'CoreArrangeManager'">
           <button v-if="!fullAreaPreviewRequested && !query.trim()" type="button" class="btn btn--secondary" @click="fullAreaPreviewRequested = true">加载页面预览</button>
-          <div v-else class="loadtools-preview"><CoreSuperAgentPanel v-if="item.name === 'CoreSuperAgentPanel'" :request-rpc="sampleFullAreaRpc" /><CoreArrangeManager v-else :request-rpc="sampleFullAreaRpc" /></div>
+          <div v-else class="loadtools-preview"><CoreArrangeManager :request-rpc="sampleFullAreaRpc" /></div>
         </template>
         <template v-else-if="item.name === 'RightSidebarProcesses'">
           <button v-if="!processPreviewRequested && !query.trim()" type="button" class="btn btn--secondary" @click="processPreviewRequested = true">加载进程预览</button>
@@ -956,6 +1045,37 @@ onBeforeUnmount(() => {
           <label>最多行数 <input v-model.number="maxRows" type="number" min="1" max="10" aria-label="最多行数" /></label>
           <AutoTextarea v-model="text" :min-rows="safeMinRows" :max-rows="safeMaxRows" aria-label="文本示例" />
         </template>
+        <!-- user:“单文件：高度固定 80~120px（取 96px），宽度按原图比例自适应，最大不超过容器宽度 60%”+
+             “多文件：横向可滑动缩略图轨，超过 5 张时末位显示 +N 遮罩”+
+             “文件损坏或加载超时（3s）平滑降级成对应格式的文件类型徽章卡片”+
+             (展厅逐态对照：比例、轨道、+N、坏图降级、音频波形、视频首帧、PDF 徽章)。 -->
+        <template v-else-if="item.name === 'ProcessMediaPreview'">
+          <div class="variant"><span>单图 16:9</span><ProcessMediaPreview :files="galleryMediaWide" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <div class="variant"><span>单图 1:1</span><ProcessMediaPreview :files="galleryMediaSquare" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <div class="variant"><span>多图 3 张</span><ProcessMediaPreview :files="galleryMediaThree" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <div class="variant"><span>多图 7 张（+2 遮罩）</span><ProcessMediaPreview :files="galleryMediaSeven" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <div class="variant"><span>坏图降级徽章</span><ProcessMediaPreview :files="galleryMediaBroken" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <div class="variant"><span>音频波形占位</span><ProcessMediaPreview :files="galleryMediaAudio" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <div class="variant"><span>视频首帧</span><ProcessMediaPreview :files="galleryMediaVideo" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <div class="variant"><span>PDF 无缩略图 → 徽章</span><ProcessMediaPreview :files="galleryMediaPdf" @preview="galleryMediaPreviewRequested = $event.name || ''" /></div>
+          <span>点击只抛 preview 事件，灯箱由消息视图承接。</span>
+          <span v-if="galleryMediaPreviewRequested" data-gallery-media-preview-result>已请求预览：{{ galleryMediaPreviewRequested }}</span>
+        </template>
+        <!-- user:“胶囊式（Pill）列表：横向流式排列多个结果胶囊（Favicon + 截断标题），点击跳转原文”+
+             “favicon 加载失败降级成首字母圆点”+(5 条结果覆盖有站标、无站标、站标取不到与超长标题截断)。 -->
+        <template v-else-if="item.name === 'ProcessResultPills'">
+          <ProcessResultPills :results="galleryPillResults" @open="galleryPillOpened = $event.title" />
+          <span>第 2、5 条没有 favicon，第 3 条 favicon 取不到：三种情况都降级成首字母圆点；第 5 条标题超长，单行截断并保留 title 全文。</span>
+          <span v-if="galleryPillOpened" data-gallery-pill-result>已点击：{{ galleryPillOpened }}</span>
+        </template>
+        <!-- user:“超过 N 个键值折叠成「+N」（展开可看全部）”+
+             “状态徽章（成功/耗时）”+(可切换三种状态与四档耗时，验证折叠与分钟级进位)。 -->
+        <template v-else-if="item.name === 'ProcessKvPill'">
+          <div class="filter-control">状态 <UiSelect :model-value="galleryKvStatus" :options="galleryKvStatusOptions" data-gallery-kv-status aria-label="键值状态" :menu-min-width="120" @update:model-value="galleryKvStatus = $event === 'error' || $event === 'running' ? $event : 'success'" /></div>
+          <div class="filter-control">耗时 <UiSelect v-model="galleryKvDuration" :options="galleryKvDurationOptions" data-gallery-kv-duration aria-label="键值耗时" :menu-min-width="150" /></div>
+          <div class="variant"><span>3 条以内</span><ProcessKvPill :entries="galleryKvFew" :status="galleryKvStatus" :duration-ms="galleryKvDurationMs" /></div>
+          <div class="variant"><span>超过 3 条折叠 +2</span><ProcessKvPill :entries="galleryKvMany" :status="galleryKvStatus" :duration-ms="galleryKvDurationMs" /></div>
+        </template>
         <template v-else><div class="variant"><FileTypeBadge name="photo.png" />图片</div><div class="variant"><FileTypeBadge name="report.pdf" />PDF</div><div class="variant"><FileTypeBadge name="report.pdf" failed />失败</div></template>
       </div>
       <pre v-if="openSource === item.name" class="source" :data-source-content="item.name"><code>{{ item.source || sourceCache[item.name] || sourceErrors[item.name] || '正在加载源码…' }}</code></pre>
@@ -994,6 +1114,7 @@ input[type=number] { width: 80px; }
 .inventory ul { max-height: 320px; overflow: auto; list-style: none; margin: 0; padding: 0; }
 .inventory li { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-1); }
 .inventory li code { overflow-wrap: anywhere; } .inventory li span { flex: none; color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); }
+[data-source-path] code { overflow-wrap: anywhere; }
 .source-button { margin-top: var(--space-3); padding: var(--space-2); border: 0; border-radius: var(--radius-sm); background: var(--theme-control-background); color: var(--theme-control-text); cursor: pointer; }
 .source { grid-column: 1 / -1; max-height: 400px; overflow: auto; white-space: pre; background: var(--theme-main-sunken-background); padding: var(--space-3); }
 .preview { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; padding: var(--space-4); background: var(--theme-main-background); border-radius: var(--radius-sm); }

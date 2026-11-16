@@ -28,6 +28,13 @@ SQLITE_WAL_AUTOCHECKPOINT_PAGES = 32768          # 兜底上界，约 128MB（�
 SQLITE_WAL_MAINTENANCE_PENDING_PAGES = 2048      # 未回写页超过这个水位就报警，约 8MB
 SQLITE_WAL_MAINTENANCE_INTERVAL = 1.0            # 巡检间隔（秒）；被动检查点很快，间隔短才抢得到空档
 SQLITE_PRUNE_INTERVAL = 60.0                     # 派生数据（同步日志）裁剪间隔（秒）
+# 每个连接只拿 4MB 页缓存（默认是 2MB 且按页计）。4.1GB 的库靠 OS 缓存兜底，
+# 但 SQLite 自己的 B-tree 页缓存过小会让每次查询重复解析内部页。
+SQLITE_CACHE_SIZE_KB = -4096
+# 只读查询用内存映射代替逐次 pread；对 WAL 模式只影响主库文件的读。
+SQLITE_MMAP_BYTES = 256 * 1024 * 1024
+# TRUNCATE 收口的冷却时间：收口需要独占，不能每秒尝试。
+SQLITE_WAL_TRUNCATE_COOLDOWN = 30.0
 
 
 def sqlite_database_path(session_factory: Any) -> Path | None:
@@ -38,14 +45,19 @@ def sqlite_database_path(session_factory: Any) -> Path | None:
     return Path(identity[len("sqlite:"):])
 
 
-async def wal_maintenance_once(session_factory: Any) -> dict[str, int]:
-    """Run one PASSIVE checkpoint and report the WAL frame state.
+async def wal_maintenance_once(session_factory: Any, *, aggressive: bool = False) -> dict[str, int]:
+    """Run one checkpoint and report the WAL frame state.
 
     A passive checkpoint never waits for readers or writers, so running it from
     a background task keeps the write path free of checkpoint stalls. The
     returned frame counts are the only honest signal here: the WAL *file* keeps
     its size after a checkpoint and is simply reused, so file size says nothing
     about how much is actually outstanding.
+
+    ``aggressive`` asks SQLite to truncate the WAL afterwards. That needs
+    exclusive access, so it is only attempted from maintenance, startup and
+    shutdown, never from a request path, and a reader still holding a snapshot
+    simply makes it a no-op.
     """
     path = sqlite_database_path(session_factory)
     if path is None:
@@ -53,11 +65,16 @@ async def wal_maintenance_once(session_factory: Any) -> dict[str, int]:
     wal = path.with_name(f"{path.name}-wal")
     if not wal.exists():
         return {"state": "no_wal"}
+    mode = "TRUNCATE" if aggressive else "PASSIVE"
     # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(维护不能等待已耗尽的业务读池；独立短连接在工作线程执行被动检查点，既不堵事件循环也不创建丢失的数据库)。
     def checkpoint():
-        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=0)
+        connection = sqlite3.connect(
+            path.resolve().as_uri() + "?mode=rw",
+            uri=True,
+            timeout=1.0 if aggressive else 0,
+        )
         try:
-            return connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+            return connection.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
         finally:
             connection.close()
 
@@ -68,6 +85,7 @@ async def wal_maintenance_once(session_factory: Any) -> dict[str, int]:
     busy, log_frames, checkpointed = values[:3]
     return {
         "state": "ok",
+        "mode": mode,
         "busy": busy,
         "log": log_frames,
         "checkpointed": checkpointed,
@@ -89,6 +107,7 @@ async def wal_maintenance_loop(
     journal); it runs on its own slow cadence and never blocks a turn.
     """
     next_prune = perf_counter() + prune_interval
+    next_truncate = perf_counter() + SQLITE_WAL_TRUNCATE_COOLDOWN
     while True:
         await asyncio.sleep(interval)
         if prune is not None and perf_counter() >= next_prune:
@@ -109,8 +128,27 @@ async def wal_maintenance_loop(
             logger.warning("[sqlite] WAL maintenance checkpoint failed", exc_info=True)
             continue
         if result.get("pending", 0) >= pending_pages:
-            # Readers are pinning the WAL; surface it instead of letting the
-            # file grow silently.
+            # Readers are pinning the WAL. A PASSIVE checkpoint cannot reclaim
+            # what a live snapshot still needs, so try one exclusive truncation
+            # (rate limited) and say plainly whether it worked.
+            if perf_counter() >= next_truncate:
+                next_truncate = perf_counter() + SQLITE_WAL_TRUNCATE_COOLDOWN
+                try:
+                    truncated = await wal_maintenance_once(session_factory, aggressive=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - maintenance must never kill the host
+                    logger.warning("[sqlite] WAL truncate failed", exc_info=True)
+                else:
+                    if truncated.get("pending", 0) < result.get("pending", 0) // 2:
+                        logger.info(
+                            "[sqlite] WAL truncated: pending %d -> %d frames",
+                            result.get("pending", 0),
+                            truncated.get("pending", 0),
+                        )
+                        continue
+                    logger.warning("[sqlite] WAL is still pinned by a reader: %s", truncated)
+                    continue
             logger.warning("[sqlite] WAL is not draining: %s", result)
 
 T = TypeVar("T")
@@ -204,6 +242,20 @@ def _apply_connection_pragmas(
     except Exception:  # noqa: BLE001 - best-effort connection setup
         logger.warning("[sqlite] PRAGMA wal_autocheckpoint failed", exc_info=True)
     started = perf_counter()
+    # 4.1GB 的库与默认 2MB 页缓存不匹配：连接级缓存只影响本连接的页访问，
+    # 不改变任何查询语义，失败就退回默认。
+    try:
+        cursor.execute(f"PRAGMA cache_size={SQLITE_CACHE_SIZE_KB}")
+    except Exception:  # noqa: BLE001 - best-effort connection setup
+        logger.warning("[sqlite] PRAGMA cache_size failed", exc_info=True)
+    try:
+        cursor.execute("PRAGMA temp_store=MEMORY")
+    except Exception:  # noqa: BLE001 - best-effort connection setup
+        logger.warning("[sqlite] PRAGMA temp_store failed", exc_info=True)
+    try:
+        cursor.execute(f"PRAGMA mmap_size={SQLITE_MMAP_BYTES}")
+    except Exception:  # noqa: BLE001 - best-effort connection setup
+        logger.warning("[sqlite] PRAGMA mmap_size failed", exc_info=True)
     try:
         cursor.execute("PRAGMA synchronous=NORMAL")
     except Exception:  # noqa: BLE001 - best-effort connection setup

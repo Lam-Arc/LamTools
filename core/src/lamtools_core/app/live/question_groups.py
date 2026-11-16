@@ -18,6 +18,7 @@ def close_pending_question_groups(
     *,
     reason: str,
     answers: dict[str, Any] | None = None,
+    closed_out: list[dict[str, Any]] | None = None,
 ) -> int:
     """Mark every pending question group done; return how many were closed.
 
@@ -37,13 +38,28 @@ def close_pending_question_groups(
     for group in groups:
         if not isinstance(group, dict):
             continue
-        if str(group.get("status") or "") != "pending":
+        group_id = str(group.get("group_id") or "")
+        provided = answers.get(group_id) if isinstance(answers, dict) else None
+        status = str(group.get("status") or "")
+
+        if status != "pending":
+            # user:“已回答过的卡展开之后再补充回答，点确定之后会出问题”+(已关闭的组也要
+            # 收下补充的答案：以前这里整组跳过，补答既不进组状态、也不发事件，
+            # 卡片这一侧就什么也没记住。补答只更新题目，不重新关组。)
+            if status == "done" and isinstance(provided, dict):
+                updated = False
+                for question in group.get("questions") or []:
+                    if not isinstance(question, dict):
+                        continue
+                    answer = provided.get(str(question.get("id") or ""))
+                    if isinstance(answer, str) and answer.strip():
+                        question["status"] = "answered"
+                        question["answer"] = answer.strip()
+                        updated = True
+                if updated and isinstance(closed_out, list):
+                    closed_out.append(group)
             continue
-        provided = (
-            answers.get(str(group.get("group_id") or ""))
-            if isinstance(answers, dict)
-            else None
-        )
+
         if isinstance(provided, dict):
             for question in group.get("questions") or []:
                 if not isinstance(question, dict):
@@ -55,5 +71,7 @@ def close_pending_question_groups(
         group["status"] = "done"
         group["closed_reason"] = reason
         group["closed_at_ms"] = now_ms
+        if isinstance(closed_out, list):
+            closed_out.append(group)
         closed += 1
     return closed

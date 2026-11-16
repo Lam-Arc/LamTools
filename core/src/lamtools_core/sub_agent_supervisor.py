@@ -336,6 +336,11 @@ class SubAgentSupervisor:
         # invocation; unacknowledged rows survive process exit/checkpoint failure.
         self._offered_mail: dict[str, set[str]] = {}
         self._initial_mail_ids: dict[str, list[str]] = {}
+        # member -> (call_id, run_id, turn_id) of the instruction it is executing.
+        # A supplement consumed at a step boundary takes over this slot so the
+        # child's following events nest under the supplement, not under the call
+        # that opened the turn.
+        self._child_sources: dict[str, tuple[str, str, str]] = {}
         self._provider_messages_by_invocation: dict[str, set[str]] = {}
         self._closed = False
         self._owned_runner: Any | None = None
@@ -422,6 +427,9 @@ class SubAgentSupervisor:
                   message_key TEXT NOT NULL, created_at REAL NOT NULL, delivered_at REAL,
                   tags TEXT NOT NULL DEFAULT '', wake INTEGER NOT NULL DEFAULT 0,
                   wake_count INTEGER NOT NULL DEFAULT 0,
+                  source_call_id TEXT NOT NULL DEFAULT '',
+                  source_run_id TEXT NOT NULL DEFAULT '',
+                  source_turn_id TEXT NOT NULL DEFAULT '',
                   UNIQUE(parent_thread_id, name, direction, message_key)
                 )
                 """
@@ -450,6 +458,20 @@ class SubAgentSupervisor:
                 (
                     "wake_count",
                     "ALTER TABLE sub_agent_mailbox ADD COLUMN wake_count INTEGER NOT NULL DEFAULT 0",
+                ),
+                # user:“修”+(补充消息要带着送达它的那次父调用：界面按这个调用给
+                # 子代理事件认亲，缺了它补充只能排在它触发的输出后面)。
+                (
+                    "source_call_id",
+                    "ALTER TABLE sub_agent_mailbox ADD COLUMN source_call_id TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "source_run_id",
+                    "ALTER TABLE sub_agent_mailbox ADD COLUMN source_run_id TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "source_turn_id",
+                    "ALTER TABLE sub_agent_mailbox ADD COLUMN source_turn_id TEXT NOT NULL DEFAULT ''",
                 ),
             ):
                 if column not in present_mailbox_columns:
@@ -689,6 +711,7 @@ class SubAgentSupervisor:
                 record.elapsed_ms = record.elapsed_ms or 0
             self._save(record)
             self._pending_prompts.pop(child_name, None)
+            self._child_sources.pop(child_name, None)
             task = self._tasks.pop(child_name, None)
             inline = self._inline_tasks.pop(child_name, None)
             for candidate in (task, inline):
@@ -823,7 +846,15 @@ class SubAgentSupervisor:
             call_id = str(ids.get("call_id") or "")
             run_id = str(ids.get("run_id") or "")
             message_key = f"{run_id}:{call_id}" if call_id else uuid.uuid4().hex
-            inserted = self._mail(child_name, "parent_to_child", body, message_key=message_key)
+            inserted = self._mail(
+                child_name,
+                "parent_to_child",
+                body,
+                message_key=message_key,
+                source_call_id=call_id,
+                source_run_id=run_id,
+                source_turn_id=str(ids.get("turn_id") or ""),
+            )
             with self._connection() as db:
                 message_id = db.execute(
                     "SELECT id FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=? "
@@ -945,6 +976,7 @@ class SubAgentSupervisor:
                     record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
                 self._save(record)
                 self._pending_prompts.pop(record.name, None)
+                self._child_sources.pop(record.name, None)
                 self._initial_mail_ids.pop(record.name, None)
                 self._offered_mail.pop(record.name, None)
                 self._resume_names.discard(record.name)
@@ -1135,6 +1167,7 @@ class SubAgentSupervisor:
                     record.elapsed_ms = int((record.completed_at - record.started_at) * 1000)
                 self._save(record)
                 self._pending_prompts.pop(record.name, None)
+                self._child_sources.pop(record.name, None)
                 self._initial_mail_ids.pop(record.name, None)
                 self._offered_mail.pop(record.name, None)
                 self._resume_names.discard(record.name)
@@ -1318,6 +1351,14 @@ class SubAgentSupervisor:
                 setter = getattr(run_runner, "set_pause_event", None)
                 if callable(setter):
                     setter(self.pause_event)
+                # user:“修”+(先认领本次运行的来源调用，再让执行器按事件读取它：
+                # 期间被消化的补充会改写这个槽位，之后的输出才算在补充名下)。
+                self._child_sources[name] = (
+                    record.source_call_id,
+                    record.source_run_id,
+                    record.source_turn_id,
+                )
+                provider = lambda child=name: self._child_source(child)  # noqa: E731
                 token = _child_identity.set((self, record.type, record.name))
                 invocation_id = uuid.uuid4().hex
                 self._provider_messages_by_invocation[invocation_id] = set()
@@ -1334,6 +1375,9 @@ class SubAgentSupervisor:
                                 raise ValueError("Owned runner does not support committed-state continuation")
                             if resume and hasattr(run_runner, "resume_interrupted"):
                                 result = await run_runner.resume_interrupted(
+                                    **self._provider_kwargs(
+                                        getattr(run_runner, "resume_interrupted", None), provider
+                                    ),
                                     session_id=record.sub_session_id,
                                     agent=record.name,
                                     model=record.model_id,
@@ -1347,6 +1391,7 @@ class SubAgentSupervisor:
                                 )
                             else:
                                 result = await run_runner.run(
+                                    **self._provider_kwargs(getattr(run_runner, "run", None), provider),
                                     task=prompt or "Continue the interrupted sub-agent task using committed conversation history.",
                                     agent=record.name, model=record.model_id,
                                     reasoning_level=record.reasoning_level, mode=record.type,
@@ -1416,6 +1461,26 @@ class SubAgentSupervisor:
                     if self._save_if_current(record, execution_token):
                         await self._record_member_event(record, "member_failed", detail=str(exc))
             await self._maybe_report_members_drained(exclude=name)
+
+    def _child_source(self, name: str) -> tuple[str, str, str]:
+        """The parent call the child's next events belong to."""
+        return self._child_sources.get(name, ("", "", ""))
+
+    @staticmethod
+    def _provider_kwargs(target: Any, provider: Any) -> dict[str, Any]:
+        """Offer the attribution provider only to runners that accept it.
+
+        A host runner that knows the provider follows the instruction being
+        executed; an older or third-party runner keeps the static stamp it was
+        constructed with, so delegating still works.
+        """
+        if not callable(target):
+            return {}
+        try:
+            inspect.signature(target).bind_partial(parent_source_provider=provider)
+        except (TypeError, ValueError):
+            return {}
+        return {"parent_source_provider": provider}
 
     @staticmethod
     def _late_context(record: SubAgentRecord) -> str:
@@ -1532,7 +1597,8 @@ class SubAgentSupervisor:
     def pending_guidance(self, name: str) -> list[dict[str, Any]]:
         with self._connection() as db:
             rows = db.execute(
-                "SELECT id,body,created_at FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=? "
+                "SELECT id,body,created_at,source_call_id,source_run_id,source_turn_id "
+                "FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=? "
                 "AND direction='parent_to_child' AND delivered_at IS NULL ORDER BY created_at,id",
                 (self.parent_thread_id, name),
             ).fetchall()
@@ -1551,6 +1617,16 @@ class SubAgentSupervisor:
         offered = self._offered_mail.setdefault(name, set())
         rows = [row for row in self.pending_guidance(name) if row["id"] not in offered]
         offered.update(row["id"] for row in rows)
+        # user:“修”+(这一步消化了哪条补充，子代理接下来产生的事件就归属那条补充的
+        # 调用行；不切换的话整轮输出都挂在开场那条消息下，补充只能排在输出后面)。
+        for row in rows:
+            call_id = str(row.get("source_call_id") or "")
+            if call_id:
+                self._child_sources[name] = (
+                    call_id,
+                    str(row.get("source_run_id") or ""),
+                    str(row.get("source_turn_id") or ""),
+                )
         return [{"content": row["body"], "metadata": {
             "guidance_id": row["id"], "sent_at": row["created_at"], "source": "parent_to_child",
         }} for row in rows]
@@ -2118,6 +2194,9 @@ class SubAgentSupervisor:
         message_key: str,
         tags: str = "",
         wake: int = 0,
+        source_call_id: str = "",
+        source_run_id: str = "",
+        source_turn_id: str = "",
     ) -> bool:
         """Write one mailbox row.
 
@@ -2128,7 +2207,7 @@ class SubAgentSupervisor:
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
         with self._connection() as db:
             cursor = db.execute(
-                "INSERT OR IGNORE INTO sub_agent_mailbox(id,parent_thread_id,name,direction,body,digest,message_key,created_at,tags,wake) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO sub_agent_mailbox(id,parent_thread_id,name,direction,body,digest,message_key,created_at,tags,wake,source_call_id,source_run_id,source_turn_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     uuid.uuid4().hex,
                     self.parent_thread_id,
@@ -2140,6 +2219,9 @@ class SubAgentSupervisor:
                     time.time(),
                     str(tags or ""),
                     1 if wake else 0,
+                    str(source_call_id or ""),
+                    str(source_run_id or ""),
+                    str(source_turn_id or ""),
                 ),
             )
             return cursor.rowcount > 0

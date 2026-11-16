@@ -2864,9 +2864,11 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   justify-content: flex-start;
   padding: 2px 0 12px;
 }
+/* user:“整条消息的范围应该是左对齐 但是铺满全屏”+(不再有 760/1080 两档上限：
+   消息占满内容列，靠 .assistant-row 的 flex-start 保持左对齐。) */
 .assistant-message,
 .assistant-reply-bubble {
-  width: min(100%, 760px);
+  width: 100%;
   padding: 0 2px;
   color: var(--theme-main-text, #f2efeb);
 }

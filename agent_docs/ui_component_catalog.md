@@ -4,7 +4,7 @@
 
 ## 组件展厅
 
-在 `core/ui` 运行 `npm run dev`，访问终端输出地址下的 `/design-system.html`。展厅直接加载生产组件，也可运行 `npm run build:design-system` 生成独立展厅。展厅可搜索、按分类筛选、切换浅暗主题、操作组件、调整滑条范围、下拉菜单参数与输入框行数并查看真实源码。开关展示标准与小尺寸；禁用状态适用于支持该属性的控件。展厅目前有下列五十八个可操作组件或样式（大型组合组件默认按需加载，搜索时直接展示，也可点击加载预览；源码按需加载）；“源码目录”可按文件名、源码线索或静态引用方搜索，并按线索和预览状态筛选，已有预览可跳转。组合预览中的组件也可按其名称搜索。静态引用可能只是导出，也可能遗漏动态入口，索引不代表组件一定可达或适合复用。
+在 `core/ui` 运行 `npm run dev`，访问终端输出地址下的 `/design-system.html`。展厅直接加载生产组件，也可运行 `npm run build:design-system` 生成独立展厅。展厅可搜索、按分类筛选、切换浅暗主题、操作组件、调整滑条范围、下拉菜单参数与输入框行数并查看真实源码。开关展示标准与小尺寸；禁用状态适用于支持该属性的控件。下表列出可操作的组件或样式（大型组合组件默认按需加载，搜索时直接展示，也可点击加载预览；源码按需加载）；“源码目录”可按文件名、源码线索或静态引用方搜索，并按线索和预览状态筛选，已有预览可跳转。主组件和组合预览中的组件均可按名称或项目相对路径搜索；展项及源码目录可复制路径，复制失败时可手动选择。静态引用可能只是导出，也可能遗漏动态入口，索引不代表组件一定可达或适合复用。
 
 | 组件 | 适用场景 | 主要接口 | 源码 |
 | --- | --- | --- | --- |
@@ -22,11 +22,18 @@
 | CoreSplitWorkspace | 工作区分屏布局、标签和分隔线 | `controller`、`workRoot`、`dirty`、内容插槽及几何／可见性事件；展厅使用不持久化的内存控制器 | `core/ui/src/components/CoreSplitWorkspace.vue`；控制器 `core/ui/src/split/useSplitWorkspace.ts` |
 | CoreSplitTextEditor | 分屏文本编辑、保存与未保存确认 | `tab`、`root`、`controller`、`documents`、`visible`，通过 `dirty` 汇报修改；展厅使用隔离的内存文档，不写真实文件 | `core/ui/src/components/CoreSplitTextEditor.vue`；文档管理 `core/ui/src/split/documents.ts` |
 | CoreSplitPreview | 分屏文件预览 | `tab`、`root`、`transport`、可选 `pane` 和 `controller`；按文件类型显示内容；展厅的 Markdown、文本、图片、错误重试和打开操作均使用本地示例 | `core/ui/src/components/CoreSplitPreview.vue` |
+| CoreSplitBrowser | 分屏浏览器地址、导航和状态 | `tab`、`visible`、可选 `services`；默认使用桌面浏览器服务，展厅仅模拟导航和外部打开 | `core/ui/src/components/CoreSplitBrowser.vue` |
+| CoreSplitFileTree | 分屏项目文件树 | `root`、可选 `listFiles`、`open`；方向键展开、收起及导航，Home / End 跳转首尾；切换项目时丢弃旧结果，失败可重试原目录；展厅可模拟读取错误 | `core/ui/src/components/CoreSplitFileTree.vue` |
 | ContextMenuHost | 共享上下文菜单及子菜单 | 应用根部挂载一次，通过 `openContextMenu` 提供条目与动作；菜单内滚动不会关闭，页面滚动会关闭；展厅动作仅记录本地结果 | `core/ui/src/components/context-menu/ContextMenuHost.vue`；入口 `core/ui/src/components/context-menu/context-menu.ts` |
 | WorkflowSwitchGuard | 工作流草稿保存、放弃或取消 | `open`、`choice`；焦点循环、Escape 与焦点恢复；展厅仅操作本地示例 | `core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowSwitchGuard.vue` |
 | WorkflowQueuePanel | 工作流队列、历史、详情与清理确认 | `items`、`history`、`selectedItem` 和操作回调；展厅操作仅影响本地示例 | `core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowQueuePanel.vue` |
 | WorkflowNodeRuntimeDock | 工作流节点运行、等待、完成和失败详情 | `nodeId`、`title`、`kind`、`state`、`detail`、人工任务回调；展厅使用本地示例 | `core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNodeRuntimeDock.vue` |
 | AttachmentTray | 输入区附件缩略图、文件、上传中、失败及重试 | `attachments`、`transport`、`preview` / `open` / `retry` / `remove`；展厅仅操作本地示例 | `core/ui/src/components/AttachmentTray.vue` |
+| InlineFileComposer / ComposerBar | 输入区编辑器与输入栏 | `v-model`、文件建议、禁用状态与输入事件；输入栏通过插槽组合工具和操作；展厅补全与发送仅使用本地示例，引用右键菜单禁用 | `core/ui/src/components/InlineFileComposer.vue`、`core/ui/src/components/ComposerBar.vue` |
+| CommandPalette | 输入区命令、文件和上下文建议 | `commands`、`activeIndex`、`select`；每个实例独立滚动，读屏标签区分 `/`、`@` 和 `#`；展厅随真实输入组件预览 | `core/ui/src/components/CommandPalette.vue` |
+| CoreQueuedInputTray | 输入区目标及待发送队列 | `items`、`goal`、`editingId`、`draft`、`canGuide` 与编辑、排序、删除、引导事件；展厅只操作内存示例 | `core/ui/src/components/CoreQueuedInputTray.vue` |
+| CoreExecutionControls | 输入区模型、思考等级、运行模式与权限 | `modelValue`、`thinkingMode`、`permissionPreset`、各选项与更新事件；禁用时收起已打开菜单；展厅仅修改内存示例 | `core/ui/src/components/CoreExecutionControls.vue`，菜单 `CoreRuntimeMenu.vue`、`CoreModelThinkingMenu.vue` |
+| CoreWorkspaceMenu | 输入区工作环境选择 | `activeId`、`options`、`disabled`、`select`；支持方向键和首尾键，禁用或无选项时收起菜单；展厅展示本地示例 | `core/ui/src/components/CoreWorkspaceMenu.vue` |
 | CoreSuperAgentPanel | 目标任务列表、权限与详情 | `requestRpc`；展厅为隔离示例，不创建真实任务 | `core/ui/src/components/CoreSuperAgentPanel.vue`；按钮配方 `core/ui/src/styles/full-area-buttons.css` |
 | CoreArrangeManager | 定时任务列表、模板与表单 | `requestRpc`；展厅为隔离示例，不创建真实任务 | `core/ui/src/components/CoreArrangeManager.vue`；按钮配方 `core/ui/src/styles/full-area-buttons.css` |
 | RightSidebarProcesses | 右侧栏后台进程、日志和状态操作 | `requestRpc`、`sessionId`、`processSignal`；展厅使用本地示例，不访问或终止系统进程 | `core/ui/src/components/RightSidebarProcesses.vue` |
@@ -72,6 +79,8 @@
 | ProjectVisualPicker | 项目创建与设置中的图标和颜色选择 | `iconKey`、`colorKey`、`disabled`、对应更新事件；支持键盘单选 | `core/ui/src/components/ProjectVisualPicker.vue` |
 | ProjectVisualIcon | 项目图标及颜色标识 | `iconKey`、`colorKey`、`size`、`iconSize`、`swatch` | `core/ui/src/components/ProjectVisualIcon.vue` |
 | FileTypeBadge | 文件类型图标 | `name`、`size`、`failed` | `core/ui/src/components/FileTypeBadge.vue` |
+| ProcessIcon | 会话内过程行（工具调用、推理、系统事件）的语义图标 | `import ProcessIcon from '@/components/process/ProcessIcon.vue'`；props `kind`、`partType`、`toolName`、`label`、`args`、`result`、`status`、`size`（默认 16）、`strokeWidth`（不传则按语义类别取 1.5~1.75）；语义类别与图标映射见 `core/ui/src/helpers/processIcons.ts`，认不出走 `generic`，不回退扳手。状态语义：`running` 外圈细环旋转、`pending` 降透明、`completed` 静态 `opacity .72`、`failed` / `error` 警戒红并在右下角加 4px 标点；`prefers-reduced-motion` 下环不旋转 | `core/ui/src/components/process/ProcessIcon.vue`；映射 `core/ui/src/helpers/processIcons.ts`；依赖主题变量 `--theme-process-icon-color`、`--theme-main-text`、`--red` |
+| ProcessChevron | 过程行折叠态的展开指示箭头 | `import { ProcessChevron } from '@/components/process/ProcessIcon.vue'`（与 `ProcessIcon` 同一文件具名导出，一处 import 可同时拿到两者）；props `expanded`（默认 `false`）、`size`（默认 16）；`expanded` 为真时挂 `.is-expanded` 旋转 90°，过渡 `transform 160ms ease-out`，`prefers-reduced-motion` 下关闭过渡；颜色跟随 `currentColor` | `core/ui/src/components/process/ProcessIcon.vue`；样式为同文件非 scoped 块，靠 `.process-chevron` 前缀限定 |
 
 SundaySegmented、项目图标及颜色、主题外观、填充和玻璃材质单选组使用 `core/ui/src/composables/radioGroupKeyboard.ts` 提供方向键和首尾键操作；工作流队列、进程日志、定时任务、调用历史筛选、分屏标签和分屏工作表标签通过同一模块提供键盘导航；资料库分区和工作流标题使用手动激活模式，保留编辑保护。共享确认框、命名框和项目／目录弹窗使用 `core/ui/src/composables/trapDialogTab.ts` 将 Tab 焦点保持在可操作控件内；确认框关闭后恢复原焦点。
 

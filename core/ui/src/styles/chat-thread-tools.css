@@ -324,14 +324,12 @@
   overflow: auto;
 }
 .tool-output {
+  /* user:“直接把自带的那层给处理掉 为新系统让位”+(同上：容器配了才画框，选「无」就无框。) */
   width: 100%;
   min-width: 0;
   max-width: 100%;
   margin: 0;
   padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent));
-  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;

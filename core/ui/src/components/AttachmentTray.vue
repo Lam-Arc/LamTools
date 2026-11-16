@@ -1,5 +1,10 @@
 <template>
-  <div v-if="attachments.length" class="attachment-tray" :aria-label="t('附件')">
+  <div
+    v-if="attachments.length"
+    class="attachment-tray"
+    :class="{ 'attachment-tray--with-media': hasMedia }"
+    :aria-label="t('附件')"
+  >
     <div
       v-for="column in columns"
       :key="column.key"
@@ -172,6 +177,11 @@ function isDisplayMedia(item: CoreAttachment): boolean {
   return isDisplayImage(item) || isDisplayVideo(item)
 }
 
+// user:“假如输入框就只有一个胶囊呢，也要被叠到像是三行那么高的位置吗”+
+// (没有图片/视频时，胶囊列高度跟随内容；只有存在媒体卡片时，胶囊列才撑到
+// 三行高度，让连续小附件像一列夹在媒体卡片之间)。
+const hasMedia = computed(() => props.attachments.some(item => isDisplayMedia(item)))
+
 function canPreview(item: CoreAttachment): boolean {
   return item.status !== 'failed' && item.status !== 'uploading'
 }
@@ -288,14 +298,19 @@ watch(
 }
 
 /* 媒体卡与“最多三个胶囊”的列等高：图/视频 104px = 3 × 32px + 2 × 4px。 */
-.attachment-column--media,
-.attachment-column--stack {
+.attachment-column--media {
   height: 104px;
 }
 
 .attachment-column--stack {
   align-items: stretch;
   max-width: min(260px, 70vw);
+}
+
+/* 有媒体卡片时，小附件列撑到媒体卡高度并垂直居中；只有胶囊时按内容高度排。 */
+.attachment-tray--with-media .attachment-column--stack {
+  height: 104px;
+  justify-content: center;
 }
 
 .attachment-entry {

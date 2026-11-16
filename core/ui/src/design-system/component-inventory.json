@@ -750,7 +750,9 @@
       "core/ui/src/index.ts",
       "core/ui/src/pet/ui/SessionCard.vue"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/ComposerPreview.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/context-menu/ContextMenuHost.vue",
@@ -933,7 +935,9 @@
       "core/ui/src/index.ts",
       "core/ui/src/pet/ui/SessionCard.vue"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/ExecutionControlsPreview.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/CoreGeneralEditor.vue",
@@ -1240,7 +1244,9 @@
       "core/ui/src/app/LamToolsApp.vue",
       "core/ui/src/index.ts"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/QueuedInputPreview.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/CoreResourceStats.vue",
@@ -1256,6 +1262,21 @@
     "callers": [
       "core/ui/src/components/RightSidebarHost.vue",
       "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreRunModeCapsule.vue",
+    "name": "CoreRunModeCapsule",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
     ],
     "previewCallers": []
   },
@@ -1366,7 +1387,9 @@
     "callers": [
       "core/ui/src/components/CoreSplitContent.vue"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/SplitBrowserPreview.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/CoreSplitContent.vue",
@@ -1390,7 +1413,9 @@
     "callers": [
       "core/ui/src/components/CoreSplitContent.vue"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/CoreSplitPane.vue",
@@ -1432,7 +1457,9 @@
     "callers": [
       "core/ui/src/components/CoreSplitContent.vue"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/SplitFilePreview.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/CoreSplitTextEditor.vue",
@@ -1602,28 +1629,6 @@
     ]
   },
   {
-    "path": "core/ui/src/components/CoreSuperAgentPanel.vue",
-    "name": "CoreSuperAgentPanel",
-    "signals": [
-      "button",
-      "checkbox",
-      "select",
-      "event",
-      "grid",
-      "flex",
-      "animation",
-      "reduced-motion",
-      "theme",
-      "tokens"
-    ],
-    "callers": [
-      "core/ui/src/components/CoreAppPage.vue"
-    ],
-    "previewCallers": [
-      "core/ui/src/design-system/Gallery.vue"
-    ]
-  },
-  {
     "path": "core/ui/src/components/CoreSystemEventRow.vue",
     "name": "CoreSystemEventRow",
     "signals": [
@@ -1699,7 +1704,9 @@
     "callers": [
       "core/ui/src/index.ts"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/ExecutionControlsPreview.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/DirectCallView.vue",
@@ -1755,7 +1762,8 @@
       "core/ui/src/components/ArtifactPanel.vue",
       "core/ui/src/components/AttachmentTray.vue",
       "core/ui/src/components/ReferenceItems.vue",
-      "core/ui/src/components/UserReferenceText.vue"
+      "core/ui/src/components/UserReferenceText.vue",
+      "core/ui/src/components/process/ProcessMediaPreview.vue"
     ],
     "previewCallers": [
       "core/ui/src/design-system/Gallery.vue"
@@ -1787,7 +1795,6 @@
     "signals": [],
     "callers": [
       "core/ui/src/components/CoreArrangeManager.vue",
-      "core/ui/src/components/CoreSuperAgentPanel.vue",
       "core/ui/src/components/MemoryView.vue",
       "core/ui/src/components/PlanLibraryView.vue"
     ],
@@ -1841,7 +1848,9 @@
       "core/ui/src/components/CoreAuxiliaryChat.vue",
       "core/ui/src/pet/ui/SessionCard.vue"
     ],
-    "previewCallers": []
+    "previewCallers": [
+      "core/ui/src/design-system/ComposerPreview.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/InlineVisualization.vue",
@@ -1977,6 +1986,7 @@
     "signals": [
       "button",
       "event",
+      "grid",
       "flex",
       "animation",
       "reduced-motion",
@@ -2258,6 +2268,64 @@
       "core/ui/src/components/WorkspaceShell.vue"
     ],
     "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/process/ProcessIcon.vue",
+    "name": "ProcessIcon",
+    "signals": [
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/process/ProcessKvPill.vue",
+    "name": "ProcessKvPill",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/process/ProcessMediaPreview.vue",
+    "name": "ProcessMediaPreview",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/process/ProcessResultPills.vue",
+    "name": "ProcessResultPills",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
   },
   {
     "path": "core/ui/src/components/ProjectVisualIcon.vue",
@@ -2570,6 +2638,27 @@
     "previewCallers": []
   },
   {
+    "path": "core/ui/src/components/settings/MessageStreamSettings.vue",
+    "name": "MessageStreamSettings",
+    "signals": [
+      "button",
+      "switch",
+      "range",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSettings.vue"
+    ],
+    "previewCallers": []
+  },
+  {
     "path": "core/ui/src/components/SettingsDraftDialog.vue",
     "name": "SettingsDraftDialog",
     "signals": [],
@@ -2638,7 +2727,8 @@
       "core/ui/src/components/PetActionPanel.vue",
       "core/ui/src/components/ThemeAreaEditor.vue",
       "core/ui/src/components/ThemeEditor.vue",
-      "core/ui/src/components/ThemeStudio.vue"
+      "core/ui/src/components/ThemeStudio.vue",
+      "core/ui/src/components/settings/MessageStreamSettings.vue"
     ],
     "previewCallers": [
       "core/ui/src/demo/thinking-lab.ts",
@@ -2679,6 +2769,7 @@
       "core/ui/src/components/CoreSettings.vue",
       "core/ui/src/components/CoreSkillsEditor.vue",
       "core/ui/src/components/ThemeStudio.vue",
+      "core/ui/src/components/settings/MessageStreamSettings.vue",
       "core/ui/src/tray/TrayPanel.vue"
     ],
     "previewCallers": [
@@ -2820,7 +2911,6 @@
       "core/ui/src/components/CoreSettings.vue",
       "core/ui/src/components/CoreSkillsEditor.vue",
       "core/ui/src/components/CoreSubAgentEditor.vue",
-      "core/ui/src/components/CoreSuperAgentPanel.vue",
       "core/ui/src/components/CoreWebSearchEditor.vue",
       "core/ui/src/components/DirectCallView.vue",
       "core/ui/src/components/OnboardingWizard.vue",
@@ -2828,6 +2918,7 @@
       "core/ui/src/components/RightSidebarWebSearch.vue",
       "core/ui/src/components/ThemeAreaEditor.vue",
       "core/ui/src/components/ThemeStudio.vue",
+      "core/ui/src/components/settings/MessageStreamSettings.vue",
       "core/ui/src/index.ts",
       "core/ui/src/pet/ui/PetPreview.vue",
       "core/ui/src/pet/ui/PetSettingsPanel.vue"
@@ -2939,6 +3030,31 @@
     "previewCallers": []
   },
   {
+    "path": "core/ui/src/design-system/ComposerPreview.vue",
+    "name": "ComposerPreview",
+    "signals": [
+      "event"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/design-system/ExecutionControlsPreview.vue",
+    "name": "ExecutionControlsPreview",
+    "signals": [
+      "checkbox",
+      "grid",
+      "theme",
+      "tokens"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
     "path": "core/ui/src/design-system/Gallery.vue",
     "name": "Gallery",
     "signals": [
@@ -2956,6 +3072,48 @@
     "callers": [],
     "previewCallers": [
       "core/ui/src/design-system/main.ts"
+    ]
+  },
+  {
+    "path": "core/ui/src/design-system/QueuedInputPreview.vue",
+    "name": "QueuedInputPreview",
+    "signals": [
+      "checkbox"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/design-system/SplitBrowserPreview.vue",
+    "name": "SplitBrowserPreview",
+    "signals": [
+      "checkbox",
+      "grid",
+      "theme",
+      "tokens"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/design-system/SplitFilePreview.vue",
+    "name": "SplitFilePreview",
+    "signals": [
+      "button",
+      "checkbox",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
     ]
   },
   {

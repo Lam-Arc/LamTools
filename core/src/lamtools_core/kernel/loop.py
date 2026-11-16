@@ -1399,6 +1399,9 @@ class CoreLoopKernel:
                         group = {
                             "group_id": group_id,
                             "call_id": prepared.id,
+                            # 关掉的组要发出"已关闭"的事实，投影靠 run_id + call_id 才能
+                            # 落回同一张卡，否则会凭空多出一张。
+                            "run_id": str(state.run_id or ""),
                             "questions": questions,
                             "status": "pending",
                             "asked_at_ms": int(time_module.time() * 1000),

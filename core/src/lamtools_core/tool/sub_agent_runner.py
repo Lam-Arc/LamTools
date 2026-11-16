@@ -816,6 +816,7 @@ class KernelSubAgentRunner:
         guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = None,
         guidance_acknowledger: Callable[[list[str]], Any] | None = None,
         initial_guidance_ids: list[str] | None = None,
+        parent_source_provider: Callable[[], Any] | None = None,
         preset: str = "",
     ) -> SubAgentRunResult:
         agent_name = normalize_sub_session_agent_name(agent)
@@ -846,6 +847,7 @@ class KernelSubAgentRunner:
                     guidance_finalizer=guidance_finalizer,
                     guidance_acknowledger=guidance_acknowledger,
                     initial_guidance_ids=initial_guidance_ids,
+                    parent_source_provider=parent_source_provider,
                     preset=preset,
                 )
         finally:
@@ -905,6 +907,7 @@ class KernelSubAgentRunner:
         guidance_finalizer: Callable[[], list[Any] | None | Awaitable[list[Any] | None]] | None = None,
         guidance_acknowledger: Callable[[list[str]], Any] | None = None,
         initial_guidance_ids: list[str] | None = None,
+        parent_source_provider: Callable[[], Any] | None = None,
         preset: str = "",
     ) -> SubAgentRunResult:
         preset_id = str(preset or "").strip()
@@ -1004,6 +1007,7 @@ class KernelSubAgentRunner:
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
             invocation_id=invocation_id,
+            parent_source_provider=parent_source_provider,
         )
         kernel = self._build_kernel(
             toolbox=toolbox,
@@ -1641,6 +1645,7 @@ class KernelSubAgentRunner:
         execution_context: Any | None = None,
         supervisor: Any | None = None,
         prompt: str | None = None,
+        parent_source_provider: Callable[[], Any] | None = None,
     ) -> SubAgentRunResult:
         """Continue a stopped child from its committed runtime state.
 
@@ -1708,6 +1713,7 @@ class KernelSubAgentRunner:
             "attachments": attachments,
             "execution_context": execution_context,
             "late_context": resume_late_context,
+            "parent_source_provider": parent_source_provider,
         }
         if supervisor is None:
             return await self._run_turn(**kwargs)
@@ -1749,6 +1755,7 @@ class KernelSubAgentRunner:
         execution_context: Any | None = None,
         late_context: str = "",
         invocation_id: str = "",
+        parent_source_provider: Callable[[], Any] | None = None,
     ) -> SubAgentRunResult:
         preset_id = ""
         preset_tools: list[str] | None = None
@@ -1809,6 +1816,7 @@ class KernelSubAgentRunner:
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
             invocation_id=invocation_id,
+            parent_source_provider=parent_source_provider,
         )
         kernel = self._build_kernel(
             toolbox=toolbox,

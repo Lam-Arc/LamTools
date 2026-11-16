@@ -136,6 +136,14 @@
           @sort-stops="(area) => $emit('sort-stops', area)"
         />
 
+        <!-- user:“在「设置 → 界面」新增「消息流（Message Stream）」配置模块，把配置落成全局 CSS 变量 + 根元素 data 属性”
+             +(消息流只影响会话里的正文与过程行；配置由宿主经 props 传入，改动经 update:messageStream 上交)。 -->
+        <MessageStreamSettings
+          :settings="props.messageStream"
+          :theme-mode="props.effectiveThemeMode || 'light'"
+          @update:settings="(value) => $emit('update:messageStream', value)"
+        />
+
         <!-- user:“可视化主题与布局编辑器”+(界面分区提供进入编辑器的入口，进入后是真实界面的编辑态) -->
         <article class="setting-card studio-entry">
           <div class="studio-entry-copy">
@@ -570,6 +578,11 @@ import SettingsShell from '@/components/SettingsShell.vue'
 import CoreModelCatalog from '@/components/CoreModelCatalog.vue'
 import { CORE_SETTINGS_SECTIONS, type SettingsSection } from '@/components/settingsSections.ts'
 import ThemeEditor from '@/components/ThemeEditor.vue'
+import MessageStreamSettings from '@/components/settings/MessageStreamSettings.vue'
+import {
+  DEFAULT_MESSAGE_STREAM,
+  type MessageStreamSettings as MessageStreamSettingsValue,
+} from '@/helpers/messageStreamStyle.ts'
 import CoreSubAgentEditor from '@/components/CoreSubAgentEditor.vue'
 import CoreGeneralEditor from '@/components/CoreGeneralEditor.vue'
 import {
@@ -628,6 +641,8 @@ const props = withDefaults(defineProps<{
   themeMode?: ThemeMode
   themeSchedule?: ThemeSchedule
   effectiveThemeMode?: 'light' | 'dark'
+  /** 消息流（正文与过程行）样式；缺省用默认配置，老宿主不传也不会炸。 */
+  messageStream?: MessageStreamSettingsValue
   allowEnvironmentImport?: boolean
   commandShellPlatform?: 'windows' | 'linux' | 'mobile' | 'web' | 'other'
   permissionPreset?: CorePermissionPreset
@@ -640,6 +655,7 @@ const props = withDefaults(defineProps<{
   modelGroups: () => [],
   catalogView: 'provider',
   commandShellPlatform: 'other',
+  messageStream: () => ({ ...DEFAULT_MESSAGE_STREAM }),
   section: undefined,
 })
 
@@ -665,6 +681,7 @@ const emit = defineEmits<{
   'update-image': [area: ThemeArea, dataUrl: string]
   'update-image-fit': [area: ThemeArea, fit: ThemeImageFit]
   'update-process-icon-color': [color: string]
+  'update:messageStream': [value: MessageStreamSettingsValue]
   'add-stop': [area: ThemeArea]
   'remove-stop': [area: ThemeArea, index: number]
   'sort-stops': [area: ThemeArea]

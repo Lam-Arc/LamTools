@@ -29,13 +29,14 @@ export function useComposerMenuMotion(root: Ref<HTMLElement | null>) {
     context = null
   })
 
-  function animatePrimaryCard(card: HTMLElement | null, itemSelector: string): void {
-    if (!card || !context || !motionEnabled) return
+  function animatePrimaryCard(card: HTMLElement | null, itemSelector: string, onComplete?: () => void): void {
+    // user:“确保视觉、功能和交互不退化”+(菜单动画结束后才能把键盘焦点交给真实可见的选项)。
+    if (!card || !context || !motionEnabled) { onComplete?.(); return }
     primaryTimeline?.kill()
     const items = Array.from(card.querySelectorAll<HTMLElement>(itemSelector))
 
     context.add(() => {
-      primaryTimeline = gsap.timeline({ defaults: { overwrite: 'auto' } })
+      primaryTimeline = gsap.timeline({ defaults: { overwrite: 'auto' }, onComplete })
       primaryTimeline
         .fromTo(
           card,
