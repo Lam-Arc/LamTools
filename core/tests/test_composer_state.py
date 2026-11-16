@@ -36,7 +36,7 @@ def test_normalize_composer_state_fills_defaults_and_rejects_unknown_levels():
     )
 
     assert state == {
-        "active_mode": "execute",
+        "active_mode": "work",
         "model_id": "model-a",
         "reasoning_level": "xhigh",
         "shallow_thinking_enabled": True,
@@ -48,14 +48,14 @@ def test_with_composer_state_mirrors_legacy_keys_and_permission_authority():
     metadata = with_composer_state(
         {"runtime_preferences": {"base_tier": "full_edit", "permission_preset": "ask"}},
         {
-            "active_mode": "consider",
+            "active_mode": "chat",
             "model_id": "model-b",
             "reasoning_level": "medium",
             "permission_preset": "auto",
         },
     )
 
-    assert metadata["composer_state"]["active_mode"] == "consider"
+    assert metadata["composer_state"]["active_mode"] == "chat"
     assert metadata["model_id"] == "model-b"
     # Permission remains authoritative in runtime_preferences.
     assert metadata["runtime_preferences"]["permission_preset"] == "auto"
@@ -65,7 +65,7 @@ def test_with_composer_state_mirrors_legacy_keys_and_permission_authority():
 def test_composer_state_patch_only_changes_provided_fields():
     metadata = {
         "composer_state": {
-            "active_mode": "execute",
+            "active_mode": "work",
             "model_id": "model-a",
             "reasoning_level": "max",
             "shallow_thinking_enabled": True,
@@ -73,10 +73,10 @@ def test_composer_state_patch_only_changes_provided_fields():
         }
     }
 
-    patched = composer_state_patch(metadata, active_mode="consider")
+    patched = composer_state_patch(metadata, active_mode="chat")
 
     assert patched == {
-        "active_mode": "consider",
+        "active_mode": "chat",
         "model_id": "model-a",
         "reasoning_level": "max",
         "shallow_thinking_enabled": True,
@@ -84,10 +84,12 @@ def test_composer_state_patch_only_changes_provided_fields():
     }
 
 
-def test_live_composer_patch_excludes_the_model():
+def test_live_composer_patch_excludes_the_model_and_the_mode():
+    # user:“新建会话时选择好，就不可变动了”+(运行中的回合也收不到模式变更：下一步
+    # 补丁里只有思考档位、浅思考与权限；模式与模型都按会话/回合固定。)
     patch = live_composer_patch(
         {
-            "active_mode": "consider",
+            "active_mode": "chat",
             "model_id": "model-b",
             "reasoning_level": "high",
             "shallow_thinking_enabled": False,
@@ -96,8 +98,8 @@ def test_live_composer_patch_excludes_the_model():
     )
 
     assert "model_id" not in patch
+    assert "active_mode" not in patch
     assert patch == {
-        "active_mode": "consider",
         "reasoning_level": "high",
         "shallow_thinking_enabled": False,
         "permission_preset": "auto",
@@ -108,19 +110,19 @@ def test_overlay_composer_controls_does_not_invent_defaults_for_legacy_sessions(
     parked = {"active_mode": "study:study", "reasoning_level": "max", "model_id": "parked"}
 
     # No composer_state block: a study/plugin/legacy session keeps its parked
-    # values instead of being turned into the product default "execute".
+    # values instead of being turned into the product default "work".
     assert overlay_composer_controls(parked, {"model_id": "legacy"}) == parked
 
     overlaid = overlay_composer_controls(
         parked,
         {
             "composer_state": {
-                "active_mode": "consider",
+                "active_mode": "chat",
                 "reasoning_level": "light",
             }
         },
     )
-    assert overlaid["active_mode"] == "consider"
+    assert overlaid["active_mode"] == "chat"
     assert overlaid["reasoning_level"] == "light"
     # Model stays parked unless explicitly requested.
     assert overlaid["model_id"] == "parked"
@@ -129,7 +131,7 @@ def test_overlay_composer_controls_does_not_invent_defaults_for_legacy_sessions(
 def test_inherit_composer_params_keeps_explicit_caller_values():
     metadata = {
         "composer_state": {
-            "active_mode": "consider",
+            "active_mode": "chat",
             "model_id": "session-model",
             "reasoning_level": "light",
             "shallow_thinking_enabled": True,
@@ -143,7 +145,7 @@ def test_inherit_composer_params_keeps_explicit_caller_values():
 
     assert merged["model_id"] == "explicit-model"
     assert merged["reasoning_level"] == "max"
-    assert merged["active_mode"] == "consider"
+    assert merged["active_mode"] == "chat"
     assert merged["shallow_thinking_enabled"] is True
 
 
@@ -225,7 +227,6 @@ async def test_session_composer_set_persists_and_signals_the_active_run():
         request_id=1,
         params={
             "thread_id": record.id,
-            "active_mode": "consider",
             "model_id": "model-b",
             "reasoning_level": "high",
             "shallow_thinking_enabled": True,
@@ -234,8 +235,8 @@ async def test_session_composer_set_persists_and_signals_the_active_run():
         context=context,
     )
 
+    # 这组参数不写模式，所以返回的组里也没有 active_mode（会话仍是「还没定模式」）。
     assert outcome.response["result"]["composer_state"] == {
-        "active_mode": "consider",
         "model_id": "model-b",
         "reasoning_level": "high",
         "shallow_thinking_enabled": True,
@@ -245,11 +246,11 @@ async def test_session_composer_set_persists_and_signals_the_active_run():
     assert record.metadata["composer_state"]["model_id"] == "model-b"
     assert record.metadata["model_id"] == "model-b"
     assert record.metadata["runtime_preferences"]["permission_preset"] == "auto"
+    # 运行中的回合只收到可热改的键，模式不在其中。
     assert registry.updates == [
         (
             record.id,
             {
-                "active_mode": "consider",
                 "reasoning_level": "high",
                 "shallow_thinking_enabled": True,
                 "permission_preset": "auto",
@@ -257,6 +258,67 @@ async def test_session_composer_set_persists_and_signals_the_active_run():
             "run-1",
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_composer_set_never_changes_the_mode():
+    # user:“发送第一条消息时，定下该会话模式；新建会话时选择好，就不可变动了”
+    # +(输入框这组参数不碰模式：请求里带了模式也不落库，会话里的模式保持不变。)
+    record = build_session_record(
+        session_id="thread-composer-fixed-mode",
+        member_id="core",
+        title="Composer",
+        status="idle",
+        metadata={
+            "composer_state": {
+                "active_mode": "work",
+                "model_id": "model-a",
+                "reasoning_level": "max",
+                "shallow_thinking_enabled": False,
+                "permission_preset": "ask",
+            }
+        },
+    )
+    store = _SessionStore(record)
+    context = _context()
+    context.host.session_store = store
+
+    outcome = await handle_session_composer_set_operation(
+        request_id=1,
+        params={"thread_id": record.id, "active_mode": "chat"},
+        context=context,
+    )
+
+    assert "error" not in outcome.response
+    assert record.metadata["composer_state"]["active_mode"] == "work"
+
+
+@pytest.mark.asyncio
+async def test_session_composer_set_does_not_write_a_mode_by_itself():
+    # 空会话里动输入框的其它参数，不会把模式提前写进会话；模式留给第一条消息定。
+    record = build_session_record(
+        session_id="thread-composer-fresh",
+        member_id="core",
+        title="Composer",
+        status="idle",
+        metadata={},
+    )
+    store = _SessionStore(record)
+    registry = _Registry()
+    context = _context()
+    context.host.session_store = store
+    context.host.runtime_task_registry = registry
+
+    outcome = await handle_session_composer_set_operation(
+        request_id=1,
+        params={"thread_id": record.id, "active_mode": "auto"},
+        context=context,
+    )
+
+    assert "error" not in outcome.response
+    assert "active_mode" not in record.metadata["composer_state"]
+    assert composer_state_from_metadata(record.metadata)["active_mode"] == "work"
+    assert "active_mode" not in registry.updates[0][1]
 
 
 @pytest.mark.asyncio
@@ -330,7 +392,7 @@ async def test_session_composer_set_partial_update_preserves_other_fields():
         status="idle",
         metadata={
             "composer_state": {
-                "active_mode": "execute",
+                "active_mode": "work",
                 "model_id": "model-a",
                 "reasoning_level": "max",
                 "shallow_thinking_enabled": True,
@@ -344,32 +406,32 @@ async def test_session_composer_set_partial_update_preserves_other_fields():
 
     await handle_session_composer_set_operation(
         request_id=1,
-        params={"thread_id": record.id, "active_mode": "consider"},
+        params={"thread_id": record.id, "reasoning_level": "light"},
         context=context,
     )
 
     assert record.metadata["composer_state"] == {
-        "active_mode": "consider",
+        "active_mode": "work",
         "model_id": "model-a",
-        "reasoning_level": "max",
+        "reasoning_level": "light",
         "shallow_thinking_enabled": True,
         "permission_preset": "full_access",
     }
     assert composer_state_from_metadata(record.metadata)["model_id"] == "model-a"
 
 
-def test_kit_apply_runtime_settings_updates_config_but_keeps_the_model(tmp_path):
+def test_kit_apply_runtime_settings_keeps_the_model_and_the_mode(tmp_path):
     from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
     from lamtools_core.runtime import RuntimeState
 
     class _Toolbox:
-        active_mode = "execute"
+        active_mode = "work"
 
     kit = CoreBaseAgentKit(
         work_root=tmp_path,
         config=CoreBaseAgentConfig(
             model_id="model-current",
-            active_mode="execute",
+            active_mode="work",
             reasoning_level="max",
         ),
         toolbox=_Toolbox(),
@@ -382,7 +444,7 @@ def test_kit_apply_runtime_settings_updates_config_but_keeps_the_model(tmp_path)
     changed = kit.apply_runtime_settings(
         state,
         {
-            "active_mode": "consider",
+            "active_mode": "chat",
             "reasoning_level": "light",
             "shallow_thinking_enabled": True,
             "permission_preset": "auto",
@@ -392,17 +454,16 @@ def test_kit_apply_runtime_settings_updates_config_but_keeps_the_model(tmp_path)
     )
 
     assert changed == {
-        "active_mode",
         "reasoning_level",
         "shallow_thinking_enabled",
         "permission_preset",
     }
-    assert kit.config.active_mode == "consider"
+    # user:“新建会话时选择好，就不可变动了”+(模式不属于本轮可改的设置，保持原样。)
+    assert kit.config.active_mode == "work"
+    assert kit.toolbox.active_mode == "work"
     assert kit.config.reasoning_level == "light"
     assert kit.config.model_id == "model-current"
-    assert kit.toolbox.active_mode == "consider"
     assert state.metadata["shallow_thinking_enabled"] is True
-    assert state.metadata["runtime_snapshot"]["active_mode"] == "consider"
     assert state.metadata["runtime_snapshot"]["reasoning_level"] == "light"
     assert state.metadata["runtime_snapshot"]["permission_preset"] == "auto"
     assert state.metadata["runtime_snapshot"]["model_id"] == "model-current"

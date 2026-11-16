@@ -159,9 +159,9 @@ async def prepare_auxiliary_request(session_store: Any, state_store: Any, payloa
     if additional:
         # user:“选中以一个“附加信息”传入”+(选文独立于当前问题和主聊天上下文，不伪造用户消息)。
         late += "\n\n[Additional information]\n" + json.dumps(additional, ensure_ascii=False)
-    snapshot.update({"auxiliary_read_only": True, "auxiliary_parent_session_id": parent, "active_mode": "consider", "active_tier": "read_only", "approval_policy": "require", "permission_preset": "ask", "instructions": AUXILIARY_INSTRUCTIONS, "request_local_late_context": late})
+    snapshot.update({"auxiliary_read_only": True, "auxiliary_parent_session_id": parent, "active_mode": "chat", "active_tier": "read_only", "approval_policy": "require", "permission_preset": "ask", "instructions": AUXILIARY_INSTRUCTIONS, "request_local_late_context": late})
     root = (getattr(source, "metadata", {}) or {}).get("work_root") if source else None
-    return {**payload, **({"work_root": root} if root else {}), "active_mode": "consider", "active_tier": "read_only", "approval_policy": "require", "permission_preset": "ask", "instructions": AUXILIARY_INSTRUCTIONS, "request_local_late_context": late, "runtime_snapshot": snapshot}
+    return {**payload, **({"work_root": root} if root else {}), "active_mode": "chat", "active_tier": "read_only", "approval_policy": "require", "permission_preset": "ask", "instructions": AUXILIARY_INSTRUCTIONS, "request_local_late_context": late, "runtime_snapshot": snapshot}
 
 
 async def prepare_auxiliary_runtime(context: Any, payload: dict) -> dict:
@@ -169,15 +169,15 @@ async def prepare_auxiliary_runtime(context: Any, payload: dict) -> dict:
 
 
 def lock_auxiliary_toolbox(toolbox: Any) -> None:
-    toolbox.active_mode = "consider"
-    configured = (toolbox.load_tools or {}).get("consider")
-    allowed = set(configured.tools) if configured and configured.tools else set(default_load_tools()["consider"].tools)
+    toolbox.active_mode = "chat"
+    configured = (toolbox.load_tools or {}).get("chat")
+    allowed = set(configured.tools) if configured and configured.tools else set(default_load_tools()["chat"].tools)
     allowed = (allowed & READ_ONLY_TOOLS) | {"read_main_chat"}
     if toolbox.agent_tool_whitelist is not None:
         allowed &= toolbox.agent_tool_whitelist
     toolbox.capability_tool_whitelist = frozenset(allowed)
-    toolbox.load_tools = {**(toolbox.load_tools or {}), "consider": LoadToolMode(description="Main-chat assistant: read-only analysis and research", tools=sorted(allowed))}
-    toolbox.plugin_mode_tool_sets["consider"] = set(allowed)
+    toolbox.load_tools = {**(toolbox.load_tools or {}), "chat": LoadToolMode(description="Main-chat assistant: read-only analysis and research", tools=sorted(allowed))}
+    toolbox.plugin_mode_tool_sets["chat"] = set(allowed)
 
 
 def auxiliary_tool_contributions(snapshot: dict | None, state_store: Any) -> tuple[list[ToolSpec], dict]:
@@ -186,7 +186,7 @@ def auxiliary_tool_contributions(snapshot: dict | None, state_store: Any) -> tup
     parent = str(snapshot.get("auxiliary_parent_session_id") or "")
     if not parent:
         return [], {}
-    spec = ToolSpec(name="read_main_chat", description="Read the source main conversation's saved context, including earlier messages and tool evidence. Source is fixed; cannot read or modify other conversations. Page with next_cursor; use content_offset to continue a large message.", permission="auto_allow", metadata={"plugin_mode": "consider"}, input_schema={"type": "object", "properties": {"offset": {"type": "integer", "minimum": 0}, "content_offset": {"type": "integer", "minimum": 0}, "max_chars": {"type": "integer", "minimum": 1024, "maximum": 32000}, "expected_version": {"type": "string"}}, "additionalProperties": False})
+    spec = ToolSpec(name="read_main_chat", description="Read the source main conversation's saved context, including earlier messages and tool evidence. Source is fixed; cannot read or modify other conversations. Page with next_cursor; use content_offset to continue a large message.", permission="auto_allow", metadata={"plugin_mode": "chat"}, input_schema={"type": "object", "properties": {"offset": {"type": "integer", "minimum": 0}, "content_offset": {"type": "integer", "minimum": 0}, "max_chars": {"type": "integer", "minimum": 1024, "maximum": 32000}, "expected_version": {"type": "string"}}, "additionalProperties": False})
 
     async def read(call: ToolCall) -> ToolResult:
         try:

@@ -36,7 +36,7 @@
       :title="hiddenErrorCount ? t('部分文件不存在') : undefined"
       @click="expanded = !expanded"
     >
-      <span class="reference-item-name">{{ expanded ? t('收起') : t('展开其余 {0} 项', { 0: items.length - COLLAPSED_LIMIT }) }}</span>
+      <span class="reference-item-name">{{ expanded ? t('收起') : (foldAll ? t('展开全部 {0} 项', { 0: items.length }) : t('展开其余 {0} 项', { 0: items.length - COLLAPSED_LIMIT })) }}</span>
       <span v-if="hiddenErrorCount" class="reference-item-error" aria-hidden="true">!</span>
     </button>
   </div>
@@ -54,7 +54,7 @@ import type { CoreAttachment, ToolArtifact } from '@/types'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
 
 defineOptions({ inheritAttrs: false })
-const props = withDefaults(defineProps<{ attachments?: CoreAttachment[]; artifacts?: ToolArtifact[]; transport: LamToolsTransport; projectId?: string | null; workRoot?: string | null; compact?: boolean; previewOnly?: boolean; heading?: string }>(), { attachments: () => [], artifacts: () => [], heading: '' })
+const props = withDefaults(defineProps<{ attachments?: CoreAttachment[]; artifacts?: ToolArtifact[]; transport: LamToolsTransport; projectId?: string | null; workRoot?: string | null; compact?: boolean; previewOnly?: boolean; heading?: string; foldAll?: boolean }>(), { attachments: () => [], artifacts: () => [], heading: '', foldAll: false })
 const actions = useReferenceActions(props.transport, () => props.workRoot || '')
 const splitWorkspace = useOptionalSplitWorkspace()
 type Item = { id: string; name: string; path: string; kind: string; mime: string; attachment?: string; artifactId?: string; link: boolean; memory: boolean; inline?: string }
@@ -112,9 +112,13 @@ function seekVideoFrame(event: Event): void {
 // 到达时重新折叠，避免上一轮展开状态串到下一轮)。
 const COLLAPSED_LIMIT = 6
 const expanded = ref(false)
-const visibleItems = computed(() => (
-  props.compact || expanded.value ? items.value : items.value.slice(0, COLLAPSED_LIMIT)
-))
+// user:“现在是显示六个，其余折叠，改成全部折叠”+(整块默认收起，一个都不露；
+// 标题旁只留“展开全部 N 项”，点了才铺开)。
+const foldAll = computed(() => props.foldAll === true)
+const visibleItems = computed(() => {
+  if (props.compact || expanded.value) return items.value
+  return foldAll.value ? [] : items.value.slice(0, COLLAPSED_LIMIT)
+})
 // user:“图片和视频附件以大缩略显示”+(媒体卡片排在前面，文档图标紧跟其后，
 // 避免大小卡片混排导致换行参差；翻页/折叠仍按原始条目顺序判定)。
 const displayedItems = computed(() => {
@@ -127,10 +131,12 @@ const displayedItems = computed(() => {
 const mediaCount = computed(() => (
   props.compact ? displayedItems.value.filter(item => Boolean(mediaKind(item))).length : 0
 ))
-const showToggle = computed(() => !props.compact && items.value.length > COLLAPSED_LIMIT)
+const showToggle = computed(() => (
+  !props.compact && items.value.length > (foldAll.value ? 0 : COLLAPSED_LIMIT)
+))
 const hiddenErrorCount = computed(() => (
   showToggle.value && !expanded.value
-    ? items.value.slice(COLLAPSED_LIMIT).filter(item => Boolean(errors[item.id])).length
+    ? items.value.slice(foldAll.value ? 0 : COLLAPSED_LIMIT).filter(item => Boolean(errors[item.id])).length
     : 0
 ))
 watch(

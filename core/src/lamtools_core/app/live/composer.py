@@ -108,6 +108,11 @@ async def handle_session_composer_set_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="session not found")
         )
 
+    # user:“发送第一条消息时，定下该会话模式；新建会话时选择好，就不可变动了”
+    # +(模式只由第一条消息写进会话：这组参数传什么都不落模式，所以点胶囊、改模型、
+    # 改权限都不会提前锁死，模式也不可能被中途换掉。)
+    raw_mode = None
+
     composer = composer_state_patch(
         record.metadata,
         active_mode=raw_mode,
@@ -116,6 +121,8 @@ async def handle_session_composer_set_operation(
         shallow_thinking_enabled=raw_shallow,
         permission_preset=raw_preset,
     )
+    # 组里不带模式，with_composer_state 因此不会把默认模式写进会话。
+    composer.pop("active_mode", None)
     metadata = with_composer_state(record.metadata, composer)
 
     patch = getattr(session_store, "patch", None)

@@ -38,8 +38,21 @@ class LoadToolMode:
 
 LoadTools = dict[ModeName, LoadToolMode]
 
+# user:“将现有的consider，excute迭代为 super Agent、chat、work”+(旧名字不再是一等模式，
+# 读旧配置时映射到新名字；用户自己写的工具清单原样带过去，只改名不改内容)。
+LEGACY_MODE_NAMES: dict[str, str] = {"consider": "chat", "execute": "work", "superagent": "auto"}
+
 
 def load_loadtools(path: Path | str) -> LoadTools:
+    """Load ``loadtools.jsonc`` and return the three canonical modes.
+
+    A missing or unreadable file still yields chat / work / auto, so a new
+    session can always pick a mode.
+    """
+    return _with_default_modes(_parse_loadtools(path))
+
+
+def _parse_loadtools(path: Path | str) -> LoadTools:
     """Load a ``loadtools.jsonc`` file and return a mode-name → LoadToolMode map.
 
     Returns an empty dict when the file is missing, unreadable, or invalid.
@@ -75,6 +88,25 @@ def load_loadtools(path: Path | str) -> LoadTools:
             tools = [str(t) for t in tools_raw if isinstance(t, str) and str(t).strip()]
         result[name.strip()] = LoadToolMode(description=description, tools=tools)
     return result
+
+
+def _with_default_modes(loaded: LoadTools) -> LoadTools:
+    """Rename legacy modes and fill in any mode the file does not define.
+
+    user:“新建会话时选择好，就不可变动了”+(三种模式必须始终存在，否则新建会话选不出
+    模式；旧配置里只有 consider/execute 时也要能开起来)。
+    """
+    merged: LoadTools = {}
+    # 同一个文件里新旧名字都写了时，以新名字为准。
+    for name, mode in loaded.items():
+        if name not in LEGACY_MODE_NAMES:
+            merged.setdefault(name, mode)
+    for name, mode in loaded.items():
+        if name in LEGACY_MODE_NAMES:
+            merged.setdefault(LEGACY_MODE_NAMES[name], mode)
+    for name, mode in default_load_tools().items():
+        merged.setdefault(name, mode)
+    return merged
 
 
 def mode_tool_set(
@@ -145,24 +177,37 @@ def serialize_loadtools(load_tools: LoadTools) -> str:
     return header + json.dumps(body, ensure_ascii=False, indent=2) + "\n"
 
 
+_READ_ONLY_TOOLS: list[str] = [
+    "read_file", "list_dir", "search_files", "search_content",
+    "web_search", "web_fetch", "git_status", "git_diff",
+    "load_skill", "memory", "message",
+    # user:“ok，那就这么做”+(分析模式也可查阅当前会话的历史原文)。
+    "search_context", "recall_context",
+]
+
+
 def default_load_tools() -> LoadTools:
-    """Return a built-in default (consider + execute) suitable for Core."""
+    """Return the built-in modes: chat, work, auto.
+
+    user:“我觉得它应该是一种运行模式，将现有的consider，excute迭代为 super Agent、
+    chat、work”+(三种模式的区别是这条会话自己留下多少活：聊天一点不干，工作全干，
+    Super Agent 只留对话、判断和派工，活交给带独立工作区的子代理)。
+    """
     return LoadTools({
-        "consider": LoadToolMode(
-            description="Consider mode: use read-only tools for analysis and research; do not modify files",
-            tools=[
-                "read_file", "list_dir", "search_files", "search_content",
-                "web_search", "web_fetch", "git_status", "git_diff",
-                "load_skill", "memory", "message",
-                # user:“ok，那就这么做”+(分析模式也可查阅当前会话的历史原文)。
-                "search_context", "recall_context",
-                # 只读命令仍可用；危险命令由操作等级在闸门里拦下。
-                "run_command",
-            ],
+        "chat": LoadToolMode(
+            description="聊天模式：只用只读工具讨论、调研、分析，不改动任何文件",
+            tools=[*_READ_ONLY_TOOLS, "run_command"],
         ),
-        "execute": LoadToolMode(
-            description="Execute mode: use all tools for complete code operations",
+        "work": LoadToolMode(
+            description="工作模式：使用全部工具，在这一轮里把事做完",
             tools=[],
+        ),
+        "auto": LoadToolMode(
+            description=(
+                "智能模式（auto）：你只对话、判断和派工，不自己改文件也不跑命令。"
+                "把目标交给带独立工作区的子代理，等它汇报后再回复用户"
+            ),
+            tools=[*_READ_ONLY_TOOLS, "question", "sub_agent", "sub_agent_message"],
         ),
     })
 

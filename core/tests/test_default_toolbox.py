@@ -275,7 +275,11 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     sub_agent_schema = specs["sub_agent"].input_schema
     assert "reasoning_level" in sub_agent_schema["properties"]
     assert "reasoning_effort" not in sub_agent_schema["properties"]
-    assert sub_agent_schema["required"] == ["action", "type", "name", "model", "reasoning_level"]
+    # 工具面把每个声明属性都算 required，可选参数靠 null 表达（work_root 就是这样）。
+    assert sub_agent_schema["required"] == [
+        "action", "type", "name", "model", "reasoning_level",
+        "offset", "max_chars", "work_root",
+    ]
     assert toolbox.tool_permissions["write_file"] == "ask_user"
     assert toolbox.tool_permissions["read_file"] == "auto_allow"
     assert toolbox.tool_permissions["load_skill"] == "auto_allow"
@@ -991,26 +995,26 @@ async def test_core_toolbox_accepts_custom_skill_registry(tmp_path):
 # loadtools mode enforcement at execution time
 # ---------------------------------------------------------------------------
 
-def _consider_toolbox(tmp_path):
+def _chat_toolbox(tmp_path):
     from lamtools_core.tool.loadtools import default_load_tools
 
     return build_core_toolbox(
         work_root=tmp_path,
         load_tools=default_load_tools(),
-        active_mode="consider",
+        active_mode="chat",
     )
 
 
-def test_core_toolbox_mode_enforcement_blocks_write_in_consider(tmp_path):
+def test_core_toolbox_mode_enforcement_blocks_write_in_chat(tmp_path):
     """Visibility and enforcement must agree.
 
-    The consider whitelist hides write tools from the model, and a write that
+    The chat whitelist hides write tools from the model, and a write that
     still arrives (stale context, direct execute) is refused with the mode
     reason.  ``run_command`` stays advertised on purpose: one tool, graded per
     command, so read-only commands remain usable while dangerous ones are
     refused by the operation level.
     """
-    toolbox = _consider_toolbox(tmp_path)
+    toolbox = _chat_toolbox(tmp_path)
 
     for name in ("write_file", "edit_file"):
         call = toolbox.prepare_call(ToolCall(id=f"mode-{name}", name=name, arguments={}))
@@ -1018,7 +1022,7 @@ def test_core_toolbox_mode_enforcement_blocks_write_in_consider(tmp_path):
         approval = call.metadata["approval"]
         assert approval["blocked"] is True
         assert call.requires_approval is False
-        assert "consider mode" in approval["reason"]
+        assert "chat mode" in approval["reason"]
 
     # An empty command cannot be graded and is refused by the level cap.
     empty_command = toolbox.prepare_call(
@@ -1033,8 +1037,8 @@ def test_core_toolbox_mode_enforcement_blocks_write_in_consider(tmp_path):
     assert read_only_command.metadata["approval"]["blocked"] is False
 
 
-def test_core_toolbox_mode_enforcement_allows_read_in_consider(tmp_path):
-    toolbox = _consider_toolbox(tmp_path)
+def test_core_toolbox_mode_enforcement_allows_read_in_chat(tmp_path):
+    toolbox = _chat_toolbox(tmp_path)
 
     call = toolbox.prepare_call(
         ToolCall(id="mode-read", name="read_file", arguments={"path": "x.txt"})
@@ -1045,7 +1049,7 @@ def test_core_toolbox_mode_enforcement_allows_read_in_consider(tmp_path):
 
 @pytest.mark.asyncio
 async def test_core_toolbox_mode_blocked_call_returns_error_to_model(tmp_path):
-    toolbox = _consider_toolbox(tmp_path)
+    toolbox = _chat_toolbox(tmp_path)
 
     call = toolbox.prepare_call(
         ToolCall(id="mode-write", name="write_file", arguments={"path": "out.txt", "content": "x"})
@@ -1055,18 +1059,18 @@ async def test_core_toolbox_mode_blocked_call_returns_error_to_model(tmp_path):
     assert result.status == "blocked"
     # The model is told the mode refuses the write, which matches what the mode
     # failed to advertise.
-    assert "consider mode" in result.error
+    assert "chat mode" in result.error
 
 
-def test_core_toolbox_consider_command_grading_blocks_dangerous_and_wrapping(tmp_path):
-    """consider keeps run_command, so the per-command level is the whole boundary.
+def test_core_toolbox_chat_command_grading_blocks_dangerous_and_wrapping(tmp_path):
+    """chat keeps run_command, so the per-command level is the whole boundary.
 
     Visibility hides the write tools, and this guards the other half: read-only
     commands still work, while a destructive command or one that hides behind a
     shell wrapper is refused by the level cap.  A wrapper must not become a
     permission bypass.
     """
-    toolbox = _consider_toolbox(tmp_path)
+    toolbox = _chat_toolbox(tmp_path)
 
     for command in ("git status", "ls -la", "cat notes.txt"):
         call = toolbox.prepare_call(
@@ -1117,9 +1121,9 @@ def test_core_toolbox_mode_unknown_mode_does_not_block(tmp_path):
     assert call.metadata["approval"]["blocked"] is False
 
 
-def test_core_toolbox_consider_mode_caps_writes_without_loadtools(tmp_path):
-    """consider's read-only cap does not depend on load_tools being loaded."""
-    toolbox = build_core_toolbox(work_root=tmp_path, active_mode="consider")
+def test_core_toolbox_chat_mode_caps_writes_without_loadtools(tmp_path):
+    """chat's read-only cap does not depend on load_tools being loaded."""
+    toolbox = build_core_toolbox(work_root=tmp_path, active_mode="chat")
 
     call = toolbox.prepare_call(ToolCall(id="mode-noload", name="write_file", arguments={}))
 
@@ -1150,7 +1154,7 @@ def test_core_toolbox_workflow_mode_allows_dynamic_workflow_tools(tmp_path):
     assert write.metadata["approval"]["blocked"] is True
 
 
-def test_core_toolbox_consider_mode_blocks_dynamic_workflow_tools(tmp_path):
+def test_core_toolbox_chat_mode_blocks_dynamic_workflow_tools(tmp_path):
     from lamtools_core.tool import ToolSpec
     from lamtools_core.tool.loadtools import default_load_tools
 
@@ -1161,12 +1165,12 @@ def test_core_toolbox_consider_mode_blocks_dynamic_workflow_tools(tmp_path):
     toolbox = build_core_toolbox(
         work_root=tmp_path,
         load_tools=default_load_tools(),
-        active_mode="consider",
+        active_mode="chat",
         plugin_tool_providers=[lambda: FakeWorkflowBundle],
         plugin_mode_tool_sets={"workflow": {"wf_run_dynamic"}},
     )
 
-    call = toolbox.prepare_call(ToolCall(id="wf-dyn-consider", name="wf_run_dynamic", arguments={}))
+    call = toolbox.prepare_call(ToolCall(id="wf-dyn-chat", name="wf_run_dynamic", arguments={}))
     assert call.metadata["approval"]["blocked"] is True
 
 

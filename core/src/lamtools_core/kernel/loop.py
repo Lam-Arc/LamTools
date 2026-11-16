@@ -1265,10 +1265,144 @@ class CoreLoopKernel:
                         ),
                         metadata={"key": "duplicate_input_error", "internal": True},
                     ))
+                # user:“Question 是纯提问工具，不维持挂起的 Tool Call”+(提问不再
+                # 进入审批等待门：工具当场闭合；含必答时以 paused 结束本轮，全非
+                # 必答时继续执行后面的步骤。)
+                question_calls = [
+                    (position, call)
+                    for position, call in enumerate(turn.tool_calls)
+                    if call.name == "question" and call.id not in blocked_results
+                ]
+                pause_for_question = False
+                if question_calls:
+                    from lamtools_core.tool.question_spec import has_required, normalize_questions
+
+                    for position, question_call in question_calls:
+                        raw_args = (
+                            question_call.arguments
+                            if isinstance(question_call.arguments, dict)
+                            else {}
+                        )
+                        try:
+                            questions = normalize_questions(raw_args)
+                        except ValueError as exc:
+                            blocked_results[question_call.id] = ToolResult(
+                                call_id=question_call.id,
+                                name=question_call.name,
+                                status="failed",
+                                error=str(exc),
+                            )
+                            tool_results.append(
+                                await self._execute_call_and_writeback(
+                                    state,
+                                    question_call,
+                                    blocked_results=blocked_results,
+                                    step=step,
+                                    index=index,
+                                    history=history,
+                                )
+                            )
+                            continue
+                        group_id = f"{state.session_id}:{state.run_id}:{question_call.id}"
+                        normalized_arguments = dict(raw_args)
+                        normalized_arguments["questions"] = [
+                            dict(item) for item in questions
+                        ]
+                        approval_metadata = (
+                            dict(question_call.metadata.get("approval") or {})
+                            if isinstance(question_call.metadata, dict)
+                            else {}
+                        )
+                        prepared = replace(
+                            question_call,
+                            arguments=normalized_arguments,
+                            requires_approval=False,
+                            metadata={
+                                **dict(question_call.metadata or {}),
+                                "approval": {
+                                    **approval_metadata,
+                                    "tier": "ask_user",
+                                    "blocked": False,
+                                    "requires_approval": False,
+                                    "question_group_id": group_id,
+                                },
+                            },
+                        )
+                        turn.tool_calls[position] = prepared
+                        from lamtools_core.sub_agent_supervisor import current_child_identity
+
+                        identity = current_child_identity()
+                        if identity is not None:
+                            # user:“对于子代理来说，它视父代理为用户，它的question也应该
+                            # 由父代理处理”+(成员提问只写信箱并暂停成员自己；父代理收
+                            # 到唤醒后用 sub_agent_message 回答，用户界面不出现提问卡。)
+                            supervisor, _child_type, _child_name = identity
+                            try:
+                                supervisor.ask_parent(questions)
+                            except BaseException:
+                                # A mailbox failure must not lose the question: the
+                                # member still pauses, and the tool result says so.
+                                pass
+                            tool_results.append(
+                                await self._execute_call_and_writeback(
+                                    state,
+                                    prepared,
+                                    blocked_results=blocked_results,
+                                    step=step,
+                                    index=index,
+                                    history=history,
+                                )
+                            )
+                            pause_for_question = True
+                            continue
+                        group = {
+                            "group_id": group_id,
+                            "call_id": prepared.id,
+                            "questions": questions,
+                            "status": "pending",
+                            "asked_at_ms": int(time_module.time() * 1000),
+                        }
+                        groups = state.metadata.get("question_groups")
+                        if not isinstance(groups, list):
+                            groups = []
+                            state.metadata["question_groups"] = groups
+                        groups.append(group)
+                        state.metadata["question_group"] = group
+                        state.metadata.pop("pending_approval", None)
+                        state.metadata.pop("pending_waiting_request", None)
+                        tool_results.append(
+                            await self._execute_call_and_writeback(
+                                state,
+                                prepared,
+                                blocked_results=blocked_results,
+                                step=step,
+                                index=index,
+                                history=history,
+                            )
+                        )
+                        # user:“组也没呈现”+(先落工具事件、再发请求事件：两者共用
+                        # 同一个 item，请求必须最后写，否则会被工具卡覆盖。)
+                        await self._emit_question_group(state, prepared, group)
+                        pause_for_question = pause_for_question or has_required(questions)
+                    if pause_for_question:
+                        # user:“若组仅非必答问题，则不进入 paused”+(必答才阻塞：
+                        # 走内核既有的 paused 收束路径，状态位与用户主动暂停一致，
+                        # 但原因单独记录，恢复逻辑据此区分。)
+                        step.decision = "paused"
+                        # user:“若组仅非必答问题，则不进入 paused”+(必答才停：
+                        # 这不是失败，收束成 wait，再由 error_msg 把状态落成 paused，
+                        # 界面显示「已暂停」而不是「运行失败」。)
+                        final_decision = "wait"
+                        error_msg = "paused"
+                        state.metadata["pause_reason"] = "question"
+                        break
+
                 approval_calls = [
                     call
                     for call in turn.tool_calls
-                    if call.id not in blocked_results and call.requires_approval
+                    if call.id not in blocked_results
+                    and call.requires_approval
+                    and call.name != "question"
                 ]
                 #: True when this step's tool calls were fully handled inside
                 #: the approval gate, so the normal parallel/sequential block
@@ -4966,6 +5100,34 @@ class CoreLoopKernel:
             tags=["compaction", "token_budget"],
         )
         await self.event_sink.emit(event)
+
+    async def _emit_question_group(
+        self,
+        state: RuntimeState,
+        call: ToolCall,
+        group: dict[str, Any],
+    ) -> None:
+        """Publish one question group. The card stays in the transcript."""
+        await self.event_sink.emit(CoreEvent(
+            name="runtime.question_group",
+            category="decision",
+            payload={
+                "group_id": str(group.get("group_id") or ""),
+                "call_id": call.id,
+                "tool_name": call.name,
+                "questions": list(group.get("questions") or []),
+                "context": str(
+                    (call.arguments or {}).get("context")
+                    if isinstance(call.arguments, dict)
+                    else ""
+                ),
+                "status": str(group.get("status") or "pending"),
+                "asked_at_ms": int(group.get("asked_at_ms") or 0),
+            },
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tags=["question"],
+        ))
 
     async def _emit_approval_request(
         self,

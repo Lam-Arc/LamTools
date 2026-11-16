@@ -108,7 +108,7 @@ const demoTransport = {
 const railIcons = [
   { name: 'chat', component: House, active: true },
   { name: 'direct', component: Sparkles, active: false },
-  { name: 'superagent', component: Bot, active: false },
+
   { name: 'arrange', component: CalendarClock, active: false },
   { name: 'plugins', component: Puzzle, active: false },
   { name: 'settings', component: Settings, active: false },

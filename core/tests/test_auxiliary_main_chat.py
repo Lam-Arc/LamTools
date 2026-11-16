@@ -33,7 +33,7 @@ async def test_parent_context_is_fresh_and_additional_information_is_separate():
     assert "Selected passage" in payload
     assert "[Additional information]" in payload
     assert first["text"] == original["text"]
-    assert first["active_mode"] == "consider"
+    assert first["active_mode"] == "chat"
     assert first["active_tier"] == "read_only"
     assert first["runtime_snapshot"]["auxiliary_read_only"] is True
     assert original["active_mode"] == "execute"
@@ -58,7 +58,7 @@ async def test_ordinary_chat_is_untouched_and_empty_source_stays_read_only():
     assert await prepare_auxiliary_runtime(ctx, ordinary) == ordinary
     sessions["aux"].metadata["parent_session_id"] = ""
     isolated = await prepare_auxiliary_runtime(ctx, {"thread_id": "aux", "text": "hello"})
-    assert isolated["active_mode"] == "consider"
+    assert isolated["active_mode"] == "chat"
 
 
 @pytest.mark.asyncio
@@ -66,7 +66,7 @@ async def test_client_and_global_full_access_cannot_override_auxiliary_mode():
     ctx, sessions, _ = context()
     sessions["aux"].metadata["runtime_preferences"] = {"permission_preset": "full_access", "base_tier": "full_edit", "base_allow_access_outside_workdir": True}
     result = await _resolve_turn_approval_policy(context=ctx, params={"thread_id": "aux", "active_mode": "execute", "permission_preset": "full_access", "active_tier": "full_edit"})
-    assert result["active_mode"] == "consider"
+    assert result["active_mode"] == "chat"
     assert result["active_tier"] == "read_only"
     assert result["runtime_snapshot"]["auxiliary_read_only"] is True
 
@@ -107,7 +107,7 @@ def test_history_pagination_does_not_lose_the_middle_of_a_large_tool_result():
 
 
 def test_capability_and_source_survive_approval_snapshot_reconstruction():
-    snapshot = {"active_mode": "consider", "active_tier": "read_only", "permission_preset": "ask", "approval_policy": "require", "allow_access_outside_workdir": False,
+    snapshot = {"active_mode": "chat", "active_tier": "read_only", "permission_preset": "ask", "approval_policy": "require", "allow_access_outside_workdir": False,
         "tier_tools": {"read_only": ["read_file"], "limited_edit": [], "full_edit": []}, "auxiliary_read_only": True, "auxiliary_parent_session_id": "main", "instructions": "helper role", "request_local_late_context": "fresh source"}
     rebuilt = _runtime_snapshot_from_payload({"runtime_snapshot": snapshot})
     assert rebuilt["auxiliary_read_only"] is True
@@ -120,9 +120,9 @@ def test_capability_and_source_survive_approval_snapshot_reconstruction():
 async def test_real_toolbox_contains_bound_read_main_chat_and_blocks_writes(tmp_path):
     ctx, _, history = context()
     prepared = await prepare_auxiliary_runtime(ctx, {"thread_id": "aux", "text": "inspect"})
-    toolbox, registry = await _build_core_runtime_toolbox(work_root=tmp_path, plugin_assembly={}, approval_policy="require", active_mode="consider", runtime_snapshot=prepared["runtime_snapshot"], sub_agent_state_store=ctx.runtime_state_store)
+    toolbox, registry = await _build_core_runtime_toolbox(work_root=tmp_path, plugin_assembly={}, approval_policy="require", active_mode="chat", runtime_snapshot=prepared["runtime_snapshot"], sub_agent_state_store=ctx.runtime_state_store)
     try:
-        assert "read_main_chat" in {tool["function"]["name"] for tool in toolbox.model_tools(active_mode="consider")}
+        assert "read_main_chat" in {tool["function"]["name"] for tool in toolbox.model_tools(active_mode="chat")}
         result = await toolbox.execute(ToolCall(id="main-read", name="read_main_chat", arguments={"offset": 0}))
         assert result.status == "ok", result.error
         content = json.loads(result.content)
@@ -147,7 +147,7 @@ async def test_model_request_receives_context_and_supplement_without_rewriting_u
     prepared = await prepare_auxiliary_runtime(ctx, {"thread_id": "aux", "text": "My actual question"})
     toolbox = build_core_toolbox(work_root=tmp_path)
     lock_auxiliary_toolbox(toolbox)
-    kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=toolbox, config=CoreBaseAgentConfig(active_mode="consider", instructions=prepared["instructions"], request_local_late_context=prepared["request_local_late_context"]))
+    kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=toolbox, config=CoreBaseAgentConfig(active_mode="chat", instructions=prepared["instructions"], request_local_late_context=prepared["request_local_late_context"]))
     history = [ChatMessage(role="user", content="My actual question")]
     prompt = PromptContext(session_id="aux", history=history)
     request = await kit.build_model_request(RuntimeState(session_id="aux", metadata={"runtime_snapshot": prepared["runtime_snapshot"]}), prompt)

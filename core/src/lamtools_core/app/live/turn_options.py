@@ -73,6 +73,52 @@ async def _latest_persisted_active_mode(*, context: "CoreLiveContext", thread_id
     return None
 
 
+async def _fix_session_active_mode(
+    *,
+    context: "CoreLiveContext",
+    thread_id: str,
+    params: dict[str, Any],
+    session_metadata: Mapping[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    """Decide this session's run mode once and keep it for the rest of its life.
+
+    user:“新建会话之后，在聊天区内选择…发送第一条消息时，定下该会话模式”
+    +(第一条消息把模式写进会话：客户端这次带的值只在会话还没定过模式时生效，
+    缺省 work；已经定过的会话一律按会话里存的模式跑，本轮再带什么都忽略。)
+    """
+    from ..composer_state import (
+        normalize_composer_active_mode,
+        stored_composer_active_mode,
+        with_composer_state,
+    )
+
+    metadata = dict(session_metadata) if isinstance(session_metadata, Mapping) else {}
+    # 辅助会话（输入框之外的只读小窗）由服务端固定只读，不落会话模式。
+    if metadata.get("ui_surface") == "auxiliary":
+        return params, None
+
+    stored = stored_composer_active_mode(metadata)
+    if stored is not None:
+        return {**params, "active_mode": stored}, stored
+
+    requested = params.get("active_mode", params.get("activeMode"))
+    chosen = normalize_composer_active_mode(requested)
+    session_store = getattr(getattr(context, "host", None), "session_store", None)
+    patch = getattr(session_store, "patch", None)
+    if thread_id and callable(patch):
+        try:
+            written = patch(
+                thread_id,
+                metadata=with_composer_state(metadata, {"active_mode": chosen}),
+            )
+            if inspect.isawaitable(written):
+                await written
+        except Exception:
+            # 落库失败不能挡住这条消息：本回合仍按 chosen 跑，下次发送会再写一次。
+            pass
+    return {**params, "active_mode": chosen}, chosen
+
+
 async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> dict[str, Any]:
     """Resolve approval policy, tier configuration, and loadtools mode for a turn.
 
@@ -182,7 +228,7 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
     # user:“工具组可以用consider模式（只读）”+(辅助会话由服务端固定模式，客户端或全局完全访问不能扩大能力)。
     auxiliary = session_metadata.get("ui_surface") == "auxiliary"
     if auxiliary:
-        preset, base_tier, active_mode = "ask", "read_only", "consider"
+        preset, base_tier, active_mode = "ask", "read_only", "chat"
     permissions = resolve_session_permissions(
         preset=preset,
         base_tier=base_tier,

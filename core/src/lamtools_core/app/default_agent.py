@@ -231,6 +231,26 @@ def create_kernel(
     )
 
 
+def _question_answers_from_message(message: str, group: dict[str, Any]) -> dict[str, str]:
+    """Read ``Q<n> <title>：<answer>`` lines back onto the group's questions."""
+    import re as _re
+
+    questions = group.get("questions") if isinstance(group.get("questions"), list) else []
+    answers: dict[str, str] = {}
+    for line in str(message or "").splitlines():
+        match = _re.match(r"^\s*Q(\d+)\s*(.*?)[：:](.*)$", line)
+        if not match:
+            continue
+        index = int(match.group(1)) - 1
+        answer = match.group(3).strip()
+        if index < 0 or index >= len(questions) or not answer:
+            continue
+        question = questions[index]
+        if isinstance(question, dict) and question.get("id"):
+            answers[str(question["id"])] = answer
+    return answers
+
+
 def create_core_agent_operations(
     *,
     spec: CoreAgentSpec | None = None,
@@ -425,6 +445,56 @@ def create_core_agent_operations(
         parts.extend(content_blocks)
         return parts, deferred
 
+    async def _close_question_groups_for_user_message(
+        *, thread_id: str, origin: str, is_continuation: bool,
+        answers: dict[str, Any] | None = None, message: str = "",
+    ) -> None:
+        """user:“普通聊天输入…当前会话所有未处理问题统一转为 done”+(新消息是最高
+        优先级的提问终止方式：先把仍打开的提问组收束，再照常开启这一轮。组记录
+        保留在原位置，卡片仍可追加回答。)
+        """
+        if runtime_state_store is None or not thread_id:
+            return
+        if is_continuation or origin in {"member_wake", "turn_resume"}:
+            return
+        state = await runtime_state_store.get(thread_id)
+        if state is None or not isinstance(state.metadata, dict):
+            return
+        groups = state.metadata.get("question_groups")
+        if not isinstance(groups, list) or not groups:
+            return
+        changed = False
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            if str(group.get("status") or "") != "pending":
+                continue
+            provided = (
+                answers.get(str(group.get("group_id") or ""))
+                if isinstance(answers, dict)
+                else None
+            )
+            if not isinstance(provided, dict) and message:
+                # user:“已确认但尚未提交的回答应与该消息一并携带”+(输入栏回答没有
+                # 结构化参数，按界面拼出的 `Q<n> <题目>：<回答>` 行回填题级状态。)
+                provided = _question_answers_from_message(message, group)
+            if isinstance(provided, dict):
+                # user:“已确认但尚未提交的回答应与该消息一并携带”+(随消息提交的
+                # 答案改写题级状态；组仍在同一次落库里关闭。)
+                for question in group.get("questions") or []:
+                    if not isinstance(question, dict):
+                        continue
+                    answer = provided.get(str(question.get("id") or ""))
+                    if isinstance(answer, str) and answer.strip():
+                        question["status"] = "answered"
+                        question["answer"] = answer.strip()
+            group["status"] = "done"
+            group["closed_reason"] = "user_message"
+            group["closed_at_ms"] = int(time_module.time() * 1000)
+            changed = True
+        if changed:
+            await runtime_state_store.save(state)
+
     async def turn_start(request: OperationRequest) -> OperationResult:
         thread_id = str(request.payload.get("thread_id") or request.payload.get("session_id") or "").strip()
         message = str(request.payload.get("message") or request.payload.get("user_message") or "").strip()
@@ -459,6 +529,18 @@ def create_core_agent_operations(
         ).strip() == "turn_resume"
         if not message and not is_continuation and not request.payload.get("attachment_ids"):
             return OperationResult(name=request.name, status="error", payload={"error": "message is required"})
+        raw_answers = request.payload.get("question_answers")
+        await _close_question_groups_for_user_message(
+            thread_id=thread_id,
+            message=message,
+            origin=str(
+                request.payload.get("origin")
+                or request.payload.get("turn_origin")
+                or ""
+            ),
+            is_continuation=is_continuation,
+            answers=raw_answers if isinstance(raw_answers, dict) else None,
+        )
         from lamtools_core.sub_agent_supervisor import (
             acknowledge_parent_mailbox,
             drain_parent_mailbox,
@@ -479,16 +561,21 @@ def create_core_agent_operations(
             peek_member_events, member_event_is_reportable, member_wake_prompt,
             mark_member_events_delivered,
         )
+        # user:“所有message均唤醒”+(父子通信只剩信箱一个载体：完成/失败也写成
+        # 信箱消息，因此这里只注入信箱正文；生命周期事件降级为审计行，仅标记
+        # 投递、不再重复拼进用户消息。)
         member_events = []
         if str(request.payload.get("origin") or request.payload.get("turn_origin") or "") != "member_wake":
             member_events = [
                 item for item in peek_member_events(sub_agent_database, thread_id)
                 if member_event_is_reportable(item.get("payload") or {})
             ]
-            if member_events:
-                message = f"{message}\n\n[Sub-agent lifecycle events]\n{member_wake_prompt(member_events)}"
 
-        def acknowledge_input(ids: list[str]) -> None:
+        # Only real guidance ids belong in the durable consumption log; the
+        # same acknowledgement also carries sub-agent mailbox ids.
+        recordable_guidance_ids: set[str] = set()
+
+        async def acknowledge_input(ids: list[str]) -> None:
             from lamtools_core.sub_agent_supervisor import acknowledge_parent_guidance
             mark_member_events_delivered(sub_agent_database, ids)
             acknowledge_parent_mailbox(sub_agent_database, thread_id, ids)
@@ -497,10 +584,42 @@ def create_core_agent_operations(
                 thread_id, run_id=guidance_run_id,
                 guidance_ids=ids,
             )
+            # user:“将回合暂停并输入引导信息并发送的时候，有可能会将大量已经成功发送并被处理过的用户信息再次发送”+(内核真正收下引导后立即落一条持久确认；暂停回写压缩历史时不会再把它们当成待发送)。
+            from .steering import record_consumed_guidance
+            has_guidance = getattr(runtime_task_registry, "has_guidance", None)
+            guidance_ids = [
+                guidance_id for guidance_id in ids
+                if guidance_id and (
+                    guidance_id in recordable_guidance_ids
+                    or (callable(has_guidance) and has_guidance(
+                        thread_id, run_id=guidance_run_id, guidance_id=guidance_id,
+                    ))
+                )
+            ]
+            try:
+                await record_consumed_guidance(
+                    db_session_factory,
+                    thread_id=thread_id,
+                    turn_id=guidance_run_id,
+                    guidance_ids=guidance_ids,
+                    event_store=app_event_store,
+                    write_coordinator=write_coordinator,
+                )
+            except Exception:  # noqa: BLE001 — bookkeeping must not fail the turn
+                _logger.warning(
+                    "[default:turn_start] failed to persist guidance consumption thread_id=%s",
+                    thread_id, exc_info=True,
+                )
         recovered_steering = []
         if db_session_factory is not None:
             from .steering import pending_steering
-            recovered_steering = await pending_steering(db_session_factory, thread_id)
+            recovered_steering = await pending_steering(
+                db_session_factory, thread_id,
+                event_store=app_event_store, write_coordinator=write_coordinator,
+            )
+            recordable_guidance_ids.update(
+                str(item["id"]) for item in recovered_steering if item.get("id")
+            )
             if recovered_steering and not is_continuation:
                 prior = "\n\n".join(item["content"] for item in recovered_steering)
                 message = f"[Previously accepted steering not yet checkpointed]\n{prior}\n\n[Current user input]\n{message}"

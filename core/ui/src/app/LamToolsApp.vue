@@ -273,9 +273,7 @@
         <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-chat :title="t('聊天')" :aria-label="t('聊天')" @click="openFromRail(() => onRailOpen('chat'))">
           <House :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-superagent :title="t('Super-agent')" :aria-label="t('Super-agent')" @click="openFromRail(() => onRailOpen('superagent'))">
-          <Bot :size="17" :stroke-width="1.8" aria-hidden="true" />
-        </button>
+
         <button class="drawer-footer-rail__btn" type="button" data-mobile-footer-arrange :title="t('定时任务')" :aria-label="t('定时任务')" @click="openFromRail(openArrange)">
           <CalendarClock :size="17" :stroke-width="1.8" aria-hidden="true" />
         </button>
@@ -420,13 +418,21 @@
           </Transition>
         </div>
         <HistoryLoadingIndicator :active="historyLoading" />
+        <!-- user:“在胶囊和输入框中间放标志语”“胶囊放在输入框和说明中间”+(空会话从上
+             到下：说明语 → 运行模式分段控件 → 输入框；发过第一条消息后整块消失)。 -->
         <div
           v-if="isEmptySession"
           class="empty-session-hero"
           data-empty-session-hero
         >
-          <SundayLogo class="empty-session-logo" :size="136" animated />
-          <h1 class="empty-session-title">{{ emptySessionGreeting }}</h1>
+          <h1 class="empty-session-slogan" :class="`is-${activeMode}`">
+            {{ t(emptySessionSlogan) }}
+          </h1>
+          <CoreRunModeCapsule
+            class="empty-session-mode"
+            :model-value="activeMode"
+            @update:model-value="executionControls.selectMode"
+          />
         </div>
         <ChatThread
           v-else
@@ -434,6 +440,7 @@
           :show-empty-state="!historyLoading"
           :assistant-model-labels="assistantModelLabels"
           :process-expanded-ids="processExpandedIds"
+
           :message-actions="true"
           :transport="transport"
           :project-id="activePluginMode ? undefined : (activeProjectId ?? selectedProjectId)"
@@ -600,7 +607,7 @@
         :thinking-mode="selectedThinkingMode"
         :shallow-thinking-enabled="shallowThinkingEnabled"
         :active-mode="activeMode"
-        :mode-options="modeOptions"
+        hide-mode
         :runtime-mode-label="runtimeModeLabel"
         :permission-preset="permissionPreset"
         :model-options="modelOptions"
@@ -612,7 +619,7 @@
         @update:catalog-view="updateModelCatalogView"
         @update:thinking-mode="executionControls.selectThinkingMode"
         @update:shallow-thinking-enabled="setShallowThinking"
-        @update:active-mode="executionControls.selectMode"
+
         @update:permission-preset="executionControls.selectPermissionPreset"
       >
         <template #leading>
@@ -807,6 +814,7 @@ import ComputerUseBar from '@/components/ComputerUseBar.vue'
 import AppRail, { type AppRailView } from '@/components/AppRail.vue'
 import CoreUpdateCard from '@/components/CoreUpdateCard.vue'
 import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
+import CoreRunModeCapsule from '@/components/CoreRunModeCapsule.vue'
 import CoreQueuedInputTray from '@/components/CoreQueuedInputTray.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import CorePendingDecisionPanel from '@/components/CorePendingDecisionPanel.vue'
@@ -1133,7 +1141,7 @@ const settingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requ
 const projectSettingsRef = ref<{ requestNavigation: (proceed: () => void) => void; requestSection: (id: string) => void } | null>(null)
 // 整版界面状态：搜索 / 资料库 / 定时任务 互斥地占住聊天区域，返回或 Esc 退出；
 // 打开同一个入口相当于退出（与旧浮层的开合直觉一致）。
-type FullAreaViewId = 'library' | 'direct' | 'search' | 'superagent' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
+type FullAreaViewId = 'library' | 'direct' | 'search' | 'arrange' | 'settings' | 'plugins' | 'account' | 'project' | 'plugin'
 const fullAreaView = ref<FullAreaViewId | null>(null)
 // user:“返回不可用，我被困在设置页面了”+(系统返回先关整版界面，界面没得关才交给后台)。
 function handleSystemBack(event: Event): void {
@@ -1219,7 +1227,7 @@ const sidebarNavTitle = computed(() => {
 const libraryRefreshTick = ref(0)
 // 定时任务 / 资料库的内部子页通过 heading 上报顶部标题；组件卸载即失效，避免残留面包屑。
 const arrangeHeading = ref<{ title: string; subtitle: string } | null>(null)
-const superagentHeading = ref<{ title: string; subtitle: string } | null>(null)
+
 const arrangeRef = ref<{ handleBack?: () => boolean } | null>(null)
 const libraryHeading = ref<{ title: string; subtitle: string } | null>(null)
 const libraryRef = ref<{ handleBack?: () => boolean } | null>(null)
@@ -1243,8 +1251,7 @@ const fullAreaHeading = computed<{ title: string; subtitle: string }>(() => {
       return { get title() { return t("调用台") }, get subtitle() { return t("直接调用模型，参数与结果都在这一页，历史可回看。") } }
     case 'arrange':
       return arrangeHeading.value ?? { get title() { return t("定时任务") }, get subtitle() { return t("按计划运行任务，或在需要时随时执行。") } }
-    case 'superagent':
-      return superagentHeading.value ?? { get title() { return t("Super-agent") }, get subtitle() { return t("把复杂目标交给它，自己规划、执行并交付结果。") } }
+
     case 'settings':
       return { get title() { return t("设置") }, get subtitle() { return t("模型与供应商、外观主题、工具权限等应用配置。") } }
     case 'plugins':
@@ -1286,7 +1293,7 @@ const railActiveView = computed<AppRailView>(() => {
 function openRailSplit(view: AppRailView, edge: 'right' | 'bottom' = 'right') {
   if (view === 'chat') return
   const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
-  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), superagent: t('Super-agent'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接'), direct: t('调用台') })[view], pane)
+  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接'), direct: t('调用台') })[view], pane)
 }
 function onRailOpen(view: AppRailView): void {
   if (view === 'chat') {
@@ -1843,8 +1850,9 @@ const {
 
 const modeOptions = computed(() =>
   activePluginMode.value ? [] : [
-    { value: 'consider', get label() { return t("思索") } },
-    { value: 'execute', get label() { return t("执行") } },
+    { value: 'chat', get label() { return t("聊天") } },
+    { value: 'work', get label() { return t("工作") } },
+    { value: 'auto', get label() { return t("智能") } },
   ]
 )
 const assistantModelLabels = computed<Record<string, string>>(() => {
@@ -2149,16 +2157,15 @@ const isEmptySession = computed(() => (
   && !historyLoading.value
   && messages.value.length === 0
 ))
-const EMPTY_SESSION_GREETINGS = ['就当给自己放个假', '芜湖，我来帮忙咯!'] as const
-const pickEmptySessionGreeting = () => (
-  EMPTY_SESSION_GREETINGS[Math.floor(Math.random() * EMPTY_SESSION_GREETINGS.length)]
-)
-const emptySessionGreeting = ref<(typeof EMPTY_SESSION_GREETINGS)[number]>(pickEmptySessionGreeting())
-watch([activeSessionId, isEmptySession], ([sessionId, empty], [previousSessionId, previousEmpty]) => {
-  if (empty && (!previousEmpty || sessionId !== previousSessionId)) {
-    emptySessionGreeting.value = pickEmptySessionGreeting()
-  }
-})
+// user:“在胶囊和输入框中间放标志语”+(一句话说明这个模式会怎么对待这条会话)。
+const EMPTY_SESSION_SLOGANS: Record<string, string> = {
+  chat: '畅所欲言',
+  work: '准备好了，随时效劳！',
+  auto: '交给我就好',
+}
+const emptySessionSlogan = computed(() => (
+  EMPTY_SESSION_SLOGANS[activeMode.value] || EMPTY_SESSION_SLOGANS.work
+))
 
 const visibleSubmissions = computed(() => liveComposerController.submissions.value.filter(
   submission => submission.threadId === activeSessionId.value && !submission.displayed,
@@ -4516,7 +4523,7 @@ const pageBindings = useCorePageBindings({
   projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
   refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands,
   selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef,
-  settingsSection, startPlanFromLibrary, superagentHeading, theme, themeMode, themeSchedule,
+  settingsSection, startPlanFromLibrary, theme, themeMode, themeSchedule,
   transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup,
   updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles
 })

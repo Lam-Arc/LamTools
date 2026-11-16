@@ -20,6 +20,7 @@ import {
   type CoreThinkingPayload,
   normalizeCorePermissionPreset,
 } from '@/composer/execution.ts'
+import { normalizeCoreRunMode } from '@/composer/runMode.ts'
 
 export interface CoreExecutionControlsStorage {
   getItem(key: string): string | null
@@ -136,7 +137,7 @@ export function useCoreExecutionControlsState<
     storageKeys.shallowThinking,
     options.initial?.shallowThinkingEnabled === true,
   ))
-  const activeMode = ref(options.initial?.activeMode || 'execute')
+  const activeMode = ref(normalizeCoreRunMode(options.initial?.activeMode))
   const permissionPreset = ref<CorePermissionPreset>(normalizeCorePermissionPreset(options.initial?.permissionPreset))
   const activeModel = computed(() => {
     const configuredDefault = options.defaultModel.value
@@ -271,7 +272,7 @@ export function useCoreExecutionControlsState<
   }
 
   function selectMode(mode: string): void {
-    activeMode.value = mode
+    activeMode.value = normalizeCoreRunMode(mode)
     try { options.storage?.setItem(storageKeys.activeMode, mode) } catch { /* noop */ }
   }
 
@@ -311,8 +312,9 @@ export function useCoreExecutionControlsState<
       shallowThinkingEnabled.value = next.shallowThinkingEnabled
     }
     if (typeof next.activeMode === 'string' && next.activeMode) {
-      activeMode.value = next.activeMode
-      try { options.storage?.setItem(storageKeys.activeMode, next.activeMode) } catch { /* noop */ }
+      const mode = normalizeCoreRunMode(next.activeMode)
+      activeMode.value = mode
+      try { options.storage?.setItem(storageKeys.activeMode, mode) } catch { /* noop */ }
     }
     if (next.permissionPreset) {
       permissionPreset.value = normalizeCorePermissionPreset(next.permissionPreset)
@@ -323,7 +325,7 @@ export function useCoreExecutionControlsState<
   // Restore persisted activeMode on mount
   try {
     const stored = options.storage?.getItem(storageKeys.activeMode)
-    if (stored) activeMode.value = stored
+    if (stored) activeMode.value = normalizeCoreRunMode(stored)
   } catch { /* noop */ }
 
   return {

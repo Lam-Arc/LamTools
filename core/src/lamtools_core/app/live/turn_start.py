@@ -236,7 +236,12 @@ async def handle_turn_start_operation(
     from .params import _expected_revision, _include_snapshot_param, _load_snapshot_outside_write_lock
     from .runtime_tasks import _auto_title_session, _fail_runtime_start, _mirror_turn_started, _start_runtime_task
     from .terminal_state import _paused_turn_id
-    from .turn_options import _resolve_imagegen_config, _resolve_turn_approval_policy, _runtime_snapshot_with_turn_options
+    from .turn_options import (
+        _fix_session_active_mode,
+        _resolve_imagegen_config,
+        _resolve_turn_approval_policy,
+        _runtime_snapshot_with_turn_options,
+    )
     thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
     client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
     # Provenance of an automatic (non-user) turn, e.g. "member_wake". It rides the
@@ -281,6 +286,17 @@ async def handle_turn_start_operation(
 
     _t_resolved = time_module.perf_counter()
     params = inherit_composer_params(params, resolved.get("session_metadata") or {})
+    # user:“发送第一条消息时，定下该会话模式；新建会话时选择好，就不可变动了”
+    # +(模式只在会话第一次发消息时写一次；已定过的会话忽略本轮请求值，回合、
+    # 验收事件与运行时快照都用会话里存的那个模式。)
+    params, fixed_active_mode = await _fix_session_active_mode(
+        context=context,
+        thread_id=thread_id,
+        params=params,
+        session_metadata=resolved.get("session_metadata") or {},
+    )
+    if fixed_active_mode is not None:
+        resolved["active_mode"] = fixed_active_mode
     # Clients and automatic continuations need not repeat the project path on
     # every message. Resolve it before composer preparation and persist the
     # same root that the tools/runtime will receive.

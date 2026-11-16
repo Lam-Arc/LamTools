@@ -6,6 +6,7 @@
       :active-mode="activeMode"
       :active-mode-label="runtimeModeLabel"
       :mode-options="modeOptions"
+      :hide-mode="hideMode"
       :permission-preset="permissionPreset"
       :disabled="disabled"
       @update:active-mode="$emit('update:activeMode', $event)"
@@ -62,6 +63,7 @@ const props = withDefaults(defineProps<{
   permissionPreset?: CorePermissionPreset | string
   runtimeModeLabel?: string
   showRuntimeMenu?: boolean
+  hideMode?: boolean
   disabled?: boolean
   modelAriaLabel?: string
   thinkingAriaLabel?: string
@@ -78,6 +80,7 @@ const props = withDefaults(defineProps<{
   permissionPreset: 'ask',
   runtimeModeLabel: '',
   showRuntimeMenu: true,
+  hideMode: false,
   disabled: false,
   modelAriaLabel: '模型',
   thinkingAriaLabel: '思考模式',

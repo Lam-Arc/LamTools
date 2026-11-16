@@ -228,18 +228,7 @@ function roomsChapter(): GuideChapter {
           return t("把它当计算器用：问一句、拿一句答案，不留下整段对话。翻译、改写、算个数都合适。")
         },
       },
-      {
-        id: 'rooms-superagent',
-        kind: 'spotlight',
-        target: '[data-rail-entry="superagent"]',
-        placement: 'right',
-        openArea: 'superagent',
-        get openLabel() { return t("进去看一眼") },
-        get title() { return t("Super-agent：把一整件事交出去") },
-        get body() {
-          return t("不是问一句答一句，而是给它一个目标，它自己拆步骤、自己检查、最后把结果交给你。适合「把这个文件夹整理好」这种一整摊事。")
-        },
-      },
+
       {
         id: 'rooms-arrange',
         kind: 'spotlight',

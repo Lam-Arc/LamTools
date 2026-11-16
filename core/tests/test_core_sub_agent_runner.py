@@ -112,10 +112,13 @@ def test_consider_and_execute_are_fail_closed_non_delegating_tool_sets(tmp_path)
         model_id="fake-model",
         load_tools=default_load_tools(),
     )
-    consider_box = runner._build_toolbox(runner._disabled_tools(), active_mode="consider")
-    execute_box = runner._build_toolbox(runner._disabled_tools(), active_mode="execute")
-    consider = {tool["function"]["name"] for tool in consider_box.model_tools(active_mode="consider")}
-    execute = {tool["function"]["name"] for tool in execute_box.model_tools(active_mode="execute")}
+    # 工具边界按运行模式算：consider 类型跑 chat，execute 类型跑 work。
+    assert runner._resolve_mode("consider") == "chat"
+    assert runner._resolve_mode("execute") == "work"
+    consider_box = runner._build_toolbox(runner._disabled_tools(), active_mode="chat")
+    execute_box = runner._build_toolbox(runner._disabled_tools(), active_mode="work")
+    consider = {tool["function"]["name"] for tool in consider_box.model_tools(active_mode="chat")}
+    execute = {tool["function"]["name"] for tool in execute_box.model_tools(active_mode="work")}
 
     assert "read_file" in consider and "write_file" not in consider
     assert "write_file" in execute
@@ -324,7 +327,7 @@ class EmptySubAgentResultLLM:
             return
         tool_messages = [message for message in request.messages if message.role == "tool"]
         assert tool_messages
-        assert "requires exactly" in tool_messages[-1].content.lower()
+        assert "requires model, reasoning_level" in tool_messages[-1].content.lower()
         yield LLMStreamEvent(kind="content_delta", content="main handled strict sub-agent validation")
         yield LLMStreamEvent(kind="done")
 
@@ -1056,7 +1059,7 @@ async def test_sub_agent_runner_consider_mode_filters_tools_and_injects_prompt(t
     # message, keeping the leading system prompt stable for the prompt cache.
     runtime_prompt = str(llm.requests[0].messages[-1].content)
     assert "Current mode" in runtime_prompt
-    assert "consider" in runtime_prompt
+    assert "chat" in runtime_prompt
     assert "Current mode" not in str(llm.requests[0].messages[0].content)
 
 
@@ -1083,7 +1086,7 @@ async def test_sub_agent_runner_execute_mode_keeps_full_access(tmp_path):
     # is still injected (mode_prompt_line fires whenever the mode is known).
     runtime_prompt = str(llm.requests[0].messages[-1].content)
     assert "Current mode" in runtime_prompt
-    assert "execute" in runtime_prompt
+    assert "work" in runtime_prompt
     assert "Current mode" not in str(llm.requests[0].messages[0].content)
 
 
