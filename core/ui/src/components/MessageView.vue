@@ -945,6 +945,7 @@
               side="left"
               :heading="t('本轮产出')"
               :aria-label="t('本轮产出')"
+              fold-all
             />
           </Transition>
 

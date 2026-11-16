@@ -76,6 +76,7 @@ from lamtools_core.tool import ToolCall, ToolContext, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.command_runner import command_shell_prompt
 from lamtools_core.tool.loadtools import mode_prompt_line
+from lamtools_core.app.superagent_brief import dispatch_brief_for
 from lamtools_core.tool.workspace import line_count
 from lamtools_core.tool.workspace_files import IMAGE_DATA_URL_METADATA_KEY
 from lamtools_core.app.project_context import ProjectContextLoader
@@ -348,6 +349,9 @@ def _runtime_context_text(fields: Mapping[str, Any]) -> str:
     mode = str(fields.get("mode") or "")
     if mode:
         lines.append(mode)
+    dispatch_brief = str(fields.get("dispatch_brief") or "")
+    if dispatch_brief:
+        lines.extend(["", dispatch_brief])
     directory = fields.get("execution_directory")
     if directory:
         # user:“继续”+(目录以尾部上下文通知模型，不改稳定系统提示词)。
@@ -536,7 +540,7 @@ class CoreBaseAgentConfig:
     reasoning_level: str = ""
     approval_policy: ApprovalPolicy = "require"
     runtime_controls: dict[str, dict[str, bool]] | None = None
-    active_mode: str | None = None  # loadtools.jsonc mode name (e.g. "consider", "execute")
+    active_mode: str | None = None  # loadtools.jsonc mode name (e.g. "chat", "work", "auto")
     capability: str = ""  # model input modality: "text" | "multimodal" | "" (unknown)
     # Advanced: override the default project context file list.
     # None (default) → uses DEFAULT_PROJECT_CONTEXT_FILES.
@@ -1000,7 +1004,6 @@ class CoreBaseAgentKit:
         if not isinstance(patch, dict):
             return set()
         allowed = (
-            "active_mode",
             "reasoning_level",
             "thinking_enabled",
             "thinking_budget",
@@ -1016,10 +1019,6 @@ class CoreBaseAgentKit:
             if key not in patch or patch[key] is None:
                 continue
             value = patch[key]
-            if key == "active_mode":
-                value = str(value or "").strip()
-                if value not in {"consider", "execute"}:
-                    continue
             if getattr(self.config, key, None) != value:
                 updates[key] = value
 
@@ -1126,6 +1125,9 @@ class CoreBaseAgentKit:
             "mode": mode_prompt_line(
                 self.toolbox.load_tools, self.config.active_mode
             ),
+            # user:“工单概念具象化（可作为给子代理的提示词）”+(工单就是派工时写给
+            # 子代理的那段简报，只在 Super Agent 模式下随上下文给出)。
+            "dispatch_brief": dispatch_brief_for(self.config.active_mode),
             "processes": processes,
             "plan": plan,
             "verification": verification,

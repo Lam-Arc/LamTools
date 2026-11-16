@@ -83,7 +83,11 @@ SUB_AGENT_SPEC = CoreAgentSpec(
 SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
     "name": SUB_AGENT_TOOL_NAME,
     "description": (
-        "Create, close, or delete one reusable, non-blocking sub-agent. "
+        "Create, close, delete, list, or read one reusable, non-blocking sub-agent. "
+        "create/close/delete manage the lifecycle; list reports every sub-agent of "
+        "this session (name, status, elapsed, last summary) and get returns one "
+        "sub-agent's full record including its final report. list/get are "
+        "read-only and never start a run. "
         "Delete removes the sub-agent's own record and its own transcript/"
         "storage so the space is freed; it refuses a still-running sub-agent "
         "(close it first). model/reasoning_level are ignored for delete."
@@ -92,7 +96,7 @@ SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "action": {"type": "string", "enum": ["create", "close", "delete"]},
+            "action": {"type": "string", "enum": ["create", "close", "delete", "list", "get"]},
             "type": {"type": "string", "enum": ["consider", "execute"]},
             "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
             "model": {
@@ -107,8 +111,29 @@ SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
                 "type": "string",
                 "enum": ["off", "light", "medium", "Medium", "high", "xhigh", "xh", "max"],
             },
+            "offset": {
+                "type": "integer",
+                "description": "Character offset into the sub-agent's final report (get only).",
+            },
+            "max_chars": {
+                "type": "integer",
+                "description": (
+                    "How many characters of the final report to return (get only). "
+                    "Defaults to 2000, capped at 20000."
+                ),
+            },
+            "work_root": {
+                "type": "string",
+                "description": (
+                    "Directory this sub-agent works in. Omit to use the current project. "
+                    "When given, the host creates it (a git worktree when the project "
+                    "is a repository) and confines the sub-agent's tools to it, so two "
+                    "sub-agents never edit the same files."
+                ),
+            },
         },
-        "required": ["action", "type", "name", "model", "reasoning_level"],
+        # 只有 action 是所有动作都要的：list 不需要名字，get 只要名字。
+        "required": ["action"],
     },
     "permission": AUTO_ALLOW,
     "failure_modes": [{"type": "agent_failed", "message": "Agent execution failed"}],

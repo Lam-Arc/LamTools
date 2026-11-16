@@ -127,7 +127,7 @@ import { openContextMenu } from '@/components/context-menu/context-menu'
 import { Bot, CalendarClock, CircleHelp, Download, House, MonitorSmartphone, MoreHorizontal, Network, PackageCheck, Settings, Sparkles } from 'lucide-vue-next'
 import { BookOne, Receive } from '@icon-park/vue-next'
 
-export type AppRailView = 'chat' | 'direct' | 'superagent' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
+export type AppRailView = 'chat' | 'direct' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
 
 const props = defineProps<{
   /** 当前所处的整界面分区；'chat' 表示在聊天界面。 */
@@ -255,9 +255,7 @@ const topItems: RailEntry[] = [
   // user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
   // +(调用台是绕过对话直接问模型的地方，紧挨聊天，避免用户去设置里找入口。)
   { id: 'direct', get label() { return t("调用台") }, icon: Sparkles },
-  // user:“让用户能直观地发起任务、查看进度、干预执行和查看成果”+(Super-agent 是交付入口，
-  // 排在聊天之后、定时任务之前：它是把复杂目标交出去的地方，不是又一个管理面板)。
-  { id: 'superagent', get label() { return t("Super-agent") }, icon: Bot },
+
   // 定时任务用 lucide 的 calendar-clock：IconPark 的时间家族里没有「日历+时钟」这一枚。
   { id: 'arrange', get label() { return t("定时任务") }, icon: CalendarClock },
   // 资料库用 IconPark 的 book-one：一叠合着的资料，而不是一本摊开的书。

@@ -98,6 +98,11 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
 
     if event.kind == "status":
         status = event.payload.get("status") or event.status
+        # user:“父会话为什么会有等待态这一个意义不明的东西？正常走完成不就唤醒了吗？”
+        # +(“等成员/成员收尾”只是给人看的标注，不是回合状态：回合产出最终答复后就是
+        # 终态，这条标注不能把它重新标成 running，否则唤醒守卫会以为会话永远在跑。
+        # 事件里的 type 字段不落库，按稳定的 item_id 后缀识别。)
+        annotation_only = str(event.item_id or "").endswith(":sub-agent-wait")
         existing_turn = (state.get("turns") or {}).get(event.turn_id) if event.turn_id else None
         existing_status = str(existing_turn.get("status") or "") if isinstance(existing_turn, dict) else ""
         turn = _upsert_turn(state, event)
@@ -107,9 +112,9 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
                 turn["usage"] = {**dict(turn.get("usage") or {}), **event.usage}
             _recompute_thread_status(state)
             return state
-        if status:
+        if status and not annotation_only:
             state["status"] = status
-        if turn is not None and status:
+        if turn is not None and status and not annotation_only:
             turn["status"] = status
         if turn is not None and event.usage and not _is_context_metrics_event(event):
             turn["usage"] = {**dict(turn.get("usage") or {}), **event.usage}

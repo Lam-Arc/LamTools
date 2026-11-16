@@ -1576,7 +1576,7 @@ class CoreToolbox:
             mcp_call_level=self._mcp_call_level,
             mcp_approved_tools=self.approved_mcp_tools,
             active_tier=active_tier,
-            available_level=1 if active_mode == "consider" else None,
+            available_level=1 if active_mode == "chat" else None,
             tier_tools=tier_tools,
             allow_access_outside_workdir=allow_access_outside_workdir,
             approval_policy=approval_policy,
@@ -2405,11 +2405,50 @@ class CoreToolbox:
             if not hasattr(self.sub_agent_runner, "session_prefix"):
                 return await _legacy_call_sub_agent(call)
             args = call.arguments if isinstance(call.arguments, dict) else {}
-            # The model-facing lifecycle contract is intentionally strict.
-            # Workflow internals still use KernelSubAgentRunner.run directly.
-            required = {"action", "type", "name", "model", "reasoning_level"}
-            if set(args) != required:
-                return ToolResult(call_id=call.id, name=call.name, status="failed", error="sub_agent requires exactly action,type,name,model,reasoning_level")
+            # user:“不过 list 或者 get 确实也有必要添加”+(动作都挂在同一个工具上：
+            # create/close/delete 管生命周期，list/get 只读地看进度与最终报告，不触发执行)。
+            action = str(args.get("action") or "").strip()
+            if action not in {"create", "close", "delete", "list", "get"}:
+                return ToolResult(
+                    call_id=call.id, name=call.name, status="failed",
+                    error="action must be one of create, close, delete, list, get",
+                )
+            # 拼错参数名要明确报错，不能静默忽略；但每个动作只要求它自己用得到的字段。
+            unknown = set(args) - {
+                "action", "type", "name", "model", "reasoning_level",
+                "work_root", "offset", "max_chars",
+            }
+            if unknown:
+                return ToolResult(
+                    call_id=call.id, name=call.name, status="failed",
+                    error=f"sub_agent does not accept {', '.join(sorted(unknown))}",
+                )
+            if action in {"create", "close", "delete"}:
+                missing = [
+                    key for key in ("type", "name", "model", "reasoning_level")
+                    if not str(args.get(key) or "").strip()
+                ]
+                if missing:
+                    return ToolResult(
+                        call_id=call.id, name=call.name, status="failed",
+                        error=f"{action} requires {', '.join(missing)}",
+                    )
+
+            def child_work_root(raw: object) -> str | None:
+                """Resolve the sub-agent's own directory, creating it when needed."""
+                value = str(raw or "").strip()
+                if not value:
+                    return None
+                root = Path(self.work_root).resolve()
+                path = Path(value).expanduser()
+                if not path.is_absolute():
+                    path = root / path
+                path = path.resolve()
+                if path != root and root not in path.parents:
+                    raise ValueError("work_root must stay inside the project directory")
+                path.mkdir(parents=True, exist_ok=True)
+                return str(path)
+
             from lamtools_core.sub_agent_supervisor import get_sub_agent_supervisor
             call_metadata = call.metadata if isinstance(call.metadata, Mapping) else {}
             parent_thread_id = str(
@@ -2422,6 +2461,82 @@ class CoreToolbox:
                 runner=self.sub_agent_runner,
                 data_dir=self.data_dir or (self.work_root / ".lam" / "core" / "data"),
             )
+            if action in {"list", "get"}:
+                records = await supervisor.list()
+
+                def clip(raw: object) -> str:
+                    text = str(raw or "").strip()
+                    return text if len(text) <= 500 else text[:500] + "…"
+
+                if action == "list":
+                    payload = {
+                        "sub_agents": [
+                            {
+                                "name": str(item.get("name") or ""),
+                                "type": str(item.get("type") or ""),
+                                "status": str(item.get("status") or ""),
+                                "elapsed_ms": item.get("elapsed_ms"),
+                                "summary": clip(item.get("summary")),
+                            }
+                            for item in records
+                        ]
+                    }
+                    return ToolResult(
+                        call_id=call.id, name=call.name, status="ok",
+                        content=json.dumps(payload, ensure_ascii=False), metadata=payload,
+                    )
+
+                wanted = str(args.get("name") or "").strip()
+                if not wanted:
+                    return ToolResult(
+                        call_id=call.id, name=call.name, status="failed",
+                        error="get requires name",
+                    )
+                match = next(
+                    (item for item in records if str(item.get("name") or "") == wanted),
+                    None,
+                )
+                if match is None:
+                    names = ", ".join(str(item.get("name") or "") for item in records) or "(none)"
+                    return ToolResult(
+                        call_id=call.id, name=call.name, status="failed",
+                        error=f"sub-agent not found: {wanted}; available: {names}",
+                    )
+                # user:“get 完整记录会不会把父代理撑爆”+(默认只给一段，带 total/has_more/
+                # next_offset；完整正文早已随唤醒信箱进过一次上下文)。
+                report = str(match.get("summary") or "")
+                raw_offset = args.get("offset")
+                raw_limit = args.get("max_chars")
+                offset = int(raw_offset) if isinstance(raw_offset, (int, float)) and raw_offset > 0 else 0
+                limit = (
+                    int(raw_limit)
+                    if isinstance(raw_limit, (int, float)) and raw_limit > 0
+                    else 2000
+                )
+                limit = min(limit, 20000)
+                chunk = report[offset:offset + limit]
+                end = offset + len(chunk)
+                payload = {
+                    "sub_agent": {
+                        key: match.get(key)
+                        for key in (
+                            "name", "type", "status", "model_id", "reasoning_level",
+                            "elapsed_ms", "completed_at", "execution_directory",
+                        )
+                    }
+                    | {
+                        "summary": chunk,
+                        "summary_total_chars": len(report),
+                        "summary_offset": offset,
+                        "has_more": end < len(report),
+                        "next_offset": end if end < len(report) else None,
+                    }
+                }
+                return ToolResult(
+                    call_id=call.id, name=call.name, status="ok",
+                    content=json.dumps(payload, ensure_ascii=False), metadata=payload,
+                )
+
             try:
                 common = {
                     "type": args["type"], "name": args["name"], "model": args["model"],
@@ -2430,6 +2545,7 @@ class CoreToolbox:
                 if args["action"] == "create":
                     operation = await supervisor.create_operation(
                         **common,
+                        execution_directory=child_work_root(args.get("work_root")),
                         source_ids={
                             "call_id": call.id,
                             "run_id": str(call_metadata.get("parent_run_id") or ""),
@@ -2456,7 +2572,7 @@ class CoreToolbox:
                         content=json.dumps(deleted, ensure_ascii=False), metadata=deleted,
                     )
                 else:
-                    raise ValueError("action must be exactly 'create', 'close', or 'delete'")
+                    raise ValueError("action must be one of create, close, delete, list, get")
             except ValueError as exc:
                 return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
             return ToolResult(

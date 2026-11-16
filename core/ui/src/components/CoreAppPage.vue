@@ -9,7 +9,6 @@ const pages: Record<string, Component> = {
   // +(调用台与资料库、设置并列，是一个独立整版页面，不是塞进设置里的一小块。)
   direct: defineAsyncComponent(() => import('./DirectCallView.vue')),
   settings: defineAsyncComponent(() => import('./CoreSettings.vue')),
-  superagent: defineAsyncComponent(() => import('./CoreSuperAgentPanel.vue')),
   arrange: defineAsyncComponent(() => import('./CoreArrangeManager.vue')),
   search: defineAsyncComponent(() => import('./SearchShell.vue')),
   plugins: defineAsyncComponent(() => import('./PluginsShell.vue')),

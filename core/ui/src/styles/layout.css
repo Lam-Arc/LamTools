@@ -254,7 +254,8 @@
   width: min(var(--content-fill-width, 1040px), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding)));
   display: grid;
   justify-items: center;
-  gap: var(--space-2);
+  /* 说明语与模式分段控件之间的呼吸位。 */
+  gap: var(--space-4, 20px);
   isolation: isolate;
   text-align: center;
   transform: translate(-50%, -100%);
@@ -263,6 +264,12 @@
 
 .empty-session-logo {
   margin-bottom: var(--space-1);
+  pointer-events: auto;
+}
+
+/* 聊天卡片顶部的运行模式分段控件（参考图位置：顶部居中、随滚动固定）。 */
+/* 空会话引导块本身不吃鼠标事件，模式分段控件要能点。 */
+.empty-session-mode {
   pointer-events: auto;
 }
 
@@ -275,6 +282,22 @@
   letter-spacing: -0.025em;
   line-height: 1.2;
   text-wrap: balance;
+}
+
+/* user:“聊天「畅所欲言」大字，工作与智能「中大字」”+(同一处标语按模式换字号)。 */
+.empty-session-slogan {
+  position: relative;
+  margin: 0;
+  color: var(--theme-main-text);
+  font-size: clamp(24px, 2.4vw, 32px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.empty-session-slogan.is-chat {
+  font-size: clamp(32px, 3.4vw, 46px);
 }
 
 /* ComposerBar is owned by WorkspaceShell, so the host state moves the same

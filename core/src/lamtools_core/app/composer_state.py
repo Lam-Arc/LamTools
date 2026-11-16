@@ -25,13 +25,21 @@ from .runtime_permissions import (
 
 COMPOSER_STATE_KEY = "composer_state"
 
-COMPOSER_ACTIVE_MODES: tuple[str, ...] = ("consider", "execute")
-DEFAULT_COMPOSER_ACTIVE_MODE = "execute"
+# user:“将现有的consider，excute迭代为 super Agent、chat、work”+(三种运行模式；
+# 旧名字仍然接受，统一归一到新名字，避免旧会话与旧配置读不出来)。
+COMPOSER_ACTIVE_MODES: tuple[str, ...] = ("chat", "work", "auto")
+DEFAULT_COMPOSER_ACTIVE_MODE = "work"
+LEGACY_COMPOSER_ACTIVE_MODES: dict[str, str] = {
+    "consider": "chat",
+    "execute": "work",
+    "superagent": "auto",
+}
 
 # Keys a live run may apply at its next step.  ``model_id`` is intentionally
 # absent: the product keeps the model bound to the current turn.
+# user:“新建会话时选择好，就不可变动了”+(运行模式不在可热改的键里：建会话时定下，
+# 之后连正在跑的这一轮也不能改)。
 LIVE_COMPOSER_KEYS: tuple[str, ...] = (
-    "active_mode",
     "reasoning_level",
     "shallow_thinking_enabled",
     "permission_preset",
@@ -40,6 +48,7 @@ LIVE_COMPOSER_KEYS: tuple[str, ...] = (
 
 def normalize_composer_active_mode(value: object, fallback: str = DEFAULT_COMPOSER_ACTIVE_MODE) -> str:
     mode = str(value or "").strip()
+    mode = LEGACY_COMPOSER_ACTIVE_MODES.get(mode, mode)
     if mode in COMPOSER_ACTIVE_MODES:
         return mode
     fallback_mode = str(fallback or "").strip()
@@ -105,6 +114,17 @@ def normalize_composer_state(
     }
 
 
+def _has_explicit_active_mode(value: object) -> bool:
+    """Return True when this mapping carries a real mode, not a defaulted one."""
+    if not isinstance(value, Mapping):
+        return False
+    for key in ("active_mode", "activeMode"):
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return True
+    return False
+
+
 def composer_state_from_metadata(metadata: object) -> dict[str, Any]:
     """Read the group, falling back to the legacy keys each field used before."""
     raw_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
@@ -114,6 +134,22 @@ def composer_state_from_metadata(metadata: object) -> dict[str, Any]:
         "permission_preset": preferences.get("permission_preset"),
     }
     return normalize_composer_state(raw_metadata.get(COMPOSER_STATE_KEY), fallback=fallback)
+
+
+def stored_composer_active_mode(metadata: object) -> str | None:
+    """Return the mode this session already fixed, or ``None`` if it never chose one.
+
+    user:“新建会话时选择好，就不可变动了”+(只认显式存下来的模式：没有这一项说明会话还没
+    定过模式，可以写入；有这一项就是终态，后续请求只能与它一致。)
+    """
+    raw_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+    raw_state = raw_metadata.get(COMPOSER_STATE_KEY)
+    if not isinstance(raw_state, Mapping):
+        return None
+    value = _first_present(raw_state.get("active_mode"), raw_state.get("activeMode"))
+    if value is None or not str(value).strip():
+        return None
+    return normalize_composer_active_mode(value)
 
 
 def with_composer_state(
@@ -130,6 +166,13 @@ def with_composer_state(
     """
     result = dict(metadata) if isinstance(metadata, Mapping) else {}
     normalized = normalize_composer_state(state, fallback=composer_state_from_metadata(result))
+    # user:“发送第一条消息时，定下该会话模式”+(模式只由第一条消息写入：没人显式给模式时
+    # 就不把默认值存进会话，否则输入框随便动一下都会把模式提前锁成 work)。
+    had_mode = _has_explicit_active_mode(state) or _has_explicit_active_mode(
+        result.get(COMPOSER_STATE_KEY)
+    )
+    if not had_mode:
+        normalized.pop("active_mode", None)
     result[COMPOSER_STATE_KEY] = normalized
     if normalized["model_id"]:
         result["model_id"] = normalized["model_id"]
@@ -249,6 +292,7 @@ __all__ = [
     "live_composer_patch",
     "normalize_composer_active_mode",
     "normalize_composer_state",
+    "stored_composer_active_mode",
     "overlay_composer_controls",
     "with_composer_state",
 ]

@@ -212,6 +212,24 @@ def _resolve_model_id_for_capability(model_ref: str) -> str:
     return ref
 
 
+# 子代理类型（生命周期分类）↔ 运行模式：consider 只读、execute 全量。
+# user:“将现有的consider，excute迭代为 super Agent、chat、work”+(类型名不变，
+# 落到 loadtools 的运行模式改名了，两边必须显式对上，否则只读边界会被改名漏掉)。
+SUB_AGENT_TYPE_MODES: dict[str, str] = {"consider": "chat", "execute": "work"}
+SUB_AGENT_TYPE_MODES_INVERSE: dict[str, str] = {
+    mode: child_type for child_type, mode in SUB_AGENT_TYPE_MODES.items()
+}
+
+
+def child_type_for(mode: object, effective_mode: object) -> str:
+    """Return the lifecycle type behind one run, never the mapped mode name."""
+    candidate = str(mode or "").strip()
+    if candidate in SUB_AGENT_TYPE_MODES:
+        return candidate
+    mapped = SUB_AGENT_TYPE_MODES_INVERSE.get(str(effective_mode or "").strip())
+    return mapped or "execute"
+
+
 class KernelSubAgentRunner:
     @property
     def parent_event_sink(self) -> EventSink | None:
@@ -720,12 +738,17 @@ class KernelSubAgentRunner:
     def _resolve_mode(self, mode: str) -> str | None:
         """Resolve a per-call mode override against the configured loadtools.
 
+        user:“将现有的consider，excute迭代为 super Agent、chat、work”+(子代理的
+        consider/execute 是生命周期分类，运行模式已改名 chat/work；这里把分类翻成
+        对应模式，只读/全量的边界才不会被改名漏掉)。
+
         An empty override falls back to the runner's baseline ``active_mode``.
         A non-empty mode that is not a known loadtools mode is treated as no
         filtering (full access) so an unknown name never silently locks the
         sub-agent out of its tools.
         """
         candidate = (mode or "").strip() or self.active_mode
+        candidate = SUB_AGENT_TYPE_MODES.get(candidate, candidate)
         if not candidate:
             return None
         if self.load_tools and candidate not in mode_names(self.load_tools):
@@ -977,7 +1000,7 @@ class KernelSubAgentRunner:
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
-            type=effective_mode or "execute",
+            type=child_type_for(mode, effective_mode),
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
             invocation_id=invocation_id,
@@ -1309,7 +1332,7 @@ class KernelSubAgentRunner:
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
-            type=effective_mode or "execute",
+            type=child_type_for("", effective_mode),
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
             invocation_id=_state_invocation_id(state),
@@ -1514,7 +1537,7 @@ class KernelSubAgentRunner:
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
-            type=effective_mode or "execute",
+            type=child_type_for("", effective_mode),
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
             invocation_id=_state_invocation_id(state),
@@ -1782,7 +1805,7 @@ class KernelSubAgentRunner:
             parent_call_id=parent_call_id,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
-            type=effective_mode or "execute",
+            type=child_type_for("", effective_mode),
             model_id=effective_model,
             reasoning_level=effective_reasoning_level,
             invocation_id=invocation_id,

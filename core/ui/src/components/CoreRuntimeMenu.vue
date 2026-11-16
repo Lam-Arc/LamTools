@@ -9,8 +9,10 @@
       :aria-label="ariaLabel"
       @click="toggle"
     >
-      <span class="core-runtime-menu__mode">{{ activeModeLabel }}</span>
-      <span class="core-runtime-menu__separator" aria-hidden="true">·</span>
+      <template v-if="!hideMode">
+        <span class="core-runtime-menu__mode">{{ activeModeLabel }}</span>
+        <span class="core-runtime-menu__separator" aria-hidden="true">·</span>
+      </template>
       <span class="core-runtime-menu__permission">{{ permissionLabel }}</span>
       <ChevronDown class="core-runtime-menu__chevron" :size="14" :stroke-width="2" aria-hidden="true" />
       <ShieldCheck class="core-runtime-menu__compact-icon" :size="16" :stroke-width="2" aria-hidden="true" />
@@ -19,6 +21,7 @@
     <div v-if="open" class="core-runtime-menu__panel" :style="viewportStyle" role="menu">
       <section ref="parameterCard" class="core-runtime-menu__card core-runtime-menu__card--parameters" :aria-label="t('运行模式与权限参数')">
         <button
+          v-if="!hideMode"
           class="core-runtime-menu__option core-runtime-menu__parameter"
           type="button"
           role="menuitem"
@@ -132,9 +135,12 @@ const props = withDefaults(defineProps<{
   modeOptions?: CoreSelectOption[]
   permissionPreset: CorePermissionPreset | string
   disabled?: boolean
+  /** 模式在建会话时定下，输入框旁不再提供切换。 */
+  hideMode?: boolean
 }>(), {
   modeOptions: () => [],
   disabled: false,
+  hideMode: false,
 })
 
 const emit = defineEmits<{
@@ -171,7 +177,11 @@ const permissionLabel = computed(() => (
   CORE_PERMISSION_PRESET_LABELS[normalizeCorePermissionPreset(props.permissionPreset)]
 ))
 
-const ariaLabel = computed(() => t("运行模式与权限：{0} · {1}", { 0: activeModeLabel.value, 1: permissionLabel.value }))
+const ariaLabel = computed(() => (
+  props.hideMode
+    ? t("权限审批：{0}", { 0: permissionLabel.value })
+    : t("运行模式与权限：{0} · {1}", { 0: activeModeLabel.value, 1: permissionLabel.value })
+))
 
 function toggle(): void {
   if (props.disabled) return

@@ -14,7 +14,7 @@
 export type GuideMode = 'quick' | 'full'
 
 /** 需要「真的把用户带过去」的整版分区。 */
-export type GuideArea = 'direct' | 'superagent' | 'arrange' | 'library' | 'plugins' | 'settings'
+export type GuideArea = 'direct' | 'arrange' | 'library' | 'plugins' | 'settings'
 
 export type GuidePlacement = 'auto' | 'top' | 'bottom' | 'left' | 'right'
 
