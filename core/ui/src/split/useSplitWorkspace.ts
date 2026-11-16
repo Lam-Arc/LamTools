@@ -6,12 +6,14 @@ export type SplitWorkspaceController = ReturnType<typeof useSplitWorkspace>
 export const SplitWorkspaceKey: InjectionKey<SplitWorkspaceController> = Symbol('split-workspace')
 export function useOptionalSplitWorkspace() { return hasInjectionContext() ? inject(SplitWorkspaceKey, null) : null }
 // user:“将大的前端文件拆分成小块”+(分屏状态、保存和内容入口独立于主应用文件)。
-export function useSplitWorkspace(storageKey: Ref<string>, workRoot?: Ref<string>, projectId?: Ref<string | null | undefined>) {
+export function useSplitWorkspace(storageKey: Ref<string>, workRoot?: Ref<string>, projectId?: Ref<string | null | undefined>, options: { persist?: boolean } = {}) {
   const state = reactive<SplitState>(createSplitState()), guards = new Map<string, CloseGuard>()
   const bounds = ref({ width: 0, height: 0 })
   const canSplit = (target: string, edge: SplitEdge) => !Object.keys(state.panes).length || !bounds.value.width || canFitSplit(state.tree, target, edge, bounds.value.width, bounds.value.height)
   let restoring = false
   const load = () => {
+    // user:“交互测试”+(展厅可使用独立内存布局，不读取或改写应用保存的分屏)。
+    if (options.persist === false) return
     restoring = true
     let raw: string | null = null
     try { raw = localStorage.getItem(storageKey.value) } catch { /* Storage unavailable: keep the in-memory workspace. */ }
@@ -19,7 +21,7 @@ export function useSplitWorkspace(storageKey: Ref<string>, workRoot?: Ref<string
   }
   load()
   let saveTimer: ReturnType<typeof setTimeout> | undefined
-  const save = () => { try { localStorage.setItem(storageKey.value, JSON.stringify(state)) } catch { /* Quota failure must not discard live content. */ } }
+  const save = () => { if (options.persist === false) return; try { localStorage.setItem(storageKey.value, JSON.stringify(state)) } catch { /* Quota failure must not discard live content. */ } }
   watch(state, () => { if (!restoring) { clearTimeout(saveTimer); saveTimer = setTimeout(save, 150) } }, { deep: true })
   // Layout is global to this application instance. Do not destroy dirty screens when changing projects.
   // Each file/agent tab stores its own project/session scope in its resource identity.

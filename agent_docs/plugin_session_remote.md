@@ -21,6 +21,10 @@ state/events/wait是原被动读取，不激活Agent或新建存储。list候选
 
 经`ServiceRef.call`取得的原follow异步生成器每次读取及发布前复核提供方和请求方代；撤回期间的旧事件不再发布。请求方或受管提供方启动代撤回会取消等待中的读取并等待其清理；非受管宿主替换在读取返回后检查。此项不补DSH开场快照、重连或Peer授权。
 
+## 全局 `session.control` Remote 边界
+
+固定上游 `packages/api/session-controller/src/control.ts`（并由 `src/index.ts` 声明导出）在开始时枚举 `ctx.sessions.list()`，逐项取得 `ctx.sessionProjections.snapshot(session)` 并发送全局基线；随后通过 `onChanged` 推送投影替换，直到调用方取消。Sunday 的 `context.session_controller.observe_projections(session_id)` 只轮询单个当前项目可见会话的有限摘要快照，可能合并中间变化；没有同等的全局列表准入来源、全局投影事件或对应清理权威。因此迁移报告只标记 `agent-required`，不生成 `suggestedContract`，不把单会话轮询伪装为该 Remote，也不以 Core 的无项目约束全局删除接口充当 DSH `session.delete`。新增迁移验收覆盖这些拒绝映射边界；`sessionController` 整体仍是候选，Remote 全量协议未完成。
+
 原follow缓存页现在逐条复核原宿主绑定与原存储会话可见性；会话隐藏或存储替换后不再发布剩余旧事件，关闭发生在可见性检查中则正常结束。此检查为逐条数据库读取，不能提供跨进程原子权限锁。相关新增文件共8项验收通过。
 
 原SESSIONS会话/请求/队列标识和prompt/队列文本先验证Unicode，非法字符不进入原读写；这不是上游Peer资源授权，其他字段仍沿原校验。
@@ -47,7 +51,7 @@ state/events/wait是原被动读取，不激活Agent或新建存储。list候选
 
 ## 当前项目会话分叉
 
-`context.session_controller.fork(session_id, checkpoint_id=... 或 turn_id=..., new_session_id=..., title=...)`先检查原可见会话和当前项目，再调用原检查点分叉；成功后复核源及新会话项目。沿用原活动会话拒绝、仅对话历史、不回退文件及取消后原提交结算。提交后复核失效的Python错误标记`may_have_changed=True`；取消也可能已创建，HTTP不保证透传该属性。检查不是跨进程原子权限锁。上游支持任意有效事件前缀和迁移预检，此处仅原checkpoint或turn边界，不能声称精确兼容。6项新增验收覆盖真实SQLite分叉、跨项目/错误边界、HTTP、重复取消、提交后项目变化和迁移交接。
+`context.session_controller.fork(session_id, checkpoint_id=... 或 turn_id=..., new_session_id=..., title=...)`先检查原可见会话和当前项目，再调用原检查点分叉；成功后复核源及新会话项目。沿用原活动会话拒绝、仅对话历史、不回退文件及取消后原提交结算。提交后复核失效的Python错误标记`may_have_changed=True`；取消也可能已创建，HTTP不保证透传该属性。检查不是跨进程原子权限锁。上游支持任意有效事件前缀和迁移预检，此处仅原checkpoint或turn边界，不能声称精确兼容。原6项验收覆盖真实SQLite分叉、跨项目/错误边界、HTTP、重复取消、提交后项目变化和迁移交接；新增2项再验证真实认证Remote分叉及重复取消期间等待原提交和作用域回收。合计8项。
 
 `context.session_projections.get/events`返回前再次通过原只读会话核验可见性与绑定项目；等待期间隐藏或迁移时不发布旧摘要/事件。5项新增验收覆盖两种接口、隐藏/迁移及真实Remote；不是原子授权快照。
 
@@ -112,3 +116,5 @@ state/events/wait是原被动读取，不激活Agent或新建存储。list候选
 ## 原桌面历史分页
 
 `context.session_controller.history_page(session_id, before_seq=None, turn_limit=10, max_bytes=262144)`复用原桌面持久快照分页，首次读取最近条目，后续用返回的`next_before_seq`向前翻页；回合限1–50，输出限64–512KiB。只返回原历史条目、顺序和分页信息，不返回完整会话快照；原分页可能按条目切开回合，单个条目超过输出上限时明确报错。缺有界原提供方时不退化为全量读取。读取和组装后复核可见会话、项目及宿主，重复取消等待原读取清理；跨进程并发不是原子快照。14项新增验收覆盖真实持久回合、向前翻页、参数及超限、缺提供方、撤回、取消、认证HTTP和迁移。上游[手册](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/api/session-controller/README.zh.md)的page/events为持久事件记录及地址和固定截断；本项是Sunday条目快照，不是其事件wire、DSH地址、完整实时follow或Peer策略。
+
+会话控制入口在原会话准入等待期间被重复取消时，会等待原读取清理和作用域释放后传播取消；准入前取消不会派发后续操作。若写入已提交，取消期间的后置准入也等待清理，但已提交结果可能保留。新增验收覆盖提示、队列、取消、分叉及选模的准入、真实提示提交后取消、认证Remote和停用等待；不合作的原读取可能延迟结束。

@@ -1,13 +1,14 @@
 <template>
   <div class="library-surface full-area-view library-home" data-ui-id="library.root">
     <!-- ── 三大项：资料 / 记忆 / 方案 ── -->
-    <div class="library-sections" role="tablist" :aria-label="t('资料库分区')" data-library-sections>
+    <div class="library-sections" role="tablist" :aria-label="t('资料库分区')" data-library-sections @keydown="onManualTabGroupKeydown">
       <button
         v-for="item in SECTIONS"
         :key="item.id"
         type="button"
         role="tab"
         :aria-selected="section === item.id"
+        :tabindex="section === item.id ? 0 : -1"
         :class="{ active: section === item.id }"
         :data-library-section="item.id"
         @click="selectSection(item.id)"
@@ -58,6 +59,8 @@
 
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
+// user:“确保视觉、功能和交互不退化”+(先移动标签焦点，激活仍经过现有草稿保护)。
+import { onManualTabGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 
 /**
  * LibraryHomeView — 资料库的壳：一个入口，三个分区。

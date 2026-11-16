@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(动作、命中区和行为勾选使用共享控件，保留各自保存行为)。
 /**
  * 单只桌宠的动作与命中区编辑。
  *
@@ -7,7 +8,8 @@
  * (图片写到角色包后更新同一份配置；不执行脚本，也不新增物理能力。
  *  命中区只改 action/doubleAction 指针，不改变物理 AABB。)
  */
-import { computed, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import SundayRange from '@/components/SundayRange.vue'
 import type { PetHitbox } from '@/pet/engine/sprite.ts'
 import { DEFAULT_BEHAVIOR } from '@/pet/engine/behavior.ts'
 import type { PetRecordConfig } from '@/pet/config.ts'
@@ -59,6 +61,9 @@ const actionRows = computed(() => Object.entries(props.record.actions).map(([id,
 }))
 const actionIds = computed(() => Object.keys(props.record.actions))
 const behavior = computed(() => ({ ...DEFAULT_BEHAVIOR, ...props.record.behavior }))
+// user:“确保视觉、功能和交互不退化”+(拖动仅更新预览，松开后仍按原有时机保存)。
+const behaviorDraft = reactive({ activity: behavior.value.activity, restChance: behavior.value.restChance, mouseBias: behavior.value.mouseBias, exploreRadius: behavior.value.exploreRadius })
+watch(behavior, value => Object.assign(behaviorDraft, { activity: value.activity, restChance: value.restChance, mouseBias: value.mouseBias, exploreRadius: value.exploreRadius }))
 function stableActionId(base: string): string {
   return uniqueActionId(actionIds.value, base)
 }
@@ -289,7 +294,7 @@ function removeHitbox(index: number): void {
           </label>
           <label>
             <input
-              type="checkbox"
+              type="checkbox" class="sunday-checkbox"
               :checked="action.loop"
               @change="updateClip(action.id, { loop: ($event.target as HTMLInputElement).checked })"
             >
@@ -325,7 +330,7 @@ function removeHitbox(index: number): void {
         </select>
       </label>
       <label class="pet-hitbox-row__enabled">
-        <input type="checkbox" :checked="hitbox.enabled" @change="updateHitbox(index, { enabled: ($event.target as HTMLInputElement).checked })">
+        <input type="checkbox" class="sunday-checkbox" :checked="hitbox.enabled" @change="updateHitbox(index, { enabled: ($event.target as HTMLInputElement).checked })">
         启用
       </label>
       <button type="button" class="is-danger" :disabled="record.hitboxes.length <= 1 || saving" @click="removeHitbox(index)">删除</button>
@@ -340,27 +345,27 @@ function removeHitbox(index: number): void {
     <div class="pet-action-panel__head">
       <strong>自主行为</strong>
       <label class="pet-behavior-enabled">
-        <input type="checkbox" :checked="behavior.enabled" @change="updateBehavior({ enabled: ($event.target as HTMLInputElement).checked })">
+        <input type="checkbox" class="sunday-checkbox" :checked="behavior.enabled" @change="updateBehavior({ enabled: ($event.target as HTMLInputElement).checked })">
         启用
       </label>
     </div>
     <div class="pet-behavior-grid">
-      <label>
-        <span>活动频率 {{ Math.round(behavior.activity * 100) }}%</span>
-        <input type="range" min="0" max="1" step="0.05" :value="behavior.activity" @change="updateBehavior({ activity: Number(($event.target as HTMLInputElement).value) })">
-      </label>
-      <label>
-        <span>休息倾向 {{ Math.round(behavior.restChance * 100) }}%</span>
-        <input type="range" min="0" max="1" step="0.05" :value="behavior.restChance" @change="updateBehavior({ restChance: Number(($event.target as HTMLInputElement).value) })">
-      </label>
-      <label>
-        <span>跟随鼠标倾向 {{ Math.round(behavior.mouseBias * 100) }}%</span>
-        <input type="range" min="0" max="1" step="0.05" :value="behavior.mouseBias" @change="updateBehavior({ mouseBias: Number(($event.target as HTMLInputElement).value) })">
-      </label>
-      <label>
-        <span>活动半径 {{ Math.round(behavior.exploreRadius) }}px</span>
-        <input type="range" min="120" max="2400" step="40" :value="behavior.exploreRadius" @change="updateBehavior({ exploreRadius: Number(($event.target as HTMLInputElement).value) })">
-      </label>
+      <div class="pet-behavior-range">
+        <span>活动频率 {{ Math.round(behaviorDraft.activity * 100) + '%' }}</span>
+        <SundayRange v-model="behaviorDraft.activity" :value-text="`${Math.round(behaviorDraft.activity * 100)}%`" label="活动频率" :min="0" :max="1" :step="0.05" bare @change="updateBehavior({ activity: $event })" />
+      </div>
+      <div class="pet-behavior-range">
+        <span>休息倾向 {{ Math.round(behaviorDraft.restChance * 100) + '%' }}</span>
+        <SundayRange v-model="behaviorDraft.restChance" :value-text="`${Math.round(behaviorDraft.restChance * 100)}%`" label="休息倾向" :min="0" :max="1" :step="0.05" bare @change="updateBehavior({ restChance: $event })" />
+      </div>
+      <div class="pet-behavior-range">
+        <span>跟随鼠标倾向 {{ Math.round(behaviorDraft.mouseBias * 100) + '%' }}</span>
+        <SundayRange v-model="behaviorDraft.mouseBias" :value-text="`${Math.round(behaviorDraft.mouseBias * 100)}%`" label="跟随鼠标倾向" :min="0" :max="1" :step="0.05" bare @change="updateBehavior({ mouseBias: $event })" />
+      </div>
+      <div class="pet-behavior-range">
+        <span>活动半径 {{ Math.round(behaviorDraft.exploreRadius) + 'px' }}</span>
+        <SundayRange v-model="behaviorDraft.exploreRadius" :value-text="`${Math.round(behaviorDraft.exploreRadius)}px`" label="活动半径" :min="120" :max="2400" :step="40" bare @change="updateBehavior({ exploreRadius: $event })" />
+      </div>
     </div>
   </div>
 </template>
@@ -499,8 +504,7 @@ function removeHitbox(index: number): void {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 6px 14px;
 }
-.pet-behavior-grid label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11px; }
-.pet-behavior-grid input[type='range'] { width: 100%; }
+.pet-behavior-range { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11px; }
 .pet-hitbox-row select {
   padding: 3px 5px;
   border: 1px solid var(--border);

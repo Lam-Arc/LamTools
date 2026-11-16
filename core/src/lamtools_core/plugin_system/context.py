@@ -57,6 +57,8 @@ class PluginContext:
     _plugin_manifest: Any | None = field(default=None, repr=False)
     # user:“继续，把 2 阶段都做完”+(执行目录独立于配置/模型/项目根；不改变现有构造参数顺序)。
     execution_root: Path | None = None
+    # user:“逐项核对固定上游源码及手册”+(Host可为固定注册表探测设置开关、期限与短缓存，不改变目标地址)。
+    registry_probe_options: dict[str, object] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         if self._service_registry is None:
@@ -493,6 +495,23 @@ class PluginContext:
         # user:“继续，自动值守，非必要不停歇，自己不断找下一步做”+(只读原市场，不暴露安装操作)。
         from .market_access import PluginMarketAPI
         return PluginMarketAPI(self, self._active_registration_scope())
+
+    @property
+    def plugin_registry_probe(self):
+        # user:“逐项核对固定上游源码及手册”+(只提供固定公共注册表的按需HTTPS连通性探测，不下载或安装包)。
+        from .registry_probe import PluginRegistryProbeAPI
+        scope = self._active_registration_scope()
+        cached = getattr(self, "_plugin_registry_probe_cache", None)
+        if cached is None or cached[0] is not scope:
+            options = self.registry_probe_options
+            cached = (scope, PluginRegistryProbeAPI(
+                self, scope,
+                enabled=options.get("enabled", True),
+                timeout_ms=options.get("timeout_ms", 1500),
+                cache_ttl_ms=options.get("cache_ttl_ms", 300000),
+            ))
+            self._plugin_registry_probe_cache = cached
+        return cached[1]
 
     @property
     def remote_access(self):

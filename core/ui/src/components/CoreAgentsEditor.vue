@@ -15,8 +15,9 @@
     />
     <p v-if="error" class="core-agents-error" role="alert">{{ error }}</p>
     <div class="core-agents-actions">
-      <button type="button" class="btn-cancel" :disabled="loading" @click="emit('close')">{{ t("取消") }}</button>
-      <button type="submit" class="btn-primary-sm" data-agents-save :disabled="loading">{{ loading ? t("保存中") : t("保存") }}</button>
+      <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(保存和取消使用共享按钮，保留紧凑尺寸与主题材质)。 -->
+      <button type="button" class="btn btn--ghost btn--sm" :disabled="loading" @click="emit('close')">{{ t("取消") }}</button>
+      <button type="submit" class="btn btn--primary btn--material btn--sm" data-agents-save :disabled="loading">{{ loading ? t("保存中") : t("保存") }}</button>
     </div>
   </form>
 </template>
@@ -85,6 +86,8 @@ function save() {
 .core-agents-actions {
   justify-content: flex-end;
 }
+/* user:“通过参数、变体和组合保留必要差异”+(取消按钮保留原有细边框)。 */
+.core-agents-actions .btn--ghost { border-color: color-mix(in srgb, var(--theme-main-text, var(--text)) 14%, transparent); }
 
 .core-agents-editor textarea {
   box-sizing: border-box;

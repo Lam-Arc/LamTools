@@ -84,7 +84,7 @@
             type="button"
             class="pending-decision__guide-submit"
             data-pending-decision-guide-submit
-            :disabled="active.submitting || !guideDraft.trim()"
+            :disabled="active.submitting || !channelReady || !guideDraft.trim()"
             @click="submitGuide"
           >{{ t("发送") }}</button>
         </div>
@@ -245,7 +245,8 @@ function decide(item: CorePendingDecision, option: CoreDecisionChoice) {
 
 function submitGuide() {
   const item = active.value
-  if (!item || item.submitting) return
+  // user:“确保视觉、功能和交互不退化”+(确认通道断开时保留草稿，不发送或清空，恢复后可继续提交)。
+  if (!item || item.submitting || !props.channelReady) return
   const text = guideDraft.value.trim()
   if (!text) return
   const option: CoreDecisionChoice = { id: 'guide', get label() { return t("引导") }, wireResponse: text }

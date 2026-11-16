@@ -35,11 +35,8 @@
             </div>
           </div>
 
-          <label class="loadtools-search mode-search">
-            <span class="sr-only">{{ t("搜索模式") }}</span>
-            <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-            <input v-model.trim="modeQuery" type="search" :placeholder="t('搜索模式')" />
-          </label>
+          <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(模式与工具搜索复用结构并保留独立筛选)。 -->
+          <LibrarySearchField v-model.trim="modeQuery" class="loadtools-search mode-search" :label="t('搜索模式')" />
 
           <div class="mode-picker" role="listbox" :aria-label="t('选择工作模式')">
             <button
@@ -133,13 +130,9 @@
               </div>
 
               <div class="tool-section-actions">
-                <label v-if="!selectedMode.unlimited" class="loadtools-search tool-search">
-                  <span class="sr-only">{{ t("搜索工具") }}</span>
-                  <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-                  <input v-model.trim="toolQuery" type="search" :placeholder="t('搜索工具')" />
-                </label>
+                <LibrarySearchField v-if="!selectedMode.unlimited" v-model.trim="toolQuery" class="loadtools-search tool-search" :label="t('搜索工具')" />
                 <label class="unlimited-toggle">
-                  <input v-model="selectedMode.unlimited" type="checkbox" :disabled="loading || saving" />
+                  <input v-model="selectedMode.unlimited" class="sunday-checkbox" type="checkbox" :disabled="loading || saving" />
                   <span>{{ t("全部工具") }}</span>
                 </label>
               </div>
@@ -171,6 +164,7 @@
                 <label v-for="tool in group.tools" :key="tool.name" class="tool-row">
                   <input
                     v-model="selectedMode.selected"
+                    class="sunday-checkbox"
                     type="checkbox"
                     :value="tool.name"
                     :disabled="loading || saving"
@@ -201,6 +195,7 @@
 </template>
 
 <script setup lang="ts">
+import LibrarySearchField from '@/components/LibrarySearchField.vue'
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, reactive, ref, type Component } from 'vue'
@@ -602,10 +597,7 @@ onMounted(fetchModes)
   border-radius: var(--radius-sm);
 }
 
-.loadtools-title-actions .btn--primary {
-  background: var(--settings-control-background, var(--theme-control-background));
-  color: var(--settings-control-text, var(--theme-control-text));
-}
+/* user:“合并冗余实现”+(保存按钮的配色直接采用共享主按钮配方) */
 
 .loadtools-loading {
   min-height: 420px;
@@ -700,7 +692,7 @@ onMounted(fetchModes)
   color: var(--theme-composer-text);
 }
 
-.loadtools-search input {
+.loadtools-search :deep(input) {
   width: 100%;
   min-width: 0;
   min-height: 34px;
@@ -713,7 +705,7 @@ onMounted(fetchModes)
   font-size: 12px;
 }
 
-.loadtools-search input::placeholder {
+.loadtools-search :deep(input::placeholder) {
   color: color-mix(in srgb, var(--theme-composer-text) 48%, transparent);
 }
 
@@ -1015,52 +1007,7 @@ onMounted(fetchModes)
   cursor: pointer;
 }
 
-.unlimited-toggle input,
-.tool-row input {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  margin: 0;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 30%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 72%, transparent);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
-}
-
-.unlimited-toggle input::after,
-.tool-row input::after {
-  content: '';
-  width: 7px;
-  height: 4px;
-  border-left: 2px solid var(--settings-control-background, var(--theme-control-background, #111));
-  border-bottom: 2px solid var(--settings-control-background, var(--theme-control-background, #111));
-  opacity: 0;
-  transform: rotate(-45deg) translateY(-1px);
-}
-
-.unlimited-toggle input:checked,
-.tool-row input:checked {
-  border-color: color-mix(in srgb, var(--green) 72%, transparent);
-  background: var(--green);
-}
-
-.unlimited-toggle input:checked::after,
-.tool-row input:checked::after {
-  opacity: 1;
-}
-
-.unlimited-toggle input:disabled,
-.tool-row input:disabled {
-  cursor: default;
-  opacity: .45;
-}
-
+/* user:“合并冗余实现”+(工具选择复用共享复选框，保留原生多选数组绑定) */
 .all-tools-note {
   min-height: 86px;
   display: flex;

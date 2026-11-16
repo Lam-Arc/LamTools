@@ -1,4 +1,5 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“可交互式网络工具界面，不需要太专业”+(诊断按可理解的阶段显示真实证据，原始参数不占据主界面)。
 import { computed, ref, watch } from "vue";
 import {
@@ -72,7 +73,7 @@ async function diagnose() {
             placeholder="例如 github.com"
             required
             aria-label="检测网站" /></label
-        ><button class="nx-button nx-primary" :disabled="Boolean(session.busy)">
+        ><button class="btn nx-button btn--primary" :disabled="Boolean(session.busy)">
           <Search :size="15" />{{
             session.busy === "diagnose" ? "检查中…" : "开始检测"
           }}
@@ -133,7 +134,7 @@ async function diagnose() {
         {{ current.recommendation }}
       </p>
       <button
-        class="nx-button nx-quiet nx-report-detail-button"
+        class="btn nx-button btn--quiet nx-report-detail-button"
         :aria-expanded="details"
         @click="details = !details"
       >

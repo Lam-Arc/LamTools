@@ -445,6 +445,8 @@
           :auto-plot-math="activeAppModeKey === 'study:study'"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
+          @question-submit="handleQuestionSubmit"
+          @question-skip="handleQuestionSkip"
           @fork-message="handleForkMessage"
           @rollback-message="handleRollbackMessage"
           @edit-message="handleEditMessage"
@@ -566,7 +568,7 @@
     <template #composer-textarea>
       <CorePendingDecisionPanel
         v-if="composerTakenOver"
-        :items="pendingDecisions"
+        :items="approvalDecisions"
         :channel-ready="approvalChannelReady"
         @decision-select="handlePendingDecisionSelect"
       />
@@ -658,8 +660,7 @@
     </template>
   </WorkspaceShell>
 
-  <!-- user:“查一下 computer use 功能怎么做”+(桌面任务运行时右下角常驻状态条，可暂停可结束。) -->
-  <ComputerUseBar />
+  <!-- user:“我不是说这个胶囊放在屏幕的最上方，紧贴屏幕上面吗”+(状态胶囊搬进覆盖层窗口，这里不留副本。) -->
 
   <ContextMenuHost />
   <!-- user:“我只要切换界面，编辑就自动取消了，那它不是永远不可能编辑到主界面吗”+
@@ -803,7 +804,7 @@ import { THEME_STUDIO_STORAGE_KEY } from '@/themeStudio/constants.ts'
 import { applyStoredPublishedTheme } from '@/themeStudio/bootstrap.ts'
 import ChatOutlineNavigator from '@/components/ChatOutlineNavigator.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
-import ComputerUseBar from '@/components/ComputerUseBar.vue'
+import { useComputerUseOverlay } from '@/computerUse/useComputerUseOverlay'
 import AppRail, { type AppRailView } from '@/components/AppRail.vue'
 import CoreUpdateCard from '@/components/CoreUpdateCard.vue'
 import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
@@ -1052,6 +1053,10 @@ useSessionCompletionNotices({
   openSession: selectSession,
   refreshSessions,
 })
+
+// user:“我不是说这个胶囊放在屏幕的最上方，紧贴屏幕上面吗？还有那个流光边框”+
+// (胶囊和流光画在覆盖层窗口里，主窗口只留开合联动，不再自己画一条贴在应用窗口上的条。)
+useComputerUseOverlay()
 
 const showProjectCreate = ref(false)
 const projectCreateLoading = ref(false)
@@ -1427,12 +1432,6 @@ function isActivePluginSession(): boolean {
   return isPluginOwnedSession(sessions.value.find((session) => session.id === activeSessionId.value))
 }
 
-const composerPlaceholder = computed(() => (
-  activePluginMode.value
-    ? readPluginSurface(activePluginSurface.value?.composerPlaceholder, t("输入内容…"))
-    : t("给 Sunday 发送任务...")
-))
-
 /**
  * Composer takeover — waiting approvals/questions.
  *
@@ -1459,7 +1458,22 @@ const pendingDecisions = computed(() => {
     },
   )
 })
-const composerTakenOver = computed(() => pendingDecisions.value.length > 0)
+// user:“Approval 维持原有行为：仍然将输入栏变形为审批卡；Question 不接管输入栏”
+// +(只有审批会顶掉输入栏；有待处理提问时输入栏照常可用，只用占位文字提示。)
+const approvalDecisions = computed(() =>
+  pendingDecisions.value.filter(item => !item.isQuestion),
+)
+const pendingQuestions = computed(() =>
+  pendingDecisions.value.filter(item => item.isQuestion),
+)
+const composerTakenOver = computed(() => approvalDecisions.value.length > 0)
+const composerPlaceholder = computed(() => (
+  activePluginMode.value
+    ? readPluginSurface(activePluginSurface.value?.composerPlaceholder, t("输入内容…"))
+    : pendingQuestions.value.length > 0
+      ? t("有提问待处理")
+      : t("给 Sunday 发送任务...")
+))
 const approvalChannelReady = computed(() => workbench.connectionState.value === 'open')
 
 const composerInputDisabled = computed(() => {
@@ -3099,6 +3113,23 @@ async function connectLive(threadId: string) {
  * Composer decision panel → the same payload shape the in-thread card emits, so
  * both surfaces share one decision channel (nothing new on the wire).
  */
+async function handleQuestionSubmit(payload: {
+  partId: string
+  groupId: string
+  text: string
+  answers: Record<string, string>
+}) {
+  // user:“Question UI 回答…恢复会话执行”+(组内一次性提交：拼成一条普通用户
+  // 消息发出，已确认的答案随消息正文一起交给模型。)
+  if (!payload.text.trim()) return
+  await approvalController.submitAnswer(payload.text)
+}
+
+async function handleQuestionSkip() {
+  // user:“跳过等于 done”+(跳过不是本地收起：交给恢复请求，后端关组并继续这一回合。)
+  await liveComposerController.skipQuestions()
+}
+
 async function handlePendingDecisionSelect(payload: {
   partId: string
   option: { id?: string; label?: string; response?: string }

@@ -122,20 +122,10 @@
     <template v-else>
       <!-- ── 工具栏：搜索 + 视图切换 ── -->
       <div class="library-toolbar" data-memory-toolbar>
-        <div class="library-search">
-          <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-          <input
-            v-model="query"
-            type="search"
-            :placeholder="atProjectLevel ? t('搜索项目') : t('搜索记忆')"
-            :aria-label="atProjectLevel ? t('搜索项目') : t('搜索记忆')"
-            data-memory-search
-          />
-        </div>
-        <div v-if="!atProjectLevel" class="library-view-toggle" role="group" :aria-label="t('视图切换')" data-memory-view-toggle>
-          <button type="button" :class="{ active: viewMode === 'grid' }" :aria-pressed="viewMode === 'grid'" :aria-label="t('网格视图')" :title="t('网格视图')" @click="viewMode = 'grid'"><LayoutGrid :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
-          <button type="button" :class="{ active: viewMode === 'list' }" :aria-pressed="viewMode === 'list'" :aria-label="t('列表视图')" :title="t('列表视图')" @click="viewMode = 'list'"><List :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
-        </div>
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享搜索框并保留本页查询和无障碍标签)。 -->
+        <LibrarySearchField v-model="query" :label="atProjectLevel ? t('搜索项目') : t('搜索记忆')" :input-attrs="{ 'data-memory-search': '' }" />
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享视图切换并保留本页的状态与保存方式)。 -->
+        <LibraryViewToggle v-if="!atProjectLevel" v-model="viewMode" data-memory-view-toggle />
       </div>
 
       <!-- ── 两档：项目 / 全局 ── -->
@@ -185,6 +175,7 @@
         </p>
         <template v-else>
         <!-- ── 子文件夹 ── -->
+        <!-- user:“确保视觉、功能和交互不退化”+(卡片内菜单的回车只操作菜单，不触发卡片打开)。 -->
         <div v-if="childFolders.length" class="folder-grid" role="list" data-memory-folders>
           <article
             v-for="folder in childFolders"
@@ -195,7 +186,7 @@
             :aria-label="t('打开文件夹 {0}', { 0: folder.name })"
             :data-memory-folder="folder.path"
             @click="goToFolder(folder.path)"
-            @keydown.enter.prevent="goToFolder(folder.path)"
+            @keydown.enter.self.prevent="goToFolder(folder.path)"
             @contextmenu="openFolderMenu($event, folder)"
           >
             <span class="folder-card-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.6" /></span>
@@ -228,7 +219,7 @@
               :aria-label="t('打开 {0}', { 0: file.name })"
               :data-memory-entry="file.path"
               @click="openEntry(file)"
-              @keydown.enter.prevent="openEntry(file)"
+              @keydown.enter.self.prevent="openEntry(file)"
               @contextmenu="openEntryMenu($event, file)"
             >
               <div class="plan-card-preview">
@@ -253,7 +244,7 @@
                 tabindex="0"
                 :data-memory-entry="file.path"
                 @click="openEntry(file)"
-                @keydown.enter.prevent="openEntry(file)"
+                @keydown.enter.self.prevent="openEntry(file)"
                 @contextmenu="openEntryMenu($event, file)"
               >
                 <div class="library-item-top">
@@ -275,71 +266,21 @@
     </template>
 
     <!-- ── 新建 / 重命名对话框 ── -->
+    <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(命名表单共享结构，保留各页面的校验及提交)。 -->
     <Transition name="library-dialog">
-      <div v-if="dialog" class="dialog-dimmer" @click.self="closeDialog">
-        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="dialogTitle" data-memory-dialog>
-          <div class="dialog-body">
-            <h3 class="dialog-title">{{ dialogTitle }}</h3>
-            <label class="dialog-field">
-              <span>{{ dialog.kind === 'create-folder' ? t("文件夹名称") : t("记忆名称") }}</span>
-              <input
-                ref="dialogInput"
-                v-model="dialog.value"
-                type="text"
-                :placeholder="dialog.kind === 'create-folder' ? t('例如：偏好') : t('例如：用户偏好.md')"
-                :data-memory-dialog-input="dialog.kind"
-                @keydown.enter.prevent="submitDialog"
-                @keydown.escape.prevent="closeDialog"
-              />
-            </label>
-            <p v-if="dialog.error" class="dialog-error" role="alert">{{ dialog.error }}</p>
-          </div>
-          <div class="dialog-actions">
-            <button class="library-button" type="button" @click="closeDialog">{{ t("取消") }}</button>
-            <button
-              class="library-button library-button--primary"
-              type="button"
-              :disabled="dialog.busy || !dialog.value.trim()"
-              data-memory-dialog-submit
-              @click="submitDialog"
-            >{{ dialog.busy ? t("处理中…") : dialog.kind === 'rename' ? t("重命名") : t("创建") }}</button>
-          </div>
-        </div>
-      </div>
+      <LibraryNameDialog v-if="dialog" v-model="dialog.value" :title="dialogTitle" :field-label="dialog.kind === 'create-folder' ? t('文件夹名称') : t('记忆名称')" :placeholder="dialog.kind === 'create-folder' ? t('例如：偏好') : t('例如：用户偏好.md')" :busy="dialog.busy" :error="dialog.error" :submit-label="dialog.kind === 'rename' ? t('重命名') : t('创建')" :input-attrs="{ 'data-memory-dialog-input': dialog.kind }" :submit-attrs="{ 'data-memory-dialog-submit': '' }" data-memory-dialog @cancel="closeDialog" @submit="submitDialog" />
     </Transition>
 
     <!-- ── 删除确认 ── -->
-    <Transition name="library-dialog">
-      <div v-if="pendingDelete" class="dialog-dimmer" @click.self="pendingDelete = null">
-        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认删除')" data-memory-confirm>
-          <div class="dialog-body">
-            <h3 class="dialog-title">{{ pendingDelete.is_dir ? t("删除文件夹") : t("删除记忆") }}</h3>
-            <p class="dialog-text">
-              「{{ pendingDelete.name }}{{ t("」将被删除") }}{{ pendingDelete.is_dir ? t("，里面的条目也会一起删掉") : '' }}{{ t("，且无法恢复。") }}</p>
-          </div>
-          <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDelete = null">{{ t("取消") }}</button>
-            <button class="library-button library-button--danger" type="button" data-memory-confirm-delete @click="confirmDelete">{{ t("删除") }}</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(保留目录及其中内容将被删除的完整警告)。 -->
+    <LibraryConfirmDialog :open="Boolean(pendingDelete)" :title="pendingDelete?.is_dir ? t('删除文件夹') : t('删除记忆')" :aria-label="t('确认删除')" :confirm-label="t('删除')" :confirm-attrs="{ 'data-memory-confirm-delete': '' }" data-memory-confirm @cancel="pendingDelete = null" @confirm="confirmDelete">
+      「{{ pendingDelete?.name }}{{ t("」将被删除") }}{{ pendingDelete?.is_dir ? t("，里面的条目也会一起删掉") : '' }}{{ t("，且无法恢复。") }}
+    </LibraryConfirmDialog>
 
     <!-- ── 放弃未保存修改 ── -->
-    <Transition name="library-dialog">
-      <div v-if="pendingDiscard" class="dialog-dimmer" @click.self="pendingDiscard = false">
-        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认放弃修改')" data-memory-discard>
-          <div class="dialog-body">
-            <h3 class="dialog-title">{{ t("放弃修改") }}</h3>
-            <p class="dialog-text">「{{ selectedName }}{{ t("」还有没保存的内容，离开就会丢掉。") }}</p>
-          </div>
-          <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDiscard = false">{{ t("继续编辑") }}</button>
-            <button class="library-button library-button--danger" type="button" data-memory-discard-confirm @click="discardEditor">{{ t("放弃修改") }}</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <LibraryConfirmDialog :open="pendingDiscard" :title="t('放弃修改')" :aria-label="t('确认放弃修改')" :cancel-label="t('继续编辑')" :confirm-label="t('放弃修改')" :confirm-attrs="{ 'data-memory-discard-confirm': '' }" data-memory-discard @cancel="pendingDiscard = false" @confirm="discardEditor">
+      「{{ selectedName }}{{ t("」还有没保存的内容，离开就会丢掉。") }}
+    </LibraryConfirmDialog>
   </div>
 </template>
 
@@ -348,6 +289,10 @@ import { useSplitKeyboardScope } from '@/split/keyboardScope'
 const splitKeyboardActive = useSplitKeyboardScope()
 
 import { t } from '@/i18n/index.ts'
+import LibraryViewToggle from '@/components/LibraryViewToggle.vue'
+import LibrarySearchField from '@/components/LibrarySearchField.vue'
+import LibraryConfirmDialog from '@/components/LibraryConfirmDialog.vue'
+import LibraryNameDialog from '@/components/LibraryNameDialog.vue'
 
 /**
  * MemoryView — the 记忆 as one full-area view, shaped like the 资料库.
@@ -372,12 +317,9 @@ import {
   BookOpen,
   FileText,
   Folder,
-  LayoutGrid,
-  List,
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Search,
 } from 'lucide-vue-next'
 import type { CoreDurableRequest } from '@/durable/api.ts'
 import type { CoreProjectClient } from '@/projects/client.ts'
@@ -470,7 +412,6 @@ watch(viewMode, (value) => {
 
 type DialogKind = 'create-file' | 'create-folder' | 'rename'
 const dialog = ref<{ kind: DialogKind; value: string; error: string; busy: boolean; target?: MemoryItem } | null>(null)
-const dialogInput = ref<HTMLInputElement | null>(null)
 const pendingDelete = ref<MemoryItem | null>(null)
 
 const isMobile = computed(() => props.platform === 'mobile')
@@ -791,7 +732,6 @@ function openDialog(kind: DialogKind, target?: MemoryItem): void {
     busy: false,
     target,
   }
-  void nextTick(() => dialogInput.value?.focus())
 }
 
 function closeDialog(): void {

@@ -14,7 +14,7 @@
       :title="collapsed ? t('展开运行详情') : t('收起运行详情')"
       @click="collapsed = !collapsed"
     >
-      <component :is="statusIcon" :size="13" :stroke-width="1.9" :class="{ 'is-spinning': state === 'running' }" aria-hidden="true" />
+      <component :is="statusIcon" :size="13" :stroke-width="1.9" :class="{ 'is-spinning': state === 'running', 'sunday-spin': state === 'running', 'sunday-spin--fast': state === 'running' }" aria-hidden="true" />
       <span>{{ stateLabel }}</span>
       <span v-if="artifactItems.length" class="wf-node-runtime-count">{{ artifactItems.length }}{{ t("个产物") }}</span>
       <ChevronRight :size="13" :stroke-width="1.8" class="wf-node-runtime-chevron" aria-hidden="true" />
@@ -72,6 +72,8 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(工作流独立加载时也使用共享旋转样式)。
+import '../../../../../../ui/src/styles/sunday-spinner.css'
 import { t } from '../../../../../../ui/src/i18n/index'
 
 import { computed, ref, watch } from 'vue'
@@ -272,8 +274,6 @@ function collectArtifacts(value: unknown): RuntimeArtifact[] {
 .wf-node-runtime-artifacts img { display: block; width: 100%; max-height: 160px; object-fit: contain; }
 .wf-node-runtime-artifacts a, .wf-node-runtime-artifacts code { display: block; overflow: hidden; padding: var(--space-2); color: inherit; font: 10px/1.35 var(--font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
 .wf-node-runtime-approval { margin-inline: calc(var(--space-2) * -1); margin-bottom: calc(var(--space-2) * -1); border-top: 1px solid color-mix(in srgb, var(--theme-main-text) 10%, transparent); }
-.is-spinning { animation: wf-node-runtime-spin .8s linear infinite; }
-@keyframes wf-node-runtime-spin { to { transform: rotate(360deg); } }
 @media (max-width: 720px) { .wf-node-runtime { width: min(320px, 72vw); } }
 @media (prefers-reduced-motion: reduce) { .wf-node-runtime *, .wf-node-runtime { transition: none; animation: none; } }
 </style>

@@ -15,6 +15,8 @@ from lamtools_core.tool.workspace import validate_workspace_path
 from lamtools_core.tool.workspace_files import atomic_write_bytes
 from .file_lock import locked_file, FileLockBusy
 
+_ORDERED_LIST_SCAN_LIMIT = 10000
+
 
 class FilesystemError(ValueError):
     def __init__(self, code: str, message: str, *, may_have_changed: bool = False):
@@ -379,6 +381,10 @@ class PluginFilesystemAPI:
             raise FilesystemError("fs/not-text", "File must be UTF-8 text without NUL") from None
 
     def stream_text(self, path, *, max_bytes: int, chunk_bytes: int = 8192) -> Iterator[str]:
+        return self._stream_text(path, max_bytes=max_bytes, chunk_bytes=chunk_bytes, reject_nul=True)
+
+    def _stream_text(self, path, *, max_bytes: int, chunk_bytes: int, reject_nul: bool,
+                     limit_source_size: bool = True) -> Iterator[str]:
         # user:“继续，列好清单 逐项打勾”+(流式文本有总量限制，解码跨块保留状态，yield 前关闭句柄，未耗尽不代表完整验证)。
         self._scope.check_open()
         _limit(max_bytes, 64 * 1024 * 1024)
@@ -390,7 +396,7 @@ class PluginFilesystemAPI:
             raise _error(error) from None
         if not stat.S_ISREG(baseline.st_mode):
             raise FilesystemError("fs/not-file", "Only regular files can be read")
-        if baseline.st_size > max_bytes:
+        if limit_source_size and baseline.st_size > max_bytes:
             raise FilesystemError("fs/too-large", "File exceeds max_bytes")
 
         def signature(info):
@@ -415,8 +421,11 @@ class PluginFilesystemAPI:
             offset = 0
             while offset < baseline.st_size:
                 self._scope.check_open()
+                # user:“逐项核对固定上游源码及手册”+(分页只允许有界扫描前缀；达到预算仍需读取时明确拒绝)。
+                if offset >= max_bytes:
+                    raise FilesystemError("fs/too-large", "Text scan exceeds max_bytes")
                 target = checked_path()
-                size = min(chunk_bytes, baseline.st_size - offset)
+                size = min(chunk_bytes, baseline.st_size - offset, max_bytes - offset)
                 try:
                     with target.open("rb") as stream:
                         if signature(os.fstat(stream.fileno())) != expected:
@@ -430,7 +439,7 @@ class PluginFilesystemAPI:
                 offset += len(raw)
                 try:
                     text = decoder.decode(raw)
-                    if "\x00" in text:
+                    if reject_nul and "\x00" in text:
                         raise UnicodeError
                 except UnicodeError:
                     raise FilesystemError("fs/not-text", "File must be UTF-8 text without NUL") from None
@@ -458,6 +467,29 @@ class PluginFilesystemAPI:
                         return DirectoryListing(tuple(entries), True)
                     entries.append(_info(entry.name, entry.stat(follow_symlinks=False)))
             return DirectoryListing(tuple(entries), False)
+        except OSError as error:
+            raise _error(error) from None
+
+    def _list_dir_ordered(self, path=".", *, limit: int = 100) -> DirectoryListing:
+        # user:“逐项核对固定上游源码及手册”+(选择稳定顺序时先有界读取目录，再排序和截断)。
+        self._scope.check_open()
+        _limit(limit, 1000)
+        target = self._path(path)
+        entries = []
+        try:
+            with os.scandir(target) as iterator:
+                for entry in iterator:
+                    self._scope.check_open()
+                    if len(entries) >= _ORDERED_LIST_SCAN_LIMIT:
+                        raise FilesystemError("fs/scan-limit", "Ordered directory scan exceeds 10000 entries")
+                    entries.append(entry)
+            entries.sort(key=lambda entry: entry.name)
+            result = []
+            for entry in entries[:limit]:
+                self._scope.check_open()
+                result.append(_info(entry.name, entry.stat(follow_symlinks=False)))
+            self._scope.check_open()
+            return DirectoryListing(tuple(result), len(entries) > limit)
         except OSError as error:
             raise _error(error) from None
 

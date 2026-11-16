@@ -18,15 +18,15 @@ _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
 def authenticate_remote(host, plugin, headers):
     if host is None:
         return 503, {"error": "plugin system is not ready"}
-    if not host.available(plugin):
-        return 409, {"error": "plugin is not available"}
-    if host.get(plugin) is None:
-        return 404, {"error": "plugin is not installed"}
-    # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(先验证已有令牌，再披露方法/参数；未认证请求不创建令牌)。
+    # user:“第三阶段先做Remote/网关的后端访问控制与明确方法名单”+(先验插件令牌再返回安装/启用状态，避免未认证Remote探测插件状态)。
     expected = plugin_http_token(host, plugin, create=False)
     supplied = _provided_token({str(k).lower(): str(v) for k, v in (headers or {}).items()})
     if not expected or not supplied or not expected.isascii() or not supplied.isascii() or not hmac.compare_digest(expected, supplied):
         return 401, {"error": "invalid plugin token"}
+    if not host.available(plugin):
+        return 409, {"error": "plugin is not available"}
+    if host.get(plugin) is None:
+        return 404, {"error": "plugin is not installed"}
     return None
 
 
@@ -57,10 +57,11 @@ def read_remote_methods(manifest):
             raise ValueError("Remote schema exceeds 32 KiB")
         check_schema(schema)
         properties, required = schema.get("properties", {}), schema.get("required", [])
+        required_names = set(required)
         if (schema.get("type") != "object" or schema.get("additionalProperties") is not False
-                or len(properties) > 32 or len(required) != len(properties) or set(required) != set(properties)
+                or len(properties) > 32 or len(required) != len(required_names)
                 or any(not _NAME.fullmatch(name) for name in properties)):
-            raise ValueError("Remote v1 requires at most 32 exact required primitive fields")
+            raise ValueError("Remote v1 requires at most 32 bounded primitive fields and rejects extra properties")
         resource = row.get("resource")
         if "resource" in row:
             resources = [resource] if type(resource) is dict else resource
@@ -71,8 +72,9 @@ def read_remote_methods(manifest):
                 if (type(entry) is not dict or set(entry) != {"kind", "argument"}
                         or entry.get("kind") not in {"session", "workspace"} or type(entry.get("argument")) is not str
                         or entry["argument"] not in properties or type(properties[entry["argument"]]) is not dict
-                        or properties[entry["argument"]].get("type") != "string"):
-                    raise ValueError("Resource requires an explicit string resource argument")
+                        or properties[entry["argument"]].get("type") != "string"
+                        or entry["argument"] not in required_names):
+                    raise ValueError("Resource requires an explicit required string resource argument")
                 resource_key = (entry["kind"], entry["argument"])
                 if resource_key in seen:
                     raise ValueError("Resource declarations must be unique")

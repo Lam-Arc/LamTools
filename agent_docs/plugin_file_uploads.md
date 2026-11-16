@@ -20,8 +20,16 @@ user:“继续，自动值守，非必要不停歇，自己不断找下一步做
 
 每块和约0.2秒空闲等待期间复核原会话/项目及宿主，启动代撤回主动取消在途读取；取消或撤回等待来源读取及关闭清理，来源不合作可能延迟停用，复核间隔也不是严格时限。接收完成并派发写入后，取消仍等待原提交且可能已保存。24项新增验收覆盖真实临时附件、超512KiB分块、错误/长度/块数限制、隐藏/宿主/根/启动代撤回、重复取消、来源清理、原写入结算、已有编码接口和显式Remote。HTTP验收由插件处理已缓冲JSON再提供分块；现有HTTP不是上游原始流式请求，仍有1MiB请求上限，无进度、图像规整、凭证消费或DSH wire。固定上游[源码](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/file-upload/src/index.ts)和[手册](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/file-upload/README.zh.md)的流式载体及凭证生命周期仍待实现。
 
+分块上传的初始会话准入及每块/空闲复核，遇到重复取消时等待原读取清理，随后关闭来源；提交后的附件复核也等待原读取清理。提交后的取消仍可能留下已保存附件。新增验收覆盖初始与分块会话读取、两种保存方式的提交后复核、真实认证Remote取消及正常存储；不合作的原读取可能延迟结束。
+
 ## 明确声明的原始 HTTP 输入
 
 原始上传声明可选`resource=session`或`resource=workspace`，以唯一的`x-resource-id`头明确当前资源，处理器从body读取相同`resource_id`；原项目/会话准入发生在请求体读取前，分块、空闲及提交后复核。16项新增验收覆盖真实临时附件与项目、非法头、跨项目、撤回和原无声明路径。检查非原子，处理器仍负责它使用的其他资源；详见[Remote资源准入](plugin_phase3_remote.md)。
 
 上述旧 HTTP 缓冲说明适用于普通 JSON 路由；另可按 [原始上传说明](plugin_phase3_remote.md) 显式声明 token POST，直接接收有界网络分块，再交给 `save_chunks`。后者仍在内存中汇总后调用原附件存储，处理器必须验证会话范围；无 DSH 暂存收据、进度、图像规整或精确 wire。43 项新增验收包括实际 HTTP 分块、授权撤回、断连及清理。
+
+## 当前会话托管文件读取
+
+`read_encoded(session_id, attachment_id)`通过原附件索引读取当前可见项目会话的托管文件，限制512KiB并核对原目录、实际字节长度和SHA-256；返回ID、MIME、大小和标准base64，不返回本机路径。外部引用、损坏、超限、不可见或缺原宿主明确拒绝，读取后复核附件记录、会话与宿主；重复取消等待原读取清理。8项新增验收覆盖临时SQLite/真实文件、损坏及外部引用、大小、撤回、无效Unicode、取消、认证HTTP和迁移。
+
+上游[附件存储](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/attachment/attachment/src/index.ts)按内容寻址引用流式读取并校验文件；此接口完整缓冲、有较小上限，使用Sunday附件ID和索引，不是DSH内容寻址引用或暂存收据，文件与授权检查不是原子锁。

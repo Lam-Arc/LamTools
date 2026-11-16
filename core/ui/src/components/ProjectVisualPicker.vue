@@ -2,7 +2,8 @@
   <section class="project-visual-picker" :aria-label="t('项目图标与颜色')">
     <div class="project-visual-picker-group">
       <strong>{{ t("图标") }}</strong>
-      <div class="project-icon-options" role="radiogroup" :aria-label="t('项目图标')">
+      <!-- user:“确保视觉、功能和交互不退化”+(图标与颜色单选保留原有外观，并可用键盘切换)。 -->
+      <div class="project-icon-options" role="radiogroup" :aria-label="t('项目图标')" @keydown="onRadioGroupKeydown">
         <button
           v-for="option in iconOptions"
           :key="option.key"
@@ -11,6 +12,7 @@
           type="button"
           role="radio"
           :aria-checked="iconKey === option.key ? 'true' : 'false'"
+          :tabindex="iconTabKey === option.key ? 0 : -1"
           :aria-label="option.label"
           :title="option.label"
           :disabled="disabled"
@@ -24,7 +26,7 @@
 
     <div class="project-visual-picker-group">
       <strong>{{ t("颜色") }}</strong>
-      <div class="project-color-options" role="radiogroup" :aria-label="t('项目颜色')">
+      <div class="project-color-options" role="radiogroup" :aria-label="t('项目颜色')" @keydown="onRadioGroupKeydown">
         <button
           v-for="option in colorOptions"
           :key="option.key"
@@ -33,6 +35,7 @@
           type="button"
           role="radio"
           :aria-checked="colorKey === option.key ? 'true' : 'false'"
+          :tabindex="colorTabKey === option.key ? 0 : -1"
           :aria-label="option.label"
           :title="option.label"
           :disabled="disabled"
@@ -48,11 +51,13 @@
 
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
+import { computed } from 'vue'
+import { onRadioGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 
 import type { CoreProjectColorKey, CoreProjectIconKey } from '@/projects/types.ts'
 import ProjectVisualIcon from '@/components/ProjectVisualIcon.vue'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   iconKey?: CoreProjectIconKey
   colorKey?: CoreProjectColorKey
   disabled?: boolean
@@ -96,6 +101,8 @@ const colorOptions: Array<{ key: CoreProjectColorKey; label: string }> = [
   { key: 'forest', get label() { return t("森林渐变") } },
   { key: 'prism', get label() { return t("棱镜渐变") } },
 ]
+const iconTabKey = computed(() => iconOptions.some(option => option.key === props.iconKey) ? props.iconKey : 'folder')
+const colorTabKey = computed(() => colorOptions.some(option => option.key === props.colorKey) ? props.colorKey : 'gray')
 </script>
 
 <style scoped>
@@ -134,7 +141,8 @@ const colorOptions: Array<{ key: CoreProjectColorKey; label: string }> = [
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--theme-control-text);
+  /* user:“确保视觉、功能和交互不退化”+(透明选项位于主界面，选中及悬停色跟随主界面文字，深浅主题均可辨认)。 */
+  color: var(--settings-main-text, var(--theme-main-text));
   cursor: pointer;
 }
 
@@ -145,18 +153,18 @@ const colorOptions: Array<{ key: CoreProjectColorKey; label: string }> = [
 
 .project-icon-option:hover,
 .project-color-option:hover {
-  background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), transparent);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-hover), transparent);
 }
 
 .project-icon-option:active,
 .project-color-option:active {
-  background: color-mix(in srgb, var(--theme-control-text) var(--alpha-active), transparent);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-active), transparent);
 }
 
 .project-icon-option.is-active,
 .project-color-option.is-active {
-  border-color: color-mix(in srgb, var(--theme-control-text) 48%, transparent);
-  background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), transparent);
+  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 48%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-hover), transparent);
 }
 
 .project-icon-option:focus-visible,

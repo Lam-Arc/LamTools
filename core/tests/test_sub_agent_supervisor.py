@@ -281,7 +281,11 @@ async def test_busy_message_is_next_step_guidance_and_mailbox_deduplicates_by_ca
     assert "name: worker" in runner.calls[0]["late_context"]
     assert "model_id: test-model" in runner.calls[0]["late_context"]
     mailbox = await supervisor.drain_parent_mailbox()
-    assert [item["body"] for item in mailbox] == ["evidence ready", "evidence ready"]
+    # user:“所有message均唤醒”+(完成也会写一条信箱消息，这里只数成员主动消息)
+    assert [item["body"] for item in mailbox if item["body"] == "evidence ready"] == [
+        "evidence ready",
+        "evidence ready",
+    ]
     assert await supervisor.drain_parent_mailbox() == []
 
     first = (await supervisor.list())[0]
@@ -353,7 +357,11 @@ async def test_parent_message_refreshes_source_and_deduplicates_only_within_pare
     assert len(runner.calls) == 1
     assert runner.calls[0]["parent_call_id"] == "shared-call"
     assert runner.calls[0]["parent_run_id"] == "parent-run-1"
-    assert len(await supervisor.drain_parent_mailbox()) == 2
+    drained = [
+        item for item in await supervisor.drain_parent_mailbox()
+        if item["body"] == "evidence ready"
+    ]
+    assert len(drained) == 2
 
     second = await supervisor.message(
         type="execute",
@@ -366,7 +374,11 @@ async def test_parent_message_refreshes_source_and_deduplicates_only_within_pare
     assert len(runner.calls) == 2
     assert runner.calls[1]["parent_call_id"] == "shared-call"
     assert runner.calls[1]["parent_run_id"] == "parent-run-2"
-    assert len(await supervisor.drain_parent_mailbox()) == 2
+    drained = [
+        item for item in await supervisor.drain_parent_mailbox()
+        if item["body"] == "evidence ready"
+    ]
+    assert len(drained) == 2
     await supervisor.shutdown()
 
 

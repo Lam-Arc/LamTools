@@ -10,6 +10,7 @@
         aria-modal="true"
         aria-labelledby="core-project-dialog-title"
         :aria-busy="loading"
+        @keydown.tab="trapDialogTab"
       >
         <header class="core-project-dialog-header">
           <h2 id="core-project-dialog-title">{{ t("新建项目") }}</h2>
@@ -93,7 +94,8 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { trapDialogTab } from '@/composables/trapDialogTab.ts'
 import FolderBrowserDialog from '@/components/FolderBrowserDialog.vue'
 import ProjectVisualPicker from '@/components/ProjectVisualPicker.vue'
 import type { LamToolsTransport } from '@/transport/index.ts'
@@ -111,11 +113,13 @@ const props = withDefaults(defineProps<{
   transport: LamToolsTransport
   teleportTarget?: string
   localOnly?: boolean
+  useNativePicker?: boolean
 }>(), {
   loading: false,
   error: '',
   teleportTarget: 'body',
   localOnly: false,
+  useNativePicker: true,
 })
 
 const emit = defineEmits<{
@@ -137,7 +141,13 @@ const showBrowser = ref(false)
 const dialogBackdropEl = ref<HTMLElement | null>(null)
 const dialogEl = ref<HTMLElement | null>(null)
 
-onMounted(() => nextTick(() => workRootInput.value?.focus()))
+// user:“确保视觉、功能和交互不退化”+(创建弹窗关闭后恢复原焦点，Tab 始终留在弹窗内)。
+let previousFocus: HTMLElement | null = null
+onMounted(() => {
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  void nextTick(() => workRootInput.value?.focus())
+})
+onUnmounted(() => { if (previousFocus?.isConnected) previousFocus.focus() })
 
 function submit() {
   const root = workRoot.value.trim()
@@ -166,7 +176,8 @@ async function openBrowser() {
   const nativePick = (window as any).__LAMTOOLS_PICK_DIRECTORY as
     | (() => Promise<string | null>)
     | undefined
-  if (nativePick) {
+  // user:“直接渲染项目真实组件”+(展厅可关闭系统目录选择并使用本地示例数据)。
+  if (props.useNativePicker && nativePick) {
     const picked = await nativePick()
     if (picked) workRoot.value = picked
     return

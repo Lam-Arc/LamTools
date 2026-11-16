@@ -2,6 +2,8 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BookOpen, Bot, FileImage, FileText, FolderTree, Globe, MessageCircle, Puzzle, Plus, X } from 'lucide-vue-next'
 import { t } from '@/i18n'
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(分屏标签共用导航，关闭按钮不触发标签切换)。
+import { onTabGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 import type { SplitPane, SplitTab } from '@/split/layout'
 const props = defineProps<{ pane: SplitPane; active: boolean; dirty?: Set<string> }>()
 const emit = defineEmits<{ focus: []; activate: [id: string]; open: [event: MouseEvent]; menu: [event: MouseEvent]; 'split-pull': [event: PointerEvent]; 'close-pane': []; close: [tab: SplitTab]; tabMenu: [event: MouseEvent, tab: SplitTab]; drag: [event: DragEvent, tab: SplitTab] }>()
@@ -29,18 +31,12 @@ function scrollTabs(event: WheelEvent) {
   if (next !== list.scrollLeft) { event.preventDefault(); list.scrollLeft = next }
 }
 const icons = { page: BookOpen, agent: Bot, editor: FileText, preview: FileImage, files: FolderTree, browser: Globe, conversation: MessageCircle, plugin: Puzzle }
-function navigate(event: KeyboardEvent) {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-  const buttons = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-  const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
-  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length
-  event.preventDefault(); buttons[next]?.focus(); buttons[next]?.click()
-}
+
 </script>
 <template>
   <!-- user:“主区无需标签”+(此标签栏仅用于辅助分屏，主区仍由原有标题栏承载)。 -->
   <header class="split-pane-bar" :class="{ 'is-active': active }" @pointerdown.stop="emit('focus')" @focusin="emit('focus')" @contextmenu.prevent="emit('menu', $event)">
-    <div ref="strip" class="split-pane-tabs" role="tablist" :aria-label="t('分屏标签')" @keydown="navigate" @wheel="scrollTabs">
+    <div ref="strip" class="split-pane-tabs" role="tablist" :aria-label="t('分屏标签')" @keydown="onTabGroupKeydown" @wheel="scrollTabs">
       <div v-for="tab in pane.tabs" :key="tab.id" class="split-pane-tab" :class="{ 'is-selected': tab.id === pane.activeTab }" draggable="true" @auxclick.middle.prevent="emit('close', tab)" @mousedown.middle.prevent @dragstart="emit('drag', $event, tab)" @contextmenu.stop.prevent="emit('tabMenu', $event, tab)">
         <button :id="`split-tab-${tab.id}`" type="button" role="tab" :aria-selected="tab.id === pane.activeTab" :aria-controls="`split-content-${tab.id}`" :tabindex="tab.id === pane.activeTab ? 0 : -1" :title="tab.title" @click="emit('activate', tab.id)">
           <component :is="icons[tab.kind]" :size="13" :stroke-width="1.6" aria-hidden="true" />

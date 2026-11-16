@@ -54,18 +54,6 @@
   flex-wrap: wrap;
 }
 
-.dream-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.dream-toggle-label {
-  font-size: 13px;
-  font-weight: 500;
-}
-
 .dream-min-turns {
   font-size: 12px;
   color: var(--muted);

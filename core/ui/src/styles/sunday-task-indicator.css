@@ -1,0 +1,17 @@
+@import './sunday-spinner.css';
+
+/* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(计划卡与侧栏共享步骤状态，运行时留出缺口使旋转可见)。 */
+.sunday-task-indicator {
+  display: inline-grid;
+  flex: 0 0 16px;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
+  border-radius: 50%;
+  color: var(--green);
+  font-size: 11px;
+  line-height: 1;
+}
+.sunday-task-indicator--running { border-color: var(--green); border-right-color: transparent; }

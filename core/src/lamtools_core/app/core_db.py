@@ -155,6 +155,10 @@ class CoreThreadSnapshot(CoreDbBase):
     snapshot_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active_turn_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # user:“宿主能力补齐和接口完善与文档更新”+(桌面本地置顶顺序归原会话行持久化，不写回大型快照JSON)。
+    workspace_pin_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # user:“复用原宿主权威”+(项目内会话手动顺序保存在Core原会话行，隐藏会话槽位也一并保留)。
+    workspace_session_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
@@ -2816,6 +2820,8 @@ _LATE_COLUMNS: dict[str, dict[str, str]] = {
     "core_thread_snapshots": {
         "revision": "INTEGER NOT NULL DEFAULT 0",
         "active_turn_id": "VARCHAR(64)",
+        "workspace_pin_order": "INTEGER",
+        "workspace_session_order": "INTEGER",
     },
     "core_artifacts": {
         "favorite": "BOOLEAN NOT NULL DEFAULT 0",
@@ -2877,10 +2883,77 @@ async def _ensure_late_columns(connection: Any) -> None:
                 "THEN snapshot_json END, '$.revision'), 0)) "
                 "WHERE revision = 0"
             ))
+    await _repair_artifact_last_used_at(connection)
     await _ensure_thread_revision_repair(
         connection,
         column_added=snapshot_revision_added,
     )
+
+
+#: 旧库把 core_artifacts.last_used_at 建成了 ``VARCHAR(64) NOT NULL DEFAULT ''``；
+#: 模型后来改成可空的 DateTime，又没有数据迁移，于是 ORM 每次读这一列都会拿空串
+#: 去 fromisoformat 并抛 ValueError。症状是资料库查询、成果登记和附件上传全部 500
+#: （2026-11-12：本机 constant 库 2635 行成果、last_used_at 全是空串）。
+_ARTIFACT_TIMESTAMP_REBUILD_TABLE = "core_artifacts_rebuild"
+_ARTIFACT_TIMESTAMP_COLUMN = "last_used_at"
+
+
+def _declared_type_is_temporal(declared: object) -> bool:
+    upper = str(declared or "").upper()
+    return "DATE" in upper or "TIME" in upper
+
+
+async def _repair_artifact_last_used_at(connection: Any) -> None:
+    """把历史遗留下来的 TEXT last_used_at 重建为可空 DateTime。
+
+    user:“附件上传总是失败，排查”+(上传会在成果登记时读 core_artifacts，
+    空串日期让这一步直接抛错；启动时必须先把这列修好，空串还原成 NULL)。
+    只在列声明不是时间类型时动作，且整体幂等：修好之后每次启动都跳过。
+    """
+    info = {
+        row["name"]: row
+        for row in (await connection.execute(text("PRAGMA table_info(core_artifacts)"))).mappings()
+    }
+    column = info.get(_ARTIFACT_TIMESTAMP_COLUMN)
+    if column is None or _declared_type_is_temporal(column["type"]):
+        return
+    model_columns = [item.name for item in CoreArtifact.__table__.columns]
+    if any(name not in info for name in model_columns):
+        # 列都不齐时交给 create_all / 补列，重建成新表只会丢掉未知的旧列。
+        _logger.warning(
+            "[startup:database] core_artifacts.last_used_at 仍是文本类型，但表结构不完整，跳过重建"
+        )
+        return
+    from sqlalchemy.schema import CreateTable
+
+    create_sql = str(
+        CreateTable(CoreArtifact.__table__).compile(dialect=connection.dialect)
+    )
+    rebuild_sql = create_sql.replace(
+        "CREATE TABLE core_artifacts", f"CREATE TABLE {_ARTIFACT_TIMESTAMP_REBUILD_TABLE}", 1
+    )
+    await connection.execute(text(f"DROP TABLE IF EXISTS {_ARTIFACT_TIMESTAMP_REBUILD_TABLE}"))
+    await connection.execute(text(rebuild_sql))
+    selecting = [
+        f"NULLIF(TRIM({name}), '')"
+        if name == _ARTIFACT_TIMESTAMP_COLUMN
+        else f'"{name}"'
+        for name in model_columns
+    ]
+    await connection.execute(text(
+        f"INSERT INTO {_ARTIFACT_TIMESTAMP_REBUILD_TABLE} ({', '.join(model_columns)}) "
+        f"SELECT {', '.join(selecting)} FROM core_artifacts"
+    ))
+    await connection.execute(text("DROP TABLE core_artifacts"))
+    await connection.execute(text(
+        f"ALTER TABLE {_ARTIFACT_TIMESTAMP_REBUILD_TABLE} RENAME TO core_artifacts"
+    ))
+    # 旧表带走了它的索引，重建后必须按模型补回来。
+    def _create_indexes(conn: Any) -> None:
+        for index in CoreArtifact.__table__.indexes:
+            index.create(conn, checkfirst=True)
+    await connection.run_sync(_create_indexes)
+    _logger.info("[startup:database] core_artifacts.last_used_at 已从文本列重建为可空时间列")
 
 
 #: Marker recording that the one-time thread-revision repair has been applied.

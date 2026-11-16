@@ -17,6 +17,7 @@ import ChatThread from '@/components/ChatThread.vue'
 import ComposerBar from '@/components/ComposerBar.vue'
 import InlineFileComposer from '@/components/InlineFileComposer.vue'
 import CoreSendStopButton from '@/components/CoreSendStopButton.vue'
+import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
 import AttachmentSourceMenu from '@/components/AttachmentSourceMenu.vue'
 import type { CoreExecutionControlsState } from '@/composables/useCoreExecutionControlsState.ts'
@@ -57,6 +58,9 @@ const hasMoreHistory = computed(() => channel.value?.hasMoreHistory().value || f
 const draft = ref(props.card.draft)
 const sending = ref(false)
 const error = ref('')
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(回退使用共享确认框，并在确认时再次检查会话状态)。
+const rollbackTarget = ref<{ turnId: string; sessionId: string } | null>(null)
+const rollbackBusy = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 
 watch(draft, value => { props.card.draft = value })
@@ -181,19 +185,38 @@ async function onFork(payload: { turnId: string; content: string }): Promise<voi
   }
 }
 
-async function onRollback(payload: { turnId: string; content: string }): Promise<void> {
-  const node = channel.value
-  if (!node) return
+function onRollback(payload: { turnId: string; content: string }): void {
+  if (!channel.value || rollbackBusy.value) return
   if (turnActive.value) {
     error.value = t('任务运行中，请先停止任务再回退')
     return
   }
-  // 主界面用应用内确认框；卡片暂用浏览器确认，确认框样式待样式轮统一。
-  if (!window.confirm(t('撤回这条消息及其之后的对话？'))) return
+  rollbackTarget.value = { turnId: payload.turnId, sessionId: props.card.sessionId }
+}
+
+async function confirmRollback(): Promise<void> {
+  const target = rollbackTarget.value
+  const node = channel.value
+  if (!target || !node || rollbackBusy.value) return
+  if (target.sessionId !== props.card.sessionId) {
+    rollbackTarget.value = null
+    error.value = t('会话已切换，请重新操作')
+    return
+  }
+  if (turnActive.value) {
+    rollbackTarget.value = null
+    error.value = t('任务运行中，请先停止任务再回退')
+    return
+  }
+  rollbackBusy.value = true
   try {
-    await node.rollbackTurn(payload.turnId)
+    await node.rollbackTurn(target.turnId)
+    rollbackTarget.value = null
   } catch (cause) {
+    rollbackTarget.value = null
     error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    rollbackBusy.value = false
   }
 }
 
@@ -388,6 +411,7 @@ function endDrag(): void {
     </ComposerBar>
 
     <div v-if="error" class="pet-card__error">{{ error }}</div>
+    <CoreConfirmDialog :open="Boolean(rollbackTarget)" :title="t('撤回此消息及后续对话？')" :loading="rollbackBusy" @cancel="rollbackTarget = null" @confirm="confirmRollback" />
   </section>
 </template>
 

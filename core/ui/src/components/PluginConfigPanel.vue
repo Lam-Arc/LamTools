@@ -21,6 +21,7 @@
       :data-panel-active="panelActive ? 'true' : 'false'"
     ></div>
 
+    <!-- user:“确保视觉、功能和交互不退化”+(保存期间锁定字段，避免新输入被旧请求结果覆盖)。 -->
     <form v-if="loaded && !panelActive" class="config-form" @submit.prevent="save()">
       <label
         v-for="field in fields"
@@ -37,6 +38,7 @@
         <UiSelect
           v-if="field.enumValues.length"
           class="config-select"
+          :disabled="saving"
           :model-value="String(draft[field.key] ?? '')"
           :options="enumOptions(field)"
           :aria-label="field.label"
@@ -46,13 +48,15 @@
         <input
           v-else-if="field.type === 'boolean'"
           v-model="draft[field.key]"
-          class="config-checkbox"
+          class="config-checkbox sunday-checkbox"
+          :disabled="saving"
           type="checkbox"
         />
         <input
           v-else-if="field.type === 'number' || field.type === 'integer'"
           v-model.number="draft[field.key]"
           class="config-input"
+          :disabled="saving"
           type="number"
           :step="field.type === 'integer' ? 1 : 'any'"
         />
@@ -60,12 +64,14 @@
           v-else-if="field.type === 'string' || !field.type"
           v-model="draft[field.key]"
           class="config-input"
+          :disabled="saving"
           type="text"
         />
         <textarea
           v-else
           v-model="draft[field.key]"
           class="config-input config-textarea"
+          :disabled="saving"
           rows="3"
         ></textarea>
       </label>
@@ -446,56 +452,11 @@ textarea.config-input {
   grid-column: 1;
 }
 
+/* user:“合并冗余实现，通过参数、变体和组合保留必要差异”+(配置复选框保留原有位置与大小，状态样式共用 Sunday 配方) */
 .config-field.is-boolean .config-checkbox {
   grid-column: 2;
   grid-row: 1;
-}
-
-.config-checkbox {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  display: grid;
-  place-content: center;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--text)) 26%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-main-text, var(--text)) 5%, transparent);
-  color: var(--settings-main-text, var(--text));
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-
-.config-checkbox::before {
-  content: '';
-  width: 10px;
-  height: 5px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(-45deg) scale(0);
-  transform-origin: center;
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-
-.config-checkbox:hover {
-  border-color: color-mix(in srgb, var(--settings-main-text, var(--text)) 42%, transparent);
-}
-
-.config-checkbox:checked {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--green) 76%, var(--settings-card-background, #1b1c1c));
-}
-
-.config-checkbox:checked::before {
-  transform: rotate(-45deg) scale(1);
-}
-
-.config-checkbox:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
+  --checkbox-size: 18px;
 }
 
 .config-hint {
@@ -536,9 +497,5 @@ textarea.config-input {
     animation: none;
   }
 
-  .config-checkbox,
-  .config-checkbox::before {
-    transition: none;
-  }
 }
 </style>

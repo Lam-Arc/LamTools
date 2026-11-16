@@ -17,7 +17,8 @@
         aria-labelledby="fb-dialog-title"
         :aria-busy="loading"
         tabindex="-1"
-        @keydown.escape="cancel"
+        @keydown.escape.prevent.stop="cancel"
+        @keydown.tab="trapDialogTab"
       >
         <header class="fb-dialog-header">
           <h2 id="fb-dialog-title">{{ t("选择目录") }}</h2>
@@ -91,6 +92,7 @@ import { nextTick, onMounted, ref, computed, watch, defineAsyncComponent } from 
 import { ArrowUp } from 'lucide-vue-next'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
+import { trapDialogTab } from '@/composables/trapDialogTab.ts'
 
 const FbTreeItem = defineAsyncComponent(() => import('@/components/FbTreeItem.vue'))
 
@@ -171,7 +173,8 @@ watch(() => props.modelValue, (val) => {
     error.value = ''
     loadEntries()
     previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    requestAnimationFrame(() => dialogRef.value?.focus())
+    // user:“确保视觉、功能和交互不退化”+(目录弹窗渲染后立即接管焦点，已关闭时不再抢焦点)。
+    void nextTick(() => { if (visible.value) dialogRef.value?.focus() })
   }
 })
 

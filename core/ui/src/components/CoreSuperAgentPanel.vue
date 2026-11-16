@@ -361,7 +361,8 @@ onUnmounted(() => {
           <input v-model="formBranch" class="sa-input" type="text" placeholder="main" />
         </label>
         <label class="sa-check sa-check--wide">
-          <input v-model="formRequireApproval" type="checkbox" />{{ t("先让我确认再开工") }}
+          <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(权限选项继续独立保存，复用共享复选框) -->
+          <input v-model="formRequireApproval" class="sunday-checkbox" type="checkbox" />{{ t("先让我确认再开工") }}
         </label>
         <label class="sa-field">
           <span class="sa-label">{{ t("它能不能自己动手") }}</span>
@@ -369,8 +370,8 @@ onUnmounted(() => {
           <span class="sa-hint">{{ presetHint }}</span>
         </label>
         <div class="sa-checks">
-          <label class="sa-check"><input v-model="formPush" type="checkbox" />{{ t("允许推送分支") }}</label>
-          <label class="sa-check"><input v-model="formPr" type="checkbox" />{{ t("允许创建 PR") }}</label>
+          <label class="sa-check"><input v-model="formPush" class="sunday-checkbox" type="checkbox" />{{ t("允许推送分支") }}</label>
+          <label class="sa-check"><input v-model="formPr" class="sunday-checkbox" type="checkbox" />{{ t("允许创建 PR") }}</label>
         </div>
         <p class="sa-hint">{{ t("推送与合并仍要你确认；不勾选时它只把改动留在本地分支。") }}</p>
         <div class="sa-actions">
@@ -523,6 +524,8 @@ onUnmounted(() => {
   </div>
 </template>
 
+<!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(与定时任务共用按钮配方)。 -->
+<style scoped src="../styles/full-area-buttons.css"></style>
 <style scoped>
 /* 整版界面：内容落在与会话同一条轴线上（full-area-column）。 */
 .sa-view {
@@ -568,44 +571,8 @@ button { font: inherit; }
 .sa-muted { font-size: 12.5px; color: color-mix(in srgb, var(--text) 58%, transparent); }
 .sa-hint { font-size: 12px; color: color-mix(in srgb, var(--text) 52%, transparent); }
 
-/* 按钮：与资料库、定时任务同一套配方。 */
-.quiet-button, .primary-button, .icon-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 5px var(--space-3);
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
-}
-
-.quiet-button, .icon-button {
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 78%, transparent);
-}
-
-.quiet-button:hover:not(:disabled), .icon-button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  color: var(--text);
-}
-
-.icon-button { justify-content: center; width: 28px; padding: 0; }
-
-.quiet-button.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
-.quiet-button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--red); }
-
-.primary-button {
-  border: 1px solid transparent;
-  background: var(--theme-control-background);
-  color: var(--theme-control-text);
-  font-weight: 600;
-}
-
-.primary-button:hover:not(:disabled) { filter: brightness(0.94); }
-.primary-button:disabled, .quiet-button:disabled, .icon-button:disabled { opacity: .45; cursor: default; }
+/* 原页面文字按钮含图标时按一行排列，定时任务保留自身排列方式。 */
+.quiet-button, .primary-button { display: inline-flex; align-items: center; gap: 6px; }
 
 /* 卡片：主区配方，内部层级只用 soft / subtle 背景，不嵌套实色卡片。 */
 .sa-card {

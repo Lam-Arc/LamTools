@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ThemeStudio from '../src/components/ThemeStudio.vue'
+import UiSelect from '../src/components/UiSelect.vue'
 import { UI_REGISTRY } from '../src/uiRegistry/registry.ts'
 import { STUDIO_PREVIEW_STYLE_ID, STUDIO_STYLE_ID } from '../src/themeStudio/runtime.ts'
 import { applyStoredPublishedTheme } from '../src/themeStudio/bootstrap.ts'
@@ -521,11 +522,13 @@ describe('编辑器补齐：属性面板与流程', () => {
     await flushPromises()
     await wrapper.get('[data-studio-node="shell.app-rail"]').trigger('click')
 
-    await wrapper.get('[data-studio-size-mode="width"]').setValue('fill')
+    wrapper.get('[data-studio-size-mode="width"]').getComponent(UiSelect).vm.$emit('update:modelValue', 'fill')
+    await flushPromises()
     await flushPromises()
     expect(previewStyle()?.textContent).toContain('width: 100%')
 
-    await wrapper.get('[data-studio-size-mode="width"]').setValue('fixed')
+    wrapper.get('[data-studio-size-mode="width"]').getComponent(UiSelect).vm.$emit('update:modelValue', 'fixed')
+    await flushPromises()
     await wrapper.get('[data-studio-size-value="width"]').setValue('240')
     await flushPromises()
     expect(previewStyle()?.textContent).toContain('width: 240px')
@@ -534,7 +537,8 @@ describe('编辑器补齐：属性面板与流程', () => {
     await flushPromises()
     expect(previewStyle()?.textContent).toContain('min-width: 120px')
 
-    await wrapper.get('[data-studio-size-mode="width"]').setValue('')
+    wrapper.get('[data-studio-size-mode="width"]').getComponent(UiSelect).vm.$emit('update:modelValue', '')
+    await flushPromises()
     await flushPromises()
     expect(previewStyle()?.textContent || '').not.toContain('width: 240px')
     wrapper.unmount()
@@ -560,7 +564,7 @@ describe('编辑器补齐：属性面板与流程', () => {
     await flushPromises()
     await wrapper.get('[data-studio-node="shell.main"]').trigger('click')
     await flushPromises()
-    const values = wrapper.get('[data-studio-asset-fit]').findAll('option').map((option) => option.element.value)
+    const values = wrapper.get('[data-studio-asset-fit]').getComponent(UiSelect).props('options').map(option => option.value)
     expect(values).toEqual(['fixed', 'contain', 'cover', 'stretch', 'tile', 'nineSlice'])
     wrapper.unmount()
   })
@@ -614,7 +618,8 @@ describe('编辑器补齐：属性面板与流程', () => {
     node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await flushPromises()
     // 默认是模板作用域；显式切到“此实例”才写这一条。
-    await wrapper.get('[data-studio-scope]').setValue('instance')
+    wrapper.get('[data-studio-scope]').getComponent(UiSelect).vm.$emit('update:modelValue', 'instance')
+    await wrapper.vm.$nextTick()
     await wrapper.get('[data-studio-field="color"]').setValue('#0a0b0c')
     await flushPromises()
 
@@ -846,18 +851,18 @@ describe('编辑器补齐：属性面板与流程', () => {
     await wrapper.get('[data-studio-node="shell.sidebar"]').trigger('click')
     await flushPromises()
 
-    await wrapper.get('[data-studio-color-token]').setValue('main-background')
+    wrapper.get('[data-studio-color-token]').getComponent(UiSelect).vm.$emit('update:modelValue', 'main-background')
     await flushPromises()
     expect(previewStyle()?.textContent).toContain('background-color: var(--theme-main-background)')
     // 选令牌时自定义色盘停用，避免两套颜色同时生效的歧义。
     expect((wrapper.get('[data-studio-field="background"]').element as HTMLInputElement).disabled).toBe(true)
 
-    await wrapper.get('[data-studio-color-token]').setValue('transparent')
+    wrapper.get('[data-studio-color-token]').getComponent(UiSelect).vm.$emit('update:modelValue', 'transparent')
     await flushPromises()
     expect(previewStyle()?.textContent).toContain('background-color: transparent')
 
     // 切回自定义颜色后色盘可用，取色立即生效。
-    await wrapper.get('[data-studio-color-token]').setValue('')
+    wrapper.get('[data-studio-color-token]').getComponent(UiSelect).vm.$emit('update:modelValue', '')
     await flushPromises()
     expect((wrapper.get('[data-studio-field="background"]').element as HTMLInputElement).disabled).toBe(false)
     await wrapper.get('[data-studio-field="background"]').setValue('#123123')
@@ -1169,7 +1174,8 @@ describe('编辑器补齐：属性面板与流程', () => {
     expect(css).not.toContain('[data-ui-instance="session:s1"]')
 
     // 显式切到“此实例”后，才只写这一条。
-    await wrapper.get('[data-studio-scope]').setValue('instance')
+    wrapper.get('[data-studio-scope]').getComponent(UiSelect).vm.$emit('update:modelValue', 'instance')
+    await wrapper.vm.$nextTick()
     await wrapper.get('[data-studio-field="color"]').setValue('#111213')
     await flushPromises()
     expect(previewStyle()?.textContent).toContain('[data-ui-instance="session:s1"]')
@@ -1664,9 +1670,11 @@ describe('编辑器补齐：属性面板与流程', () => {
     await wrapper.get('[data-studio-node="template.message"]').trigger('click')
     await flushPromises()
 
-    await wrapper.get('[data-studio-anchor-edge="h"]').setValue('left')
+    wrapper.get('[data-studio-anchor-edge="h"]').getComponent(UiSelect).vm.$emit('update:modelValue', 'left')
+    await flushPromises()
     await wrapper.get('[data-studio-anchor-offset="h"]').setValue('12')
-    await wrapper.get('[data-studio-anchor-edge="v"]').setValue('top')
+    wrapper.get('[data-studio-anchor-edge="v"]').getComponent(UiSelect).vm.$emit('update:modelValue', 'top')
+    await flushPromises()
     await wrapper.get('[data-studio-anchor-offset="v"]').setValue('8')
     await flushPromises()
 

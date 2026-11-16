@@ -33,6 +33,7 @@ const props = withDefaults(defineProps<{
 const expanded = ref<Set<string>>(new Set())
 const children = ref<Record<string, KnowledgeItem[]>>({})
 const loading = ref<Set<string>>(new Set())
+const failed = ref<Set<string>>(new Set())
 
 function isGroup(item: KnowledgeItem | Course): boolean {
   if ('learnable' in item) return item.entity === 'course' || !item.learnable
@@ -60,10 +61,21 @@ async function toggle(parent: TreeParent): Promise<void> {
   const next = new Set(expanded.value)
   next.add(key)
   expanded.value = next
-  if (!props.loadChildren || children.value[key] || loading.value.has(key)) return
+  if (!children.value[key]) await load(parent)
+}
+
+// user:“确保视觉、功能和交互不退化”+(课程或模块加载失败时保留展开状态，提示并允许重试)。
+async function load(parent: TreeParent): Promise<void> {
+  const key = keyFor(parent)
+  if (!props.loadChildren || loading.value.has(key)) return
+  const previousFailures = new Set(failed.value)
+  previousFailures.delete(key)
+  failed.value = previousFailures
   loading.value = new Set(loading.value).add(key)
   try {
     children.value = { ...children.value, [key]: await props.loadChildren(parent) }
+  } catch {
+    failed.value = new Set(failed.value).add(key)
   } finally {
     const pending = new Set(loading.value)
     pending.delete(key)
@@ -167,9 +179,11 @@ function visibleChildren(course: Course): Array<{ node: KnowledgeItem; depth: nu
                 </button>
               </div>
               <span v-if="loading.has(keyFor({ id: entry.node.id, kind: 'module' }))" class="study-tree-loading" role="status">{{ t("加载中…") }}</span>
+              <span v-if="failed.has(keyFor({ id: entry.node.id, kind: 'module' }))" class="study-tree-loading" role="alert">{{ t("加载失败") }} <button class="btn btn--ghost btn--sm" type="button" @click="load({ id: entry.node.id, kind: 'module', courseId: entry.node.course_id })">{{ t("重试") }}</button></span>
             </div>
           </template>
           <span v-if="loading.has(keyFor({ id: course.id, kind: 'course' }))" class="study-tree-loading" role="status">{{ t("加载中…") }}</span>
+          <span v-if="failed.has(keyFor({ id: course.id, kind: 'course' }))" class="study-tree-loading" role="alert">{{ t("加载失败") }} <button class="btn btn--ghost btn--sm" type="button" @click="load({ id: course.id, kind: 'course' })">{{ t("重试") }}</button></span>
         </div>
       </div>
     </section>

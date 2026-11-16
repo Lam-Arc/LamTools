@@ -123,31 +123,36 @@ _MODEL_SECRET_PATTERNS = (
 DEFAULT_CORE_INSTRUCTIONS = "You are Sunday Agent."
 
 # user:“Sunday也可以实现吗？去实现”+(告诉模型如何生成可交互回复，并明确运行边界)。
-INLINE_VISUALIZATION_PROTOCOL = (
-    "Sunday supports message style blocks: :::note, :::info, :::tip, :::warning, :::danger, :::success, "
-    "and :::details, each with an optional title on the opening line, Markdown body, and a closing ::: line. "
-    "GitHub alerts (> [!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION]) are also supported. "
-    "For reusable drafts use :::writing{variant=\"document\" title=\"Title\"} with a Markdown body and closing :::; "
-    "variants: standard, document, email, chat_message, social_post. Email uses subject=\"Subject\". "
-    "Writing blocks offer local editing and copying only, never sending or saving. Use these blocks sparingly when useful. "
-    "Sunday can render inline interactive content. When interaction materially helps or the user requests it, "
-    "emit a fenced interactive-html block containing self-contained HTML, CSS and JavaScript. "
-    "Use semantic labeled controls and CSS variables --background, --foreground, --control, --control-text, --border. "
-    "The block starts only after the reply finishes. It has no network, external libraries, file, storage, "
-    "tool or Sunday API access; keep inputs and calculations local. Never imply that a local form sends data or performs app actions. "
-    "Keep the source under 262144 characters. Ordinary html fences remain code. Use regular Markdown for plain explanations."
-)
+INLINE_VISUALIZATION_PROTOCOL = """\
+# Output Surface & Visualization
+Prefer plain Markdown prose. Escalate to rich blocks ONLY when structure or interactivity adds clear value:
+- **Callouts**: `:::note|info|tip|warning|danger|success|details [Optional Title]` ... `:::` (or GitHub `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION]`). Do not wrap long prose in callouts just for emphasis.
+- **Drafts**: `:::writing{variant="standard|document|email|chat_message|social_post" title="Title" subject="Email Subject"}` ... `:::` for reusable copy/edit drafts. Local-only; never implies sending or saving.
+- **Diagrams & Charts**:
+  - ` ```mermaid `: ONLY for flows/trees with >3 nodes (≤3 steps → numbered list).
+  - ` ```chart `: JSON spec rendered natively — bar / line / pie / radar. Shape: `{"type":"bar|line|pie|radar","title":"…","unit":"%","categories":["A","B"],"smooth":false,"area":false,"series":[{"name":"…","data":[1,2],"type":"bar|line"}]}`. bar/line need `categories`; pie uses one series and `categories` as slice labels; radar uses `categories` as axes (≥3) with one series per entity; `smooth` curves a line, `area` fills it with a gradient, and a per-series `type` mixes bars and lines in one frame.
+  - ` ```svg `: only for geometry a chart cannot express.
+  - **Theme & Contrast**: Use CSS variables/tokens only (never hardcode hex colors; no emoji as icons). Keep node text ≥50% opacity, edges ≥35%, chart bars ≥30%.
+- **Interactive HTML**: Output a fenced `interactive-html` block ONLY at the very end of the reply when user manipulation (simulators, calculators, drag/animate) is needed or requested.
+  - Self-contained HTML/CSS/JS (<256KB), fits within one screen, semantic labeled controls.
+  - Style exclusively with `--background`, `--foreground`, `--control`, `--control-text`, `--border`.
+  - Strict sandbox: NO network, external libs, storage, files, or Sunday APIs. Never imply form submission or app actions.
+- **Hard Bans**: No 2-step Mermaid; no tables for <2 dimensions; no carousels, popovers, or click-to-reveal answers; max nesting depth ≤ 2.\
+"""
 
 # 文件引用规则与内联可视化无关，单独成块：系统提示审计按块归类时不会被记成
 # “inline visualization”。
 # user:“引用的地址可能不对”+(引用工具返回且核实存在的完整路径，不能根据文件名省略成果目录)。
 # user:“让模型写完整路径”+(回复里提到的文件必须写全相对目录，裸文件名会被前端拼到项目根目录，界面显示“原文件不存在”)。
-FILE_REFERENCE_PROTOCOL = (
-    "For file/image references, use exact verified paths returned by tools; never reconstruct directories from filenames. "
-    "When you mention a file anywhere in a reply, write its full workspace-relative path "
-    "including every directory (for example core/ui/tests/app.test.ts, never just the file name app.test.ts); "
-    "the app resolves mentioned paths against the project root, so a bare file name cannot be located."
-)
+COMPLETION_RULE = """\
+# Completion
+Conclude finished tasks with a brief summary of work done, scope, output locations, and pending confirmations. List every created or modified deliverable using its verified workspace-relative path (parent directories included) in backticks or a Markdown link; never cite non-existent paths.\
+"""
+
+FILE_REFERENCE_PROTOCOL = """\
+# File References
+Always cite files and images with their full workspace-relative path, including every parent directory (e.g. `core/ui/tests/app.test.ts`, never just the file name `app.test.ts`). Never guess or reconstruct directory paths from filenames.\
+"""
 
 # user:“Minimize unnecessary model round-trips.”+(内置工具执行原则，不依赖 AGENTS.md；主 Agent 与适用子 Agent 共享)。
 TOOL_EFFICIENCY_RULE = (
@@ -272,12 +277,10 @@ def _redact_model_tool_evidence(value: str) -> str:
     return redacted
 
 
-_IMAGE_FIDELITY_GUIDANCE = (
-    "Images: a picture read from a file or attached by the user is shown at full "
-    "resolution only in the request that immediately follows; later requests carry a "
-    "low-resolution copy marked as such. Judge detail or quality only from the "
-    "full-resolution view, and read the file again when you need it."
-)
+_IMAGE_FIDELITY_GUIDANCE = """\
+# Image Fidelity
+Images read from files or attached by the user appear at full resolution ONLY in the immediately following turn; subsequent turns receive annotated low-res copies. Re-read the image file before judging fine details or visual quality.\
+"""
 
 
 def _find_image_data_url(result: ToolResult) -> str | None:
@@ -868,13 +871,7 @@ class CoreBaseAgentKit:
                 *_COMMON_TOOL_PROTOCOL,
             ])
             # user:“让模型写完整路径”+(交付清单里的路径也必须带全目录，否则完成的文件在界面上打不开)。
-            completion = (
-                "When the task is complete, reply with a short summary covering completed work, "
-                "scope, output locations, and any matters requiring user confirmation. The final "
-                "reply must list each deliverable file created or updated in this turn, with each "
-                "real full workspace-relative path (directories included) wrapped in backticks or "
-                "a Markdown file link; do not claim a nonexistent path was delivered."
-            )
+            completion = COMPLETION_RULE
         push(protocol)
         record("tool_protocol", "tool protocol", protocol)
         push(completion)

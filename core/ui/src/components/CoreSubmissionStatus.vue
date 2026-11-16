@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(发送状态使用共享旋转反馈)。
+import '@/styles/sunday-spinner.css'
 import { computed } from 'vue'
 import { CircleAlert, CircleHelp, LoaderCircle } from 'lucide-vue-next'
 import { t } from '@/i18n/index.ts'
@@ -48,7 +50,7 @@ function filesLabel(count: number): string {
       aria-live="polite"
     >
       <span class="submission-status__icon" :class="{ 'is-spinning': isActive(submission.state) }" aria-hidden="true">
-        <LoaderCircle v-if="isActive(submission.state)" :size="14" :stroke-width="1.8" />
+        <LoaderCircle v-if="isActive(submission.state)" class="sunday-spin" :size="14" :stroke-width="1.8" />
         <CircleAlert v-else-if="submission.state === 'failed'" :size="14" :stroke-width="1.9" />
         <CircleHelp v-else :size="14" :stroke-width="1.9" />
       </span>
@@ -125,10 +127,6 @@ function filesLabel(count: number): string {
   color: color-mix(in srgb, var(--text) 65%, transparent);
 }
 
-.submission-status__icon.is-spinning svg {
-  animation: submission-status-spin 0.9s linear infinite;
-}
-
 .submission-status[data-state='failed'] .submission-status__icon {
   color: color-mix(in srgb, var(--red) 70%, var(--text) 30%);
 }
@@ -202,10 +200,6 @@ function filesLabel(count: number): string {
   transform: translateY(4px) scale(0.98);
 }
 
-@keyframes submission-status-spin {
-  to { transform: rotate(360deg); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .submission-status-enter-active,
   .submission-status-leave-active,
@@ -218,8 +212,5 @@ function filesLabel(count: number): string {
     transform: none;
   }
 
-  .submission-status__icon.is-spinning svg {
-    animation: none;
-  }
 }
 </style>

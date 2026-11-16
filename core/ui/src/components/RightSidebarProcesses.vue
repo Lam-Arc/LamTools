@@ -12,7 +12,7 @@
         :title="loading ? t('刷新中…') : t('刷新')"
         @click="fetchProcesses()"
       >
-        <RotateCw :size="13" :stroke-width="1.8" :class="{ 'is-spinning': loading }" aria-hidden="true" />
+        <RotateCw :size="13" :stroke-width="1.8" :class="{ 'is-spinning sunday-spin sunday-spin--slow': loading }" aria-hidden="true" />
       </button>
     </div>
 
@@ -66,11 +66,12 @@
               <span v-if="process.persistent">{{ t("长期驻留（轮次结束后继续运行）") }}</span>
               <span v-else>{{ t("随轮次结束清理") }}</span>
             </p>
-            <div class="core-process-panel__log-tabs" role="tablist" :aria-label="t('进程日志')">
+            <div class="core-process-panel__log-tabs" role="tablist" :aria-label="t('进程日志')" @keydown="onTabGroupKeydown">
               <button
                 type="button"
                 role="tab"
                 :aria-selected="logStream === 'stdout'"
+                :tabindex="logStream === 'stdout' ? 0 : -1"
                 :class="{ active: logStream === 'stdout' }"
                 @click="selectLogStream('stdout')"
               >{{ t("标准输出") }}</button>
@@ -78,6 +79,7 @@
                 type="button"
                 role="tab"
                 :aria-selected="logStream === 'stderr'"
+                :tabindex="logStream === 'stderr' ? 0 : -1"
                 :class="{ active: logStream === 'stderr' }"
                 @click="selectLogStream('stderr')"
               >{{ t("错误输出") }}</button>
@@ -93,7 +95,11 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(进程刷新使用共享旋转反馈)。
+import '@/styles/sunday-spinner.css'
 import { t } from '@/i18n/index.ts'
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(进程日志标签使用共享键盘导航)。
+import { onTabGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { RotateCw, Square, X } from 'lucide-vue-next'
@@ -138,6 +144,7 @@ const logState = ref<{ content: string; truncated: boolean; missing: boolean }>(
 const pendingPid = ref(0)
 const nowTick = ref(Date.now())
 let loadRevision = 0
+let logRevision = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let tickTimer: ReturnType<typeof setInterval> | null = null
 let actionErrorTimer: ReturnType<typeof setTimeout> | null = null
@@ -228,6 +235,7 @@ function elapsedLabel(process: BackgroundProcessItem): string {
 function toggleExpanded(process: BackgroundProcessItem): void {
   if (expandedPid.value === process.pid) {
     expandedPid.value = 0
+    logRevision += 1
     return
   }
   expandedPid.value = process.pid
@@ -244,6 +252,9 @@ async function selectLogStream(stream: 'stdout' | 'stderr'): Promise<void> {
 async function fetchLog(process: BackgroundProcessItem, stream: 'stdout' | 'stderr'): Promise<void> {
   const requestRpc = props.requestRpc
   if (!requestRpc || !props.sessionId) return
+  // user:“确保视觉、功能和交互不退化”+(切换进程或日志时只显示当前请求的结果，旧响应不能覆盖新选择)。
+  const revision = ++logRevision
+  logState.value = { content: '', truncated: false, missing: false }
   try {
     const response = await requestRpc('process.log', {
       thread_id: props.sessionId,
@@ -251,16 +262,18 @@ async function fetchLog(process: BackgroundProcessItem, stream: 'stdout' | 'stde
       stream,
       max_bytes: 16384,
     })
+    if (revision !== logRevision) return
     logState.value = {
       content: typeof response?.content === 'string' ? response.content : '',
       truncated: response?.truncated === true,
       missing: response?.missing === true,
     }
   } catch (cause) {
+    if (revision !== logRevision) return
     logState.value = {
       content: cause instanceof Error ? cause.message : String(cause),
       truncated: false,
-      missing: true,
+      missing: false,
     }
   }
 }
@@ -326,6 +339,7 @@ function isProcessSignal(event: unknown): boolean {
 }
 
 watch(() => props.sessionId, () => {
+  logRevision += 1
   expandedPid.value = 0
   void fetchProcesses()
 })
@@ -345,6 +359,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   loadRevision += 1
+  logRevision += 1
   if (pollTimer) clearInterval(pollTimer)
   if (tickTimer) clearInterval(tickTimer)
   if (actionErrorTimer) clearTimeout(actionErrorTimer)
@@ -394,14 +409,6 @@ defineExpose({ fetchProcesses })
 .core-process-panel__log-tabs button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
   outline-offset: 1px;
-}
-
-.core-process-panel__refresh svg.is-spinning {
-  animation: core-process-spin 1s linear infinite;
-}
-
-@keyframes core-process-spin {
-  to { transform: rotate(360deg); }
 }
 
 .core-process-panel__list {
@@ -632,7 +639,6 @@ defineExpose({ fetchProcesses })
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .core-process-panel__refresh svg.is-spinning { animation: none; }
   .core-process-panel__main,
   .core-process-detail-enter-active,
   .core-process-detail-leave-active {

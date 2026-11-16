@@ -92,16 +92,8 @@
         </label>
         <div class="field field-wide checkbox-inline">
           <span>{{ t("hook 失败时阻断执行") }}</span>
-          <button
-            type="button"
-            class="toggle-btn"
-            :class="{ 'is-on': hookForm.required }"
-            :aria-label="t('hook 失败时阻断执行')"
-            @click="hookForm.required = !hookForm.required"
-          >
-            <ToggleRight v-if="hookForm.required" :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-          </button>
+          <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(钩子阻断设置使用共享开关，保留原表单提交语义)。 -->
+          <SundaySwitch v-model="hookForm.required" :label="t('hook 失败时阻断执行')" />
         </div>
         <div class="editor-actions field-wide">
           <button type="button" class="btn btn--quiet" @click="showHookForm = false">{{ t("取消") }}</button>
@@ -230,8 +222,9 @@
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
-import { ChevronLeft, ToggleLeft, ToggleRight } from 'lucide-vue-next'
+import { ChevronLeft } from 'lucide-vue-next'
 import UiSelect from '@/components/UiSelect.vue'
+import SundaySwitch from '@/components/SundaySwitch.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import type { CoreHookItem, CoreHookListPayload } from '@/types.ts'
 

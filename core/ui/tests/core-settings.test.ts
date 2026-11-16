@@ -385,9 +385,10 @@ describe('CoreSettings', () => {
 
     await wrapper.get('[data-settings-section="about"]').trigger('click')
     const updateToggle = wrapper.get('[data-update-auto-check]')
-    expect(updateToggle.attributes('aria-pressed')).toBe('true')
-    await updateToggle.trigger('click')
-    expect(updateToggle.attributes('aria-pressed')).toBe('false')
+    const updateInput = updateToggle.get('input[role="switch"]')
+    expect((updateInput.element as HTMLInputElement).checked).toBe(true)
+    await updateInput.setValue(false)
+    expect((updateInput.element as HTMLInputElement).checked).toBe(false)
     expect(localStorage.getItem('lamtools.update.autoCheck')).toBe('false')
 
     wrapper.unmount()

@@ -14,6 +14,11 @@
         <Search class="search-field-icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
             <input
               class="search-field-input"
+              role="combobox"
+              aria-autocomplete="list"
+              :aria-expanded="resultsShown"
+              :aria-controls="resultsShown ? searchListId : undefined"
+              :aria-activedescendant="activeResultId"
               ref="inputEl"
               :value="query"
               type="text"
@@ -56,13 +61,17 @@
           <p v-else-if="error" class="search-status search-error" role="alert">{{ error }}</p>
           <p v-else-if="!visibleRows.length" class="search-status search-hint">{{ hintText }}</p>
 
-          <ul v-else class="search-results">
+          <ul v-else :id="searchListId" class="search-results" role="listbox" :aria-label="t('搜索结果')">
             <template v-for="group in visibleGroups" :key="group.label">
-              <li class="search-group-label">{{ group.label }}</li>
+              <li class="search-group-label" role="presentation">{{ group.label }}</li>
               <li
                 v-for="row in group.rows"
                 :key="row.key"
                 class="search-row"
+                :id="`${searchListId}-option-${row.index}`"
+                role="option"
+                :aria-selected="row.index === cursor"
+                :aria-disabled="!row.action || undefined"
                 :class="{ active: row.index === cursor, 'is-static': !row.action }"
                 :data-search-row="row.key"
                 @mousedown.prevent="activate(row)"
@@ -105,7 +114,7 @@ import { t } from '@/i18n/index.ts'
  * 空查询给“最近任务 / 建议 / 面板”三组。建议与面板里的快捷命令由宿主传入：
  * 桌面有终端与预览、手机没有，所以命令表由调用方决定，不写死在这里。
  */
-import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch, type Component } from 'vue'
 import {
   ArrowLeft,
   File,
@@ -122,7 +131,8 @@ import {
   X,
 } from 'lucide-vue-next'
 import type { CoreSessionListItem } from '@/types.ts'
-import { relativeLuminance, themeAreaBackground, type ThemeData } from '@/helpers/theme.ts'
+import { type ThemeData } from '@/helpers/theme.ts'
+import { settingsThemeVars } from '@/helpers/settingsTheme.ts'
 
 /** A host-supplied shortcut row, so each host offers only the commands it has. */
 export interface SearchCommand {
@@ -142,6 +152,8 @@ export interface SearchPluginTarget {
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   sessions: CoreSessionListItem[]
+  /** 嵌入式预览可保留当前输入焦点；独立搜索默认自动聚焦。 */
+  autoFocus?: boolean
   onJump: (sessionId: string, messageId: string) => void
   /** Study reuses this host search surface; it does not render a parallel search UI. */
   activeModeId?: string | null
@@ -240,6 +252,7 @@ const catalog = ref<CatalogEntry[]>([])
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let searchSeq = 0
+let disposed = false
 
 const commands = computed(() => props.commands || [])
 const hasStudy = computed(() => Boolean(props.activeModeId?.startsWith('study:')))
@@ -409,7 +422,11 @@ const rows = computed<SearchRow[]>(() => {
   return built.map((row, index) => ({ ...row, index }))
 })
 
+// user:“确保视觉、功能和交互不退化”+(搜索框暴露当前结果及展开状态，键盘选择与视觉同步)。
+const searchListId = `search-results-${useId()}`
 const visibleRows = computed(() => rows.value)
+const resultsShown = computed(() => !searching.value && !error.value && visibleRows.value.length > 0)
+const activeResultId = computed(() => resultsShown.value && visibleRows.value.some(row => row.index === cursor.value) ? `${searchListId}-option-${cursor.value}` : undefined)
 
 /** Rows grouped for rendering, in a stable order, empty groups dropped. */
 const visibleGroups = computed(() => {
@@ -511,7 +528,9 @@ function moveCursor(step: number): void {
   cursor.value = selectable[next]
 }
 
+// user:“确保视觉、功能和交互不退化”+(输入一变化就作废旧请求，防止等待新搜索时显示过期结果)。
 watch(query, (value) => {
+  searchSeq++
   if (debounceTimer) clearTimeout(debounceTimer)
   const needle = value.trim()
   cursor.value = 0
@@ -596,30 +615,8 @@ async function searchStudy(needle: string): Promise<SearchHit[]> {
   return (result.results || result.hits || []) as SearchHit[]
 }
 
-const settingsThemeStyle = computed(() => {
-  if (!props.theme) return {}
-  const theme = props.theme
-  const lightMain = relativeLuminance(theme.mainText) < 0.45
-  return {
-    '--settings-backdrop-background': themeAreaBackground(theme, 'backdrop'),
-    '--settings-backdrop-text': theme.backdropText,
-    '--settings-main-background': themeAreaBackground(theme, 'main'),
-    '--settings-main-text': theme.mainText,
-    '--settings-main-solid': theme.mainStops[0]?.color || '#111111',
-    '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
-    '--settings-card-text': theme.mainText,
-    '--settings-control-background': themeAreaBackground(theme, 'control'),
-    '--settings-control-text': theme.controlText,
-    '--settings-control-solid': theme.controlStops[0]?.color || '#3a3834',
-    ...(lightMain
-      ? {
-          '--settings-panel-2': '#f0efeb',
-          '--settings-line': '#d4d0cc',
-          '--settings-muted': '#8a8580',
-        }
-      : {}),
-  } as Record<string, string>
-})
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(多个页面使用同一主题映射)。
+const settingsThemeStyle = computed(() => settingsThemeVars(props.theme))
 
 function titleOf(sessionId: string | undefined): string {
   const session = props.sessions.find((item) => item.id === sessionId)
@@ -670,7 +667,9 @@ function escapeRegExp(text: string): string {
 
 onMounted(async () => {
   await nextTick()
-  inputEl.value?.focus()
+  if (disposed) return
+  // user:“确保视觉、功能和交互不退化”+(嵌入预览不抢焦点，真实搜索保留自动聚焦)。
+  if (props.autoFocus !== false) inputEl.value?.focus()
   void loadCatalog()
   try {
     const result = await props.requestRpc('plugin.system.list')
@@ -680,6 +679,9 @@ onMounted(async () => {
     ragEnabled.value = false
   }
 })
+
+// user:“确保视觉、功能和交互不退化”+(关闭搜索时取消定时查询并忽略未完成结果)。
+onBeforeUnmount(() => { disposed = true; searchSeq++; if (debounceTimer) clearTimeout(debounceTimer) })
 
 /** Three catalogues, fetched once, filtered locally: typing costs no RPC. */
 async function loadCatalog(): Promise<void> {

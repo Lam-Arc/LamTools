@@ -231,3 +231,6 @@ AGENTS.md
 
 # Rust build output for the p2p crate
 core/p2p/target/
+
+# user:“可视化组件展厅”+(展厅构建结果可重建，不进入仓库)
+/core/ui/dist-design-system/

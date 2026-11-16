@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(Ping 设置复用共享复选框并保持原有即时操作与保存时机)。
 /**
  * 主界面「Ping」设置页 / 工作台。
  *
@@ -31,6 +32,7 @@ import type { PingConfig, PingSectorConfig, PingSectorKind } from '@/pet/config.
 import { DEFAULT_PING_PROMPTS } from '@/pet/config.ts'
 import { hasPetConfigAccess } from '@/pet/configFile.ts'
 import PingCaptureSandbox from '@/components/PingCaptureSandbox.vue'
+import UiSelect from '@/components/UiSelect.vue'
 import { consumeSettingsDeepLink, onSettingsDeepLink } from '@/helpers/settingsDeepLink.ts'
 import { createPetAgentClient, type PetAgentClient } from '@/pet/agent/client.ts'
 import * as bridge from '@/pet/bridge.ts'
@@ -51,6 +53,9 @@ const PREVIEW_PRESETS = [
   { id: 'square', label: '方形 · 1200×1200', width: 1200, height: 1200 },
   { id: '4-3', label: '4:3 · 1440×1080', width: 1440, height: 1080 },
 ]
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(屏幕与缩放预览使用共享下拉，仍只改变本地模拟)。
+const previewSizeOptions = PREVIEW_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))
+const previewScaleOptions = [100, 125, 150, 200].map(value => ({ value: String(value), label: `${value}%` }))
 const previewPresetId = ref('16-9')
 const previewDpi = ref(100)
 const previewPreset = computed(() => PREVIEW_PRESETS.find(item => item.id === previewPresetId.value) || PREVIEW_PRESETS[0])
@@ -67,6 +72,8 @@ const projects = ref<{ id: string; name: string }[]>([])
 const sessions = ref<{ id: string; title: string }[]>([])
 const targetProjectId = ref('')
 const targetSessionId = ref('')
+const projectOptions = computed(() => projects.value.map(item => ({ value: item.id, label: item.name })))
+const sessionOptions = computed(() => sessions.value.map(item => ({ value: item.id, label: item.title })))
 const loadingTargets = ref(false)
 const targetNotice = ref('')
 let targetClient: PetAgentClient | null = null
@@ -90,6 +97,8 @@ const LOCAL_ACTIONS = [
   { id: 'debug-terrain', label: '开关地形线' },
   { id: 'hide-overlay', label: '收起桌宠覆盖层' },
 ]
+
+const localActionOptions = [{ value: '', label: '未绑定' }, ...LOCAL_ACTIONS.map(action => ({ value: action.id, label: action.label }))]
 
 const tree = computed(() => buildPingTree(config.sectors))
 const nodes = computed(() => flattenTree(tree.value))
@@ -386,8 +395,9 @@ function onDrop(targetId: string, event: DragEvent): void {
   selectedId.value = moving
 }
 
+// user:“确保视觉、功能和交互不退化”+(重复选中当前选项不触发保存或重置)。
 function setKind(value: PingSectorKind): void {
-  if (!selected.value) return
+  if (!selected.value || selected.value.kind === value) return
   if (childCount.value > 0 && value !== 'subring') {
     error.value = '这个项已有子菜单；要改成普通动作请先删除它的子项，避免子项变成不可达的孤儿'
     return
@@ -484,7 +494,7 @@ onBeforeUnmount(() => {
         <span v-else-if="saved" class="ping-state ping-state--ok">已保存</span>
         <label class="ping-toggle">
           <input
-            type="checkbox"
+            type="checkbox" class="sunday-checkbox"
             :checked="config.enabled"
             @change="setEnabled(($event.target as HTMLInputElement).checked)"
           >
@@ -546,15 +556,8 @@ onBeforeUnmount(() => {
         <div class="ping-preview__toolbar">
           <span>一级完整环 · 选中项子环</span>
           <span class="ping-preview__meta">{{ Math.max(0, geometry.bands.length - 1) }} 层子环</span>
-          <select v-model="previewPresetId" class="ping-preview__preset" aria-label="模拟屏幕尺寸">
-            <option v-for="preset in PREVIEW_PRESETS" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
-          </select>
-          <select v-model.number="previewDpi" class="ping-preview__preset" aria-label="模拟系统缩放">
-            <option :value="100">100%</option>
-            <option :value="125">125%</option>
-            <option :value="150">150%</option>
-            <option :value="200">200%</option>
-          </select>
+          <UiSelect v-model="previewPresetId" class="ping-preview__preset" data-ping-preview-size aria-label="模拟屏幕尺寸" :options="previewSizeOptions" :menu-min-width="160" />
+          <UiSelect :model-value="String(previewDpi)" class="ping-preview__preset" data-ping-preview-scale aria-label="模拟系统缩放" :options="previewScaleOptions" :menu-min-width="100" @update:model-value="previewDpi = Number($event)" />
         </div>
         <p v-if="previewClamped" class="ping-preview__warn">
           当前环半径 {{ config.radius }} 超出模拟可视区，预览按 {{ Math.round(previewLimit) }} 显示；真实桌面会按屏幕边缘自适应。
@@ -627,23 +630,19 @@ onBeforeUnmount(() => {
           <span>颜色</span>
           <input type="color" :value="selected.color" @input="updateSelected({ color: ($event.target as HTMLInputElement).value })">
         </label>
-        <label class="ping-row">
+        <!-- user:“通过参数、变体和组合保留必要差异”+(行为选择使用共享下拉，保留原有配置更新)。 -->
+        <div class="ping-row">
           <span>行为</span>
-          <select :value="selected.kind" @change="setKind(($event.target as HTMLSelectElement).value as PingSectorKind)">
-            <option v-for="kind in KINDS" :key="kind.label" :value="kind.value">{{ kind.label }}</option>
-          </select>
-        </label>
+          <UiSelect :model-value="selected.kind" :options="KINDS" aria-label="行为" data-ping-kind :menu-min-width="180" @update:model-value="setKind($event as PingSectorKind)" />
+        </div>
         <label class="ping-row">
           <span>启用</span>
-          <input type="checkbox" :checked="selected.enabled" @change="updateSelected({ enabled: ($event.target as HTMLInputElement).checked })">
+          <input type="checkbox" class="sunday-checkbox" :checked="selected.enabled" @change="updateSelected({ enabled: ($event.target as HTMLInputElement).checked })">
         </label>
-        <label v-if="selected.kind === 'custom'" class="ping-row">
+        <div v-if="selected.kind === 'custom'" class="ping-row">
           <span>本地动作</span>
-          <select :value="selected.action || ''" @change="updateSelected({ action: ($event.target as HTMLSelectElement).value })">
-            <option value="">未绑定</option>
-            <option v-for="action in LOCAL_ACTIONS" :key="action.id" :value="action.id">{{ action.label }}</option>
-          </select>
-        </label>
+          <UiSelect :model-value="selected.action || ''" :options="localActionOptions" aria-label="本地动作" data-ping-action :menu-min-width="180" @update:model-value="$event !== (selected.action || '') && updateSelected({ action: $event })" />
+        </div>
         <label v-if="selected.kind === 'subring'" class="ping-row">
           <span>子菜单 ID</span>
           <input :value="selected.subring || ''" @input="updateSelected({ subring: ($event.target as HTMLInputElement).value })">
@@ -686,11 +685,11 @@ onBeforeUnmount(() => {
         </label>
         <label class="ping-row">
           <span>「对话」自动附当前截图</span>
-          <input type="checkbox" :checked="config.autoAttachScreenshot" @change="setField('autoAttachScreenshot', ($event.target as HTMLInputElement).checked)">
+          <input type="checkbox" class="sunday-checkbox" :checked="config.autoAttachScreenshot" @change="setField('autoAttachScreenshot', ($event.target as HTMLInputElement).checked)">
         </label>
         <label class="ping-row">
           <span>自动把「切换会话」固定到右侧</span>
-          <input type="checkbox" :checked="config.autoPlaceSwitch !== false" @change="setField('autoPlaceSwitch', ($event.target as HTMLInputElement).checked)">
+          <input type="checkbox" class="sunday-checkbox" :checked="config.autoPlaceSwitch !== false" @change="setField('autoPlaceSwitch', ($event.target as HTMLInputElement).checked)">
         </label>
         <p class="ping-hint">关闭后严格按菜单树顺序显示一级项，不再自动移动「切换会话」。</p>
       </article>
@@ -704,20 +703,15 @@ onBeforeUnmount(() => {
 
       <article class="setting-card">
         <div class="subhead"><span class="muted subhead-title">目标会话（独立于桌宠）</span></div>
-        <label class="ping-row">
+        <!-- user:“确保视觉、功能和交互不退化”+(选择项目仍加载对应会话，空列表保留提示与禁用状态)。 -->
+        <div class="ping-row">
           <span>项目</span>
-          <select :value="targetProjectId" :disabled="loadingTargets" @change="loadTargetSessions(($event.target as HTMLSelectElement).value)">
-            <option v-if="!projects.length" value="">暂无项目</option>
-            <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
-          </select>
-        </label>
-        <label class="ping-row">
+          <UiSelect :model-value="targetProjectId" :options="projectOptions" placeholder="暂无项目" aria-label="项目" data-ping-project :disabled="loadingTargets" :menu-min-width="180" @update:model-value="$event !== targetProjectId && loadTargetSessions($event)" />
+        </div>
+        <div class="ping-row">
           <span>会话</span>
-          <select v-model="targetSessionId" :disabled="loadingTargets || !sessions.length">
-            <option v-if="!sessions.length" value="">暂无会话</option>
-            <option v-for="session in sessions" :key="session.id" :value="session.id">{{ session.title }}</option>
-          </select>
-        </label>
+          <UiSelect v-model="targetSessionId" :options="sessionOptions" placeholder="暂无会话" aria-label="会话" data-ping-session :disabled="loadingTargets || !sessions.length" :menu-min-width="180" />
+        </div>
         <div class="ping-target-actions">
           <button type="button" class="btn" :disabled="saving || !targetProjectId || !targetSessionId" @click="applyTarget">设为 Ping 目标</button>
           <button type="button" class="btn btn--ghost" :disabled="loadingTargets" @click="loadTargets">刷新会话</button>
@@ -871,16 +865,7 @@ onBeforeUnmount(() => {
   margin: 0 auto;
   cursor: pointer;
 }
-.ping-preview__preset {
-  max-width: 145px;
-  padding: 2px 5px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--control);
-  color: var(--control-text);
-  font: inherit;
-  font-size: 10px;
-}
+.ping-preview__preset { max-width: 145px; }
 .ping-preview__warn { margin: 4px 10px; color: var(--danger, #c0392b); font-size: 11px; line-height: 1.4; }
 .ping-preview__hub { fill: color-mix(in srgb, var(--text) 8%, transparent); stroke: var(--border); }
 .ping-preview__arc {
@@ -930,6 +915,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 .ping-row > span { flex: none; color: var(--muted); }
+.ping-row :deep(.ui-select) { flex: 1; min-width: 0; }
 .ping-row input:not([type='checkbox']):not([type='color']),
 .ping-row select,
 .ping-row textarea {

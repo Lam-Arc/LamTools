@@ -32,7 +32,13 @@ from .process_access import ProcessAccessError
 from .owned_processes import ProcessOutcome, ProcessOutput
 from .llm_access import LLMAccessError, TokenEstimate
 from .durable_access import DurableAccessError
-from .session_query import SessionQueryError, SessionSummary, SessionQueryPage
+from .session_query import (
+    ProjectSessionQueryPage,
+    ProjectSessionSummary,
+    SessionQueryError,
+    SessionQueryPage,
+    SessionSummary,
+)
 from .approval_access import ApprovalAccessError, ApprovalRequest, ApprovalResult
 from .management_access import HostOperationError
 from .file_watch import FileWatchEvent, FileWatchResult
@@ -170,6 +176,8 @@ __all__ = [
     "SessionQueryError",
     "SessionSummary",
     "SessionQueryPage",
+    "ProjectSessionSummary",
+    "ProjectSessionQueryPage",
     "DurableAccessError",
     "LLMAccessError",
     "TokenEstimate",

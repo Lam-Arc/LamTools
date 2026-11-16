@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ThemeStudio from '../src/components/ThemeStudio.vue'
+import UiSelect from '../src/components/UiSelect.vue'
 import { createStudioStore } from '../src/themeStudio/store.ts'
 import {
   compileStudioDocument,
@@ -128,7 +129,7 @@ describe('实例级覆盖的工作台行为', () => {
     node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await flushPromises()
     // user:“我编辑了一个会话行，所有的会话行都会被应用成一样的东西”+默认模板作用域。
-    expect((wrapper.get('[data-studio-scope]').element as HTMLSelectElement).value).toBe('base')
+    expect(wrapper.get('[data-studio-scope]').getComponent(UiSelect).props('modelValue')).toBe('base')
     await wrapper.get('[data-studio-field="color"]').setValue('#123456')
     await flushPromises()
     const templateCss = previewStyle()?.textContent || ''
@@ -136,7 +137,8 @@ describe('实例级覆盖的工作台行为', () => {
     expect(templateCss).not.toContain('[data-ui-instance="message:m1"]')
 
     // 显式切到“此实例”后，才只写这一条。
-    await wrapper.get('[data-studio-scope]').setValue('instance')
+    wrapper.get('[data-studio-scope]').getComponent(UiSelect).vm.$emit('update:modelValue', 'instance')
+    await wrapper.vm.$nextTick()
     await wrapper.get('[data-studio-field="color"]').setValue('#0a0b0c')
     await flushPromises()
     const css = previewStyle()?.textContent || ''
@@ -154,7 +156,8 @@ describe('实例级覆盖的工作台行为', () => {
 
     node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await flushPromises()
-    await wrapper.get('[data-studio-scope]').setValue('instance')
+    wrapper.get('[data-studio-scope]').getComponent(UiSelect).vm.$emit('update:modelValue', 'instance')
+    await wrapper.vm.$nextTick()
     await wrapper.get('[data-studio-field="color"]').setValue('#0a0b0c')
     await flushPromises()
 
@@ -178,12 +181,13 @@ describe('实例级覆盖的工作台行为', () => {
 
     node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await flushPromises()
-    await wrapper.get('[data-studio-scope]').setValue('instance')
-    expect((wrapper.get('[data-studio-scope]').element as HTMLSelectElement).value).toBe('instance')
+    wrapper.get('[data-studio-scope]').getComponent(UiSelect).vm.$emit('update:modelValue', 'instance')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-studio-scope]').getComponent(UiSelect).props('modelValue')).toBe('instance')
 
     await wrapper.get('[data-studio-node="shell.sidebar"]').trigger('click')
     await flushPromises()
-    expect((wrapper.get('[data-studio-scope]').element as HTMLSelectElement).value).toBe('base')
+    expect(wrapper.get('[data-studio-scope]').getComponent(UiSelect).props('modelValue')).toBe('base')
 
     await wrapper.get('[data-studio-field="color"]').setValue('#776655')
     await flushPromises()

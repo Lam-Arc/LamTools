@@ -38,9 +38,8 @@
             <span>{{ block.label || t("进度") }}</span>
             <strong>{{ progressLabel(block.value, block.max) }}</strong>
           </div>
-          <div class="right-sidebar-widget-progress-track" role="progressbar" :aria-valuenow="safeProgress(block.value)" :aria-valuemax="safeMax(block.max)">
-            <span :style="{ transform: `scaleX(${progressRatio(block.value, block.max)})` }"></span>
-          </div>
+          <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(侧栏插件进度使用共享配方，保留紧凑尺寸和百分比)。 -->
+          <SundayProgress class="right-sidebar-widget-progress-track" :value="block.value" :max="block.max" :label="block.label || t('进度')" />
           <small v-if="block.detail">{{ block.detail }}</small>
         </template>
         <template v-else-if="block.type === 'list'">
@@ -93,6 +92,8 @@ import type { Component } from 'vue'
 import { getPluginWidget, invokePluginWidget } from '@/plugins/api.ts'
 import { getWidget } from '@/plugins/registry.ts'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import SundayProgress from '@/components/SundayProgress.vue'
+import { progressMetrics } from '@/helpers/progressMetrics.ts'
 import type {
   PluginWidgetEntry,
   RightSidebarRpc,
@@ -238,22 +239,8 @@ function formatValue(value: unknown): string {
   return String(value)
 }
 
-function safeProgress(value: unknown): number {
-  const number = Number(value)
-  return Number.isFinite(number) ? Math.max(0, number) : 0
-}
-
-function safeMax(value: unknown): number {
-  const number = Number(value)
-  return Number.isFinite(number) && number > 0 ? number : 100
-}
-
-function progressRatio(value: unknown, max: unknown): number {
-  return Math.min(1, safeProgress(value) / safeMax(max))
-}
-
 function progressLabel(value: unknown, max: unknown): string {
-  return `${Math.round(progressRatio(value, max) * 100)}%`
+  return `${Math.round(progressMetrics(value, max).ratio * 100)}%`
 }
 
 /** 危险动作的确认：等一次用户回答（应用内胶囊，不用系统弹窗）。 */
@@ -361,12 +348,10 @@ watch(() => props.snapshot, (value) => {
 .right-sidebar-widget-block ul { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
 .right-sidebar-widget-block li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); }
 .right-sidebar-widget-block li small { grid-column: 1 / -1; margin-top: calc(-1 * var(--space-1)); }
-.right-sidebar-widget-progress-track { height: 4px; overflow: hidden; margin-top: var(--space-1); background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent); }
-.right-sidebar-widget-progress-track span { display: block; height: 100%; background: var(--blue); transform-origin: left; transition: transform var(--dur-base) var(--ease-out); }
+.right-sidebar-widget-progress-track { height: 4px; margin-top: var(--space-1); border-radius: 0; background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent); }
 .right-sidebar-widget-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .right-sidebar-widget-action { min-height: 30px; padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--theme-control-text) 16%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); font-size: 12px; }
 .right-sidebar-widget-action:hover { background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), var(--theme-control-background)); }
 .right-sidebar-widget-action:active { background: color-mix(in srgb, var(--theme-control-text) var(--alpha-active), var(--theme-control-background)); }
 .right-sidebar-widget-action:disabled { opacity: .45; cursor: default; }
-@media (prefers-reduced-motion: reduce) { .right-sidebar-widget-progress-track span { transition: none; } }
 </style>

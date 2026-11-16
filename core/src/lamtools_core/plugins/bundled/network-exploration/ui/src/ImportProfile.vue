@@ -1,4 +1,5 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“可交互式网络工具界面，不需要太专业”+(订阅为默认导入方式，配置文件作为可选入口)。
 import { ref } from "vue";
 import { Link, FileUp, X, Eye, EyeOff } from "lucide-vue-next";
@@ -51,7 +52,7 @@ async function readFile(event) {
     <div class="nx-panel-heading">
       <h2><Link :size="17" />添加订阅</h2>
       <button
-        class="nx-button nx-quiet nx-icon-button"
+        class="btn nx-button btn--quiet nx-icon-button"
         aria-label="收起订阅设置"
         @click="$emit('close')"
       >
@@ -72,14 +73,14 @@ async function readFile(event) {
           placeholder="https://…"
           aria-label="订阅链接"
           autocomplete="off" /><button
-          class="nx-button nx-quiet nx-icon-button"
+          class="btn nx-button btn--quiet nx-icon-button"
           type="button"
           :aria-label="visible ? '隐藏订阅链接' : '显示订阅链接'"
           @click="visible = !visible"
         >
           <component :is="visible ? EyeOff : Eye" :size="16" /></button></label
       ><button
-        class="nx-button nx-primary"
+        class="btn nx-button btn--primary"
         :disabled="Boolean(session.busy) || !url.trim()"
       >
         {{ session.busy === "proxy.config" ? "正在下载…" : "保存订阅" }}
@@ -90,13 +91,13 @@ async function readFile(event) {
     </p>
     <div class="nx-import-options">
       <button
-        class="nx-button nx-quiet"
+        class="btn nx-button btn--quiet"
         :disabled="Boolean(session.busy)"
         @click="fileInput.click()"
       >
         <FileUp :size="14" />导入配置文件</button
       ><button
-        class="nx-button nx-quiet"
+        class="btn nx-button btn--quiet"
         :aria-expanded="advanced"
         @click="advanced = !advanced"
       >
@@ -118,7 +119,7 @@ async function readFile(event) {
         placeholder="粘贴 Mihomo / Clash YAML 配置"
         required
       /><button
-        class="nx-button nx-secondary"
+        class="btn nx-button btn--secondary"
         :disabled="Boolean(session.busy)"
       >
         保存配置

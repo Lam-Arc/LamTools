@@ -1,6 +1,7 @@
 // user:“可交互式网络工具界面，不需要太专业”+(常用操作直接可用，专业参数收起，真实状态以图表和列表呈现)。
 import { afterEach, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import UiSelect from "../src/components/UiSelect.vue";
 import NetworkApp from "../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue";
 import QuickPanel from "../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/QuickPanel.vue";
 import { networkStore } from "../../src/lamtools_core/plugins/bundled/network-exploration/ui/store.mjs";
@@ -243,8 +244,8 @@ it("starts a download with the chosen parallel count and speed limit", async () 
   await view.get('[data-page="transfer"]').trigger("click");
   await flushPromises();
   await view.get('input[name="url"]').setValue("https://example.com/file.zip");
-  await view.get('select[aria-label="并行数量"]').setValue("4");
-  await view.get('select[aria-label="下载限速"]').setValue("5242880");
+  view.get("[data-transfer-connections]").getComponent(UiSelect).vm.$emit("update:modelValue", "4");
+  view.get("[data-transfer-speed]").getComponent(UiSelect).vm.$emit("update:modelValue", "5242880");
   await view.get(".nx-download-composer").trigger("submit");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith(
@@ -307,7 +308,7 @@ it("only enables the proxy switch after a subscription is saved", async () => {
   });
   await view.get('[data-page="proxy"]').trigger("click");
   await flushPromises();
-  expect(view.get("[data-proxy-switch]").attributes("disabled")).toBeDefined();
+  expect(view.get("[data-proxy-switch] input[role=switch]").attributes("disabled")).toBeDefined();
 });
 it("toggles the proxy directly from the home block", async () => {
   // user:“三个块分别是加速代理下载的快捷操作”+(代理块直接开关连接，不要求先跳到代理页)。
@@ -518,7 +519,7 @@ it("renders three quick pills with direct actions", async () => {
     kind: "proxy",
     server: "127.0.0.1:49152",
   });
-  await view.get('[data-quick="proxy"] select').setValue("Singapore");
+  view.get("[data-network-quick-node]").getComponent(UiSelect).vm.$emit("update:modelValue", "Singapore");
   await flushPromises();
   expect(rpc).toHaveBeenCalledWith("network-exploration.proxy.select", {
     group: "Auto",

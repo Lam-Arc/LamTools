@@ -1,6 +1,9 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“可交互式网络工具界面，不需要太专业”+(网络信息按接口展示，需要修改时才展开表单)。
-import { ref } from "vue";
+import { computed, ref } from "vue";
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络接口、查询方式和规则出口使用共享下拉)。
+import UiSelect from "../../../../../../../ui/src/components/UiSelect.vue";
 import {
   Monitor,
   Globe,
@@ -22,6 +25,9 @@ const editing = ref(false),
   domain = ref(""),
   outbound = ref("DIRECT"),
   matched = ref(null);
+const interfaceOptions = computed(() => props.session.interfaces.map(adapter => ({ value: String(adapter.index), label: adapter.name })));
+const providerOptions = [{ value: 'system', label: '系统 DNS' }, { value: 'cloudflare', label: 'Cloudflare' }, { value: 'google', label: 'Google' }];
+const outboundOptions = [{ value: 'DIRECT', label: '直接连接' }, { value: 'PROXY', label: '通过代理' }, { value: 'REJECT', label: '阻止连接' }];
 async function lookup() {
   answers.value = await props.session.run("dns.query", {
     domain: query.value.trim(),
@@ -74,7 +80,7 @@ async function testRules() {
         <p>查看当前地址和正在使用的 DNS。</p>
       </div>
       <button
-        class="nx-button nx-secondary"
+        class="btn nx-button btn--secondary"
         :aria-expanded="editing"
         @click="editing = !editing"
       >
@@ -113,23 +119,8 @@ async function testRules() {
     <form v-if="editing" class="nx-panel nx-form" @submit.prevent="saveDns">
       <h2>调整 DNS</h2>
       <div class="nx-form-grid">
-        <label
-          ><span>网络接口</span
-          ><select
-            v-model="interfaceIndex"
-            class="nx-input"
-            required
-            aria-label="网络接口"
-          >
-            <option disabled value="">选择正在使用的网络</option>
-            <option
-              v-for="adapter in session.interfaces"
-              :key="adapter.index"
-              :value="adapter.index"
-            >
-              {{ adapter.name }}
-            </option>
-          </select></label
+        <!-- user:“确保视觉、功能和交互不退化”+(未选网络接口时禁止提交，保留必选行为)。 -->
+        <div class="nx-form-field"><span>网络接口</span><UiSelect v-model="interfaceIndex" :options="interfaceOptions" placeholder="选择正在使用的网络" aria-label="网络接口" data-network-interface :menu-min-width="180" /></div
         ><label
           ><span>DNS 地址</span
           ><input
@@ -140,7 +131,7 @@ async function testRules() {
         /></label>
       </div>
       <p class="nx-help">修改前会保存原设置，之后可在“防护”中恢复。</p>
-      <button class="nx-button nx-secondary" :disabled="Boolean(session.busy)">
+      <button class="btn nx-button btn--secondary" :disabled="Boolean(session.busy) || !interfaceIndex">
         确认并申请修改
       </button>
     </form>
@@ -155,16 +146,9 @@ async function testRules() {
           placeholder="输入域名"
           aria-label="查询域名"
           required
-        /><select
-          v-model="provider"
-          class="nx-input nx-fit-select"
-          aria-label="查询方式"
-        >
-          <option value="system">系统 DNS</option>
-          <option value="cloudflare">Cloudflare</option>
-          <option value="google">Google</option></select
-        ><button
-          class="nx-button nx-secondary"
+        /><UiSelect v-model="provider" class="nx-shared-select" :options="providerOptions" aria-label="查询方式" data-network-dns-provider :menu-min-width="150" />
+        <button
+          class="btn nx-button btn--secondary"
           :disabled="Boolean(session.busy)"
         >
           <Search :size="14" />查询
@@ -188,7 +172,7 @@ async function testRules() {
     </section>
     <section class="nx-settings-fold">
       <button
-        class="nx-button nx-quiet"
+        class="btn nx-button btn--quiet"
         :aria-expanded="ruleEditor"
         @click="editRules"
       >
@@ -204,16 +188,9 @@ async function testRules() {
             class="nx-input"
             placeholder="例如 github.com"
             aria-label="规则域名"
-          /><select
-            v-model="rule.outbound"
-            class="nx-input"
-            aria-label="规则出口"
-          >
-            <option value="DIRECT">直接连接</option>
-            <option value="PROXY">通过代理</option>
-            <option value="REJECT">阻止连接</option></select
-          ><button
-            class="nx-button nx-quiet nx-icon-button"
+          /><UiSelect v-model="rule.outbound" class="nx-rule-select" :options="outboundOptions" aria-label="规则出口" data-network-rule-outbound :menu-min-width="140" />
+          <button
+            class="btn nx-button btn--quiet nx-icon-button"
             aria-label="删除规则"
             @click="rules.splice(index, 1)"
           >
@@ -222,12 +199,12 @@ async function testRules() {
         </div>
         <div class="nx-actions">
           <button
-            class="nx-button nx-quiet"
+            class="btn nx-button btn--quiet"
             @click="rules.push({ domain: '', outbound: 'DIRECT' })"
           >
             <Plus :size="14" />添加规则</button
           ><button
-            class="nx-button nx-secondary"
+            class="btn nx-button btn--secondary"
             :disabled="Boolean(session.busy)"
             @click="saveRules"
           >
@@ -242,7 +219,7 @@ async function testRules() {
             placeholder="输入域名，看看会匹配到哪里"
             aria-label="测试规则域名"
           /><button
-            class="nx-button nx-secondary"
+            class="btn nx-button btn--secondary"
             :disabled="Boolean(session.busy)"
           >
             测试匹配

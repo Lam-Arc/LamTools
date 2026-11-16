@@ -14,8 +14,8 @@
         :data-status="step.status"
       >
         <span
-          class="right-sidebar-checklist__indicator"
-          :class="{ 'right-sidebar-checklist__indicator--running': step.status === 'running' }"
+          class="right-sidebar-checklist__indicator sunday-task-indicator"
+          :class="{ 'right-sidebar-checklist__indicator--running sunday-task-indicator--running sunday-spin sunday-spin--task': step.status === 'running' }"
           aria-hidden="true"
         >{{ step.status === 'completed' ? '✓' : step.status === 'failed' ? '!' : '' }}</span>
         <div class="right-sidebar-checklist__step-body">
@@ -32,9 +32,12 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(侧栏与计划卡共享步骤状态样式)。
+import '@/styles/sunday-task-indicator.css'
+import { runtimeStepStatusLabel as statusLabel } from '@/helpers/runtimeStepStatus.ts'
 import { t } from '@/i18n/index.ts'
 
-import type { CoreRuntimeStepGroup, CoreRuntimeStepStatus } from '@/types.ts'
+import type { CoreRuntimeStepGroup } from '@/types.ts'
 
 withDefaults(defineProps<{
   stepGroups?: CoreRuntimeStepGroup[]
@@ -42,15 +45,6 @@ withDefaults(defineProps<{
   stepGroups: () => [],
 })
 
-function statusLabel(status: CoreRuntimeStepStatus): string {
-  return ({
-    pending: '待处理',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败',
-    skipped: '已跳过',
-  } as Record<CoreRuntimeStepStatus, string>)[status]
-}
 </script>
 
 <style scoped>
@@ -69,23 +63,6 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
 .right-sidebar-checklist__step.is-running { color: color-mix(in srgb, var(--green) 78%, var(--text) 22%); }
 .right-sidebar-checklist__step.is-failed { color: color-mix(in srgb, var(--red) 78%, var(--text) 22%); }
 
-.right-sidebar-checklist__indicator {
-  display: inline-grid;
-  flex: 0 0 16px;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  margin-top: 1px;
-  border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
-  border-radius: 50%;
-  color: var(--green);
-  font-size: 11px;
-  line-height: 1;
-}
-.right-sidebar-checklist__indicator--running {
-  border-color: var(--green);
-  animation: right-sidebar-checklist-spin 1.2s linear infinite;
-}
 .right-sidebar-checklist__step.is-failed .right-sidebar-checklist__indicator {
   border-color: var(--red);
   color: var(--red);
@@ -144,11 +121,4 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
   font-size: 12px;
 }
 
-@keyframes right-sidebar-checklist-spin {
-  to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .right-sidebar-checklist__indicator--running { animation: none; }
-}
 </style>

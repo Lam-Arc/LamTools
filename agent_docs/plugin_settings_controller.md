@@ -32,3 +32,15 @@ user:“继续，自动值守，非必要不停歇，自己不断找下一步做
 `context.settings_controller.mutate(ops, expected_revision=...)`在原配置副本按顺序应用1–64条set/unset，路径为1–32个非空字符串；已有对象键可设/删，已有数组下标可设/删，末尾可追加。全部编辑和schema校验成功后才通过原CAS一次提交并返回脱敏投影，未涉及的密值保留。不存在的父路径、无效数组下标或根编辑拒绝；对象缺失的末项unset无操作。
 
 固定上游[源码](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/settings/settings/src/index.ts)会依据schema默认值构造路径、unset时可能恢复继承层；Sunday本接口不提供这些行为，也不支持全局namespace、Peer或无条件写，需人工移植。13项新增验收覆盖有序操作、数组、保密字段、非法请求、并发CAS、真实Remote及迁移；同步调用不能异步抢占。前文mutate待办以本节为准，完整DSH mutate仍未完成。
+
+## 当前插件设置结构提示
+
+`context.settings_controller.schema_outline()`读取同一原配置快照中的schema和修订，只投影有限类型、属性结构、必填名称、数组items、直接秘密标记及存在引用的提示；上限1024节点、深度16，超限明确拒绝。它不返回设置值、默认值、示例、枚举或说明，也不解析引用、组合分支和完整校验规则；`secret_hint`只代表该节点直接声明秘密，不能据此判断其他节点无秘密，结果标记`partial=true`，不能当作校验schema。同步读取无法异步抢占；调用前后检查原启动代、manifest和数据目录。
+
+5项新增验收覆盖真实临时schema、秘密数据不回传、引用/嵌套/数组、超限、撤回、认证HTTP和迁移提示。上游describe提供多namespace、完整脱敏schema及分层值；此功能仅是当前插件结构提示，非其完整协议或Peer策略。
+
+## 当前插件恢复默认设置
+
+`context.settings_controller.reset(expected_revision=...)`按原`context.settings.reset`默认值规则计算完整替换配置，再经原schema验证、修订CAS及控制器脱敏返回；会整体替换当前插件配置，包括未在默认值中声明的字段。过期修订、schema要求未被默认值满足或提交前撤回时不写入；提交后异常按原控制器的可能已变更规则报告，不返回原始密值。同步调用不能异步抢占。
+
+6项新增验收使用临时配置覆盖原默认值和秘密脱敏、过期修订、无效默认值、撤回、提交后异常、认证HTTP及迁移。上游mutate的unset是单路径编辑并可恢复继承层；此接口恢复整个插件的原默认配置，不是该操作的等价映射，不提供全局namespace或Peer。

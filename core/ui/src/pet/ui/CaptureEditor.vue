@@ -40,6 +40,8 @@ export interface CaptureSelectionMeta {
 
 const props = defineProps<{
   frame: CapturedFrame
+  /** user:“确保视觉、功能和交互不退化”+(工作台沙盒嵌入页面，不覆盖其他设置)。 */
+  sandbox?: boolean
   busy: boolean
   /** 标注层圈选带过来的区域，截图内像素；有值时打开就框好。 */
   presetRegion?: CaptureRegion | null
@@ -51,6 +53,7 @@ const emit = defineEmits<{
   send: [payload: { blob: Blob; text: string; meta: CaptureSelectionMeta }]
 }>()
 
+const root = ref<HTMLElement | null>(null)
 const canvas = ref<HTMLCanvasElement | null>(null)
 const region = ref<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
 const tool = ref<Tool>('region')
@@ -68,6 +71,7 @@ const textInput = ref<HTMLInputElement | null>(null)
 const toolsBar = ref<HTMLElement | null>(null)
 const inputWidth = ref(0)
 let toolsObserver: ResizeObserver | null = null
+let viewportObserver: ResizeObserver | null = null
 const INPUT_SIDE_GUTTER = 32
 
 const colors: Record<string, string> = {
@@ -116,8 +120,8 @@ function displayRect(): CaptureDisplayRect {
 
 function toImage(clientX: number, clientY: number): { x: number; y: number } {
   return pointToFrame(
-    clientX,
-    clientY,
+    clientX - (props.sandbox ? root.value?.getBoundingClientRect().left ?? 0 : 0),
+    clientY - (props.sandbox ? root.value?.getBoundingClientRect().top ?? 0 : 0),
     props.frame.width,
     props.frame.height,
     displayRect(),
@@ -131,7 +135,7 @@ function toScreen(x: number, y: number): { left: number; top: number } {
 function syncInputWidth(): void {
   const element = toolsBar.value
   if (!element) return
-  const available = Math.max(280, window.innerWidth - 48)
+  const available = Math.max(280, viewport.value.width - 48)
   const wanted = Math.ceil(element.getBoundingClientRect().width) + INPUT_SIDE_GUTTER * 2
   inputWidth.value = Math.min(available, Math.max(280, wanted))
 }
@@ -375,7 +379,8 @@ async function send(): Promise<void> {
 }
 
 function onResize(): void {
-  viewport.value = { width: window.innerWidth, height: window.innerHeight }
+  const bounds = props.sandbox ? root.value?.getBoundingClientRect() : null
+  viewport.value = { width: bounds?.width || window.innerWidth, height: bounds?.height || window.innerHeight }
   draw()
   syncInputWidth()
 }
@@ -392,8 +397,11 @@ onMounted(() => {
   // 标注层圈选进来时 frame 已经有值，watch 不会触发首次初始化，这里补一次。
   if (props.presetRegion) region.value = props.presetRegion
   void nextTick(() => {
-    draw()
-    syncInputWidth()
+    onResize()
+    if (props.sandbox && root.value) {
+      viewportObserver = new ResizeObserver(onResize)
+      viewportObserver.observe(root.value)
+    }
     if (toolsBar.value) {
       toolsObserver = new ResizeObserver(syncInputWidth)
       toolsObserver.observe(toolsBar.value)
@@ -405,11 +413,13 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
   toolsObserver?.disconnect()
   toolsObserver = null
+  viewportObserver?.disconnect()
+  viewportObserver = null
 })
 </script>
 
 <template>
-  <div class="capture" role="dialog" aria-label="截图框选">
+  <div ref="root" class="capture" :class="{ 'capture--sandbox': sandbox }" role="dialog" aria-label="截图框选">
     <div class="capture__stage" @pointermove="onPointerMove">
       <canvas
         ref="canvas"
@@ -528,6 +538,15 @@ onBeforeUnmount(() => {
   background: #05070a;
   color: #eef3fb;
   user-select: none;
+}
+
+/* user:“确保视觉、功能和交互不退化”+(沙盒保留截图编辑能力，不能遮住工作台其他控件)。 */
+.capture--sandbox {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: min(520px, 60vh);
+  min-height: 320px;
 }
 
 .capture__stage {

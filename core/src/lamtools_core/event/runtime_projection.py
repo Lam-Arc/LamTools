@@ -374,6 +374,49 @@ def runtime_fact_to_run_item_events(
             )
         ]
 
+    if phase == "runtime.question_group":
+        # user:“不将原始聊天输入栏替换为提问卡”+(提问先以正文清单呈现：用户直接读题、
+        # 直接在输入栏回答；组内控件另行接入，不阻塞这条链路。)
+        questions = payload.get("questions")
+        questions = questions if isinstance(questions, list) else []
+        lines: list[str] = []
+        for index, item in enumerate(questions, start=1):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            marks = []
+            if bool(item.get("required")):
+                marks.append("必答")
+            kind = str(item.get("type") or "text")
+            marks.append({"single": "单选", "multiple": "多选", "text": "文本"}.get(kind, kind))
+            options = [
+                str(option.get("label") or "").strip()
+                for option in item.get("options") or []
+                if isinstance(option, dict) and str(option.get("label") or "").strip()
+            ]
+            suffix = f"（{'，'.join(marks)}）" if marks else ""
+            option_text = " / ".join(options) if options else "自由输入"
+            lines.append(f"{index}. {title}{suffix}：{option_text}")
+        content = ("需要你回答：" + "\n".join(lines)) if lines else "需要你回答（题目数据缺失）"
+        return [
+            RunItemEvent(
+                # user:“为什么显示已回答？”+(提问在等用户，它的行状态是 waiting；
+                # 写成 completed 会让卡片一出现就自称已回答。)
+                kind="message",
+                item_id=f"{_tool_item_id(fact, payload)}:question",
+                status="waiting",
+                payload={
+                    "type": "questionGroup",
+                    "content": content,
+                    "question_group_id": str(payload.get("group_id") or ""),
+                    "questions": list(questions),
+                },
+                **base,
+            )
+        ]
+
     if phase == "runtime.approval_request":
         tool_item_id = _tool_item_id(fact, payload)
         kind = str(payload.get("request_kind") or "approval")

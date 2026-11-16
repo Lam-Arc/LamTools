@@ -37,9 +37,8 @@
         <template v-else-if="block.type === 'progress'">
           <span class="plugin-block-label">{{ block.label }}</span>
           <strong>{{ progressLabel(block) }}</strong>
-          <div class="plugin-block-track" role="progressbar" :aria-valuenow="numberValue(block.value)" :aria-valuemax="block.max ?? 100">
-            <span :style="{ transform: `scaleX(${progressRatio(block)})` }"></span>
-          </div>
+          <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(插件进度复用主题进度条并保留数值语义) -->
+          <SundayProgress :value="block.value" :max="block.max" :label="block.label || undefined" />
           <small v-if="block.detail">{{ block.detail }}</small>
         </template>
 
@@ -56,6 +55,8 @@
         </template>
       </div>
 
+      <!-- user:“确保视觉、功能和交互不退化”+(失败直接显示在对应插件区域，便于修改后重试)。 -->
+      <p v-if="actionError && actionError.plugin === region.plugin && actionError.region === region.region" class="plugin-action-error" role="alert">{{ actionError.message }}</p>
       <div v-if="region.actions.length" class="plugin-region-actions">
         <button
           v-for="action in region.actions"
@@ -63,7 +64,7 @@
           type="button"
           class="btn btn--secondary"
           :class="{ 'is-danger': action.dangerous }"
-          :disabled="busy === action.id"
+          :disabled="Boolean(busy)"
           :data-action="action.id"
           :title="action.mutates ? t('会修改数据') : undefined"
           @click="invoke(action, region)"
@@ -83,24 +84,29 @@
           <input
             v-if="field.type === 'boolean'"
             v-model="pendingValues[name]"
+            class="sunday-checkbox"
             type="checkbox"
+            :disabled="Boolean(busy)"
           />
           <input
             v-else-if="field.type === 'number'"
             v-model="pendingValues[name]"
             type="number"
+            step="any"
+            :disabled="Boolean(busy)"
             :required="field.required || undefined"
           />
           <input
             v-else
             v-model="pendingValues[name]"
             type="text"
+            :disabled="Boolean(busy)"
             :required="field.required || undefined"
           />
         </label>
         <div class="plugin-action-form-actions">
           <button class="btn btn--secondary" type="submit" :disabled="busy !== ''">{{ t("执行") }}</button>
-          <button class="btn btn--ghost" type="button" @click="pendingAction = null">{{ t("取消") }}</button>
+          <button class="btn btn--ghost" type="button" :disabled="Boolean(busy)" @click="pendingAction = null">{{ t("取消") }}</button>
         </div>
       </form>
     </section>
@@ -108,8 +114,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import PluginRegionEntry from './PluginRegionEntry.vue'
+import SundayProgress from '@/components/SundayProgress.vue'
+import { progressMetrics } from '@/helpers/progressMetrics.ts'
 import { consentRpc, confirmPluginOperation } from '@/plugins/consent'
 
 import { t } from '@/i18n/index.ts'
@@ -132,7 +140,11 @@ const viewRegions = computed<RegionView[]>(() =>
 
 const regions = viewRegions
 
+// user:“确保视觉、功能和交互不退化”+(区域卸载时终止待处理授权，避免离开后执行)。
+const actionController = new AbortController()
+onBeforeUnmount(() => actionController.abort())
 const busy = ref('')
+const actionError = ref<{ plugin: string; region: string; message: string } | null>(null)
 
 interface ActionField {
   title: string
@@ -151,12 +163,14 @@ const pendingFields = computed<Record<string, ActionField>>(() => {
     schema && typeof schema === 'object' && (schema as { properties?: Record<string, Record<string, unknown>> }).properties
       ? (schema as { properties: Record<string, Record<string, unknown>> }).properties
       : {}
+  // user:“确保视觉、功能和交互不退化”+(同时识别标准声明与原有字段级必填标记)。
+  const requiredNames = Array.isArray(schema?.required) ? new Set(schema.required.map(String)) : new Set<string>()
   const fields: Record<string, ActionField> = {}
   for (const [name, property] of Object.entries(properties)) {
     fields[name] = {
       title: String(property.title || property.description || name),
       type: String(property.type || 'string'),
-      required: Boolean(property.required) || false,
+      required: property.required === true || requiredNames.has(name),
     }
     pendingValues.value[name] = property.type === 'boolean' ? false : ''
   }
@@ -173,12 +187,17 @@ function coerce(name: string, field: ActionField): unknown {
   return String(value ?? '')
 }
 
-async function runOperation(action: PluginAction, payload: Record<string, unknown>): Promise<void> {
+// user:“确保视觉、功能和交互不退化”+(动作失败可见且保留参数，运行期间避免并发覆盖状态)。
+async function runOperation(action: PluginAction, payload: Record<string, unknown>, target: { plugin: string; region: string }): Promise<boolean> {
+  if (busy.value) return false
   busy.value = action.id
+  actionError.value = null
   try {
-    await consentRpc(props.requestRpc)(action.operation, payload)
+    await consentRpc(props.requestRpc, actionController.signal)(action.operation, payload)
+    return true
   } catch (cause) {
-    console.warn('[plugin-region] action failed:', action.operation, cause)
+    if (!actionController.signal.aborted) actionError.value = { plugin: target.plugin, region: target.region, message: cause instanceof Error ? cause.message : String(cause) }
+    return false
   } finally {
     busy.value = ''
   }
@@ -189,20 +208,22 @@ async function submitPending(): Promise<void> {
   if (!pending) return
   const payload: Record<string, unknown> = {}
   for (const [name, field] of Object.entries(pendingFields.value)) {
-    if (field.required && coerce(name, field) === '') {
+    // user:“确保视觉、功能和交互不退化”+(空数值不能被转换为零后绕过必填，false 和零仍有效)。
+    if (field.required && (pendingValues.value[name] === '' || pendingValues.value[name] == null)) {
       return
     }
     payload[name] = coerce(name, field)
   }
-  pendingAction.value = null
-  await runOperation(pending.action, payload)
+  if (await runOperation(pending.action, payload, pending)) pendingAction.value = null
 }
 
 async function invoke(action: PluginAction, region: PluginRegionContribution): Promise<void> {
+  if (busy.value) return
+  actionError.value = null
   // user:“危险操作先确认”+dangerous 标记的按钮点击先弹确认再执行。
   if (action.dangerous) {
     const label = action.mutates ? t("确定执行 {0}？该操作会修改数据。", { 0: action.title }) : t("确定执行 {0}？", { 0: action.title })
-    if (!await confirmPluginOperation(action.title, label)) return
+    if (!await confirmPluginOperation(action.title, label, actionController.signal)) return
   }
   const schema = action.input_schema as { properties?: Record<string, unknown> } | undefined
   if (schema && schema.properties && Object.keys(schema.properties).length > 0) {
@@ -210,7 +231,7 @@ async function invoke(action: PluginAction, region: PluginRegionContribution): P
     pendingAction.value = { plugin: region.plugin, region: region.region, action }
     return
   }
-  await runOperation(action, {})
+  await runOperation(action, {}, region)
 }
 
 function formatValue(value: unknown): string {
@@ -236,19 +257,9 @@ function itemLabel(item: unknown): string {
   return formatValue(item)
 }
 
-function numberValue(value: unknown): number {
-  const parsed = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function progressRatio(block: PluginBlock): number {
-  const max = block.max && block.max > 0 ? block.max : 100
-  return Math.max(0, Math.min(1, numberValue(block.value) / max))
-}
-
 function progressLabel(block: PluginBlock): string {
-  const max = block.max && block.max > 0 ? block.max : 100
-  return `${numberValue(block.value)} / ${max}`
+  const { raw, maximum } = progressMetrics(block.value, block.max)
+  return `${raw} / ${maximum}`
 }
 </script>
 
@@ -304,25 +315,12 @@ function progressLabel(block: PluginBlock): string {
   opacity: 0.6;
 }
 
-.plugin-block-track {
-  background: color-mix(in srgb, var(--theme-main-text) 10%, transparent);
-  border-radius: 999px;
-  height: 4px;
-  overflow: hidden;
-}
-
-.plugin-block-track > span {
-  background: var(--blue);
-  display: block;
-  height: 100%;
-  transform-origin: left center;
-}
-
 .plugin-block-list {
   margin: 0;
   padding-left: 16px;
 }
 
+.plugin-action-error { margin: 0; color: var(--red); font-size: 12px; }
 .plugin-region-actions {
   display: flex;
   gap: 8px;

@@ -115,18 +115,16 @@ def _prefer_background(hwnd: int, *, action: str = "key") -> bool:
 
 
 def _active_session(action: str, *, mutating: bool = True) -> session.Session:
+    """取当前任务；读和写都过守卫，状态不对时拿到的是一句说明而不是异常栈。"""
+    del mutating  # 守卫已经不含接管检查，读和写走同一条路径。
     current = session.current()
     if current is None:
         raise session.GuardError(
             "还没有开始桌面任务。先调用 computer_use action=start 并说明目标，再做动作。"
         )
-    if mutating:
-        current.guard(action)
-    else:
-        with current._lock:  # noqa: SLF001 - 只读状态判断，避免为读取类动作引入接管检查
-            state = current.state
-        if state != "running":
-            raise session.GuardError(f"任务当前是 {state} 状态，不能继续。")
+    # user:“结束并非结束回合，而是返回一个用户结束了你的computer use”+
+    # (用户结束后读状态、截图之类的调用也要拿到同一句说明，所以统一走守卫。)
+    current.guard(action)
     return current
 
 
@@ -595,7 +593,7 @@ async def handle(call: ToolCall, *, work_root: str | Path) -> ToolResult:
             active = session.current()
             if active is None:
                 return _result(call, content="[computer_use] 当前没有桌面任务")
-            active.stop(str(_arg(args, "reason", "用户要求结束")))
+            active.stop(str(_arg(args, "reason", "模型结束任务")), by_user=False)
             return _result(call, content="[computer_use] 任务已结束", metadata=active.status())
 
         if action == "pause":
@@ -664,6 +662,14 @@ async def handle(call: ToolCall, *, work_root: str | Path) -> ToolResult:
             error=f"未知 action: {action}。可用：start/status/stop/pause/resume/screenshot/snapshot/click/type/key/scroll/drag/focus",
         )
 
+    except session.StoppedByUser as exc:
+        # user:“结束并非结束回合，而是返回一个用户结束了你的computer use”+
+        # (当成正常结果返回：模型看到这句话就知道是人叫停的，可以接着聊天或问下一步。)
+        active = session.current()
+        metadata = active.status() if active is not None else {}
+        metadata["stopped_by_user"] = True
+        # user:“仅『用户结束了这次电脑操作』即可”+(回给模型的话就这一句，不再附加说明。)
+        return _result(call, content="用户结束了这次电脑操作", metadata=metadata)
     except session.GuardError as exc:
         active = session.current()
         if active is not None:

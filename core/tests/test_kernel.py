@@ -197,6 +197,162 @@ def test_clean_history_produces_no_repair_log(caplog):
     ]
 
 
+def _tool_pairing_is_valid(messages: list[ChatMessage]) -> bool:
+    """Provider rule: the tool results answering a ``tool_calls`` message follow it at once."""
+    pending: set[str] = set()
+    for message in messages:
+        if message.role == "tool":
+            call_id = str(message.tool_call_id or "")
+            if not pending or call_id not in pending:
+                return False
+            pending.discard(call_id)
+            continue
+        if pending:
+            return False
+        if message.role == "assistant":
+            pending = {
+                str(call.id)
+                for call in message.tool_calls
+                if str(call.id or "").strip()
+            }
+    return not pending
+
+
+def test_orphaned_result_never_splits_the_pending_tool_block():
+    """A result whose id no call owns must not push a user turn into the block.
+
+    Real session 0efb3530 (2026-11-14): the stored result for ``read_file``
+    carried an id from a different model response, so the repair rewrote it as a
+    ``user`` message *between* the assistant message and the two results it owed.
+    DeepSeek rejected that request with 400 "An assistant message with
+    'tool_calls' must be followed by tool messages ... (insufficient tool
+    messages following tool_call ...)" and the whole turn died without a retry.
+    """
+    messages = [
+        ChatMessage(role="user", content="start"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[
+                LLMToolCall(id="call-A", name="read_file", arguments={}),
+                LLMToolCall(id="call-B", name="run_command", arguments={}),
+            ],
+        ),
+        ChatMessage(role="tool", name="read_file", tool_call_id="call-X", content="stale file"),
+        ChatMessage(role="tool", name="run_command", tool_call_id="call-B", content="status: ok"),
+        ChatMessage(role="assistant", content="done"),
+    ]
+
+    repaired = _repair_incomplete_tool_history(messages, session_id="sid-mid-block-orphan")
+
+    assert [message.role for message in repaired] == [
+        "user", "assistant", "tool", "tool", "user", "assistant",
+    ]
+    # The real result keeps its tool role; the unanswered call is closed in place.
+    assert repaired[2].tool_call_id == "call-B"
+    assert repaired[3].tool_call_id == "call-A"
+    assert repaired[3].metadata["history_repair"] == "interrupted_tool_call"
+    # The orphaned payload survives, but only after the block is closed.
+    assert "stale file" in str(repaired[4].content)
+    assert repaired[4].metadata["history_repair"] == "orphaned_tool_result"
+    assert _tool_pairing_is_valid(repaired)
+
+
+def test_repaired_history_is_stable_and_reaches_a_valid_shape():
+    """Running the repair on its own output must be a no-op (twice-broken data)."""
+    messages = [
+        ChatMessage(role="user", content="start"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[
+                LLMToolCall(id="call-A", name="read_file", arguments={}),
+                LLMToolCall(id="call-B", name="run_command", arguments={}),
+            ],
+        ),
+        ChatMessage(role="tool", tool_call_id="call-X", content="stale one"),
+        ChatMessage(role="tool", tool_call_id="call-B", content="status: ok"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[LLMToolCall(id="call-C", name="computer_use", arguments={})],
+        ),
+        ChatMessage(role="tool", tool_call_id="call-Y", content="stale two"),
+        ChatMessage(role="user", content="continue"),
+    ]
+
+    once = _repair_incomplete_tool_history(messages, session_id="sid-stable")
+    twice = _repair_incomplete_tool_history(once, session_id="sid-stable")
+
+    assert _tool_pairing_is_valid(once)
+    assert twice is once
+
+
+def test_repair_never_mutates_the_messages_it_is_given():
+    """The repair also runs on the live request, so it must not edit shared objects."""
+    shared_user = ChatMessage(role="user", content="original question")
+    messages = [
+        shared_user,
+        ChatMessage(role="tool", tool_call_id="call-X", content="status: ok\nstale"),
+    ]
+
+    repaired = _repair_incomplete_tool_history(messages, session_id="sid-purity")
+
+    assert shared_user.content == "original question"
+    assert shared_user.metadata.get("history_repair") is None
+    assert "stale" in str(repaired[0].content)
+    assert repaired[0] is not shared_user
+
+
+def test_clean_history_is_returned_unchanged():
+    """No rewrite, no copy: a clean request must stay byte-identical (prompt cache)."""
+    messages = [
+        ChatMessage(role="system", content="rules"),
+        ChatMessage(role="user", content="start"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[LLMToolCall(id="call-1", name="search_files", arguments={})],
+        ),
+        ChatMessage(role="tool", tool_call_id="call-1", content="status: ok"),
+        ChatMessage(role="assistant", content="done"),
+    ]
+
+    assert _repair_incomplete_tool_history(messages, session_id="sid-clean-copy") is messages
+
+
+@pytest.mark.asyncio
+async def test_kernel_re_pairs_tool_messages_before_dispatch():
+    """Whatever path builds the request, an invalid tool pairing never ships."""
+
+    class DamagedRequestKit(MockRuntimeKit):
+        async def build_model_request(self, state, context):
+            return LLMRequest(
+                messages=[
+                    ChatMessage(role="user", content="start"),
+                    ChatMessage(
+                        role="assistant",
+                        tool_calls=[
+                            LLMToolCall(id="call-A", name="read_file", arguments={}),
+                            LLMToolCall(id="call-B", name="run_command", arguments={}),
+                        ],
+                    ),
+                    ChatMessage(role="tool", tool_call_id="call-X", content="stale file"),
+                    ChatMessage(role="tool", tool_call_id="call-B", content="status: ok"),
+                ],
+                model="mock-model",
+            )
+
+    llm = CapturingLLMClient()
+    kernel = _make_kernel(
+        DamagedRequestKit(steps=[MockKitStep(reply="done", decision="done")]),
+        llm_client=llm,
+    )
+
+    result = await kernel.run(_make_turn_input())
+
+    assert result.decision == "done"
+    sent = llm.last_request.messages
+    assert _tool_pairing_is_valid(sent)
+    assert [message.role for message in sent] == ["user", "assistant", "tool", "tool", "user"]
+
+
 def test_retained_history_keeps_the_original_not_the_request_copy():
     """A request-bound degraded copy must map back to its durable original.
 

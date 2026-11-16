@@ -19,6 +19,12 @@ class PluginSessionFileReferencesAPI:
     async def list(self, session_id, query="", *, limit=100):
         if type(query) is not str or len(query) > 512 or "\x00" in query or type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("Use a query up to 512 characters and limit 1–1000")
+        from .session_controller import _cancel_owned_read
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(重复取消等待原会话准入及扫描清理后再释放租约)。
+        return await _cancel_owned_read(self._list_owned(session_id, query, limit=limit),
+                                        name="session-file-references-list")
+
+    async def _list_owned(self, session_id, query, *, limit):
         self._scope.acquire()
         try:
             self._check()

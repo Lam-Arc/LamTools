@@ -2,9 +2,9 @@
   "skills": [
     "./skills"
   ],
-  "name": "network-exploration",
-  "version": "0.2.3",
-  "description": "Network Exploration · 网络拓展",
+  "name": "easynet",
+  "version": "0.2.4",
+  "description": "EasyNet · 订阅、线路与下载，一个开关就能用",
   "config": {
     "panel": "./config/panel.js",
     "schema": "./config/schema.json"
@@ -16,7 +16,7 @@
       {
         "id": "network",
         "entry": "./ui/page.mjs",
-        "title": "网络拓展",
+        "title": "EasyNet",
         "navigation": true,
         "order": 40
       }
@@ -39,7 +39,7 @@
   "cli": {
     "commands": [
       {
-        "name": "network-exploration",
+        "name": "easynet",
         "commands": [
           {
             "name": "call",
@@ -73,7 +73,7 @@
             "help": "Call the running network plugin"
           }
         ],
-        "help": "Network Exploration"
+        "help": "EasyNet"
       }
     ]
   }

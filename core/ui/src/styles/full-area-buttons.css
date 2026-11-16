@@ -1,0 +1,28 @@
+/* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(任务与定时任务共用紧凑按钮，保留已有尺寸与主题材质)。 */
+.quiet-button, .primary-button, .icon-button {
+  min-height: 28px;
+  padding: 5px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
+}
+.quiet-button, .icon-button {
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+.quiet-button:hover:not(:disabled), .icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
+}
+.icon-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; padding: 0; }
+.quiet-button.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
+.quiet-button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--red); }
+.primary-button { border: 1px solid transparent; background: var(--theme-control-background); color: var(--theme-control-text); font-weight: 600; }
+.primary-button:hover:not(:disabled) { filter: brightness(0.94); }
+.primary-button:disabled, .quiet-button:disabled, .icon-button:disabled { opacity: .45; cursor: default; }
+/* user:“梳理所有可见的组件、样式、布局、动效及交互”+(减少动态效果时关闭按钮过渡)。 */
+@media (prefers-reduced-motion: reduce) {
+  .quiet-button, .primary-button, .icon-button { transition: none; }
+}

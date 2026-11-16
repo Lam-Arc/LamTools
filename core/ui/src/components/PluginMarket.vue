@@ -3,12 +3,12 @@
   <section class="market" :aria-label="t('插件市场')" :aria-busy="loading || Boolean(busy)">
     <div class="market-heading">
       <div><h2>{{ t('从 GitHub 安装插件') }}</h2><p>{{ t('独立发布，按需安装。网络拓展可用时自动优化下载，安装前校验文件。') }}</p></div>
-      <button class="btn btn--secondary" type="button" :disabled="loading || Boolean(busy)" @click="load"><RefreshCw :size="14" :class="{ spin: loading }" />{{ t('检查更新') }}</button>
+      <button class="btn btn--secondary" type="button" :disabled="loading || Boolean(busy)" @click="load"><RefreshCw :size="14" :class="{ 'sunday-spin sunday-spin--slow': loading }" />{{ t('检查更新') }}</button>
     </div>
     <p v-if="error" class="market-error" role="alert"><CircleAlert :size="15" />{{ error }}</p>
     <p v-if="cached" class="market-note" role="status">{{ t('当前显示缓存目录；安装时会重新核对 GitHub 最新发布。') }}</p>
     <p v-if="notice" class="market-note" role="status">{{ notice }}</p>
-    <div v-if="loading && !plugins.length" class="market-loading" role="status"><LoaderCircle class="spin" :size="18" />{{ t('正在连接插件市场…') }}</div>
+    <div v-if="loading && !plugins.length" class="market-loading" role="status"><LoaderCircle class="sunday-spin sunday-spin--slow" :size="18" />{{ t('正在连接插件市场…') }}</div>
     <ul v-else class="market-list">
       <li v-for="plugin in plugins" :key="plugin.id" class="market-row" :data-market-plugin="plugin.id">
         <div class="market-mark" aria-hidden="true"><component :is="plugin.id === 'qq-bot' ? MessagesSquare : Clapperboard" :size="26" :stroke-width="1.5" /></div>
@@ -16,12 +16,12 @@
           <div class="market-title"><h3>{{ t(plugin.title) }}</h3><span>{{ t(plugin.category) }}</span></div>
           <p>{{ t(plugin.description) }}</p>
           <ul class="market-capabilities" :aria-label="t('插件能力')"><li v-for="item in plugin.capabilities" :key="item">{{ t(item) }}</li></ul>
-          <div class="market-meta"><span>{{ plugin.version ? `v${plugin.version}` : t('版本暂不可用') }}</span><span v-if="plugin.installed_version">{{ t('已安装') }} v{{ plugin.installed_version }}</span><button class="btn btn--ghost" type="button" @click="openExternalUrl(plugin.repository_url)"><Github :size="13" />{{ t('源代码与许可证') }}<ArrowUpRight :size="12" /></button></div>
+          <div class="market-meta"><span>{{ plugin.version ? `v${plugin.version}` : t('版本暂不可用') }}</span><span v-if="plugin.installed_version">{{ t('已安装') }} v{{ plugin.installed_version }}</span><button class="btn btn--ghost" type="button" @click="openRepository(plugin.repository_url)"><Github :size="13" />{{ t('源代码与许可证') }}<ArrowUpRight :size="12" /></button></div>
         </div>
         <div class="market-action">
           <button class="btn btn--secondary" :class="{ primary: !plugin.installed_version || plugin.update_available }" type="button"
             :data-market-action="plugin.id" :disabled="Boolean(busy) || !plugin.installable || Boolean(plugin.installed_version && !plugin.update_available)" @click="install(plugin)">
-            <LoaderCircle v-if="busy === plugin.id" :size="14" class="spin" /><Check v-else-if="plugin.installed_version && !plugin.update_available" :size="14" /><Download v-else :size="14" />
+            <LoaderCircle v-if="busy === plugin.id" :size="14" class="sunday-spin sunday-spin--slow" /><Check v-else-if="plugin.installed_version && !plugin.update_available" :size="14" /><Download v-else :size="14" />
             {{ busy === plugin.id ? t('下载并校验中…') : !plugin.installable ? t('暂不可用') : plugin.update_available ? t('更新') : plugin.installed_version ? t('已安装') : t('安装') }}
           </button>
           <span v-if="plugin.update_available">{{ t('有新版本') }}</span>
@@ -33,13 +33,17 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(市场加载与安装复用共享旋转反馈并保留速度)。
+import '@/styles/sunday-spinner.css'
 import { onMounted, ref } from 'vue'
 import { ArrowUpRight, Check, CircleAlert, Clapperboard, Download, Github, LoaderCircle, MessagesSquare, RefreshCw } from 'lucide-vue-next'
 import { t } from '@/i18n/index'
 import { openExternalUrl } from '@/helpers/openUrl'
 
 interface MarketPlugin { id: string; title: string; description: string; category: string; capabilities: string[]; version: string; installed_version: string; update_available: boolean; installable: boolean; repository_url: string }
-const props = defineProps<{ requestRpc: (method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>> }>()
+// user:“直接渲染项目真实组件”+(展厅可注入本地链接操作，生产默认保留外部打开)。
+const props = defineProps<{ requestRpc: (method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>; openRepository?: (url: string) => void | Promise<void> }>()
+function openRepository(url: string): void { void (props.openRepository ?? openExternalUrl)(url) }
 const emit = defineEmits<{ changed: [] }>()
 const plugins = ref<MarketPlugin[]>([])
 const loading = ref(false)
@@ -108,8 +112,5 @@ onMounted(load)
 .market-error { color: var(--red); }
 .market-note { color: color-mix(in srgb, var(--text) 65%, transparent); font-size: 13px; }
 .market-loading { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-5) 0; }
-.spin { animation: market-spin 1s linear infinite; }
-@keyframes market-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 @container (max-width: 620px) { .market-row { grid-template-columns: 40px minmax(0, 1fr); } .market-action { grid-column: 2; align-items: flex-start; } .market-heading { align-items: flex-start; flex-wrap: wrap; } }
 </style>

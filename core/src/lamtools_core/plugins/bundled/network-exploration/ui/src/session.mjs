@@ -84,7 +84,7 @@ export function useNetwork(context) {
     proxyRequest;
   const rpc = async (method, params = {}) => {
     if (disposed || context.signal?.aborted) throw new Error("页面已关闭");
-    const result = await context.rpc(`network-exploration.${method}`, params);
+    const result = await context.rpc(`easynet.${method}`, params);
     if (disposed || context.signal?.aborted) throw new Error("页面已关闭");
     return result;
   };

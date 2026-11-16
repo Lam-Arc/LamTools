@@ -69,12 +69,12 @@
   color: var(--theme-composer-text, var(--mc-text));
 }
 
-.mc-search > svg {
+.mc-search :deep(svg) {
   flex: 0 0 auto;
   color: color-mix(in srgb, var(--theme-composer-text, var(--mc-text)) 45%, transparent);
 }
 
-.mc-search input {
+.mc-search :deep(input) {
   min-width: 0;
   flex: 1 1 auto;
   border: 0;
@@ -86,7 +86,7 @@
   caret-color: currentColor;
 }
 
-.mc-search input::placeholder {
+.mc-search :deep(input::placeholder) {
   color: color-mix(in srgb, var(--theme-composer-text, var(--mc-text)) 42%, transparent);
 }
 
@@ -437,7 +437,8 @@
   gap: 5px;
   padding: 3px 6px;
   border: 1px solid var(--mc-line);
-  border-radius: 5px;
+  /* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(按实际控件或卡片语义复用圆角刻度) */
+  border-radius: var(--radius-sm);
   background: var(--mc-cell);
   box-shadow: var(--shadow-sm);
   white-space: nowrap;
@@ -747,7 +748,8 @@
   align-content: start;
   gap: 2px;
   border: 1px solid var(--mc-line-soft);
-  border-radius: 9px;
+  /* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(按卡片和控件各自语义使用共享圆角) */
+  border-radius: var(--radius);
   background: var(--mc-cell);
   color: var(--mc-text);
   font: inherit;
@@ -977,7 +979,8 @@
   gap: var(--space-3);
   padding: 0 12px;
   border: 1px dashed var(--mc-line);
-  border-radius: 10px;
+  /* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(按实际控件或卡片语义复用圆角刻度) */
+  border-radius: var(--radius);
   color: var(--mc-faint);
   font-size: 10.5px;
 }
@@ -990,7 +993,8 @@
   gap: 6px;
   padding: 0 12px;
   border: 1px dashed var(--mc-line);
-  border-radius: 9px;
+  /* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(按实际控件或卡片语义复用圆角刻度) */
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--mc-muted);
   font: inherit;
@@ -1058,7 +1062,8 @@
   gap: 3px;
   padding: 0 var(--space-3);
   border: 1px solid var(--mc-line-soft);
-  border-radius: 9px;
+  /* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(按实际控件或卡片语义复用圆角刻度) */
+  border-radius: var(--radius);
   background: color-mix(in srgb, var(--mc-text) 2.5%, transparent);
   color: var(--mc-text);
   font: inherit;
@@ -1158,7 +1163,8 @@
   gap: 6px;
   padding: 6px 8px;
   border: 1px solid var(--mc-line-soft);
-  border-radius: 7px;
+  /* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(按卡片和控件各自语义使用共享圆角) */
+  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--mc-text) 76%, transparent);
   font: inherit;
@@ -1591,14 +1597,6 @@
   padding: 8px;
 }
 
-.mc-spin {
-  animation: mc-spin 1s linear infinite;
-}
-
-@keyframes mc-spin {
-  to { transform: rotate(360deg); }
-}
-
 @keyframes mc-bar-rise {
   from { transform: scaleY(.08); opacity: .35; }
   to { transform: scaleY(1); opacity: 1; }
@@ -1657,8 +1655,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mc-spark-bar,
-  .mc-spin {
+  .mc-spark-bar {
     animation: none;
   }
 }

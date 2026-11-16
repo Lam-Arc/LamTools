@@ -12,7 +12,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import RemoteConnectionPanel from '@/components/RemoteConnectionPanel.vue'
-import { relativeLuminance, themeAreaBackground, type ThemeData } from '@/helpers/theme.ts'
+import { type ThemeData } from '@/helpers/theme.ts'
+import { settingsThemeVars } from '@/helpers/settingsTheme.ts'
 
 const props = defineProps<{
   theme?: ThemeData | null
@@ -20,30 +21,8 @@ const props = defineProps<{
   appRuntime?: { platform?: 'desktop' | 'mobile' | 'web' }
 }>()
 
-const settingsThemeStyle = computed(() => {
-  if (!props.theme) return {}
-  const theme = props.theme
-  const lightMain = relativeLuminance(theme.mainText) < 0.45
-  return {
-    '--settings-backdrop-background': themeAreaBackground(theme, 'backdrop'),
-    '--settings-backdrop-text': theme.backdropText,
-    '--settings-main-background': themeAreaBackground(theme, 'main'),
-    '--settings-main-text': theme.mainText,
-    '--settings-main-solid': theme.mainStops[0]?.color || '#111111',
-    '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
-    '--settings-card-text': theme.mainText,
-    '--settings-control-background': themeAreaBackground(theme, 'control'),
-    '--settings-control-text': theme.controlText,
-    '--settings-control-solid': theme.controlStops[0]?.color || '#3a3834',
-    ...(lightMain
-      ? {
-          '--settings-panel-2': '#f0efeb',
-          '--settings-line': '#d4d0cc',
-          '--settings-muted': '#8a8580',
-        }
-      : {}),
-  } as Record<string, string>
-})
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(多个页面使用同一主题映射)。
+const settingsThemeStyle = computed(() => settingsThemeVars(props.theme))
 </script>
 
 <style scoped>

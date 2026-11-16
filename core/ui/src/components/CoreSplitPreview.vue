@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(工作表切换复用标签键盘导航)。
+import { onTabGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue'
 import { ExternalLink, FileQuestion, Minus, Pencil, Plus, RefreshCw, RotateCcw } from 'lucide-vue-next'
 import MarkdownRenderer from './MarkdownRenderer.vue'
@@ -363,8 +365,8 @@ onBeforeUnmount(() => { generation++; docxResizeObserver?.disconnect(); docxResi
     </div>
     <div v-else-if="kind === 'docx'" ref="docxHost" class="split-preview-body split-preview-body--document split-preview-docx"></div>
     <div v-else-if="kind === 'xlsx'" class="split-preview-body split-preview-body--document">
-      <div v-if="sheets.length > 1" class="split-preview-sheet-tabs" role="tablist" aria-label="工作表">
-        <button v-for="sheet in sheets" :key="sheet.name" type="button" role="tab" :aria-selected="sheet.name === activeSheet" :class="{ active: sheet.name === activeSheet }" @click="activeSheet = sheet.name">{{ sheet.name }}</button>
+      <div v-if="sheets.length > 1" class="split-preview-sheet-tabs" role="tablist" aria-label="工作表" @keydown="onTabGroupKeydown">
+        <button v-for="sheet in sheets" :key="sheet.name" type="button" role="tab" :aria-selected="sheet.name === activeSheet" :tabindex="sheet.name === activeSheet ? 0 : -1" :class="{ active: sheet.name === activeSheet }" @click="activeSheet = sheet.name">{{ sheet.name }}</button>
       </div>
       <div v-for="sheet in sheets" v-show="sheet.name === activeSheet" :key="sheet.name" class="split-preview-sheet">
         <table>

@@ -116,34 +116,10 @@
     <template v-else>
       <!-- ── 工具栏：搜索 + 视图切换 ── -->
       <div class="library-toolbar" data-library-toolbar>
-        <div class="library-search">
-          <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-          <input
-            v-model="query"
-            type="search"
-            :placeholder="t('搜索资料库')"
-            :aria-label="t('搜索资料库')"
-            data-library-search
-          />
-        </div>
-        <div class="library-view-toggle" role="group" :aria-label="t('视图切换')" data-library-view-toggle>
-          <button
-            type="button"
-            :class="{ active: viewMode === 'grid' }"
-            :aria-pressed="viewMode === 'grid'"
-            :aria-label="t('网格视图')"
-            :title="t('网格视图')"
-            @click="viewMode = 'grid'"
-          ><LayoutGrid :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
-          <button
-            type="button"
-            :class="{ active: viewMode === 'list' }"
-            :aria-pressed="viewMode === 'list'"
-            :aria-label="t('列表视图')"
-            :title="t('列表视图')"
-            @click="viewMode = 'list'"
-          ><List :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
-        </div>
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享搜索框并保留本页查询和无障碍标签)。 -->
+        <LibrarySearchField v-model="query" :label="t('搜索资料库')" :input-attrs="{ 'data-library-search': '' }" />
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享视图切换并保留本页的状态与保存方式)。 -->
+        <LibraryViewToggle v-model="viewMode" data-library-view-toggle />
       </div>
 
       <!-- ── 筛选页签 ── -->
@@ -166,6 +142,7 @@
 
       <template v-else>
         <!-- ── 子文件夹：根上的「文件夹」页签，以及文件夹详情里的下一层 ── -->
+        <!-- user:“确保视觉、功能和交互不退化”+(卡片内菜单的回车只操作菜单，不触发卡片打开)。 -->
         <div v-if="showFolderGrid" class="folder-grid" role="list" data-library-folders>
           <article
             v-for="folder in childFolders"
@@ -176,7 +153,7 @@
             :aria-label="t('打开文件夹 {0}', { 0: folder.name })"
             :data-library-folder="folder.dir"
             @click="goToFolder(folder.dir)"
-            @keydown.enter.prevent="goToFolder(folder.dir)"
+            @keydown.enter.self.prevent="goToFolder(folder.dir)"
             @contextmenu="openFolderMenu($event, folder)"
           >
             <span class="folder-card-icon" aria-hidden="true"><Folder :size="18" :stroke-width="1.6" /></span>
@@ -221,7 +198,7 @@
             :aria-label="t('打开 {0}', { 0: displayTitle(entry) })"
             :data-library-entry="entry.name"
             @click="openEntry(entry)"
-            @keydown.enter.prevent="openEntry(entry)"
+            @keydown.enter.self.prevent="openEntry(entry)"
             @contextmenu="openEntryMenu($event, entry)"
           >
             <div class="plan-card-preview">
@@ -248,7 +225,7 @@
               tabindex="0"
               :data-library-entry="entry.name"
               @click="openEntry(entry)"
-              @keydown.enter.prevent="openEntry(entry)"
+              @keydown.enter.self.prevent="openEntry(entry)"
               @contextmenu="openEntryMenu($event, entry)"
             >
               <div class="library-item-top">
@@ -271,70 +248,21 @@
     </template>
 
     <!-- ── 新建 / 重命名对话框 ── -->
+    <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(命名表单共享结构，保留各页面的校验及提交)。 -->
     <Transition name="library-dialog">
-      <div v-if="dialog" class="dialog-dimmer" @click.self="closeDialog">
-        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="dialogTitle" data-library-dialog>
-          <div class="dialog-body">
-            <h3 class="dialog-title">{{ dialogTitle }}</h3>
-            <label class="dialog-field">
-              <span>{{ dialog.kind === 'create-folder' ? t("文件夹名称") : t("方案名称") }}</span>
-              <input
-                ref="dialogInput"
-                v-model="dialog.value"
-                type="text"
-                :placeholder="dialog.kind === 'create-folder' ? t('例如：迭代计划') : t('例如：导出显示进度')"
-                :data-library-dialog-input="dialog.kind"
-                @keydown.enter.prevent="submitDialog"
-                @keydown.escape.prevent="closeDialog"
-              />
-            </label>
-            <p v-if="dialog.error" class="dialog-error" role="alert">{{ dialog.error }}</p>
-          </div>
-          <div class="dialog-actions">
-            <button class="library-button" type="button" @click="closeDialog">{{ t("取消") }}</button>
-            <button
-              class="library-button library-button--primary"
-              type="button"
-              :disabled="dialog.busy || !dialog.value.trim()"
-              data-library-dialog-submit
-              @click="submitDialog"
-            >{{ dialog.busy ? t("处理中…") : dialog.kind === 'rename' ? t("重命名") : t("创建") }}</button>
-          </div>
-        </div>
-      </div>
+      <LibraryNameDialog v-if="dialog" v-model="dialog.value" :title="dialogTitle" :field-label="dialog.kind === 'create-folder' ? t('文件夹名称') : t('方案名称')" :placeholder="dialog.kind === 'create-folder' ? t('例如：迭代计划') : t('例如：导出显示进度')" :busy="dialog.busy" :error="dialog.error" :submit-label="dialog.kind === 'rename' ? t('重命名') : t('创建')" :input-attrs="{ 'data-library-dialog-input': dialog.kind }" :submit-attrs="{ 'data-library-dialog-submit': '' }" data-library-dialog @cancel="closeDialog" @submit="submitDialog" />
     </Transition>
 
     <!-- ── 放弃未保存修改的确认 ── -->
-    <Transition name="library-dialog">
-      <div v-if="pendingDiscard" class="dialog-dimmer" @click.self="pendingDiscard = false">
-        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认放弃修改')" data-library-discard>
-          <div class="dialog-body">
-            <h3 class="dialog-title">{{ t("放弃修改") }}</h3>
-            <p class="dialog-text">「{{ displayTitle(selected!) }}{{ t("」还有没保存的内容，离开就会丢掉。") }}</p>
-          </div>
-          <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDiscard = false">{{ t("继续编辑") }}</button>
-            <button class="library-button library-button--danger" type="button" data-library-discard-confirm @click="discardEditor">{{ t("放弃修改") }}</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <LibraryConfirmDialog :open="pendingDiscard" :title="t('放弃修改')" :aria-label="t('确认放弃修改')" :cancel-label="t('继续编辑')" :confirm-label="t('放弃修改')" :confirm-attrs="{ 'data-library-discard-confirm': '' }" data-library-discard @cancel="pendingDiscard = false" @confirm="discardEditor">
+      「{{ selected ? displayTitle(selected) : '' }}{{ t("」还有没保存的内容，离开就会丢掉。") }}
+    </LibraryConfirmDialog>
 
     <!-- ── 删除确认 ── -->
-    <Transition name="library-dialog">
-      <div v-if="pendingDelete" class="dialog-dimmer" @click.self="pendingDelete = null">
-        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认删除')" data-library-confirm>
-          <div class="dialog-body">
-            <h3 class="dialog-title">{{ t("删除方案") }}</h3>
-            <p class="dialog-text">「{{ displayTitle(pendingDelete) }}{{ t("」将被删除，且无法恢复。") }}</p>
-          </div>
-          <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingDelete = null">{{ t("取消") }}</button>
-            <button class="library-button library-button--danger" type="button" data-library-confirm-delete @click="confirmDelete">{{ t("删除") }}</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(方案删除沿用共享确认框并保留不可恢复的警告)。 -->
+    <LibraryConfirmDialog :open="Boolean(pendingDelete)" :title="t('删除方案')" :aria-label="t('确认删除')" :confirm-label="t('删除')" :confirm-attrs="{ 'data-library-confirm-delete': '' }" data-library-confirm @cancel="pendingDelete = null" @confirm="confirmDelete">
+      「{{ pendingDelete ? displayTitle(pendingDelete) : '' }}{{ t("」将被删除，且无法恢复。") }}
+    </LibraryConfirmDialog>
   </div>
 </template>
 
@@ -342,6 +270,10 @@
 import { useSplitKeyboardScope } from '@/split/keyboardScope'
 const splitKeyboardActive = useSplitKeyboardScope()
 import { t } from '@/i18n/index.ts'
+import LibraryViewToggle from '@/components/LibraryViewToggle.vue'
+import LibrarySearchField from '@/components/LibrarySearchField.vue'
+import LibraryConfirmDialog from '@/components/LibraryConfirmDialog.vue'
+import LibraryNameDialog from '@/components/LibraryNameDialog.vue'
 
 /**
  * PlanLibraryView — the 资料库 as one full-area view.
@@ -359,12 +291,9 @@ import {
   BookOpen,
   FileText,
   Folder,
-  LayoutGrid,
-  List,
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Search,
   Star,
   Trash2,
   Upload,
@@ -461,7 +390,6 @@ const dirty = computed(() => draft.value !== editorBaseline.value)
 /* ---- 对话框（新建 / 新建文件夹 / 重命名）与删除确认 ---- */
 type DialogKind = 'create-plan' | 'create-folder' | 'rename'
 const dialog = ref<{ kind: DialogKind; value: string; error: string; busy: boolean; target?: PlanLibraryEntry } | null>(null)
-const dialogInput = ref<HTMLInputElement | null>(null)
 const pendingDelete = ref<PlanLibraryEntry | null>(null)
 
 const STATUS_LABELS: Record<PlanLibraryEntry['status'], string> = {
@@ -796,7 +724,6 @@ function openDialog(kind: DialogKind, target?: PlanLibraryEntry): void {
     busy: false,
     target,
   }
-  void nextTick(() => dialogInput.value?.focus())
 }
 
 function closeDialog(): void {

@@ -21,6 +21,7 @@ const RENDERABLE_ITEM_TYPES = new Set([
   'commandExecution',
   'fileChange',
   'serverRequest',
+  'questionGroup',
   'plan',
   'error',
   'webSearch',

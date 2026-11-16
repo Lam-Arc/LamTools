@@ -6,6 +6,7 @@
     </div>
     <label v-for="module in modules" :key="module.id" class="right-sidebar-layout-editor-item">
       <input
+        class="sunday-checkbox"
         type="checkbox"
         :checked="layout.visible[module.id] !== false"
         @change="$emit('toggle-visible', module.id, ($event.target as HTMLInputElement).checked)"
@@ -39,7 +40,8 @@ defineEmits<{
 .right-sidebar-layout-editor-head button { min-height: 28px; padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--theme-control-text) 14%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); font-size: 11px; }
 .right-sidebar-layout-editor-head button:hover { background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), var(--theme-control-background)); }
 .right-sidebar-layout-editor-item { display: flex; align-items: center; gap: var(--space-2); min-height: 32px; color: var(--theme-backdrop-text); font-size: 12px; cursor: pointer; }
-.right-sidebar-layout-editor-item input { width: 14px; height: 14px; margin: 0; padding: 0; accent-color: var(--green); }
+/* user:“通过参数、变体和组合保留必要差异”+(复用复选框，文字颜色继承侧栏主题区并保留紧凑尺寸) */
+.right-sidebar-layout-editor-item .sunday-checkbox { --checkbox-size: 14px; --checkbox-area-text: var(--theme-backdrop-text); }
 .right-sidebar-layout-editor-item svg { color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent); }
 @media (max-width: 640px) { .right-sidebar-layout-editor-item { min-height: 44px; } .right-sidebar-layout-editor-head button { min-height: 44px; } }
 </style>

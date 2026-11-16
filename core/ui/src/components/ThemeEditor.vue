@@ -14,7 +14,8 @@
                 <strong>{{ t("外观") }}</strong>
                 <span>{{ t("选择主题随系统变化、固定在一个模式，或按时段自动切换。") }}</span>
               </div>
-              <div class="theme-mode-options" role="radiogroup" :aria-label="t('外观模式')">
+              <!-- user:“确保视觉、功能和交互不退化”+(外观单选组保留原样式并支持键盘切换)。 -->
+              <div class="theme-mode-options" role="radiogroup" :aria-label="t('外观模式')" @keydown="onRadioGroupKeydown">
                 <button
                   v-for="mode in appearanceModes"
                   :key="mode.value"
@@ -23,6 +24,7 @@
                   type="button"
                   role="radio"
                   :aria-checked="themeMode === mode.value ? 'true' : 'false'"
+                  :tabindex="themeMode === mode.value ? 0 : -1"
                   :data-theme-mode="mode.value"
                   @click="setThemeMode(mode.value)"
                 >
@@ -235,6 +237,7 @@ import SundayRange from '@/components/SundayRange.vue'
 import SundaySegmented from '@/components/SundaySegmented.vue'
 import { themeAreaBackground, themeAreaFill, themeAreaGlass, themeForMode, DEFAULT_THEME_SCHEDULE, type ThemeArea, type ThemeFillMode, type ThemeGlassPreference, type ThemeImageFit, type ThemeMode, type ThemePreset, type ThemeSchedule, type ThemeStop } from '@/helpers/theme.ts'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
+import { onRadioGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 
 const props = withDefaults(defineProps<{
   productName?: string

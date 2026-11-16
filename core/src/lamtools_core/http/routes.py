@@ -210,7 +210,10 @@ def create_core_router(
         from lamtools_core.computer_use import session as computer_session
 
         active = computer_session.current()
-        return {"active": active is not None, "session": active.status() if active else None}
+        # user:“结束并非结束回合，而是返回一个用户结束了你的computer use”+
+        # (结束或失败的任务不再算 active：覆盖层和胶囊要立刻收掉。)
+        running = active is not None and active.state in {"running", "paused"}
+        return {"active": running, "session": active.status() if active else None}
 
     @router.post("/computer-use/control")
     async def computer_use_control(payload: dict[str, Any] | None = None) -> dict[str, Any]:

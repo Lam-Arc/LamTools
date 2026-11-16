@@ -28,6 +28,8 @@
       :decisions-disabled="decisionsDisabled"
       @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
+        @question-submit="onQuestionSubmit"
+        @question-skip="onQuestionSkip"
         @fork-message="onForkMessage"
         @rollback-message="onRollbackMessage"
         @edit-message="onEditMessage"
@@ -149,6 +151,8 @@ function messageTurnStatus(message: CoreMessage): string {
 const emit = defineEmits<{
   'toggle-process': [messageId: string]
   'decision-select': [payload: { partId: string; option: DecisionOption; response: string }]
+  'question-submit': [payload: { partId: string; groupId: string; text: string; answers: Record<string, string> }]
+  'question-skip': [payload: { partId: string; groupId: string }]
   'fork-message': [payload: AssistantActionPayload]
   'rollback-message': [payload: AssistantActionPayload]
   'edit-message': [payload: EditMessagePayload]
@@ -183,6 +187,19 @@ function onToggleProcess(messageId: string): void {
 
 function onDecisionSelect(payload: { partId: string; option: DecisionOption; response: string }): void {
   emit('decision-select', payload)
+}
+
+function onQuestionSubmit(payload: {
+  partId: string
+  groupId: string
+  text: string
+  answers: Record<string, string>
+}) {
+  emit('question-submit', payload)
+}
+
+function onQuestionSkip(payload: { partId: string; groupId: string }): void {
+  emit('question-skip', payload)
 }
 
 function onForkMessage(payload: AssistantActionPayload): void {

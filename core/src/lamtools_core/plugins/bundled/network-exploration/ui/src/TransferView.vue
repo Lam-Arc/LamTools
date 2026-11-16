@@ -1,6 +1,9 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“可交互式网络工具界面，不需要太专业”+(下载从任务行暂停和继续，不要求用户填写任务 ID)。
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(下载设置复用共享下拉，保留数值、线路禁用与单任务限速)。
+import UiSelect from "../../../../../../../ui/src/components/UiSelect.vue";
 import {
   Download,
   FileDown,
@@ -26,6 +29,10 @@ const tab = ref("active"),
   speed = ref(0),
   dragging = ref(false),
   expanded = ref("");
+const connectionOptions = [1, 2, 4, 8, 16].map(value => ({ value: String(value), label: String(value) }));
+const speedOptions = [{ value: '0', label: '不限速' }, { value: '1048576', label: '1 MB/s' }, { value: '5242880', label: '5 MB/s' }, { value: '10485760', label: '10 MB/s' }];
+const routeOptions = computed(() => [{ value: 'auto', label: '自动（跟随加速）' }, { value: 'direct', label: '直接连接' }, { value: 'proxy', label: '当前代理', disabled: !props.session.state?.proxy?.running }]);
+const taskLimits = reactive({});
 const totalSpeed = computed(() =>
   props.session.tasks.reduce(
     (sum, task) => sum + (Number(task.downloadSpeed) || 0),
@@ -122,6 +129,9 @@ async function action(task, action) {
   await props.session.loadTasks();
 }
 async function limit(task, value) {
+  // user:“确保视觉、功能和交互不退化”+(保持原生选择框只在值变化时申请限速)。
+  if (value === (taskLimits[task.gid] || "0")) return;
+  taskLimits[task.gid] = value;
   await props.session.run(
     "transfer.action",
     { gid: task.gid, action: "limit", bytes_per_second: Number(value) },
@@ -182,37 +192,19 @@ async function verify(task) {
           placeholder="粘贴下载链接，或把链接拖到这里"
           aria-label="下载链接"
         /><button
-          class="nx-button nx-primary"
+          class="btn nx-button btn--primary"
           :disabled="Boolean(session.busy) || !url.trim()"
         >
           开始下载
         </button>
       </div>
       <div class="nx-download-options">
-        <label
-          ><span>并行数量</span
-          ><select v-model.number="connections" aria-label="并行数量">
-            <option
-              v-for="value in [1, 2, 4, 8, 16]"
-              :key="value"
-              :value="value"
-            >
-              {{ value }}
-            </option>
-          </select></label
-        ><label
-          ><span>下载限速</span
-          ><select v-model.number="speed" aria-label="下载限速">
-            <option :value="0">不限速</option>
-            <option :value="1048576">1 MB/s</option>
-            <option :value="5242880">5 MB/s</option>
-            <option :value="10485760">10 MB/s</option>
-          </select></label
-        >
+        <div class="nx-download-option"><span>并行数量</span><UiSelect :model-value="String(connections)" :options="connectionOptions" aria-label="并行数量" data-transfer-connections :menu-min-width="100" @update:model-value="connections = Number($event)" /></div>
+        <div class="nx-download-option"><span>下载限速</span><UiSelect :model-value="String(speed)" :options="speedOptions" aria-label="下载限速" data-transfer-speed :menu-min-width="120" @update:model-value="speed = Number($event)" /></div>
       </div>
       <button
         type="button"
-        class="nx-button nx-quiet nx-options-button"
+        class="btn nx-button btn--quiet nx-options-button"
         :aria-expanded="advanced"
         @click="advanced = !advanced"
       >
@@ -237,16 +229,7 @@ async function verify(task) {
             v-model="hash"
             class="nx-input"
             placeholder="SHA-256" /></label
-        ><label
-          ><span>下载线路</span
-          ><select v-model="route" aria-label="下载线路">
-            <option value="auto">自动（跟随加速）</option>
-            <option value="direct">直接连接</option>
-            <option value="proxy" :disabled="!session.state?.proxy?.running">
-              当前代理
-            </option>
-          </select></label
-        >
+        ><div class="nx-form-field"><span>下载线路</span><UiSelect v-model="route" :options="routeOptions" aria-label="下载线路" data-transfer-route :menu-min-width="180" /></div>
       </div>
     </form>
     <div class="nx-list-toolbar">
@@ -263,7 +246,7 @@ async function verify(task) {
         </button>
       </div>
       <button
-        class="nx-button nx-quiet nx-icon-button"
+        class="btn nx-button btn--quiet nx-icon-button"
         aria-label="刷新下载列表"
         @click="session.loadTasks()"
       >
@@ -315,7 +298,7 @@ async function verify(task) {
         <div class="nx-task-controls">
           <button
             v-if="task.status === 'active' || task.status === 'waiting'"
-            class="nx-button nx-secondary nx-icon-button"
+            class="btn nx-button btn--secondary nx-icon-button"
             aria-label="暂停下载"
             data-task-action="pause"
             :disabled="Boolean(session.busy)"
@@ -324,7 +307,7 @@ async function verify(task) {
             <Pause :size="15" /></button
           ><button
             v-else-if="['paused', 'recoverable'].includes(task.status)"
-            class="nx-button nx-secondary nx-icon-button"
+            class="btn nx-button btn--secondary nx-icon-button"
             aria-label="继续下载"
             data-task-action="resume"
             :disabled="Boolean(session.busy)"
@@ -332,7 +315,7 @@ async function verify(task) {
           >
             <Play :size="15" /></button
           ><button
-            class="nx-button nx-quiet nx-icon-button"
+            class="btn nx-button btn--quiet nx-icon-button"
             :aria-label="
               expanded === task.gid ? '收起下载详情' : '展开下载详情'
             "
@@ -348,33 +331,24 @@ async function verify(task) {
         <div v-if="expanded === task.gid" class="nx-task-details">
           <span class="nx-subtle">{{ task.directory || "默认下载目录" }}</span>
           <div class="nx-actions">
-            <label class="nx-small-select"
-              >下载速度<select
-                aria-label="下载速度限制"
-                @change="limit(task, $event.target.value)"
-              >
-                <option value="0">不限速</option>
-                <option value="1048576">1 MB/s</option>
-                <option value="5242880">5 MB/s</option>
-                <option value="10485760">10 MB/s</option>
-              </select></label
-            ><button
+            <div class="nx-small-select"><span>下载速度</span><UiSelect :model-value="taskLimits[task.gid] || '0'" :options="speedOptions" aria-label="下载速度限制" data-transfer-task-limit :menu-min-width="120" @update:model-value="limit(task, $event)" /></div>
+            <button
               v-if="!['complete', 'removed'].includes(task.status)"
-              class="nx-button nx-quiet"
+              class="btn nx-button btn--quiet"
               :disabled="Boolean(session.busy)"
               @click="action(task, 'first')"
             >
               <ArrowUp :size="13" />优先下载</button
             ><button
               v-if="task.status === 'complete'"
-              class="nx-button nx-quiet"
+              class="btn nx-button btn--quiet"
               :disabled="Boolean(session.busy)"
               @click="verify(task)"
             >
               <ShieldCheck :size="13" />校验文件</button
             ><button
               v-if="!['complete', 'removed'].includes(task.status)"
-              class="nx-button nx-quiet nx-danger-text"
+              class="btn nx-button btn--quiet nx-danger-text"
               :disabled="Boolean(session.busy)"
               @click="action(task, 'cancel')"
             >

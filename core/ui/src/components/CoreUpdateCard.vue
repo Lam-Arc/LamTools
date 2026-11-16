@@ -8,6 +8,8 @@
       aria-modal="true"
       aria-labelledby="core-update-card-title"
       data-update-card
+      tabindex="-1"
+      @keydown.tab="trapDialogTab"
     >
       <header class="core-update-card__head">
         <h3 id="core-update-card-title" class="core-update-card__title">
@@ -18,6 +20,7 @@
           type="button"
           :aria-label="installBusy ? t('取消更新') : t('关闭')"
           data-update-dismiss
+          :disabled="downloaded || installing"
           @click="requestCancel"
         >
           <X :size="15" :stroke-width="2" aria-hidden="true" />
@@ -33,9 +36,8 @@
       <p v-if="notes" class="core-update-card__notes" data-update-notes>{{ notes }}</p>
 
       <div v-if="installBusy || downloaded" class="core-update-card__progress" data-update-progress>
-        <div class="core-update-card__bar sunday-progress" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
-          <span class="core-update-card__fill sunday-progress__fill" :style="{ width: `${percent}%` }" />
-        </div>
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(未知总量报告为不确定进度，已知总量保留百分比)。 -->
+        <SundayProgress class="core-update-card__bar" :value="percent" :max="100" :indeterminate="installBusy && total <= 0" :label="t('更新下载进度')" :value-text="percentLabel" />
         <span class="core-update-card__percent" data-update-percent>{{ percentLabel }}</span>
       </div>
 
@@ -47,7 +49,7 @@
           class="core-update-card__btn"
           type="button"
           data-update-cancel
-          :disabled="installing"
+          :disabled="downloaded || installing"
           @click="requestCancel"
         >{{ cancelLabel }}</button>
         <button
@@ -57,6 +59,8 @@
           :disabled="confirmDisabled"
           @click="emit('confirm')"
         >{{ confirmLabel }}</button>
+        <!-- user:“直接渲染项目真实组件”+(展厅可注入结束预览操作，生产更新流程不增加按钮)。 -->
+        <slot name="preview-actions" />
       </footer>
     </div>
   </Teleport>
@@ -76,11 +80,13 @@ import { t } from '@/i18n/index.ts'
  * （下载百分比 / 正在安装）。「更新」按下之后不再需要第二次点击：下载完成即自动安装，
  * 安装完由安装程序把应用重新拉起来。下载中「取消」真的会停掉传输。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowRight, X } from 'lucide-vue-next'
 import { gsap } from 'gsap'
 // user:“动画什么的可复用性，像是下载窗口弹出的那个动画”+(形变参数与守卫收进 presets，组件只声明从哪长出来)
 import { enterFade, enterMorph, enterScrim, leaveMorph, leaveScrim, shouldSkipMotion } from '@/motion/presets.ts'
+import { trapDialogTab } from '@/composables/trapDialogTab.ts'
+import SundayProgress from '@/components/SundayProgress.vue'
 
 export type CoreUpdateCardState = 'idle' | 'downloading' | 'downloaded' | 'installing' | 'failed'
 
@@ -152,10 +158,14 @@ const confirmDisabled = computed(() => installBusy.value || downloaded.value || 
 
 let context: gsap.Context | null = null
 let closing = false
+let previousFocus: HTMLElement | null = null
+let focusFrame = 0
 
 onMounted(() => {
   const card = cardEl.value
   if (!card) return
+  // user:“确保视觉、功能和交互不退化”+(更新弹窗接管键盘焦点，安装时禁用无法执行的关闭操作)。
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   context = gsap.context(() => {
     if (shouldSkipMotion() || !props.origin) {
       enterScrim(scrimEl.value)
@@ -165,10 +175,20 @@ onMounted(() => {
     enterScrim(scrimEl.value)
     enterMorph(card, props.origin)
   }, card)
+  focusFrame = requestAnimationFrame(() => {
+    focusFrame = requestAnimationFrame(() => {
+      if (!closing && card.isConnected) (card.querySelector<HTMLButtonElement>('button:not(:disabled)') || card).focus({ preventScroll: true })
+    })
+  })
 })
 
 onBeforeUnmount(() => {
+  cancelAnimationFrame(focusFrame)
   context?.revert()
+})
+onUnmounted(() => { if (previousFocus?.isConnected) previousFocus.focus() })
+watch([downloaded, installing], ([isDownloaded, isInstalling]) => {
+  if ((isDownloaded || isInstalling) && cardEl.value?.contains(document.activeElement)) cardEl.value.focus({ preventScroll: true })
 })
 
 /** 缩回按钮那一小块，然后交还宿主（宿主据此卸载卡片）。 */
@@ -185,6 +205,8 @@ async function close(): Promise<void> {
 }
 
 function requestCancel(): void {
+  // user:“确保视觉、功能和交互不退化”+(关闭动画期间忽略重复取消，避免重复发送取消请求)。
+  if (closing) return
   // 下载中：「取消」停掉传输再收卡片；安装一旦开始就无法中止，这时只允许看。
   if (installBusy.value) {
     emit('cancel')

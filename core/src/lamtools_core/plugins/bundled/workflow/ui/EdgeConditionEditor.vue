@@ -33,8 +33,9 @@
     </div>
 
     <footer class="wf-edge-condition-foot">
-      <button class="small-btn" type="button" @click="$emit('close')">{{ t("取消") }}</button>
-      <button class="small-btn primary" type="button" @click="apply">{{ t("应用") }}</button>
+      <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(条件编辑操作复用紧凑按钮并保留原有保存和取消行为)。 -->
+      <button class="btn btn--secondary btn--sm" type="button" @click="$emit('close')">{{ t("取消") }}</button>
+      <button class="btn btn--primary btn--sm" type="button" @click="apply">{{ t("应用") }}</button>
     </footer>
   </section>
 </template>

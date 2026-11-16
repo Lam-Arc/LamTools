@@ -15,20 +15,26 @@ context.workspace_files绑定当前插件启动代、原working_directory服务�
 | 方法 | 参数与实际结果 |
 | --- | --- |
 | await stat(session_id, path) | 普通文件；absolute_path/version/bytes |
-| await list(session_id, path='.', limit=100) | 原有限目录列举；path/entries/truncated；entries沿原name/kind/size/modified_ns |
+| await list(session_id, path='.', limit=100, ordered=False, relative_path=False, portable_entries=False) | 原有限目录列举；path/entries/truncated；显式选择有界排序、相对路径及精简条目 |
 | await read(session_id, path, offset=1, limit=100) | offset为1起算正整数，limit为1–5000；返回stat字段及offset/text/lines/eof |
 | await read_bytes(session_id, path, offset=None, length=None, base_file=None) | 两者均None时完整文件≤1MiB；否则使用原0起算字节窗口≤1MiB，允许零长度/EOF短读；返回stat字段及offset/data/eof，data为Python bytes；base_file指定同根普通文件，path须相对且从其父目录解析 |
 | await changes(session_id, path, interval=0.5) | 返回受管异步迭代器，先ready，再发合并后的change；显式await stream.aclose()关闭 |
 
-read使用原UTF-8增量stream_text，源文件≤64MiB，读取块8KiB；只保留请求页，跳过前缀不积累整行，页UTF-8内容含行间分隔符≤1MiB。空文件返回0行；单空行返回1行但text为空；末尾LF是行终止符，不额外创建空行。页text无最终终止符；窗口后还有实际字符或空行则eof=false。原CR保留，不额外规范化换行。
+read使用原UTF-8增量文件流，读取块8KiB、实际扫描前缀最多64MiB；更大文件仍可读取预算内的前部页，若定位页面或确定是否还有后续内容需超出预算则报`workspace-file/too-large`。只保留请求页，跳过前缀不积累整行，页UTF-8内容含行间分隔符≤1MiB。空文件返回0行；单空行返回1行但text为空；末尾LF是行终止符，不额外创建空行。页text无最终终止符；窗口后还有实际字符或空行则eof=false。原CR保留，不额外规范化换行。固定上游文本页没有同一扫描总量上限，因此深页仍有差异。
 
-窗口前缀和当前读取块必须可解码为UTF-8且无NUL，因此块中位于请求页之后的坏数据也可能使本页拒绝。原stream_text的源大小、变更检测及作用域规则仍适用。version仅为stat:size:mtime_ns，不是内容指纹；metadata先于内容读取，不提供原子文件快照。
+`list(..., ordered=True)`先读取目录名称，最多扫描10000项，再按Unicode码点排序并截取`limit`项；超出扫描上限报`fs/scan-limit`，不返回看似完整的部分结果。只为选中的条目读取原本地元数据；目录并发变化可能导致错误或影响结果，并非原子快照。默认`ordered=False`和通用`context.filesystem.list_dir`仍使用原系统顺序和原检查数量。固定上游[本地提供方](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/fs/fs-local/src/fsio.ts)使用JavaScript `localeCompare`名称排序，Unicode码点排序是明确的可复现近似，大小写及非ASCII顺序可能不同；上游也没有同一10000项扫描上限。新增验收覆盖截取前排序、原默认顺序、Unicode、扫描上限、准入取消及认证Remote。
+
+`list(..., relative_path=True)`将返回的目录`path`表示为相对于原会话执行目录的正斜杠路径，根目录为`""`；默认仍返回原绝对路径。可以与`ordered=True`组合，仍经原会话可见性、根目录和读取后复核。此路径格式接近上游，但上游根可能经Session lookup取得不同的工作区。新增验收覆盖根目录、嵌套/Unicode路径、会话执行目录变更、越界/隐藏拒绝、重复取消和认证Remote。
+
+`list(..., portable_entries=True)`只返回每项的`name/type`，普通文件额外返回`size`，类型为`file`、`directory`或`other`；默认仍返回Sunday原`name/kind/size/modified_ns`。原文件系统不会跟随目录项链接，因此链接投影为`other`且不返回大小；上游会按链接目标类型列举，不能据本近似认定目标类型或可读权限。新增验收覆盖普通/空文件、目录、真实链接边界、参数、重复取消、认证Remote和迁移提示。
+
+窗口前缀和当前读取块必须可解码为UTF-8，因此块中位于请求页之后的无效UTF-8也可能使本页拒绝。按固定上游的页语义，仅所选页含NUL时报`workspace-file/not-text`；页外NUL不再拒绝本页。复用原文件流的路径检查、变更检测及作用域规则；通用`context.filesystem.stream_text`仍限制整个源文件大小并拒绝已读取块中的NUL。version仅为stat:size:mtime_ns，不是内容指纹；metadata先于内容读取，不提供原子文件快照。新增验收覆盖页前/页后NUL、跨块前缀、所选页NUL、无效UTF-8、通用流对照及真实认证Remote。
 
 ## 错误、取消与清理
 
 本控制器错误为WorkspaceFileError(ValueError)，包括workspace-file/invalid-request、host-changed、outside-workspace、not-found、not-regular-file、not-text和too-large。其他fs/*、working-directory/*、session-data/*或service/*沿原宿主错误归属，不能按消息文本判断。隐藏会话在进入文件系统前由原可见性拒绝。
 
-等待会话准入期间可以取消；取消或撤回后不继续文件读取，原租约释放。文件部分为原同步可信插件API，开始后不能承诺异步抢占系统读调用；普通读取没有额外线程、后台任务或长期打开的文件句柄；changes的原受管监听任务另见下节。流分页在finally关闭原迭代器，原stream_text每块yield前已关闭句柄。
+等待会话准入期间可以取消；取消或撤回后不继续文件读取，原租约释放。重复取消也会等原会话准入协程完成清理后再释放插件作用域。文件部分为原同步可信插件API，开始后不能承诺异步抢占系统读调用；普通读取没有额外线程、后台任务或长期打开的文件句柄；changes的原受管监听任务另见下节。流分页在finally关闭原迭代器，原stream_text每块yield前已关闭句柄。
 
 所有文件读取和目录列举均限制在选定会话执行目录，拒绝已观察的链接/重解析点。沿用原路径检查的并发竞态限制，不声称OS级隔离、任意文件系统安全快照或网络文件系统支持。
 
@@ -36,7 +42,7 @@ read使用原UTF-8增量stream_text，源文件≤64MiB，读取块8KiB；只保
 
 SDK方法可由插件原operations处理器调用，再经明确http.remote扁平参数映射公开；本批真实HTTP/SQLite/文件验收验证read及额外root字段拒绝、隐藏会话拒绝。没有自动公开整个控制器或新的全局文件权限入口。SDK现支持base_file和changes；DSH复杂options/字段投影仍需人工移植，changes可通过显式resultEncoding=ndjson服务端JSON流输出；read_bytes的Python bytes不能直接充当JSON响应，但现在可由显式resultEncoding=multipart的Sunday Remote输出原始字节附件，实际HTTP往返及隐藏会话拒绝已验收。此格式不等于DSH envelope/codec，详见plugin_phase3_remote.md。
 
-迁移报告新增workspaceFileMethods，为read/readBytes/stat/list/changes给出context.workspace_files对应候选及agent-required差异。未知方法无候选；changes候选保留轮询差异，网络流需人工显式ndjson映射；生成PORTING.md保留限制与文档，不生成未经授权的Remote映射，runtimeVerified仍为false。
+迁移报告为源码中的`ctx.workspaceFiles.*`调用及真实`ctx.remote.workspaceFiles.*`方法分别提供候选。固定Remote的`stat/read/readBytes/list/changes`分别交接到`context.workspace_files.stat/read/read_bytes/list/changes`，仍标记agent-required：上游`workspaceFileScopeId`来自Session lookup，Sunday需显式`session_id`并使用原可见性/执行目录；读取结果、范围与权限不同。`readBytes`须显式选择Sunday multipart并读取附件路径，`changes`须显式选择Sunday ndjson且是轮询合并流。未知Remote方法不猜测映射；脚本不生成未经授权的Remote，`runtimeVerified`仍为false。
 
 本批16项新增验收覆盖实际行页/空行/EOF、Unicode、跨块与恰好页限额、跳过长前缀、坏文本、原二进制窗口/完整文件、目录/元数据、选定目录与隐藏会话、宿主替换/撤回/取消、真实HTTP链路及迁移交接。页预算边界测试缩小到16字节；生产默认1MiB。
 
@@ -74,5 +80,7 @@ read_bytes的base_file必须为同根普通文件；path只允许相对路径，
 
 
 会话文件变化流现在在发布ready/change前重查原会话和固定执行目录；另有独立守卫按0.1–1秒间隔检查，空闲消费者也能在会话隐藏、目录切换或原项目绑定改变后停止旧监听。守卫触发后原watch退出，等待中的消费者收到错误；显式关闭和插件停用等待守卫及原watch清理。数据库响应和任务调度可能延迟发现，不是原子权限锁或严格时限。9项新增验收覆盖隐藏/目录变更、空闲及等待消费者、真实HTTP、正常变化、守卫及watch退出，含守卫慢清理时停用等待。
+
+创建监听、消费下一帧或守卫复核期间，会话准入被重复取消时等待原读取清理；取消消费还关闭并等待真实监听退出，停用会等待未完成的准入。新增验收覆盖监听创建与消费、真实认证Remote取消、停用等待、守卫清理及真实文件变化。不合作的原读取可能延迟结束。
 
 一元stat/list/read/read_bytes在原文件读取后再次通过原会话可见性和执行目录准入，同时检查启动代与固定项目绑定；会话隐藏、目录切换或绑定撤回时拒绝旧结果。最后一次准入等待可以取消并释放作用域租约，原同步文件读取本身仍不能异步抢占。11项新增验收覆盖四种真实文件操作、目录/根/宿主/启动代变化、取消、真实HTTP隐藏拒绝和原二进制返回；检查不是原子权限锁或文件快照。

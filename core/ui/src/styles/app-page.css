@@ -80,6 +80,11 @@
   animation: core-remote-lost-pulse 2.4s ease-in-out infinite;
 }
 
+/* user:“梳理所有可见的组件、样式、布局、动效及交互”+(减少动态效果时保留断线提示，停止持续闪动)。 */
+@media (prefers-reduced-motion: reduce) {
+  .core-remote-badge.is-lost { animation: none; }
+}
+
 @keyframes core-remote-lost-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }

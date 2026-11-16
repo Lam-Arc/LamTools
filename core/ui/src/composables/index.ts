@@ -48,13 +48,6 @@ export {
 } from '@/composables/useCoreApprovalController.ts'
 
 export {
-  ASK_SKIP_GUIDANCE,
-  ASK_SKIP_TIMEOUT_MS,
-  useCoreAskAutoContinue,
-  type UseCoreAskAutoContinueOptions,
-} from '@/composables/useCoreAskAutoContinue.ts'
-
-export {
   CORE_SEND_BEHAVIOR_DEFAULT_MODE,
   CORE_SEND_BEHAVIOR_NAMESPACE,
   CORE_SEND_BEHAVIOR_STORAGE_KEY,

@@ -14,7 +14,7 @@ export function createNetworkStore() {
     inflight = true;
     const current = generation;
     try {
-      const result = await source.rpc('network-exploration.status', {});
+      const result = await source.rpc('easynet.status', {});
       if (current === generation) { state = result; error = ''; publish(); }
     } catch (cause) {
       if (current === generation) { error = cause instanceof Error ? cause.message : String(cause); publish(); }

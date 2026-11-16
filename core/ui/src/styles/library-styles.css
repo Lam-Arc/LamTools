@@ -702,7 +702,8 @@
   text-align: left;
   cursor: pointer;
 }
-.library-surface .material-tag-suggest button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+/* user:“确保视觉、功能和交互不退化”+(键盘选中与鼠标悬停使用一致反馈)。 */
+.library-surface .material-tag-suggest button.active, .library-surface .material-tag-suggest button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
 
 .library-surface .material-html-preview {
   position: absolute;

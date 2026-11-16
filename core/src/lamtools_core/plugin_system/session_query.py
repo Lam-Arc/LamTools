@@ -23,6 +23,25 @@ class SessionQueryPage:
     has_more: bool
 
 
+@dataclass(frozen=True)
+class ProjectSessionSummary:
+    session_id: str
+    title: str
+    status: str
+    title_truncated: bool
+    updated_at_ms: int
+    cwd: str
+    running: bool
+    last_prompt_received_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class ProjectSessionQueryPage:
+    items: tuple[ProjectSessionSummary, ...]
+    next_cursor: str | None
+    has_more: bool
+
+
 class PluginSessionQueryAPI:
     def __init__(self, host, scope):
         self._host, self._scope = host, scope

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Computer Use 胶囊预览</title>
+  <title>Computer Use 屏幕胶囊预览</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; }
@@ -17,13 +17,21 @@
       position: relative;
       width: 100vw;
       height: 100vh;
+      /* 和覆盖层一致：角度在根节点转，胶囊与光标都继承 */
+      animation: cu-angle-flow 6.5s linear infinite;
     }
-    /* 模拟一个应用窗口的顶边 */
-    .preview-window-edge {
+    @keyframes cu-angle-flow {
+      to { --cu-angle: 360deg; }
+    }
+    /* 浅色底，用来看光标的白边和彩色填充在亮背景上的对比 */
+    .preview-paper {
       position: absolute;
-      inset: 0 0 auto 0;
-      height: 8px;
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent);
+      top: 260px;
+      width: 260px;
+      height: 140px;
+      border-radius: 12px;
+      background: #f2f2f5;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
     }
     .preview-content {
       padding: 96px 64px;
@@ -40,26 +48,6 @@
       font-size: 13px;
       line-height: 1.7;
       color: rgba(232, 232, 236, 0.62);
-    }
-    .preview-controls {
-      position: absolute;
-      left: 64px;
-      bottom: 64px;
-      display: flex;
-      gap: 10px;
-    }
-    .preview-controls button {
-      height: 30px;
-      padding: 0 14px;
-      border-radius: 9px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      background: rgba(255, 255, 255, 0.06);
-      color: #e8e8ec;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .preview-controls button:hover {
-      background: rgba(255, 255, 255, 0.12);
     }
   </style>
 </head>

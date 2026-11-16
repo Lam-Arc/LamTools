@@ -1,4 +1,5 @@
 <template>
+  <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(复用共享复选框，保留原有勾选与保存逻辑) -->
   <details class="wf-policy-panel wf-inspector-section">
     <summary>
       <span>{{ t("运行策略") }}</span>
@@ -19,7 +20,7 @@
 
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
-          <input type="checkbox" :checked="Boolean(policies.concurrency)" :disabled="disabled || !workflowDefinition" @change="toggleConcurrency" />
+          <input class="sunday-checkbox" type="checkbox" :checked="Boolean(policies.concurrency)" :disabled="disabled || !workflowDefinition" @change="toggleConcurrency" />
           <span>{{ t("并发上限") }}</span>
         </label>
         <div v-if="policies.concurrency" class="wf-policy-grid">
@@ -36,7 +37,7 @@
 
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
-          <input type="checkbox" :checked="Boolean(policies.rate_limit)" :disabled="disabled || !workflowDefinition" @change="toggleRateLimit" />
+          <input class="sunday-checkbox" type="checkbox" :checked="Boolean(policies.rate_limit)" :disabled="disabled || !workflowDefinition" @change="toggleRateLimit" />
           <span>{{ t("速率限制") }}</span>
         </label>
         <div v-if="policies.rate_limit" class="wf-policy-grid">
@@ -53,7 +54,7 @@
 
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
-          <input type="checkbox" :checked="Boolean(policies.throttle)" :disabled="disabled || !workflowDefinition" @change="toggleThrottle" />
+          <input class="sunday-checkbox" type="checkbox" :checked="Boolean(policies.throttle)" :disabled="disabled || !workflowDefinition" @change="toggleThrottle" />
           <span>{{ t("节流") }}</span>
         </label>
         <label v-if="policies.throttle" class="wf-policy-field">
@@ -64,7 +65,7 @@
 
       <fieldset class="wf-policy-group">
         <label class="wf-policy-toggle">
-          <input type="checkbox" :checked="Boolean(policies.debounce)" :disabled="disabled || !workflowDefinition" @change="toggleDebounce" />
+          <input class="sunday-checkbox" type="checkbox" :checked="Boolean(policies.debounce)" :disabled="disabled || !workflowDefinition" @change="toggleDebounce" />
           <span>{{ t("防抖") }}</span>
         </label>
         <div v-if="policies.debounce" class="wf-policy-grid">
@@ -203,7 +204,6 @@ function setDebounceMode(mode: string): void { patch('debounce', { ...policies.v
 .wf-policy-body { display: grid; gap: var(--space-2); padding: 0 var(--space-3) var(--space-3); }
 .wf-policy-group { min-width: 0; margin: 0; padding: var(--space-2); border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); border-radius: var(--radius-sm); }
 .wf-policy-toggle { display: flex; align-items: center; gap: var(--space-2); font-weight: 650; cursor: pointer; }
-.wf-policy-toggle input { margin: 0; accent-color: var(--theme-control-text); }
 .wf-policy-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2); margin-top: var(--space-2); }
 .wf-policy-field { display: grid; min-width: 0; gap: var(--space-1); color: color-mix(in srgb, var(--text) 65%, transparent); font-size: 10px; }
 .wf-policy-priority { grid-template-columns: minmax(0, 1fr) 84px; align-items: center; }

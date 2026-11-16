@@ -1,4 +1,8 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络工具复用应用开关，保留原有操作与禁用条件)。
+import SundaySwitch from "../../../../../../../ui/src/components/SundaySwitch.vue";
+import UiSelect from "../../../../../../../ui/src/components/UiSelect.vue";
 import { ref } from "vue";
 import {
   Clock,
@@ -17,6 +21,15 @@ const creating = ref(false),
   interval = ref("30"),
   devices = ref(null),
   sample = ref(String(props.session.state?.settings?.sample_seconds || 5));
+// user:“确保视觉、功能和交互不退化”+(选择采样间隔时保持原有保存请求与版本)。
+const intervalOptions = [{ value: '15', label: '每 15 分钟' }, { value: '30', label: '每 30 分钟' }, { value: '60', label: '每小时' }, { value: '360', label: '每 6 小时' }];
+const sampleOptions = [2, 5, 10, 30].map(value => ({ value: String(value), label: `每 ${value} 秒` }));
+function setSample(value) {
+  // user:“确保视觉、功能和交互不退化”+(重复选中当前值不重复发出保存请求)。
+  if (value === sample.value) return;
+  sample.value = value;
+  void props.session.run('settings.update', { revision: props.session.state.revision, settings: { sample_seconds: Number(value) } }, '更新频率已保存');
+}
 async function save(rows) {
   return props.session.run(
     "automation.save",
@@ -82,7 +95,7 @@ async function loadDevices() {
     <section class="nx-panel">
       <div class="nx-panel-heading">
         <h2><Clock :size="17" />定时检查</h2>
-        <button class="nx-button nx-quiet" @click="creating = !creating">
+        <button class="btn nx-button btn--quiet" @click="creating = !creating">
           <Plus :size="14" />添加
         </button>
       </div>
@@ -98,17 +111,9 @@ async function loadDevices() {
           required
           placeholder="检查哪个网站"
           aria-label="定时检查的网站"
-        /><select
-          v-model="interval"
-          class="nx-input nx-fit-select"
-          aria-label="检查间隔"
-        >
-          <option value="15">每 15 分钟</option>
-          <option value="30">每 30 分钟</option>
-          <option value="60">每小时</option>
-          <option value="360">每 6 小时</option></select
-        ><button
-          class="nx-button nx-secondary"
+        /><UiSelect v-model="interval" class="nx-shared-select" :options="intervalOptions" aria-label="检查间隔" data-network-interval :menu-min-width="140" />
+        <button
+          class="btn nx-button btn--secondary"
           :disabled="Boolean(session.busy)"
         >
           添加计划
@@ -119,28 +124,25 @@ async function loadDevices() {
         :key="index"
         class="nx-schedule-row"
       >
-        <button
-          class="nx-switch nx-switch--small"
-          role="switch"
-          :aria-label="`${row.target} 定时检查`"
-          :aria-checked="row.enabled"
+        <SundaySwitch
+          size="sm"
+          :label="`${row.target} 定时检查`"
+          :model-value="row.enabled"
           :disabled="Boolean(session.busy)"
-          @click="toggle(index)"
-        >
-          <span />
-        </button>
+          @update:model-value="toggle(index)"
+        />
         <div>
           <strong>{{ row.target }}</strong
           ><small>每 {{ row.interval_minutes }} 分钟检查一次</small>
         </div>
         <button
-          class="nx-button nx-quiet"
+          class="btn nx-button btn--quiet"
           :disabled="Boolean(session.busy)"
           @click="preview(index)"
         >
           <Play :size="13" />试运行</button
         ><button
-          class="nx-button nx-quiet nx-icon-button"
+          class="btn nx-button btn--quiet nx-icon-button"
           :disabled="Boolean(session.busy)"
           aria-label="删除定时检查"
           @click="remove(index)"
@@ -158,14 +160,14 @@ async function loadDevices() {
     <section class="nx-panel">
       <div class="nx-panel-heading">
         <h2><Monitor :size="17" />本地设备</h2>
-        <button class="nx-button nx-quiet" @click="loadDevices">
+        <button class="btn nx-button btn--quiet" @click="loadDevices">
           查看设备
         </button>
       </div>
       <p class="nx-help">查看系统记录过的局域网邻居。</p>
       <button
         v-if="!devices"
-        class="nx-button nx-secondary"
+        class="btn nx-button btn--secondary"
         :disabled="Boolean(session.busy)"
         @click="loadDevices"
       >
@@ -198,33 +200,14 @@ async function loadDevices() {
         <span
           ><strong>网速更新频率</strong
           ><small>降低更新频率可以减少后台采样。</small></span
-        ><select
-          v-model="sample"
-          class="nx-input nx-fit-select"
-          aria-label="网速采样间隔"
-          @change="
-            session.run(
-              'settings.update',
-              {
-                revision: session.state.revision,
-                settings: { sample_seconds: Number(sample) },
-              },
-              '更新频率已保存',
-            )
-          "
-        >
-          <option value="2">每 2 秒</option>
-          <option value="5">每 5 秒</option>
-          <option value="10">每 10 秒</option>
-          <option value="30">每 30 秒</option>
-        </select>
+        ><UiSelect :model-value="sample" :options="sampleOptions" aria-label="网速采样间隔" data-network-sampling :menu-min-width="140" @update:model-value="setSample" />
       </div>
       <div>
         <span
           ><strong>导出检查记录</strong
           ><small>保存检查结果和近期事件，方便对照。</small></span
         ><button
-          class="nx-button nx-secondary"
+          class="btn nx-button btn--secondary"
           :disabled="Boolean(session.busy)"
           @click="exportReports"
         >

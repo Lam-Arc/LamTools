@@ -24,6 +24,11 @@ class PluginJobController:
             raise JobAccessError("job/host-changed", "Original job or session binding changed")
 
     async def _admit(self, session_id):
+        from .session_controller import _cancel_owned_read
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(重复取消等待原会话准入及其作用域清理)。
+        return await _cancel_owned_read(self._admit_owned(session_id), name="job-session-admission")
+
+    async def _admit_owned(self, session_id):
         self._check()
         state = await self._host.for_scope(self._scope).get(session_id)
         # user:“复用原宿主权威”+(先检查会话可见性和原项目归属，再按现有插件作业的会话标签过滤)。

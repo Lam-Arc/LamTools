@@ -127,7 +127,10 @@ const emit = defineEmits<{
 function onContextMenu(event: MouseEvent, item: CoreAttachment): void {
   if (isNativeContextTarget(event.target)) return;
   const failed = item.status === 'failed'
-  const items: ContextMenuEntry[] = failed
+  // user:“确保视觉、功能和交互不退化”+(上传未完成时右键菜单与不可预览按钮保持一致)。
+  const items: ContextMenuEntry[] = item.status === 'uploading'
+    ? [{ id: 'remove', get label() { return t("移除") }, icon: Trash2, destructive: true, action: () => emit('remove', item.id) }]
+    : failed
     ? [
         { id: 'retry', get label() { return t("重试") }, icon: RotateCcw, action: () => emit('retry', item.id) },
         { type: 'separator', id: 'attachment-danger-separator' },

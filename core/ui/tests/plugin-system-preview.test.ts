@@ -59,7 +59,7 @@ describe('plugin system preview', () => {
     const wrapper = mountEditor(rpc)
     await flushPromises()
 
-    await wrapper.find('button[data-toggle-for="hello"]').trigger('click')
+    await wrapper.get('[data-toggle-for="hello"] input').setValue(false)
     await flushPromises()
 
     expect(rpc).toHaveBeenCalledWith('plugin.system.disable', { name: 'hello' })

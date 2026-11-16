@@ -1,4 +1,5 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“常用功能放在首页 切梯子/网络加速”+(首页直接选择真实节点，不要求填写代理组或节点参数)。
 import { computed, ref, watch } from "vue";
 import { Check, Radio, Plus, RefreshCw, Zap } from "lucide-vue-next";
@@ -34,17 +35,30 @@ const nodes = computed(() =>
     name.toLowerCase().includes(filter.value.toLowerCase()),
   ),
 );
-function latency(name) {
-  const value =
-    delays.value[name] ??
-    props.session.proxy?.proxies?.[name]?.history?.at(-1)?.delay;
-  return Number(value) > 0 ? `${value} ms` : "未测速";
+// user:“你需要确保插件内节点正确出现，延迟正常显示，可切换”+(可选分组里放的常常是子分组，子分组自身没有 history，延迟要顺着它当前出口节点取，否则整列都显示未测速)。
+function resolveDelay(name, depth = 0) {
+  const node = props.session.proxy?.proxies?.[name];
+  if (!node) return 0;
+  const own = Number(node.history?.at(-1)?.delay);
+  if (own > 0) return own;
+  const child = node.now;
+  if (depth >= 4 || !child || child === name) return 0;
+  return resolveDelay(child, depth + 1);
 }
 function delayValue(name) {
-  const value =
-    delays.value[name] ??
-    props.session.proxy?.proxies?.[name]?.history?.at(-1)?.delay;
+  const value = delays.value[name] ?? resolveDelay(name);
   return Number(value) > 0 ? Number(value) : 0;
+}
+function latency(name) {
+  const value = delayValue(name);
+  return value > 0 ? `${value} ms` : "未测速";
+}
+// user:“你需要确保插件内节点正确出现”+(分组行要标出它当前真正走的节点，用户才知道选中的这行背后是谁)。
+function currentExit(name) {
+  const node = props.session.proxy?.proxies?.[name];
+  if (!node || !Array.isArray(node.all)) return "";
+  const now = node.now;
+  return now && now !== name ? now : "";
 }
 function quality(name) {
   const value = delayValue(name);
@@ -78,7 +92,7 @@ async function optimize() {
       </div>
       <div class="nx-node-head-actions">
         <button
-          class="nx-button nx-quiet nx-icon-button"
+          class="btn nx-button btn--quiet nx-icon-button"
           aria-label="刷新线路"
           :disabled="Boolean(session.busy)"
           @click="session.loadProxy()"
@@ -86,7 +100,7 @@ async function optimize() {
           <RefreshCw :size="15" />
         </button>
         <button
-          class="nx-button nx-secondary nx-optimize"
+          class="btn nx-button btn--secondary nx-optimize"
           data-optimize
           :disabled="Boolean(session.busy) || !nodes.length"
           @click="optimize"
@@ -144,6 +158,9 @@ async function optimize() {
                   ? "阻止连接"
                   : name
             }}</span>
+            <span v-if="currentExit(name)" class="nx-subtle nx-line-exit">{{
+              currentExit(name)
+            }}</span>
             <span class="nx-line-meter" :class="tone(name)"
               ><i :style="{ width: `${quality(name)}%` }"
             /></span>
@@ -151,7 +168,7 @@ async function optimize() {
           </button>
           <button
             v-if="!compact"
-            class="nx-button nx-quiet nx-icon-button nx-line-refresh"
+            class="btn nx-button btn--quiet nx-icon-button nx-line-refresh"
             :disabled="Boolean(session.busy)"
             :aria-label="`测试 ${name} 的延迟`"
             @click="testNode(name)"
@@ -161,7 +178,7 @@ async function optimize() {
         </div>
       </div>
       <button
-        class="nx-button nx-quiet nx-add-profile"
+        class="btn nx-button btn--quiet nx-add-profile"
         @click="$emit('import')"
       >
         <Plus :size="14" />添加或更新订阅
@@ -174,7 +191,7 @@ async function optimize() {
           : "开启代理后可切换线路"
       }}</strong>
       <p>添加订阅，使用你已有的代理节点。</p>
-      <button class="nx-button nx-secondary" @click="$emit('import')">
+      <button class="btn nx-button btn--secondary" @click="$emit('import')">
         <Plus :size="14" />添加订阅
       </button>
     </div>

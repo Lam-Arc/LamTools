@@ -134,7 +134,7 @@ async fn delay_probe(
     url.query_pairs_mut()
         .append_pair("timeout", "4000")
         .append_pair("url", &target);
-    match client.get(url).bearer_auth(secret).send().await {
+    match client.get(url).bearer_auth(&secret).send().await {
         Ok(response) if response.status().is_success() => {
             let value: Value = response.json().await.unwrap_or_default();
             match value["delay"].as_u64().filter(|delay| *delay > 0) {
@@ -144,11 +144,125 @@ async fn delay_probe(
                 None => json!({"name":name,"error":"测速未返回延迟"}),
             }
         }
+        Ok(response) if response.status().as_u16() == 404 => {
+            // user:“你需要确保插件内节点正确出现，延迟正常显示，可切换”+(provider 下发的节点不在 /proxies 顶层，普通测速接口 404；改走 provider 健康检查再回读延迟，否则这些线路永远显示未测速)。
+            match provider_delay_probe(client, port, &secret, &name, &target).await {
+                Ok(delay) => json!({"name":name,"delay":delay,"ms":started.elapsed().as_millis() as u64}),
+                Err(error) => json!({"name":name,"error":error}),
+            }
+        }
         Ok(response) => {
             json!({"name":name,"error":format!("节点返回 {}",response.status().as_u16())})
         }
         Err(_) => json!({"name":name,"error":"测速请求失败或超时"}),
     }
+}
+async fn fetch_providers(
+    client: &reqwest::Client,
+    port: u16,
+    secret: &str,
+) -> Result<Value, String> {
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/providers/proxies"))
+        .bearer_auth(secret)
+        .send()
+        .await
+        .map_err(|_| "控制接口不可用".to_string())?;
+    if !response.status().is_success() {
+        return Err("控制接口不可用".into());
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| "控制接口返回无效数据".to_string())
+}
+/// user:“你需要确保插件内节点正确出现，延迟正常显示，可切换”+(先定位这个节点属于哪个 provider，才能触发它的健康检查)。
+fn provider_of(providers: &Value, name: &str) -> Option<String> {
+    let groups = providers["providers"].as_object()?;
+    for (key, provider) in groups {
+        let Some(nodes) = provider["proxies"].as_array() else {
+            continue;
+        };
+        if nodes
+            .iter()
+            .any(|node| node["name"].as_str() == Some(name) && node["provider-name"].as_str().is_some())
+        {
+            return Some(key.clone());
+        }
+    }
+    None
+}
+/// user:“延迟正常显示”+(provider 健康检查不返回延迟本身，测完要回读该节点的历史)。
+fn last_delay(providers: &Value, name: &str) -> Option<u64> {
+    let groups = providers["providers"].as_object()?;
+    for provider in groups.values() {
+        let Some(nodes) = provider["proxies"].as_array() else {
+            continue;
+        };
+        for node in nodes {
+            if node["name"].as_str() != Some(name) {
+                continue;
+            }
+            let history = node["history"].as_array()?;
+            for entry in history.iter().rev() {
+                if let Some(delay) = entry["delay"].as_u64().filter(|value| *value > 0) {
+                    return Some(delay);
+                }
+            }
+        }
+    }
+    None
+}
+async fn provider_delay_probe(
+    client: reqwest::Client,
+    port: u16,
+    secret: &str,
+    name: &str,
+    target: &str,
+) -> Result<u64, String> {
+    let before = fetch_providers(&client, port, secret).await?;
+    let provider = provider_of(&before, name).ok_or("线路不在任何订阅提供器里")?;
+    let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/providers/proxies"))
+        .map_err(|_| "测速地址无效".to_string())?;
+    url.path_segments_mut()
+        .map_err(|_| "测速地址无效".to_string())?
+        .push(&provider)
+        .push(name)
+        .push("healthcheck");
+    url.query_pairs_mut()
+        .append_pair("timeout", "5000")
+        .append_pair("url", target);
+    let _ = client
+        .get(url)
+        .bearer_auth(secret)
+        .send()
+        .await
+        .map_err(|_| "测速请求失败或超时".to_string())?;
+    let after = fetch_providers(&client, port, secret).await?;
+    last_delay(&after, name).ok_or_else(|| "线路不可达".to_string())
+}
+/// user:“你需要确保插件内节点正确出现，延迟正常显示，可切换”+(provider 节点只在 /providers/proxies 里，按名字并进主表；同名以内联节点为准，provider 不覆盖)。
+fn merge_provider_nodes(table: &mut serde_json::Map<String, Value>, providers: &Value) -> usize {
+    let Some(groups) = providers["providers"].as_object() else {
+        return 0;
+    };
+    let mut added = 0;
+    for provider in groups.values() {
+        let Some(nodes) = provider["proxies"].as_array() else {
+            continue;
+        };
+        for node in nodes {
+            let Some(name) = node["name"].as_str() else {
+                continue;
+            };
+            if name.is_empty() || table.contains_key(name) {
+                continue;
+            }
+            table.insert(name.to_string(), node.clone());
+            added += 1;
+        }
+    }
+    added
 }
 pub async fn protect(text: &str) -> Result<String, String> {
     crate::credentials::protect(text)
@@ -361,17 +475,32 @@ impl Engines {
                 .spawn()
                 .map_err(|_| "无法启动 Mihomo")?,
         );
-        for _ in 0..50 {
+        // user:“改名儿是小事儿 主要是够不够 easy 和Stable”+(内核起不来时必须尽快给出原因；原来最多等 50 次、每次带 8 秒超时，会超过宿主 90 秒上限，整个插件被判死)。
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
             if self.proxy_request("GET", "/version", None).await.is_ok() {
                 self.proxy_started = Some(chrono::Utc::now());
                 return Ok(
                     json!({"running":true,"mixed_port":17890,"tun":false,"system_proxy":false}),
                 );
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let exited = self
+                .proxy
+                .as_mut()
+                .map(|process| process.try_wait().ok().flatten().is_some())
+                .unwrap_or(true);
+            if exited {
+                self.proxy = None;
+                self.proxy_started = None;
+                return Err("Mihomo 启动后立即退出：配置、规则资源或本地端口不可用".into());
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
         self.stop_proxy().await?;
-        Err("Mihomo 启动失败：检查端口、配置或规则资源".into())
+        Err("Mihomo 启动超时：检查配置、规则资源或本地端口".into())
     }
     pub async fn stop_proxy(&mut self) -> Reply {
         terminate(&mut self.proxy).await;
@@ -380,11 +509,17 @@ impl Engines {
         Ok(json!({"running":false}))
     }
     pub async fn proxy_inspect(&self) -> Reply {
-        let proxies = self.proxy_request("GET", "/proxies", None).await?;
+        let mut proxies = self.proxy_request("GET", "/proxies", None).await?["proxies"].clone();
         let rules = self.proxy_request("GET", "/rules", None).await?;
         let configs = self.proxy_request("GET", "/configs", None).await?;
+        // user:“你需要确保插件内节点正确出现，延迟正常显示，可切换”+(订阅用 proxy-providers 下发节点时，/proxies 顶层不列这些节点，界面因此永远显示未测速；把 provider 节点并进同一张表，延迟和切换才有数据)。
+        if let Ok(providers) = self.proxy_request("GET", "/providers/proxies", None).await {
+            if let Some(table) = proxies.as_object_mut() {
+                merge_provider_nodes(table, &providers);
+            }
+        }
         Ok(
-            json!({"proxies":proxies["proxies"],"rules":rules["rules"],"mode":configs["mode"],"mixed_port":configs["mixed-port"]}),
+            json!({"proxies":proxies,"rules":rules["rules"],"mode":configs["mode"],"mixed_port":configs["mixed-port"]}),
         )
     }
     pub async fn proxy_select(&self, p: Value) -> Reply {
@@ -406,12 +541,32 @@ impl Engines {
         url.query_pairs_mut()
             .append_pair("timeout", "5000")
             .append_pair("url", target);
-        self.proxy_request(
-            "GET",
-            &format!("{}?{}", url.path(), url.query().unwrap()),
-            None,
-        )
-        .await
+        let direct = self
+            .proxy_request(
+                "GET",
+                &format!("{}?{}", url.path(), url.query().unwrap()),
+                None,
+            )
+            .await;
+        match direct {
+            Ok(value) => Ok(value),
+            // user:“你需要确保插件内节点正确出现，延迟正常显示，可切换”+(provider 节点在 /proxies 上测速会 404，这里回退到所属 provider 的健康检查，界面上单行测速才不会整列失败)。
+            Err(error) if error.contains("404") => {
+                match provider_delay_probe(
+                    self.client.clone(),
+                    self.proxy_port,
+                    &self.secret,
+                    name,
+                    target,
+                )
+                .await
+                {
+                    Ok(delay) => Ok(json!({"delay":delay})),
+                    Err(message) => Err(format!("{error}（{message}）")),
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
     // user:“继续进行网络工具插件的开发”+(一次点击测完分组内真实节点并切到最快可达线路，失败节点保留证据且不切换)。
     pub async fn proxy_optimize(&self, p: Value) -> Reply {
@@ -1304,5 +1459,56 @@ mod tests {
         assert_eq!(value["allow-lan"], false);
         assert_eq!(value["external-controller"], "127.0.0.1:4000");
         assert_eq!(value["secret"], "secret");
+    }
+    #[test]
+    fn provider_nodes_join_the_main_table_with_their_delays() {
+        // user:“你需要确保插件内节点正确出现，延迟正常显示，可切换”+(provider 下发的节点必须能和内联节点一样出现在线路表里，并带着实测延迟)。
+        let mut table = json!({"US-CF-BOOT":{"type":"Trojan","history":[{"delay":180}]}})
+            .as_object()
+            .cloned()
+            .unwrap();
+        let providers = json!({"providers":{
+            "cf-nodes":{"proxies":[
+                {"name":"CF-1","type":"Trojan","history":[{"delay":562}]},
+                {"name":"CF-2","type":"Trojan","history":[{"delay":0}]}
+            ]},
+            "cf-nodes-us":{"proxies":[{"name":"US-CF-8","type":"Trojan","history":[{"delay":422}]}]}
+        }});
+        assert_eq!(merge_provider_nodes(&mut table, &providers), 3);
+        assert_eq!(table["CF-1"]["history"][0]["delay"], 562);
+        assert_eq!(table["US-CF-8"]["history"][0]["delay"], 422);
+        assert_eq!(table["US-CF-BOOT"]["history"][0]["delay"], 180);
+    }
+    #[test]
+    fn provider_nodes_never_override_inline_nodes_or_break_on_missing_data() {
+        let mut table = json!({"CF-1":{"type":"Trojan","history":[{"delay":100}]}})
+            .as_object()
+            .cloned()
+            .unwrap();
+        let providers = json!({"providers":{"cf-nodes":{"proxies":[
+            {"name":"CF-1","type":"Trojan","history":[{"delay":999}]},
+            {"type":"Trojan"}
+        ]}}});
+        assert_eq!(merge_provider_nodes(&mut table, &providers), 0);
+        assert_eq!(table["CF-1"]["history"][0]["delay"], 100);
+        assert_eq!(merge_provider_nodes(&mut table, &json!({})), 0);
+    }
+    #[test]
+    fn provider_lookup_finds_the_owner_and_reads_the_latest_delay() {
+        // user:“延迟正常显示”+(provider 健康检查不返回延迟，必须先按节点名找到所属 provider，测完再回读它自己的历史)。
+        let providers = json!({"providers":{
+            "Proxy":{"proxies":[{"name":"美国","type":"URLTest","history":[]}]},
+            "cf-nodes":{"proxies":[
+                {"name":"CF-1","provider-name":"cf-nodes","history":[{"delay":0},{"delay":562}]},
+                {"name":"CF-2","provider-name":"cf-nodes","history":[{"delay":0}]}
+            ]}
+        }});
+        assert_eq!(provider_of(&providers, "CF-1"), Some("cf-nodes".to_string()));
+        assert_eq!(provider_of(&providers, "CF-2"), Some("cf-nodes".to_string()));
+        assert_eq!(provider_of(&providers, "美国"), None);
+        assert_eq!(provider_of(&providers, "no-such-node"), None);
+        assert_eq!(last_delay(&providers, "CF-1"), Some(562));
+        assert_eq!(last_delay(&providers, "CF-2"), None);
+        assert_eq!(last_delay(&json!({}), "CF-1"), None);
     }
 }

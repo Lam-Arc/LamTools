@@ -72,7 +72,10 @@ export interface UseCoreLiveComposerControllerOptions {
   /** Whether the session is paused as a whole: its members follow the session. */
   sessionPaused?: Readonly<Ref<boolean>>
   /** Continue the paused turn. Text typed while paused rides the same press. */
-  resumeTurn?(threadId: string, turnId: string, input?: CoreInputItem[], clientMessageId?: string): Promise<void>
+  resumeTurn?(
+    threadId: string, turnId: string, input?: CoreInputItem[], clientMessageId?: string,
+    options?: { skipQuestions?: boolean },
+  ): Promise<void>
   /** Long-press confirm: end the turn and its members for good. */
   terminateTurn?(threadId: string, turnId?: string): Promise<void>
   /**
@@ -767,6 +770,23 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       })
   }
 
+  /**
+   * user:“跳过等于 done”+(跳过 = 关组 + 继续：一条恢复请求带 skip_questions，
+   * 后端把提问组收成 done；前端不再自己收起卡片，免得界面说跳过后回合还停着。)
+   */
+  async function skipQuestions(): Promise<void> {
+    const threadId = options.activeThreadId.value || ''
+    const turnId = options.resumableTurnId?.value || ''
+    if (!threadId || !turnId || !options.resumeTurn) return
+    if (submitting.value) return
+    submitting.value = true
+    try {
+      await options.resumeTurn(threadId, turnId, undefined, crypto.randomUUID(), { skipQuestions: true })
+    } finally {
+      submitting.value = false
+    }
+  }
+
   return {
     submissions,
     submitting,
@@ -789,6 +809,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     resetForThreadChange,
     runCommand,
     selectCommand,
+    skipQuestions,
     stop,
     submit,
   }

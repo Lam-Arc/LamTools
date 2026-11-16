@@ -534,6 +534,11 @@ export function coreAppItemToWorkbenchPart(
       ...itemMetadata,
       ...(subLineParts.length > 0 ? { subLineParts } : {}),
       request_id: requestId || undefined,
+      // user:“组内一并 confirm”+(题目正文在 payload 里，组件从 metadata 读；
+      // 这里补一份，避免组件拿到空列表。)
+      questions: Array.isArray(itemPayload.questions)
+        ? itemPayload.questions
+        : (Array.isArray(item.questions) ? item.questions : undefined),
       title: item.title,
       question: item.question,
       description: item.description || item.message,

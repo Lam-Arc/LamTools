@@ -1829,6 +1829,7 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 .modal-actions {
   justify-content: flex-end;
 }
+/* user:“清理废弃实现”+(应用内已迁移，旧类暂作插件兼容；确认动态调用后再删除)。 */
 .btn-cancel {
   height: 30px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 14%, transparent);
@@ -3442,6 +3443,11 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* user:“梳理所有可见的组件、样式、布局、动效及交互”+(减少动态效果时，实时消息及过程内容直接显示)。 */
+  .assistant-message--live,
+  .process-stream--live {
+    animation: none;
+  }
   .workspace-drawer,
   .workspace-main,
   .floating-composer {

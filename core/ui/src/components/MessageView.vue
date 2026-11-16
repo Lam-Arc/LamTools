@@ -175,10 +175,12 @@
               <span class="stream-spinner" />
               {{ liveStatusText(msg) }}
             </span>
+            <!-- user:“确保视觉、功能和交互不退化”+(过程摘要同步暴露实际展开状态)。 -->
             <button
               v-if="(isLiveMessage(msg) || processSummary(msg).count > 0) && !isCompactionOnlyMessage(msg)"
               type="button"
               class="process-summary"
+              :aria-expanded="isProcessExpanded(msg)"
               @click="emit('toggle-process', msg.id)"
             >
               <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="process-summary-state">
@@ -231,6 +233,19 @@
               <span class="request-phase__send"><span></span><span></span><span></span></span>
               <span class="request-phase__wait"><span></span></span>
             </span>
+          </div>
+
+          <!-- user:“连纯文本都没有”+(提问组不能放进可折叠的过程流：消息完成后过程区
+               默认收起，卡片会随之消失。它固定渲染在消息主体里，任何折叠状态都可见。) -->
+          <div v-if="questionParts(msg).length > 0" class="question-group-block">
+            <CoreQuestionGroup
+              v-for="part in questionParts(msg)"
+              :key="part.id"
+              :part="part"
+              :disabled="decisionsDisabled"
+              @submit="onQuestionSubmit"
+              @skip="onQuestionSkip(part)"
+            />
           </div>
 
           <!-- One process renderer for both live and completed messages. The
@@ -745,8 +760,11 @@
                       <span v-if="decisionStatusLabel(group.part)" class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
                     </div>
                     <p class="decision-card-title">{{ decisionTitle(group.part) }}</p>
-                    <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                    <ol v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
+                    <p
+                      v-if="decisionQuestions(group.part).length === 0 && decisionDetail(group.part)"
+                      class="decision-card-detail"
+                    >{{ decisionDetail(group.part) }}</p>
+                    <ol v-if="decisionQuestions(group.part).length === 0 && group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
                       <li v-for="(option, index) in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
                         <span class="decision-option-index" aria-hidden="true">{{ index + 1 }}</span>
                         <button
@@ -764,7 +782,7 @@
                         <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
                       </li>
                     </ol>
-                    <details v-if="!decisionsDisabled && canGuideDecision(group.part)" class="decision-guide">
+                    <details v-if="decisionQuestions(group.part).length === 0 && !decisionsDisabled && canGuideDecision(group.part)" class="decision-guide">
                       <summary class="decision-guide-toggle">{{ t("其他处理方式") }}</summary>
                       <div class="decision-guide-fields">
                         <textarea
@@ -1031,6 +1049,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-vue-next'
+import CoreQuestionGroup from '@/components/CoreQuestionGroup.vue'
 import {
   assistantSegmentTurnId,
   // Decision presentation/selection semantics live in `pendingDecisions.ts` so
@@ -1220,7 +1239,38 @@ const emit = defineEmits<{
   'edit-message': [payload: EditMessagePayload]
   /** 打开右侧子代理分屏：只带身份，由壳体从当前消息投影里解析出运行。 */
   'open-sub-agent': [ref: CoreSubAgentRef]
+  'question-submit': [payload: { partId: string; groupId: string; text: string; answers: Record<string, string> }]
+  'question-skip': [payload: { partId: string; groupId: string }]
 }>()
+
+function questionParts(msg: CoreMessage): MessagePart[] {
+  return (msg.parts || []).filter(part => part.partType === 'questionGroup')
+}
+
+function decisionQuestions(part: MessagePart): unknown[] {
+  const meta = (part.metadata || {}) as Record<string, unknown>
+  return Array.isArray(meta.questions) ? meta.questions : []
+}
+
+function onQuestionSubmit(payload: {
+  partId: string
+  groupId: string
+  text: string
+  answers: Record<string, string>
+}) {
+  // user:“确保视觉、功能和交互不退化”+(只读会话不向当前会话转发回答)。
+  if (!props.decisionsDisabled) emit('question-submit', payload)
+}
+
+function questionGroupId(part: MessagePart): string {
+  const meta = (part.metadata || {}) as Record<string, unknown>
+  return String(meta.question_group_id || meta.group_id || '')
+}
+
+function onQuestionSkip(part: MessagePart) {
+  // user:“跳过等于 done”+(只读会话同样不向当前会话转发跳过)。
+  if (!props.decisionsDisabled) emit('question-skip', { partId: part.id, groupId: questionGroupId(part) })
+}
 
 function openSubAgentPane(part: MessagePart): void {
   emit('open-sub-agent', coreSubAgentRef(part))

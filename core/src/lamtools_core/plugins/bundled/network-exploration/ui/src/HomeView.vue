@@ -1,4 +1,5 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“首页重做，放三个块和一个 bar，bar 写数值，三个块分别是加速代理下载的快捷操作”+(首页只保留实时数值条与三个可直接操作的快捷块)。
 import { computed, ref } from "vue";
 import {
@@ -150,8 +151,8 @@ async function startDownload() {
         </div>
         <div class="nx-quick-actions">
           <button
-            class="nx-button"
-            :class="active ? 'nx-secondary' : 'nx-primary'"
+            class="btn nx-button"
+            :class="active ? 'btn--secondary' : 'btn--primary'"
             :aria-pressed="active"
             :disabled="Boolean(session.busy) || !session.systemProxyReady"
             data-acceleration
@@ -160,7 +161,7 @@ async function startDownload() {
             <Power :size="15" />{{ accelerationLabel }}
           </button>
           <button
-            class="nx-button nx-quiet nx-quick-link"
+            class="btn nx-button btn--quiet nx-quick-link"
             data-home-open="overview"
             @click="emit('navigate', 'overview')"
           >
@@ -198,8 +199,8 @@ async function startDownload() {
         </div>
         <div class="nx-quick-actions">
           <button
-            class="nx-button"
-            :class="proxyRunning ? 'nx-secondary' : 'nx-primary'"
+            class="btn nx-button"
+            :class="proxyRunning ? 'btn--secondary' : 'btn--primary'"
             :aria-pressed="proxyRunning"
             :disabled="Boolean(session.busy)"
             data-home-proxy
@@ -208,7 +209,7 @@ async function startDownload() {
             <Power :size="15" />{{ proxyLabel }}
           </button>
           <button
-            class="nx-button nx-quiet nx-quick-link"
+            class="btn nx-button btn--quiet nx-quick-link"
             data-home-open="proxy"
             @click="emit('navigate', 'proxy')"
           >
@@ -259,7 +260,7 @@ async function startDownload() {
               placeholder="粘贴下载链接"
               required
             /><button
-              class="nx-button nx-primary"
+              class="btn nx-button btn--primary"
               :disabled="Boolean(session.busy) || !draft.trim()"
               aria-label="开始下载"
             >
@@ -267,7 +268,7 @@ async function startDownload() {
             </button>
           </form>
           <button
-            class="nx-button nx-quiet nx-quick-link"
+            class="btn nx-button btn--quiet nx-quick-link"
             data-home-open="transfer"
             @click="emit('navigate', 'transfer')"
           >

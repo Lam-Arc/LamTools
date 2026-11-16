@@ -401,6 +401,11 @@ function clamp(value: number, min: number, max: number): number {
   animation: ping-ring-tier-in 180ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
+/* user:“梳理所有可见的组件、样式、布局、动效及交互”+(减少动态效果时圆环与子环直接显示)。 */
+@media (prefers-reduced-motion: reduce) {
+  .ping-ring__svg, .ping-ring__tier { animation: none; }
+}
+
 @keyframes ping-ring-tier-in {
   from { opacity: 0; transform: scale(0.9); }
   to { opacity: 1; transform: scale(1); }

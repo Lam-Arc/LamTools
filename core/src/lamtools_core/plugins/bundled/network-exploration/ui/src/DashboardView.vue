@@ -1,4 +1,5 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“加速页里头不用分什么线路加速…选线路的事儿，去代理里面”+(加速页只做本机加速；订阅和线路全部留在代理页)。
 import { computed, ref } from "vue";
 import {
@@ -39,8 +40,8 @@ async function checkSite() {
         </p>
       </div>
       <button
-        class="nx-button nx-large"
-        :class="active ? 'nx-secondary' : 'nx-primary'"
+        class="btn nx-button nx-large"
+        :class="active ? 'btn--secondary' : 'btn--primary'"
         :aria-pressed="active"
         :disabled="Boolean(session.busy) || !session.systemProxyReady"
         data-acceleration
@@ -81,7 +82,7 @@ async function checkSite() {
         <div class="nx-fact">
           <span>订阅线路</span
           ><button
-            class="nx-button nx-quiet nx-fact-link"
+            class="btn nx-button btn--quiet nx-fact-link"
             @click="emit('navigate', 'proxy')"
           >
             去代理页管理<ArrowUpRight :size="13" />
@@ -109,7 +110,7 @@ async function checkSite() {
             placeholder="输入网址，例如 github.com"
             required
           /><button
-            class="nx-button nx-secondary"
+            class="btn nx-button btn--secondary"
             :disabled="Boolean(session.busy)"
           >
             <Activity :size="15" />{{
@@ -122,7 +123,7 @@ async function checkSite() {
           ><button
             v-for="site in ['github.com', 'huggingface.co', 'google.com']"
             :key="site"
-            class="nx-button nx-quiet"
+            class="btn nx-button btn--quiet"
             @click="target = site"
           >
             {{ site }}
@@ -133,7 +134,7 @@ async function checkSite() {
         <div class="nx-section-heading">
           <h2>最近活动</h2>
           <button
-            class="nx-button nx-quiet"
+            class="btn nx-button btn--quiet"
             @click="emit('navigate', 'advanced')"
           >
             查看记录<ArrowUpRight :size="13" />

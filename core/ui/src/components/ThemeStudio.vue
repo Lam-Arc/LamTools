@@ -329,13 +329,8 @@
 
         <div class="studio-body">
         <div class="studio-scope">
-          <select :value="scope" class="studio-select" data-studio-scope @change="setScope">
-            <option value="base">{{ selectedIsTemplate ? t('模板样式') : t('基础样式') }}</option>
-            <option v-if="instanceKey" value="instance">{{ t('此实例') }} · {{ instanceKey }}</option>
-            <option v-for="item in store.draft.value.breakpoints" :key="item.id" :value="item.id">
-              {{ t('窄于') }} {{ item.maxWidth }}px
-            </option>
-          </select>
+          <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(范围切换使用共享下拉，实例与断点仍保持独立) -->
+          <UiSelect :model-value="scope" :options="scopeOptions" class="studio-select" data-studio-scope :aria-label="t('编辑范围')" :menu-min-width="180" @update:model-value="setScope" />
           <button class="studio-secondary" type="button" data-studio-add-breakpoint @click="addBreakpoint">{{ t('按当前宽度加断点') }}</button>
           <button v-if="scope !== 'base' && scope !== 'instance'" class="studio-secondary" type="button" data-studio-remove-breakpoint @click="removeBreakpoint">{{ t('删除这个断点') }}</button>
           <p v-if="scope !== 'base' && scope !== 'instance'" class="studio-hint">{{ t('正在编辑窄屏覆盖，只影响该宽度以下。') }}</p>
@@ -361,16 +356,14 @@
                 user:“那个背景色除了可直接选色，也应该和主题 token 关联上”+
                 (颜色来源：自定义色 / 透明 / 主题令牌；令牌跟随主题预设自动变化，选令牌时色盘停用。)
               -->
-              <select class="studio-select" :value="backgroundToken" data-studio-color-token :aria-label="t('背景颜色')" @change="updateBackgroundToken">
-                <option value="">{{ t('自定义颜色') }}</option>
-                <option v-for="option in COLOR_TOKEN_OPTIONS" :key="option.value" :value="option.value">{{ t(option.label) }}</option>
-              </select>
+              <UiSelect class="studio-select" :model-value="backgroundToken" :options="backgroundTokenOptions" data-studio-color-token :aria-label="t('背景颜色')" :menu-min-width="180" @update:model-value="updateBackgroundToken" />
             </div>
           </label>
 
           <label v-if="allows('background')" class="studio-field">
             <span>{{ t('背景透明度') }} {{ percent(backgroundOpacity) }}</span>
-            <input type="range" min="0" max="1" step="0.05" :value="backgroundOpacity" data-studio-field="background-opacity" :aria-label="t('背景透明度')" @input="updateBackgroundOpacity($event)" />
+            <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(背景透明度沿用原来的即时预览和独立字段) -->
+            <SundayRange bare :model-value="backgroundOpacity" :min="0" :max="1" :step="0.05" :decimals="2" :label="t('背景透明度')" :input-attrs="{ 'data-studio-field': 'background-opacity' }" @input="updateBackgroundOpacity($event)" />
           </label>
 
           <div v-if="allows('background')" class="studio-field">
@@ -399,14 +392,8 @@
               </button>
               <button v-if="hasAsset" class="studio-secondary" type="button" data-studio-clear-asset @click="clearAsset">{{ t('清除') }}</button>
             </div>
-            <select :value="assetFit" class="studio-select" data-studio-asset-fit :disabled="!hasAsset" :aria-label="t('背景素材')" @change="updateFit">
-              <option value="fixed">fixed</option>
-              <option value="contain">contain</option>
-              <option value="cover">cover</option>
-              <option value="stretch">stretch</option>
-              <option value="tile">tile</option>
-              <option value="nineSlice">nineSlice</option>
-            </select>
+            <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(素材适应方式复用共享菜单，保留完整模式与预览) -->
+            <UiSelect :model-value="assetFit" :options="assetFitOptions" class="studio-select" data-studio-asset-fit :disabled="!hasAsset" :aria-label="t('背景素材')" :menu-min-width="160" @update:model-value="updateFit" />
             <!-- user:“添加的图像应该可以裁切、位移、缩放等等”+(裁切=上面的适配方式；这里补位置与缩放) -->
             <div v-if="hasAsset" class="studio-field studio-field--pair">
               <span>{{ t('图片位置') }}</span>
@@ -439,14 +426,16 @@
             </div>
             <label v-if="hasAsset" class="studio-field studio-field--row">
               <span>{{ t('允许溢出组件') }}</span>
-              <input type="checkbox" :checked="assetOverflow === 'local-visible'" data-studio-asset-overflow @change="updateOverflow" />
+              <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(图片溢出选项共用复选框并保留原有预览更新) -->
+              <input class="sunday-checkbox" type="checkbox" :checked="assetOverflow === 'local-visible'" data-studio-asset-overflow @change="updateOverflow" />
             </label>
             <input ref="assetEl" type="file" accept="image/*" hidden @change="importAsset" />
           </div>
 
           <label v-if="allows('opacity')" class="studio-field">
             <span>{{ t('透明度') }} {{ percent(styleOf('opacity', 1)) }}</span>
-            <input type="range" min="0" max="1" step="0.05" :value="styleOf('opacity', 1)" data-studio-field="opacity" @input="updateNumber('opacity', $event)" />
+            <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(整体透明度继续与背景透明度分别更新) -->
+            <SundayRange bare :model-value="Number(styleOf('opacity', 1))" :min="0" :max="1" :step="0.05" :decimals="2" :label="t('透明度')" :input-attrs="{ 'data-studio-field': 'opacity' }" @input="updateNumber('opacity', $event)" />
           </label>
 
           <div v-if="allows('position')" class="studio-field studio-field--pair">
@@ -463,22 +452,12 @@
             <span>{{ t('锚点') }}</span>
             <div class="studio-size-row">
               <span class="studio-size-axis">{{ t('横向') }}</span>
-              <select class="studio-select" :value="anchorOf('h')?.edge ?? ''" data-studio-anchor-edge="h" :aria-label="t('横向锚点')" @change="updateAnchorEdge('h', $event)">
-                <option value="">{{ t('不锚定') }}</option>
-                <option value="left">{{ t('左') }}</option>
-                <option value="centerX">{{ t('水平居中') }}</option>
-                <option value="right">{{ t('右') }}</option>
-              </select>
+              <UiSelect class="studio-select" :model-value="anchorOf('h')?.edge ?? ''" :options="anchorOptions.h" data-studio-anchor-edge="h" :aria-label="t('横向锚点')" :menu-min-width="160" @update:model-value="updateAnchorEdge('h', $event)" />
               <input type="number" min="0" :value="anchorOf('h')?.offset ?? 0" data-studio-anchor-offset="h" :aria-label="t('横向距离')" :disabled="!anchorOf('h')" @input="updateAnchorOffset('h', $event)" />
             </div>
             <div class="studio-size-row">
               <span class="studio-size-axis">{{ t('纵向') }}</span>
-              <select class="studio-select" :value="anchorOf('v')?.edge ?? ''" data-studio-anchor-edge="v" :aria-label="t('纵向锚点')" @change="updateAnchorEdge('v', $event)">
-                <option value="">{{ t('不锚定') }}</option>
-                <option value="top">{{ t('上') }}</option>
-                <option value="centerY">{{ t('垂直居中') }}</option>
-                <option value="bottom">{{ t('下') }}</option>
-              </select>
+              <UiSelect class="studio-select" :model-value="anchorOf('v')?.edge ?? ''" :options="anchorOptions.v" data-studio-anchor-edge="v" :aria-label="t('纵向锚点')" :menu-min-width="160" @update:model-value="updateAnchorEdge('v', $event)" />
               <input type="number" min="0" :value="anchorOf('v')?.offset ?? 0" data-studio-anchor-offset="v" :aria-label="t('纵向距离')" :disabled="!anchorOf('v')" @input="updateAnchorOffset('v', $event)" />
             </div>
             <p class="studio-hint">{{ t('锚点=到父容器某条边的距离，不会小于 0。') }}</p>
@@ -499,12 +478,8 @@
             <span>{{ t('尺寸') }}</span>
             <div v-for="axis in (['width', 'height'] as const)" :key="axis" class="studio-size-row">
               <span class="studio-size-axis">{{ axis === 'width' ? t('宽度') : t('高度') }}</span>
-              <select class="studio-select" :value="sizeModeOf(axis)" :data-studio-size-mode="axis" :aria-label="axis === 'width' ? t('宽度') : t('高度')" @change="updateSizeMode(axis, $event)">
-                <option value="">{{ t('未设置') }}</option>
-                <option value="fill">{{ t('填充') }}</option>
-                <option value="hug">{{ t('内容适配') }}</option>
-                <option value="fixed">{{ t('固定值') }}</option>
-              </select>
+              <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(尺寸与锚点选择共用下拉，保留各轴独立的预览行为) -->
+              <UiSelect class="studio-select" :model-value="sizeModeOf(axis)" :options="sizeModeOptions" :data-studio-size-mode="axis" :aria-label="axis === 'width' ? t('宽度') : t('高度')" :menu-min-width="160" @update:model-value="updateSizeMode(axis, $event)" />
               <input v-if="sizeModeOf(axis) === 'fixed'" type="number" :value="sizeValueOf(axis)" :data-studio-size-value="axis" :aria-label="t('固定值')" @input="updateSizeValue(axis, $event)" />
               <input type="number" min="0" :value="sizeBoundOf(axis, 'min')" :data-studio-size-min="axis" :aria-label="t('最小')" placeholder="min" @input="updateSizeBound(axis, 'min', $event)" />
               <input type="number" min="0" :value="sizeBoundOf(axis, 'max')" :data-studio-size-max="axis" :aria-label="t('最大')" placeholder="max" @input="updateSizeBound(axis, 'max', $event)" />
@@ -524,7 +499,8 @@
 
           <label v-if="allows('visibility')" class="studio-field studio-field--row">
             <span>{{ t('显示') }}</span>
-            <input type="checkbox" :checked="draftVisibility" data-studio-field="visibility" @change="updateVisibility($event)" />
+            <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(显隐选项共用复选框并保留原有预览更新) -->
+            <input class="sunday-checkbox" type="checkbox" :checked="draftVisibility" data-studio-field="visibility" @change="updateVisibility($event)" />
           </label>
 
           <button class="studio-secondary" type="button" @click="clearSelected">{{ t('清除这个组件的修改') }}</button>
@@ -644,6 +620,8 @@
 </template>
 
 <script setup lang="ts">
+import SundayRange from '@/components/SundayRange.vue'
+import UiSelect from '@/components/UiSelect.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '@/i18n/index.ts'
 import { UI_REGISTRY, type UiProtectionLevel, type UiRegistryEntry } from '@/uiRegistry/index.ts'
@@ -1403,6 +1381,11 @@ const visibleEntries = computed<TreeEntry[]>(() => {
 
 const selectedEntry = computed(() => UI_REGISTRY.find((entry) => entry.id === selectedId.value) || null)
 const scope = ref<'base' | string>('base')
+const scopeOptions = computed(() => [
+  { value: 'base', label: selectedIsTemplate.value ? t('模板样式') : t('基础样式') },
+  ...(instanceKey.value ? [{ value: 'instance', label: `${t('此实例')} · ${instanceKey.value}` }] : []),
+  ...store.draft.value.breakpoints.map(item => ({ value: item.id, label: `${t('窄于')} ${item.maxWidth}px` })),
+])
 const selectedIsTemplate = computed(() => selectedEntry.value?.kind === 'template')
 
 const draftNode = computed<StudioNodeStyle>(() => {
@@ -1430,6 +1413,7 @@ const assetPreviewUrl = computed(() => {
   return assetRef ? assetUrls.value[assetRef] || null : null
 })
 const assetFit = computed(() => activeBackground.value?.fit ?? 'cover')
+const assetFitOptions = ['fixed', 'contain', 'cover', 'stretch', 'tile', 'nineSlice'].map(value => ({ value, label: value }))
 const assetOverflow = computed(() => activeBackground.value?.overflow ?? 'clipped')
 const backgroundColor = computed(() => {
   // 底色在任何背景类型下都保留（图片背景时它铺在图片下面）。
@@ -1445,9 +1429,10 @@ const COLOR_TOKEN_OPTIONS: Array<{ value: StudioColorToken; label: string }> = [
   { value: 'control-background', label: '控件底色' },
 ]
 const backgroundToken = computed(() => draftNode.value.background?.colorToken ?? '')
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(令牌选择沿用共享下拉并保留自定义颜色的空值)
+const backgroundTokenOptions = computed(() => [{ value: '', label: t('自定义颜色') }, ...COLOR_TOKEN_OPTIONS.map(option => ({ value: option.value, label: t(option.label) }))])
 
-function updateBackgroundToken(event: Event): void {
-  const token = (event.target as HTMLSelectElement).value
+function updateBackgroundToken(token: string): void {
   const current: StudioBackground = draftNode.value.background ?? { type: 'solid' }
   // 令牌优先于自定义色（编译层保证），所以切换令牌不动多余字段：
   // 切回“自定义颜色”时之前选的色还在，不会丢。
@@ -1506,6 +1491,12 @@ function percent(value: string | number): string {
 }
 
 // —— 边锚点（方案 §4.4）：相对父容器某条边的距离，兜底距离非负 ——
+const anchorOptions = computed(() => ({
+  h: [{ value: '', label: t('不锚定') }, { value: 'left', label: t('左') }, { value: 'centerX', label: t('水平居中') }, { value: 'right', label: t('右') }],
+  v: [{ value: '', label: t('不锚定') }, { value: 'top', label: t('上') }, { value: 'centerY', label: t('垂直居中') }, { value: 'bottom', label: t('下') }],
+}))
+const sizeModeOptions = computed(() => [{ value: '', label: t('未设置') }, { value: 'fill', label: t('填充') }, { value: 'hug', label: t('内容适配') }, { value: 'fixed', label: t('固定值') }])
+
 const ANCHOR_AXIS_EDGES = {
   h: ['left', 'right', 'centerX'],
   v: ['top', 'bottom', 'centerY'],
@@ -1516,8 +1507,8 @@ function anchorOf(axis: 'h' | 'v'): StudioNodeAnchor | undefined {
   return anchors.find((anchor) => (ANCHOR_AXIS_EDGES[axis] as readonly string[]).includes(anchor.edge))
 }
 
-function updateAnchorEdge(axis: 'h' | 'v', event: Event): void {
-  const edge = (event.target as HTMLSelectElement).value as StudioAnchorEdge | ''
+function updateAnchorEdge(axis: 'h' | 'v', value: string): void {
+  const edge = value as StudioAnchorEdge | ''
   const existing = anchorOf(axis)
   const rest = (draftNode.value.anchors || []).filter((anchor) => !(ANCHOR_AXIS_EDGES[axis] as readonly string[]).includes(anchor.edge))
   const anchors = edge
@@ -1708,8 +1699,7 @@ function refreshPreview(): void {
   })
 }
 
-function setScope(event: Event): void {
-  const value = (event.target as HTMLSelectElement).value
+function setScope(value: string): void {
   if (value === 'instance' && !instanceKey.value) return
   scope.value = value === 'instance' ? 'instance' : value
   // user:“写好清单，逐项打勾”+(离开实例作用域就把实例标识一起清掉，别让下拉停在空目标上)
@@ -2061,8 +2051,7 @@ function writeSizeDimension(axis: 'width' | 'height', dimension: StudioDimension
   pullSelectedInsideShell()
 }
 
-function updateSizeMode(axis: 'width' | 'height', event: Event): void {
-  const mode = (event.target as HTMLSelectElement).value
+function updateSizeMode(axis: 'width' | 'height', mode: string): void {
   const variable = layoutVariableFor(axis)
   if (variable) {
     // 布局变量驱动的轴：清空=删变量；固定值=写变量；其余模式退回元素尺寸。
@@ -2220,8 +2209,8 @@ function clearAsset(): void {
   patch({ background: { ...(rest as unknown as StudioBackground), type: hasBase ? 'solid' : 'gradient' } })
 }
 
-function updateFit(event: Event): void {
-  patch({ background: { ...(activeBackground.value || { type: 'asset' }), type: 'asset', fit: (event.target as HTMLSelectElement).value as never } })
+function updateFit(value: string): void {
+  patch({ background: { ...(activeBackground.value || { type: 'asset' }), type: 'asset', fit: value as never } })
 }
 
 // user:“添加的图像应该可以裁切、位移、缩放等等”+(位置=焦点百分比，缩放=相对原始尺寸的倍数)
@@ -3377,6 +3366,8 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: var(--z-fullscreen, 900);
+  /* user:“确保视觉、功能和交互不退化”+(传送的下拉菜单与全屏编辑器同层，避免被遮住) */
+  --ui-select-layer: var(--z-fullscreen, 900);
   pointer-events: none;
   /* 编辑器挂在 body 下，主区域主题变量够不到；玻璃着色取主区域面色，别退到默认象牙色。 */
   --optical-glass-surface: var(--theme-main-background, #1b1d22);
@@ -3781,7 +3772,6 @@ onBeforeUnmount(() => {
   object-fit: cover;
   display: block;
 }
-.studio-select { height: 28px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 16%, transparent); border-radius: var(--radius-sm, 6px); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); }
 .studio-field--pair { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 6px; }
 .studio-color-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px; }
 .studio-color-row input[type='color'] { width: 44px; }
@@ -3823,6 +3813,8 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   pointer-events: none;
 }
+.studio-select.ui-select { width: 100%; min-width: 0; }
+.studio-select :deep(.ui-select-trigger) { min-height: 28px; font-size: var(--type-xs, 11px); }
 .studio-field {
   display: flex;
   flex-direction: column;

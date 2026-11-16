@@ -6,7 +6,7 @@ user:“继续，自动值守，非必要不停歇，自己不断找下一步做
 
 `await context.workspace_registry.get(project_id)`调用原OperationCatalog的`project.get`，读取原CoreProjectStore/SQLite。project_id须为非空字符串且至多128字符；返回与当前context.work_root规范路径一致的原project字典。其他项目及不存在项目均返回None，不暴露其他项目字段或路径；没有可由请求指定的授权根。原项目字段为id/name/work_root/icon_key/color_key/workspace_id/revision及时间字符串，不是DSH Workspace实体或生成codec。项目ID由调用方提供，接口不枚举全局项目，也不自动激活Agent。
 
-接口绑定当前插件启动代、项目根和原操作目录；等待后再次核对，期间目录替换/项目根变化/撤回则拒绝发布旧结果，取消传播给原读取并释放作用域租约。不存在通过原project.get明确的not-found结果映射为None；其他原错误归类为workspace-registry/rejected，操作缺失为workspace-registry/unavailable，绑定变化为workspace-registry/host-changed。仅是读取前后检查，并非跨数据库和授权的原子事务或OS级目录隔离。
+接口绑定当前插件启动代、项目根和原操作目录；等待后再次核对，期间目录替换/项目根变化/撤回则拒绝发布旧结果。重复取消时等待原项目读取清理后释放作用域租约，不合作的读取可能延迟结束。不存在通过原project.get明确的not-found结果映射为None；其他原错误归类为workspace-registry/rejected，操作缺失为workspace-registry/unavailable，绑定变化为workspace-registry/host-changed。仅是读取前后检查，并非跨数据库和授权的原子事务或OS级目录隔离。
 
 插件可在自身operations处理器中显式调用，再将该处理器声明为已有token POST路由和http.remote方法。实际SQLite→原project.get→插件处理器→HTTP验收覆盖当前项目、其他项目不可见和无效令牌；默认不公开路由。数据库关闭再打开后同一原项目ID/名称仍可查。
 
@@ -15,7 +15,7 @@ user:“继续，自动值守，非必要不停歇，自己不断找下一步做
 
 ## 从当前目录解析项目编号
 
-`await context.workspace_registry.resolve_by_path(path)`接受1–4096字符的绝对路径，仅当规范路径等于调用上下文固定项目根时进入原project.resolve；其他路径不访问项目数据库并返回None。原CoreProjectStore.resolve_by_path使用原规范路径和SQLite精确读取，未登记返回None，不创建目录或项目；成功返回同一原project字典。不是DSH跨工作区全局resolveByPath。等待期间根、原操作目录或插件启动代变化时拒绝结果；取消传播并释放作用域租约。`project.resolve`为原Core操作目录的只读操作，HTTP仍需插件显式映射。
+`await context.workspace_registry.resolve_by_path(path)`接受1–4096字符的绝对路径，仅当规范路径等于调用上下文固定项目根时进入原project.resolve；其他路径不访问项目数据库并返回None。原CoreProjectStore.resolve_by_path使用原规范路径和SQLite精确读取，未登记返回None，不创建目录或项目；成功返回同一原project字典。不是DSH跨工作区全局resolveByPath。等待期间根、原操作目录或插件启动代变化时拒绝结果；重复取消等待原读取清理后释放作用域租约。`project.resolve`为原Core操作目录的只读操作，HTTP仍需插件显式映射。
 
 新增14项验收覆盖原SQLite精确解析、其他项目派发前拒绝、五种非法参数、四种等待后失效/取消、缺失根不创建、原插件操作到HTTP和迁移交接；与本轮前13项一起仅运行这两个新增测试文件，27项通过。不是完整workspaceRegistry或Workspace follow。
 
@@ -29,3 +29,5 @@ user:“继续，自动值守，非必要不停歇，自己不断找下一步做
 扫描完页面后再次只读核对已选记录并更新摘要，过滤扫描后隐藏或迁移的会话；过滤可能产生短页，游标仍按已扫描位置推进。这些逐项读取和随后的项目核对不是原子快照，后续并发变化仍可能发生。2项新增验收覆盖早先选中会话在后续读取中隐藏，以及相同场景经真实HTTP返回。
 
 项目ID查询和根目录解析完成后还复核原操作注册身份；同名重新注册或失效则拒绝发布旧结果。2项新增验收覆盖原SQLite读取期间的两种同名替换，检查不是跨线程原子锁。
+
+最终项目复核等待结束后，再经原会话存储逐条只读复核已选记录，过滤期间隐藏或转移的会话并刷新摘要；重复取消等待当前读取清理。8项新增验收覆盖临时SQLite隐藏和转移、作用域/提供方撤回、重复取消、真实认证HTTP及迁移提示；逐条检查仍非原子快照。

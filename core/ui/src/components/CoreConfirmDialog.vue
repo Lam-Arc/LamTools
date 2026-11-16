@@ -5,7 +5,7 @@
         v-if="open"
         ref="backdropEl"
         class="core-confirm__backdrop"
-        @keydown.esc.prevent="cancel"
+        @keydown.esc.prevent.stop="cancel"
       >
         <section
           ref="dialogEl"
@@ -14,6 +14,7 @@
           aria-modal="true"
           :aria-labelledby="titleId"
           :aria-busy="loading"
+          @keydown.tab="trapDialogTab"
         >
           <span :id="titleId" class="core-confirm__title">{{ title }}</span>
           <input
@@ -36,7 +37,7 @@
           >{{ error || detail }}</span>
           <span class="core-confirm__spacer" aria-hidden="true"></span>
           <span class="core-confirm__actions">
-            <button type="button" class="core-confirm__cancel" :disabled="loading" @click="cancel">{{ t("取消") }}</button>
+            <button ref="cancelButtonEl" type="button" class="core-confirm__cancel" :disabled="loading" @click="cancel">{{ t("取消") }}</button>
             <button v-if="discardLabel" type="button" class="core-confirm__cancel" :disabled="loading" @click="$emit('discard')">{{ discardLabel }}</button>
             <button
               ref="confirmButtonEl"
@@ -57,6 +58,7 @@ import { t } from '@/i18n/index.ts'
 
 import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
+import { trapDialogTab } from '@/composables/trapDialogTab.ts'
 
 const props = withDefaults(defineProps<{
   open: boolean
@@ -96,6 +98,7 @@ const titleId = `core-confirm-title-${instanceId}`
 const backdropEl = ref<HTMLElement | null>(null)
 const dialogEl = ref<HTMLElement | null>(null)
 const confirmButtonEl = ref<HTMLButtonElement | null>(null)
+const cancelButtonEl = ref<HTMLButtonElement | null>(null)
 const inputEl = ref<HTMLInputElement | null>(null)
 let restoreFocus: HTMLElement | null = null
 
@@ -103,7 +106,10 @@ watch(() => props.open, async open => {
   if (open) {
     restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     await nextTick()
+    // user:“确保视觉、功能和交互不退化”+(快速关闭时不抢焦点，确认不可用时聚焦可用的取消按钮)。
+    if (!props.open) return
     if (props.input) inputEl.value?.focus()
+    else if (!props.loading && props.confirmDisabled) cancelButtonEl.value?.focus()
     else confirmButtonEl.value?.focus()
   } else {
     restoreFocus?.focus()

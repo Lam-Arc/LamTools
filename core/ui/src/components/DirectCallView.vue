@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(调用台加载和运行状态复用共享旋转动效)。
+import '@/styles/sunday-spinner.css'
 /**
  * DirectCallView — 调用台。
  *
@@ -25,6 +27,8 @@ import {
   Trash2,
 } from 'lucide-vue-next'
 import { t } from '@/i18n/index.ts'
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(调用历史筛选复用标签键盘导航)。
+import { onTabGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 import UiSelect from '@/components/UiSelect.vue'
 
 type OutputType = 'text' | 'image' | 'video' | 'audio'
@@ -532,7 +536,7 @@ onBeforeUnmount(() => { stopPolling() })
         </div>
       </div>
       <button class="dc-icon-btn" type="button" :disabled="loading" :title="t('刷新')" @click="refreshAll">
-        <RefreshCw :size="15" :stroke-width="1.9" :class="{ 'dc-spin': loading }" />
+        <RefreshCw :size="15" :stroke-width="1.9" :class="{ 'dc-spin sunday-spin': loading }" />
       </button>
     </header>
 
@@ -672,7 +676,7 @@ onBeforeUnmount(() => { stopPolling() })
               <span>{{ activeCall.provider_name }} · {{ outputLabel(activeCall.output_type) }}</span>
             </div>
             <span class="dc-status" :data-status="activeCall.status">
-              <Loader2 v-if="!activeCall.finished" :size="13" class="dc-spin" />
+              <Loader2 v-if="!activeCall.finished" :size="13" class="dc-spin sunday-spin" />
               {{ statusLabel(activeCall.status) }}
             </span>
           </header>
@@ -739,13 +743,14 @@ onBeforeUnmount(() => { stopPolling() })
         <header class="dc-history-head">
           <span><History :size="14" :stroke-width="1.9" />{{ t('历史') }}</span>
         </header>
-        <div class="dc-history-filters" role="tablist" :aria-label="t('按输出类型筛选')">
+        <div class="dc-history-filters" role="tablist" :aria-label="t('按输出类型筛选')" @keydown="onTabGroupKeydown">
           <button
             v-for="item in historyFilters"
             :key="item.value"
             type="button"
             role="tab"
             :aria-selected="historyFilter === item.value"
+            :tabindex="historyFilter === item.value ? 0 : -1"
             :class="{ 'is-on': historyFilter === item.value }"
             @click="historyFilter = item.value"
           >{{ item.label }}</button>
@@ -1332,18 +1337,6 @@ onBeforeUnmount(() => { stopPolling() })
 .dc-more:hover {
   background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
   color: var(--theme-main-text);
-}
-
-.dc-spin {
-  animation: dc-rotate 0.9s linear infinite;
-}
-
-@keyframes dc-rotate {
-  to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .dc-spin { animation: none; }
 }
 
 @container direct-call (max-width: 1080px) {

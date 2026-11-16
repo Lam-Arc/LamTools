@@ -14,7 +14,7 @@
         :disabled="!requestRpc || searchLoading"
       />
       <button type="submit" :disabled="!requestRpc || !query.trim() || searchLoading" :aria-label="t('搜索')">
-        <LoaderCircle v-if="searchLoading" :size="14" :stroke-width="1.8" class="spinning" aria-hidden="true" />
+        <LoaderCircle v-if="searchLoading" :size="14" :stroke-width="1.8" class="spinning sunday-spin sunday-spin--fast" aria-hidden="true" />
         <Search v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </form>
@@ -29,6 +29,8 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(搜索加载复用共享旋转反馈并保留速度)。
+import '@/styles/sunday-spinner.css'
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
@@ -190,7 +192,4 @@ onMounted(() => { void loadStatus() })
 .right-sidebar-rag-results li { display: grid; gap: 2px; min-width: 0; padding-top: var(--space-1); border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 8%, transparent); }
 .right-sidebar-rag-results strong { overflow: hidden; color: var(--theme-backdrop-text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .right-sidebar-rag-results span { display: -webkit-box; overflow: hidden; color: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent); font-size: 11px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.spinning { animation: right-sidebar-rag-spin .8s linear infinite; }
-@keyframes right-sidebar-rag-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }
 </style>

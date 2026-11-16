@@ -22,6 +22,11 @@ class PluginWorkspaceRegistryAPI:
             raise WorkspaceRegistryError("workspace-registry/host-changed", "Workspace binding changed")
 
     async def get(self, project_id):
+        from .session_controller import _cancel_owned_read
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(重复取消等待原项目读取及作用域清理)。
+        return await _cancel_owned_read(self._get_owned(project_id), name="workspace-registry-get")
+
+    async def _get_owned(self, project_id):
         if type(project_id) is not str or not project_id.strip() or len(project_id) > 128:
             raise ValueError("project_id must be a nonblank string of at most 128 characters")
         self._scope.acquire()
@@ -51,6 +56,11 @@ class PluginWorkspaceRegistryAPI:
             self._scope.release()
 
     async def resolve_by_path(self, path):
+        from .session_controller import _cancel_owned_read
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(路径解析取消后仍等待原查询退出)。
+        return await _cancel_owned_read(self._resolve_by_path_owned(path), name="workspace-registry-resolve")
+
+    async def _resolve_by_path_owned(self, path):
         if type(path) is not str or not path or len(path) > 4096 or "\x00" in path or not Path(path).is_absolute():
             raise ValueError("path must be a bounded absolute path")
         self._scope.acquire()
@@ -82,7 +92,10 @@ class PluginWorkspaceRegistryAPI:
             self._scope.release()
 
     async def sessions(self, project_id, *, limit=50, cursor=None):
-        return await self._sessions_page(project_id, limit=limit, cursor=cursor, binding=None)
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(重复取消仍等待实际查询及最后复核退出)。
+        from .session_controller import _cancel_owned_read
+        return await _cancel_owned_read(self._sessions_page(project_id, limit=limit, cursor=cursor, binding=None),
+                                        name="workspace-session-page")
 
     async def _sessions_page(self, project_id, *, limit, cursor, binding):
         self._scope.acquire()
@@ -104,6 +117,13 @@ class PluginWorkspaceRegistryAPI:
                 raise WorkspaceRegistryError("workspace-registry/host-changed", "Session query provider changed")
             if await self.get(project_id) is None:
                 raise WorkspaceRegistryError("workspace-registry/not-found", "Workspace is unavailable in this project")
+            self._check()
+            if self._context.service("session_query") is not host:
+                raise WorkspaceRegistryError("workspace-registry/host-changed", "Session query provider changed")
+            # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(项目复核等待后复用原会话权威，过滤已经隐藏或移出的记录)。
+            if not callable(getattr(host, "revalidate_project_page", None)):
+                raise WorkspaceRegistryError("workspace-registry/unavailable", "Native session revalidation is unavailable")
+            result = await host.revalidate_project_page(result, str(self._root))
             self._check()
             if self._context.service("session_query") is not host:
                 raise WorkspaceRegistryError("workspace-registry/host-changed", "Session query provider changed")

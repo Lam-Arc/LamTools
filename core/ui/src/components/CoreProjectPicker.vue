@@ -7,6 +7,8 @@
         role="dialog"
         aria-modal="true"
         aria-labelledby="core-project-picker-title"
+        @keydown.tab="trapDialogTab"
+        @keydown.esc.prevent.stop="emit('cancel')"
       >
         <header class="core-project-picker-header">
           <h2 id="core-project-picker-title">{{ t("选择项目") }}</h2>
@@ -41,9 +43,10 @@
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 
-import { ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { CoreProject } from '@/projects/types.ts'
 import { useOutsidePointerDismiss } from '@/composables/useOutsidePointerDismiss.ts'
+import { trapDialogTab } from '@/composables/trapDialogTab.ts'
 
 withDefaults(defineProps<{
   projects?: CoreProject[]
@@ -60,6 +63,13 @@ const emit = defineEmits<{
 
 const pickerBackdropEl = ref<HTMLElement | null>(null)
 const pickerEl = ref<HTMLElement | null>(null)
+// user:“确保视觉、功能和交互不退化”+(项目选择弹窗接管键盘焦点，关闭后返回原位置)。
+let previousFocus: HTMLElement | null = null
+onMounted(() => {
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  void nextTick(() => pickerEl.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+})
+onUnmounted(() => { if (previousFocus?.isConnected) previousFocus.focus() })
 
 useOutsidePointerDismiss({
   overlay: pickerBackdropEl,

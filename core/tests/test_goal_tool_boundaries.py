@@ -44,13 +44,13 @@ def test_goal_tool_description_explains_the_gate_and_every_action() -> None:
     spec = next(item for item in durable_tool_specs(goal=True, arrange=False) if item.name == "goal")
     description = str(spec.description or "")
 
-    # 5 秒读懂：它是什么（闸门，不是任务列表）以及怎么收口。
-    assert "不是任务" in description
-    assert "什么时候调用" in description
+    # 5 秒读懂：它是什么（闸门）、什么时候用、怎么收口。
+    assert "防偷懒闸门" in description
+    assert "调用时机" in description
     assert "下一回合" in description
     for action in ("create", "complete", "block", "cancel"):
         assert action in description
-    assert "阻塞" in description
+    assert "无法自主进行" in description
     # 不允许再出现“额外调模型校验”的暗示。
     assert "evaluator" not in description.lower()
     # 描述本身要短到能一眼扫完。

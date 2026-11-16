@@ -8,6 +8,10 @@ import { computed, ref, type PropType } from 'vue'
 import { DEFAULT_PING_PROMPTS, defaultConfig, type PingSectorConfig } from '../config.ts'
 import type { PetRuntime } from './usePetRuntime.ts'
 import PetHotkeyField from './PetHotkeyField.vue'
+import UiSelect from '@/components/UiSelect.vue'
+import { petQualityOptions, petZModeOptions } from '../settingsOptions'
+// user:“存量迁移：将现有页面逐步接入统一组件库”+(独立桌宠窗口也加载相同的控件样式)
+import '@/styles/sunday-controls.css'
 
 const props = defineProps<{ runtime: PetRuntime }>()
 const emit = defineEmits<{ close: [] }>()
@@ -18,6 +22,7 @@ const sectors = computed(() => props.runtime.config.ping.sectors)
 const defaultHotkey = defaultConfig().ping.hotkey
 const defaultOverlayHotkey = defaultConfig().overlay.captureHotkey
 /** 字体下拉：只列系统里基本都在的几套。 */
+const bubbleOptions = [{ value: 'popup', label: '主动弹出' }, { value: 'badge', label: '标记数量' }, { value: 'silent', label: '静默' }]
 const danmakuFonts = [
   { value: '', label: '系统默认' },
   { value: "'Microsoft YaHei', 'PingFang SC', sans-serif", label: '雅黑' },
@@ -198,23 +203,16 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
           <h4>桌面与地形</h4>
           <label class="settings__row">
             <span>真实遮挡模式</span>
-            <select :value="runtime.config.zMode" @change="applyZMode(($event.target as HTMLSelectElement).value as 'top' | 'behind' | 'clip')">
-              <option value="top">置顶（总在窗口之上）</option>
-              <option value="clip">置顶 + 按窗口几何裁剪（推荐）</option>
-              <option value="behind">压到窗口之下（整层被挡）</option>
-            </select>
+            <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(独立窗口共用主设置的选项和下拉控件，保留窗口操作) -->
+            <UiSelect :model-value="runtime.config.zMode" :options="[...petZModeOptions]" aria-label="真实遮挡模式" :menu-min-width="180" @update:model-value="applyZMode($event as 'top' | 'behind' | 'clip')" />
           </label>
           <label class="settings__row">
             <span>L3 视觉边缘识别</span>
-            <input v-model="runtime.config.useL3" type="checkbox" @change="runtime.setUseL3(runtime.config.useL3)">
+            <input v-model="runtime.config.useL3" class="sunday-checkbox" type="checkbox" @change="runtime.setUseL3(runtime.config.useL3)">
           </label>
           <label class="settings__row">
             <span>几何精度</span>
-            <select :value="runtime.config.quality" @change="runtime.setQuality(($event.target as HTMLSelectElement).value as never)">
-              <option value="low">低（更快，线段更少）</option>
-              <option value="balanced">均衡</option>
-              <option value="high">高（更贴边缘）</option>
-            </select>
+            <UiSelect :model-value="runtime.config.quality" :options="[...petQualityOptions]" aria-label="几何精度" :menu-min-width="180" @update:model-value="runtime.setQuality($event as never)" />
           </label>
           <div class="settings__row">
             <button type="button" @click="toggleDebug('terrain')">地形线</button>
@@ -258,9 +256,7 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
           </label>
           <label class="settings__row">
             <span>弹幕字体</span>
-            <select v-model="runtime.config.overlay.danmaku.fontFamily" @change="applyOverlayDanmaku">
-              <option v-for="font in danmakuFonts" :key="font.value" :value="font.value">{{ font.label }}</option>
-            </select>
+            <UiSelect :model-value="runtime.config.overlay.danmaku.fontFamily" :options="danmakuFonts" aria-label="弹幕字体" :menu-min-width="180" @update:model-value="runtime.config.overlay.danmaku.fontFamily = $event; applyOverlayDanmaku()" />
           </label>
         </section>
 
@@ -304,7 +300,7 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
           <div v-if="backgroundError" class="settings__error">{{ backgroundError }}</div>
           <label class="settings__row">
             <span>「对话」自动附当前截图</span>
-            <input v-model="runtime.config.ping.autoAttachScreenshot" type="checkbox" @change="runtime.schedulePingSave()">
+            <input v-model="runtime.config.ping.autoAttachScreenshot" class="sunday-checkbox" type="checkbox" @change="runtime.schedulePingSave()">
           </label>
           <div class="settings__row">
             <button type="button" @click="runtime.openSessionPicker('ping')">
@@ -317,7 +313,7 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
               <input v-model="sector.icon" class="settings__icon" maxlength="2" @change="runtime.schedulePingSave()">
               <input v-model="sector.label" class="settings__label" @change="runtime.schedulePingSave()">
               <input v-model="sector.color" type="color" @change="runtime.schedulePingSave()">
-              <input v-model="sector.enabled" type="checkbox" @change="runtime.schedulePingSave()">
+              <input v-model="sector.enabled" class="sunday-checkbox" type="checkbox" @change="runtime.schedulePingSave()">
               <button type="button" class="settings__danger" @click="removeSector(sector.id)">删除</button>
               <textarea
                 v-if="sector.kind === 'question' || sector.kind === 'exclamation' || sector.kind === 'note'"
@@ -341,11 +337,7 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
           <h4>气泡与通知</h4>
           <label v-for="key in (['question', 'approval', 'reply', 'done'] as const)" :key="key" class="settings__row">
             <span>{{ key === 'question' ? 'Agent 提问' : key === 'approval' ? '审批' : key === 'reply' ? '普通回复' : '任务完成' }}</span>
-            <select v-model="runtime.config.bubbles[key]" @change="runtime.scheduleSave()">
-              <option value="popup">主动弹出</option>
-              <option value="badge">标记数量</option>
-              <option value="silent">静默</option>
-            </select>
+            <UiSelect :model-value="runtime.config.bubbles[key]" :options="bubbleOptions" :aria-label="key === 'question' ? 'Agent 提问' : key === 'approval' ? '审批' : key === 'reply' ? '普通回复' : '任务完成'" :menu-min-width="180" @update:model-value="runtime.config.bubbles[key] = $event as 'popup' | 'badge' | 'silent'; runtime.scheduleSave()" />
           </label>
           <label class="settings__row">
             <span>同时展开气泡上限</span>
@@ -416,6 +408,9 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
   overflow: hidden;
 }
 
+/* user:“通过参数、变体和组合保留必要差异”+(桌宠设置面板保留深色底，复选框边框跟随该面板文字色) */
+.settings__panel .sunday-checkbox { --checkbox-area-text: #e9eff9; }
+
 .settings__head {
   display: flex;
   align-items: center;
@@ -473,8 +468,7 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
 }
 
 .settings__row input[type='text'],
-.settings__row input[type='number'],
-.settings__row select {
+.settings__row input[type='number'] {
   padding: 3px 8px;
   border-radius: 7px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -483,6 +477,8 @@ function hasBlocky(record: { actions: Record<string, unknown> }): boolean {
   font-size: 11px;
   min-width: 120px;
 }
+
+.settings__row :deep(.ui-select) { width: 180px; flex: 0 0 180px; }
 
 .settings__pet {
   display: flex;

@@ -30,6 +30,15 @@ class GuardError(RuntimeError):
     """动作被安全守卫拒绝。"""
 
 
+class StoppedByUser(GuardError):
+    """用户主动结束了任务。
+
+    user:“只留一个结束，且结束并非结束回合，而是返回一个用户结束了你的computer use”+
+    (这是用户的意思，不是执行出错，所以工具把这句话当正常结果交还给模型，
+     模型可以接着说话、问下一步，而不是当成失败中断。)
+    """
+
+
 @dataclass
 class Step:
     index: int
@@ -51,6 +60,8 @@ class Session:
     max_steps: int = 40
     steps: list[Step] = field(default_factory=list)
     pause_reason: str = ""
+    stop_reason: str = ""
+    stopped_by_user: bool = False
     last_error: str = ""
     last_frame: Frame | None = None
     last_action_point: tuple[int, int] | None = None
@@ -158,6 +169,10 @@ class Session:
                 "或者向用户确认后再继续。"
             )
         if state == "stopped":
+            # user:“结束并非结束回合，而是返回一个用户结束了你的computer use”+
+            # (用户点的结束属于正常结果，直接告诉模型；模型自己 stop 的仍按终止处理。)
+            if self.stopped_by_user:
+                raise StoppedByUser(self.stop_reason or "用户从界面结束了本次电脑操作")
             raise GuardError("任务已结束，请重新 start 一个新任务。")
         if state == "failed":
             raise GuardError(f"任务已失败：{self.last_error}。修好问题后重新 start。")
@@ -187,10 +202,12 @@ class Session:
             self._last_inject_tick = 0
             self._last_cursor = None
 
-    def stop(self, reason: str = "用户要求结束") -> None:
+    def stop(self, reason: str = "用户要求结束", *, by_user: bool = True) -> None:
         with self._lock:
             self.state = "stopped"
             self.pause_reason = reason
+            self.stop_reason = reason
+            self.stopped_by_user = by_user
 
     def fail(self, reason: str) -> None:
         with self._lock:

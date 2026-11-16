@@ -1516,6 +1516,52 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
             payload={"sessions": [session.to_dict() for session in await project_store.list_sessions(project_id)]},
         )
 
+    async def project_session_get(request: OperationRequest) -> OperationResult:
+        # user:“复用原宿主权威”+(单次会话查询沿用原项目归属及可见性)。
+        session = await project_store.get_session(_project_id(request), str(request.payload.get("session_id") or ""))
+        return OperationResult(name=request.name, payload={"session": session.to_dict() if session else None})
+
+    async def project_sessions_pin(request: OperationRequest) -> OperationResult:
+        # user:“宿主能力补齐和接口完善与文档更新”+(置顶状态通过原CoreProjectStore事务持久化，不使用插件私有状态)。
+        project_id = _project_id(request)
+        session_ids = await project_store.pin_session(project_id, str(request.payload.get("session_id") or ""))
+        if session_ids is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Session not found in project"})
+        return OperationResult(name=request.name, payload={"pinned_session_ids": session_ids})
+
+    async def project_sessions_unpin(request: OperationRequest) -> OperationResult:
+        project_id = _project_id(request)
+        if await project_store.get(project_id) is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        session_ids = await project_store.unpin_session(project_id, str(request.payload.get("session_id") or ""))
+        return OperationResult(name=request.name, payload={"pinned_session_ids": session_ids})
+
+    async def project_sessions_pinned(request: OperationRequest) -> OperationResult:
+        project_id = _project_id(request)
+        if await project_store.get(project_id) is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        session_ids = await project_store.pinned_session_ids(project_id)
+        return OperationResult(name=request.name, payload={"pinned_session_ids": session_ids})
+
+    async def project_sessions_insert_before(request: OperationRequest) -> OperationResult:
+        project_id = _project_id(request)
+        try:
+            session_ids = await project_store.insert_session_before(
+                project_id,
+                str(request.payload.get("session_id") or ""),
+                request.payload.get("before_session_id"),
+            )
+        except LookupError:
+            return OperationResult(name=request.name, status="error", payload={
+                "error": "Session or anchor is not visible in this project",
+                "code": "workspace/move-invalid",
+            })
+        if session_ids is None:
+            return OperationResult(name=request.name, status="error", payload={
+                "error": "Project not found", "code": "workspace/not-found",
+            })
+        return OperationResult(name=request.name, payload={"session_ids": session_ids})
+
     async def project_sessions_create(request: OperationRequest) -> OperationResult:
         try:
             session = await project_store.create_session(
@@ -1557,7 +1603,12 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         "project.update": project_update,
         "project.delete": project_delete,
         "project.sessions.create": project_sessions_create,
+        "project.sessions.get": project_session_get,
         "project.sessions.list": project_sessions_list,
+        "project.sessions.pin": project_sessions_pin,
+        "project.sessions.unpin": project_sessions_unpin,
+        "project.sessions.pinned": project_sessions_pinned,
+        "project.sessions.insert_before": project_sessions_insert_before,
         "project.agents_md.get": project_agents_md_get,
         "project.agents_md.update": project_agents_md_update,
     }

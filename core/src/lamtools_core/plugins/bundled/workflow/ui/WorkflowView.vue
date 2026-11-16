@@ -47,17 +47,8 @@
         />
       </template>
     </WorkflowCanvas>
-    <div v-if="workflowSwitchGuard" class="wf-switch-guard" role="dialog" aria-modal="true" aria-labelledby="wf-switch-guard-title">
-      <div class="wf-switch-guard-card">
-        <h2 id="wf-switch-guard-title">{{ t("工作流有未保存修改") }}</h2>
-        <p>{{ t("切换前要如何处理当前草稿？") }}</p>
-        <div class="wf-switch-guard-actions">
-          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('cancel')">{{ t("取消") }}</button>
-          <button type="button" class="text-btn" @click="resolveWorkflowSwitch('discard')">{{ t("放弃修改") }}</button>
-          <button type="button" class="primary-btn" @click="resolveWorkflowSwitch('save')">{{ t("保存并切换") }}</button>
-        </div>
-      </div>
-    </div>
+    <!-- user:“确保视觉、功能和交互不退化”+(三种草稿处理保留原选择，复用带焦点管理的真实对话框)。 -->
+    <WorkflowSwitchGuard :open="Boolean(workflowSwitchGuard)" @choice="resolveWorkflowSwitch" />
   </div>
 
   <Teleport v-if="workflowDefinition" defer to=".workspace-plugin-header">
@@ -73,7 +64,7 @@
   </Teleport>
 
   <Teleport v-if="workflowTabs.length > 1" defer to="[data-titlebar-workflow-tabs]">
-    <nav class="wf-workflow-tabs" role="tablist" :aria-label="t('打开的工作流')">
+    <nav class="wf-workflow-tabs" role="tablist" :aria-label="t('打开的工作流')" @keydown="onManualTabGroupKeydown">
       <button
         v-for="tab in workflowTabs"
         :key="tab.id"
@@ -167,6 +158,8 @@
 
 <script setup lang="ts">
 import { t } from '../../../../../../ui/src/i18n/index'
+// user:“确保视觉、功能和交互不退化”+(方向键只移动焦点，激活仍经过未保存内容保护)。
+import { onManualTabGroupKeydown } from '../../../../../../ui/src/composables/radioGroupKeyboard'
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleDotDashed, X } from 'lucide-vue-next'
@@ -217,6 +210,7 @@ import {
   mergeWorkflowCanvasSidecar,
   writeWorkflowCanvasSidecar,
 } from './canvas'
+import WorkflowSwitchGuard from './WorkflowSwitchGuard.vue'
 import WorkflowCanvas from './WorkflowCanvas.vue'
 import WorkflowControlBar from './WorkflowControlBar.vue'
 import WorkflowInspector from './WorkflowInspector.vue'
@@ -1658,11 +1652,6 @@ onBeforeUnmount(() => {
 .wf-workflow-tab-dirty { display: grid; place-items: center; color: var(--orange); }
 .wf-workflow-tab-close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--radius-sm); color: color-mix(in srgb, var(--theme-main-text) 55%, transparent); }
 .wf-workflow-tab-close:hover, .wf-workflow-tab-close:focus-visible { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); outline: 0; }
-.wf-switch-guard { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; background: color-mix(in srgb, var(--theme-main-background) 66%, transparent); backdrop-filter: blur(2px); }
-.wf-switch-guard-card { width: 360px; max-width: calc(100vw - 32px); padding: var(--space-4); border: 1px solid var(--theme-main-border); border-radius: var(--radius-md, 12px); background: var(--theme-main-background); color: var(--theme-main-text); box-shadow: var(--shadow-lg, var(--shadow-md)); }
-.wf-switch-guard-card h2 { margin: 0 0 var(--space-2); font-size: 14px; }
-.wf-switch-guard-card p { margin: 0; color: color-mix(in srgb, var(--theme-main-text) 68%, transparent); font-size: 12px; }
-.wf-switch-guard-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
 
 .wf-create-backdrop {
   position: fixed;

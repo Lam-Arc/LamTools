@@ -5,7 +5,7 @@ import threading
 import pytest
 from lamtools_core.app.operation_catalog import OperationCatalog
 from lamtools_core.plugin_system.context import PluginContext
-from lamtools_core.plugin_system.market import register_market_operations
+from lamtools_core.plugin_system.operations import register_plugin_system_operations
 from .test_plugin_http_routes import _host
 
 
@@ -14,7 +14,7 @@ async def market_env(tmp_path, monkeypatch):
     from lamtools_core.plugin_system import market
     host, _, _ = _host(tmp_path)
     catalog = OperationCatalog()
-    register_market_operations(catalog, host)
+    register_plugin_system_operations(catalog, host)
     ctx = PluginContext(tmp_path, operation_catalog=catalog)
     ctx._begin_registration_scope("market-test", 1)
     release = {"assets": [{"name": "catalog.json", "url": "https://api.github.com/catalog"}]}

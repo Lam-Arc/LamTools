@@ -4,18 +4,18 @@
     class="sunday-segmented"
     role="radiogroup"
     :aria-label="label"
+    @keydown="onRadioGroupKeydown"
   >
-    <span ref="indicatorEl" class="sunday-segmented__indicator" aria-hidden="true" />
+    <span v-show="hasSelection" ref="indicatorEl" class="sunday-segmented__indicator" aria-hidden="true" />
     <button
-      v-for="(option, index) in options"
+      v-for="option in options"
       :key="option.value"
       class="sunday-segmented__item"
       type="button"
       role="radio"
       :aria-checked="option.value === modelValue"
-      :tabindex="option.value === modelValue ? 0 : -1"
+      :tabindex="option.value === entryValue ? 0 : -1"
       @click="select(option.value)"
-      @keydown="onKeydown($event, index)"
     >
       {{ option.label }}
     </button>
@@ -23,7 +23,9 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(分段控件与主题单选组共用键盘导航)。
+import { onRadioGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 
 defineOptions({ name: 'SundaySegmented' })
 
@@ -39,6 +41,9 @@ const emit = defineEmits<{
 
 const rootEl = ref<HTMLElement | null>(null)
 const indicatorEl = ref<HTMLElement | null>(null)
+// user:“确保视觉、功能和交互不退化”+(选项动态变化导致当前值缺失时，仍可用键盘进入，且不显示错误的选中指示)。
+const hasSelection = computed(() => props.options.some(option => option.value === props.modelValue))
+const entryValue = computed(() => hasSelection.value ? props.modelValue : props.options[0]?.value)
 
 let observer: ResizeObserver | null = null
 let readyFrame = 0
@@ -84,21 +89,6 @@ function select(value: string): void {
   })
 }
 
-function onKeydown(event: KeyboardEvent, index: number): void {
-  const last = props.options.length - 1
-  let next = index
-
-  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = index === last ? 0 : index + 1
-  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = index === 0 ? last : index - 1
-  else if (event.key === 'Home') next = 0
-  else if (event.key === 'End') next = last
-  else return
-
-  event.preventDefault()
-  const option = props.options[next]
-  if (option) select(option.value)
-}
-
 onMounted(() => {
   layout()
   markReady()
@@ -120,7 +110,7 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => props.modelValue,
+  () => [props.modelValue, ...props.options.flatMap(option => [option.value, option.label])],
   () => {
     void nextTick(() => layout())
   },

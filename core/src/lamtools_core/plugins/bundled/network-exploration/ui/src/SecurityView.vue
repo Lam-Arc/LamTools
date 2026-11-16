@@ -1,6 +1,9 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“可交互式网络工具界面，不需要太专业”+(优先选择正在运行的应用，系统修改仍使用宿主审批及恢复接口)。
 import { computed, ref } from "vue";
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(应用和限速选择复用共享下拉并保持原有申请行为)。
+import UiSelect from "../../../../../../../ui/src/components/UiSelect.vue";
 import {
   ShieldCheck,
   ShieldOff,
@@ -16,6 +19,8 @@ const choosing = ref(false),
   selected = ref(""),
   manual = ref(false),
   speed = ref("8000000");
+const appOptions = computed(() => apps.value.map(app => ({ value: app.path, label: `${app.process} · ${app.path.split("\\").at(-1)}` })));
+const speedOptions = [{ value: '8000000', label: '1 MB/s' }, { value: '40000000', label: '5 MB/s' }, { value: '80000000', label: '10 MB/s' }];
 const transactions = computed(() =>
   [...(props.session.state?.transactions || [])].reverse(),
 );
@@ -74,7 +79,7 @@ function status(value) {
         <h2>应用联网与恢复</h2>
         <p>只修改你选择的应用，随时检查并恢复原设置。</p>
       </div>
-      <button class="nx-button nx-secondary" @click="loadApps">
+      <button class="btn nx-button btn--secondary" @click="loadApps">
         <Monitor :size="15" />选择应用
       </button>
     </div>
@@ -87,18 +92,9 @@ function status(value) {
           class="nx-input"
           placeholder="应用 .exe 的完整路径"
           aria-label="应用路径"
-        /><select
-          v-else
-          v-model="selected"
-          class="nx-input"
-          aria-label="选择应用"
-        >
-          <option disabled value="">从当前连接的应用中选择</option>
-          <option v-for="app in apps" :key="app.path" :value="app.path">
-            {{ app.process }} · {{ app.path.split("\\").at(-1) }}
-          </option></select
-        ><button
-          class="nx-button nx-quiet"
+        /><UiSelect v-else v-model="selected" class="nx-shared-select" :options="appOptions" placeholder="从当前连接的应用中选择" aria-label="选择应用" data-network-application :menu-min-width="220" />
+        <button
+          class="btn nx-button btn--quiet"
           @click="
             manual = !manual;
             selected = '';
@@ -112,7 +108,7 @@ function status(value) {
           <h3>阻止这个应用联网</h3>
           <p>创建仅作用于该应用的出站防火墙规则。</p>
           <button
-            class="nx-button nx-secondary nx-danger-text"
+            class="btn nx-button btn--secondary nx-danger-text"
             :disabled="!selected || Boolean(session.busy)"
             @click="apply('firewall')"
           >
@@ -123,16 +119,9 @@ function status(value) {
           <h3>限制这个应用的上传</h3>
           <p>降低后台上传对其他任务的影响。</p>
           <div class="nx-inline-form">
-            <select
-              v-model="speed"
-              class="nx-input"
-              aria-label="应用上传速度上限"
-            >
-              <option value="8000000">1 MB/s</option>
-              <option value="40000000">5 MB/s</option>
-              <option value="80000000">10 MB/s</option></select
-            ><button
-              class="nx-button nx-secondary"
+            <UiSelect v-model="speed" class="nx-shared-select" :options="speedOptions" aria-label="应用上传速度上限" data-network-upload-limit :menu-min-width="140" />
+            <button
+              class="btn nx-button btn--secondary"
               :disabled="!selected || Boolean(session.busy)"
               @click="apply('qos')"
             >
@@ -171,7 +160,7 @@ function status(value) {
           v-if="
             ['applied', 'prepared', 'recovery_required'].includes(row.status)
           "
-          class="nx-button nx-secondary"
+          class="btn nx-button btn--secondary"
           :disabled="Boolean(session.busy)"
           @click="
             session.run('system.restore', { id: row.id }, '已检查并恢复原设置')

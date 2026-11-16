@@ -6,7 +6,7 @@
       <p class="right-sidebar-web-search-message" data-state="disabled">{{ t("搜索插件未启用。到「插件」页启用 websearch 后可用。") }}</p>
       <div class="right-sidebar-web-search-health" data-state="unavailable">
         <button class="right-sidebar-web-search-action" type="button" :disabled="healthLoading" @click="recheck">
-          <RefreshCw :size="13" :stroke-width="1.8" :class="{ spinning: healthLoading }" aria-hidden="true" />
+          <RefreshCw :size="13" :stroke-width="1.8" :class="{ 'spinning sunday-spin sunday-spin--fast': healthLoading }" aria-hidden="true" />
           <span>{{ t("重新检查") }}</span>
         </button>
       </div>
@@ -32,7 +32,7 @@
           :disabled="!requestRpc || healthLoading"
           @click="checkHealth"
         >
-          <RefreshCw :size="13" :stroke-width="1.8" :class="{ spinning: healthLoading }" aria-hidden="true" />
+          <RefreshCw :size="13" :stroke-width="1.8" :class="{ 'spinning sunday-spin sunday-spin--fast': healthLoading }" aria-hidden="true" />
           <span>{{ healthLoading ? t("检查中…") : t("检查连接") }}</span>
         </button>
       </div>
@@ -43,6 +43,8 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(连接检查复用共享旋转反馈并保留速度)。
+import '@/styles/sunday-spinner.css'
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
@@ -266,9 +268,6 @@ onMounted(() => {
 .right-sidebar-web-search-action:hover { background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), var(--theme-control-background)); }
 .right-sidebar-web-search-action:active { background: color-mix(in srgb, var(--theme-control-text) var(--alpha-active), var(--theme-control-background)); }
 .right-sidebar-web-search-action:disabled { opacity: .45; cursor: default; }
-.right-sidebar-web-search-action .spinning { animation: right-sidebar-spin .8s linear infinite; }
 .right-sidebar-web-search-message { margin: 0; color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent); font-size: 11px; line-height: 1.45; }
 .right-sidebar-web-search-message[data-state="error"] { color: color-mix(in srgb, var(--red) 72%, var(--theme-backdrop-text) 28%); }
-@keyframes right-sidebar-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .right-sidebar-web-search-action .spinning { animation: none; } }
 </style>

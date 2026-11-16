@@ -345,14 +345,6 @@
 }
 
 /* ── 动画 ─────────────────────────────────────────────────────────────── */
-.spin {
-  animation: plugin-spin 1s linear infinite;
-}
-
-@keyframes plugin-spin {
-  to { transform: rotate(360deg); }
-}
-
 @keyframes plugin-status-pulse {
   0%, 100% {
     box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 38%, transparent);
@@ -374,7 +366,6 @@
   .plugin-card::before,
   .plugin-glyph,
   .plugin-switch,
-  .plugin-switch-thumb,
   .plugin-description,
   .plugin-entry,
   .plugin-action,
@@ -396,8 +387,7 @@
   .plugin-status-row.is-pending .plugin-status-dot,
   .skeleton-block,
   .skeleton-line,
-  .skeleton-chips i,
-  .spin {
+  .skeleton-chips i {
     animation: none;
   }
 }

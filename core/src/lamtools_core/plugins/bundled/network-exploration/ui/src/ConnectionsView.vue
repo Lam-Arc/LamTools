@@ -1,4 +1,5 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 import { computed, onMounted, ref } from "vue";
 import { ArrowLeftRight, Search, RefreshCw } from "lucide-vue-next";
 const props = defineProps({ session: Object });
@@ -50,7 +51,7 @@ onMounted(query);
           class="nx-input"
           placeholder="搜索应用、IP 或端口"
           aria-label="搜索连接" /></label
-      ><button class="nx-button nx-secondary" :disabled="loading">
+      ><button class="btn nx-button btn--secondary" :disabled="loading">
         <RefreshCw :size="14" />刷新
       </button>
     </form>
@@ -103,7 +104,7 @@ onMounted(query);
       </div>
       <button
         v-if="rows.length > limit"
-        class="nx-button nx-quiet nx-load-more"
+        class="btn nx-button btn--quiet nx-load-more"
         @click="limit += 150"
       >
         再显示 150 个连接

@@ -21,6 +21,8 @@ export default defineConfig({
     },
   },
   server: {
+    // user:“源码定位”+(展厅可读取随桌面分发的工作流组件源码，同时保留 Vite 默认敏感文件限制)。
+    fs: { allow: [__dirname, resolve(__dirname, '../src/lamtools_core/plugins/bundled/workflow/ui')] },
     proxy: {
       '/api': {
         target: `http://127.0.0.1:${coreBackendPort}`,

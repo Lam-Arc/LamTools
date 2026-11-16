@@ -1,4 +1,5 @@
 <template>
+  <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(复用共享复选框，保留原有勾选与保存逻辑) -->
   <section class="wf-trigger-panel" data-workflow-trigger-panel :aria-label="t('工作流触发器与激活')">
     <header class="wf-trigger-head">
       <div>
@@ -19,7 +20,7 @@
         </button>
         <button
           type="button"
-          class="small-btn primary"
+          class="btn btn--primary wf-trigger-primary"
           data-trigger-add
           :disabled="activationBusy || !workflowDefinition"
           :aria-label="t('新增触发器')"
@@ -81,7 +82,7 @@
         <label class="wf-trigger-checkbox">
           <span>{{ t("启用") }}</span>
           <span class="wf-trigger-checkbox-control">
-            <input v-model="draft.enabled" type="checkbox" />
+            <input v-model="draft.enabled" class="sunday-checkbox" type="checkbox" />
             <small>{{ draft.enabled ? t("会参与激活") : t("停用") }}</small>
           </span>
         </label>
@@ -146,7 +147,8 @@
       <p v-if="error" class="wf-trigger-error" role="alert">{{ error }}</p>
       <p v-if="message" class="wf-trigger-message" role="status">{{ message }}</p>
       <div class="wf-trigger-editor-actions">
-        <button type="submit" class="small-btn primary" data-trigger-save :disabled="activationBusy">{{ t("保存触发器") }}</button>
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(新增、保存和激活共用主按钮颜色，保留面板紧凑尺寸及忙碌禁用)。 -->
+        <button type="submit" class="btn btn--primary wf-trigger-primary" data-trigger-save :disabled="activationBusy">{{ t("保存触发器") }}</button>
       </div>
     </form>
 
@@ -181,7 +183,7 @@
       <div v-if="selectedTrigger.type !== 'manual'" class="wf-activation-actions">
         <button
           type="button"
-          class="small-btn primary"
+          class="btn btn--primary wf-trigger-primary"
           data-trigger-activate
           :disabled="activationBusy || !selectedTrigger.enabled"
           @click="activateTrigger(false)"
@@ -518,10 +520,10 @@ async function deactivateTrigger(): Promise<void> {
   font-size: 10px;
 }
 .wf-trigger-panel .small-btn { padding: 0 var(--space-2); background: color-mix(in srgb, var(--theme-control-background) 82%, transparent); color: var(--theme-control-text); }
-.wf-trigger-panel .small-btn.primary { background: var(--theme-control-background); color: var(--theme-control-text); font-weight: 650; }
 .wf-trigger-panel .small-btn.quiet, .wf-trigger-panel .text-btn { background: transparent; color: color-mix(in srgb, var(--trigger-text) 68%, transparent); }
 .wf-trigger-panel .small-btn:hover:not(:disabled), .wf-trigger-panel .text-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--trigger-text) var(--alpha-hover), transparent); color: var(--trigger-text); }
-.wf-trigger-panel .small-btn.primary:hover:not(:disabled) { filter: brightness(.94); }
+/* user:“通过参数、变体和组合保留必要差异”+(触发器面板保留原有 28px 紧凑操作密度)。 */
+.wf-trigger-panel .wf-trigger-primary { min-height: 28px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-sm); font-size: 10px; font-weight: 650; }
 .wf-trigger-panel .text-btn.danger { color: var(--red); }
 .wf-trigger-panel .text-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent); }
 .wf-trigger-panel button:disabled { cursor: default; opacity: .45; }
@@ -554,9 +556,11 @@ async function deactivateTrigger(): Promise<void> {
 .wf-trigger-panel input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']) { width: 100%; min-width: 0; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
 .wf-trigger-panel :deep(.ui-select-trigger) { width: 100%; min-width: 0; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-control-background) 70%, transparent); color: var(--theme-control-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
 .wf-trigger-panel :deep(.ui-select-trigger) { padding-right: var(--space-3); }
-.wf-trigger-panel input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):focus, .wf-trigger-panel :deep(.ui-select-trigger:focus) { outline: none; }
+.wf-trigger-panel input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):focus { outline: none; }
+/* user:“确保视觉、功能和交互不退化”+(下拉没有文本光标，键盘操作时保留可见焦点)。 */
+.wf-trigger-panel :deep(.ui-select-trigger:focus-visible) { outline: 2px solid var(--blue); outline-offset: 2px; }
 .wf-trigger-checkbox-control { display: flex; align-items: center; gap: var(--space-1); min-height: 30px; color: var(--theme-control-text); }
-.wf-trigger-checkbox-control input { width: 14px; min-height: 14px; accent-color: var(--green); }
+.wf-trigger-checkbox-control .sunday-checkbox { --checkbox-size: 14px; }
 .wf-trigger-checkbox-control small { color: color-mix(in srgb, var(--trigger-text) 58%, transparent); font-size: 10px; }
 .wf-trigger-inputs :deep(.auto-textarea) { min-height: 46px; }
 .wf-trigger-error { margin: 0; color: var(--red) !important; font-size: 10px !important; white-space: pre-wrap; word-break: break-word; }

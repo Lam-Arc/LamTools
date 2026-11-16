@@ -13,18 +13,10 @@
         <button class="icon-button" type="button" :aria-label="sortLabel" :title="sortLabel" data-materials-sort @click="toggleSort">
           <ArrowDownWideNarrow :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <div class="library-view-toggle" role="group" :aria-label="t('视图切换')" data-materials-view-toggle>
-          <button type="button" :class="{ active: view === 'grid' }" :aria-pressed="view === 'grid'" :aria-label="t('网格视图')" :title="t('网格视图')" @click="view = 'grid'">
-            <LayoutGrid :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-          <button type="button" :class="{ active: view === 'list' }" :aria-pressed="view === 'list'" :aria-label="t('列表视图')" :title="t('列表视图')" @click="view = 'list'">
-            <List :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-        </div>
-        <div class="library-search materials-search">
-          <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-          <input v-model="query" type="search" :placeholder="t('搜索资料库')" :aria-label="t('搜索资料库')" data-materials-search />
-        </div>
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享视图切换并保留本页的状态与保存方式)。 -->
+        <LibraryViewToggle v-model="view" data-materials-view-toggle />
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(共享搜索框并保留本页查询和无障碍标签)。 -->
+        <LibrarySearchField v-model="query" :label="t('搜索资料库')" :input-attrs="{ 'data-materials-search': '' }" class="materials-search" />
         <button class="library-button library-button--primary materials-new" type="button" :disabled="!projectId || uploading" data-materials-new @click="uploadHere">
           <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
           {{ uploading ? t("上传中…") : t("新建") }}
@@ -156,7 +148,7 @@
           :aria-label="t('打开 {0}', { 0: item.name })"
           :data-material="item.artifact_id"
           @click="open(item)"
-          @keydown.enter.prevent="open(item)"
+          @keydown.enter.self.prevent="open(item)"
           @contextmenu="openMenu($event, item)"
         >
           <div
@@ -205,27 +197,40 @@
               :title="t('去掉标签 {0}', { 0: tag })"
               @click.stop="toggleTag(item, tag)"
             >{{ tag }}</button>
-            <span class="material-tag-entry">
+            <!-- user:“确保视觉、功能和交互不退化”+(操作卡片内标签时不触发文件打开)。 -->
+            <span class="material-tag-entry" @click.stop>
               <input
                 :value="tagDraftFor(item)"
                 class="material-tag-input"
+                role="combobox"
+                aria-autocomplete="list"
+                :aria-expanded="tagSuggestionsOpen(item)"
+                :aria-controls="tagSuggestionsOpen(item) ? tagListId(item) : undefined"
+                :aria-activedescendant="tagSuggestionsOpen(item) && tagSuggestionIndex >= 0 && tagSuggestionIndex < suggestionsFor(item).length ? `${tagListId(item)}-${tagSuggestionIndex}` : undefined"
                 type="text"
                 :placeholder="t('+ 标签')"
                 :aria-label="t('给 {0} 加标签', { 0: item.name })"
                 :data-material-tag-input="item.artifact_id"
                 @input="setTagDraft(item, ($event.target as HTMLInputElement).value)"
-                @keydown.enter.prevent="commitTag(item)"
-                @keydown.space.prevent="commitTag(item)"
-                @focus="focusedTagId = item.artifact_id"
+                @keydown.enter.stop.prevent="commitSelectedTag(item)"
+                @keydown.down="moveTagSuggestion($event, item, 1)"
+                @keydown.up="moveTagSuggestion($event, item, -1)"
+                @keydown.esc="dismissTagSuggestions($event, item)"
+                @keydown.space.stop.prevent="commitTag(item)"
+                @focus="focusTagEditor(item)"
                 @blur="blurTagEditor(item)"
               />
               <!-- user:“输入后空格或者回车自动生成新tag，支持补全”+(前缀补全，点一条直接落成标签) -->
-              <span v-if="focusedTagId === item.artifact_id && suggestionsFor(item).length" class="material-tag-suggest" role="listbox">
+              <span v-if="tagSuggestionsOpen(item)" :id="tagListId(item)" class="material-tag-suggest" role="listbox" :aria-label="t('标签建议')">
                 <button
-                  v-for="suggestion in suggestionsFor(item)"
+                  v-for="(suggestion, index) in suggestionsFor(item)"
                   :key="suggestion"
                   type="button"
                   role="option"
+                  tabindex="-1"
+                  :id="`${tagListId(item)}-${index}`"
+                  :aria-selected="index === tagSuggestionIndex"
+                  :class="{ active: index === tagSuggestionIndex }"
                   :data-material-tag-suggest="suggestion"
                   @mousedown.prevent="commitTag(item, suggestion)"
                 >{{ suggestion }}</button>
@@ -272,7 +277,7 @@
             tabindex="0"
             :data-material="item.artifact_id"
             @click="open(item)"
-            @keydown.enter.prevent="open(item)"
+            @keydown.enter.self.prevent="open(item)"
             @contextmenu="openMenu($event, item)"
           >
             <div class="library-item-top">
@@ -352,20 +357,9 @@
     </Teleport>
 
     <!-- ── 移除确认：只改资料库状态，不删文件（沿用成果库既有语义） ── -->
-    <Transition name="library-dialog">
-      <div v-if="pendingRemove" class="dialog-dimmer" @click.self="pendingRemove = null">
-        <div class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('确认移除')" data-materials-confirm>
-          <div class="dialog-body">
-            <h3 class="dialog-title">{{ t("从资料库移除") }}</h3>
-            <p class="dialog-text">{{ t("将移除此处的") }}{{ pendingRemove.length }}{{ t("项；文件本身不会被删除。") }}</p>
-          </div>
-          <div class="dialog-actions">
-            <button class="library-button" type="button" @click="pendingRemove = null">{{ t("取消") }}</button>
-            <button class="library-button library-button--danger" type="button" data-materials-confirm-remove @click="confirmRemove">{{ t("移除") }}</button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <LibraryConfirmDialog :open="Boolean(pendingRemove)" :title="t('从资料库移除')" :aria-label="t('确认移除')" :confirm-label="t('移除')" :confirm-attrs="{ 'data-materials-confirm-remove': '' }" data-materials-confirm @cancel="pendingRemove = null" @confirm="confirmRemove">
+      {{ t("将移除此处的") }}{{ pendingRemove?.length ?? 0 }}{{ t("项；文件本身不会被删除。") }}
+    </LibraryConfirmDialog>
 
     <CoreConfirmDialog
       :open="Boolean(pendingFolderName)"
@@ -382,6 +376,8 @@
 
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
+import LibraryViewToggle from '@/components/LibraryViewToggle.vue'
+import LibrarySearchField from '@/components/LibrarySearchField.vue'
 
 /**
  * MaterialsView — 资料库的「资料」分区：项目里进出的文件（用户 / 中间产物 / 产物）。
@@ -392,23 +388,21 @@ import { t } from '@/i18n/index.ts'
  * （见 material-cover），不再一律是一枚灰图标。
  * 取数与推导全部来自 artifacts/model.ts 与右栏成果库同一份判断，不另立一套。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import {
   ArrowDownWideNarrow,
   Check,
   Folder,
-  LayoutGrid,
-  List,
   MoreHorizontal,
   Play,
   Plus,
-  Search,
   Star,
 } from 'lucide-vue-next'
 import type { ProjectArtifact } from '@/types.ts'
 import { buildSpecimens, collectRules } from '@/library/style-assets.ts'
 import '@/library/style-runtime.ts'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import LibraryConfirmDialog from '@/components/LibraryConfirmDialog.vue'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
 import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
 import { openFileInSplit } from '@/split/openFile'
@@ -453,6 +447,8 @@ const props = defineProps<{
   artifactSignal?: unknown
   /** 上传文件到当前这一层（宿主负责选文件与传字节）。 */
   uploadFiles?: (folder: string) => Promise<void>
+  /** user:“交互测试”+(展厅可接管复制，正常应用继续使用系统剪贴板)。 */
+  copyPath?: (path: string) => Promise<void>
 }>()
 
 const TABS = [
@@ -475,7 +471,11 @@ const cssPending = new Set<string>()
 /** 解析过就不再问：解析不出样本的文件也要记住，否则每次渲染都会重发请求。 */
 const cssTried = new Set<string>()
 /** 正在输入标签的那张卡，用来决定补全要不要露出来。 */
+// user:“确保视觉、功能和交互不退化”+(补全焦点留在输入框，方向键选择并允许 Escape 收起)。
+const tagListPrefix = `material-tags-${useId()}`
 const focusedTagId = ref('')
+const tagSuggestionIndex = ref(-1)
+const tagSuggestionsDismissed = ref(false)
 const tagDrafts = ref<Record<string, string>>({})
 /** HTML 素材的原文，卡片里用 iframe 直接渲染它自己。 */
 const htmlPreviews = ref<Record<string, string>>({})
@@ -777,6 +777,8 @@ function tagDraftFor(item: ProjectArtifact): string {
 
 function setTagDraft(item: ProjectArtifact, value: string): void {
   tagDrafts.value = { ...tagDrafts.value, [item.artifact_id]: value }
+  tagSuggestionIndex.value = -1
+  tagSuggestionsDismissed.value = false
 }
 
 /** 补全：全项目已有的标签里，前缀对得上、这张卡上还没有的。 */
@@ -786,6 +788,25 @@ function suggestionsFor(item: ProjectArtifact): string[] {
   return tagPool.value
     .filter(tag => !own.has(tag) && (!draft || tag.startsWith(draft)))
     .slice(0, 6)
+}
+
+function tagListId(item: ProjectArtifact): string { return `${tagListPrefix}-${encodeURIComponent(item.artifact_id)}` }
+function tagSuggestionsOpen(item: ProjectArtifact): boolean { return focusedTagId.value === item.artifact_id && !tagSuggestionsDismissed.value && suggestionsFor(item).length > 0 }
+function focusTagEditor(item: ProjectArtifact): void { focusedTagId.value = item.artifact_id; tagSuggestionIndex.value = -1; tagSuggestionsDismissed.value = false }
+function moveTagSuggestion(event: KeyboardEvent, item: ProjectArtifact, step: number): void {
+  if (focusedTagId.value !== item.artifact_id) return
+  const suggestions = suggestionsFor(item)
+  if (!suggestions.length) return
+  event.preventDefault(); tagSuggestionsDismissed.value = false
+  tagSuggestionIndex.value = tagSuggestionIndex.value < 0 ? (step > 0 ? 0 : suggestions.length - 1) : (tagSuggestionIndex.value + step + suggestions.length) % suggestions.length
+}
+function dismissTagSuggestions(event: KeyboardEvent, item: ProjectArtifact): void {
+  if (!tagSuggestionsOpen(item)) return
+  event.preventDefault(); event.stopPropagation(); tagSuggestionsDismissed.value = true; tagSuggestionIndex.value = -1
+}
+function commitSelectedTag(item: ProjectArtifact): void {
+  const suggestion = tagSuggestionsOpen(item) && tagSuggestionIndex.value >= 0 ? suggestionsFor(item)[tagSuggestionIndex.value] : undefined
+  void commitTag(item, suggestion)
 }
 
 /** 回车、空格、点补全都走这里：规范成小写，已有的忽略，空串不落。 */
@@ -802,6 +823,8 @@ async function commitTag(item: ProjectArtifact, preset?: string): Promise<void> 
 function blurTagEditor(item: ProjectArtifact): void {
   const draft = tagDraftFor(item)
   focusedTagId.value = ''
+  tagSuggestionIndex.value = -1
+  tagSuggestionsDismissed.value = false
   if (draft.trim()) void commitTag(item)
 }
 
@@ -1101,7 +1124,7 @@ function openMenu(event: MouseEvent, item: ProjectArtifact): void {
       // 危险操作不入组，始终裸露在菜单尾部，不能被折叠藏起来。
       { id: 'open', get label() { return t("打开") }, group: MATERIALS_FILE_GROUP, action: () => void openDefault(item) },
       { id: 'open-system', get label() { return t("使用默认应用打开") }, group: MATERIALS_FILE_GROUP, action: () => void openWithSystem(item) },
-      { id: 'copy', get label() { return t("复制路径") }, group: MATERIALS_FILE_GROUP, action: () => void copyText(displayPath(item)) },
+      { id: 'copy', get label() { return t("复制路径") }, group: MATERIALS_FILE_GROUP, action: () => void (props.copyPath ?? copyText)(displayPath(item)) },
       {
         id: 'favorite',
         label: item.favorite ? t("取消收藏") : t("添加到收藏"),

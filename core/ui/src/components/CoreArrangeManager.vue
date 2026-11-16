@@ -3,6 +3,8 @@ import { useSplitKeyboardScope } from '@/split/keyboardScope'
 const splitKeyboardActive = useSplitKeyboardScope()
 
 import { t } from '@/i18n/index.ts'
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(任务设置和历史标签使用共享键盘导航)。
+import { onTabGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
@@ -619,9 +621,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           <p>{{ view === 'create' ? t("配置任务的执行时间、指令和运行方式。") : t("调整此任务的执行时间、指令和运行方式。") }}</p>
         </header>
 
-        <div class="form-tabs" role="tablist" :aria-label="t('任务页签')">
-          <button type="button" role="tab" :aria-selected="formTab === 'settings'" :class="{ active: formTab === 'settings' }" @click="formTab = 'settings'">{{ t("设置") }}</button>
-          <button type="button" role="tab" :aria-selected="formTab === 'history'" :class="{ active: formTab === 'history' }" @click="openHistoryTab">{{ t("历史") }}</button>
+        <div class="form-tabs" role="tablist" :aria-label="t('任务页签')" @keydown="onTabGroupKeydown">
+          <button type="button" role="tab" :aria-selected="formTab === 'settings'" :tabindex="formTab === 'settings' ? 0 : -1" :class="{ active: formTab === 'settings' }" @click="formTab = 'settings'">{{ t("设置") }}</button>
+          <button type="button" role="tab" :aria-selected="formTab === 'history'" :tabindex="formTab === 'history' ? 0 : -1" :class="{ active: formTab === 'history' }" @click="openHistoryTab">{{ t("历史") }}</button>
         </div>
 
         <div v-if="formTab === 'settings'" class="form-body">
@@ -758,6 +760,8 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   </div>
 </template>
 
+<!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(与任务页面共用按钮配方)。 -->
+<style scoped src="../styles/full-area-buttons.css"></style>
 <style scoped>
 /* user:“专门对小屏或者说分屏状态做一下适配”+(按页面实际宽度调整布局，宽窗口中的窄分屏也能独立折叠)。 */
 
@@ -808,49 +812,6 @@ h1 { margin: 0 0 2px; font-size: 17px; font-weight: 700; letter-spacing: 0; }
 .crumb-sep { margin: 0 2px; color: color-mix(in srgb, var(--text) 40%, transparent); }
 p { margin: 0; }
 button { font: inherit; }
-
-/* 按钮：与资料库同一套（一种配方，两种语气）。 */
-.quiet-button, .primary-button, .icon-button {
-  min-height: 28px;
-  padding: 5px var(--space-3);
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
-}
-
-.quiet-button, .icon-button {
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 78%, transparent);
-}
-
-.quiet-button:hover:not(:disabled), .icon-button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  color: var(--text);
-}
-
-.icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  padding: 0;
-}
-
-.quiet-button.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
-.quiet-button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--red); }
-
-.primary-button {
-  border: 1px solid transparent;
-  background: var(--theme-control-background);
-  color: var(--theme-control-text);
-  font-weight: 600;
-}
-
-.primary-button:hover:not(:disabled) { filter: brightness(0.94); }
-
-.primary-button:disabled, .quiet-button:disabled, .icon-button:disabled { opacity: .45; cursor: default; }
 
 .arrange-loading { padding: var(--space-4) 0; font-size: 13px; color: color-mix(in srgb, var(--text) 62%, transparent); }
 .arrange-error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; color: var(--red); font-size: 13px; }

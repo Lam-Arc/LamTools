@@ -72,6 +72,12 @@ export interface ImportAnalysis {
   suggestions: { actionId: string; source: string; confidence: number }[]
 }
 
+// user:“确保视觉、功能和交互不退化”+(恢复桌宠编辑器和创建流程依赖的限制；文件数与体积对齐桌面角色包写入限制)。
+export const MAX_SCAN_FILES = 800
+export const MAX_SCAN_BYTES = 160 * 1024 * 1024
+export const MAX_ASSET_BYTES = 64 * 1024 * 1024
+export const MAX_IMAGE_EDGE = 8192
+
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
 const MODEL_EXTS = new Set(['glb', 'gltf', 'vrm'])
 /** 认识但当前没有可用运行时的格式：明确报出来，不伪装。 */

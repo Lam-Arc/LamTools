@@ -128,7 +128,10 @@ export function coreAppItemToMessagePart(
   item: CoreAppItem,
   options: CoreAppItemPartOptions = {},
 ): MessagePart {
-  const partType = options.type ?? coreAppItemPartType(String(item.type || ''))
+  // user:“Question Group…随消息流按位置加载渲染”+(分片的语义类型在 payload.type
+  // 里，顶层 type 只作回退；否则提问组会退化成普通正文。)
+  const payloadType = isRecord(item.payload) ? String(item.payload.type || '') : ''
+  const partType = options.type ?? coreAppItemPartType(payloadType || String(item.type || ''))
   return {
     id: item.item_id,
     partType,
@@ -152,6 +155,7 @@ export function coreAppItemPartType(type: string): MessagePart['partType'] {
   if (type === 'commandExecution') return 'command_output'
   if (type === 'fileChange') return 'file_diff'
   if (type === 'serverRequest') return 'decision'
+  if (type === 'questionGroup') return 'questionGroup'
   if (type === 'error') return 'error'
   if (type === 'plan') return 'plan'
   if (type === 'agent_summary' || type === 'sub_line') return type

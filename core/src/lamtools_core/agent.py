@@ -117,7 +117,11 @@ SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
 
 SUB_AGENT_MESSAGE_TOOL_SPEC: dict[str, Any] = {
     "name": SUB_AGENT_MESSAGE_TOOL_NAME,
-    "description": "Send guidance to an active reusable sub-agent without blocking.",
+    "description": (
+        "Send guidance to an active reusable sub-agent without blocking. "
+        "Every message wakes that sub-agent, so use it for decisions and answers, "
+        "not for progress chatter."
+    ),
     "input_schema": {
         "type": "object", "additionalProperties": False,
         "properties": {
@@ -132,7 +136,10 @@ SUB_AGENT_MESSAGE_TOOL_SPEC: dict[str, Any] = {
 
 SUB_AGENT_CHILD_MESSAGE_TOOL_SPEC: dict[str, Any] = {
     "name": SUB_AGENT_CHILD_MESSAGE_TOOL_NAME,
-    "description": "Send a persistent message to the parent agent.",
+    "description": (
+        "Send a persistent message to the parent agent. Every message wakes the "
+        "parent, so use it for questions and conclusions, not for progress chatter."
+    ),
     "input_schema": {
         "type": "object", "additionalProperties": False,
         "properties": {"message": {"type": "string", "minLength": 1}},

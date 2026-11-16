@@ -26,12 +26,12 @@
   border-color: var(--plugin-border-strong);
 }
 
-.plugin-search-icon {
+.plugin-search :deep(.plugin-search-icon) {
   flex: 0 0 auto;
   color: var(--plugin-faint);
 }
 
-.plugin-search input {
+.plugin-search :deep(input) {
   flex: 1 1 auto;
   min-width: 0;
   height: 32px;
@@ -42,7 +42,7 @@
   font-size: 12.5px;
 }
 
-.plugin-search input::placeholder {
+.plugin-search :deep(input::placeholder) {
   color: color-mix(in srgb, var(--theme-composer-text) 42%, transparent);
 }
 
@@ -324,51 +324,6 @@
   white-space: nowrap;
 }
 
-/* 开关 */
-.plugin-switch {
-  position: relative;
-  flex: 0 0 auto;
-  width: 42px;
-  height: 24px;
-  margin-top: 1px;
-  padding: 2px;
-  border: 1px solid color-mix(in srgb, var(--plugin-text) 16%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--plugin-text) 12%, transparent);
-  transition:
-    background var(--dur-base) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out),
-    opacity var(--dur-fast) var(--ease-out);
-}
-
-.plugin-switch:hover {
-  border-color: color-mix(in srgb, var(--plugin-text) 26%, transparent);
-}
-
-.plugin-switch[aria-checked='true'] {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--green) 72%, var(--plugin-card));
-}
-
-.plugin-switch:disabled {
-  opacity: .6;
-  cursor: progress;
-}
-
-.plugin-switch-thumb {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--plugin-text);
-  color: var(--plugin-card);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .22);
-  transform: translateX(0);
-  transition: transform var(--dur-base) var(--ease-emphasized), background var(--dur-base) var(--ease-out);
-}
-
-.plugin-switch[aria-checked='true'] .plugin-switch-thumb {
-  transform: translateX(18px);
-  background: var(--plugin-text);
-}
+/* user:“合并冗余实现，通过参数、变体和组合保留必要差异”+(插件卡片仅保留开关定位与忙碌图标，轨道由共享控件负责) */
+.plugin-switch { margin-top: 1px; }
+.plugin-switch .sunday-switch__thumb { display: grid; place-items: center; color: var(--sunday-signal); }

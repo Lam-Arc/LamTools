@@ -1,4 +1,5 @@
 <script setup>
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
 // user:“你应当设计的是一个高级、简洁、现代的网络工具界面，不用管跟 sunday 是否适配”+(使用独立深色视觉和简洁导航，不继承宿主面板布局)。
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
@@ -99,7 +100,7 @@ const navItems = items.filter((item) =>
   ["home", "overview", "proxy", "transfer"].includes(item.id),
 );
 // user:“右侧栏…三行 3 个胶囊…易交互”+(胶囊点下载/代理时直接落到对应页；页面已打开时用事件切页)。
-const PAGE_STORAGE = "network-exploration:page";
+const PAGE_STORAGE = "easynet:page";
 function requestedPage() {
   try {
     const value = sessionStorage.getItem(PAGE_STORAGE);
@@ -141,8 +142,8 @@ function diagnostic(value) {
 <template>
   <div class="nx-app" :aria-busy="Boolean(s.busy)">
     <aside class="nx-sidebar">
-      <div class="nx-brand" title="Network Exploration">
-        <Network :size="25" :stroke-width="1.7" /><span>Network</span>
+      <div class="nx-brand" title="EasyNet">
+        <Network :size="25" :stroke-width="1.7" /><span>EasyNet</span>
       </div>
       <nav aria-label="网络工具">
         <template v-for="item in navItems" :key="item.id">
@@ -183,7 +184,7 @@ function diagnostic(value) {
           ><span v-else-if="s.state && !s.connectionError" class="nx-live-label"
             ><span class="nx-live-dot" />实时更新</span
           ><button
-            class="nx-button nx-quiet nx-icon-button"
+            class="btn nx-button btn--quiet nx-icon-button"
             :disabled="Boolean(s.busy)"
             aria-label="刷新网络状态"
             @click="s.refresh()"
@@ -198,7 +199,7 @@ function diagnostic(value) {
         role="alert"
       >
         <span>暂时无法连接网络服务，请稍后重试。</span
-        ><button class="nx-button nx-quiet" @click="s.refresh()">重试</button>
+        ><button class="btn nx-button btn--quiet" @click="s.refresh()">重试</button>
       </div>
       <div
         v-if="s.error || s.notice"
@@ -208,7 +209,7 @@ function diagnostic(value) {
       >
         <span>{{ s.error || s.notice }}</span
         ><button
-          class="nx-button nx-quiet nx-icon-button"
+          class="btn nx-button btn--quiet nx-icon-button"
           aria-label="关闭提示"
           @click="
             s.error = '';
@@ -238,7 +239,7 @@ function diagnostic(value) {
             <p>正在读取网络状态…</p>
             <button
               v-if="s.connectionError"
-              class="nx-button nx-secondary"
+              class="btn nx-button btn--secondary"
               @click="s.refresh()"
             >
               重新连接

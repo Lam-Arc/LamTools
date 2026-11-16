@@ -39,7 +39,7 @@
 
     <template v-if="expanded">
       <div v-if="previousCompletedStep" class="runtime-checklist-card__previous" data-status="completed">
-        <span class="runtime-checklist-card__indicator" aria-hidden="true">✓</span>
+        <span class="runtime-checklist-card__indicator sunday-task-indicator" aria-hidden="true">✓</span>
         <span class="runtime-checklist-card__previous-title">{{ t("第") }}{{ stepNumber(previousCompletedStep) }}{{ t("步：") }}{{ previousCompletedStep.title }}</span>
         <span class="runtime-checklist-card__previous-status">{{ t("已完成") }}</span>
       </div>
@@ -47,8 +47,8 @@
 
     <div v-if="expanded" class="runtime-checklist-card__current" :class="`is-${currentStep.status}`" :data-status="currentStep.status">
       <span
-        class="runtime-checklist-card__indicator"
-        :class="{ 'runtime-checklist-card__indicator--running': currentStep.status === 'running' }"
+        class="runtime-checklist-card__indicator sunday-task-indicator"
+        :class="{ 'runtime-checklist-card__indicator--running sunday-task-indicator--running sunday-spin sunday-spin--task': currentStep.status === 'running' }"
         aria-hidden="true"
       >{{ currentStep.status === 'completed' ? '✓' : currentStep.status === 'failed' ? '!' : '' }}</span>
       <div class="runtime-checklist-card__current-body">
@@ -82,7 +82,7 @@
           :class="`is-${step.status}`"
           :data-status="step.status"
         >
-          <span class="runtime-checklist-card__indicator" :class="{ 'runtime-checklist-card__indicator--running': step.status === 'running' }" aria-hidden="true">
+          <span class="runtime-checklist-card__indicator sunday-task-indicator" :class="{ 'runtime-checklist-card__indicator--running sunday-task-indicator--running sunday-spin sunday-spin--task': step.status === 'running' }" aria-hidden="true">
             {{ step.status === 'completed' ? '✓' : '' }}
           </span>
           <div class="runtime-checklist-card__step-body">
@@ -100,11 +100,14 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(计划卡与侧栏共享步骤状态样式)。
+import '@/styles/sunday-task-indicator.css'
+import { runtimeStepStatusLabel as statusLabel } from '@/helpers/runtimeStepStatus.ts'
 import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { gsap } from 'gsap'
-import type { CoreRuntimeStep, CoreRuntimeStepGroup, CoreRuntimeStepStatus } from '@/types.ts'
+import type { CoreRuntimeStep, CoreRuntimeStepGroup } from '@/types.ts'
 
 const props = withDefaults(defineProps<{
   stepGroups?: CoreRuntimeStepGroup[]
@@ -247,15 +250,6 @@ function compactAriaLabel(step: CoreRuntimeStep): string {
   return t("当前步骤：第 {0} 步，{1}，{2}", { 0: stepNumber(step), 1: step.title, 2: statusLabel(step.status) })
 }
 
-function statusLabel(status: CoreRuntimeStepStatus): string {
-  return ({
-    pending: '待处理',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败',
-    skipped: '已跳过',
-  } as Record<CoreRuntimeStepStatus, string>)[status]
-}
 </script>
 
 <style scoped>
@@ -452,24 +446,6 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
   line-height: 1.4;
 }
 
-.runtime-checklist-card__indicator {
-  display: inline-grid;
-  flex: 0 0 16px;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  margin-top: 1px;
-  border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
-  border-radius: 50%;
-  color: var(--green);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.runtime-checklist-card__indicator--running {
-  border-color: var(--green);
-  animation: runtime-checklist-spin 1.2s linear infinite;
-}
 .runtime-checklist-card__current.is-failed .runtime-checklist-card__indicator {
   border-color: var(--red);
   color: var(--red);
@@ -544,10 +520,6 @@ function statusLabel(status: CoreRuntimeStepStatus): string {
 
 .runtime-checklist-card__step.is-running .runtime-checklist-card__step-status {
   color: color-mix(in srgb, var(--green) 76%, var(--text) 24%);
-}
-
-@keyframes runtime-checklist-spin {
-  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 640px) {

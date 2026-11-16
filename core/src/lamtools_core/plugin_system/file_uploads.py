@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import binascii
+import hashlib
 from pathlib import Path
 
 from lamtools_core.async_tasks import finish_on_cancel
@@ -57,6 +58,55 @@ class PluginFileUploadsAPI:
         except (RuntimeError, ValueError, OSError):
             raise FileUploadError("file-upload/host-changed", "Attachment was saved but host binding changed", may_have_changed=True) from None
 
+    async def _read_session(self, session_id):
+        from .session_controller import _cancel_owned_read
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(上传会话准入重复取消时等待原读取清理)。
+        return await _cancel_owned_read(self._host._read(session_id, self._root), name="file-upload-session-read")
+
+    async def read_encoded(self, session_id, attachment_id):
+        from .session_controller import _cancel_owned_read
+        from .filesystem_access import PluginFilesystemAPI
+        identifier(session_id)
+        identifier(attachment_id)
+        try:
+            session_id.encode("utf-8")
+            attachment_id.encode("utf-8")
+        except UnicodeError:
+            raise SessionDataError("session-data/invalid-id", "Use valid UTF-8 identifiers") from None
+        async def read_owned():
+            self._scope.acquire()
+            try:
+                self._check()
+                if getattr(self._host, "_data_dir", None) is None:
+                    raise FileUploadError("file-upload/unavailable", "Managed attachment storage is unavailable")
+                picker = PluginAttachmentAPI(self._host, self._scope, self._root, "attachments")
+                item = await picker.get(session_id, attachment_id)
+                self._check()
+                metadata = item.get("metadata") if type(item) is dict else None
+                if (type(metadata) is not dict or metadata.get("managed") is not True
+                        or type(metadata.get("sha256")) is not str or type(item.get("path")) is not str
+                        or type(item.get("size")) is not int or not 0 <= item["size"] <= MAX_ENCODED_UPLOAD_BYTES
+                        or type(item.get("mime_type")) is not str or len(item["mime_type"]) > 256):
+                    raise FileUploadError("file-upload/invalid-file", "Choose a bounded managed attachment")
+                # user:“复用原宿主权威”+(限定原托管目录并核对真实字节长度和指纹，不暴露本机路径)。
+                root = Path(self._host._data_dir).resolve() / "artifact" / "attachments"
+                try:
+                    raw = PluginFilesystemAPI(root, self._scope).read_bytes(item["path"], max_bytes=MAX_ENCODED_UPLOAD_BYTES)
+                    if len(raw) != item["size"] or hashlib.sha256(raw).hexdigest() != metadata["sha256"]:
+                        raise ValueError("Attachment changed")
+                except (OSError, ValueError, RuntimeError):
+                    raise FileUploadError("file-upload/invalid-file", "Managed attachment is unavailable or changed") from None
+                current = await picker.get(session_id, attachment_id)
+                await self._host._read(session_id, self._root)
+                self._check()
+                if current != item:
+                    raise FileUploadError("file-upload/host-changed", "Attachment binding changed")
+                return {"id": attachment_id, "mime_type": item["mime_type"], "size": len(raw),
+                        "content_base64": base64.b64encode(raw).decode("ascii")}
+            finally:
+                self._scope.release()
+        return await _cancel_owned_read(read_owned(), name="session-managed-file-read")
+
     async def save_encoded(self, session_id, *, filename, content_base64, mime_type=None):
         self._check()
         if type(content_base64) is not str or len(content_base64) > ((MAX_ENCODED_UPLOAD_BYTES + 2) // 3) * 4:
@@ -88,12 +138,12 @@ class PluginFileUploadsAPI:
         try:
             data = bytearray()
             try:
-                await self._host._read(session_id, self._root)
+                await self._read_session(session_id)
                 self._check()
                 count = 0
                 async def validate():
                     self._check()
-                    await self._host._read(session_id, self._root)
+                    await self._read_session(session_id)
                     self._check()
                 while True:
                     try:
@@ -102,7 +152,7 @@ class PluginFileUploadsAPI:
                         break
                     # user:“继续”+(每个分块后复核原会话和启动代；未完整接收前不创建持久附件)。
                     self._check()
-                    await self._host._read(session_id, self._root)
+                    await self._read_session(session_id)
                     self._check()
                     count += 1
                     if (type(chunk) is not bytes or len(chunk) > MAX_UPLOAD_CHUNK_BYTES
@@ -140,7 +190,9 @@ class PluginFileUploadsAPI:
                 raise FileUploadError("file-upload/write-uncertain", "Attachment write failed; inspect current state", may_have_changed=True) from None
             self._check_after_write()
             try:
-                await picker.get(session_id, result["id"])
+                from .session_controller import _cancel_owned_read
+                # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(提交后附件复核在重复取消时等待原读取清理)。
+                await _cancel_owned_read(picker.get(session_id, result["id"]), name="file-upload-committed-read")
             except asyncio.CancelledError:
                 raise
             except Exception as error:

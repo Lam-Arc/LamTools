@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent
 class NetworkRuntime:
     def __init__(self, context):
         self.context = context
-        self.data_dir = Path(context.app_data_dir or context.data_dir or ROOT) / 'plugins' / 'network-exploration' / 'data'
+        self.data_dir = Path(context.app_data_dir or context.data_dir or ROOT) / 'plugins' / 'easynet' / 'data'
         self.process = None
         self._lock = asyncio.Lock()
         self._sequence = 0
@@ -23,6 +23,12 @@ class NetworkRuntime:
         self._engine_lock = asyncio.Lock()
         self._job = None
         self._protocol_failed = False
+        # user:“改名儿是小事儿 主要是够不够 easy 和Stable”+(控制器异常退出后要能自己拉起来，用户不必重启整个应用)。
+        self._context = None
+        self._last_restart = 0.0
+        self._watchdog = None
+        self._shutting_down = False
+        self._proxy_desired = False
 
     @property
     def lifecycle_processes(self):
@@ -89,6 +95,7 @@ class NetworkRuntime:
         return ToolResult(call_id=call.id, name=call.name, status='ok', content=json.dumps(result, ensure_ascii=False))
 
     async def start(self, context):
+        self._context = context
         if self.process is not None and self.process.returncode is None:
             return
         if os.name != 'nt':
@@ -114,6 +121,9 @@ class NetworkRuntime:
         try:
             from .process_job import ProcessJob
             self._job = ProcessJob(self.process.pid)
+            if self._watchdog is None or self._watchdog.done():
+                self._shutting_down = False
+                self._watchdog = asyncio.create_task(self._watch())
             state = await self.call('status', {})
             # user:“自动通过网络拓展加速（如果需要）”+(启用本机 CONNECT 加速并供宿主分发请求共享，不更改系统代理)。
             from lamtools_core.distribution import register_accelerator
@@ -125,7 +135,53 @@ class NetworkRuntime:
             await self.stop()
             raise
 
+    @staticmethod
+    def _needs_restart(message):
+        return any(marker in message for marker in ('未运行', '提前退出', '响应格式无效', '响应不匹配'))
+
+    async def _restart_controller(self):
+        now = time.monotonic()
+        if now - self._last_restart < 20:
+            raise RuntimeError('网络控制器刚刚重启过，请稍后再试')
+        self._last_restart = now
+        context = self._context
+        if context is None:
+            raise RuntimeError('网络控制器未运行，且缺少重启所需的上下文')
+        desired = self._proxy_desired
+        try:
+            await self.stop(context)
+        except RuntimeError:
+            pass
+        await self.start(context)
+        if desired:
+            try:
+                await self._call_once('proxy.start', {})
+            except Exception:  # noqa: BLE001 - 恢复失败不影响控制器已经回来
+                pass
+
+    async def _watch(self):
+        # user:“改名儿是小事儿 主要是够不够 easy 和Stable”+(后台静默崩溃时自己恢复，用户看到的只是短暂重连，而不是整个插件变成未就绪)。
+        while not self._shutting_down:
+            await asyncio.sleep(5)
+            try:
+                async with self._lock:
+                    process = self.process
+                    dead = process is None or process.returncode is not None or self._protocol_failed
+                if dead:
+                    await self._restart_controller()
+            except Exception:  # noqa: BLE001 - 看门狗不能把插件带崩
+                continue
+
     async def call(self, method, params):
+        try:
+            return await self._call_once(method, params)
+        except RuntimeError as exc:
+            if not self._needs_restart(str(exc)):
+                raise
+            await self._restart_controller()
+            return await self._call_once(method, params)
+
+    async def _call_once(self, method, params):
         # user:“建议还是集成一下吧，尽量不把这些安装操作留给用户”+(随插件提供并自动准备成熟内核，页面不要求用户安装)。
         if method in {'proxy.start', 'transfer.add', 'transfer.recover'}:
             from .engine_install import ensure_bundled_engine
@@ -165,6 +221,10 @@ class NetworkRuntime:
             if 'error' in response:
                 raise ValueError(response['error'])
             result = response['result']
+            if method == 'proxy.start':
+                self._proxy_desired = True
+            elif method == 'proxy.stop':
+                self._proxy_desired = False
             # user:“自动通过网络拓展加速（如果需要）”+(手动启停加速器时同步宿主路由，避免保留过期端口)。
             if method == 'accelerator.start':
                 from lamtools_core.distribution import register_accelerator
@@ -181,6 +241,11 @@ class NetworkRuntime:
     async def stop(self, context=None):
         from lamtools_core.distribution import clear_accelerator
         clear_accelerator(self)
+        self._shutting_down = True
+        watchdog = self._watchdog
+        self._watchdog = None
+        if watchdog is not None and not watchdog.done():
+            watchdog.cancel()
         self._stopping = True
         process = self.process
         if process is None or process.returncode is not None:

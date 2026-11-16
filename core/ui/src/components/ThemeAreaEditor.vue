@@ -5,7 +5,8 @@
       user:“色彩渐变图像作为一个 mark 节点，然后玻璃应该单独作为一个 preference 节点”+
       (填充节点只描述区域里放什么：纯色/渐变/图片；玻璃另设一个材质偏好节点。)
     -->
-    <div class="theme-fill-modes" role="radiogroup" :aria-label="t('填充')">
+    <!-- user:“确保视觉、功能和交互不退化”+(填充与玻璃材质单选组支持键盘切换，保留各自外观)。 -->
+    <div class="theme-fill-modes" role="radiogroup" :aria-label="t('填充')" @keydown="onRadioGroupKeydown">
       <button
         v-for="mode in fillModes"
         :key="mode.value"
@@ -14,6 +15,7 @@
         type="button"
         role="radio"
         :aria-checked="fillMode === mode.value ? 'true' : 'false'"
+        :tabindex="fillMode === mode.value ? 0 : -1"
         :data-theme-fill-mode="mode.value"
         @click="$emit('update:fill-mode', mode.value)"
       >{{ mode.label }}</button>
@@ -141,14 +143,16 @@
       </label>
       <label class="field theme-image-fit-field">
         <span>{{ t("适应方式") }}</span>
-        <select
-          :value="imageFit"
+        <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(图片适应方式使用共享下拉框并保留主题更新事件) -->
+        <UiSelect
+          :model-value="imageFit"
+          :options="imageFits"
           class="theme-image-fit"
           data-theme-image-fit
-          @change="$emit('update:image-fit', ($event.target as HTMLSelectElement).value as ThemeImageFit)"
-        >
-          <option v-for="fit in imageFits" :key="fit.value" :value="fit.value">{{ fit.label }}</option>
-        </select>
+          :aria-label="t('适应方式')"
+          :menu-min-width="160"
+          @update:model-value="$emit('update:image-fit', $event as ThemeImageFit)"
+        />
       </label>
       <p class="theme-area-hint">{{ t("支持 PNG、JPEG、GIF、WebP、AVIF、SVG；动图会照常播放。") }}</p>
       <p v-if="imageError" class="theme-area-error" role="alert">{{ imageError }}</p>
@@ -161,7 +165,7 @@
     -->
     <div class="theme-glass-preference">
       <span class="theme-glass-label">{{ t("玻璃材质") }}</span>
-      <div class="theme-glass-levels" role="radiogroup" :aria-label="t('玻璃材质')">
+      <div class="theme-glass-levels" role="radiogroup" :aria-label="t('玻璃材质')" @keydown="onRadioGroupKeydown">
         <button
           v-for="level in glassLevels"
           :key="level.value"
@@ -170,6 +174,7 @@
           type="button"
           role="radio"
           :aria-checked="glassLevel === level.value ? 'true' : 'false'"
+          :tabindex="glassLevel === level.value ? 0 : -1"
           :data-theme-glass-level="level.value"
           @click="$emit('update:glass-level', level.value)"
         >{{ level.label }}</button>
@@ -227,7 +232,9 @@ import { t } from '@/i18n/index.ts'
 import { computed, ref } from 'vue'
 import type { ThemeFillMode, ThemeGlassPreference, ThemeImageFit, ThemeStop } from '@/helpers/theme.ts'
 import { readThemeImageFile } from '@/helpers/themeImage.ts'
+import { onRadioGroupKeydown } from '@/composables/radioGroupKeyboard.ts'
 import SundayRange from '@/components/SundayRange.vue'
+import UiSelect from '@/components/UiSelect.vue'
 
 const props = defineProps<{
   label: string

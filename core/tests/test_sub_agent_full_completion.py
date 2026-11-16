@@ -67,15 +67,20 @@ async def test_finished_member_message_is_injected_into_a_live_parent_run(tmp_pa
     assert metadata["name"] == "worker"
     assert metadata["status"] == "idle"
 
-    # The guidance id is the durable event row id: the kernel's checkpoint
-    # acknowledgement is what marks the event delivered, and until then the
-    # event stays queued (a live run that never consumed it must not lose it).
-    pending = peek_member_events(database, "parent")
-    assert [item["id"] for item in pending] == [guidance_id]
-    assert pending[0]["payload"]["summary"] == message
+    # user:“所有message均唤醒”+(实时注入的 guidance id 指向那条信箱消息：
+    # checkpoint 确认据此把消息标成已投递；事件行只做审计，不再承载投递状态。)
+    from lamtools_core.sub_agent_supervisor import (
+        acknowledge_parent_mailbox,
+        peek_wake_messages,
+    )
 
-    mark_member_events_delivered(database, [guidance_id])
-    assert peek_member_events(database, "parent") == []
+    assert guidance_id.startswith(
+        "sub-agent:parent:worker:wake:member_finished:worker:"
+    )
+    pending = peek_wake_messages(database, "parent")
+    assert [item["body"] for item in pending] == [f"子代理 worker 已完成：{message}"]
+    acknowledge_parent_mailbox(database, "parent", [pending[0]["id"]])
+    assert peek_wake_messages(database, "parent") == []
 
 
 @pytest.mark.asyncio

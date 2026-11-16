@@ -1,12 +1,13 @@
 <script setup>
 // user:“右侧栏…直接把该要的那 3 个胶囊镶上去…1. 加速：一个开启键。2. 代理：一个点击更换节点，和一个开启键。3. 下载：一个 URL 输入框，和一个下载键”“能用图标表示的地方就不用写文字”+(去掉内嵌卡片，只放三行胶囊；操作控件直接放在胶囊里)。
 import { computed, ref } from "vue";
+// user:“通过参数、变体和组合保留必要差异”+(快捷胶囊使用共享下拉，同时保留紧凑布局与节点操作)。
+import UiSelect from "../../../../../../../ui/src/components/UiSelect.vue";
 import {
   Zap,
   Globe,
   Download,
   Power,
-  ChevronsUpDown,
   ArrowDownToLine,
 } from "lucide-vue-next";
 import { useNetwork } from "./session.mjs";
@@ -26,18 +27,19 @@ const groups = computed(() =>
 const group = computed(() => groups.value[0] || null);
 const nodes = computed(() => group.value?.[1]?.all || []);
 const currentNode = computed(() => group.value?.[1]?.now || "");
+const nodeOptions = computed(() => nodes.value.map(name => ({ value: name, label: name === "DIRECT" ? "直接连接" : name })));
 const accelerationText = computed(() =>
   !s.systemProxyReady ? "读取中" : s.accelerated ? "已开启" : "未开启",
 );
 function open(page) {
   try {
-    sessionStorage.setItem("network-exploration:page", page);
+    sessionStorage.setItem("easynet:page", page);
   } catch {
     // 没有 sessionStorage 时仍然可以打开插件页。
   }
   window.dispatchEvent(
     new CustomEvent("sunday:open-plugin-page", {
-      detail: { plugin: "network-exploration", id: "network" },
+      detail: { plugin: "easynet", id: "network" },
     }),
   );
   window.dispatchEvent(
@@ -51,8 +53,7 @@ function toggleProxy() {
   }
   s.toggleProxy();
 }
-async function chooseNode(event) {
-  const name = event.target.value;
+async function chooseNode(name) {
   if (!name || !group.value || name === currentNode.value) return;
   await s.selectNode(group.value[0], name);
 }
@@ -98,20 +99,7 @@ async function startDownload() {
       >
         <span class="nx-pill-icon" title="代理"><Globe :size="16" /></span>
         <div class="nx-node-wrap">
-          <select
-            class="nx-node-select"
-            :value="currentNode"
-            :disabled="Boolean(s.busy) || !nodes.length"
-            aria-label="更换节点"
-            title="更换节点"
-            @change="chooseNode"
-          >
-            <option v-if="!nodes.length" value="">无可用节点</option>
-            <option v-for="name in nodes" :key="name" :value="name">
-              {{ name === "DIRECT" ? "直接连接" : name }}
-            </option>
-          </select>
-          <ChevronsUpDown :size="12" class="nx-chevron" />
+          <UiSelect :model-value="currentNode" :options="nodeOptions" :disabled="Boolean(s.busy) || !nodes.length" placeholder="无可用节点" aria-label="更换节点" data-network-quick-node :menu-min-width="160" @update:model-value="chooseNode" />
         </div>
         <button
           class="nx-mini-action"

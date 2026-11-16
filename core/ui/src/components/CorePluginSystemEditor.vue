@@ -39,7 +39,7 @@
           :title="t('刷新')"
           @click="fetchPlugins()"
         >
-          <RefreshCw :size="15" :class="{ spin: refreshing }" aria-hidden="true" />
+          <RefreshCw :size="15" :class="{ 'spin sunday-spin sunday-spin--slow': refreshing }" aria-hidden="true" />
         </button>
       </div>
     </header>
@@ -60,7 +60,7 @@
               <p>{{ t("本地目录、压缩包或链接，三种来源共用一条流程。") }}</p>
             </div>
             <span v-if="installBusy" class="install-busy" role="status">
-              <LoaderCircle :size="13" class="spin" aria-hidden="true" />
+              <LoaderCircle :size="13" class="spin sunday-spin sunday-spin--slow" aria-hidden="true" />
               {{ t("处理中…") }}
             </span>
           </div>
@@ -149,24 +149,13 @@
     </div>
 
     <div class="plugin-toolbar">
-      <div class="plugin-search">
-        <Search :size="15" :stroke-width="1.9" class="plugin-search-icon" aria-hidden="true" />
-        <input
-          ref="searchInputEl"
-          v-model="query"
-          data-plugin-search
-          type="text"
-          :placeholder="t('搜索插件、能力或路径')"
-          :aria-label="t('搜索插件、能力或路径')"
-          spellcheck="false"
-          autocomplete="off"
-          @keydown.esc="clearSearch"
-        />
+      <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(插件搜索保留快捷键、清除和原有外观)。 -->
+      <LibrarySearchField ref="searchInputEl" v-model="query" class="plugin-search" type="text" :label="t('搜索插件、能力或路径')" :icon-size="15" :icon-stroke-width="1.9" icon-class="plugin-search-icon" :input-attrs="{ 'data-plugin-search': '', spellcheck: 'false', autocomplete: 'off' }" @keydown.esc="clearSearch">
         <button v-if="query" class="plugin-search-clear" type="button" :aria-label="t('清除搜索')" @click="clearSearch">
           <X :size="13" aria-hidden="true" />
         </button>
         <kbd v-else class="plugin-search-key" aria-hidden="true">/</kbd>
-      </div>
+      </LibrarySearchField>
 
       <div class="plugin-filters" role="group" :aria-label="t('筛选插件')">
         <button
@@ -266,20 +255,17 @@
               <span class="plugin-root" :title="plugin.root">{{ plugin.root }}</span>
             </div>
           </div>
-          <button
+          <!-- user:“合并冗余实现，通过参数、变体和组合保留必要差异”+(插件开关使用共享控件并保留忙碌提示和失败回退) -->
+          <SundaySwitch
             class="plugin-switch"
-            type="button"
-            role="switch"
-            :aria-checked="plugin.enabled"
-            :aria-label="plugin.enabled ? t('禁用 {0}', { 0: plugin.name }) : t('启用 {0}', { 0: plugin.name })"
+            :model-value="plugin.enabled"
+            :label="plugin.enabled ? t('禁用 {0}', { 0: plugin.name }) : t('启用 {0}', { 0: plugin.name })"
             :data-toggle-for="plugin.name"
             :disabled="busy === plugin.name"
-            @click="toggle(plugin)"
+            @update:model-value="toggle(plugin)"
           >
-            <span class="plugin-switch-thumb">
-              <LoaderCircle v-if="busy === plugin.name" :size="11" :stroke-width="2.4" class="spin" aria-hidden="true" />
-            </span>
-          </button>
+            <template #thumb><LoaderCircle v-if="busy === plugin.name" :size="11" :stroke-width="2.4" class="spin sunday-spin sunday-spin--slow" aria-hidden="true" /></template>
+          </SundaySwitch>
         </header>
 
         <p class="plugin-description" :class="{ 'is-empty': !plugin.description }">
@@ -378,7 +364,7 @@
             :disabled="depsBusy === plugin.name"
             @click="checkDeps(plugin)"
           >
-            <LoaderCircle v-if="depsBusy === plugin.name" :size="13" class="spin" aria-hidden="true" />
+            <LoaderCircle v-if="depsBusy === plugin.name" :size="13" class="spin sunday-spin sunday-spin--slow" aria-hidden="true" />
             <PackageCheck v-else :size="13" :stroke-width="1.9" aria-hidden="true" />
             <span>{{ t("依赖") }}</span>
           </button>
@@ -527,6 +513,9 @@
 </template>
 
 <script setup lang="ts">
+import LibrarySearchField from '@/components/LibrarySearchField.vue'
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(插件管理加载反馈使用共享旋转动效)。
+import '@/styles/sunday-spinner.css'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, type Component } from 'vue'
 import {
   AppWindow,
@@ -563,6 +552,7 @@ import {
 
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import SundaySegmented from '@/components/SundaySegmented.vue'
+import SundaySwitch from '@/components/SundaySwitch.vue'
 import PluginMarket from '@/components/PluginMarket.vue'
 import PluginConfigPanel from '@/components/PluginConfigPanel.vue'
 import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
@@ -684,7 +674,7 @@ const copiedPlugin = ref('')
 const pendingUninstall = ref<PluginSystemEntry | null>(null)
 const uninstallError = ref('')
 const uninstalling = ref(false)
-const searchInputEl = ref<HTMLInputElement | null>(null)
+const searchInputEl = ref<InstanceType<typeof LibrarySearchField> | null>(null)
 const installInputEl = ref<HTMLInputElement | null>(null)
 const pageEl = ref<HTMLElement | null>(null)
 const columnCount = ref(1)

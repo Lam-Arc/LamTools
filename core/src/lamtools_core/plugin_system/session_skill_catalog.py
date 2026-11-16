@@ -31,6 +31,12 @@ class PluginSessionSkillCatalog:
     async def list(self, session_id, *, limit=100):
         if type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError("limit must be an integer from 1 to 500")
+        from .session_controller import _cancel_owned_read
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(重复取消等待原会话准入及技能发现清理后再释放租约)。
+        return await _cancel_owned_read(self._list_owned(session_id, limit=limit),
+                                        name="session-skill-catalog-list")
+
+    async def _list_owned(self, session_id, *, limit):
         self._scope.acquire()
         try:
             self._check()
@@ -63,6 +69,14 @@ class PluginSessionSkillCatalog:
             self._check()
             if Path(current.root).resolve() != Path(fs.root).resolve():
                 raise SessionSkillError("session-skill/directory-changed", "Session execution directory changed during discovery")
+            try:
+                current_registry, current_state = self._factory(), self._state_factory()
+            except Exception:
+                raise SessionSkillError("session-skill/provider-changed", "Original skill provider changed during discovery") from None
+            self._check()
+            # user:“复用原宿主权威”+(技能发现后重新解析原提供方实例，撤换时拒绝旧目录或启用状态结果)。
+            if current_registry is not registry or current_state is not state:
+                raise SessionSkillError("session-skill/provider-changed", "Original skill provider changed during discovery")
             # user:“复用原宿主权威”+(返回前复核启用账本；等待期间发生变更则拒绝旧技能列表)。
             _, current_entries = state.snapshot()
             self._check()

@@ -9,9 +9,9 @@
         <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </header>
-    <div class="wf-queue-tabs" role="tablist" :aria-label="t('队列视图')">
-      <button type="button" role="tab" :aria-selected="tab === 'queue'" :class="{ active: tab === 'queue' }" @click="tab = 'queue'">{{ t("当前队列") }}</button>
-      <button type="button" role="tab" :aria-selected="tab === 'history'" :class="{ active: tab === 'history' }" @click="tab = 'history'">{{ t("运行历史") }}</button>
+    <div class="wf-queue-tabs" role="tablist" :aria-label="t('队列视图')" @keydown="onTabGroupKeydown">
+      <button type="button" role="tab" :aria-selected="tab === 'queue'" :tabindex="tab === 'queue' ? 0 : -1" :class="{ active: tab === 'queue' }" @click="tab = 'queue'">{{ t("当前队列") }}</button>
+      <button type="button" role="tab" :aria-selected="tab === 'history'" :tabindex="tab === 'history' ? 0 : -1" :class="{ active: tab === 'history' }" @click="tab = 'history'">{{ t("运行历史") }}</button>
     </div>
     <div class="wf-queue-actions">
       <button type="button" class="wf-queue-primary" :disabled="loading || disabled" @click="enqueue">{{ t("加入队列") }}</button>
@@ -73,6 +73,8 @@
 
 <script setup lang="ts">
 import { t } from '../../../../../../ui/src/i18n/index'
+// user:“确保视觉、功能和交互不退化”+(队列标签使用统一键盘导航与可达焦点)。
+import { onTabGroupKeydown } from '../../../../../../ui/src/composables/radioGroupKeyboard'
 
 import { computed, ref } from 'vue'
 import { ChevronRight, RefreshCw, X } from 'lucide-vue-next'

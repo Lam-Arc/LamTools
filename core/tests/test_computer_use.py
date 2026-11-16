@@ -403,6 +403,15 @@ class TestStatusEndpoint:
         assert stopped.status_code == 200
         assert stopped.json()["session"]["state"] == "stopped"
 
+    def test_stopped_task_is_no_longer_active(self, client):
+        # user:“结束并非结束回合，而是返回一个用户结束了你的computer use”+
+        # (结束之后覆盖层要能自己收掉，所以状态端点不再把结束的任务当 active。)
+        session.start("测试控制")
+        client.post("/api/core/computer-use/control", json={"action": "stop"})
+        payload = client.get("/api/core/computer-use/status").json()
+        assert payload["active"] is False
+        assert payload["session"]["state"] == "stopped"
+
     def test_control_without_task_is_404(self, client):
         response = client.post("/api/core/computer-use/control", json={"action": "pause"})
         assert response.status_code == 404
@@ -411,3 +420,31 @@ class TestStatusEndpoint:
         session.start("测试控制")
         response = client.post("/api/core/computer-use/control", json={"action": "explode"})
         assert response.status_code == 400
+
+class TestUserStopsFromUi:
+    """user:“只留一个结束，且结束并非结束回合，而是返回一个用户结束了你的computer use”+
+    (用户点结束之后，模型下一次调用拿到的是一句说明，不是 blocked 错误；这件事由
+     用户发起，所以不算失败，也不是这一轮的终点。)
+    """
+
+    @pytest.mark.asyncio
+    async def test_next_action_reports_user_stopped(self, tmp_path):
+        await tools.handle(_call("start", goal="测试"), work_root=tmp_path)
+        session.current().stop("用户点了胶囊上的结束", by_user=True)
+
+        result = await tools.handle(_call("click", x=1, y=1), work_root=tmp_path)
+
+        assert result.status == "ok"
+        assert result.content == "用户结束了这次电脑操作"
+        assert result.metadata["stopped_by_user"] is True
+
+    @pytest.mark.asyncio
+    async def test_model_stop_is_still_terminal(self, tmp_path):
+        await tools.handle(_call("start", goal="测试"), work_root=tmp_path)
+        await tools.handle(_call("stop", reason="我自己做完了"), work_root=tmp_path)
+
+        result = await tools.handle(_call("click", x=1, y=1), work_root=tmp_path)
+
+        assert result.status == "blocked"
+        assert "用户结束了" not in result.content
+

@@ -11,8 +11,12 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { defaultConfig, DEFAULT_PING_PROMPTS, type PetConfigV1, type PingSectorConfig } from '@/pet/config.ts'
 import { hasPetConfigAccess, patchPetConfig, readPetConfig, updatePetConfig } from '@/pet/configFile.ts'
 import PetHotkeyField from '@/pet/ui/PetHotkeyField.vue'
+import UiSelect from '@/components/UiSelect.vue'
+import { petQualityOptions as qualityOptions, petZModeOptions as zModeOptions } from '@/pet/settingsOptions'
 
-const available = hasPetConfigAccess()
+// user:“直接渲染项目真实组件”+(展厅预览使用本地状态，不读取或修改真实桌宠配置)。
+const props = withDefaults(defineProps<{ preview?: boolean }>(), { preview: false })
+const available = props.preview || hasPetConfigAccess()
 const config = reactive<PetConfigV1>(defaultConfig())
 // user:“恢复默认回到 Ctrl+Alt+Space”+(默认值只认 config.ts 一处，界面上不手写 accelerator。)
 const defaultHotkey = defaultConfig().ping.hotkey
@@ -20,18 +24,6 @@ const loading = ref(true)
 const saving = ref(false)
 const saved = ref(false)
 const error = ref('')
-
-const qualityOptions = [
-  { value: 'low', label: '低（更快，线段更少）' },
-  { value: 'balanced', label: '均衡' },
-  { value: 'high', label: '高（更贴边缘）' },
-] as const
-
-const zModeOptions = [
-  { value: 'top', label: '置顶（总在窗口之上）' },
-  { value: 'clip', label: '置顶 + 按窗口几何裁剪（推荐）' },
-  { value: 'behind', label: '压到窗口之下（整层被挡）' },
-] as const
 
 const bubbleOptions = [
   { value: 'popup', label: '主动弹出' },
@@ -53,6 +45,7 @@ function report(message: string): void {
 }
 
 async function load(): Promise<void> {
+  if (props.preview) { loading.value = false; return }
   if (!available) {
     loading.value = false
     return
@@ -87,6 +80,7 @@ function mergePatch(target: Record<string, unknown>, patch: Record<string, unkno
 }
 
 function queuePatch(patch: Record<string, unknown>): void {
+  if (props.preview) return
   revision += 1
   pending = mergePatch(pending, patch)
   if (saveTimer) window.clearTimeout(saveTimer)
@@ -115,6 +109,7 @@ async function flush(): Promise<void> {
 
 async function setEnabled(value: boolean): Promise<void> {
   config.enabled = value
+  if (props.preview) return
   saving.value = true
   error.value = ''
   try {
@@ -146,6 +141,7 @@ function setQuality(value: PetConfigV1['quality']): void {
 function setZMode(value: PetConfigV1['zMode']): void {
   config.zMode = value
   queuePatch({ zMode: value })
+  if (props.preview) return
   void import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('pet_set_z_mode', { mode: value }))
     .catch(() => undefined)
@@ -164,7 +160,7 @@ function setBubbleMax(value: number): void {
 function setPingField(key: string, value: unknown): void {
   ;(config.ping as unknown as Record<string, unknown>)[key] = value
   queuePatch({ ping: { [key]: value } })
-  if (key === 'hotkey') {
+  if (key === 'hotkey' && !props.preview) {
     void import('@tauri-apps/api/core')
       .then(({ invoke }) => invoke('pet_hotkey_set', { accelerator: value }))
       .catch(() => undefined)
@@ -202,6 +198,11 @@ function resetPrompt(sector: PingSectorConfig): void {
 let petPending: Record<string, Record<string, unknown>> = {}
 let petTimer = 0
 function queuePetField(id: string, field: string, value: unknown): void {
+  if (props.preview) {
+    const record = config.pets.find(item => item.id === id)
+    if (record) Object.assign(record, { [field]: value })
+    return
+  }
   petPending[id] = { ...(petPending[id] || {}), [field]: value }
   if (petTimer) window.clearTimeout(petTimer)
   petTimer = window.setTimeout(() => { void flushPets() }, 300)
@@ -229,7 +230,7 @@ async function flushPets(): Promise<void> {
 let unlisten: (() => void) | null = null
 onMounted(() => {
   void load()
-  if (!available) return
+  if (!available || props.preview) return
   void import('@tauri-apps/api/event').then(({ listen }) => {
     void listen('pet://config-changed', () => {
       // 自己刚写入的广播不重载，避免覆盖正在编辑的草稿。
@@ -264,9 +265,10 @@ onBeforeUnmount(() => {
         <div class="subhead">
           <span class="muted subhead-title">总开关</span>
         </div>
+        <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(桌宠设置保留即时与防抖保存时机，共用原生复选框配方) -->
         <label class="pet-settings-row">
           <span>启用桌宠</span>
-          <input type="checkbox" :checked="config.enabled" @change="setEnabled(($event.target as HTMLInputElement).checked)">
+          <input class="sunday-checkbox" type="checkbox" :checked="config.enabled" @change="setEnabled(($event.target as HTMLInputElement).checked)">
         </label>
         <p class="pet-settings-hint">关闭后会收起桌宠覆盖层；Ping 独立窗口不受影响。</p>
       </article>
@@ -277,20 +279,17 @@ onBeforeUnmount(() => {
         </div>
         <label class="pet-settings-row">
           <span>真实遮挡模式</span>
-          <select :value="config.zMode" @change="setZMode(($event.target as HTMLSelectElement).value as PetConfigV1['zMode'])">
-            <option v-for="option in zModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
+          <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(下拉菜单沿用共享控件，保留桌宠的保存和窗口操作) -->
+          <UiSelect :model-value="config.zMode" :options="[...zModeOptions]" aria-label="真实遮挡模式" :menu-min-width="180" @update:model-value="setZMode($event as PetConfigV1['zMode'])" />
         </label>
         <label class="pet-settings-row">
           <span>L3 视觉边缘识别</span>
-          <input type="checkbox" :checked="config.useL3" @change="setL3(($event.target as HTMLInputElement).checked)">
+          <input class="sunday-checkbox" type="checkbox" :checked="config.useL3" @change="setL3(($event.target as HTMLInputElement).checked)">
         </label>
         <p class="pet-settings-hint">默认关闭：不抓屏、不建视觉地形；需要时再打开。</p>
         <label class="pet-settings-row">
           <span>几何精度</span>
-          <select :value="config.quality" @change="setQuality(($event.target as HTMLSelectElement).value as PetConfigV1['quality'])">
-            <option v-for="option in qualityOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
+          <UiSelect :model-value="config.quality" :options="[...qualityOptions]" aria-label="几何精度" :menu-min-width="180" @update:model-value="setQuality($event as PetConfigV1['quality'])" />
         </label>
       </article>
 
@@ -302,7 +301,7 @@ onBeforeUnmount(() => {
         <div v-for="record in config.pets" :key="record.id" class="pet-settings-row pet-settings-row--pet">
           <span class="pet-settings-name">{{ record.name }}</span>
           <label class="pet-settings-inline">
-            <input type="checkbox" :checked="record.visible" @change="queuePetField(record.id, 'visible', ($event.target as HTMLInputElement).checked)">
+            <input class="sunday-checkbox" type="checkbox" :checked="record.visible" @change="queuePetField(record.id, 'visible', ($event.target as HTMLInputElement).checked)">
             显示
           </label>
           <label class="pet-settings-inline">
@@ -338,7 +337,7 @@ onBeforeUnmount(() => {
         </label>
         <label class="pet-settings-row">
           <span>「对话」自动附当前截图</span>
-          <input type="checkbox" :checked="config.ping.autoAttachScreenshot" @change="setPingField('autoAttachScreenshot', ($event.target as HTMLInputElement).checked)">
+          <input class="sunday-checkbox" type="checkbox" :checked="config.ping.autoAttachScreenshot" @change="setPingField('autoAttachScreenshot', ($event.target as HTMLInputElement).checked)">
         </label>
 
         <div class="pet-settings-sectors">
@@ -347,7 +346,7 @@ onBeforeUnmount(() => {
             <input class="pet-settings-sector-label" :value="sector.label" @change="setSector(index, 'label', ($event.target as HTMLInputElement).value)">
             <input type="color" :value="sector.color" @change="setSector(index, 'color', ($event.target as HTMLInputElement).value)">
             <label class="pet-settings-inline">
-              <input type="checkbox" :checked="sector.enabled" @change="setSector(index, 'enabled', ($event.target as HTMLInputElement).checked)">
+              <input class="sunday-checkbox" type="checkbox" :checked="sector.enabled" @change="setSector(index, 'enabled', ($event.target as HTMLInputElement).checked)">
               启用
             </label>
             <button type="button" class="pet-settings-danger" @click="removeSector(index)">删除</button>
@@ -375,9 +374,7 @@ onBeforeUnmount(() => {
         </div>
         <label v-for="row in bubbleRows" :key="row.key" class="pet-settings-row">
           <span>{{ row.label }}</span>
-          <select :value="config.bubbles[row.key]" @change="setBubble(row.key, ($event.target as HTMLSelectElement).value)">
-            <option v-for="option in bubbleOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
+          <UiSelect :model-value="config.bubbles[row.key]" :options="[...bubbleOptions]" :aria-label="row.label" :menu-min-width="180" @update:model-value="setBubble(row.key, $event)" />
         </label>
         <label class="pet-settings-row">
           <span>最多同时展开</span>
@@ -401,20 +398,20 @@ onBeforeUnmount(() => {
 }
 .pet-settings-hint {
   margin: 0;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
   font-size: 12px;
   line-height: 1.55;
 }
 .pet-settings-state {
   margin-left: 8px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
 }
 .pet-settings-state--ok {
-  color: var(--success, #4f9d69);
+  color: var(--green);
 }
 .pet-settings-error {
   margin: 0;
-  color: var(--danger, #c0392b);
+  color: var(--red);
   font-size: 12px;
 }
 .pet-settings-row {
@@ -439,16 +436,24 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-size: 12px;
 }
-.pet-settings-row select,
 .pet-settings-row input[type='text'],
 .pet-settings-row input[type='number'] {
   min-width: 180px;
   padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--control);
-  color: var(--control-text);
 }
+/* user:“建立统一的 Design Tokens”+(桌宠设置文字输入跟随输入区主题，浅暗主题均使用同一配方)。 */
+.pet-settings-row input[type='text'],
+.pet-settings-row input[type='number'],
+.pet-settings-sector input[type='text'],
+.pet-settings-sector input:not([type]),
+.pet-settings-sector-prompt {
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent);
+  color: var(--theme-composer-text);
+  caret-color: var(--theme-composer-text);
+}
+.pet-settings-row :deep(.ui-select) { width: 180px; flex: 0 0 180px; }
 .pet-settings-row--pet input[type='number'] {
   min-width: 72px;
   width: 72px;
@@ -465,16 +470,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius-sm);
 }
 .pet-settings-sector input[type='text'],
 .pet-settings-sector input:not([type]) {
   padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--control);
-  color: var(--control-text);
 }
 .pet-settings-sector-icon {
   width: 36px;
@@ -487,14 +488,10 @@ onBeforeUnmount(() => {
   flex: 1 0 100%;
   min-height: 44px;
   padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--control);
-  color: var(--control-text);
   font: inherit;
 }
 .pet-settings-danger {
-  color: var(--danger, #c0392b);
+  color: var(--red);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -502,7 +499,7 @@ onBeforeUnmount(() => {
 .pet-settings-reset {
   background: transparent;
   border: none;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
   cursor: pointer;
   font-size: 11px;
 }

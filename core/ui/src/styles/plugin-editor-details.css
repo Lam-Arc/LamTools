@@ -49,6 +49,11 @@
   animation: plugin-status-pulse 1.6s var(--ease-out) infinite;
 }
 
+/* user:“确保视觉、功能和交互不退化”+(减少动态效果时保留状态点和文字，停止呼吸动画)。 */
+@media (prefers-reduced-motion: reduce) {
+  .plugin-status-row.is-pending .plugin-status-dot { animation: none; }
+}
+
 .plugin-status-label {
   flex: 0 0 auto;
   font-weight: 600;

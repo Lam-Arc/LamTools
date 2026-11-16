@@ -12,6 +12,7 @@
       <span class="sunday-range__fill" aria-hidden="true" />
       <input
         class="sunday-range__input"
+        v-bind="inputAttrs"
         type="range"
         :value="modelValue"
         :min="min"
@@ -19,8 +20,9 @@
         :step="step"
         :disabled="disabled"
         :aria-label="label"
-        :aria-valuetext="displayValue"
+        :aria-valuetext="valueText ?? displayValue"
         @input="onInput"
+        @change="onChange"
       />
     </div>
   </div>
@@ -41,6 +43,10 @@ const props = withDefaults(defineProps<{
   decimals?: number
   disabled?: boolean
   bare?: boolean
+  /** user:“通过参数、变体和组合保留必要差异”+(保留调用方对真实原生滑条的标识与表单属性) */
+  inputAttrs?: Record<string, string>
+  /** user:“保留必要差异”+(支持与原始数值不同的可读单位，例如小数表示百分比)。 */
+  valueText?: string
 }>(), {
   min: 0,
   max: 100,
@@ -54,6 +60,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: number]
+  change: [value: number]
 }>()
 
 const fillPercent = computed(() => {
@@ -67,6 +74,11 @@ const displayValue = computed(() => `${props.modelValue.toFixed(props.decimals)}
 const trackStyle = computed<Record<string, string>>(() => ({
   '--sunday-range-fill': `${fillPercent.value}%`,
 }))
+
+// user:“通过参数、变体和组合保留必要差异”+(允许调用方在拖动时预览、在原生提交时保存)。
+function onChange(event: Event): void {
+  emit('change', Number((event.target as HTMLInputElement).value))
+}
 
 function onInput(event: Event): void {
   emit('update:modelValue', Number((event.target as HTMLInputElement).value))

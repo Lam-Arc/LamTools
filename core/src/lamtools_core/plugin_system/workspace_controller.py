@@ -125,11 +125,15 @@ class PluginWorkspaceController:
             self._check()
             if self._catalog is None or not self._catalog.has("project.sessions.create"):
                 raise WorkspaceControllerError("workspace/unavailable", "Original session creation is unavailable")
+            if not self._catalog.has("project.sessions.get"):
+                raise WorkspaceControllerError("workspace/unavailable", "Original session lookup is unavailable")
             binding = self._catalog.binding_token("project.sessions.create")
+            read_binding = self._catalog.binding_token("project.sessions.get")
             try:
                 # user:“复用原宿主权威”+(在原项目事务内创建会话，派发后取消等待结算)。
                 async def write():
                     self._check_operation("project.sessions.create", binding)
+                    self._check_operation("project.sessions.get", read_binding)
                     return await self._catalog.execute("project.sessions.create", {"project_id": project_id, "title": title},
                         metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
                 result = await finish_on_cancel(write(), name="workspace-session-create")
@@ -143,6 +147,14 @@ class PluginWorkspaceController:
                         or await self._registry.get(project_id) is None):
                     raise ValueError("Session binding changed")
                 self._check_operation("project.sessions.create", binding)
+                # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(复核真实会话仍归属当前项目且可见，撤回或后续变化不发布旧快照)。
+                self._check_operation("project.sessions.get", read_binding)
+                lookup = await self._catalog.execute("project.sessions.get", {"project_id": project_id, "session_id": session["id"]},
+                    metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
+                self._check_operation("project.sessions.create", binding)
+                self._check_operation("project.sessions.get", read_binding)
+                if lookup.status != "ok" or type(lookup.payload) is not dict or lookup.payload.get("session") != session:
+                    raise ValueError("Session changed after creation")
                 return dict(session)
             except asyncio.CancelledError:
                 raise
@@ -190,8 +202,185 @@ class PluginWorkspaceController:
                 if (type(project) is not dict or project.get("id") != project_id
                         or Path(project.get("work_root", "")).resolve() != self._root):
                     raise ValueError("Unexpected project result")
-                return dict(project)
+                # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(提交后复核原项目记录，避免发布已删除或被后续写入覆盖的旧结果)。
+                current = await self._registry.get(project_id)
+                self._check_operation("project.update", binding)
+                if current is None or current != project:
+                    raise ValueError("Project changed after write")
+                return dict(current)
             except (RuntimeError, ValueError, TypeError, OSError):
                 raise WorkspaceControllerError("workspace/host-changed", "Project write completed but binding changed", may_have_changed=True) from None
+        finally:
+            self._scope.release()
+
+    async def pin_session(self, session_id):
+        return await self._change_pin(session_id, pin=True)
+
+    async def unpin_session(self, session_id):
+        return await self._change_pin(session_id, pin=False)
+
+    async def insert_session_before(self, session_id, before_session_id=None):
+        if type(session_id) is not str or not session_id or len(session_id) > 128 or "\x00" in session_id:
+            raise ValueError("Use a bounded session id")
+        if before_session_id is not None and (
+            type(before_session_id) is not str or not before_session_id
+            or len(before_session_id) > 128 or "\x00" in before_session_id
+        ):
+            raise ValueError("Use a bounded before_session_id")
+        for value in (session_id, before_session_id):
+            if value is not None:
+                try:
+                    value.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise ValueError("Use valid session ids") from None
+        mutation, read = "project.sessions.insert_before", "project.sessions.list"
+        self._scope.acquire()
+        try:
+            self._check()
+            project = await self._registry.resolve_by_path(str(self._root))
+            self._check()
+            if project is None:
+                raise WorkspaceControllerError("workspace/not-found", "Workspace is unavailable in this project")
+            project_id = project.get("id")
+            if type(project_id) is not str or not project_id:
+                raise WorkspaceControllerError("workspace/invalid-result", "Original project identity is invalid")
+            if self._catalog is None or any(not self._catalog.has(name) for name in (mutation, read)):
+                raise WorkspaceControllerError("workspace/unavailable", "Original project session ordering is unavailable")
+            mutation_binding = self._catalog.binding_token(mutation)
+            read_binding = self._catalog.binding_token(read)
+            try:
+                async def write():
+                    self._check_operation(mutation, mutation_binding)
+                    payload = {"project_id": project_id, "session_id": session_id}
+                    if before_session_id is not None:
+                        payload["before_session_id"] = before_session_id
+                    return await self._catalog.execute(
+                        mutation, payload,
+                        metadata={"source": "plugin-sdk", "plugin": self._scope.owner},
+                    )
+                result = await finish_on_cancel(write(), name="workspace-session-order")
+                self._check_operation(mutation, mutation_binding)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise WorkspaceControllerError(
+                    "workspace/write-uncertain", "Session order may have changed; inspect current order", may_have_changed=True
+                ) from None
+            if result.status != "ok" or type(result.payload) is not dict:
+                error = result.payload if type(result.payload) is dict else {}
+                code = error.get("code")
+                if code not in {"workspace/move-invalid", "workspace/not-found"}:
+                    code = "workspace/rejected"
+                raise WorkspaceControllerError(code, "Original session order operation was rejected")
+
+            # user:“真实请求、错误、作用域、取消/流和清理”+(写后重读原项目会话顺序，并拒绝发布过时结果)。
+            from .session_controller import _cancel_owned_read
+
+            async def read_current():
+                self._check_operation(read, read_binding)
+                current = await self._catalog.execute(
+                    read, {"project_id": project_id},
+                    metadata={"source": "plugin-sdk", "plugin": self._scope.owner},
+                )
+                self._check_operation(read, read_binding)
+                self._check_operation(mutation, mutation_binding)
+                if current.status != "ok" or type(current.payload) is not dict:
+                    raise ValueError("Original session order is unavailable")
+                sessions = current.payload.get("sessions")
+                if type(sessions) is not list or any(type(row) is not dict or type(row.get("id")) is not str for row in sessions):
+                    raise ValueError("Original session order is invalid")
+                ids = [row["id"] for row in sessions]
+                if session_id not in ids:
+                    raise ValueError("Moved session is no longer visible")
+                if before_session_id is None:
+                    if ids[-1] != session_id:
+                        raise ValueError("Moved session is no longer last")
+                elif before_session_id != session_id and ids.index(session_id) + 1 != ids.index(before_session_id):
+                    raise ValueError("Session anchor ordering changed")
+                if await self._registry.get(project_id) is None:
+                    raise ValueError("Workspace changed after session ordering")
+                self._check_operation(mutation, mutation_binding)
+                self._check_operation(read, read_binding)
+                return ids
+
+            try:
+                session_ids = await _cancel_owned_read(read_current(), name="workspace-session-order-revalidation")
+                return {"session_ids": session_ids}
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise WorkspaceControllerError(
+                    "workspace/host-changed", "Session order changed after commit", may_have_changed=True
+                ) from None
+        finally:
+            self._scope.release()
+
+    async def _change_pin(self, session_id, *, pin):
+        if type(session_id) is not str or not session_id or len(session_id) > 128 or "\x00" in session_id:
+            raise ValueError("Use a bounded session id")
+        try:
+            session_id.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("Use a valid session id") from None
+        mutation = "project.sessions.pin" if pin else "project.sessions.unpin"
+        read = "project.sessions.pinned"
+        self._scope.acquire()
+        try:
+            self._check()
+            project = await self._registry.resolve_by_path(str(self._root))
+            self._check()
+            if project is None:
+                raise WorkspaceControllerError("workspace/not-found", "Workspace is unavailable in this project")
+            project_id = project.get("id")
+            if type(project_id) is not str or not project_id:
+                raise WorkspaceControllerError("workspace/invalid-result", "Original project identity is invalid")
+            if self._catalog is None or any(not self._catalog.has(name) for name in (mutation, read)):
+                raise WorkspaceControllerError("workspace/unavailable", "Original project session pin store is unavailable")
+            mutation_binding = self._catalog.binding_token(mutation)
+            read_binding = self._catalog.binding_token(read)
+            try:
+                async def write():
+                    self._check_operation(mutation, mutation_binding)
+                    return await self._catalog.execute(mutation, {"project_id": project_id, "session_id": session_id},
+                        metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
+                result = await finish_on_cancel(write(), name="workspace-session-pin" if pin else "workspace-session-unpin")
+                self._check_operation(mutation, mutation_binding)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise WorkspaceControllerError("workspace/write-uncertain", "Session pin state may have changed; inspect current state", may_have_changed=True) from None
+            if result.status != "ok" or type(result.payload) is not dict:
+                error = result.payload.get("error", "") if type(result.payload) is dict else ""
+                if "Session not found" in str(error):
+                    raise WorkspaceControllerError("session/not-found", "Session is unavailable in this project")
+                raise WorkspaceControllerError("workspace/rejected", "Original session pin operation was rejected")
+            # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(提交后重读原Core置顶集合，不能发布已失效项目或过时列表)。
+            from .session_controller import _cancel_owned_read
+
+            async def read_current():
+                self._check_operation(read, read_binding)
+                current = await self._catalog.execute(read, {"project_id": project_id},
+                    metadata={"source": "plugin-sdk", "plugin": self._scope.owner})
+                self._check_operation(read, read_binding)
+                if current.status != "ok" or type(current.payload) is not dict:
+                    raise ValueError("Original session pin state is unavailable")
+                ids = current.payload.get("pinned_session_ids")
+                if type(ids) is not list or any(type(value) is not str for value in ids):
+                    raise ValueError("Original session pin state is invalid")
+                if await self._registry.get(project_id) is None:
+                    raise ValueError("Workspace changed after pin update")
+                self._check_operation(mutation, mutation_binding)
+                self._check_operation(read, read_binding)
+                return list(ids)
+
+            try:
+                pinned_ids = await _cancel_owned_read(read_current(), name="workspace-session-pin-revalidation")
+                if pin and session_id not in pinned_ids:
+                    raise ValueError("Session pin did not persist")
+                return {"pinned_session_ids": pinned_ids}
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise WorkspaceControllerError("workspace/host-changed", "Session pin state changed after commit", may_have_changed=True) from None
         finally:
             self._scope.release()

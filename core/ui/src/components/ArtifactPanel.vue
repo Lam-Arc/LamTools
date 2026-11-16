@@ -28,15 +28,8 @@
       </div>
     </header>
 
-    <div class="artifact-search-row">
-      <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-      <input
-        v-model="searchText"
-        class="artifact-search"
-        type="search"
-        :placeholder="t('搜索名称、路径或来源…')"
-        :aria-label="t('搜索成果库')"
-      />
+    <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(成果库共享搜索结构，保留紧凑外观与清除操作)。 -->
+    <LibrarySearchField v-model="searchText" class="artifact-search-row" :input-attrs="{ class: 'artifact-search' }" :placeholder="t('搜索名称、路径或来源…')" :label="t('搜索成果库')">
       <button
         v-if="searchText"
         type="button"
@@ -44,7 +37,7 @@
         :aria-label="t('清除搜索')"
         @click="searchText = ''"
       >×</button>
-    </div>
+    </LibrarySearchField>
 
     <div class="artifact-filters" :aria-label="t('成果筛选')">
       <UiSelect
@@ -78,7 +71,7 @@
     <p v-if="error" class="artifact-error" role="alert">{{ error }}</p>
 
     <div v-if="loading" class="artifact-state" data-state="loading" role="status" aria-live="polite">
-      <LoaderCircle class="artifact-state-spinner" :size="15" :stroke-width="1.8" aria-hidden="true" />
+      <LoaderCircle class="artifact-state-spinner sunday-spin" :size="15" :stroke-width="1.8" aria-hidden="true" />
       <span>{{ t("正在加载成果库…") }}</span>
     </div>
     <div v-else-if="!projectId" class="artifact-state" data-state="empty">{{ t("选择项目后查看成果库。") }}</div>
@@ -123,6 +116,7 @@
         <div class="artifact-item-actions">
           <label v-if="cleanupMode" class="artifact-check" @click.stop>
             <input
+              class="sunday-checkbox"
               type="checkbox"
               :checked="selectedSet.has(item.artifact_id)"
               :aria-label="t('选择 {0}', { 0: item.name })"
@@ -199,6 +193,8 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(成果加载复用共享旋转反馈)。
+import '@/styles/sunday-spinner.css'
 import { useReferenceActions } from '@/helpers/referenceActions'
 
 import { t } from '@/i18n/index.ts'
@@ -211,7 +207,6 @@ import {
   LoaderCircle,
   RefreshCw,
   RotateCcw,
-  Search,
   Trash2,
 } from 'lucide-vue-next'
 import type { ArtifactRole, ProjectArtifact } from '@/types.ts'
@@ -221,6 +216,7 @@ import { isNativeContextTarget, openContextMenu } from '@/components/context-men
 import FileTypeBadge from '@/components/FileTypeBadge.vue'
 import UiSelect from '@/components/UiSelect.vue'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import LibrarySearchField from '@/components/LibrarySearchField.vue'
 
 const props = withDefaults(defineProps<{
   projectId: string | null
@@ -557,8 +553,8 @@ onMounted(() => { void fetchArtifacts() })
 .artifact-panel .btn--ghost { min-height: 28px; padding: 0 var(--space-1); font-size: 11px; color: color-mix(in srgb, var(--text) 64%, transparent); }
 .artifact-panel .btn--danger { color: color-mix(in srgb, var(--red) 80%, var(--text) 20%); }
 .artifact-search-row { display: flex; align-items: center; gap: var(--space-1); min-height: 32px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); padding: 0 var(--space-2); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: color-mix(in srgb, var(--theme-composer-text) 52%, transparent); }
-.artifact-search { min-width: 0; flex: 1 1 auto; border: 0; outline: 0; background: transparent; color: var(--theme-composer-text); caret-color: var(--theme-composer-text); font: inherit; font-size: 11px; }
-.artifact-search::placeholder { color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent); }
+.artifact-search-row :deep(.artifact-search) { min-width: 0; flex: 1 1 auto; border: 0; outline: 0; background: transparent; color: var(--theme-composer-text); caret-color: var(--theme-composer-text); font: inherit; font-size: 11px; }
+.artifact-search-row :deep(.artifact-search::placeholder) { color: color-mix(in srgb, var(--theme-composer-text) 45%, transparent); }
 .artifact-search-clear { border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; font-size: 15px; line-height: 1; }
 .artifact-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-1); padding: var(--space-2) 0 var(--space-1); }
 .artifact-filters :deep(.ui-select-trigger) { min-height: 28px; padding-inline: var(--space-1); font-size: 10px; }
@@ -568,8 +564,7 @@ onMounted(() => { void fetchArtifacts() })
 .artifact-panel-hint { margin: 0 0 var(--space-2); color: color-mix(in srgb, var(--text) 46%, transparent); font-size: 10px; line-height: 1.45; }
 .artifact-error { margin: 0 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--red) 22%, transparent); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); background: color-mix(in srgb, var(--red) 10%, var(--theme-backdrop-background)); color: color-mix(in srgb, var(--red) 80%, var(--text) 20%); font-size: 11px; }
 .artifact-state { display: flex; align-items: center; justify-content: center; gap: var(--space-1); min-height: 88px; padding: var(--space-3); color: color-mix(in srgb, var(--text) 52%, transparent); font-size: 11px; line-height: 1.5; text-align: center; }
-.artifact-state-spinner { animation: artifact-spin .9s linear infinite; color: var(--blue); }
-@keyframes artifact-spin { to { transform: rotate(360deg); } }
+.artifact-state-spinner { color: var(--blue); }
 .artifact-list { display: grid; gap: var(--space-1); min-height: 0; max-height: 42vh; overflow: auto; margin: 0; padding: 0; list-style: none; }
 .artifact-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); min-width: 0; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); border-radius: var(--radius-sm); padding: var(--space-1); background: var(--theme-backdrop-background); }
 .artifact-item:hover { border-color: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); background: color-mix(in srgb, var(--text) var(--alpha-hover), var(--theme-backdrop-background)); }
@@ -594,7 +589,8 @@ onMounted(() => { void fetchArtifacts() })
 .artifact-icon-button--danger:hover { color: var(--red); }
 .artifact-icon-button--restore:hover { color: var(--green); }
 .artifact-check { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; min-height: 26px; }
-.artifact-check input { width: 14px; height: 14px; margin: 0; accent-color: var(--green); }
+/* user:“存量迁移：将现有页面逐步接入统一组件库”+(成果多选继续使用原生表单交互，外观由共享配方提供) */
+.artifact-check .sunday-checkbox { --checkbox-size: 14px; }
 .artifact-detail { margin-top: var(--space-2); border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent); padding-top: var(--space-2); }
 .artifact-detail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .artifact-detail-head > div { display: grid; min-width: 0; gap: 2px; }
@@ -611,7 +607,6 @@ onMounted(() => { void fetchArtifacts() })
   .artifact-removed-toggle { grid-column: 1 / -1; min-height: 34px; }
   .artifact-icon-button, .artifact-check { min-width: 34px; min-height: 34px; }
 }
-@media (prefers-reduced-motion: reduce) { .artifact-state-spinner { animation: none; } }
 </style>
 
 <style scoped>

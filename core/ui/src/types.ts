@@ -127,6 +127,7 @@ export type MessagePartType =
   | 'status'
   | 'error'
   | 'decision'
+  | 'questionGroup'
   | 'sub_line'
   | 'agent_summary'
   | 'compaction'

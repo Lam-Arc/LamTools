@@ -7,11 +7,10 @@
   >
     <!-- ── 命令条：搜索 / 视图 / 筛选 / 探测 ─────────────────────────── -->
     <header class="mc-bar">
-      <label class="mc-search">
-        <Search :size="14" :stroke-width="1.9" aria-hidden="true" />
-        <input v-model.trim="query" type="search" data-model-catalog-search :placeholder="t('搜索模型或供应商')" />
+      <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(模型搜索复用结构，保留结果数量与原尺寸)。 -->
+      <LibrarySearchField v-model.trim="query" class="mc-search" :label="t('搜索模型或供应商')" :icon-stroke-width="1.9" :input-attrs="{ 'data-model-catalog-search': '' }">
         <span v-if="query" class="mc-search-total">{{ visibleModelCount }}</span>
-      </label>
+      </LibrarySearchField>
 
       <div class="mc-bar-tools">
         <CoreModelCatalogViewToggle
@@ -38,7 +37,7 @@
           data-model-probe
           @click="probeAll(true)"
         >
-          <RefreshCw :size="15" :stroke-width="1.9" :class="{ 'mc-spin': probing }" aria-hidden="true" />
+          <RefreshCw :size="15" :stroke-width="1.9" :class="{ 'mc-spin sunday-spin sunday-spin--slow': probing }" aria-hidden="true" />
         </button>
         <button class="btn btn--primary mc-add-provider" type="button" data-provider-create @click="openProviderCreate()">
           <Plus :size="14" :stroke-width="2.2" aria-hidden="true" />
@@ -220,7 +219,7 @@
                 :data-provider-probe="shelf.provider.id"
                 @click="probeProvider(shelf.provider.id)"
               >
-                <RefreshCw :size="13" :stroke-width="1.9" :class="{ 'mc-spin': probingIds.has(shelf.provider.id) }" aria-hidden="true" />
+                <RefreshCw :size="13" :stroke-width="1.9" :class="{ 'mc-spin sunday-spin sunday-spin--slow': probingIds.has(shelf.provider.id) }" aria-hidden="true" />
               </button>
               <button
                 v-if="shelf.provider"
@@ -547,10 +546,11 @@
             />
           </div>
 
-          <label class="mc-field mc-field--switch">
+          <!-- user:“确保视觉、功能和交互不退化”+(共享开关自身提供标签，外层只负责布局，避免嵌套标签)。 -->
+          <div class="mc-field mc-field--switch">
             <span>{{ t('启用') }}</span>
             <SundaySwitch v-model="draft.enabled" :label="t('启用')" size="sm" />
-          </label>
+          </div>
 
           <div class="mc-field-grid">
             <label class="mc-field">
@@ -565,10 +565,10 @@
               <span>{{ t('温度') }}</span>
               <input v-model.number="draft.temperature" type="number" min="0" max="2" step="0.1" />
             </label>
-            <label class="mc-field mc-field--switch">
+            <div class="mc-field mc-field--switch">
               <span>{{ t('推理') }}</span>
               <SundaySwitch v-model="draft.thinkingSupported" :label="t('推理')" size="sm" />
-            </label>
+            </div>
           </div>
 
           <label v-if="draft.thinkingSupported" class="mc-field">
@@ -620,7 +620,8 @@
           </label>
           <div class="mc-member-list">
             <label v-for="model in models" :key="model.id" class="mc-member">
-              <input v-model="draft.modelIds" type="checkbox" :value="model.id" />
+              <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(模型分组保留数组多选和草稿保护) -->
+              <input v-model="draft.modelIds" class="sunday-checkbox" type="checkbox" :value="model.id" />
               <span>
                 <b>{{ modelName(model) }}</b>
                 <small>{{ providerName(model.provider_id) }}</small>
@@ -806,6 +807,8 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(模型检测使用共享旋转动效)。
+import '@/styles/sunday-spinner.css'
 import { t } from '@/i18n/index.ts'
 
 /**
@@ -828,12 +831,12 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  Search,
   SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-vue-next'
 import CoreModelCatalogViewToggle from '@/components/CoreModelCatalogViewToggle.vue'
+import LibrarySearchField from '@/components/LibrarySearchField.vue'
 import UiSelect from '@/components/UiSelect.vue'
 import SundaySegmented from '@/components/SundaySegmented.vue'
 import SundaySwitch from '@/components/SundaySwitch.vue'

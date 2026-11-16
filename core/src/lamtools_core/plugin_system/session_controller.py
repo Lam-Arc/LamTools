@@ -48,6 +48,10 @@ class PluginSessionController:
             raise SessionControllerError("session-controller/host-changed", "Session binding changed")
 
     async def _admit(self, session_id):
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(会话控制准入重复取消时等待原读取及作用域清理)。
+        return await _cancel_owned_read(self._admit_owned(session_id), name="scoped-session-admission")
+
+    async def _admit_owned(self, session_id):
         self._check()
         state = await self._directories.for_scope(self._scope).get(session_id)
         self._check()
@@ -71,6 +75,20 @@ class PluginSessionController:
 
     async def state(self, session_id):
         return await self._read("state", session_id)
+
+    async def list_current_project(self, *, limit=50, cursor=None):
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(复用原项目与会话目录提供有界列表，不冒充DSH全局Peer可见列表)。
+        async def read_current_project():
+            self._check()
+            registry = self._context.workspace_registry
+            project = await registry.resolve_by_path(str(self._root))
+            self._check()
+            if project is None:
+                raise SessionControllerError("session-controller/project-unavailable", "Current project is unavailable")
+            page = await registry.sessions(project["id"], limit=limit, cursor=cursor)
+            self._check()
+            return page
+        return await _cancel_owned_read(read_current_project(), name="scoped-session-current-project-list")
 
     async def history_page(self, session_id, *, before_seq=None, turn_limit=10, max_bytes=262144):
         if before_seq is not None and (type(before_seq) is not int or not 1 <= before_seq <= 2**63 - 1):

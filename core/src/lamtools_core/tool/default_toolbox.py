@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from lamtools_core.tool.question_spec import question_input_schema
+
 import hashlib
 import json
 import logging
@@ -782,73 +784,15 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "name": "question",
         "description": (
-            "Ask the user one or more questions, or request confirmation, when you need "
-            "clarification, a decision between options, or explicit approval before "
-            "proceeding. The run pauses until the user responds. Use `questions` to ask "
-            "several questions in one call; they are presented one at a time."
+            "Ask 1–4 structured questions (2–4 options each) when you need clarification, a decision "
+            "among options, or explicit confirmation that cannot be inferred from the repo.\n"
+            "- Put context/rationale in `description`, keep `title` concise.\n"
+            "- `required: true` (default) pauses the turn until answered; `required: false` collects "
+            "optional context without pausing.\n"
+            "- Answers return as a normal user message (`Q1 ...: ...`), NOT a tool result — do not wait "
+            "for a tool output. Skipping closes the card (`closed_reason=\"skipped\"`) and resumes the turn."
         ),
-        "input_schema": {
-            **_schema(
-                {
-                    "question": {
-                        "type": "string",
-                        "description": "The question or confirmation prompt to present to the user.",
-                    },
-                    "options": {
-                        "type": "array",
-                        "description": "Selectable choices. Omit for a simple confirm/deny question.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "label": {"type": "string", "description": "Short option label."},
-                                "description": {"type": "string", "description": "Optional detail."},
-                            },
-                            "required": ["label"],
-                        },
-                    },
-                    "questions": {
-                        "type": "array",
-                        "description": "Several questions to present one at a time in this same paused turn.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "header": {
-                                    "type": "string",
-                                    "description": "Short heading for this question.",
-                                },
-                                "question": {
-                                    "type": "string",
-                                    "description": "The question or confirmation prompt.",
-                                },
-                                "options": {
-                                    "type": "array",
-                                    "description": "Selectable choices for this question.",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "label": {"type": "string"},
-                                            "description": {"type": "string"},
-                                        },
-                                        "required": ["label"],
-                                    },
-                                },
-                                "multiSelect": {
-                                    "type": "boolean",
-                                    "description": "Allow selecting more than one option.",
-                                },
-                            },
-                            "required": ["question"],
-                        },
-                    },
-                    "context": {
-                        "type": "string",
-                        "description": "Optional context or background for the question.",
-                    },
-                },
-                [],
-            ),
-            "anyOf": [{"required": ["question"]}, {"required": ["questions"]}],
-        },
+        "input_schema": question_input_schema(),
     },
     {
         "name": "computer_use",
@@ -1383,26 +1327,37 @@ async def _update_checklist_handler(call: ToolCall) -> ToolResult:
 
 
 async def _question_handler(call: ToolCall) -> ToolResult:
-    """Defensive fallback for the question tool.
+    """Close a question call immediately; the answer arrives as a user message.
 
-    Under normal operation the approval gate pauses the run before this
-    handler is reached, and the user's answer is injected as the tool result
-    by the approval-respond flow. This handler only runs when
-    ``approval_policy='auto_approve'`` bypasses the gate — in that case we
-    return a placeholder so the model knows no real user answer was collected.
+    user:“Question 是纯提问工具…不通过 Tool Result 接收回答”+(提问在这里就结束：
+    工具结果是「已展示给用户」，答案稍后作为一条普通用户消息进入会话。工具不再
+    挂着等回答，也不再占用等待门。)
     """
     args = call.arguments if isinstance(call.arguments, dict) else {}
-    question = str(args.get("question") or "")
+    questions = args.get("questions")
+    titles = [
+        str(item.get("title") or "").strip()
+        for item in questions
+        if isinstance(item, dict)
+    ] if isinstance(questions, list) else []
+    titles = [title for title in titles if title]
+    if not titles:
+        titles = [str(args.get("question") or "").strip()] if args.get("question") else []
+    asked = "；".join(titles)
     return ToolResult(
         call_id=call.id,
         name=call.name,
         status="ok",
         content=(
-            "Question was auto-approved without user input."
-            + (f" The question was: {question}" if question else "")
-            + " No user answer was collected."
+            "questions_shown: the user now sees the question card. "
+            "No answer is available in this tool result; it will arrive as a normal "
+            "user message, and this step is finished."
+            + (f" Asked: {asked}" if asked else "")
         ),
-        metadata={"auto_approved": True},
+        metadata={
+            "question_shown": True,
+            "questions": questions if isinstance(questions, list) else [],
+        },
     )
 
 

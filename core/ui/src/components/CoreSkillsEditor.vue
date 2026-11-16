@@ -219,17 +219,8 @@
             >
               <Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
-            <button
-              class="btn btn--ghost toggle-btn"
-              :class="{ 'is-on': skill.enabled }"
-              type="button"
-              :aria-label="skill.enabled ? t('禁用技能 {0}', { 0: skill.name }) : t('启用技能 {0}', { 0: skill.name })"
-              :title="skill.enabled ? t('已启用') : t('已禁用')"
-              @click="toggleSkill(skill.name, !skill.enabled)"
-            >
-              <ToggleRight v-if="skill.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
-              <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-            </button>
+            <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(技能开关复用控件，保存期间禁用且失败时保持原状态)。 -->
+            <SundaySwitch :model-value="skill.enabled" :label="t('技能 {0}', { 0: skill.name })" :title="skill.enabled ? t('已启用') : t('已禁用')" :disabled="togglingNames.includes(skill.name)" size="sm" @update:model-value="toggleSkill(skill.name, $event)" />
           </div>
         </div>
       </article>
@@ -258,8 +249,9 @@
 import { t } from '@/i18n/index.ts'
 
 import { computed, onMounted, ref } from 'vue'
-import { Pencil, Plus, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
+import { Pencil, Plus, Trash2, X } from 'lucide-vue-next'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
+import SundaySwitch from '@/components/SundaySwitch.vue'
 import UiSelect from '@/components/UiSelect.vue'
 import type { CoreSkillItem } from '@/types.ts'
 
@@ -277,6 +269,7 @@ const groups = ref<string[]>([])
 const loading = ref(true)
 const error = ref('')
 const deletingName = ref('')
+const togglingNames = ref<string[]>([])
 
 // 新建技能表单（标题 / 描述 / 内容 / 所属分组）
 const showCreateForm = ref(false)
@@ -352,6 +345,8 @@ async function refreshSkills() {
 }
 
 async function toggleSkill(name: string, enable: boolean) {
+  if (togglingNames.value.includes(name)) return
+  togglingNames.value = [...togglingNames.value, name]
   try {
     await props.requestRpc(enable ? 'skill.enable' : 'skill.disable', { name })
     const idx = skills.value.findIndex((s) => s.name === name)
@@ -359,6 +354,8 @@ async function toggleSkill(name: string, enable: boolean) {
     emit('changed')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    togglingNames.value = togglingNames.value.filter(item => item !== name)
   }
 }
 

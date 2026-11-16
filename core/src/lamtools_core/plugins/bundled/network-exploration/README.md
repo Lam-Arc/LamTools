@@ -1,4 +1,4 @@
-# Network Exploration · 网络拓展
+# EasyNet · 简单代理与下载
 
 <!-- user:“实现这个插件，也正好实验我们的新插件架构”+(记录实际实现、验收与尚未交付的范围，不把方案目录当作已完成功能)。 -->
 
@@ -20,7 +20,7 @@ Sunday 的 Windows 桌面内置网络插件。完整界面由插件自己绘制�
 - 经宿主审批后的当前用户系统代理、指定接口 DNS、应用出站防火墙规则、应用上传 QoS。
 - 修改前加密快照、实际配置核对、失败恢复、重启恢复；发现外部修改时保留现场。
 - 定时只读诊断、试运行、事件记录与报告导出。
-- Agent Skill 和 `core network-exploration call` 命令；没有新增 Agent 工具或第二个 Agent Loop。
+- Agent Skill 和 `core easynet call` 命令；没有新增 Agent 工具或第二个 Agent Loop。
 
 ## 使用
 
@@ -84,18 +84,18 @@ python scripts/prepare-network-plugin.py
 
 ## 接口与数据
 
-UI / CLI 调用 `network-exploration.<method>`。入口清单见 `operations.json`。除 `system.apply`、`system.restore` 必须通过宿主审批外，其余接口不修改系统全局网络配置。
+UI / CLI 调用 `easynet.<method>`。入口清单见 `operations.json`。除 `system.apply`、`system.restore` 必须通过宿主审批外，其余接口不修改系统全局网络配置。
 
 `status` 返回统一快照及配置版本；`settings.update`、`rules.save`、`automation.save` 必须带 `revision`。过期版本被拒绝，避免不同面板互相覆盖。`rules.save/test` 当前为独立匹配预览；实际代理路由由导入的 Mihomo 规则执行，二者不会假装自动同步。
 
 ```text
-core network-exploration call status
-core network-exploration call diagnose --arguments-file E:\temp\diagnose.json
+core easynet call status
+core easynet call diagnose --arguments-file E:\temp\diagnose.json
 ```
 
 诊断参数示例：`{"target":"github.com","port":443,"kind":"basic"}`。命令连接运行中的 Sunday，不新建网络服务。使用 `--base-url` / `--ws-path` 或现有 Sunday 环境变量选择桌面后台。
 
-数据位于宿主 `data_dir/plugins/network-exploration/data`（若宿主提供 `app_data_dir`，优先使用它）。内置源目录保持只读，运行数据不会经插件资源接口对外提供。目录 ACL 限定当前 Windows 用户与 SYSTEM。订阅配置、下载地址和配置快照使用当前账户 DPAPI 加密；换 Windows 账户后不能直接解密。
+数据位于宿主 `data_dir/plugins/easynet/data`（若宿主提供 `app_data_dir`，优先使用它）。内置源目录保持只读，运行数据不会经插件资源接口对外提供。目录 ACL 限定当前 Windows 用户与 SYSTEM。订阅配置、下载地址和配置快照使用当前账户 DPAPI 加密；换 Windows 账户后不能直接解密。
 
 控制器使用独占锁；全部受控进程加入 Windows Job，宿主崩溃后不遗留内核子进程。正常退出先恢复插件配置、暂停并正常关闭 aria2。异常退出留下的事务会在下次启动检查；无法确认所有权时保留快照并要求核对。无法恢复的事务会阻止直接卸载。
 

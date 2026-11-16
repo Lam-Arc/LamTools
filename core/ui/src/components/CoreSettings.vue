@@ -378,7 +378,7 @@
             <div class="lc-chips">
               <span v-for="(name, index) in contextExcept" :key="name" class="lc-chip">
                 {{ name }}
-                <button type="button" class="lc-chip-x" :disabled="contextSaving" @click="contextExcept.splice(index, 1)">
+                <button type="button" class="lc-chip-x" :aria-label="t('移除 {0}', { 0: name })" :disabled="contextSaving" @click="contextExcept.splice(index, 1)">
                   <X :size="10" :stroke-width="2.2" aria-hidden="true" />
                 </button>
               </span>
@@ -508,21 +508,8 @@
         <article class="setting-card">
           <h3>{{ t("自动检查") }}</h3>
           <div class="dream-row">
-            <div class="dream-toggle">
-          <button
-            type="button"
-            class="toggle-btn"
-            data-update-auto-check
-            :class="{ 'is-on': updateAutoCheck }"
-            :aria-label="t('启动时自动检查更新')"
-            :aria-pressed="updateAutoCheck ? 'true' : 'false'"
-            @click="toggleUpdateAutoCheck"
-          >
-            <ToggleRight v-if="updateAutoCheck" :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-              <span class="dream-toggle-label">{{ t("启动时自动检查更新") }}</span>
-            </div>
+            <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(自动检查使用共享开关，保留持久化设置)。 -->
+            <SundaySwitch data-update-auto-check :model-value="updateAutoCheck" :label="t('启动时自动检查更新')" @update:model-value="setAutoCheck">{{ t("启动时自动检查更新") }}</SundaySwitch>
             <span class="muted">{{ t("发现新版本时会在顶部显示提示条") }}</span>
           </div>
         </article>
@@ -545,11 +532,12 @@ import { useSplitKeyboardScope } from '@/split/keyboardScope'
 const splitKeyboardActive = useSplitKeyboardScope()
 
 import { t } from '@/i18n/index.ts'
+import { settingsThemeVars } from '@/helpers/settingsTheme.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useThemeStudio } from '@/composables/useThemeStudio.ts'
 import { createSettingsDraftGuard, useSettingsDraft } from '@/composables/useSettingsDraftGuard.ts'
-import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
+import { X } from 'lucide-vue-next'
 import { THEME_PRESETS } from '@/data/theme-presets.ts'
 import {
   CORE_PERMISSION_PRESET_DESCRIPTIONS,
@@ -558,7 +546,6 @@ import {
   type CorePermissionPreset,
 } from '@/composer/execution.ts'
 import {
-  relativeLuminance,
   themeAreaBackground,
   themeAreaFill,
   themeAreaGlass,
@@ -759,9 +746,9 @@ defineExpose({ requestNavigation: draftGuard.requestNavigation, requestSection }
 
 // ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
 const updateAutoCheck = ref(readUpdateAutoCheck())
-function toggleUpdateAutoCheck() {
-  updateAutoCheck.value = !updateAutoCheck.value
-  setUpdateAutoCheck(updateAutoCheck.value)
+function setAutoCheck(value: boolean) {
+  updateAutoCheck.value = value
+  setUpdateAutoCheck(value)
 }
 async function openUpdateReleasePage() {
   if (updateReleaseUrl.value) {
@@ -949,7 +936,8 @@ async function saveLoadContext() {
     await rpc('config.load_context.set', {
       addition: contextAdditions.value
         .filter(item => item.name.trim())
-        .map(item => ({ name: item.name.trim(), priority: Number(item.priority) || 50, kind: item.kind })),
+        // user:“确保视觉、功能和交互不退化”+(优先级零是有效输入，只有空值或无效数字回退默认值)。
+        .map(item => ({ name: item.name.trim(), priority: String(item.priority).trim() !== '' && Number.isFinite(Number(item.priority)) ? Number(item.priority) : 50, kind: item.kind })),
       except: contextExcept.value.filter(name => name.trim()),
     })
     contextSettingsDraft.accept()
@@ -1083,30 +1071,8 @@ const permissionPresetOptions = (['ask', 'auto', 'full_access'] as CorePermissio
 function selectPermissionPreset(preset: CorePermissionPreset) {
   emit('update-permission-preset', preset)
 }
-const settingsThemeStyle = computed(() => {
-  const lightMain = relativeLuminance(props.theme.mainText) < 0.45
-  return {
-    '--settings-backdrop-background': themeAreaBackground(props.theme, 'backdrop'),
-    '--settings-backdrop-text': props.theme.backdropText,
-    '--settings-main-background': themeAreaBackground(props.theme, 'main'),
-    '--settings-main-text': props.theme.mainText,
-    // main 区首停点纯色：卡片实色底（渐变值不可用于 color-mix）
-    '--settings-main-solid': props.theme.mainStops[0]?.color || '#111111',
-    // 卡片/浮层面板：main 实色 + 文字色 4% 微调，不透明、与内容区有层级
-    '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
-    '--settings-card-text': props.theme.mainText,
-    '--settings-control-background': themeAreaBackground(props.theme, 'control'),
-    '--settings-control-text': props.theme.controlText,
-    // control 区首停点纯色：color-mix 混透明用的实色底（渐变值不可用于 color-mix）
-    '--settings-control-solid': props.theme.controlStops[0]?.color || '#3a3834',
-    // 暗色分支不重复字面量：layout.css 的 --settings-* fallback 即 :root 真值（单一来源）
-    ...(lightMain ? {
-      '--settings-panel-2': '#f0efeb',
-      '--settings-line': '#d4d0cc',
-      '--settings-muted': '#8a8580',
-    } : {}),
-  }
-})
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(多个页面使用同一主题映射)。
+const settingsThemeStyle = computed(() => settingsThemeVars(props.theme))
 
 const previewStyleFor = (area: ThemeArea, textColor: string) => ({
   background: themeAreaBackground(props.theme, area),

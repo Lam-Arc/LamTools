@@ -96,7 +96,7 @@
           <span class="field-label">{{ t("工具集") }}</span>
           <div class="wf-tool-checklist">
             <label v-for="t in toolList" :key="t.name" class="wf-tool-check">
-              <input type="checkbox" :checked="selectedTools.includes(t.name)" @change="toggleTool(t.name)" />
+              <input class="sunday-checkbox" type="checkbox" :checked="selectedTools.includes(t.name)" @change="toggleTool(t.name)" />
               <span class="wf-tool-name" :title="t.description">{{ t.name }}</span>
             </label>
             <p v-if="!toolList.length" class="wf-tool-empty">{{ t("暂无可用工具") }}</p>
@@ -176,7 +176,8 @@
       <!-- Content: no extra config needed — values are in the port editor -->
     </div>
     <footer class="wf-edit-foot">
-      <button class="small-btn primary" type="button" @click="apply">{{ t("应用") }}</button>
+      <!-- user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(节点应用操作使用共享紧凑主按钮，保留原有更新行为)。 -->
+      <button class="btn btn--primary btn--sm" type="button" @click="apply">{{ t("应用") }}</button>
     </footer>
   </div>
 </template>
@@ -552,35 +553,8 @@ function apply() {
   line-height: 1.3;
 }
 .wf-tool-check:hover { background: var(--theme-main-soft-background); }
-.wf-tool-check input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
-  margin: 0;
-  border-radius: 3px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 35%, transparent);
-  background: transparent;
-  cursor: pointer;
-  position: relative;
-  transition: background 0.12s, border-color 0.12s;
-}
-.wf-tool-check input[type="checkbox"]:checked {
-  background: var(--blue);
-  border-color: var(--blue);
-}
-.wf-tool-check input[type="checkbox"]:checked::after {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 0px;
-  width: 4px;
-  height: 7px;
-  border: solid color-mix(in srgb, var(--theme-backdrop-text) 92%, transparent);
-  border-width: 0 1.6px 1.6px 0;
-  transform: rotate(45deg);
-}
+/* user:“通过参数、变体和组合保留必要差异”+(工作流工具清单使用共享复选框并保留紧凑尺寸) */
+.wf-tool-check .sunday-checkbox { --checkbox-size: 11px; }
 .wf-tool-name {
   flex: 1 1 auto;
   min-width: 0;

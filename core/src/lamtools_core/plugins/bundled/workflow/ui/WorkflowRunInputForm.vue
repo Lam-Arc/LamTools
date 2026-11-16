@@ -1,4 +1,5 @@
 <template>
+  <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(复用共享复选框，保留原有勾选与保存逻辑) -->
   <section v-if="params.length" class="wf-run-inputs" :aria-label="t('工作流运行输入')">
     <header class="wf-run-input-head">
       <div>
@@ -12,7 +13,7 @@
         <span class="wf-run-input-label">{{ param.name }}<em v-if="param.required">{{ t("必填") }}</em></span>
         <small v-if="param.description">{{ param.description }}</small>
         <label v-if="param.type === 'boolean'" class="wf-run-input-toggle">
-          <input type="checkbox" :checked="Boolean(values[param.name])" @change="onBooleanChange(param.name, $event)" />
+          <input class="sunday-checkbox" type="checkbox" :checked="Boolean(values[param.name])" @change="onBooleanChange(param.name, $event)" />
           <span>{{ values[param.name] ? t("开启") : t("关闭") }}</span>
         </label>
         <input
@@ -131,7 +132,6 @@ function submit(): void {
 .wf-run-input-field input:not([type='checkbox']), .wf-run-input-field textarea { width: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); padding: var(--space-1) var(--space-2); font: inherit; font-size: 11px; outline: 0; }
 .wf-run-input-field textarea { min-height: 46px; resize: vertical; font-family: var(--font-mono); }
 .wf-run-input-toggle { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--theme-control-text); font-size: 11px; }
-.wf-run-input-toggle input { accent-color: var(--blue); }
 .wf-run-input-error { margin: 0; color: var(--red); font-size: 10px; }
 .wf-run-input-submit { min-height: 30px; border: 0; border-radius: var(--radius-sm); background: var(--theme-control-background); color: var(--theme-control-text); cursor: pointer; font-size: 11px; font-weight: 650; }
 .wf-run-input-submit:hover:not(:disabled) { filter: brightness(.94); }

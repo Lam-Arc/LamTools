@@ -93,7 +93,8 @@ const menuVars = ref<Record<string, string>>({})
  * Copy the resolved values off the trigger at open time so the floating menu
  * keeps exactly the colours it had while rendered in place.
  */
-const MENU_SCOPED_VARS = ['--settings-control-solid', '--settings-control-text'] as const
+// user:“确保视觉、功能和交互不退化”+(传送菜单时保留所在区域的配色与层级，避免被全屏编辑器遮住)
+const MENU_SCOPED_VARS = ['--settings-control-solid', '--settings-control-text', '--ui-select-layer'] as const
 
 function readScopedVars(): Record<string, string> {
   const element = triggerEl.value
@@ -180,9 +181,12 @@ async function openMenu(): Promise<void> {
   open.value = true
   startTrackingViewport()
   await nextTick()
+  if (!open.value) return
   naturalHeight.value = measureMenu()
   placement.value = resolvePlacement(naturalHeight.value)
   prepared.value = true
+  await nextTick()
+  if (open.value) enabledOptions()[0]?.focus()
 }
 
 function closeMenu(): void {
@@ -191,15 +195,29 @@ function closeMenu(): void {
   stopTrackingViewport()
 }
 
+// user:“确保视觉、功能和交互不退化”+(保存或加载导致控件禁用时立即关闭浮层，防止继续选择)。
+watch(() => props.disabled, disabled => {
+  if (disabled && open.value) closeMenu()
+}, { flush: 'sync' })
+
 watch(
   () => props.options,
   () => {
     if (!open.value) return
+    // user:“确保视觉、功能和交互不退化”+(选项异步消失或禁用时保留键盘入口，不自动改变选中值)。
+    const focused = document.activeElement instanceof HTMLButtonElement && menuEl.value?.contains(document.activeElement)
+      ? document.activeElement : null
     void nextTick(() => {
+      if (!open.value) return
       naturalHeight.value = measureMenu()
       placement.value = resolvePlacement(naturalHeight.value)
+      if (focused && (!focused.isConnected || focused.disabled)
+        && (document.activeElement === focused || document.activeElement === document.body)) {
+        ;(enabledOptions()[0] || triggerEl.value)?.focus()
+      }
     })
   },
+  { deep: true },
 )
 
 const selectedLabel = computed(() => {
@@ -236,10 +254,43 @@ function toggle() {
   else void openMenu()
 }
 
+// user:“确保视觉、功能和交互不退化”+(共享下拉提供一致的键盘操作，禁用项不能获得焦点或被选择)
+function enabledOptions(): HTMLButtonElement[] {
+  return Array.from(menuEl.value?.querySelectorAll<HTMLButtonElement>('.ui-select-option:not(:disabled)') ?? [])
+}
+
+function onMenuKeydown(event: KeyboardEvent): void {
+  // user:“确保视觉、功能和交互不退化”+(Tab 从触发器的位置继续前进，浮层关闭且不困住键盘焦点)
+  if (event.key === 'Tab') {
+    triggerEl.value?.focus()
+    closeMenu()
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeMenu()
+    triggerEl.value?.focus()
+    return
+  }
+  const options = enabledOptions()
+  if (!options.length) return
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  let index: number
+  if (event.key === 'ArrowDown') index = (current + 1) % options.length
+  else if (event.key === 'ArrowUp') index = (current <= 0 ? options.length : current) - 1
+  else if (event.key === 'Home') index = 0
+  else if (event.key === 'End') index = options.length - 1
+  else return
+  event.preventDefault()
+  options[index]?.focus()
+}
+
 function selectOption(option: SelectOption) {
-  if (option.disabled) return
+  if (props.disabled || option.disabled) return
   emit('update:modelValue', option.value)
   closeMenu()
+  triggerEl.value?.focus()
 }
 
 function onPointerDown(event: PointerEvent) {
@@ -271,6 +322,8 @@ onUnmounted(() => {
       :aria-label="ariaLabel || t('当前选择：{0}', { 0: selectedLabel })"
       :aria-expanded="open"
       @click="toggle"
+      @keydown.esc="open && onMenuKeydown($event)"
+      @keydown.tab="open && closeMenu()"
     >
       <span>{{ selectedLabel }}</span>
       <span v-if="!hideArrow" class="ui-select-arrow"></span>
@@ -284,6 +337,7 @@ onUnmounted(() => {
         class="ui-select-menu"
         :class="{ 'ui-select-menu--up': placement.up }"
         :style="menuStyle"
+        @keydown="onMenuKeydown"
       >
         <div v-for="group in groupedOptions" :key="group.group || 'default'" class="ui-select-group">
           <div v-if="group.group" class="ui-select-group-label">{{ group.group }}</div>
@@ -298,6 +352,7 @@ onUnmounted(() => {
               disabled: option.disabled,
             }"
             type="button"
+            :disabled="option.disabled"
             @click="selectOption(option)"
           >
             {{ option.label }}
@@ -308,170 +363,4 @@ onUnmounted(() => {
   </div>
 </template>
 
-<style scoped>
-.ui-select {
-  /* 箭头槽位：触发器右侧必须按「内缩 + 箭头宽 + 间隙」预留，
-     否则短标签（尤其 CJK，如「自动」）会被箭头压住。 */
-  --ui-select-arrow-inset: 11px;
-  --ui-select-arrow-size: 7px;
-  --ui-select-arrow-gap: var(--space-1);
-  position: relative;
-  min-width: 0;
-}
-
-.ui-select-trigger {
-  width: 100%;
-  min-height: 32px;
-  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #f4f1ec)) 12%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--settings-control-solid, var(--theme-control-solid, #242424)) 70%, transparent);
-  color: var(--settings-control-text, var(--theme-control-text, #f4f1ec));
-  padding: 0 calc(var(--ui-select-arrow-inset) + var(--ui-select-arrow-size) + var(--ui-select-arrow-gap)) 0 var(--space-2);
-  display: inline-flex;
-  align-items: center;
-  text-align: left;
-  font-size: 13px;
-}
-
-.ui-select-trigger:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.ui-select-trigger span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.ui-select-arrow {
-  position: absolute;
-  right: var(--ui-select-arrow-inset);
-  top: 50%;
-  width: var(--ui-select-arrow-size);
-  height: var(--ui-select-arrow-size);
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  opacity: .7;
-  transform: translateY(-65%) rotate(45deg);
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-
-.ui-select.open .ui-select-arrow {
-  transform: translateY(-35%) rotate(225deg);
-}
-
-.ui-select-menu {
-  /* 传送到 body 的浮层：fixed 定位，坐标/宽高由脚本按视口算好，
-     任何 overflow 祖先都裁不到它。 */
-  position: fixed;
-  left: 0;
-  top: 0;
-  z-index: var(--z-popover, 60);
-  max-height: 320px;
-  overflow: auto;
-  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-  border-radius: var(--radius);
-  /* 菜单是 control area；settings 预览优先使用作用域内实色 token，
-     其他上下文回退到 control 主题，不跨用 main/composer 文字色。 */
-  background: var(--settings-control-solid, var(--theme-control-background, #242424));
-  color: var(--settings-control-text, var(--theme-control-text, #f4f1ec));
-  box-shadow: var(--shadow-md);
-  padding: 6px;
-  display: grid;
-  gap: 4px;
-  /* 弹出入场：scale+淡入（popover-in 与项目菜单同源） */
-  animation: popover-in var(--dur-base) var(--ease-out);
-  transform-origin: top;
-}
-.ui-select-menu--up {
-  transform-origin: bottom;
-}
-
-.ui-select-group {
-  display: grid;
-  gap: 2px;
-}
-
-.ui-select-group + .ui-select-group {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-}
-
-.ui-select-group-label {
-  padding: 4px 9px 3px;
-  color: color-mix(in srgb, currentColor 72%, transparent);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.35;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.ui-select-option {
-  min-height: 30px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  padding: 5px 9px;
-  display: block;
-  text-align: left;
-  font-size: 13px;
-  line-height: 1.35;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  position: relative;
-}
-.ui-select-option::before {
-  content: ""; position: absolute; inset: 0;
-  border-radius: 0; background: transparent; pointer-events: none;
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-}
-.ui-select-option:hover::before {
-  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
-}
-.ui-select-option.active::before {
-  background: color-mix(in srgb, currentColor var(--alpha-active), transparent);
-}
-
-.ui-select-option.active.active-accent {
-  background: transparent;
-  color: var(--green, #32d17d);
-}
-
-.ui-select-option.separator-before {
-  position: relative;
-  margin-top: 7px;
-}
-
-.ui-select-option.separator-before::after {
-  content: '';
-  position: absolute;
-  left: 9px;
-  right: 9px;
-  top: -4px;
-  height: 1px;
-  background: color-mix(in srgb, currentColor 16%, transparent);
-}
-
-.ui-select-option.disabled {
-  opacity: .45;
-  cursor: default;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ui-select-arrow {
-    transition: none;
-  }
-
-  .ui-select-menu {
-    animation: none;
-  }
-}
-</style>
+<style scoped src="../styles/ui-select.css"></style>

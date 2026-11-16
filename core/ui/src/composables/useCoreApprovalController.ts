@@ -134,8 +134,17 @@ export function useCoreApprovalController(options: UseCoreApprovalControllerOpti
     if (next.size !== submittingRequestIds.value.size) submittingRequestIds.value = next
   }
 
+  /**
+   * user:“答案就是标准 user message”+(提问的回答不进审批通道：直接作为一条普通
+   * 消息发送，由会话状态决定它是继续当前回合还是开新回合。)
+   */
+  async function submitAnswer(text: string): Promise<void> {
+    await options.submitText(text)
+  }
+
   return {
     handleDecision,
+    submitAnswer,
     lastError,
     submittingRequestIds,
   }

@@ -28,6 +28,51 @@ class PluginSettingsController:
         self._check()
         return result
 
+    def schema_outline(self):
+        self._check()
+        snapshot = self._settings.read()
+        self._check()
+        remaining = 1024
+        types = {"object", "array", "string", "integer", "number", "boolean", "null"}
+        def outline(node, depth=0):
+            nonlocal remaining
+            remaining -= 1
+            if remaining < 0 or depth > 16:
+                raise ConfigError("settings/schema-limit", "Schema outline exceeds supported limits")
+            if type(node) is not dict:
+                return {"partial": True}
+            result = {}
+            kind = node.get("type")
+            if type(kind) is str and kind in types:
+                result["type"] = kind
+            if node.get("writeOnly") is True or node.get("x-secret") is True or node.get("format") == "password":
+                result["secret_hint"] = True
+            if "$ref" in node or "$dynamicRef" in node:
+                result["has_reference"] = True
+            properties = node.get("properties")
+            if type(properties) is dict:
+                if any(type(key) is not str or len(key) > 256 for key in properties):
+                    raise ConfigError("settings/schema-limit", "Schema property name exceeds supported limits")
+                result["properties"] = {key: outline(value, depth + 1) for key, value in properties.items()}
+                required = node.get("required")
+                if type(required) is list:
+                    result["required"] = [key for key in required if type(key) is str and key in properties]
+            if type(node.get("items")) is dict:
+                result["items"] = outline(node["items"], depth + 1)
+            return result
+        # user:“复用原宿主权威”+(仅从原schema提取有界结构提示，不返回默认值、示例或配置值)。
+        schema = outline(snapshot.schema)
+        self._check()
+        return {"revision": snapshot.revision, "schema": schema, "partial": True}
+
+    def reset(self, *, expected_revision):
+        from .settings_access import _defaults
+        self._check()
+        snapshot = self._settings.read()
+        self._check()
+        # user:“复用原宿主权威”+(按原设置默认值规则恢复当前插件配置，仍经原CAS及脱敏提交)。
+        return self.replace(_defaults(snapshot.schema), expected_revision=expected_revision)
+
     def update(self, patch, *, expected_revision):
         if type(patch) is not dict:
             raise ConfigError("settings/invalid-values", "Patch must be an object")

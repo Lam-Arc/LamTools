@@ -32,7 +32,7 @@ Sunday原HTTP router现在同时挂载POST /api/core/plugin-remote/{plugin}/{nam
 {"http":{"routes":[{"method":"POST","path":"/echo","operation":"demo.echo"}],"remote":[{"namespace":"demo","method":"echo","route":"/echo","argsSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}}]}}
 ```
 
-请求JSON必须恰好为{"args":{"text":"hello"}}。最多64个方法，namespace/method各1–64个普通名称字符；schema最多32KiB、32个扁平原始类型字段，所有字段必填且不允许额外字段。复用原tool_schema实际校验能力，拒绝复杂对象/数组/引用等未实现schema。不是TypeScript生成codec，参数名称及返回值需要agent人工适配。可选resultEncoding为json（缺省）、multipart或ndjson；其他值/类型拒绝。
+请求JSON必须恰好为{"args":{"text":"hello"}}。最多64个方法，namespace/method各1–64个普通名称字符；schema最多32KiB、32个扁平原始类型字段。JSON Schema的`required`可为字段子集，因此可选原始字段能省略或在出现时继续校验；不会为省略字段应用schema `default`。资源声明使用的会话/工作区ID必须是`required`字符串，否则整份声明拒绝。额外字段仍拒绝。复用原tool_schema实际校验能力，拒绝复杂对象/数组/引用等未实现schema。不是TypeScript生成codec，参数名称及返回值需要agent人工适配。可选resultEncoding为json（缺省）、multipart或ndjson；其他值/类型拒绝。
 
 映射只允许指向本插件已声明、token认证的POST路由，不能指向公共auth:none路由、未声明路径或直接操作名。每次请求读取当前manifest描述，不缓存旧方法；撤回后404，无OperationCatalog兜底。参数错误400，插件停用409，错误令牌401，操作归属或审批拒绝403；其余原操作结果沿原HTTP envelope返回，不改造成DSH wire envelope。原HTTP入口的可用性、令牌、操作归属及permission=auto_allow检查是唯一执行权威。
 
@@ -41,6 +41,8 @@ Sunday原HTTP router现在同时挂载POST /api/core/plugin-remote/{plugin}/{nam
 本批17项新增验收经真实FastAPI/ASGI及OperationCatalog，覆盖允许/未知方法、缺失/额外/错误类型/额外envelope、令牌、审批、外部操作归属、停用、公共路由、复杂schema拒绝、描述符撤回、Core+插件双认证、大小上限与原HTTP读取回归、原操作取消清理，以及迁移包说明。大小上限测试缩小为64字节；原宿主操作是实际测试注册的处理器，不代表已移植真实DSH业务插件。
 
 迁移报告的sundayHostContracts.remoteGateway和PORTING.md公开本契约与文档；脚本不自动生成http.remote、不把上游session/goals等方法盲绑定到原操作。
+
+静态扫描命中的Remote调用会逐方法生成交接项：有专门验收映射时写出Sunday候选及语义差异；没有专门映射时明确标为`agent-required`，提示核对固定上游签名、资源范围、授权、错误和取消/流，不建议猜测性的Sunday接口。比如固定上游没有`session.delete` Remote，不能把Sunday跨项目删除操作误当成替代。扫描只给移植者线索，不证明方法确属固定版本上游，也不代表可运行。
 
 ## 显式原始字节结果：remoteGateway v2
 
@@ -94,9 +96,9 @@ Sunday在单个http.remote声明中显式添加"resultEncoding":"multipart"，�
 
 ## Remote令牌先验及撤回
 
-对已可用插件的`/plugin-remote`请求，先只读验证现有插件令牌，再读取/解析请求体及检查方法声明和参数；没有有效令牌统一401，不会以不同方法或schema错误泄露声明。读取请求体后网关及原token路由再次检查；中途撤回令牌不重新生成，流容量也会释放。未配置令牌的Remote请求不会自动创建令牌，须由原插件自己的凭据配置或其他已有显式配置路径预先提供。普通`/plugin-http`的原首次使用行为未改变。插件存在/可用性仍在认证前检查，不将此称作隐藏插件存在性或DSH Peer资源权限。
+`/plugin-remote`请求先只读验证已有插件令牌，再返回插件安装/启用状态、读取/解析请求体或检查方法声明和参数；已安装、已停用及未知插件ID在没有有效令牌时统一返回401，避免未认证探测状态。通过校验的令牌仍能得到原宿主的不可用409或未安装404。读取请求体后网关及原token路由再次检查；中途撤回令牌不重新生成，流容量也会释放。未配置令牌的Remote请求不会自动创建令牌，须由原插件自己的凭据配置或其他已有显式配置路径预先提供。普通`/plugin-http`的原首次使用行为未改变。
 
-11项新增验收使用临时测试令牌和真实FastAPI/ASGI路由，覆盖无效令牌探测已声明/未知方法和schema、请求体不读取、未配置不创建令牌、请求体期间及二次派发前撤回，以及JSON/NDJSON容量回收；没有读取或修改用户真实密钥。上游完整Peer principal、资源授权和双向wire仍未实现。
+12项新增验收使用临时测试令牌和真实FastAPI/ASGI路由，覆盖无效令牌探测已声明/未知方法和schema、请求体不读取、未配置不创建令牌、安装/启用状态不可探测、有效令牌下保留原状态错误、请求体期间及二次派发前撤回，以及JSON/NDJSON容量回收；没有读取或修改用户真实密钥。上游完整Peer principal、资源授权和双向wire仍未实现。
 
 
 ## Remote派发前声明复核

@@ -2,9 +2,18 @@
 import secrets
 import time
 from collections import OrderedDict
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
-from lamtools_core.plugin_system.session_query import SessionQueryError, SessionSummary, SessionQueryPage, PluginSessionQueryAPI
+from lamtools_core.plugin_system.session_query import (
+    PluginSessionQueryAPI,
+    ProjectSessionQueryPage,
+    ProjectSessionSummary,
+    SessionQueryError,
+    SessionQueryPage,
+    SessionSummary,
+)
 from lamtools_core.plugin_system.sessions import SessionError
 
 
@@ -27,6 +36,133 @@ class PluginSessionQueryService:
         if context.host.session_store is not self._store:
             raise SessionQueryError("session-query/host-changed", "Host session store changed")
         return context
+
+    @staticmethod
+    def _project_summary(record, *, project_root, running, last_prompt_received_at_ms=None):
+        # user:“每一个地方 sunday 都有等价或者近似接口”+(从原Core记录提供可说明的更新时间近似，不冒称DSH最后用户消息活动时间)。
+        updated_at = getattr(record, "updated_at", None)
+        if not isinstance(updated_at, datetime):
+            raise SessionQueryError("session-query/invalid-result", "Session query returned no usable update time")
+        try:
+            updated_at_ms = int(updated_at.timestamp() * 1000)
+        except (OSError, OverflowError, ValueError):
+            raise SessionQueryError("session-query/invalid-result", "Session query returned no usable update time") from None
+        return ProjectSessionSummary(
+            record.id,
+            record.title[:1024],
+            record.status,
+            len(record.title) > 1024,
+            updated_at_ms,
+            # user:“复用原宿主权威”+(cwd只近似为已验证的当前项目根，不伪称各会话实时进程目录)。
+            project_root,
+            running,
+            last_prompt_received_at_ms,
+        )
+
+    async def _last_prompt_received_times(self, session_ids):
+        if not session_ids:
+            return {}
+        context = self._context()
+        factory = getattr(context, "session_factory", None)
+        if not callable(factory):
+            raise SessionQueryError("session-query/unavailable", "Host provides no session event reader")
+        try:
+            from sqlalchemy import and_, func, select
+            from lamtools_core.app.core_db import CoreAppEvent
+
+            latest_prompt = (
+                select(
+                    CoreAppEvent.thread_id.label("thread_id"),
+                    func.max(CoreAppEvent.seq).label("seq"),
+                )
+                .where(
+                    CoreAppEvent.thread_id.in_(tuple(session_ids)),
+                    CoreAppEvent.method == "turn/accepted",
+                )
+                .group_by(CoreAppEvent.thread_id)
+                .subquery()
+            )
+            async with factory() as db:
+                rows = (await db.execute(
+                    select(CoreAppEvent.thread_id, CoreAppEvent.created_at)
+                    .join(
+                        latest_prompt,
+                        and_(
+                            CoreAppEvent.thread_id == latest_prompt.c.thread_id,
+                            CoreAppEvent.seq == latest_prompt.c.seq,
+                        ),
+                    )
+                )).all()
+        except SessionQueryError:
+            raise
+        except Exception:
+            raise SessionQueryError("session-query/read-failed", "Session query failed") from None
+        self._context()
+        result = {}
+        for session_id, created_at in rows:
+            if not isinstance(created_at, datetime):
+                raise SessionQueryError("session-query/invalid-result", "Session event has no usable receive time")
+            try:
+                result[str(session_id)] = int(created_at.timestamp() * 1000)
+            except (OSError, OverflowError, ValueError):
+                raise SessionQueryError("session-query/invalid-result", "Session event has no usable receive time") from None
+        return result
+
+    async def revalidate_project_page(self, page, project_root):
+        # user:“复用原宿主权威”+(项目准入等待结束后，按原存储可见性重读每条已选会话)。
+        self._context()
+        read_current = getattr(self._store, "get_readonly", None)
+        if not callable(read_current):
+            raise SessionQueryError("session-query/unavailable", "Host provides no read-only session lookup")
+        verified = []
+        for item in page.items:
+            try:
+                record = await read_current(item.session_id)
+                self._context()
+                root = record.metadata.get("work_root") if record is not None else None
+                in_project = (type(root) is str and bool(root) and "\x00" not in root
+                              and Path(root).is_absolute() and str(Path(root).resolve()) == project_root)
+            except SessionQueryError:
+                raise
+            except Exception:
+                raise SessionQueryError("session-query/read-failed", "Session query failed") from None
+            if in_project:
+                # user:“每一个地方 sunday 都有等价或者近似接口”+(running来源于原SessionState而非持久status猜测，并在读取后再次核验项目可见性)。
+                state = await self._sessions.state(item.session_id)
+                self._context()
+                try:
+                    record = await read_current(item.session_id)
+                    self._context()
+                    root = record.metadata.get("work_root") if record is not None else None
+                    still_in_project = (type(root) is str and bool(root) and "\x00" not in root
+                                        and Path(root).is_absolute() and str(Path(root).resolve()) == project_root)
+                except SessionQueryError:
+                    raise
+                except Exception:
+                    raise SessionQueryError("session-query/read-failed", "Session query failed") from None
+                if still_in_project:
+                    verified.append(self._project_summary(record, project_root=project_root, running=state.running))
+
+        # user:“复用原宿主权威”+(只查询本页已准入会话的原turn/accepted事件，并在数据库等待后再次核对项目可见性)。
+        received_times = await self._last_prompt_received_times([item.session_id for item in verified])
+        published = []
+        for item in verified:
+            try:
+                record = await read_current(item.session_id)
+                self._context()
+                root = record.metadata.get("work_root") if record is not None else None
+                still_in_project = (type(root) is str and bool(root) and "\x00" not in root
+                                    and Path(root).is_absolute() and str(Path(root).resolve()) == project_root)
+            except SessionQueryError:
+                raise
+            except Exception:
+                raise SessionQueryError("session-query/read-failed", "Session query failed") from None
+            if still_in_project:
+                published.append(replace(
+                    item,
+                    last_prompt_received_at_ms=received_times.get(item.session_id),
+                ))
+        return ProjectSessionQueryPage(tuple(published), page.next_cursor, page.has_more)
 
     async def query(self, owner, *, limit, cursor, title_contains, project_root=None):
         self._context()

@@ -14,7 +14,7 @@
         :title="t('刷新')"
         @click="refresh"
       >
-        <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" :class="{ 'is-spinning': loading }" />
+        <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" :class="{ 'is-spinning': loading, 'sunday-spin': loading, 'sunday-spin--fast': loading }" />
       </button>
     </header>
 
@@ -105,6 +105,8 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(工作流独立加载时也使用共享旋转样式)。
+import '../../../../../../ui/src/styles/sunday-spinner.css'
 import { t } from '../../../../../../ui/src/i18n/index'
 
 import { computed, ref, watch } from 'vue'
@@ -255,8 +257,6 @@ function formatValue(value: unknown): string {
 .wf-human-task-audit ul { display: grid; gap: var(--space-1); max-height: 100px; margin: 0; padding: 0; overflow: auto; list-style: none; }
 .wf-human-task-audit li { display: flex; justify-content: space-between; gap: var(--space-2); color: color-mix(in srgb, var(--text) 72%, transparent); font-size: 10px; }
 .wf-human-task-audit small { color: color-mix(in srgb, var(--text) 48%, transparent); }
-.is-spinning { animation: wf-human-task-spin .8s linear infinite; }
-@keyframes wf-human-task-spin { to { transform: rotate(360deg); } }
 @media (max-width: 640px) { .wf-human-task-icon-btn, .wf-human-task-action { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .wf-human-task-panel *, .wf-human-task-panel { transition: none; animation: none; } }
 </style>

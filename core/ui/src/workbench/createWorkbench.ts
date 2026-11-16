@@ -29,7 +29,6 @@ import {
 } from '@/appServer/index.ts'
 import {
   useCoreApprovalController,
-  useCoreAskAutoContinue,
   useCoreLiveComposerController,
   useCoreQueuedInputController,
   useCorePendingGuidance,
@@ -473,7 +472,7 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     activeTurnId,
     resumableTurnId,
     sessionPaused,
-    resumeTurn: (threadId, turnId, input, clientMessageId) => runtimeController.resumeTurn(threadId, turnId, input, clientMessageId),
+    resumeTurn: (threadId, turnId, input, clientMessageId, options) => runtimeController.resumeTurn(threadId, turnId, input, clientMessageId, options),
     interruptibleSubAgents: computed(() => sessionActivity.value.interruptibleSubAgentNames),
     resumableSubAgents: computed(() => sessionActivity.value.resumableSubAgentNames),
     subAgentControl: computed(() => runtime.client?.capabilities?.sub_agent_control === true),
@@ -597,33 +596,6 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
   })
   approvalControllerRef.value = approvalController
 
-  // 「提问自动继续」（设置 → 通用）：提问卡挂满 5 分钟没人回答就回传「用户跳过」，
-  // 本轮继续。权限审批卡不在此列——超时不代表同意，只有人能放行。
-  // 偏好在这里才读：只有真的出现待答复提问卡时才问一次后端，不跟着每帧快照走。
-  useCoreAskAutoContinue({
-    messages: projectionController.messages,
-    loadEnabled: async () => {
-      // The backend now owns this timer. A second renderer-side timer would
-      // race the server's skip; the server's durable claim absorbs the race,
-      // but running two timers only produces duplicate requests.
-      if (runtime.client?.capabilities?.ask_auto_continue_backend === true) return false
-      try {
-        const result = await requestRpc('settings.get', { namespace: 'core.askAutoContinue' })
-        const value = result && typeof result.value === 'object' && result.value
-          ? result.value as Record<string, unknown>
-          : {}
-        return value.enabled === true
-      } catch {
-        // 读不到偏好就当没开启：绝不因为一次读取失败替用户跳过提问。
-        return false
-      }
-    },
-    respondApproval: (requestId, decision, guidance) => (
-      runtimeController.respondApproval(requestId, decision, guidance)
-    ),
-    onAutoSkipped: () => composerCallbacks.onStatusText?.('提问 5 分钟未回答，已按「用户跳过」继续'),
-    onError: (message) => composerCallbacks.onError?.(message),
-  })
 
   const queuedInputs = computed(() => (
     snapshot.value && snapshot.value.thread_id === activeSessionId.value

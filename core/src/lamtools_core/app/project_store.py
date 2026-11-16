@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -567,6 +567,117 @@ class CoreProjectStore:
             )
         return [session for session in sessions if self._is_session_visible(session)]
 
+    async def get_session(self, project_id: str, session_id: str) -> SessionRecord | None:
+        # user:“复用原宿主权威”+(按主键复核项目所属及原会话可见性，不扫描项目全部会话)。
+        async with self.session_factory() as db:
+            project = await db.get(CoreProject, project_id)
+            row = await db.get(CoreThreadSnapshot, session_id) if project is not None else None
+            if row is None:
+                return None
+            session = session_record_from_snapshot(row)
+            if session.metadata.get("work_root") != project.work_root or not self._is_session_visible(session):
+                return None
+            return session
+
+    async def pin_session(self, project_id: str, session_id: str) -> list[str] | None:
+        if type(project_id) is not str or not project_id or type(session_id) is not str or not session_id:
+            raise ValueError("project_id and session_id are required")
+
+        async def write(db: Any) -> list[str] | None:
+            project = await db.get(CoreProject, project_id)
+            row = await db.get(CoreThreadSnapshot, session_id) if project is not None else None
+            if row is None:
+                return None
+            session = session_record_from_snapshot(row)
+            if session.metadata.get("work_root") != project.work_root or not self._is_session_visible(session):
+                return None
+            if row.workspace_pin_order is None:
+                max_order = await db.scalar(
+                    select(func.max(CoreThreadSnapshot.workspace_pin_order)).where(
+                        func.json_extract(CoreThreadSnapshot.snapshot_json, "$.session.metadata.work_root")
+                        == project.work_root,
+                        CoreThreadSnapshot.workspace_pin_order.is_not(None),
+                    )
+                )
+                row.workspace_pin_order = int(max_order or 0) + 1
+                await db.flush()
+            return await _project_pinned_session_ids(db, project, self._is_session_visible)
+
+        return await self.write_coordinator.run(write)
+
+    async def unpin_session(self, project_id: str, session_id: str) -> list[str]:
+        if type(project_id) is not str or not project_id or type(session_id) is not str or not session_id:
+            raise ValueError("project_id and session_id are required")
+
+        async def write(db: Any) -> list[str]:
+            project = await db.get(CoreProject, project_id)
+            row = await db.get(CoreThreadSnapshot, session_id) if project is not None else None
+            if row is not None:
+                session = session_record_from_snapshot(row)
+                if session.metadata.get("work_root") == project.work_root and self._is_session_visible(session):
+                    row.workspace_pin_order = None
+                    await db.flush()
+            return await _project_pinned_session_ids(db, project, self._is_session_visible) if project else []
+
+        return await self.write_coordinator.run(write)
+
+    async def pinned_session_ids(self, project_id: str) -> list[str]:
+        if type(project_id) is not str or not project_id:
+            raise ValueError("project_id is required")
+        async with self.session_factory() as db:
+            project = await db.get(CoreProject, project_id)
+            if project is None:
+                return []
+            return await _project_pinned_session_ids(db, project, self._is_session_visible)
+
+    async def insert_session_before(
+        self, project_id: str, session_id: str, before_session_id: str | None = None
+    ) -> list[str] | None:
+        if type(project_id) is not str or not project_id or type(session_id) is not str or not session_id:
+            raise ValueError("project_id and session_id are required")
+        if before_session_id is not None and (type(before_session_id) is not str or not before_session_id):
+            raise ValueError("before_session_id must be a non-empty string")
+
+        async def write(db: Any) -> list[str] | None:
+            project = await db.get(CoreProject, project_id)
+            if project is None:
+                return None
+            rows = (await db.execute(_project_session_statement(project.work_root))).scalars().all()
+            sessions = {row.thread_id: session_record_from_snapshot(row) for row in rows}
+            visible_ids = []
+            for row in rows:
+                session = sessions[row.thread_id]
+                try:
+                    visible = bool(self._is_session_visible(session))
+                except Exception:  # noqa: BLE001 — fail closed when plugin session visibility is unavailable
+                    visible = not bool(str(session.metadata.get("owner_plugin") or "").strip())
+                if visible:
+                    visible_ids.append(row.thread_id)
+            if session_id not in visible_ids or (before_session_id is not None and before_session_id not in visible_ids):
+                raise LookupError("Session or anchor is not visible in this project")
+            if before_session_id == session_id:
+                return visible_ids
+
+            reordered = [value for value in visible_ids if value != session_id]
+            index = len(reordered) if before_session_id is None else reordered.index(before_session_id)
+            reordered.insert(index, session_id)
+            if reordered == visible_ids:
+                return visible_ids
+
+            # Preserve hidden sessions in their existing slots while replacing only the visible ordering.
+            visible_set = set(visible_ids)
+            visible_slots = [index for index, row in enumerate(rows) if row.thread_id in visible_set]
+            slot_ids = [row.thread_id for row in rows]
+            for slot, value in zip(visible_slots, reordered, strict=True):
+                slot_ids[slot] = value
+            by_id = {row.thread_id: row for row in rows}
+            for order, value in enumerate(slot_ids):
+                by_id[value].workspace_session_order = order
+            await db.flush()
+            return reordered
+
+        return await self.write_coordinator.run(write)
+
     async def count_sessions(self, project_id: str) -> int:
         """Total sessions the project owns, for "N more" in the sidebar."""
         async with self.session_factory() as db:
@@ -837,7 +948,17 @@ async def _project_sessions(
     ``limit``/``offset`` are optional: callers that page pass them, callers that
     need the whole project list (exists checks, first-session creation) do not.
     """
-    stmt = (
+    stmt = _project_session_statement(work_root)
+    if offset:
+        stmt = stmt.offset(int(offset))
+    if limit is not None:
+        stmt = stmt.limit(max(1, int(limit)))
+    rows = (await db.execute(stmt)).scalars().all()
+    return [session_record_from_snapshot(row) for row in rows]
+
+
+def _project_session_statement(work_root: str):
+    return (
         select(CoreThreadSnapshot)
         .where(
             func.json_extract(
@@ -845,15 +966,38 @@ async def _project_sessions(
             )
             == work_root
         )
-        .order_by(CoreThreadSnapshot.updated_at.desc())
+        .order_by(
+            case((CoreThreadSnapshot.workspace_session_order.is_(None), 1), else_=0),
+            CoreThreadSnapshot.workspace_session_order.asc(),
+            func.json_extract(CoreThreadSnapshot.snapshot_json, "$.session.created_at").asc(),
+            CoreThreadSnapshot.thread_id.asc(),
+        )
     )
-    if offset:
-        stmt = stmt.offset(int(offset))
-    if limit is not None:
-        stmt = stmt.limit(max(1, int(limit)))
-    rows = (await db.execute(stmt)).scalars().all()
-    sessions = [session_record_from_snapshot(row) for row in rows]
-    return sorted(sessions, key=lambda session: (session.created_at, session.id))
+
+
+async def _project_pinned_session_ids(
+    db: Any,
+    project: CoreProject,
+    session_visible: Callable[[str, dict[str, Any]], bool],
+) -> list[str]:
+    rows = (await db.execute(
+        select(CoreThreadSnapshot)
+        .where(
+            func.json_extract(CoreThreadSnapshot.snapshot_json, "$.session.metadata.work_root") == project.work_root,
+            CoreThreadSnapshot.workspace_pin_order.is_not(None),
+        )
+        .order_by(CoreThreadSnapshot.workspace_pin_order.desc(), CoreThreadSnapshot.thread_id.asc())
+    )).scalars().all()
+    result = []
+    for row in rows:
+        session = session_record_from_snapshot(row)
+        try:
+            visible = bool(session_visible(session.id, session.metadata))
+        except Exception:  # noqa: BLE001 — fail closed when plugin session visibility is unavailable
+            visible = not bool(str(session.metadata.get("owner_plugin") or "").strip())
+        if visible:
+            result.append(session.id)
+    return result
 
 
 async def _project_session_count(db: Any, work_root: str) -> int:

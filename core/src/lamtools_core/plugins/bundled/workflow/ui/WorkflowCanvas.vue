@@ -96,8 +96,7 @@
     <CoreConfirmDialog
       :open="bulkDeleteConfirmOpen"
       :title="t('删除容器及其内容')"
-      :description="bulkDeleteDescription"
-      :detail="bulkDeleteDetail"
+      :detail="`${bulkDeleteDescription} ${bulkDeleteDetail}`"
       :confirm-label="bulkDeleteConfirmLabel"
       :confirm-disabled="bulkDeleteCountdown > 0"
       @confirm="confirmDeleteAllCanvasElement"
@@ -195,6 +194,8 @@ const props = defineProps<{
   availableModels?: Array<{ id: string; display_name?: string; model_id?: string }>
   nodeSchemas?: Record<string, WorkflowNodeSchema>
   locked?: boolean
+  /** user:“交互测试”+(展厅内的复制粘贴只使用画布自身内存)。 */
+  isolatedClipboard?: boolean
 }>()
 const emit = defineEmits<{
   'update:definition': [def: WorkflowDef]
@@ -286,6 +287,7 @@ const nodePickerStyle = computed(() => {
 
 // Provide an update callback so WorkflowNode components can edit fields inline.
 provide('wf-update-node', (nodeId: string, patch: Partial<WorkflowNodeData>) => {
+  if (props.locked) return
   const previous = props.definition.nodes.find((node) => node.id === nodeId)
   if (!previous) return
   const next = { ...previous, ...patch, config: { ...previous.config, ...(patch.config || {}) } }
@@ -302,6 +304,7 @@ provide('wf-models', () => props.availableModels ?? [])
 provide('wf-node-schemas', () => props.nodeSchemas ?? {})
 provide('wf-canvas-locked', () => props.locked === true)
 provide('wf-update-canvas-element', (elementId: string, patch: Partial<WorkflowCanvasElement>) => {
+  if (props.locked) return
   const elements = props.definition.canvas_elements ?? []
   if (!elements.some((element) => element.id === elementId)) return
   emit('update:definition', {
@@ -430,6 +433,12 @@ watch(() => props.selectedNodeId, (id) => {
 watch(vfNodes, (nodes) => {
   if (syncing) return
   const posById = new Map(nodes.map((n) => [n.id, n.position]))
+  // user:“确保视觉、功能和交互不退化”+(选中或运行状态变化不应伪装成位置修改，避免画布与父页面循环更新)。
+  const moved = [...props.definition.nodes, ...(props.definition.canvas_elements ?? [])].some((item) => {
+    const position = posById.get(item.id)
+    return position && (position.x !== item.position?.x || position.y !== item.position?.y)
+  })
+  if (!moved) return
   emit('update:definition', {
     ...props.definition,
     nodes: props.definition.nodes.map((n) => ({ ...n, position: posById.get(n.id) ?? n.position })),
@@ -441,9 +450,7 @@ watch(vfNodes, (nodes) => {
 
 watch(vfEdges, (edges) => {
   if (syncing) return
-  emit('update:definition', {
-    ...props.definition,
-    edges: edges.map((e) => {
+  const nextEdges = edges.map((e) => {
       const existing = props.definition.edges.find((de) => de.id === e.id)
       const sourceHandle = String(e.sourceHandle ?? '')
       const targetHandle = String(e.targetHandle ?? '')
@@ -460,8 +467,11 @@ watch(vfEdges, (edges) => {
         transform: existing?.transform ?? '',
         condition: existing?.condition ?? '',
       }
-    }),
-  })
+    })
+  // user:“确保视觉、功能和交互不退化”+(选择与绘制变化不产生虚假的连线编辑)。
+  const signature = (edge: WorkflowDef['edges'][number]) => JSON.stringify([edge.id, edge.source, edge.source_port, edge.source_port_id || '', edge.target, edge.target_port, edge.target_port_id || '', edge.transform ?? '', edge.condition ?? ''])
+  if (nextEdges.length === props.definition.edges.length && nextEdges.every((edge, index) => signature(edge) === signature(props.definition.edges[index]))) return
+  emit('update:definition', { ...props.definition, edges: nextEdges })
 }, { deep: true })
 
 // ---- edge condition helpers ----
@@ -471,6 +481,7 @@ function edgeCondition(edgeId: string): string {
   return typeof e.condition === 'string' ? e.condition : JSON.stringify(e.condition)
 }
 function setEdgeCondition(edgeId: string, value: string) {
+  if (props.locked) return
   emit('update:definition', {
     ...props.definition,
     edges: props.definition.edges.map((e) =>
@@ -486,7 +497,7 @@ const editAnchor = ref<MenuPos>({ x: 0, y: 0 })
 const clipboard = ref<WorkflowCanvasClipboardPayload | null>(null)
 const edgeConditionEditor = ref<{ id: string; value: string } | null>(null)
 const edgeConditionAnchor = ref<MenuPos>({ x: 0, y: 0 })
-const clipboardAvailable = computed(() => Boolean(clipboard.value) || hasWorkflowClipboardPayload())
+const clipboardAvailable = computed(() => Boolean(clipboard.value) || (!props.isolatedClipboard && hasWorkflowClipboardPayload()))
 const bulkDeleteTargetId = ref<string | null>(null)
 const bulkDeleteCountdown = ref(0)
 const bulkDeleteConfirmOpen = computed(() => bulkDeleteTargetId.value !== null)
@@ -583,16 +594,16 @@ function buildPaneMenu(pos: MenuPos): ContextMenuEntry[] {
   const selectedCount = selectedNodeIds.value.size + selectedCanvasElementIds.value.size
   return [
     { type: 'label', get label() { return t("新建节点") } },
-    { id: 'add-node-catalog', get label() { return t("添加节点…") }, icon: Plus, action: () => openNodePicker(pos) },
+    { id: 'add-node-catalog', get label() { return t("添加节点…") }, icon: Plus, disabled: props.locked, action: () => openNodePicker(pos) },
     { type: 'separator', id: 'decoration-separator' },
     { type: 'label', get label() { return t("画布元素") } },
-    { id: 'frame', get label() { return t("框架") }, action: () => addCanvasElementAt('frame', pos) },
-    { id: 'group', get label() { return t("分组") }, action: () => addCanvasElementAt('group', pos) },
-    { id: 'note', get label() { return t("便签") }, action: () => addCanvasElementAt('note', pos) },
-    { id: 'comment', get label() { return t("注释") }, action: () => addCanvasElementAt('comment', pos) },
-    { id: 'reroute', get label() { return t("中继点") }, action: () => addCanvasElementAt('reroute', pos) },
+    { id: 'frame', get label() { return t("框架") }, disabled: props.locked, action: () => addCanvasElementAt('frame', pos) },
+    { id: 'group', get label() { return t("分组") }, disabled: props.locked, action: () => addCanvasElementAt('group', pos) },
+    { id: 'note', get label() { return t("便签") }, disabled: props.locked, action: () => addCanvasElementAt('note', pos) },
+    { id: 'comment', get label() { return t("注释") }, disabled: props.locked, action: () => addCanvasElementAt('comment', pos) },
+    { id: 'reroute', get label() { return t("中继点") }, disabled: props.locked, action: () => addCanvasElementAt('reroute', pos) },
     { type: 'separator', id: 'paste-separator' },
-    { id: 'paste', get label() { return t("粘贴") }, shortcut: '⌘/Ctrl V', disabled: !clipboardAvailable.value, action: () => pasteAt(pos) },
+    { id: 'paste', get label() { return t("粘贴") }, shortcut: '⌘/Ctrl V', disabled: props.locked || !clipboardAvailable.value, action: () => pasteAt(pos) },
     ...(selectedCount > 0 ? [
       { type: 'separator' as const, id: 'selection-separator' },
       { id: 'delete-selection', label: t("删除选中元素（{0}）", { 0: selectedCount }), icon: Trash2, destructive: true, disabled: props.locked === true, action: deleteSelectedNodes },
@@ -614,14 +625,14 @@ function buildNodeMenu(id: string): ContextMenuEntry[] {
     { id: 'run-from', get label() { return t("从此节点运行") }, icon: Play, action: () => runFromNode(id) },
     { id: 'run-node', get label() { return t("运行此节点") }, icon: Play, action: () => runNode(id) },
     { type: 'separator', id: 'node-config-separator' },
-    { id: 'configure', get label() { return t("配置") }, icon: Settings, action: () => configNode(id) },
+    { id: 'configure', get label() { return t("配置") }, icon: Settings, disabled: props.locked, action: () => configNode(id) },
     { id: 'copy', get label() { return t("复制") }, shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyNode(id) },
-    { id: 'cut', get label() { return t("剪切") }, icon: Scissors, action: () => cutNode(id) },
+    { id: 'cut', get label() { return t("剪切") }, icon: Scissors, disabled: props.locked, action: () => cutNode(id) },
     { type: 'separator', id: 'node-port-separator' },
-    { id: 'add-input', get label() { return t("+ 输入端口") }, icon: Plus, action: () => addPort(id, 'in') },
-    { id: 'add-output', get label() { return t("+ 输出端口") }, icon: Plus, action: () => addPort(id, 'out') },
+    { id: 'add-input', get label() { return t("+ 输入端口") }, icon: Plus, disabled: props.locked, action: () => addPort(id, 'in') },
+    { id: 'add-output', get label() { return t("+ 输出端口") }, icon: Plus, disabled: props.locked, action: () => addPort(id, 'out') },
     { type: 'separator', id: 'node-danger-separator' },
-    { id: 'delete', get label() { return t("删除") }, icon: Trash2, destructive: true, action: () => deleteNode(id) },
+    { id: 'delete', get label() { return t("删除") }, icon: Trash2, destructive: true, disabled: props.locked, action: () => deleteNode(id) },
   ]
 }
 
@@ -632,7 +643,7 @@ function buildCanvasElementMenu(id: string): ContextMenuEntry[] {
       { id: 'select-contents', get label() { return t("全选") }, action: () => selectCanvasElementContents(id) },
       { type: 'separator', id: 'element-copy-separator' },
       { id: 'copy', get label() { return t("复制") }, shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyCanvasElement(id) },
-      { id: 'cut', get label() { return t("剪切") }, shortcut: '⌘/Ctrl X', icon: Scissors, action: () => cutCanvasElement(id) },
+      { id: 'cut', get label() { return t("剪切") }, shortcut: '⌘/Ctrl X', icon: Scissors, disabled: props.locked, action: () => cutCanvasElement(id) },
       { type: 'separator', id: 'element-danger-separator' },
       { id: 'delete', get label() { return t("删除") }, icon: Trash2, destructive: true, disabled: props.locked === true, action: () => deleteCanvasElements(new Set([id])) },
       { id: 'delete-all', get label() { return t("全部删除") }, icon: Trash2, destructive: true, disabled: props.locked === true, action: () => requestDeleteAllCanvasElement(id) },
@@ -640,13 +651,14 @@ function buildCanvasElementMenu(id: string): ContextMenuEntry[] {
   }
   return [
     { id: 'copy', get label() { return t("复制") }, shortcut: '⌘/Ctrl C', icon: Copy, action: () => copyCanvasElement(id) },
-    { id: 'cut', get label() { return t("剪切") }, shortcut: '⌘/Ctrl X', icon: Scissors, action: () => cutCanvasElement(id) },
+    { id: 'cut', get label() { return t("剪切") }, shortcut: '⌘/Ctrl X', icon: Scissors, disabled: props.locked, action: () => cutCanvasElement(id) },
     { type: 'separator', id: 'element-danger-separator' },
     { id: 'delete', get label() { return t("删除") }, icon: Trash2, destructive: true, disabled: props.locked === true, action: () => deleteCanvasElements(new Set([id])) },
   ]
 }
 
 function editEdgeCondition(id: string, anchor: MenuPos): void {
+  if (props.locked) return
   edgeConditionEditor.value = { id, value: edgeCondition(id) }
   edgeConditionAnchor.value = anchor
   closeContextMenu()
@@ -654,9 +666,9 @@ function editEdgeCondition(id: string, anchor: MenuPos): void {
 
 function buildEdgeMenu(id: string, anchor: MenuPos): ContextMenuEntry[] {
   return [
-    { id: 'condition', get label() { return t("编辑条件") }, icon: Pencil, action: () => editEdgeCondition(id, anchor) },
+    { id: 'condition', get label() { return t("编辑条件") }, icon: Pencil, disabled: props.locked, action: () => editEdgeCondition(id, anchor) },
     { type: 'separator', id: 'edge-danger-separator' },
-    { id: 'delete', get label() { return t("删除连线") }, icon: Trash2, destructive: true, action: () => deleteEdge(id) },
+    { id: 'delete', get label() { return t("删除连线") }, icon: Trash2, destructive: true, disabled: props.locked, action: () => deleteEdge(id) },
   ]
 }
 
@@ -780,6 +792,7 @@ function configNode(id: string) {
   openEdit(id)
 }
 function openEdit(id: string, x?: number, y?: number) {
+  if (props.locked) return
   const n = props.definition.nodes.find((node) => node.id === id)
   if (n) {
     editNode.value = n
@@ -808,6 +821,7 @@ function saveEdgeCondition(value: string): void {
 // Vue Flow fires `connect` when the user finishes dragging a handle-to-handle
 // connection; it does NOT auto-create an edge, so we add it here.
 function onConnect(params: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }) {
+  if (props.locked) return
   if (!connectionIsValid(params)) {
     canvasLiveMessage.value = t("无法连接：端口类型不兼容或端口不存在")
     return
@@ -1071,6 +1085,7 @@ function _typesCompatible(src: string, dst: string): boolean {
 }
 
 function onUpdateNode(updated: WorkflowNodeData) {
+  if (props.locked) return
   const previous = props.definition.nodes.find((node) => node.id === updated.id)
   if (!previous) return
   const reconciled = reconcileWorkflowNodePorts(props.definition, previous, updated)
@@ -1084,6 +1099,7 @@ function onUpdateNode(updated: WorkflowNodeData) {
 }
 
 function addPort(id: string, direction: 'in' | 'out') {
+  if (props.locked) return
   const node = props.definition.nodes.find((n) => n.id === id)
   if (!node) return
   const existing = node.ports.filter((p) => p.direction === direction)
@@ -1175,6 +1191,7 @@ function deleteCanvasElementContents(id: string): void {
 }
 
 function deleteEdge(id: string) {
+  if (props.locked) return
   emit('update:definition', {
     ...props.definition,
     edges: props.definition.edges.filter((e) => e.id !== id),
@@ -1202,13 +1219,15 @@ async function copySelection(singleId?: string): Promise<void> {
   const payload = createWorkflowClipboardPayload(props.definition, ids)
   if (!payload.nodes.length && !payload.canvas_elements.length) return
   clipboard.value = payload
-  await writeWorkflowClipboardPayload(payload)
+  if (!props.isolatedClipboard) await writeWorkflowClipboardPayload(payload)
   canvasLiveMessage.value = t("已复制 {0} 个元素", { 0: payload.nodes.length + payload.canvas_elements.length })
   closeContextMenu()
 }
 async function pasteAt(pos?: MenuPos): Promise<void> {
-  const payload = await readWorkflowClipboardPayload()
-  if (!payload) return
+  // user:“确保视觉、功能和交互不退化”+(工作流运行期间不能通过粘贴修改画布，包括读取剪贴板期间转为锁定)。
+  if (props.locked) return
+  const payload = props.isolatedClipboard ? clipboard.value : await readWorkflowClipboardPayload()
+  if (!payload || props.locked) return
   clipboard.value = payload
   const flowPos = pos ? safeScreenToFlow(pos) : undefined
   const existingIds = [
@@ -1327,6 +1346,7 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 async function refreshClipboard(): Promise<void> {
+  if (props.isolatedClipboard) return
   const payload = await readWorkflowClipboardPayload()
   if (payload) clipboard.value = payload
 }

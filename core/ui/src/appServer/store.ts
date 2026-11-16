@@ -910,7 +910,10 @@ export function createCoreAppServerRuntimeController<
     applyResponse(response)
   }
 
-  async function resumeTurn(threadId: string, turnId: string, input?: CoreAppInputItem[], clientMessageId?: string) {
+  async function resumeTurn(
+    threadId: string, turnId: string, input?: CoreAppInputItem[], clientMessageId?: string,
+    options?: { skipQuestions?: boolean },
+  ) {
     await ensureClient()
     const key = JSON.stringify([threadId, turnId])
     // user:“做吧”+(恢复补充输入以提交为单位重试，不能借用另一条补充输入的身份)。
@@ -919,6 +922,9 @@ export function createCoreAppServerRuntimeController<
       const response = await requestMutation('turn/resume', {
         thread_id: threadId, turn_id: turnId, include_snapshot: false,
         client_message_id: clientId,
+        // user:“跳过等于 done”+(跳过不落用户消息：恢复请求带一个显式标记，后端在
+        // 同一次动作里把提问组关成 done，closed_reason=skipped。)
+        ...(options?.skipQuestions ? { skip_questions: true } : {}),
         // Text typed while the turn was paused rides the same continue press as
         // a supplementary input for the same turn.
         ...(input && input.length > 0 ? { input } : {}),
@@ -1426,6 +1432,11 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     parent_item_id: typeof value.parent_item_id === 'string' ? value.parent_item_id : existing.parent_item_id,
     kind: kind === 'tool_result' ? 'tool_result' : existing.kind || kind,
     last_kind: kind,
+    // user:“连纯文本都没有”+(渲染白名单与分片类型都读条目顶层的 type，但构造时从未
+    // 写入它——于是任何新分片都退化成普通正文，甚至被白名单整条丢弃。)
+    type: typeof runPayload.type === 'string' && runPayload.type
+      ? runPayload.type
+      : (existing as { type?: string }).type,
     status: terminalTurnStatus || (typeof value.status === 'string' ? value.status : existing.status),
     payload: preservedPayload,
   }

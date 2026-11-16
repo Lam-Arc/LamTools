@@ -3,11 +3,15 @@ import asyncio
 import base64
 import binascii
 import math
+import os
 import secrets
+from collections import OrderedDict
 from pathlib import Path
 
 from lamtools_core.async_tasks import finish_on_cancel
 from .working_directory import WorkingDirectoryError
+
+_SHELL_CANDIDATES = ("cmd.exe", "pwsh.exe", "powershell.exe")
 
 
 class TerminalPipeError(RuntimeError):
@@ -32,6 +36,11 @@ class PluginTerminalController:
             raise WorkingDirectoryError("working-directory/host-changed", "Terminal binding changed")
 
     async def _admit(self, session_id):
+        from .session_controller import _cancel_owned_read
+        # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(重复取消等待原会话准入读取及其作用域清理)。
+        return await _cancel_owned_read(self._admit_owned(session_id), name="terminal-session-admission")
+
+    async def _admit_owned(self, session_id):
         self._check()
         state = await self._host.for_scope(self._scope).get(session_id)
         # user:“复用原宿主权威”+(工作目录和可见性均从原会话宿主取得，不接受客户端授权根)。
@@ -44,16 +53,49 @@ class PluginTerminalController:
         state = await self._admit(session_id)
         return {"session_id": session_id, "cwd": state.path, "cwd_exists": state.exists, "pty": False}
 
+    async def shells(self, session_id):
+        from .session_controller import _cancel_owned_read
+        from .process_access import ProcessAccessError
+        async def discover():
+            self._scope.acquire()
+            try:
+                await self._admit(session_id)
+                if os.name != "nt":
+                    raise ProcessAccessError("process/platform-unavailable", "Managed native process owner is Windows desktop only")
+                shells = []
+                # user:“复用原宿主权威”+(只使用原进程PATH解析结果，缺失候选不冒充可用或默认shell)。
+                for candidate in _SHELL_CANDIDATES:
+                    try:
+                        path = self._processes.resolve_executable(candidate)
+                    except ProcessAccessError as error:
+                        if error.code == "process/not-found":
+                            continue
+                        raise
+                    if path.suffix.lower() not in {".exe", ".com"}:
+                        continue
+                    name = path.name
+                    shells.append({"name": name, "path": str(path),
+                                   "args": [] if name.casefold() == "cmd.exe" else ["-NoLogo"]})
+                await self._admit(session_id)
+                self._check()
+                return {"shells": shells, "pty": False, "default": None}
+            finally:
+                self._scope.release()
+        return await _cancel_owned_read(discover(), name="session-terminal-shells")
+
     def _pipes(self, *, create=False):
         pipes = getattr(self._scope, "_session_terminal_pipes", None)
         if pipes is None and create:
             pipes = {}
+            closed = OrderedDict()
             async def dispose_pipes():
                 for key, (_, terminal) in tuple(pipes.items()):
                     await terminal.close()
                     pipes.pop(key, None)
+                closed.clear()
             self._scope.on_dispose(dispose_pipes)
             self._scope._session_terminal_pipes = pipes
+            self._scope._session_terminal_closed = closed
         return pipes
 
     def _pipe(self, session_id, terminal_id):
@@ -78,11 +120,29 @@ class PluginTerminalController:
             if len(pipes) >= 32:
                 raise TerminalPipeError("terminal/limit", "At most 32 retained terminals")
             terminal_id = secrets.token_urlsafe(24)
+            while terminal_id in pipes or terminal_id in self._scope._session_terminal_closed:
+                terminal_id = secrets.token_urlsafe(24)
             pipes[terminal_id] = (session_id, terminal)
             return {"id": terminal_id, "pty": False}
         except BaseException:
             await finish_on_cancel(terminal.close(), name="terminal-pipe-unpublished-close")
             raise
+
+    async def list_pipes(self, session_id):
+        from .session_controller import _cancel_owned_read
+        async def list_owned():
+            self._scope.acquire()
+            try:
+                # user:“逐项核对固定上游源码及手册”+(只列当前插件代和可见会话拥有的真实受管管道，不冒充PTY名册)。
+                await self._admit(session_id)
+                pipes = self._pipes() or {}
+                result = [{"id": key, "pty": False, "complete": terminal.read().complete}
+                          for key, (owner, terminal) in pipes.items() if owner == session_id]
+                self._check()
+                return result
+            finally:
+                self._scope.release()
+        return await _cancel_owned_read(list_owned(), name="session-terminal-pipe-list")
 
     async def read_pipe(self, session_id, terminal_id, *, stdout_after=0, stderr_after=0):
         await self._admit(session_id)
@@ -135,14 +195,30 @@ class PluginTerminalController:
             raise TerminalPipeError("terminal/write-uncertain", "Input may have been delivered", may_have_changed=True) from None
 
     async def close_pipe(self, session_id, terminal_id):
-        terminal = self._pipe(session_id, terminal_id)
+        self._scope.acquire()
         try:
-            # user:“复用原宿主权威”+(只关闭当前插件拥有的句柄，允许原会话失效后清理)。
-            await finish_on_cancel(terminal.close(), name="terminal-pipe-close")
+            self._check()
+            closed = getattr(self._scope, "_session_terminal_closed", {})
+            # user:“逐项核对固定上游源码及手册”+(仅对本插件该会话真实关闭过的有限句柄允许重试)。
+            if type(terminal_id) is str and terminal_id in closed and closed[terminal_id] == session_id:
+                return None
+            terminal = self._pipe(session_id, terminal_id)
+            try:
+                # user:“复用原宿主权威”+(只关闭当前插件拥有的句柄，允许原会话失效后清理)。
+                await finish_on_cancel(terminal.close(), name="terminal-pipe-close")
+            finally:
+                pipes = self._pipes()
+                if pipes is not None and terminal._process._cleaned:
+                    if pipes.get(terminal_id) == (session_id, terminal):
+                        pipes.pop(terminal_id, None)
+                    closed = self._scope._session_terminal_closed
+                    closed[terminal_id] = session_id
+                    closed.move_to_end(terminal_id)
+                    while len(closed) > 128:
+                        closed.popitem(last=False)
         finally:
-            pipes = self._pipes()
-            if pipes is not None and terminal._process._cleaned:
-                pipes.pop(terminal_id, None)
+            # user:“建立真实请求、错误、作用域、取消/流和清理验收”+(关闭真实结算后才允许启动代清理重试记录)。
+            self._scope.release()
 
     def _watch_session(self, session_id, terminal):
         watchers = getattr(self._scope, "_session_terminal_watchers", None)

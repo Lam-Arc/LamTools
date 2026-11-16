@@ -420,6 +420,8 @@ class SubAgentSupervisor:
                   id TEXT PRIMARY KEY, parent_thread_id TEXT NOT NULL, name TEXT NOT NULL,
                   direction TEXT NOT NULL, body TEXT NOT NULL, digest TEXT NOT NULL,
                   message_key TEXT NOT NULL, created_at REAL NOT NULL, delivered_at REAL,
+                  tags TEXT NOT NULL DEFAULT '', wake INTEGER NOT NULL DEFAULT 0,
+                  wake_count INTEGER NOT NULL DEFAULT 0,
                   UNIQUE(parent_thread_id, name, direction, message_key)
                 )
                 """
@@ -435,6 +437,27 @@ class SubAgentSupervisor:
                     """
                 )
                 db.execute("DROP TABLE sub_agent_mailbox_legacy")
+            # user:“消息需带tag，若带有唤醒tag，则将其唤醒”+(旧库就地补列：语义标签、
+            # 唤醒标记与已唤醒次数；既有行默认不唤醒，历史未投递事件由
+            # migrate_pending_member_events_to_wake 一次性转成唤醒消息。)
+            present_mailbox_columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(sub_agent_mailbox)").fetchall()
+            }
+            for column, ddl in (
+                ("tags", "ALTER TABLE sub_agent_mailbox ADD COLUMN tags TEXT NOT NULL DEFAULT ''"),
+                ("wake", "ALTER TABLE sub_agent_mailbox ADD COLUMN wake INTEGER NOT NULL DEFAULT 0"),
+                (
+                    "wake_count",
+                    "ALTER TABLE sub_agent_mailbox ADD COLUMN wake_count INTEGER NOT NULL DEFAULT 0",
+                ),
+            ):
+                if column not in present_mailbox_columns:
+                    db.execute(ddl)
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS sub_agent_mailbox_wake "
+                "ON sub_agent_mailbox(parent_thread_id, direction, delivered_at, wake)"
+            )
             # 成员状态变化事件：与「成员来信」邮箱分开存放，避免改变既有
             # 邮箱语义；事件按 event_key 幂等，投递状态由 delivered_at 记录。
             db.execute(
@@ -1419,10 +1442,14 @@ class SubAgentSupervisor:
         else:
             seen.add(provider_message_id)
             message_key = provider_message_id
-            inserted = self._mail(name, "child_to_parent", body, message_key=message_key)
+            inserted = self._mail(
+                name, "child_to_parent", body, message_key=message_key, tags="message", wake=1
+            )
             if not inserted:
                 message_key = f"{invocation_id}:{provider_message_id}"
-                inserted = self._mail(name, "child_to_parent", body, message_key=message_key)
+                inserted = self._mail(
+                    name, "child_to_parent", body, message_key=message_key, tags="message", wake=1
+                )
         injected = False
         record = self._load(name)
         sink = getattr(self.runner, "parent_guidance_sink", None)
@@ -1463,6 +1490,44 @@ class SubAgentSupervisor:
                         (time.time(), self.parent_thread_id, name, message_key),
                     )
         return {"accepted": True, "deduplicated": not inserted, "injected": injected, "type": child_type, "name": name}
+
+    def ask_parent(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
+        """Ask the parent agent (the member's user) a question.
+
+        user:“对于子代理来说，它视父代理为用户，它的question也应该由父代理处理”
+        +(成员提问写一条带唤醒标记的信箱消息；父代理用 sub_agent_message 回答。
+        成员的提问不进入任何用户界面。)
+        """
+        identity = _child_identity.get()
+        if identity is None or identity[0] is not self:
+            raise ValueError("ask_parent is only available inside a bound sub-agent context")
+        _supervisor, child_type, name = identity
+        titles = [
+            str(item.get("title") or "").strip()
+            for item in questions
+            if isinstance(item, dict)
+        ]
+        titles = [title for title in titles if title]
+        body = "\n".join(f"- 子代理 {name} 提问：{title}" for title in titles) or (
+            f"- 子代理 {name} 需要你的决定。"
+        )
+        invocation_id = _child_invocation_id.get() or "legacy"
+        message_key = f"question:{invocation_id}:{uuid.uuid4().hex[:12]}"
+        inserted = self._mail(
+            name,
+            "child_to_parent",
+            body,
+            message_key=message_key,
+            tags="question",
+            wake=1,
+        )
+        return {
+            "accepted": True,
+            "deduplicated": not inserted,
+            "type": child_type,
+            "name": name,
+            "message_key": message_key,
+        }
 
     def pending_guidance(self, name: str) -> list[dict[str, Any]]:
         with self._connection() as db:
@@ -1642,10 +1707,28 @@ class SubAgentSupervisor:
             return ""
         self._notify_activity()
         _notify_member_event()
+        # user:“所有message均唤醒”+(成员完成/失败也写一条带唤醒标记的信箱消息：
+        # 唤醒只认信箱，事件表退化为审计。父子两条通道因此只有一种载体。)
+        wake_key = f"wake:{key}"
+        self._mail(
+            record.name,
+            "child_to_parent",
+            member_wake_prompt([{"payload": event_payload}])
+            or format_member_event(event_payload),
+            message_key=wake_key,
+            tags=event,
+            wake=1,
+        )
         # user:“子代理异常，主诉：子代理完成后不会回传最终回复”+(父回合还在跑时，
-        # 成员一完成就把完整最终消息作为指导注入该回合；回合已结束则由持久事件
-        # 的 member-wake 路径在下一回合投递，两条路都靠 delivered_at 去重。)
-        self._deliver_member_event_live(record, event, event_payload, event_id)
+        # 成员一完成就把完整最终消息作为指导注入该回合；回合已结束则由信箱的
+        # wake 路径在下一回合投递，两条路都靠 delivered_at 去重。)
+        self._deliver_member_event_live(
+            record,
+            event,
+            event_payload,
+            event_id,
+            guidance_id=f"sub-agent:{self.parent_thread_id}:{record.name}:{wake_key}",
+        )
         return event_id
 
     def _deliver_member_event_live(
@@ -1654,6 +1737,7 @@ class SubAgentSupervisor:
         event: str,
         payload: dict[str, Any],
         event_id: str,
+        guidance_id: str = "",
     ) -> bool:
         """Hand a finished member's final message to a still-running parent.
 
@@ -1686,7 +1770,7 @@ class SubAgentSupervisor:
             "parent_turn_id": record.source_turn_id,
             "lifecycle_event": event,
         }
-        args = (self.parent_thread_id, record.source_run_id, text, event_id)
+        args = (self.parent_thread_id, record.source_run_id, text, guidance_id or event_id)
         try:
             inspect.signature(sink).bind(*args, metadata)
         except (TypeError, ValueError):
@@ -2025,11 +2109,26 @@ class SubAgentSupervisor:
 
         task.add_done_callback(_finished)
 
-    def _mail(self, name: str, direction: str, body: str, *, message_key: str) -> bool:
+    def _mail(
+        self,
+        name: str,
+        direction: str,
+        body: str,
+        *,
+        message_key: str,
+        tags: str = "",
+        wake: int = 0,
+    ) -> bool:
+        """Write one mailbox row.
+
+        ``tags`` names what the message is (question / message / finished /
+        failed) and ``wake`` marks it as a reason to wake the parent: the wake
+        watchdog reads this table, not the audit event table.
+        """
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
         with self._connection() as db:
             cursor = db.execute(
-                "INSERT OR IGNORE INTO sub_agent_mailbox(id,parent_thread_id,name,direction,body,digest,message_key,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO sub_agent_mailbox(id,parent_thread_id,name,direction,body,digest,message_key,created_at,tags,wake) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
                     uuid.uuid4().hex,
                     self.parent_thread_id,
@@ -2039,6 +2138,8 @@ class SubAgentSupervisor:
                     digest,
                     message_key,
                     time.time(),
+                    str(tags or ""),
+                    1 if wake else 0,
                 ),
             )
             return cursor.rowcount > 0
@@ -2476,28 +2577,187 @@ def format_member_event(payload: dict[str, Any]) -> str:
     return f"- {name} {label}{elapsed_text}{tail}"
 
 
+def list_threads_with_pending_wakes(database_path: str | Path) -> list[str]:
+    """Parent threads holding an undelivered wake message.
+
+    user:“消息需带tag，若带有唤醒tag，则将其唤醒”+(唤醒的唯一数据源是信箱：
+    带 wake 且未投递的 child_to_parent 消息才让线程可被唤醒。)
+    """
+    path = Path(database_path)
+    if not path.is_file():
+        return []
+    try:
+        with sqlite3.connect(path) as db:
+            rows = db.execute(
+                "SELECT DISTINCT parent_thread_id FROM sub_agent_mailbox "
+                "WHERE direction='child_to_parent' AND delivered_at IS NULL AND wake=1"
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [str(row[0]) for row in rows if str(row[0] or "").strip()]
+
+
 def list_threads_with_pending_member_wakes(
     database_path: str | Path,
     *,
     events: tuple[str, ...] = MEMBER_WAKE_EVENTS,
 ) -> list[str]:
-    """Parent threads with an undelivered event that justifies a wake."""
+    """Compatibility alias: wake is now driven by mailbox messages."""
+    return list_threads_with_pending_wakes(database_path)
+
+
+def peek_wake_messages(
+    database_path: str | Path, parent_thread_id: str
+) -> list[dict[str, Any]]:
+    """Undelivered wake messages for one thread, without claiming them."""
     path = Path(database_path)
-    if not path.is_file() or not events:
+    if not path.is_file():
         return []
-    clauses = " OR ".join("event_key LIKE ?" for _ in events)
-    params = [f"{name}:%" for name in events]
     try:
         with sqlite3.connect(path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
-                f"SELECT DISTINCT parent_thread_id FROM sub_agent_events "
-                f"WHERE delivered_at IS NULL AND ({clauses})",
-                params,
+                "SELECT id,name,body,tags,wake_count,created_at FROM sub_agent_mailbox "
+                "WHERE parent_thread_id=? AND direction='child_to_parent' "
+                "AND delivered_at IS NULL AND wake=1 ORDER BY created_at,id",
+                (str(parent_thread_id),),
             ).fetchall()
     except sqlite3.OperationalError:
         return []
-    return [str(row["parent_thread_id"]) for row in rows if row["parent_thread_id"]]
+    return [
+        {
+            "id": str(row["id"]),
+            "name": str(row["name"]),
+            "body": str(row["body"]),
+            "tags": str(row["tags"] or ""),
+            "wake_count": int(row["wake_count"] or 0),
+            "created_at": float(row["created_at"] or 0.0),
+        }
+        for row in rows
+    ]
+
+
+def mark_mailbox_wake_delivered(
+    database_path: str | Path, parent_thread_id: str, ids: list[str]
+) -> None:
+    """Claim wake messages only after the parent turn actually started."""
+    acknowledge_parent_mailbox(database_path, parent_thread_id, ids)
+
+
+def bump_wake_counts(database_path: str | Path, parent_thread_id: str, ids: list[str]) -> int:
+    """Increment how many times these wake messages have woken the parent."""
+    clean = [str(item) for item in ids if str(item)]
+    path = Path(database_path)
+    if not clean or not path.is_file():
+        return 0
+    placeholders = ",".join("?" for _ in clean)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute(
+            f"UPDATE sub_agent_mailbox SET wake_count=wake_count+1 "
+            f"WHERE parent_thread_id=? AND id IN ({placeholders})",
+            (str(parent_thread_id), *clean),
+        )
+        row = db.execute(
+            f"SELECT MAX(wake_count) FROM sub_agent_mailbox "
+            f"WHERE parent_thread_id=? AND id IN ({placeholders})",
+            (str(parent_thread_id), *clean),
+        ).fetchone()
+    return int((row[0] if row else 0) or 0)
+
+
+def migrate_pending_member_events_to_wake(database_path: str | Path) -> int:
+    """Turn undelivered lifecycle events into wake messages, exactly once."""
+    path = Path(database_path)
+    if not path.is_file():
+        return 0
+    with closing(sqlite3.connect(path)) as db, db:
+        db.row_factory = sqlite3.Row
+        try:
+            rows = db.execute(
+                "SELECT id,parent_thread_id,name,payload,event_key FROM sub_agent_events "
+                "WHERE delivered_at IS NULL ORDER BY created_at,id"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        migrated = 0
+        now = time.time()
+        for row in rows:
+            payload = member_event_payload({"payload": row["payload"]})
+            event = str(payload.get("event") or "")
+            if not event:
+                continue
+            body = format_member_event(payload)
+            inserted = db.execute(
+                "INSERT OR IGNORE INTO sub_agent_mailbox("
+                "id,parent_thread_id,name,direction,body,digest,message_key,created_at,tags,wake"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    uuid.uuid4().hex,
+                    str(row["parent_thread_id"]),
+                    str(row["name"]),
+                    "child_to_parent",
+                    body,
+                    hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    f"wake:{row['event_key']}",
+                    now,
+                    event,
+                    1,
+                ),
+            ).rowcount
+            if inserted:
+                migrated += 1
+            db.execute("UPDATE sub_agent_events SET delivered_at=? WHERE id=?", (now, row["id"]))
+    return migrated
+
+
+def auto_release_unanswered(
+    database_path: str | Path, parent_thread_id: str, *, limit: int = 2
+) -> list[str]:
+    """Release a member whose question the parent ignored ``limit`` times.
+
+    user:“若有必要解决这个问题，再在tool描述中加一句就足够了”+(机制上仍要一个
+    出口：同一提问唤醒父代理达到上限后自动回「按合理默认继续」，避免子代理
+    永久悬空。)
+    """
+    path = Path(database_path)
+    if not path.is_file():
+        return []
+    released: list[str] = []
+    with closing(sqlite3.connect(path)) as db, db:
+        db.row_factory = sqlite3.Row
+        try:
+            rows = db.execute(
+                "SELECT id,name FROM sub_agent_mailbox "
+                "WHERE parent_thread_id=? AND direction='child_to_parent' "
+                "AND tags='question' AND wake=1 AND delivered_at IS NOT NULL AND wake_count>=?",
+                (str(parent_thread_id), int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        now = time.time()
+        for row in rows:
+            name = str(row["name"])
+            body = "未获答复，按合理默认继续。"
+            db.execute(
+                "INSERT OR IGNORE INTO sub_agent_mailbox("
+                "id,parent_thread_id,name,direction,body,digest,message_key,created_at,tags,wake"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    uuid.uuid4().hex,
+                    str(parent_thread_id),
+                    name,
+                    "parent_to_child",
+                    body,
+                    hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    f"auto-release:{row['id']}",
+                    now,
+                    "release",
+                    0,
+                ),
+            )
+            db.execute("UPDATE sub_agent_mailbox SET wake=0 WHERE id=?", (row["id"],))
+            released.append(name)
+    return released
 
 
 def peek_member_events(
@@ -2588,6 +2848,23 @@ def member_wake_prompt(events: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def wake_messages_prompt(messages: list[dict[str, Any]]) -> str:
+    """One line per undelivered wake message. No coaching.
+
+    user:“所有message均唤醒”+(唤醒输入就是信箱正文本身：完成/失败/提问/主动消息
+    同形，不再按事件名重新拼装。)
+    """
+    lines: list[str] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        body = str(item.get("body") or "").strip()
+        if not body:
+            continue
+        lines.append(body if body.startswith("-") else f"- {body}")
+    return "\n".join(lines)
+
+
 def current_child_identity() -> tuple[SubAgentSupervisor, str, str] | None:
     return _child_identity.get()
 
@@ -2636,7 +2913,10 @@ __all__ = [
     "MEMBER_WAKE_EVENTS",
     "MEMBER_WAKE_REPORT_EVENTS",
     "SUB_AGENT_TYPES", "SubAgentOperationResult", "SubAgentRecord", "SubAgentSupervisor", "acknowledge_parent_mailbox", "bound_child_identity", "current_child_identity", "drain_parent_mailbox",
-    "format_member_event", "get_sub_agent_supervisor", "list_threads_with_pending_member_wakes",
+    "auto_release_unanswered", "bump_wake_counts", "format_member_event",
+    "get_sub_agent_supervisor", "list_threads_with_pending_member_wakes",
+    "list_threads_with_pending_wakes", "mark_mailbox_wake_delivered",
+    "migrate_pending_member_events_to_wake", "peek_wake_messages", "wake_messages_prompt",
     "mark_member_events_delivered", "member_event_is_reportable", "member_event_payload", "member_event_triggers_wake",
     "member_wake_prompt", "peek_member_events", "register_sub_agent_lifecycle_operations",
     "resolve_model_id", "set_member_event_notifier",

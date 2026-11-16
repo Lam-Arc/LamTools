@@ -1,7 +1,7 @@
 <template>
   <div class="right-sidebar-runtime-status" :data-state="normalizedState" role="status" aria-live="polite">
     <span class="right-sidebar-runtime-status-icon" aria-hidden="true">
-      <LoaderCircle v-if="normalizedState === 'running'" :size="14" :stroke-width="1.8" class="spinning" />
+      <LoaderCircle v-if="normalizedState === 'running'" :size="14" :stroke-width="1.8" class="spinning sunday-spin" />
       <Clock3 v-else-if="normalizedState === 'waiting'" :size="14" :stroke-width="1.8" />
       <TriangleAlert v-else-if="normalizedState === 'error'" :size="14" :stroke-width="1.8" />
       <CircleCheck v-else-if="normalizedState === 'completed'" :size="14" :stroke-width="1.8" />
@@ -14,6 +14,8 @@
 </template>
 
 <script setup lang="ts">
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(运行状态复用共享旋转反馈)。
+import '@/styles/sunday-spinner.css'
 import { t } from '@/i18n/index.ts'
 
 import { computed } from 'vue'
@@ -59,7 +61,4 @@ const stateLabel = computed(() => {
 .right-sidebar-runtime-status[data-state="waiting"] .right-sidebar-runtime-status-icon { color: var(--orange); }
 .right-sidebar-runtime-status[data-state="error"] .right-sidebar-runtime-status-icon { color: var(--red); }
 .right-sidebar-runtime-status[data-state="completed"] .right-sidebar-runtime-status-icon { color: var(--theme-backdrop-text); }
-.spinning { animation: right-sidebar-runtime-spin .9s linear infinite; }
-@keyframes right-sidebar-runtime-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }
 </style>

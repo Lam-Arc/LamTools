@@ -188,6 +188,17 @@ async def handle_turn_resume_operation(
         await _close_open_interactions(
             context=context, thread_id=thread_id, reason="turn_resumed"
         )
+    if runtime_start is not None and params.get("skip_questions") is True:
+        # user:“跳过等于 done 没问题吧？”+(跳过不落用户消息，但必须真的结束等待：
+        # 关组与恢复在同一次动作里完成，否则界面说「已跳过」而回合仍停在暂停。)
+        from .question_groups import close_pending_question_groups
+        skip_store = context.runtime_state_store
+        if skip_store is not None:
+            skip_state = await skip_store.get(thread_id)
+            if skip_state is not None and close_pending_question_groups(
+                skip_state, reason="skipped",
+            ):
+                await skip_store.save(skip_state)
     # The parked turn is about to run again: clear the pause request so the
     # resumed kernel does not immediately park on the same signal.
     reset_pause = getattr(context.host.runtime_task_registry, "reset_pause_event", None)

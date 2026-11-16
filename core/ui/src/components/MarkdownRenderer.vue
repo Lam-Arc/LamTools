@@ -5,6 +5,7 @@
     <div ref="contentRoot" class="markdown-renderer__content markdown-body" />
     <Teleport v-for="block in replyBlocks" :key="block.id" :to="block.target">
       <InlineVisualization v-if="block.kind === 'interactive'" :source="block.source" />
+      <CoreChart v-else-if="block.kind === 'chart'" :source="block.source" />
       <WritingBlock v-else :source="block.source" :title="block.title || ''" :variant="block.variant || 'standard'">
         <template #default="{ content }"><MarkdownRenderer :content="content" :interactive="false" /></template>
       </WritingBlock>
@@ -23,6 +24,8 @@ import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount, nextTick,
 import InlineVisualization from './InlineVisualization.vue'
 // user:“总的来说就是样式块”+(成稿组件按需加载，预览由插槽提供以保持模块依赖单向)。
 const WritingBlock = defineAsyncComponent(() => import('./WritingBlock.vue'))
+// 组件本身很小，静态导入；echarts 由 CoreChart 在首次真正绘制时才加载。
+import CoreChart from './CoreChart.vue'
 import { messageStyleExtension, addAlertRenderer } from './messageStyleBlocks'
 import { marked, Marked, type Renderer } from 'marked'
 import DOMPurify from 'dompurify'
@@ -178,26 +181,37 @@ async function hydrateLocalReferences() {
     if (generation === localImageGeneration && root.contains(image)) image.dispatchEvent(new Event('error'))
   }
 }
-type ReplyBlock = { id: number; target: HTMLElement; kind: 'interactive' | 'writing'; source: string; title?: string; variant?: string }
+type ReplyBlock = { id: number; target: HTMLElement; kind: 'interactive' | 'chart' | 'writing'; source: string; title?: string; variant?: string }
 const replyBlocks = shallowRef<ReplyBlock[]>([])
 let replyBlockSequence = 0
 function disposeInteractiveBlocks() {
   replyBlocks.value = []
 }
 function mountInteractiveBlocks() {
-  if (!props.interactive || props.streaming) return
+  if (props.streaming) return
   const blocks: ReplyBlock[] = []
-  for (const placeholder of contentRoot.value?.querySelectorAll<HTMLElement>('[data-inline-visualization]') || []) {
-    const source = placeholder.querySelector('.code-source')?.textContent || ''
+  // user:“图表落地，柱状，折线，饼图都支持”+(图表是只读可视化，和 mermaid 同级，
+  // 不依赖 interactive 开关；源码从复制按钮的隐藏兄弟节点读，避免再维护一份缓存。)
+  for (const placeholder of contentRoot.value?.querySelectorAll<HTMLElement>('[data-chart-block]') || []) {
+    const source = placeholder.closest('.code-block')?.querySelector('.code-source')?.textContent || ''
+    if (!source) continue
     const mount = document.createElement('div')
     placeholder.prepend(mount)
-    blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'interactive', source })
+    blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'chart', source })
   }
-  for (const placeholder of contentRoot.value?.querySelectorAll<HTMLElement>('[data-writing-block]') || []) {
-    const mount = document.createElement('div')
-    const source = placeholder.querySelector('.writing-source')?.textContent || ''
-    placeholder.prepend(mount)
-    blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'writing', source, title: placeholder.dataset.writingTitle, variant: placeholder.dataset.writingVariant })
+  if (props.interactive) {
+    for (const placeholder of contentRoot.value?.querySelectorAll<HTMLElement>('[data-inline-visualization]') || []) {
+      const source = placeholder.querySelector('.code-source')?.textContent || ''
+      const mount = document.createElement('div')
+      placeholder.prepend(mount)
+      blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'interactive', source })
+    }
+    for (const placeholder of contentRoot.value?.querySelectorAll<HTMLElement>('[data-writing-block]') || []) {
+      const mount = document.createElement('div')
+      const source = placeholder.querySelector('.writing-source')?.textContent || ''
+      placeholder.prepend(mount)
+      blocks.push({ id: ++replyBlockSequence, target: mount, kind: 'writing', source, title: placeholder.dataset.writingTitle, variant: placeholder.dataset.writingVariant })
+    }
   }
   replyBlocks.value = blocks
 }
@@ -487,6 +501,11 @@ function createMermaidRenderer(heavy: boolean): Renderer {
     const closed = fence && new RegExp(`\\n {0,3}${fence[0]}{${fence.length},}[ \\t]*(?:\\r?\\n)?$`).test(raw || '')
     if (props.interactive && heavy && lang === 'interactive-html' && closed) {
       return `<div class="code-block" data-inline-visualization>${copyButtonHtml(text)}</div>`
+    }
+    // user:“图表落地”+(```chart 里是 JSON 规格，由 CoreChart 用 echarts 渲染；
+    // 源码仍走复制按钮的隐藏节点，复制出来就是可直接改的 JSON。)
+    if (heavy && lang === 'chart') {
+      return `<div class="code-block"><div class="chart-placeholder" data-chart-block></div>${copyButtonHtml(text)}</div>`
     }
     if (props.mermaid && heavy && lang === 'mermaid') {
       const id = `mermaid-${mermaidSeq++}`
@@ -1312,6 +1331,11 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 /* Hidden carrier for the copy source — never rendered */
 .markdown-body :deep(.code-source) {
   display: none;
+}
+
+/* 流式期间图表占位：给一点高度，避免代码块在渲染前塌成一条线。 */
+.markdown-body :deep(.chart-placeholder) {
+  min-height: 20px;
 }
 .markdown-body :deep(.code-copy) {
   position: absolute;

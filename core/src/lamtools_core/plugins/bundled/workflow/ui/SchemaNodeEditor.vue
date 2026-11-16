@@ -1,4 +1,5 @@
 <template>
+  <!-- user:“存量迁移：将现有页面逐步接入统一组件库”+(复用共享复选框，保留原有勾选与保存逻辑) -->
   <section v-if="hasMeaningfulEditor" class="wf-schema-editor" :aria-label="t('节点参数')">
     <header class="wf-schema-editor-head">
       <div>
@@ -19,7 +20,7 @@
           @update:model-value="setField(field, $event)"
         />
         <label v-else-if="field.type === 'boolean'" class="wf-schema-toggle">
-          <input type="checkbox" :checked="Boolean(fieldValue(field.name))" @change="setField(field, ($event.target as HTMLInputElement).checked)" />
+          <input class="sunday-checkbox" type="checkbox" :checked="Boolean(fieldValue(field.name))" @change="setField(field, ($event.target as HTMLInputElement).checked)" />
           <span>{{ Boolean(fieldValue(field.name)) ? t("开启") : t("关闭") }}</span>
         </label>
         <input
@@ -158,7 +159,6 @@ function syncPorts(): void {
 .wf-schema-field small { color: color-mix(in srgb, var(--theme-main-text) 48%, transparent); font-size: 10px; line-height: 1.3; }
 .wf-schema-field input:not([type='checkbox']) { width: 100%; box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, var(--theme-composer-text) 12%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-composer-background) 70%, transparent); color: var(--theme-composer-text); caret-color: var(--theme-composer-text); padding: 0 var(--space-2); font: inherit; font-size: 11px; outline: 0; }
 .wf-schema-toggle { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--theme-control-text); font-size: 11px; }
-.wf-schema-toggle input { accent-color: var(--blue); }
 .wf-schema-sync { min-height: 28px; border: 1px dashed color-mix(in srgb, var(--theme-main-text) 22%, transparent); border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--theme-main-text) 72%, transparent); cursor: pointer; font-size: 10px; }
 .wf-schema-sync:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
 @media (max-width: 640px) { .wf-schema-sync { min-height: 44px; } }

@@ -1,0 +1,3463 @@
+[
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue",
+    "name": "AdvancedView",
+    "signals": [
+      "button",
+      "switch",
+      "select",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ConnectionModes.vue",
+    "name": "ConnectionModes",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ConnectionsView.vue",
+    "name": "ConnectionsView",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/DashboardView.vue",
+    "name": "DashboardView",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/DiagnoseView.vue",
+    "name": "DiagnoseView",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/HomeView.vue",
+    "name": "HomeView",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ImportProfile.vue",
+    "name": "ImportProfile",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue",
+    "name": "NetworkApp",
+    "signals": [
+      "button",
+      "event",
+      "animation"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/page.mjs"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkSettings.vue",
+    "name": "NetworkSettings",
+    "signals": [
+      "button",
+      "select",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NodePicker.vue",
+    "name": "NodePicker",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue",
+    "name": "ProxyView",
+    "signals": [
+      "button",
+      "switch",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/QuickPanel.vue",
+    "name": "QuickPanel",
+    "signals": [
+      "button",
+      "select",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/page.mjs"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/SecurityView.vue",
+    "name": "SecurityView",
+    "signals": [
+      "button",
+      "select",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/SpeedChart.vue",
+    "name": "SpeedChart",
+    "signals": [],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/DashboardView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TrafficDonut.vue",
+    "name": "TrafficDonut",
+    "signals": [],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TransferView.vue",
+    "name": "TransferView",
+    "signals": [
+      "button",
+      "select",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/EdgeConditionEditor.vue",
+    "name": "EdgeConditionEditor",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/HumanTaskPanel.vue",
+    "name": "HumanTaskPanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNodeRuntimeDock.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/NodeEditCard.vue",
+    "name": "NodeEditCard",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/SchemaNodeEditor.vue",
+    "name": "SchemaNodeEditor",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/NodeEditCard.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNode.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue",
+    "name": "WorkflowCanvas",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvasElement.vue",
+    "name": "WorkflowCanvasElement",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowControlBar.vue",
+    "name": "WorkflowControlBar",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+    "name": "WorkflowInspector",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNode.vue",
+    "name": "WorkflowNode",
+    "signals": [
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNodeCatalog.vue",
+    "name": "WorkflowNodeCatalog",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNodeRuntimeDock.vue",
+    "name": "WorkflowNodeRuntimeDock",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNode.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowPoliciesPanel.vue",
+    "name": "WorkflowPoliciesPanel",
+    "signals": [
+      "checkbox",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowQueuePanel.vue",
+    "name": "WorkflowQueuePanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowResourcesPanel.vue",
+    "name": "WorkflowResourcesPanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowRunInputForm.vue",
+    "name": "WorkflowRunInputForm",
+    "signals": [
+      "button",
+      "checkbox",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowSwitchGuard.vue",
+    "name": "WorkflowSwitchGuard",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue",
+    "name": "WorkflowTriggersPanel",
+    "signals": [
+      "button",
+      "checkbox",
+      "range",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue",
+    "name": "WorkflowView",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/app/LamToolsApp.vue",
+    "name": "LamToolsApp",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/desktop/src/main.ts",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/AccountShell.vue",
+    "name": "AccountShell",
+    "signals": [
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAppPage.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/AppRail.vue",
+    "name": "AppRail",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ArtifactPanel.vue",
+    "name": "ArtifactPanel",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/AssistantAvatarField.vue",
+    "name": "AssistantAvatarField",
+    "signals": [
+      "button",
+      "range",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreGeneralEditor.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/AttachmentSourceMenu.vue",
+    "name": "AttachmentSourceMenu",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/pet/ui/SessionCard.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/AttachmentTray.vue",
+    "name": "AttachmentTray",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/AutoTextarea.vue",
+    "name": "AutoTextarea",
+    "signals": [
+      "event",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/EdgeConditionEditor.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/NodeEditCard.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/SchemaNodeEditor.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNode.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue",
+      "core/ui/src/components/MessageView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/ChatOutlineNavigator.vue",
+    "name": "ChatOutlineNavigator",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ChatThread.vue",
+    "name": "ChatThread",
+    "signals": [],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowInspector.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue",
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/components/CoreSubAgentDialog.vue",
+      "core/ui/src/components/CoreSubAgentView.vue",
+      "core/ui/src/guide/GuideDemoSession.vue",
+      "core/ui/src/index.ts",
+      "core/ui/src/pet/ui/SessionCard.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CommandPalette.vue",
+    "name": "CommandPalette",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/InlineFileComposer.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ComposerBar.vue",
+    "name": "ComposerBar",
+    "signals": [
+      "event",
+      "reduced-motion",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/components/CoreSubAgentDialog.vue",
+      "core/ui/src/components/WorkspaceShell.vue",
+      "core/ui/src/index.ts",
+      "core/ui/src/pet/ui/SessionCard.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/context-menu/ContextMenuHost.vue",
+    "name": "ContextMenuHost",
+    "signals": [
+      "animation"
+    ],
+    "callers": [
+      "core/ui/src/components/context-menu/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/context-menu/ContextMenuItem.vue",
+    "name": "ContextMenuItem",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/context-menu/ContextMenuPanel.vue",
+      "core/ui/src/components/context-menu/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/context-menu/ContextMenuPanel.vue",
+    "name": "ContextMenuPanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/context-menu/ContextMenuHost.vue",
+      "core/ui/src/components/context-menu/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/context-menu/ContextMenuSubmenu.vue",
+    "name": "ContextMenuSubmenu",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/context-menu/ContextMenuPanel.vue",
+      "core/ui/src/components/context-menu/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreAgentsEditor.vue",
+    "name": "CoreAgentsEditor",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreAppPage.vue",
+    "name": "CoreAppPage",
+    "signals": [],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreSplitContent.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreArrangeManager.vue",
+    "name": "CoreArrangeManager",
+    "signals": [
+      "button",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAppPage.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreAuxiliaryChat.vue",
+    "name": "CoreAuxiliaryChat",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSplitContent.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreChart.vue",
+    "name": "CoreChart",
+    "signals": [
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/MarkdownRenderer.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreConfirmDialog.vue",
+    "name": "CoreConfirmDialog",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue",
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/ArtifactPanel.vue",
+      "core/ui/src/components/CoreAppPage.vue",
+      "core/ui/src/components/CoreHooksEditor.vue",
+      "core/ui/src/components/CorePluginSystemEditor.vue",
+      "core/ui/src/components/CoreSkillsEditor.vue",
+      "core/ui/src/components/CoreSplitTextEditor.vue",
+      "core/ui/src/components/MaterialsView.vue",
+      "core/ui/src/components/RightSidebarWidgetRenderer.vue",
+      "core/ui/src/components/SettingsDraftDialog.vue",
+      "core/ui/src/components/ThemeStudio.vue",
+      "core/ui/src/pet/ui/SessionCard.vue",
+      "core/ui/src/plugins/consent.ts",
+      "core/ui/src/study/NotesManager.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/demo/composite-lab.ts",
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreExecutionControls.vue",
+    "name": "CoreExecutionControls",
+    "signals": [
+      "flex",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/components/CoreSubAgentDialog.vue",
+      "core/ui/src/index.ts",
+      "core/ui/src/pet/ui/SessionCard.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreGeneralEditor.vue",
+    "name": "CoreGeneralEditor",
+    "signals": [
+      "button",
+      "switch",
+      "range",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSettings.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreGoalStrip.vue",
+    "name": "CoreGoalStrip",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreHooksEditor.vue",
+    "name": "CoreHooksEditor",
+    "signals": [
+      "button",
+      "switch",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/PluginsShell.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreImageGenEditor.vue",
+    "name": "CoreImageGenEditor",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreLoadToolsEditor.vue",
+    "name": "CoreLoadToolsEditor",
+    "signals": [
+      "button",
+      "checkbox",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSettings.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreModelCatalog.vue",
+    "name": "CoreModelCatalog",
+    "signals": [
+      "button",
+      "checkbox",
+      "switch",
+      "select",
+      "event",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSettings.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreModelCatalogViewToggle.vue",
+    "name": "CoreModelCatalogViewToggle",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreModelCatalog.vue",
+      "core/ui/src/components/CoreModelThinkingMenu.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreModelThinkingMenu.vue",
+    "name": "CoreModelThinkingMenu",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreExecutionControls.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CorePendingDecisionPanel.vue",
+    "name": "CorePendingDecisionPanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CorePetEditor.vue",
+    "name": "CorePetEditor",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSettings.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CorePingEditor.vue",
+    "name": "CorePingEditor",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "grid",
+      "flex"
+    ],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CorePluginSystemEditor.vue",
+    "name": "CorePluginSystemEditor",
+    "signals": [
+      "button",
+      "switch",
+      "event",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/components/PluginsShell.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreProjectCreate.vue",
+    "name": "CoreProjectCreate",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreProjectPicker.vue",
+    "name": "CoreProjectPicker",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreProjectSettings.vue",
+    "name": "CoreProjectSettings",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAppPage.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreQuestionGroup.vue",
+    "name": "CoreQuestionGroup",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/MessageView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreQueuedInputTray.vue",
+    "name": "CoreQueuedInputTray",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreResourceStats.vue",
+    "name": "CoreResourceStats",
+    "signals": [
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/RightSidebarHost.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreRuntimeMenu.vue",
+    "name": "CoreRuntimeMenu",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreExecutionControls.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSendStopButton.vue",
+    "name": "CoreSendStopButton",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/ComposerBar.vue",
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/components/WorkspaceShell.vue",
+      "core/ui/src/index.ts",
+      "core/ui/src/pet/ui/SessionCard.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreSessionTitleEditor.vue",
+    "name": "CoreSessionTitleEditor",
+    "signals": [
+      "event",
+      "grid",
+      "theme"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue",
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSettings.vue",
+    "name": "CoreSettings",
+    "signals": [
+      "button",
+      "switch",
+      "select",
+      "event",
+      "flex"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreAppPage.vue",
+      "core/ui/src/components/CoreProjectSettings.vue",
+      "core/ui/src/components/CoreSubAgentEditor.vue",
+      "core/ui/src/components/OnboardingWizard.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/demo/model-catalog-lab.ts",
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreSkillsEditor.vue",
+    "name": "CoreSkillsEditor",
+    "signals": [
+      "button",
+      "switch",
+      "select",
+      "event",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/PluginsShell.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitBrowser.vue",
+    "name": "CoreSplitBrowser",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSplitContent.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitContent.vue",
+    "name": "CoreSplitContent",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitFileTree.vue",
+    "name": "CoreSplitFileTree",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSplitContent.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitPane.vue",
+    "name": "CoreSplitPane",
+    "signals": [
+      "button",
+      "event",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSplitWorkspace.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitPluginPage.vue",
+    "name": "CoreSplitPluginPage",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreSplitContent.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitPreview.vue",
+    "name": "CoreSplitPreview",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSplitContent.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitTextEditor.vue",
+    "name": "CoreSplitTextEditor",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSplitContent.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/SplitWorkspacePreview.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreSplitWorkspace.vue",
+    "name": "CoreSplitWorkspace",
+    "signals": [
+      "button",
+      "event",
+      "animation"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/SplitWorkspacePreview.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreStartPage.vue",
+    "name": "CoreStartPage",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSubAgentActivityIndicator.vue",
+    "name": "CoreSubAgentActivityIndicator",
+    "signals": [
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreSubAgentDialog.vue",
+    "name": "CoreSubAgentDialog",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSubAgentEditor.vue",
+    "name": "CoreSubAgentEditor",
+    "signals": [
+      "button",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreProjectSettings.vue",
+      "core/ui/src/components/CoreSettings.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSubAgentPane.vue",
+    "name": "CoreSubAgentPane",
+    "signals": [],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSubAgentPanel.vue",
+    "name": "CoreSubAgentPanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/RightSidebarHost.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSubAgentView.vue",
+    "name": "CoreSubAgentView",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSplitContent.vue",
+      "core/ui/src/components/CoreSubAgentPane.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreSubmissionStatus.vue",
+    "name": "CoreSubmissionStatus",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreSuperAgentPanel.vue",
+    "name": "CoreSuperAgentPanel",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAppPage.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreSystemEventRow.vue",
+    "name": "CoreSystemEventRow",
+    "signals": [
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/MessageView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreToastHost.vue",
+    "name": "CoreToastHost",
+    "signals": [
+      "button",
+      "event",
+      "animation"
+    ],
+    "callers": [
+      "core/ui/src/components/WorkspaceShell.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreUpdateCard.vue",
+    "name": "CoreUpdateCard",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/CoreWebSearchEditor.vue",
+    "name": "CoreWebSearchEditor",
+    "signals": [
+      "button",
+      "select",
+      "event",
+      "grid",
+      "theme",
+      "tokens"
+    ],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/CoreWorkspaceMenu.vue",
+    "name": "CoreWorkspaceMenu",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/DirectCallView.vue",
+    "name": "DirectCallView",
+    "signals": [
+      "button",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAppPage.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/DocumentEditor.vue",
+    "name": "DocumentEditor",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/PlanLibraryView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/FbTreeItem.vue",
+    "name": "FbTreeItem",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/FolderBrowserDialog.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/FileTypeBadge.vue",
+    "name": "FileTypeBadge",
+    "signals": [
+      "grid"
+    ],
+    "callers": [
+      "core/ui/src/components/ArtifactPanel.vue",
+      "core/ui/src/components/AttachmentTray.vue",
+      "core/ui/src/components/ReferenceItems.vue",
+      "core/ui/src/components/UserReferenceText.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/FolderBrowserDialog.vue",
+    "name": "FolderBrowserDialog",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreProjectCreate.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/FullAreaActions.vue",
+    "name": "FullAreaActions",
+    "signals": [],
+    "callers": [
+      "core/ui/src/components/CoreArrangeManager.vue",
+      "core/ui/src/components/CoreSuperAgentPanel.vue",
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/PlanLibraryView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/FullAreaSidebarNav.vue",
+    "name": "FullAreaSidebarNav",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/HistoryLoadingIndicator.vue",
+    "name": "HistoryLoadingIndicator",
+    "signals": [
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/PluginModeHost.vue",
+      "core/ui/src/study/StudyView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/InlineFileComposer.vue",
+    "name": "InlineFileComposer",
+    "signals": [
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/pet/ui/SessionCard.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/InlineVisualization.vue",
+    "name": "InlineVisualization",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/MarkdownRenderer.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/LeftPluginDock.vue",
+    "name": "LeftPluginDock",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/WorkspaceShell.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/LeftSidebarShell.vue",
+    "name": "LeftSidebarShell",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/WorkspaceShell.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/LibraryConfirmDialog.vue",
+    "name": "LibraryConfirmDialog",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "animation"
+    ],
+    "callers": [
+      "core/ui/src/components/MaterialsView.vue",
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/PlanLibraryView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/LibraryHomeView.vue",
+    "name": "LibraryHomeView",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAppPage.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/LibraryNameDialog.vue",
+    "name": "LibraryNameDialog",
+    "signals": [
+      "button",
+      "dialog",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/PlanLibraryView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/LibrarySearchField.vue",
+    "name": "LibrarySearchField",
+    "signals": [],
+    "callers": [
+      "core/ui/src/components/ArtifactPanel.vue",
+      "core/ui/src/components/CoreLoadToolsEditor.vue",
+      "core/ui/src/components/CoreModelCatalog.vue",
+      "core/ui/src/components/CorePluginSystemEditor.vue",
+      "core/ui/src/components/MaterialsView.vue",
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/PlanLibraryView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/LibraryViewToggle.vue",
+    "name": "LibraryViewToggle",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/MaterialsView.vue",
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/PlanLibraryView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/MarkdownRenderer.vue",
+    "name": "MarkdownRenderer",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/components/CoreSplitPreview.vue",
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/MessageView.vue",
+      "core/ui/src/components/PlanLibraryView.vue",
+      "core/ui/src/components/WikiView.vue",
+      "core/ui/src/index.ts",
+      "core/ui/src/study/NotesManager.vue",
+      "core/ui/src/study/SelectionAssistant.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/MaterialsView.vue",
+    "name": "MaterialsView",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "animation"
+    ],
+    "callers": [
+      "core/ui/src/components/LibraryHomeView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/demo/materials-lab.ts",
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/MemoryView.vue",
+    "name": "MemoryView",
+    "signals": [
+      "button",
+      "event",
+      "animation",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/LibraryHomeView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/MessageView.vue",
+    "name": "MessageView",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/ChatThread.vue",
+      "core/ui/src/components/MessageView.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/OnboardingWizard.vue",
+    "name": "OnboardingWizard",
+    "signals": [
+      "button",
+      "select",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/OperationTrustSettings.vue",
+    "name": "OperationTrustSettings",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSettings.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PetActionPanel.vue",
+    "name": "PetActionPanel",
+    "signals": [
+      "button",
+      "checkbox",
+      "range",
+      "select",
+      "event",
+      "grid",
+      "flex"
+    ],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PetCreationPanel.vue",
+    "name": "PetCreationPanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex"
+    ],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PetWorkspacePreview.vue",
+    "name": "PetWorkspacePreview",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "flex"
+    ],
+    "callers": [],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PingCaptureSandbox.vue",
+    "name": "PingCaptureSandbox",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex"
+    ],
+    "callers": [
+      "core/ui/src/components/CorePingEditor.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PlanLibraryView.vue",
+    "name": "PlanLibraryView",
+    "signals": [
+      "button",
+      "event",
+      "animation"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/LibraryHomeView.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/PluginConfigPanel.vue",
+    "name": "PluginConfigPanel",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CorePluginSystemEditor.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/PluginMarket.vue",
+    "name": "PluginMarket",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CorePluginSystemEditor.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/PluginModeHost.vue",
+    "name": "PluginModeHost",
+    "signals": [
+      "grid",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PluginRegionBlocks.vue",
+    "name": "PluginRegionBlocks",
+    "signals": [
+      "button",
+      "checkbox",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/LeftPluginDock.vue",
+      "core/ui/src/components/PluginSystemContributions.vue",
+      "core/ui/src/components/RightSidebarHost.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/PluginRegionEntry.vue",
+    "name": "PluginRegionEntry",
+    "signals": [],
+    "callers": [
+      "core/ui/src/components/PluginRegionBlocks.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PluginsShell.vue",
+    "name": "PluginsShell",
+    "signals": [],
+    "callers": [
+      "core/ui/src/components/CoreAppPage.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/PluginSystemContributions.vue",
+    "name": "PluginSystemContributions",
+    "signals": [],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/ChatThread.vue",
+      "core/ui/src/components/CorePluginSystemEditor.vue",
+      "core/ui/src/components/WorkspaceShell.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ProjectVisualIcon.vue",
+    "name": "ProjectVisualIcon",
+    "signals": [
+      "grid",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/MemoryView.vue",
+      "core/ui/src/components/ProjectVisualPicker.vue",
+      "core/ui/src/components/SessionSidebar.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/ProjectVisualPicker.vue",
+    "name": "ProjectVisualPicker",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreProjectCreate.vue",
+      "core/ui/src/components/CoreProjectSettings.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/RailAction.vue",
+    "name": "RailAction",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/LeftSidebarShell.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ReferenceItems.vue",
+    "name": "ReferenceItems",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreAuxiliaryChat.vue",
+      "core/ui/src/components/MessageView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RemoteConnectionPanel.vue",
+    "name": "RemoteConnectionPanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/AccountShell.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarChecklist.vue",
+    "name": "RightSidebarChecklist",
+    "signals": [
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/RightSidebarHost.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarHost.vue",
+    "name": "RightSidebarHost",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarLayoutEditor.vue",
+    "name": "RightSidebarLayoutEditor",
+    "signals": [
+      "button",
+      "checkbox",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarModule.vue",
+    "name": "RightSidebarModule",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarProcesses.vue",
+    "name": "RightSidebarProcesses",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/RightSidebarHost.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarRag.vue",
+    "name": "RightSidebarRag",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/RightSidebarHost.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarRuntimeStatus.vue",
+    "name": "RightSidebarRuntimeStatus",
+    "signals": [
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarWebSearch.vue",
+    "name": "RightSidebarWebSearch",
+    "signals": [
+      "button",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/RightSidebarHost.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RightSidebarWidgetRenderer.vue",
+    "name": "RightSidebarWidgetRenderer",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/RuntimeChecklistCard.vue",
+    "name": "RuntimeChecklistCard",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/RuntimePanel.vue",
+    "name": "RuntimePanel",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "animation",
+      "reduced-motion",
+      "theme"
+    ],
+    "callers": [
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/SearchShell.vue",
+    "name": "SearchShell",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/components/CoreAppPage.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/SessionSidebar.vue",
+    "name": "SessionSidebar",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "animation",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue",
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/SettingsDraftDialog.vue",
+    "name": "SettingsDraftDialog",
+    "signals": [],
+    "callers": [
+      "core/ui/src/components/CoreProjectSettings.vue",
+      "core/ui/src/components/CoreSettings.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/SettingsShell.vue",
+    "name": "SettingsShell",
+    "signals": [
+      "button",
+      "event",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreProjectSettings.vue",
+      "core/ui/src/components/CoreSettings.vue",
+      "core/ui/src/components/PluginsShell.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/SundayLogo.vue",
+    "name": "SundayLogo",
+    "signals": [
+      "event",
+      "grid",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/SundayProgress.vue",
+    "name": "SundayProgress",
+    "signals": [],
+    "callers": [
+      "core/ui/src/components/CoreUpdateCard.vue",
+      "core/ui/src/components/PluginRegionBlocks.vue",
+      "core/ui/src/components/RightSidebarWidgetRenderer.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/SundayRange.vue",
+    "name": "SundayRange",
+    "signals": [
+      "range",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/AssistantAvatarField.vue",
+      "core/ui/src/components/CoreGeneralEditor.vue",
+      "core/ui/src/components/PetActionPanel.vue",
+      "core/ui/src/components/ThemeAreaEditor.vue",
+      "core/ui/src/components/ThemeEditor.vue",
+      "core/ui/src/components/ThemeStudio.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/demo/thinking-lab.ts",
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/SundaySegmented.vue",
+    "name": "SundaySegmented",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreModelCatalog.vue",
+      "core/ui/src/components/CorePluginSystemEditor.vue",
+      "core/ui/src/components/ThemeEditor.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/SundaySwitch.vue",
+    "name": "SundaySwitch",
+    "signals": [
+      "checkbox",
+      "switch",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue",
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue",
+      "core/ui/src/components/CoreGeneralEditor.vue",
+      "core/ui/src/components/CoreHooksEditor.vue",
+      "core/ui/src/components/CoreModelCatalog.vue",
+      "core/ui/src/components/CorePluginSystemEditor.vue",
+      "core/ui/src/components/CoreSettings.vue",
+      "core/ui/src/components/CoreSkillsEditor.vue",
+      "core/ui/src/components/ThemeStudio.vue",
+      "core/ui/src/tray/TrayPanel.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/ThemeAreaEditor.vue",
+    "name": "ThemeAreaEditor",
+    "signals": [
+      "button",
+      "range",
+      "select",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/ThemeEditor.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/ThemeEditor.vue",
+    "name": "ThemeEditor",
+    "signals": [
+      "button",
+      "range",
+      "dialog",
+      "event",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreSettings.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ThemePreview.vue",
+    "name": "ThemePreview",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/components/ThemeEditor.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ThemeStudio.vue",
+    "name": "ThemeStudio",
+    "signals": [
+      "button",
+      "checkbox",
+      "switch",
+      "range",
+      "select",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/ThinkingIntensitySlider.vue",
+    "name": "ThinkingIntensitySlider",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/CoreModelThinkingMenu.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/demo/thinking-lab.ts",
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/TitleBar.vue",
+    "name": "TitleBar",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/UiSelect.vue",
+    "name": "UiSelect",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue",
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkSettings.vue",
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/QuickPanel.vue",
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/SecurityView.vue",
+      "core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TransferView.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/NodeEditCard.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/SchemaNodeEditor.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNode.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowPoliciesPanel.vue",
+      "core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue",
+      "core/ui/src/components/ArtifactPanel.vue",
+      "core/ui/src/components/CoreArrangeManager.vue",
+      "core/ui/src/components/CoreGeneralEditor.vue",
+      "core/ui/src/components/CoreHooksEditor.vue",
+      "core/ui/src/components/CoreModelCatalog.vue",
+      "core/ui/src/components/CorePetEditor.vue",
+      "core/ui/src/components/CorePingEditor.vue",
+      "core/ui/src/components/CoreSettings.vue",
+      "core/ui/src/components/CoreSkillsEditor.vue",
+      "core/ui/src/components/CoreSubAgentEditor.vue",
+      "core/ui/src/components/CoreSuperAgentPanel.vue",
+      "core/ui/src/components/CoreWebSearchEditor.vue",
+      "core/ui/src/components/DirectCallView.vue",
+      "core/ui/src/components/OnboardingWizard.vue",
+      "core/ui/src/components/PluginConfigPanel.vue",
+      "core/ui/src/components/RightSidebarWebSearch.vue",
+      "core/ui/src/components/ThemeAreaEditor.vue",
+      "core/ui/src/components/ThemeStudio.vue",
+      "core/ui/src/index.ts",
+      "core/ui/src/pet/ui/PetPreview.vue",
+      "core/ui/src/pet/ui/PetSettingsPanel.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/components/UserReferenceText.vue",
+    "name": "UserReferenceText",
+    "signals": [
+      "event",
+      "flex"
+    ],
+    "callers": [
+      "core/ui/src/components/MessageView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/WikiView.vue",
+    "name": "WikiView",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/LibraryHomeView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/WorkspaceShell.vue",
+    "name": "WorkspaceShell",
+    "signals": [
+      "button",
+      "event",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue",
+      "core/ui/src/index.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/components/WritingBlock.vue",
+    "name": "WritingBlock",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/components/MarkdownRenderer.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/computerUse/ComputerUseCapsule.vue",
+    "name": "ComputerUseCapsule",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/computerUse/ComputerUseOverlay.vue"
+    ],
+    "previewCallers": [
+      "core/desktop/src/bar-preview.ts",
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/computerUse/ComputerUseCursor.vue",
+    "name": "ComputerUseCursor",
+    "signals": [
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/computerUse/ComputerUseOverlay.vue"
+    ],
+    "previewCallers": [
+      "core/desktop/src/bar-preview.ts"
+    ]
+  },
+  {
+    "path": "core/ui/src/computerUse/ComputerUseOverlay.vue",
+    "name": "ComputerUseOverlay",
+    "signals": [
+      "event",
+      "animation"
+    ],
+    "callers": [
+      "core/desktop/src/computer-use.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/design-system/Gallery.vue",
+    "name": "Gallery",
+    "signals": [
+      "button",
+      "checkbox",
+      "switch",
+      "range",
+      "select",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/main.ts"
+    ]
+  },
+  {
+    "path": "core/ui/src/design-system/SplitWorkspacePreview.vue",
+    "name": "SplitWorkspacePreview",
+    "signals": [
+      "tokens"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/guide/GuideDemoSession.vue",
+    "name": "GuideDemoSession",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/guide/GuideHost.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/guide/GuideHost.vue",
+    "name": "GuideHost",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/guide/GuidePractice.vue",
+    "name": "GuidePractice",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/guide/GuideHost.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/guide/GuideStoryArt.vue",
+    "name": "GuideStoryArt",
+    "signals": [
+      "event",
+      "grid",
+      "animation",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/guide/GuideHost.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/overlay/FloaterMarks.vue",
+    "name": "FloaterMarks",
+    "signals": [
+      "event",
+      "flex",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/ui/src/overlay/OverlaySurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/overlay/OverlaySurface.vue",
+    "name": "OverlaySurface",
+    "signals": [
+      "button",
+      "event",
+      "animation",
+      "reduced-motion"
+    ],
+    "callers": [
+      "core/desktop/src/overlay.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/overlay/SvgMarkShapes.vue",
+    "name": "SvgMarkShapes",
+    "signals": [],
+    "callers": [
+      "core/ui/src/overlay/OverlaySurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/CaptureApp.vue",
+    "name": "CaptureApp",
+    "signals": [
+      "button",
+      "event",
+      "grid"
+    ],
+    "callers": [
+      "core/desktop/src/capture.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/CaptureEditor.vue",
+    "name": "CaptureEditor",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex"
+    ],
+    "callers": [
+      "core/ui/src/components/PingCaptureSandbox.vue",
+      "core/ui/src/pet/ui/CaptureApp.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetAnimLab.vue",
+    "name": "PetAnimLab",
+    "signals": [
+      "button",
+      "event",
+      "flex"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/desktop/src/pet-animlab.ts"
+    ]
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetBubbles.vue",
+    "name": "PetBubbles",
+    "signals": [
+      "button",
+      "event",
+      "grid",
+      "flex",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PetSurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetContextMenu.vue",
+    "name": "PetContextMenu",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PetSurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetHotkeyField.vue",
+    "name": "PetHotkeyField",
+    "signals": [
+      "button",
+      "event",
+      "flex"
+    ],
+    "callers": [
+      "core/ui/src/components/CorePetEditor.vue",
+      "core/ui/src/pet/ui/PetSettingsPanel.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetNavLab.vue",
+    "name": "PetNavLab",
+    "signals": [
+      "button",
+      "checkbox",
+      "event"
+    ],
+    "callers": [],
+    "previewCallers": [
+      "core/desktop/src/pet-navlab.ts"
+    ]
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetPreview.vue",
+    "name": "PetPreview",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "dialog",
+      "event",
+      "grid",
+      "flex"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PetSurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetSettingsPanel.vue",
+    "name": "PetSettingsPanel",
+    "signals": [
+      "button",
+      "checkbox",
+      "select",
+      "dialog",
+      "event",
+      "grid",
+      "flex"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PetSurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetStage.vue",
+    "name": "PetStage",
+    "signals": [],
+    "callers": [
+      "core/ui/src/pet/ui/PetSurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PetSurface.vue",
+    "name": "PetSurface",
+    "signals": [
+      "button",
+      "event",
+      "grid"
+    ],
+    "callers": [
+      "core/desktop/src/pet.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PingCardWindow.vue",
+    "name": "PingCardWindow",
+    "signals": [],
+    "callers": [
+      "core/desktop/src/pingCard.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PingMarkerFx.vue",
+    "name": "PingMarkerFx",
+    "signals": [
+      "grid"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PingSurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/PingRing.vue",
+    "name": "PingRing",
+    "signals": [
+      "event",
+      "animation",
+      "reduced-motion",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PingSurface.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/demo/composite-lab.ts",
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/pet/ui/PingSurface.vue",
+    "name": "PingSurface",
+    "signals": [
+      "event"
+    ],
+    "callers": [
+      "core/desktop/src/ping.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/SessionCard.vue",
+    "name": "SessionCard",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PingCardWindow.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/pet/ui/SessionPicker.vue",
+    "name": "SessionPicker",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/pet/ui/PetSurface.vue",
+      "core/ui/src/pet/ui/PingSurface.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/MarksPanel.vue",
+    "name": "MarksPanel",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/study/StudyView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/NotesManager.vue",
+    "name": "NotesManager",
+    "signals": [
+      "button",
+      "event",
+      "reduced-motion",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/study/StudyView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/SelectionAssistant.vue",
+    "name": "SelectionAssistant",
+    "signals": [
+      "button",
+      "dialog",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/app/LamToolsApp.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/StudyGraph.vue",
+    "name": "StudyGraph",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/study/StudyView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/StudyNoteReferences.vue",
+    "name": "StudyNoteReferences",
+    "signals": [],
+    "callers": [
+      "core/ui/src/study/NotesManager.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/StudyNoteRelationGraph.vue",
+    "name": "StudyNoteRelationGraph",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/study/StudyView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/StudyNoteTree.vue",
+    "name": "StudyNoteTree",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/ui/src/study/StudySidebarHost.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/StudySidebar.vue",
+    "name": "StudySidebar",
+    "signals": [
+      "button",
+      "event",
+      "flex",
+      "reduced-motion",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/ui/src/study/StudySidebarHost.vue"
+    ],
+    "previewCallers": [
+      "core/ui/src/design-system/Gallery.vue"
+    ]
+  },
+  {
+    "path": "core/ui/src/study/StudySidebarHost.vue",
+    "name": "StudySidebarHost",
+    "signals": [],
+    "callers": [
+      "core/ui/src/study/StudyView.vue"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/study/StudyView.vue",
+    "name": "StudyView",
+    "signals": [
+      "button",
+      "event"
+    ],
+    "callers": [
+      "core/src/lamtools_core/plugins/bundled/study/ui/index.ts",
+      "core/ui/src/plugins/bundled.ts"
+    ],
+    "previewCallers": []
+  },
+  {
+    "path": "core/ui/src/tray/TrayPanel.vue",
+    "name": "TrayPanel",
+    "signals": [
+      "button",
+      "switch",
+      "event",
+      "grid",
+      "flex",
+      "theme",
+      "tokens"
+    ],
+    "callers": [
+      "core/desktop/src/tray.ts"
+    ],
+    "previewCallers": []
+  }
+]

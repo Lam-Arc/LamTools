@@ -388,7 +388,9 @@ function handleDocumentKeyDown(event: KeyboardEvent): void {
   if (event.key === 'Escape' || event.key === 'Tab') closeContextMenu()
 }
 
-function handleDocumentScroll(): void {
+function handleDocumentScroll(event: Event): void {
+  // user:“确保视觉、功能和交互不退化”+(菜单自身滚动不关闭菜单，页面滚动仍关闭浮层)。
+  if (isContextMenuElement(event.target)) return
   closeContextMenu()
 }
 

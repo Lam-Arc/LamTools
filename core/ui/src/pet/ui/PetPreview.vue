@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// user:“确保视觉、功能和交互不退化”+(调试及命中区域勾选复用共享控件，保留原有状态与确认行为)。
 /**
  * 导入预览器（也是角色调试器）。
  *
@@ -7,6 +8,9 @@
  * (确认添加后才创建真实桌面实例；取消不留残留。)
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(独立桌宠预览也加载共享控件样式)。
+import '@/styles/sunday-controls.css'
+import UiSelect from '@/components/UiSelect.vue'
 import { PetWorld } from '../engine/world.ts'
 import { buildTestArena } from '../engine/terrain.ts'
 import { createDefaultSettings } from '../engine/pet.ts'
@@ -28,6 +32,9 @@ const world = shallowRef<PetWorld | null>(null)
 const petId = 'preview'
 const running = ref(true)
 const actionList = ['idle', 'walk', 'jump', 'jump_happy', 'climb', 'hang', 'fall', 'dance', 'interact', 'rest']
+// user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(桌宠预览复用同一套动作下拉，保留测试与确认行为)。
+const actionOptions = actionList.map(value => ({ value, label: value }))
+const doubleActionOptions = [{ value: '', label: '（无）' }, ...actionOptions]
 const selectedAction = ref('idle')
 const mode = ref<'free' | 'action' | 'target' | 'hitbox'>('free')
 /** Hitbox 可视化编辑：归一化坐标存在这里，确认时写进角色记录。 */
@@ -490,9 +497,7 @@ async function confirm(): Promise<void> {
               <button type="button" :class="{ active: mode === 'hitbox' }" @click="mode = 'hitbox'">Hitbox 编辑</button>
             </div>
             <div v-if="mode === 'action'" class="preview__row">
-              <select v-model="selectedAction">
-                <option v-for="action in actionList" :key="action" :value="action">{{ action }}</option>
-              </select>
+              <UiSelect v-model="selectedAction" :options="actionOptions" aria-label="测试动作" data-pet-preview-action :menu-min-width="120" />
               <button type="button" @click="playAction">执行</button>
             </div>
             <div class="preview__row">
@@ -520,27 +525,16 @@ async function confirm(): Promise<void> {
                 @change="updateSelectedHitbox({ name: ($event.target as HTMLInputElement).value })"
               >
             </label>
-            <label>单击动作
-              <select
-                :value="hitboxes[selectedHitbox]?.action"
-                @change="updateSelectedHitbox({ action: ($event.target as HTMLSelectElement).value })"
-              >
-                <option v-for="action in actionList" :key="action" :value="action">{{ action }}</option>
-              </select>
-            </label>
-            <label>双击动作
-              <select
-                :value="hitboxes[selectedHitbox]?.doubleAction || ''"
-                @change="updateSelectedHitbox({ doubleAction: ($event.target as HTMLSelectElement).value || undefined })"
-              >
-                <option value="">（无）</option>
-                <option v-for="action in actionList" :key="action" :value="action">{{ action }}</option>
-              </select>
-            </label>
+            <div class="preview__select-row"><span>单击动作</span>
+              <UiSelect :model-value="hitboxes[selectedHitbox]?.action || ''" :options="actionOptions" aria-label="单击动作" data-pet-preview-hitbox-action :menu-min-width="120" @update:model-value="updateSelectedHitbox({ action: $event })" />
+            </div>
+            <div class="preview__select-row"><span>双击动作</span>
+              <UiSelect :model-value="hitboxes[selectedHitbox]?.doubleAction || ''" :options="doubleActionOptions" aria-label="双击动作" data-pet-preview-hitbox-double :menu-min-width="120" @update:model-value="updateSelectedHitbox({ doubleAction: $event || undefined })" />
+            </div>
             <label>
               <input
                 :checked="hitboxes[selectedHitbox]?.enabled"
-                type="checkbox"
+                type="checkbox" class="sunday-checkbox"
                 @change="updateSelectedHitbox({ enabled: ($event.target as HTMLInputElement).checked })"
               > 启用这个区域
             </label>
@@ -553,10 +547,10 @@ async function confirm(): Promise<void> {
 
           <div class="preview__group">
             <div class="preview__label">调试叠层</div>
-            <label><input v-model="debug.terrain" type="checkbox"> 地形线</label>
-            <label><input v-model="debug.colliders" type="checkbox"> 碰撞体 / Hitbox</label>
-            <label><input v-model="debug.path" type="checkbox"> 寻路路径</label>
-            <label><input v-model="debug.velocity" type="checkbox"> 速度向量</label>
+            <label><input v-model="debug.terrain" type="checkbox" class="sunday-checkbox"> 地形线</label>
+            <label><input v-model="debug.colliders" type="checkbox" class="sunday-checkbox"> 碰撞体 / Hitbox</label>
+            <label><input v-model="debug.path" type="checkbox" class="sunday-checkbox"> 寻路路径</label>
+            <label><input v-model="debug.velocity" type="checkbox" class="sunday-checkbox"> 速度向量</label>
           </div>
 
           <div class="preview__group">
@@ -735,7 +729,8 @@ async function confirm(): Promise<void> {
   border-color: rgba(126, 180, 255, 0.6);
 }
 
-.preview__group select,
+.preview__select-row { display: flex; align-items: center; gap: 6px; }
+.preview__select-row .ui-select, .preview__row .ui-select { width: 110px; }
 .preview__group input[type='number'] {
   padding: 3px 6px;
   border-radius: 6px;
