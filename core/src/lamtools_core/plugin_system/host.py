@@ -92,6 +92,10 @@ class PluginHost:
         for root in self.roots:
             if not root.is_dir():
                 continue
+            for prefix in (".update-", ".backup-"):
+                for stale in root.glob(f"{prefix}*"):
+                    if stale.is_dir():
+                        shutil.rmtree(stale, ignore_errors=True)
             for manifest_path in sorted(root.glob(f"*/{MANIFEST_FILENAME}")):
                 if manifest_path.parent.name.startswith("."):
                     # 点开头目录（含历史 .update-/.backup- 残留）不是插件。
@@ -237,7 +241,7 @@ class PluginHost:
             raise ValueError('; '.join(problems))
         existing = self.get(incoming.name)
         if existing is None:
-            raise ValueError(f"plugin '{incoming.name}' is not installed")
+            raise ValueError(f"plugin '{incoming.name}' is not installed; update cannot change the name")
         self._assert_mutable(existing)
         from .storage import CodeTransaction
         transaction = CodeTransaction(existing.root, source_path, self.data_path(incoming.name))

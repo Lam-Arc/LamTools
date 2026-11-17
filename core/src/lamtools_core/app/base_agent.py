@@ -820,6 +820,9 @@ class CoreBaseAgentKit:
                     if plan is not None and plan.agent.tools is not None
                     else None
                 )
+            self._apply_plugin_agent_approval(
+                plan.agent.approval if plan is not None else None
+            )
             # user:“插件可以自定义整个 Agent”+提示词和工具之外，
             # 审批口径也跟随同一个生效的插件 Agent。
             self._apply_plugin_agent_approval(
@@ -929,7 +932,8 @@ class CoreBaseAgentKit:
             record(key, label, part.content)
         push(_IMAGE_FIDELITY_GUIDANCE, blank_before=True)
         record("image_fidelity", "image fidelity", _IMAGE_FIDELITY_GUIDANCE)
-        if self.prompt_waterfall is not None:
+        prompt_waterfall = getattr(self, "prompt_waterfall", None)
+        if prompt_waterfall is not None:
             from lamtools_core.plugin_system.prompt_waterfall import (
                 PromptAssembly,
                 PromptContext,
@@ -961,7 +965,7 @@ class CoreBaseAgentKit:
                 ],
             )
             try:
-                assembly = self.prompt_waterfall.assemble(context, assembly)
+                assembly = prompt_waterfall.assemble(context, assembly)
             except Exception:
                 # A broken plugin handler must not take down the turn; the
                 # built-in prompt remains usable and the error is in the log.

@@ -574,3 +574,4 @@ The definition of done is the loop above passing, not the files looking right.
 - Do not claim a capability works until you have exercised it once through the host, after a reload or restart.
 - Report what you did not build: if the request implies a capability you left out, say so — the missing part is a deliverable, not a footnote.
 - If the request needs something the host does not offer, say what is missing instead of faking it.
+- After installing or updating a plugin, restart the app before judging the result; the running backend keeps the old modules.
