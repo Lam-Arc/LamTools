@@ -10,6 +10,7 @@ description = "Composition layer: single-writer lock and the core.app_server.v1 
 sunday-protocol.workspace = true
 sunday-store.workspace = true
 sunday-agent.workspace = true
+sunday-context.workspace = true
 sunday-platform.workspace = true
 sunday-tools.workspace = true
 serde.workspace = true

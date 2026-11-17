@@ -182,6 +182,7 @@ impl SubAgentHub {
                     .into(),
             ),
             prompt: record.guide.clone(),
+            history: Vec::new(),
         };
 
         let outcome = run_turn(&env, input, budget).await;

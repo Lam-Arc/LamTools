@@ -224,6 +224,27 @@ impl CoreRunner {
             .collect()
     }
 
+    /// What the model has already been told, rebuilt from the journal.
+    ///
+    /// Rebuilt rather than stored a second time: the journal is the only durable record of
+    /// what actually ran, and a parallel transcript table could disagree with it. A long
+    /// conversation is compacted at load, so the request cannot grow without bound.
+    fn history_for(&self, thread: &str) -> Vec<sunday_protocol::Message> {
+        let events = {
+            let store = self.store.lock().unwrap();
+            store.events(thread, 0).unwrap_or_default()
+        };
+        let start = events.len().saturating_sub(crate::transcript::MAX_EVENTS);
+        let mut messages = crate::transcript::messages(&events[start..]);
+        let policy = sunday_context::Policy::default();
+        if let Ok(Some(compaction)) =
+            sunday_context::compact(&messages, &policy, &crate::transcript::OmittedNote)
+        {
+            messages = compaction.messages;
+        }
+        messages
+    }
+
     fn cancel_token(&self, thread: &str) -> CancelToken {
         let mut map = self.cancel.lock().unwrap();
         map.entry(thread.to_owned()).or_default().clone()
@@ -411,6 +432,10 @@ impl TurnRunner for CoreRunner {
         } else {
             String::new()
         };
+        // user:“Rust Core和 Python Core 等价吗？可以安全切换吗”+(Python 每轮把历史交给模型；
+        // 这里原来只发一条 user，等于每句话都是新对话。历史从日志重建，读在受理之前，
+        // 这样本轮自己那条指令不会被算进历史)。
+        let history = self.history_for(thread_id);
         // Acceptance must be a real journal event with a real seq: the client
         // treats it as authoritative and orders everything after it.
         let accept_seq = {
@@ -504,6 +529,7 @@ impl TurnRunner for CoreRunner {
             model_id: self.model_id.clone(),
             system: self.system.clone(),
             prompt: prompt.to_owned(),
+            history,
         };
 
         let runtime = tokio::runtime::Builder::new_current_thread()

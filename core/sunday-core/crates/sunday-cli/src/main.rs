@@ -190,6 +190,7 @@ async fn run_once(
         model_id: "scripted".into(),
         system: Some("You are Sunday. Use the tools you are given.".into()),
         prompt: prompt.to_owned(),
+        history: Vec::new(),
     };
 
     match sunday_agent::run_turn(&run_env, input, RunBudget::default()).await {

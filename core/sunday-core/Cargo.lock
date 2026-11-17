@@ -1337,6 +1337,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sunday-agent",
+ "sunday-context",
  "sunday-platform",
  "sunday-protocol",
  "sunday-store",

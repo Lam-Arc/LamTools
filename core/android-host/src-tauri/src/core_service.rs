@@ -352,6 +352,7 @@ impl TurnRunner for AndroidRunner {
             model_id: self.model_id.clone(),
             system: Some("You are Sunday. Use the tools you are given.".into()),
             prompt: prompt.to_owned(),
+            history: Vec::new(),
         };
 
         let runtime = tokio::runtime::Builder::new_current_thread()

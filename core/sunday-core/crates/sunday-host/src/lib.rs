@@ -19,3 +19,4 @@ pub mod private_file;
 pub mod provider;
 pub mod runner;
 pub mod token;
+pub mod transcript;

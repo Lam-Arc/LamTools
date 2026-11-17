@@ -887,6 +887,16 @@ impl RecordingModel {
         let last = seen.last().expect("the model was never called");
         last.last().cloned().expect("the request carried no message")
     }
+
+    /// Everything the model was given on its last call, in order.
+    fn last_request(&self) -> Vec<Message> {
+        self.seen
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 #[async_trait::async_trait]
@@ -992,6 +1002,54 @@ fn an_attached_text_file_is_read_by_the_model() {
     // The transcript shows what the user wrote, not the briefing that was assembled for
     // the model: internal prompt text on screen reads as if the user had typed it.
     assert_eq!(accepted["text"], "what is the goal in this file?");
+}
+
+/// A conversation has to survive its own turn boundary.
+///
+/// user:“Rust Core和 Python Core 等价吗？可以安全切换吗”+(Python 每轮把历史交给模型；这个核心
+/// 原来每轮只发一条 user，第二句话就忘了第一句。这条测试钉住的是「第二轮能看到第一轮」)。
+#[test]
+fn a_second_turn_carries_the_first_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = Arc::new(RecordingModel::new(vec![
+        text_turn("first answer"),
+        text_turn("second answer"),
+    ]));
+    let (runner, _store) = runner_with_files(
+        dir.path(),
+        Arc::clone(&model) as Arc<dyn Model>,
+        false,
+        false,
+    );
+    let (_frames, sink) = recorder();
+
+    runner.start_turn(THREAD, "first question", "cm-1", &sink).unwrap();
+    runner
+        .start_turn(THREAD, "second question", "cm-2", &sink)
+        .unwrap();
+
+    let request = model.last_request();
+    let said = |wanted: &str| {
+        request.iter().any(|message| match message {
+            Message::User { content } => content == wanted,
+            _ => false,
+        })
+    };
+    let answered = |wanted: &str| {
+        request.iter().any(|message| match message {
+            Message::Assistant { content } => content == wanted,
+            _ => false,
+        })
+    };
+    assert!(said("second question"), "{request:?}");
+    assert!(
+        said("first question"),
+        "the earlier question was dropped: {request:?}"
+    );
+    assert!(
+        answered("first answer"),
+        "the earlier answer was dropped: {request:?}"
+    );
 }
 
 /// A model that can see gets the image itself.

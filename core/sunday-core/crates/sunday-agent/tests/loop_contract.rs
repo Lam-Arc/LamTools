@@ -127,6 +127,7 @@ fn input(thread: &str) -> TurnInput {
         model_id: "m".into(),
         system: Some("be careful".into()),
         prompt: "do it".into(),
+        history: Vec::new(),
     }
 }
 

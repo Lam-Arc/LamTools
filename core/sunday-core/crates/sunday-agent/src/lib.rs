@@ -63,6 +63,11 @@ pub struct TurnInput {
     pub model_id: String,
     pub system: Option<String>,
     pub prompt: String,
+    /// What was said before this turn, oldest first.
+    ///
+    /// user:“Rust Core和 Python Core 等价吗？可以安全切换吗”+(Python 每轮把历史交给模型；
+    /// 这里原来只发一条 user，等于每句话都是新的对话。历史由调用方从日志重建，核心不自存)。
+    pub history: Vec<sunday_protocol::Message>,
 }
 
 /// What happened to one tool call.
@@ -320,6 +325,9 @@ pub async fn run_turn_with_images(
             content: system.clone(),
         });
     }
+    // The conversation so far sits after the system prompt and before the new
+    // instruction, which is the only order a provider accepts.
+    messages.extend(input.history.iter().cloned());
     messages.push(if images.is_empty() {
         Message::User {
             content: input.prompt,

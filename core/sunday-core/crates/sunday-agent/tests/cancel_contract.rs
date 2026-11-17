@@ -98,6 +98,7 @@ fn input(thread: &str) -> TurnInput {
         model_id: "slow".into(),
         system: None,
         prompt: "do something long".into(),
+        history: Vec::new(),
     }
 }
 
