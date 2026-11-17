@@ -1,8 +1,8 @@
-"""Parse module overrides from a plugin manifest.
+"""Parse module replacements, function patches and frontend overrides.
 
 user:“双键族”+``lamtools_core.*`` 键走后端 boot 查找器；``@/...`` 键是
-前端模块（import map 替换，Core 返回页面时注入）。同一目标只能一个插件
-接管，安全模式跳过全部覆盖。
+前端模块（import map 替换，Core 返回页面时注入）。后端键还可以写
+``模块:函数``，只替换一个函数。同一目标只能一个插件接管，安全模式跳过。
 """
 
 from __future__ import annotations
@@ -26,15 +26,21 @@ class PluginOverrideSpec:
     target: str
     path: Path
     root: Path
+    function: str = ""
 
     @property
     def is_frontend(self) -> bool:
         return self.target.startswith(FRONTEND_KEY_PREFIX)
 
+    @property
+    def is_function_patch(self) -> bool:
+        return bool(self.function)
+
 
 @dataclass
 class OverrideAssembly:
     overrides: dict[str, PluginOverrideSpec] = field(default_factory=dict)
+    patches: dict[str, dict[str, PluginOverrideSpec]] = field(default_factory=dict)
     errors: list[dict[str, Any]] = field(default_factory=list)
     skipped: bool = False
 
@@ -45,21 +51,30 @@ class OverrideAssembly:
         return {k: v for k, v in self.overrides.items() if not v.is_frontend}
 
 
-def _validate_target(plugin: str, value: Any) -> str:
-    target = str(value or "").strip()
+def _validate_target(plugin: str, value: Any) -> tuple[str, str]:
+    raw = str(value or "").strip()
+    target, _separator, function = raw.partition(":")
     from lamtools_boot.contract import protected_target
+
     if protected_target(target):
         raise CapabilityError(plugin, f"recovery kernel cannot be overridden: {target}")
     if target.startswith(FRONTEND_KEY_PREFIX):
-        return target
+        if function:
+            raise CapabilityError(
+                plugin,
+                f"frontend overrides are module-level; function patch is not supported: {raw}",
+            )
+        return target, ""
     if not target.startswith(HOST_MODULE_PREFIX):
         raise CapabilityError(
             plugin,
             f"override target must start with '{HOST_MODULE_PREFIX}' or '{FRONTEND_KEY_PREFIX}': {target or '(missing)'}",
         )
     if any(not part.isidentifier() for part in target.split(".")):
-        raise CapabilityError(plugin, f"override target is not a module name: {target}")
-    return target
+        raise CapabilityError(plugin, f"override target is not a module name: {raw}")
+    if function and not function.isidentifier():
+        raise CapabilityError(plugin, f"override function is not a name: {raw}")
+    return target, function
 
 
 def read_overrides(manifest: PluginManifest) -> list[PluginOverrideSpec]:
@@ -71,13 +86,14 @@ def read_overrides(manifest: PluginManifest) -> list[PluginOverrideSpec]:
     specs: list[PluginOverrideSpec] = []
     seen: set[str] = set()
     for raw_target, raw_path in raw.items():
-        target = _validate_target(manifest.name, raw_target)
-        if target in seen:
-            raise CapabilityError(manifest.name, f"duplicate override target '{target}'")
-        seen.add(target)
+        target, function = _validate_target(manifest.name, raw_target)
+        key = f"{target}:{function}" if function else target
+        if key in seen:
+            raise CapabilityError(manifest.name, f"duplicate override target '{key}'")
+        seen.add(key)
         text = str(raw_path or "").strip()
         if not text:
-            raise CapabilityError(manifest.name, f"override '{target}' has no file")
+            raise CapabilityError(manifest.name, f"override '{key}' has no file")
         if not text.startswith("./"):
             raise CapabilityError(
                 manifest.name, f"override path must start with './': {text}"
@@ -101,6 +117,7 @@ def read_overrides(manifest: PluginManifest) -> list[PluginOverrideSpec]:
                 target=target,
                 path=candidate,
                 root=manifest.root,
+                function=function,
             )
         )
     return specs
@@ -111,7 +128,7 @@ def assemble_overrides(
     *,
     safe_mode: bool = False,
 ) -> OverrideAssembly:
-    """Build the target-to-file map, reporting conflicts explicitly."""
+    """Build the module and function maps, reporting conflicts explicitly."""
     assembly = OverrideAssembly(skipped=safe_mode)
     if safe_mode:
         return assembly
@@ -124,6 +141,46 @@ def assemble_overrides(
             assembly.errors.append({"plugin": manifest.name, "error": exc.message})
             continue
         for spec in specs:
+            if spec.function:
+                module_owner = assembly.overrides.get(spec.target)
+                if module_owner is not None:
+                    assembly.errors.append(
+                        {
+                            "plugin": manifest.name,
+                            "error": (
+                                f"module '{spec.target}' is replaced by plugin "
+                                f"'{module_owner.plugin}'; function "
+                                f"'{spec.function}' skipped"
+                            ),
+                        }
+                    )
+                    continue
+                patches = assembly.patches.setdefault(spec.target, {})
+                existing = patches.get(spec.function)
+                if existing is not None:
+                    assembly.errors.append(
+                        {
+                            "plugin": manifest.name,
+                            "error": (
+                                f"function '{spec.target}:{spec.function}' is already "
+                                f"patched by plugin '{existing.plugin}'"
+                            ),
+                        }
+                    )
+                    continue
+                patches[spec.function] = spec
+                continue
+            if assembly.patches.get(spec.target):
+                assembly.errors.append(
+                    {
+                        "plugin": manifest.name,
+                        "error": (
+                            f"module '{spec.target}' has function patches; "
+                            "whole-module replacement skipped"
+                        ),
+                    }
+                )
+                continue
             existing = assembly.overrides.get(spec.target)
             if existing is not None:
                 assembly.errors.append(
@@ -144,11 +201,21 @@ def override_paths(assembly: OverrideAssembly) -> dict[str, Path]:
     return {target: spec.path for target, spec in assembly.overrides.items()}
 
 
+def patch_paths(assembly: OverrideAssembly) -> dict[str, dict[str, Path]]:
+    return {
+        module: {function: spec.path for function, spec in patches.items()}
+        for module, patches in assembly.patches.items()
+    }
+
+
 __all__ = [
+    "FRONTEND_KEY_PREFIX",
+    "FRONTEND_SUFFIXES",
     "HOST_MODULE_PREFIX",
     "OverrideAssembly",
     "PluginOverrideSpec",
     "assemble_overrides",
     "override_paths",
+    "patch_paths",
     "read_overrides",
 ]

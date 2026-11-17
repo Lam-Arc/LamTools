@@ -1,7 +1,7 @@
-"""Load and install module overrides before ``lamtools_core`` is imported.
+"""Load and install module replacements and function patches before import.
 
-user:“禁用我们的某一个文件，自己提供上去”+启动时先读覆盖表，再导入宿主；
-安全模式跳过全部覆盖。这里只用标准库，不能导入 lamtools_core。
+user:“禁用我们的某一段函数，自己提供一个函数上去”+启动时先读覆盖表，再导入
+宿主；函数补丁在模块执行完成、调用方绑定名字之前应用。安全模式跳过全部覆盖。
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-from .import_hook import OverrideFinder, install_overrides
 from .contract import protected_target
+from .import_hook import OverrideFinder, OverrideTable, install_overrides
 
 SAFE_MODE_ENV = "LAMTOOLS_SAFE_MODE"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -128,22 +128,40 @@ def _is_enabled(state: Mapping[str, Any], name: str, default: bool = True) -> bo
     return default
 
 
+def _parse_target(name: str, raw: Any, errors: list[str]) -> tuple[str, str] | None:
+    target = str(raw or "").strip()
+    module, _separator, function = target.partition(":")
+    if not module.startswith(HOST_PREFIX):
+        errors.append(f"{name}: override target must start with '{HOST_PREFIX}': {target}")
+        return None
+    if protected_target(module):
+        errors.append(f"{name}: recovery kernel cannot be overridden: {module}")
+        return None
+    if any(not part.isidentifier() for part in module.split(".")):
+        errors.append(f"{name}: override target is not a module name: {target}")
+        return None
+    if function and not function.isidentifier():
+        errors.append(f"{name}: override function is not a name: {target}")
+        return None
+    return module, function
+
+
 def load_boot_overrides(
     *,
     environ: Mapping[str, str] | None = None,
     roots: list[Path | str] | None = None,
     state_path: Path | str | None = None,
-) -> tuple[dict[str, Path], list[str]]:
-    """Return ``{module_name: plugin_file}`` plus human-readable problems."""
+) -> tuple[OverrideTable, list[str]]:
+    """Return the override table plus human-readable problems."""
     env = os.environ if environ is None else environ
     if _truthy(env.get(SAFE_MODE_ENV)):
-        return {}, []
+        return OverrideTable(), []
 
     plugin_roots = [Path(root) for root in roots] if roots is not None else _default_roots(env)
     state = _read_json(Path(state_path)) if state_path is not None else _read_json(
         _default_state_path(env) or Path("__missing__")
     )
-    overrides: dict[str, Path] = {}
+    table = OverrideTable()
     errors: list[str] = []
     for root in plugin_roots:
         if not root.is_dir():
@@ -151,23 +169,23 @@ def load_boot_overrides(
         for manifest_path in sorted(root.glob("*/plugin.json")):
             data = _read_json(manifest_path)
             name = str(data.get("name") or manifest_path.parent.name).strip()
-            if not name or not _is_enabled(state, name, data.get("defaultEnabled") is not False):
+            if not name or not _is_enabled(
+                state, name, data.get("defaultEnabled") is not False
+            ):
                 continue
             declared = data.get("overrides")
             if not isinstance(declared, dict):
                 continue
             plugin_root = manifest_path.parent.resolve()
             for raw_target, raw_value in declared.items():
-                target = str(raw_target or "").strip()
-                if target.startswith("@/"):
+                target_text = str(raw_target or "").strip()
+                if target_text.startswith("@/"):
                     # 前端键走 import map（Core 返回页面时注入），与 boot 无关。
                     continue
-                if not target.startswith(HOST_PREFIX):
-                    errors.append(f"{name}: override target must start with '{HOST_PREFIX}': {target}")
+                parsed = _parse_target(name, target_text, errors)
+                if parsed is None:
                     continue
-                if protected_target(target):
-                    errors.append(f"{name}: recovery kernel cannot be overridden: {target}")
-                    continue
+                module, function = parsed
                 text = str(raw_value or "").strip()
                 if not text.startswith("./"):
                     errors.append(f"{name}: override path must start with './': {text}")
@@ -179,11 +197,30 @@ def load_boot_overrides(
                 if candidate.suffix.lower() != ".py" or not candidate.is_file():
                     errors.append(f"{name}: override file is missing or not Python: {text}")
                     continue
-                if target in overrides:
-                    errors.append(f"{name}: module '{target}' is already overridden")
-                    continue
-                overrides[target] = candidate
-    return overrides, errors
+                if function:
+                    if module in table.modules:
+                        errors.append(
+                            f"{name}: module '{module}' is replaced; function patch '{function}' skipped"
+                        )
+                        continue
+                    patches = table.patches.setdefault(module, {})
+                    if function in patches:
+                        errors.append(
+                            f"{name}: function '{module}:{function}' is already patched"
+                        )
+                        continue
+                    patches[function] = candidate
+                else:
+                    if table.patches.get(module):
+                        errors.append(
+                            f"{name}: module '{module}' has function patches; whole-module replacement skipped"
+                        )
+                        continue
+                    if module in table.modules:
+                        errors.append(f"{name}: module '{module}' is already overridden")
+                        continue
+                    table.modules[module] = candidate
+    return table, errors
 
 
 def apply_boot_overrides(
@@ -193,15 +230,16 @@ def apply_boot_overrides(
     state_path: Path | str | None = None,
 ) -> OverrideFinder | None:
     """Install the finder and return it, or ``None`` when there is nothing to do."""
-    overrides, errors = load_boot_overrides(
+    table, errors = load_boot_overrides(
         environ=environ, roots=roots, state_path=state_path
     )
     for error in errors:
         _logger.warning("[plugin-overrides] %s", error)
-    if not overrides:
+    if table.is_empty():
         return None
-    _logger.info("[plugin-overrides] installing %s module override(s)", len(overrides))
-    return install_overrides(overrides)
+    count = len(table.modules) + sum(len(items) for items in table.patches.values())
+    _logger.info("[plugin-overrides] installing %s override(s)", count)
+    return install_overrides(table)
 
 
 __all__ = [

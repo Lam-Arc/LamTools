@@ -207,3 +207,63 @@ def test_remove_overrides_is_idempotent() -> None:
     remove_overrides(finder)
 
     assert finder not in sys.meta_path
+
+
+def test_function_patch_is_parsed(tmp_path: Path) -> None:
+    manifest_path = make_plugin(
+        tmp_path,
+        "demo",
+        overrides={"lamtools_core.prompt:build_system_prompt": "./overrides/patch.py"},
+        files={"overrides/patch.py": "def build_system_prompt():\n    return 'x'\n"},
+    )
+
+    specs = read_overrides(load_manifest(manifest_path))
+
+    assert specs[0].target == "lamtools_core.prompt"
+    assert specs[0].function == "build_system_prompt"
+
+
+def test_module_and_function_patch_conflict(tmp_path: Path) -> None:
+    module_plugin = make_plugin(
+        tmp_path,
+        "module-plugin",
+        overrides={"lamtools_core.prompt": "./overrides/prompt.py"},
+        files={"overrides/prompt.py": "value = 'module'\n"},
+    )
+    patch_plugin = make_plugin(
+        tmp_path,
+        "patch-plugin",
+        overrides={"lamtools_core.prompt:build_system_prompt": "./overrides/patch.py"},
+        files={"overrides/patch.py": "def build_system_prompt():\n    return 'x'\n"},
+    )
+
+    assembly = assemble_overrides(
+        [load_manifest(module_plugin), load_manifest(patch_plugin)]
+    )
+
+    assert "lamtools_core.prompt" in assembly.overrides
+    assert assembly.patches == {}
+    assert "skipped" in assembly.errors[0]["error"]
+
+
+def test_duplicate_function_patch_conflicts(tmp_path: Path) -> None:
+    first = make_plugin(
+        tmp_path,
+        "first",
+        overrides={"lamtools_core.prompt:build_system_prompt": "./overrides/patch.py"},
+        files={"overrides/patch.py": "def build_system_prompt():\n    return 'first'\n"},
+    )
+    second = make_plugin(
+        tmp_path,
+        "second",
+        overrides={"lamtools_core.prompt:build_system_prompt": "./overrides/patch.py"},
+        files={"overrides/patch.py": "def build_system_prompt():\n    return 'second'\n"},
+    )
+
+    assembly = assemble_overrides([load_manifest(first), load_manifest(second)])
+
+    assert (
+        assembly.patches["lamtools_core.prompt"]["build_system_prompt"].plugin
+        == "first"
+    )
+    assert "already patched" in assembly.errors[0]["error"]
