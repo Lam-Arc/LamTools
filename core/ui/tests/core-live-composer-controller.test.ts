@@ -951,3 +951,40 @@ describe('useCoreLiveComposerController', () => {
     expect(controller.commandError.value).toBe('catalog unavailable')
   })
 })
+
+describe('external submissions (question card answers)', () => {
+  // user:“在我输入框已有内容的时候，我提交一个回复，会把原有的输入框内容给吞掉，且没有恢复”+
+  // (提问卡答案自带正文：答案照发，输入栏里正在写的草稿与待发附件一个都不动。)
+  it('sends answered text without touching the composer draft or pending attachments', async () => {
+    const text = ref('我还在写的东西')
+    const attachments = ref<CoreInputItem[]>([{ type: 'text', text: '待发附件' }])
+    const started: Array<{ text?: string; attachments?: unknown[] }> = []
+    const controller = useCoreLiveComposerController({
+      pauseTurn: async () => undefined,
+      activeThreadId: ref<string | null>('thread-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(text.value.length),
+      status: ref('idle'),
+      attachments,
+      connect: async () => undefined,
+      startTurn: async (_threadId, input) => {
+        started.push({ text: input.map(item => ('text' in item ? item.text : '')).join(''), attachments: input })
+      },
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      queueInput: async () => undefined,
+      listCommands: async () => [],
+      getWorkRoot: () => '',
+      executeCommand: async () => true,
+    })
+
+    await controller.submit({ text: 'Q1 要不要继续？：继续', attachments: [] })
+
+    expect(started).toHaveLength(1)
+    expect(started[0].text).toBe('Q1 要不要继续？：继续')
+    expect(text.value).toBe('我还在写的东西')
+    expect(attachments.value).toHaveLength(1)
+  })
+})

@@ -115,12 +115,13 @@ watch(() => props.viewport, viewport => {
     <VueFlow v-model:nodes="graphNodes" :edges="edges" data-study-layout="layered" :aria-label="t('知识图谱')" :min-zoom=".25" :max-zoom="2" :nodes-connectable="false" @init="bindGraphViewport" @node-click="openGraphNode($event.node.data)" @node-drag-stop="emit('save-layout')" @move-end="syncGraphViewport($event)">
       <template #node-knowledge="{ data, selected: nodeSelected }">
         <Handle type="target" :position="Position.Left" />
+        <!-- user:“确保视觉、功能和交互不退化”+(回车只打开一次，避免合成点击再次触发画布节点事件)。 -->
         <button
           :class="['study-node', isCourse(data) ? 'study-node--course' : isGroup(data) ? 'study-node--module' : 'study-node--knowledge', !isCourse(data) && data.assessment === 'pass' ? 'study-node--passed' : '', !isCourse(data) && data.assessment !== 'pass' ? 'study-node--incomplete' : '', !isCourse(data) && data.assessment === 'pass' && data.mastery ? `study-node--mastery-${data.mastery}` : '', { 'is-focused': graphFocusId === data.id, 'is-selected': nodeSelected || graphSelectedId === data.id }]"
           :data-study-node="data.id"
           :title="isCourse(data) ? courseProgressTitle(data) : statusFor(data).label"
           :aria-label="isCourse(data) ? courseProgressTitle(data) : data.name + (isGroup(data) ? t(' 分组') : ' ' + statusFor(data).label)"
-          @mouseenter="focusGraphNode(data)" @mouseleave="blurGraphNode(data)" @focus="focusGraphNode(data)" @blur="blurGraphNode(data)" @keydown.enter.stop="emit('open-node', data)"
+          @mouseenter="focusGraphNode(data)" @mouseleave="blurGraphNode(data)" @focus="focusGraphNode(data)" @blur="blurGraphNode(data)" @keydown.enter.prevent.stop="emit('open-node', data)"
         >
           <template v-if="isCourse(data)">
             <svg class="study-course-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">

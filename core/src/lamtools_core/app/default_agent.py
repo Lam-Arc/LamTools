@@ -929,6 +929,9 @@ def create_core_agent_operations(
                         guidance_sealer=lambda: runtime_task_registry.seal_guidance(
                             thread_id, run_id=guidance_run_id
                         ),
+                        # user:“最终 Step 开始后收到的所有引导，都应开启下一回合”
+                        # +(主回合：自然结束的最终步不再消费引导，执行层投成新回合)。
+                        defer_tail_guidance=True,
                         # user:“模式、权限、思考强度在下一步生效（即时生效）”+(运行中
                         # 的回合每步来取一次最新的输入参数组；模型不在补丁里)。
                         settings_source=runtime_task_registry.settings_source(
@@ -1980,6 +1983,9 @@ def create_core_agent_operations(
                                 if runtime_task_registry is not None
                                 else None
                             ),
+                            # user:“最终 Step 开始后收到的所有引导，都应开启下一回合”
+                            # +(主回合：自然结束的最终步不再消费引导)。
+                            defer_tail_guidance=True,
                             metadata={
                                 **_runtime_metadata(request.metadata),
                                 **dict(request.payload.get("metadata") or {}),
@@ -2423,6 +2429,9 @@ def create_core_agent_operations(
                             if runtime_task_registry is not None
                             else None
                         ),
+                        # user:“最终 Step 开始后收到的所有引导，都应开启下一回合”
+                        # +(主回合：自然结束的最终步不再消费引导)。
+                        defer_tail_guidance=True,
                         metadata={
                             **_runtime_metadata(request.metadata),
                             **dict(request.payload.get("metadata") or {}),
@@ -3542,19 +3551,12 @@ async def _persist_run_items(
         write_coordinator=write_coordinator,
     )
 
-    async def write(db):
-        return await persistence.append_batch(db, run_item_events=run_items)
-
-    # Append and snapshot-load are deliberately two separate steps. Loading the
-    # whole thread back is by far the most allocation-heavy part of this call,
-    # and while it lived inside the same transaction a memory failure there
-    # rolled the just-committed events back: the turn's terminal record
-    # vanished, the session stayed "running" forever, and nothing explained why
-    # (2026-10-10 host-memory crash). The events are the record that must
-    # survive; the snapshot is a convenience the caller can recompute locally
-    # when this returns None.
+    # user:“规划并实现”+(复用 append_batch_atomic(return_state=True) 的返回快照，消除回合落盘后紧接着开新会话重读整条线程的冗余读盘)
     try:
-        envelopes = await persistence.write(write)
+        envelopes, snapshot = await persistence.append_batch_atomic(
+            run_item_events=run_items,
+            return_state=True,
+        )
     except BaseException:
         minimal = _terminal_status_run_items(run_items)
         if not minimal:
@@ -3567,21 +3569,10 @@ async def _persist_run_items(
             "[default:persist_run_items] batch append failed; retrying with %d terminal item(s)",
             len(minimal),
         )
-        async def write_terminal(db):
-            return await persistence.append_batch(db, run_item_events=minimal)
-
-        envelopes = await persistence.write(write_terminal)
-    thread_id = run_items[-1].thread_id
-    try:
-        async with db_session_factory() as db:
-            snapshot = await persistence.load(db, thread_id)
-    except BaseException:
-        _logger.exception(
-            "[default:persist_run_items] snapshot load failed after append thread_id=%s items=%d",
-            thread_id,
-            len(run_items),
+        envelopes, snapshot = await persistence.append_batch_atomic(
+            run_item_events=minimal,
+            return_state=True,
         )
-        snapshot = None
     if app_event_hub is not None:
         publish = getattr(app_event_hub, "publish", None)
         if callable(publish):
@@ -3819,19 +3810,18 @@ async def _persist_core_event_live(
         write_coordinator=write_coordinator,
     )
 
-    async def write(db):
-        # Every event projects now: the snapshot store writes items
-        # incrementally (one row per touched item), so a streaming part event
-        # no longer rewrites the whole thread snapshot. There is no deferred
-        # intermediate state — an interrupted turn (stop/steer) keeps every
-        # chunk that already streamed.
-        envelopes = await persistence.append_batch(db, run_item_events=run_items)
-        return envelopes
-
     try:
-        envelopes = await persistence.write(write)
+        # user:“check，事件通道压力过高：可靠通道 32/64；已丢弃 257 帧可丢进度；正在自动恢复，无需操作”+(实时事件落库仅返回并广播真正新写入的事件，防止重复 event_id 反复冲刷可靠通道)
+        envelopes = await persistence.append_batch_atomic(
+            run_item_events=run_items,
+            only_new=True,
+        )
+        if not envelopes:
+            return
+        new_ids = {env.event_id for env in envelopes}
+        new_run_items = [item for item in run_items if not item.event_id or item.event_id in new_ids]
         await _mirror_run_items_as_interactions(
-            run_items,
+            new_run_items,
             db_session_factory=db_session_factory,
             write_coordinator=write_coordinator,
         )
@@ -4120,6 +4110,9 @@ async def _build_core_runtime_toolbox(
         operation_executor=execute_operation if operation_catalog is not None else None,
         enable_goal_tool=enable_goal_tool,
         enable_arrange_tool=enable_arrange_tool,
+        # user:“Sunday Agent 与用户使用同一套文件能力”+(主代理可搜索整机文件、
+        # 按标签/评分筛选、收藏与入集合；文件写操作不在这里开放)。
+        enable_library_tool=True,
         imagegen_config=runtime_imagegen_config,
         disabled_tools=disabled_tools,
         active_tier=active_tier,

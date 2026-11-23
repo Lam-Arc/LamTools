@@ -42,6 +42,13 @@ pub struct TrustStore {
     pub revoked: Vec<RevokedDevice>,
     #[serde(skip)]
     path: PathBuf,
+    /// 上次读盘时文件的 (修改时间, 长度)。
+    ///
+    /// user:“用户移除设备后，当前已建立的连接立刻失去操作权限”+(每条远程调用前都重读
+    /// 名单才能做到「立刻」，但无脑重读会在每次调用上多加一次文件读；用修改时间判断，
+    /// 名单没变就只用一次 stat)。
+    #[serde(skip)]
+    stamp: Option<(u64, u64)>,
 }
 
 impl TrustStore {
@@ -51,17 +58,19 @@ impl TrustStore {
             return Ok(Self {
                 devices: Vec::new(),
                 revoked: Vec::new(),
+                stamp: None,
                 path,
             });
         }
         let text = std::fs::read_to_string(&path).context("cannot read p2p-trust.json")?;
         let mut store: Self =
             serde_json::from_str(&text).context("p2p-trust.json is not valid JSON")?;
+        store.stamp = file_stamp(&path);
         store.path = path;
         Ok(store)
     }
 
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&mut self) -> Result<()> {
         if self.path.as_os_str().is_empty() {
             return Ok(());
         }
@@ -69,7 +78,35 @@ impl TrustStore {
         let temporary = self.path.with_extension("tmp");
         std::fs::write(&temporary, text).context("cannot write the trust store")?;
         std::fs::rename(&temporary, &self.path).context("cannot install the trust store")?;
+        // 自己写的这次改动不该被下一次检查当成「外部变更」。
+        self.stamp = file_stamp(&self.path);
         Ok(())
+    }
+
+    /// 名单文件变了才重读，返回「是不是真的读了一次」。
+    ///
+    /// user:“用户移除设备后，当前已建立的连接立刻失去操作权限”+(每条远程调用前都问一次
+    /// 「还允许吗」；用修改时间做前置判断，正常路径只是一次 stat，撤销后第一次调用就会
+    /// 重读并看到撤销记录)。
+    pub fn reload_if_stale(&mut self) -> Result<bool> {
+        if self.path.as_os_str().is_empty() {
+            return Ok(false);
+        }
+        let current = file_stamp(&self.path);
+        if current.is_none() && !self.path.exists() {
+            // 文件被删掉视为「撤销所有设备」。
+            if !self.devices.is_empty() {
+                self.devices.clear();
+                self.stamp = current;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        if current == self.stamp {
+            return Ok(false);
+        }
+        self.reload()?;
+        Ok(true)
     }
 
     pub fn is_trusted(&self, id: &str) -> bool {
@@ -99,6 +136,7 @@ impl TrustStore {
         let parsed: Self = serde_json::from_str(&text).context("p2p-trust.json is not valid JSON")?;
         self.devices = parsed.devices;
         self.revoked = parsed.revoked;
+        self.stamp = file_stamp(&self.path);
         Ok(())
     }
 
@@ -146,6 +184,17 @@ impl TrustStore {
     }
 }
 
+/// 文件身份：(修改时间纳秒, 长度)。取不到就是 `None`（文件不在）。
+fn file_stamp(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let nanos = modified
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+    Some((nanos, metadata.len()))
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -175,6 +224,33 @@ mod tests {
         server_side.reload().unwrap();
         assert!(!server_side.is_trusted("phone-1"));
         assert!(server_side.is_revoked("phone-1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// user:“撤权同步两处状态：持久信任记录（磁盘）+ 当前活跃连接（内存）”+
+    /// (活跃连接拿的是内存里的名单；宿主落盘之后，下一次检查必须看到撤销，而且没有变化时
+    /// 不该白白重读文件)。
+    #[test]
+    fn an_active_connection_sees_a_fresh_revocation_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("sunday-trust-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut active = TrustStore::load(&dir).unwrap();
+        active.trust("phone-1", "Phone");
+        active.save().unwrap();
+
+        // 没有外部改动：检查一次就够，不需要重读。
+        assert!(!active.reload_if_stale().unwrap());
+        assert!(active.is_trusted("phone-1"));
+
+        // 宿主那一侧撤销并落盘。
+        let mut host = TrustStore::load(&dir).unwrap();
+        host.revoke("phone-1");
+        host.save().unwrap();
+
+        // 活跃连接的下一次检查必须看到它。
+        assert!(active.reload_if_stale().unwrap());
+        assert!(!active.is_trusted("phone-1"));
+        assert!(active.is_revoked("phone-1"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

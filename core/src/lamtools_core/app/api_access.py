@@ -13,6 +13,14 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 PLUGIN_ASSET_PREFIX = "/api/core/plugin-system/"
+# 预览器用 iframe 内联显示本机文件；桌面 WebView 与后台端口不同源，默认的
+# X-Frame-Options: SAMEORIGIN 会把整块预览拦成空白。这条只读接口按「显式要内联」
+# 的请求单独放开（?inline=1），其余请求仍走同源限制。
+PREVIEW_FILE_PATH = "/api/core/files/read-reference"
+# user:“除了Office类，别的都把它修好”+(TIF/TIFF 由后端转成 PNG 给图片查看器；
+# 这条也是只读预览内容，必须和 read-reference 一样允许跨源嵌入)。
+PREVIEW_RASTER_PATH = "/api/core/files/preview-image"
+PREVIEW_INLINE_PATHS = frozenset({PREVIEW_FILE_PATH, PREVIEW_RASTER_PATH})
 # 标注层页面和 Core 永远不同源：开发是 5299 对 5298，打包后是 WebView 自定义源
 # 对 127.0.0.1。表情包图片只是服务端生成名字的只读临时文件，必须允许跨源嵌入，
 # 否则浏览器按 CORP: same-origin 直接拦掉，页面上只剩一个 0 高的 img。
@@ -23,11 +31,27 @@ def is_plugin_asset_path(path: str) -> bool:
     return path.startswith(PLUGIN_ASSET_PREFIX) and "/assets/" in path
 
 
+def is_inline_preview_request(path: str, query: str) -> bool:
+    """预览器显式要求内联渲染的那一种请求（`/files/read-reference?inline=1`）。
+
+    user:"必须实测 read-reference 的响应头…如果带出 Content-Disposition: attachment，
+    iframe 会变成下载而不是内联渲染"+(预览器用 iframe 取本机文件字节，桌面 WebView 与
+    后台端口不同源；这条只读接口必须允许被嵌入式加载，否则 X-Frame-Options: SAMEORIGIN
+    会把预览拦成空白。只放开显式声明 inline=1 的这一种请求，其余请求照旧同源限制。)
+    """
+    if path not in PREVIEW_INLINE_PATHS:
+        return False
+    from urllib.parse import parse_qs
+
+    return parse_qs(query or "").get("inline", [""])[0] in {"1", "true", "yes"}
+
+
 def apply_response_security_headers(
     path: str,
     headers: MutableMapping[str, str],
     *,
     runtime_path: str,
+    query: str = "",
 ) -> None:
     """按路径给响应补安全头；跨源需要嵌入的只读资源单独放开。"""
     headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -46,6 +70,13 @@ def apply_response_security_headers(
             del headers["access-control-allow-credentials"]
         headers["Access-Control-Allow-Private-Network"] = "true"
         headers.setdefault("Vary", "Origin")
+    elif is_inline_preview_request(path, query):
+        # 预览器的 iframe 与后台不同源：只放开帧祖先限制，且仅限本机回环与桌面 WebView 源。
+        headers.setdefault(
+            "Content-Security-Policy",
+            "frame-ancestors http://127.0.0.1:* http://localhost:* tauri://localhost http://tauri.localhost",
+        )
+        headers.setdefault("Cross-Origin-Resource-Policy", "cross-origin")
     elif path == runtime_path:
         # The runtime document is intentionally framed by the local Tauri
         # host, which uses a different loopback port in development and the

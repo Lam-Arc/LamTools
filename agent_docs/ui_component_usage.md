@@ -5,22 +5,27 @@
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkSettingsPreview.vue](../core/ui/src/design-system/NetworkSettingsPreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ConnectionsView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkInspectionPreview.vue](../core/ui/src/design-system/NetworkInspectionPreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/DashboardView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkHomePreview.vue](../core/ui/src/design-system/NetworkHomePreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/DiagnoseView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkInspectionPreview.vue](../core/ui/src/design-system/NetworkInspectionPreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/HomeView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkHomePreview.vue](../core/ui/src/design-system/NetworkHomePreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ImportProfile.vue
 
@@ -33,6 +38,7 @@
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkSettings.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkSettingsPreview.vue](../core/ui/src/design-system/NetworkSettingsPreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NodePicker.vue
 
@@ -41,6 +47,7 @@
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkProxyPreview.vue](../core/ui/src/design-system/NetworkProxyPreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/QuickPanel.vue
 
@@ -49,6 +56,7 @@
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/SecurityView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkSettingsPreview.vue](../core/ui/src/design-system/NetworkSettingsPreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/SpeedChart.vue
 
@@ -58,6 +66,7 @@
 ## core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TransferView.vue
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkApp.vue)
+- [core/ui/src/design-system/NetworkTransferPreview.vue](../core/ui/src/design-system/NetworkTransferPreview.vue)（预览入口）
 
 ## core/src/lamtools_core/plugins/bundled/workflow/ui/EdgeConditionEditor.vue
 
@@ -150,6 +159,11 @@
 
 - [core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts](../core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts)
 
+## core/ui/src/annotation/AnnotationToolbar.vue
+
+- [core/ui/src/pet/ui/CaptureEditor.vue](../core/ui/src/pet/ui/CaptureEditor.vue)
+- [core/ui/src/preview/PreviewImageViewer.vue](../core/ui/src/preview/PreviewImageViewer.vue)
+
 ## core/ui/src/app/LamToolsApp.vue
 
 - [core/desktop/src/main.ts](../core/desktop/src/main.ts)
@@ -158,6 +172,7 @@
 ## core/ui/src/components/AccountShell.vue
 
 - [core/ui/src/components/CoreAppPage.vue](../core/ui/src/components/CoreAppPage.vue)
+- [core/ui/src/design-system/AccountPreview.vue](../core/ui/src/design-system/AccountPreview.vue)（预览入口）
 
 ## core/ui/src/components/AppRail.vue
 
@@ -175,6 +190,7 @@
 
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
 - [core/ui/src/components/CoreAuxiliaryChat.vue](../core/ui/src/components/CoreAuxiliaryChat.vue)
+- [core/ui/src/design-system/ComposerPreview.vue](../core/ui/src/design-system/ComposerPreview.vue)（预览入口）
 - [core/ui/src/pet/ui/SessionCard.vue](../core/ui/src/pet/ui/SessionCard.vue)
 
 ## core/ui/src/components/AttachmentTray.vue
@@ -193,8 +209,13 @@
 - [core/ui/src/components/MessageView.vue](../core/ui/src/components/MessageView.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
+## core/ui/src/components/BrowserHomeView.vue
+
+- [core/ui/src/components/CoreSplitBrowser.vue](../core/ui/src/components/CoreSplitBrowser.vue)
+
 ## core/ui/src/components/ChatOutlineNavigator.vue
 
+- [core/desktop/src/tmp-gap-check.ts](../core/desktop/src/tmp-gap-check.ts)
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
 
 ## core/ui/src/components/ChatThread.vue
@@ -205,7 +226,6 @@
 - [core/ui/src/components/CoreAuxiliaryChat.vue](../core/ui/src/components/CoreAuxiliaryChat.vue)
 - [core/ui/src/components/CoreSubAgentDialog.vue](../core/ui/src/components/CoreSubAgentDialog.vue)
 - [core/ui/src/components/CoreSubAgentView.vue](../core/ui/src/components/CoreSubAgentView.vue)
-- [core/ui/src/guide/GuideDemoSession.vue](../core/ui/src/guide/GuideDemoSession.vue)
 - [core/ui/src/index.ts](../core/ui/src/index.ts)
 - [core/ui/src/pet/ui/SessionCard.vue](../core/ui/src/pet/ui/SessionCard.vue)
 
@@ -264,6 +284,11 @@
 - [core/ui/src/components/CoreSplitContent.vue](../core/ui/src/components/CoreSplitContent.vue)
 - [core/ui/src/index.ts](../core/ui/src/index.ts)
 
+## core/ui/src/components/CoreBubbleAppearance.vue
+
+- [core/ui/src/components/CoreSettings.vue](../core/ui/src/components/CoreSettings.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
 ## core/ui/src/components/CoreChart.vue
 
 - [core/ui/src/components/MarkdownRenderer.vue](../core/ui/src/components/MarkdownRenderer.vue)
@@ -288,6 +313,11 @@
 - [core/ui/src/plugins/consent.ts](../core/ui/src/plugins/consent.ts)
 - [core/ui/src/study/NotesManager.vue](../core/ui/src/study/NotesManager.vue)
 
+## core/ui/src/components/CoreContentRoot.vue
+
+- [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
+
 ## core/ui/src/components/CoreExecutionControls.vue
 
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
@@ -309,6 +339,7 @@
 ## core/ui/src/components/CoreHooksEditor.vue
 
 - [core/ui/src/components/PluginsShell.vue](../core/ui/src/components/PluginsShell.vue)
+- [core/ui/src/design-system/SkillsHooksPreview.vue](../core/ui/src/design-system/SkillsHooksPreview.vue)（预览入口）
 
 ## core/ui/src/components/CoreImageGenEditor.vue
 
@@ -317,6 +348,11 @@
 ## core/ui/src/components/CoreLoadToolsEditor.vue
 
 - [core/ui/src/components/CoreSettings.vue](../core/ui/src/components/CoreSettings.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/components/CoreMessageSurface.vue
+
+- [core/ui/src/components/MessageView.vue](../core/ui/src/components/MessageView.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
 ## core/ui/src/components/CoreModelCatalog.vue
@@ -404,6 +440,7 @@
 
 - [core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue](../core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue)
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
 - [core/ui/src/index.ts](../core/ui/src/index.ts)
 
 ## core/ui/src/components/CoreSettings.vue
@@ -420,6 +457,7 @@
 ## core/ui/src/components/CoreSkillsEditor.vue
 
 - [core/ui/src/components/PluginsShell.vue](../core/ui/src/components/PluginsShell.vue)
+- [core/ui/src/design-system/SkillsHooksPreview.vue](../core/ui/src/design-system/SkillsHooksPreview.vue)（预览入口）
 
 ## core/ui/src/components/CoreSplitBrowser.vue
 
@@ -433,12 +471,8 @@
 ## core/ui/src/components/CoreSplitFileTree.vue
 
 - [core/ui/src/components/CoreSplitContent.vue](../core/ui/src/components/CoreSplitContent.vue)
+- [core/ui/src/components/LibraryHomeView.vue](../core/ui/src/components/LibraryHomeView.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
-
-## core/ui/src/components/CoreSplitPane.vue
-
-- [core/ui/src/components/CoreSplitWorkspace.vue](../core/ui/src/components/CoreSplitWorkspace.vue)
-- [core/ui/src/index.ts](../core/ui/src/index.ts)
 
 ## core/ui/src/components/CoreSplitPluginPage.vue
 
@@ -454,12 +488,6 @@
 
 - [core/ui/src/components/CoreSplitContent.vue](../core/ui/src/components/CoreSplitContent.vue)
 - [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
-
-## core/ui/src/components/CoreSplitWorkspace.vue
-
-- [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
-- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
-- [core/ui/src/index.ts](../core/ui/src/index.ts)
 
 ## core/ui/src/components/CoreStartPage.vue
 
@@ -509,14 +537,42 @@
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
+## core/ui/src/components/CoreWorkspace.vue
+
+- [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
+
+## core/ui/src/components/CoreWorkspaceArea.vue
+
+- [core/ui/src/components/CoreWorkspace.vue](../core/ui/src/components/CoreWorkspace.vue)
+
+## core/ui/src/components/CoreWorkspaceContentHost.vue
+
+- [core/ui/src/components/CoreWorkspace.vue](../core/ui/src/components/CoreWorkspace.vue)
+
+## core/ui/src/components/CoreWorkspaceFloat.vue
+
+- [core/ui/src/components/CoreWorkspace.vue](../core/ui/src/components/CoreWorkspace.vue)
+
 ## core/ui/src/components/CoreWorkspaceMenu.vue
 
 - [core/ui/src/design-system/ExecutionControlsPreview.vue](../core/ui/src/design-system/ExecutionControlsPreview.vue)（预览入口）
 - [core/ui/src/index.ts](../core/ui/src/index.ts)
 
+## core/ui/src/components/CoreWorkspaceTabDrawer.vue
+
+- [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
+
+## core/ui/src/components/CoreWorkspaceTabs.vue
+
+- [core/ui/src/components/CoreWorkspaceArea.vue](../core/ui/src/components/CoreWorkspaceArea.vue)
+
 ## core/ui/src/components/DirectCallView.vue
 
 - [core/ui/src/components/CoreAppPage.vue](../core/ui/src/components/CoreAppPage.vue)
+- [core/ui/src/components/CoreSettings.vue](../core/ui/src/components/CoreSettings.vue)
+- [core/ui/src/design-system/DirectCallPreview.vue](../core/ui/src/design-system/DirectCallPreview.vue)（预览入口）
 
 ## core/ui/src/components/DocumentEditor.vue
 
@@ -535,6 +591,11 @@
 - [core/ui/src/components/UserReferenceText.vue](../core/ui/src/components/UserReferenceText.vue)
 - [core/ui/src/components/process/ProcessMediaPreview.vue](../core/ui/src/components/process/ProcessMediaPreview.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/components/FirstRunChecklist.vue
+
+- [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/FirstRunPreview.vue](../core/ui/src/design-system/FirstRunPreview.vue)（预览入口）
 
 ## core/ui/src/components/FolderBrowserDialog.vue
 
@@ -588,6 +649,7 @@
 ## core/ui/src/components/LibraryHomeView.vue
 
 - [core/ui/src/components/CoreAppPage.vue](../core/ui/src/components/CoreAppPage.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
 ## core/ui/src/components/LibraryNameDialog.vue
 
@@ -612,6 +674,10 @@
 - [core/ui/src/components/MemoryView.vue](../core/ui/src/components/MemoryView.vue)
 - [core/ui/src/components/PlanLibraryView.vue](../core/ui/src/components/PlanLibraryView.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/components/LocalFilesView.vue
+
+- [core/ui/src/components/LibraryHomeView.vue](../core/ui/src/components/LibraryHomeView.vue)
 
 ## core/ui/src/components/MarkdownRenderer.vue
 
@@ -703,6 +769,30 @@
 - [core/ui/src/components/CorePluginSystemEditor.vue](../core/ui/src/components/CorePluginSystemEditor.vue)
 - [core/ui/src/components/WorkspaceShell.vue](../core/ui/src/components/WorkspaceShell.vue)
 
+## core/ui/src/components/PluginWindowLauncher.vue
+
+- [core/ui/src/components/CorePluginSystemEditor.vue](../core/ui/src/components/CorePluginSystemEditor.vue)
+
+## core/ui/src/components/process/ProcessIcon.vue
+
+- [core/ui/src/components/MessageView.vue](../core/ui/src/components/MessageView.vue)
+- [core/ui/src/components/process/ProcessIcon.vue](../core/ui/src/components/process/ProcessIcon.vue)
+
+## core/ui/src/components/process/ProcessKvPill.vue
+
+- [core/ui/src/components/MessageView.vue](../core/ui/src/components/MessageView.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/components/process/ProcessMediaPreview.vue
+
+- [core/ui/src/components/MessageView.vue](../core/ui/src/components/MessageView.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/components/process/ProcessResultPills.vue
+
+- [core/ui/src/components/MessageView.vue](../core/ui/src/components/MessageView.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
 ## core/ui/src/components/ProjectVisualIcon.vue
 
 - [core/ui/src/components/MemoryView.vue](../core/ui/src/components/MemoryView.vue)
@@ -788,8 +878,17 @@
 - [core/ui/src/components/CoreAppPage.vue](../core/ui/src/components/CoreAppPage.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
+## core/ui/src/components/SendToDeviceMenu.vue
+
+- [core/ui/src/components/CoreSplitFileTree.vue](../core/ui/src/components/CoreSplitFileTree.vue)
+- [core/ui/src/components/CoreSplitPreview.vue](../core/ui/src/components/CoreSplitPreview.vue)
+- [core/ui/src/components/MaterialsView.vue](../core/ui/src/components/MaterialsView.vue)
+- [core/ui/src/design-system/TransferPreview.vue](../core/ui/src/design-system/TransferPreview.vue)（预览入口）
+- [core/ui/src/preview/PreviewLightbox.vue](../core/ui/src/preview/PreviewLightbox.vue)
+
 ## core/ui/src/components/SessionSidebar.vue
 
+- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（使用本地会话演示拖动排序）
 - [core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue](../core/src/lamtools_core/plugins/bundled/workflow/ui/WorkflowView.vue)
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
 - [core/ui/src/index.ts](../core/ui/src/index.ts)
@@ -820,7 +919,9 @@
 - [core/ui/src/components/CoreUpdateCard.vue](../core/ui/src/components/CoreUpdateCard.vue)
 - [core/ui/src/components/PluginRegionBlocks.vue](../core/ui/src/components/PluginRegionBlocks.vue)
 - [core/ui/src/components/RightSidebarWidgetRenderer.vue](../core/ui/src/components/RightSidebarWidgetRenderer.vue)
+- [core/ui/src/components/TransferPanel.vue](../core/ui/src/components/TransferPanel.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+- [core/ui/src/design-system/MotionPreview.vue](../core/ui/src/design-system/MotionPreview.vue)（预览入口）
 
 ## core/ui/src/components/SundayRange.vue
 
@@ -836,8 +937,10 @@
 
 ## core/ui/src/components/SundaySegmented.vue
 
+- [core/ui/src/components/CoreBubbleAppearance.vue](../core/ui/src/components/CoreBubbleAppearance.vue)
 - [core/ui/src/components/CoreModelCatalog.vue](../core/ui/src/components/CoreModelCatalog.vue)
 - [core/ui/src/components/CorePluginSystemEditor.vue](../core/ui/src/components/CorePluginSystemEditor.vue)
+- [core/ui/src/components/CoreSettings.vue](../core/ui/src/components/CoreSettings.vue)
 - [core/ui/src/components/ThemeEditor.vue](../core/ui/src/components/ThemeEditor.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
@@ -845,6 +948,7 @@
 
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue)
 - [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue)
+- [core/ui/src/components/CoreBubbleAppearance.vue](../core/ui/src/components/CoreBubbleAppearance.vue)
 - [core/ui/src/components/CoreGeneralEditor.vue](../core/ui/src/components/CoreGeneralEditor.vue)
 - [core/ui/src/components/CoreHooksEditor.vue](../core/ui/src/components/CoreHooksEditor.vue)
 - [core/ui/src/components/CoreModelCatalog.vue](../core/ui/src/components/CoreModelCatalog.vue)
@@ -884,6 +988,13 @@
 ## core/ui/src/components/TitleBar.vue
 
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
+
+## core/ui/src/components/TransferPanel.vue
+
+- [core/ui/src/components/RemoteConnectionPanel.vue](../core/ui/src/components/RemoteConnectionPanel.vue)
+- [core/ui/src/design-system/TransferPreview.vue](../core/ui/src/design-system/TransferPreview.vue)（预览入口）
 
 ## core/ui/src/components/UiSelect.vue
 
@@ -916,7 +1027,9 @@
 - [core/ui/src/components/ThemeStudio.vue](../core/ui/src/components/ThemeStudio.vue)
 - [core/ui/src/components/settings/MessageStreamSettings.vue](../core/ui/src/components/settings/MessageStreamSettings.vue)
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+- [core/ui/src/design-system/MotionPreview.vue](../core/ui/src/design-system/MotionPreview.vue)（预览入口）
 - [core/ui/src/index.ts](../core/ui/src/index.ts)
+- [core/ui/src/pet/ui/CaptureEditor.vue](../core/ui/src/pet/ui/CaptureEditor.vue)
 - [core/ui/src/pet/ui/PetPreview.vue](../core/ui/src/pet/ui/PetPreview.vue)
 - [core/ui/src/pet/ui/PetSettingsPanel.vue](../core/ui/src/pet/ui/PetSettingsPanel.vue)
 
@@ -931,6 +1044,7 @@
 ## core/ui/src/components/WorkspaceShell.vue
 
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue)（预览入口）
 - [core/ui/src/index.ts](../core/ui/src/index.ts)
 
 ## core/ui/src/components/WritingBlock.vue
@@ -952,7 +1066,15 @@
 
 - [core/desktop/src/computer-use.ts](../core/desktop/src/computer-use.ts)
 
+## core/ui/src/design-system/AccountPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
 ## core/ui/src/design-system/ComposerPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/DirectCallPreview.vue
 
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
@@ -960,11 +1082,51 @@
 
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
+## core/ui/src/design-system/FirstRunPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
 ## core/ui/src/design-system/Gallery.vue
 
 - [core/ui/src/design-system/main.ts](../core/ui/src/design-system/main.ts)（预览入口）
 
+## core/ui/src/design-system/LightboxPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/MotionPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/NetworkHomePreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/NetworkInspectionPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/NetworkProxyPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/NetworkSettingsPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/NetworkTransferPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
 ## core/ui/src/design-system/QueuedInputPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/SelectionAssistantPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/SkillsHooksPreview.vue
 
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
@@ -980,21 +1142,29 @@
 
 - [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
-## core/ui/src/guide/GuideDemoSession.vue
+## core/ui/src/design-system/StudyGraphsPreview.vue
 
-- [core/ui/src/guide/GuideHost.vue](../core/ui/src/guide/GuideHost.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
-## core/ui/src/guide/GuideHost.vue
+## core/ui/src/design-system/StudyMarksPreview.vue
 
-- [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
-## core/ui/src/guide/GuidePractice.vue
+## core/ui/src/design-system/StudyNotesPreview.vue
 
-- [core/ui/src/guide/GuideHost.vue](../core/ui/src/guide/GuideHost.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
-## core/ui/src/guide/GuideStoryArt.vue
+## core/ui/src/design-system/StudyNoteTreePreview.vue
 
-- [core/ui/src/guide/GuideHost.vue](../core/ui/src/guide/GuideHost.vue)
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/TransferPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
+
+## core/ui/src/design-system/TrayPreview.vue
+
+- [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue)（预览入口）
 
 ## core/ui/src/overlay/FloaterMarks.vue
 
@@ -1082,20 +1252,50 @@
 - [core/ui/src/pet/ui/PetSurface.vue](../core/ui/src/pet/ui/PetSurface.vue)
 - [core/ui/src/pet/ui/PingSurface.vue](../core/ui/src/pet/ui/PingSurface.vue)
 
+## core/ui/src/preview/PreviewImageViewer.vue
+
+- [core/ui/src/components/CoreSplitPreview.vue](../core/ui/src/components/CoreSplitPreview.vue)
+- [core/ui/src/preview/PreviewSurface.vue](../core/ui/src/preview/PreviewSurface.vue)
+
+## core/ui/src/preview/PreviewLightbox.vue
+
+- [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/LightboxPreview.vue](../core/ui/src/design-system/LightboxPreview.vue)（预览入口）
+
+## core/ui/src/preview/PreviewMediaPlayer.vue
+
+- [core/ui/src/preview/PreviewSurface.vue](../core/ui/src/preview/PreviewSurface.vue)
+
+## core/ui/src/preview/PreviewPdfViewer.vue
+
+- [core/ui/src/preview/PreviewSurface.vue](../core/ui/src/preview/PreviewSurface.vue)
+
+## core/ui/src/preview/PreviewSurface.vue
+
+- [core/ui/src/preview/PreviewLightbox.vue](../core/ui/src/preview/PreviewLightbox.vue)
+
+## core/ui/src/preview/PreviewTextViewer.vue
+
+- [core/ui/src/preview/PreviewSurface.vue](../core/ui/src/preview/PreviewSurface.vue)
+
 ## core/ui/src/study/MarksPanel.vue
 
+- [core/ui/src/design-system/StudyMarksPreview.vue](../core/ui/src/design-system/StudyMarksPreview.vue)（预览入口）
 - [core/ui/src/study/StudyView.vue](../core/ui/src/study/StudyView.vue)
 
 ## core/ui/src/study/NotesManager.vue
 
+- [core/ui/src/design-system/StudyNotesPreview.vue](../core/ui/src/design-system/StudyNotesPreview.vue)（预览入口）
 - [core/ui/src/study/StudyView.vue](../core/ui/src/study/StudyView.vue)
 
 ## core/ui/src/study/SelectionAssistant.vue
 
 - [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue)
+- [core/ui/src/design-system/SelectionAssistantPreview.vue](../core/ui/src/design-system/SelectionAssistantPreview.vue)（预览入口）
 
 ## core/ui/src/study/StudyGraph.vue
 
+- [core/ui/src/design-system/StudyGraphsPreview.vue](../core/ui/src/design-system/StudyGraphsPreview.vue)（预览入口）
 - [core/ui/src/study/StudyView.vue](../core/ui/src/study/StudyView.vue)
 
 ## core/ui/src/study/StudyNoteReferences.vue
@@ -1104,10 +1304,12 @@
 
 ## core/ui/src/study/StudyNoteRelationGraph.vue
 
+- [core/ui/src/design-system/StudyGraphsPreview.vue](../core/ui/src/design-system/StudyGraphsPreview.vue)（预览入口）
 - [core/ui/src/study/StudyView.vue](../core/ui/src/study/StudyView.vue)
 
 ## core/ui/src/study/StudyNoteTree.vue
 
+- [core/ui/src/design-system/StudyNoteTreePreview.vue](../core/ui/src/design-system/StudyNoteTreePreview.vue)（预览入口）
 - [core/ui/src/study/StudySidebarHost.vue](../core/ui/src/study/StudySidebarHost.vue)
 
 ## core/ui/src/study/StudySidebar.vue
@@ -1127,3 +1329,4 @@
 ## core/ui/src/tray/TrayPanel.vue
 
 - [core/desktop/src/tray.ts](../core/desktop/src/tray.ts)
+- [core/ui/src/design-system/TrayPreview.vue](../core/ui/src/design-system/TrayPreview.vue)（预览入口）

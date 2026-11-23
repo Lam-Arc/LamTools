@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { computed, defineComponent, h, ref } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
-import { useSplitWorkspace } from '../src/split/useSplitWorkspace'
-import { restoreSplitState } from '../src/split/layout'
+import { useSplitWorkspace } from '../src/workspace/context'
+import { restoreSplitState } from '../src/workspace/types'
 import { createAuxiliaryWorkspace } from '../src/auxiliary/workspace'
 import { useAuxiliaryChat } from '../src/auxiliary/useAuxiliaryChat'
 import { DirectTransport } from '../src/transport/directTransport'
 import CoreAuxiliaryChat from '../src/components/CoreAuxiliaryChat.vue'
 import { AuxiliaryWorkspaceKey } from '../src/auxiliary/workspace'
 import { createWorkbench } from '../src/workbench/createWorkbench'
-import type { SplitTab } from '../src/split/layout'
+import type { SplitTab } from '../src/workspace/types'
 import type { LamToolsTransport } from '../src/transport'
 
 vi.mock('../src/workbench/createWorkbench', () => ({ createWorkbench: vi.fn() }))

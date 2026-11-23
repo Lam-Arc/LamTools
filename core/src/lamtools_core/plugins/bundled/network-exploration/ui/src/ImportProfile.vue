@@ -16,16 +16,30 @@ async function save(payload) {
   const wasAccelerated = Boolean(props.session.accelerated);
   if (wasRunning) {
     const stopped = await props.session.run("proxy.stop", {}, "");
-    if (!stopped) return;
+    // user:“确保视觉、功能和交互不退化”+(取消或失败时保留输入，不能继续执行后续步骤)。
+    if (!stopped || stopped.cancelled) return;
   }
   const result = await props.session.run("proxy.config", payload, "");
-  if (!result) return;
+  if (!result || result.cancelled) {
+    // user:“确保视觉、功能和交互不退化”+(配置未保存时恢复为更新前已开启的代理，并保留原错误提示)。
+    if (wasRunning) {
+      const previousError = props.session.error;
+      const previousNotice = props.session.notice;
+      const restored = await props.session.run("proxy.start", {}, "");
+      if (restored && !restored.cancelled) {
+        await props.session.loadProxy();
+        props.session.error = previousError;
+        props.session.notice = previousNotice;
+      }
+    }
+    return;
+  }
   url.value = "";
   content.value = "";
   emit("close");
   if (wasRunning) {
     const started = await props.session.run("proxy.start", {}, "");
-    if (started) {
+    if (started && !started.cancelled) {
       props.session.notice = "订阅已更新，线路已重新连接";
       await props.session.loadProxy();
       if (wasAccelerated) await props.session.toggleAcceleration();

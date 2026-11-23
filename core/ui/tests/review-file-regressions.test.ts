@@ -4,7 +4,7 @@ import { splitNative } from '../src/split/native'
 import { createDesktopFilePicker } from '../src/app/desktopFilePicker'
 import { flushPromises, mount } from '@vue/test-utils'
 import CoreSplitTextEditor from '../src/components/CoreSplitTextEditor.vue'
-import type { SplitWorkspaceController } from '../src/split/useSplitWorkspace'
+import type { WorkspaceController } from '../src/workspace/context'
 
 vi.mock('../src/split/native', () => ({ splitNative: vi.fn() }))
 const stores: Array<ReturnType<typeof createSplitDocuments>> = []
@@ -145,7 +145,7 @@ describe('reviewed file regressions', () => {
   it('renders split text without a line number gutter', async () => {
     vi.mocked(splitNative).mockResolvedValueOnce('body')
     const documents = newDocuments()
-    const controller = { registerGuard: () => () => {} } as unknown as SplitWorkspaceController
+    const controller = { registerGuard: () => () => {} } as unknown as WorkspaceController
     const tab = { id: 'a', kind: 'editor' as const, title: 'a.md', resource: 'a.md' }
     const wrapper = mount(CoreSplitTextEditor, { props: { tab, root: 'E:/project', controller, documents } })
     try {
@@ -159,7 +159,7 @@ describe('reviewed file regressions', () => {
   it('applies content changed by another view while keeping the shared document', async () => {
     vi.mocked(splitNative).mockResolvedValue('original A')
     const documents = newDocuments()
-    const controller = { registerGuard: () => () => {} } as unknown as SplitWorkspaceController
+    const controller = { registerGuard: () => () => {} } as unknown as WorkspaceController
     const firstTab = { id: 'a', kind: 'editor' as const, title: 'a.md', resource: 'a.md' }
     const first = mount(CoreSplitTextEditor, { props: { tab: firstTab, root: 'E:/project', controller, documents } })
     const second = mount(CoreSplitTextEditor, { props: { tab: { ...firstTab, id: 'second-view' }, root: 'E:/project', controller, documents } })
@@ -176,7 +176,7 @@ describe('reviewed file regressions', () => {
   it('updates every shared editor target after saving a copy', async () => {
     vi.mocked(splitNative).mockResolvedValue('original A')
     const documents = newDocuments()
-    const controller = { registerGuard: () => () => {} } as unknown as SplitWorkspaceController
+    const controller = { registerGuard: () => () => {} } as unknown as WorkspaceController
     const firstTab = { id: 'a', kind: 'editor' as const, title: 'a.md', resource: 'a.md' }
     const secondTab = { ...firstTab, id: 'second-view' }
     const first = mount(CoreSplitTextEditor, { props: { tab: firstTab, root: 'E:/project', controller, documents } })

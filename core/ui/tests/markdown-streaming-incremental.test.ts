@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import MarkdownRenderer from '../src/components/MarkdownRenderer.vue'
+import { REVEAL_TOTAL_MS } from '../src/components/streamingTextFade.ts'
 
 // Mermaid is lazy-loaded only when a ```mermaid block reaches the finished
 // (heavy) render; stub it so jsdom never runs the real renderer.
@@ -44,6 +45,7 @@ function api(wrapper: unknown): RendererApi {
 
 async function mountStreaming(content: string) {
   const wrapper = mount(MarkdownRenderer, { props: { content, streaming: true } })
+  await nextFrame()
   await wrapper.vm.$nextTick()
   return wrapper
 }
@@ -73,54 +75,108 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+
+// 方案 C：chunk 只标脏，画面在下一帧合并渲染 —— 断言前先等一帧。
+async function nextFrame(): Promise<void> {
+  // 假定时器下 rAF 也被接管：直接推进时间，别让断言等真帧。
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(16)
+    return
+  }
+  await new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
+    else setTimeout(resolve, 16)
+  })
+}
+
 describe('MarkdownRenderer incremental streaming', () => {
-  it('fades new text without replaying old text and carries the fade across tail rebuilds', async () => {
+  it('只在行写完时落一次动画，旧文本不重放（方案 C）', async () => {
     vi.useFakeTimers()
     const wrapper = await mountStreaming('Earlier text')
-    expect(wrapper.find('.stream-text-fade').exists()).toBe(false)
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    // 还没换行：不算写完，什么都不动。
+    expect(wrapper.find('.stream-block-enter').exists()).toBe(false)
 
-    await wrapper.setProps({ content: 'Earlier text arrives' })
-    expect(wrapper.findAll('.stream-text-fade').map(span => span.text())).toEqual(['arrives'])
-    await vi.advanceTimersByTimeAsync(60)
-    await wrapper.setProps({ content: 'Earlier text arrives **smoothly**' })
-    const fading = wrapper.findAll('.stream-text-fade')
-    expect(fading.map(span => span.text())).toEqual(['arrives', 'smoothly'])
-    expect(fading[0].attributes('style')).toContain('--stream-fade-age: 60ms')
-    expect(wrapper.find('strong .stream-text-fade').text()).toBe('smoothly')
+    await wrapper.setProps({ content: 'Earlier text arrives\n' })
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    // 这一块写完了：整块落一次动画（旧块的动画节点会被回收，页面上只有新块那一段）。
+    expect(wrapper.findAll('.stream-block-enter').map(span => span.text()).join('')).toBe('Earlier text arrives')
+    expect(wrapper.text()).toContain('Earlier text arrives')
 
-    await vi.advanceTimersByTimeAsync(180)
-    await wrapper.setProps({ content: 'Earlier text arrives **smoothly**.\n\nNext paragraph' })
-    expect(wrapper.findAll('.stream-text-fade').map(span => span.text())).toEqual(['.', 'Next paragraph'])
-    expect(wrapper.text()).toContain('Earlier text arrives smoothly.')
+    await wrapper.setProps({ content: 'Earlier text arrives\n\nNext paragraph' })
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('Next paragraph')
+
+    // 新的一段随空白行一起落定（页面上只有它带 .stream-block-enter）。
+    expect(wrapper.findAll('.stream-block-enter').map(span => span.text()).join('')).toBe('Next paragraph')
+
+    await wrapper.setProps({ content: 'Earlier text arrives\n\nNext paragraph\n' })
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    // 只多了换行、没有新文字：不产生新的动画节点。
+    expect(wrapper.find('.stream-block-enter').exists()).toBe(false)
+
     await wrapper.setProps({ streaming: false })
-    expect(wrapper.find('.stream-text-fade').exists()).toBe(false)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.stream-block-enter').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('does not animate replacement snapshots or code copy controls', async () => {
+  it('同一帧内的多次 chunk 只渲染一次（帧速不再等于 chunk 速）', async () => {
+    vi.useFakeTimers()
     const wrapper = await mountStreaming('')
-    await wrapper.setProps({ content: '```js\nconst answer = 42' })
-    expect(wrapper.find('code .stream-text-fade').exists()).toBe(true)
-    expect(wrapper.find('button .stream-text-fade').exists()).toBe(false)
+    const stats = api(wrapper).streamingStats
+    const before = stats.tailParses
+    for (let index = 1; index <= 12; index += 1) {
+      await wrapper.setProps({ content: '字'.repeat(index) })
+    }
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    expect(stats.tailParses - before).toBeLessThanOrEqual(1)
+    expect(wrapper.text()).toContain('字'.repeat(12))
+    wrapper.unmount()
+  })
+
+  it('一次到达的块才动画；重置快照与按钮文字不动画（方案 C）', async () => {
+    const wrapper = await mountStreaming('')
+    // 整段代码带闭合围栏一次到达：算“写完”，整块落一次动画。
+    await wrapper.setProps({ content: '```js\nconst answer = 42\n```\n' })
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('code .stream-block-enter').exists()).toBe(true)
+    expect(wrapper.find('button .stream-block-enter').exists()).toBe(false)
+
+    // 内容变短（重新生成/回滚）：不把旧动画留在页面上。
     await wrapper.setProps({ content: 'Reset' })
-    expect(wrapper.find('.stream-text-fade').exists()).toBe(false)
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.stream-block-enter').exists()).toBe(false)
     expect(wrapper.text()).toBe('Reset')
     wrapper.unmount()
   })
 
-  it('keeps an active reveal timeline when the tail closes and preserves Unicode text', async () => {
+  it('行写完才落定，Unicode 不被拆开（方案 C）', async () => {
     vi.useFakeTimers()
     const wrapper = await mountStreaming('Read')
-    await wrapper.setProps({ content: 'Read 😀' })
-    await vi.advanceTimersByTimeAsync(60)
     await wrapper.setProps({ content: 'Read 😀 now\n\nNext' })
+    await nextFrame()
+    await wrapper.vm.$nextTick()
     const first = wrapper.find('p')
     expect(first.text()).toBe('Read 😀 now')
-    expect(first.findAll('.stream-text-fade').map(span => span.text())).toEqual(['😀', 'now'])
-    expect(first.find('.stream-text-fade').attributes('style')).toContain('--stream-fade-age: 60ms')
+    // 整块落一次动画；emoji 整颗，不会被拆成两个 span。
+    expect(first.find('.stream-block-enter').text()).toBe('Read 😀 now')
+    expect(first.findAll('.stream-block-enter')).toHaveLength(1)
+
     const closed = first.element
     await wrapper.setProps({ content: 'Read 😀 now\n\nNext update' })
+    await nextFrame()
+    await wrapper.vm.$nextTick()
+    // 已闭合的段落复用同一个 DOM 节点（不重建、不重放动画）。
     expect(wrapper.find('p').element).toBe(closed)
+    expect(wrapper.text()).toContain('Read 😀 now')
     wrapper.unmount()
   })
 
@@ -135,7 +191,8 @@ describe('MarkdownRenderer incremental streaming', () => {
     expect(blockSignature(wrapper.find('.markdown-body').element)).toBe(referenceSignature(wrapper, steps[0]))
     for (const step of steps.slice(1)) {
       await wrapper.setProps({ content: step })
-      await wrapper.vm.$nextTick()
+      await nextFrame()
+  await wrapper.vm.$nextTick()
       expect(blockSignature(wrapper.find('.markdown-body').element), `step: ${JSON.stringify(step)}`).toBe(referenceSignature(wrapper, step))
     }
     wrapper.unmount()
@@ -148,7 +205,8 @@ describe('MarkdownRenderer incremental streaming', () => {
 
     // Tail growth: 丁段 appended → the first three segments keep their nodes.
     await wrapper.setProps({ content: '甲段\n\n乙段\n\n丙段\n\n丁段' })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     const after = Array.from(container.children)
     expect(after.length).toBe(4)
     for (let i = 0; i < 3; i += 1) {
@@ -159,7 +217,8 @@ describe('MarkdownRenderer incremental streaming', () => {
     // Tail modification: the open segment is replaced, closed ones stay.
     const beforeSecondTick = Array.from(container.children)
     await wrapper.setProps({ content: '甲段\n\n乙段\n\n丙段\n\n丁段加长内容' })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     const afterSecondTick = Array.from(container.children)
     expect(afterSecondTick[0]).toBe(beforeSecondTick[0])
     expect(afterSecondTick[1]).toBe(beforeSecondTick[1])
@@ -172,7 +231,8 @@ describe('MarkdownRenderer incremental streaming', () => {
   it('cleans up DOM when streaming ends', async () => {
     const wrapper = await mountStreaming('一段')
     await wrapper.setProps({ content: '一段', streaming: false })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     // Non-streaming path renders via v-html (full markdown).
     expect(wrapper.find('.markdown-body').exists()).toBe(true)
     wrapper.unmount()
@@ -184,7 +244,8 @@ describe('MarkdownRenderer incremental streaming', () => {
     const content = wrapper.find('.markdown-renderer__content').element
 
     await wrapper.setProps({ streaming: false })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.markdown-renderer').element).toBe(shell)
     expect(wrapper.find('.markdown-renderer__content').element).toBe(content)
@@ -245,7 +306,8 @@ describe('MarkdownRenderer incremental streaming', () => {
     expect(wrapper.findAll('.markdown-body > *')).toHaveLength(2)
 
     await wrapper.setProps({ content: `${openFence}\`\`\`\n\n结尾` })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     expect(wrapper.findAll('.code-block')).toHaveLength(1)
     const code = wrapper.find('.code-block pre code')
     expect(code.text()).toContain('print(1)')
@@ -260,7 +322,8 @@ describe('MarkdownRenderer incremental streaming', () => {
     const stats = api(wrapper).streamingStats
 
     await wrapper.setProps({ content: '一句正在增长' })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(stats.tailParses).toBe(2)
     expect(stats.closedParses).toBe(0)
@@ -271,14 +334,16 @@ describe('MarkdownRenderer incremental streaming', () => {
   it('rate limits tail parses for a large tail without dropping the newest content', async () => {
     vi.useFakeTimers()
     const wrapper = mount(MarkdownRenderer, { props: { content: LONG_TAIL, streaming: true } })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     const stats = api(wrapper).streamingStats
     expect(stats.tailParses).toBe(1)
 
     const updates = [1, 2, 3, 4, 5].map(count => LONG_TAIL + '新'.repeat(count))
     for (const content of updates) {
       await wrapper.setProps({ content })
-      await wrapper.vm.$nextTick()
+      await nextFrame()
+  await wrapper.vm.$nextTick()
     }
     // All five updates landed inside one throttle window.
     expect(stats.tailParses).toBe(1)
@@ -286,7 +351,8 @@ describe('MarkdownRenderer incremental streaming', () => {
 
     // The queued tail parse renders the newest content: nothing is lost.
     vi.advanceTimersByTime(400)
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     expect(stats.tailParses).toBe(2)
     expect(stats.tailParses).toBeLessThan(updates.length)
     expect(wrapper.find('.markdown-body').text()).toContain(LONG_TAIL + '新'.repeat(5))
@@ -296,21 +362,25 @@ describe('MarkdownRenderer incremental streaming', () => {
   it('keeps the last rendered tail visible while a rate-limited parse is pending', async () => {
     vi.useFakeTimers()
     const wrapper = mount(MarkdownRenderer, { props: { content: LONG_TAIL, streaming: true } })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     await wrapper.setProps({ content: `${LONG_TAIL}新增的一段话` })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     // Deferred re-parse: the stale tail stays put (lagging, never blank).
     expect(wrapper.find('.markdown-body').text()).toContain(LONG_TAIL)
     expect(wrapper.find('.markdown-body').text()).not.toContain('新增的一段话')
 
     vi.advanceTimersByTime(400)
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     expect(wrapper.find('.markdown-body').text()).toContain(`${LONG_TAIL}新增的一段话`)
 
     // Closing that segment renders it immediately — again with no blank gap.
     await wrapper.setProps({ content: `${LONG_TAIL}新增的一段话\n\n结尾段` })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     expect(wrapper.find('.markdown-body').text()).toContain(`${LONG_TAIL}新增的一段话`)
     expect(wrapper.find('.markdown-body').text()).toContain('结尾段')
     wrapper.unmount()
@@ -319,20 +389,24 @@ describe('MarkdownRenderer incremental streaming', () => {
   it('never lets a queued tail parse write into content it no longer owns', async () => {
     vi.useFakeTimers()
     const wrapper = mount(MarkdownRenderer, { props: { content: LONG_TAIL, streaming: true } })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     const stats = api(wrapper).streamingStats
 
     // Queue a throttled tail parse ...
     await wrapper.setProps({ content: `${LONG_TAIL}新内容` })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     expect(stats.tailParses).toBe(1)
 
     // ... then leave streaming mode before it fires.
     await wrapper.setProps({ streaming: false })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     const settled = wrapper.find('.markdown-body').element.innerHTML
     vi.advanceTimersByTime(400)
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(stats.tailParses).toBe(1)
     expect(wrapper.find('.markdown-body').element.innerHTML).toBe(settled)
@@ -370,7 +444,8 @@ describe('MarkdownRenderer incremental streaming', () => {
     const wrapper = mount(MarkdownRenderer, {
       props: { content, streaming: true, autoPlotMath: true },
     })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     // While streaming: formulas render, heavy output stays a placeholder-free
     // code block / plain formula.
@@ -384,9 +459,11 @@ describe('MarkdownRenderer incremental streaming', () => {
     expect(wrapper.find('code.language-mermaid').text()).toBe(mermaidSource)
 
     await wrapper.setProps({ streaming: false })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     await flushPromises()
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     // The finished render is authoritative: heavy output appears exactly once.
     expect(wrapper.find('.math-auto-plot').exists()).toBe(true)
@@ -399,28 +476,55 @@ describe('MarkdownRenderer incremental streaming', () => {
   it('parses each closed segment exactly once', async () => {
     vi.useFakeTimers()
     const wrapper = mount(MarkdownRenderer, { props: { content: LONG_TAIL, streaming: true } })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     const stats = api(wrapper).streamingStats
 
     // The throttled tail is stale when its segment closes, so closing it costs
     // exactly one render.
     await wrapper.setProps({ content: `${LONG_TAIL}补一句` })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     await wrapper.setProps({ content: `${LONG_TAIL}补一句\n\n第二段` })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
     expect(stats.closedParses).toBe(1)
 
     for (const suffix of ['一', '一二', '一二三', '一二三四']) {
       await wrapper.setProps({ content: `${LONG_TAIL}补一句\n\n第二段${suffix}` })
-      await wrapper.vm.$nextTick()
+      await nextFrame()
+  await wrapper.vm.$nextTick()
     }
     vi.advanceTimersByTime(400)
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     // Tail-only ticks never re-parse a closed segment (per-frame O(tail)).
     expect(stats.closedParses).toBe(1)
     expect(stats.closedParses + stats.tailParses).toBeLessThanOrEqual(8)
     expect(wrapper.find('.markdown-body').text()).toContain('第二段一二三四')
+    wrapper.unmount()
+  })
+})
+
+// user:“收尾那一次必须立即刷新，不能因为待着的定时器而让最后几个字晚 120ms 出现或残留 span”
+// +(尾段 120ms 节流只允许发生在流式过程中；一旦退出 streaming，最后几个字必须立刻出现在
+// 收尾整体渲染里，并且动画 span 同步清掉 —— 不推进任何定时器也要成立。)
+describe('MarkdownRenderer 收尾即时性', () => {
+  it('退出 streaming 时最后几个字立即可见，且动画 span 同步清干净（不推进任何定时器）', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-16T00:00:00Z'))
+    // 尾段长度 ≥ EAGER_TAIL_PARSE_LIMIT，才会走 120ms 节流这条路径
+    const base = '长'.repeat(1100)
+    const wrapper = await mountStreaming(base)
+    await wrapper.setProps({ content: `${base}末` })
+    // 此刻尾段解析被 scheduleTailParse 挂起，靠定时器才可能刷新
+    await wrapper.setProps({ streaming: false })
+    await nextFrame()
+  await wrapper.vm.$nextTick()
+    await flushPromises()
+    expect(wrapper.text()).toContain('末')
+    expect(wrapper.find('.stream-block-enter').exists()).toBe(false)
     wrapper.unmount()
   })
 })

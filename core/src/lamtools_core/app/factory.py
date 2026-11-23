@@ -148,6 +148,8 @@ def create_app(
             request.url.path,
             response.headers,
             runtime_path=RUNTIME_PATH,
+            # user:"必须实测 read-reference 的响应头"+(预览器 iframe 需要按 inline=1 单独放开帧宿先限制，其余请求照旧同源限制。)
+            query=request.url.query,
         )
         return response
 

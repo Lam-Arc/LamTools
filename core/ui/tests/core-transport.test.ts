@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CoreAppServerClient } from '../src/appServer/client'
 import { DirectHttpTransport, DirectTransport } from '../src/transport/directTransport'
-import { TransportDisconnectedError } from '../src/transport/types'
+import { TransportDisconnectedError, TransportRpcError } from '../src/transport/types'
 import type {
   LamToolsTransport,
   TransportConnectionState,
@@ -253,5 +253,117 @@ describe('Core transport abstraction', () => {
       expect.objectContaining({ code: 1013, wasClean: false }),
     )
     warning.mockRestore()
+  })
+})
+
+class NotInitializedTransport implements LamToolsTransport {
+  private messageListeners = new Set<(message: TransportMessage) => void>()
+  private stateListeners = new Set<(state: TransportConnectionState) => void>()
+  calls: string[] = []
+  handshakes = 0
+  rejectNextBusiness = true
+  rejectEveryBusiness = false
+
+  async connect(): Promise<void> {
+    this.emitState('connecting')
+    this.emitState('connected')
+  }
+
+  async close(): Promise<void> {
+    this.emitState('disconnected')
+  }
+
+  async request<TResponse = unknown>(request: TransportRequest): Promise<TResponse> {
+    this.calls.push(request.method)
+    if (request.method === 'initialize') {
+      this.handshakes += 1
+      return {} as TResponse
+    }
+    if (this.rejectEveryBusiness || this.rejectNextBusiness) {
+      this.rejectNextBusiness = false
+      throw new TransportRpcError(-32002, 'Connection is not initialized', {
+        reason: 'not_initialized',
+        retriable: true,
+      })
+    }
+    return { method: request.method } as TResponse
+  }
+
+  send(_message: TransportMessage): void {}
+
+  subscribe(listener: (message: TransportMessage) => void): () => void {
+    this.messageListeners.add(listener)
+    return () => this.messageListeners.delete(listener)
+  }
+
+  onState(listener: (state: TransportConnectionState) => void): () => void {
+    this.stateListeners.add(listener)
+    return () => this.stateListeners.delete(listener)
+  }
+
+  getState(): TransportConnectionState {
+    return 'connected'
+  }
+
+  private emitState(state: TransportConnectionState): void {
+    for (const listener of this.stateListeners) listener(state)
+  }
+}
+
+describe('Core pre-handshake recovery', () => {
+  // user:"界面出现 Connection is not initialized"+(服务器说连接还没握手时，客户端必须
+  // 在同一条连接上补一次 initialize 并重试这一帧，而不是把这条拒绝当成失败丢掉)。
+  it('re-handshakes and retries once when the server reports not_initialized', async () => {
+    const transport = new NotInitializedTransport()
+    const client = new CoreAppServerClient({ transport, clientInfo: { name: 'test' } })
+
+    const result = await client.request('goal.list', { thread_id: 'thread-1' })
+
+    expect(result).toEqual({ method: 'goal.list' })
+    expect(transport.handshakes).toBe(2)
+    expect(transport.calls).toEqual(['initialize', 'goal.list', 'initialize', 'goal.list'])
+    client.close()
+  })
+
+  // user:"界面出现 Connection is not initialized"+(重握手也失败时，用户看到的是
+  // 中文提示，而不是协议英文原句；技术细节留在 error.code 里)。
+  it('surfaces a readable message instead of the raw protocol text', async () => {
+    const transport = new NotInitializedTransport()
+    transport.rejectEveryBusiness = true
+    const client = new CoreAppServerClient({ transport, clientInfo: { name: 'test' } })
+
+    await expect(client.request('goal.list', {})).rejects.toMatchObject({ code: 'NOT_READY' })
+    await expect(client.request('goal.list', {})).rejects.toThrow('与主程序的连接还没就绪')
+    await expect(client.request('goal.list', {})).rejects.not.toThrow('Connection is not initialized')
+    client.close()
+  })
+})
+
+// user:“标注后无法引用”+
+// (预览器先用 `<img>` 以 no-cors 缓存了同一个地址，之后 CORS `fetch` 同一 URL 会被浏览器
+//  判成“没有 ACAO”；读字节必须显式绕过缓存，否则合成标注图这一步永远失败。)
+describe('preview byte reads bypass the http cache', () => {
+  it('sends cache: no-store through the direct http transport', async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = []
+    const fakeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 })
+    })
+    const http = new DirectHttpTransport('http://127.0.0.1:9/api/core', {}, fakeFetch as unknown as typeof fetch)
+    await http.request({ kind: 'http', method: 'GET', path: '/files/read-reference?path=a.png', cache: 'no-store' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.init?.cache).toBe('no-store')
+  })
+
+  it('keeps the preview transport asking for no-store on every read', async () => {
+    const transport = {
+      request: async (request: Record<string, unknown>) => {
+        expect(request.cache).toBe('no-store')
+        return { status: 200, headers: {}, body: new Uint8Array([1]) }
+      },
+    } as unknown as LamToolsTransport
+    const { createPreviewTransport } = await import('../src/preview/transport')
+    const bytes = await createPreviewTransport({ transport, origin: 'http://127.0.0.1:9' }).read('/files/read-reference?path=a.png')
+    expect(Array.from(bytes)).toEqual([1])
   })
 })

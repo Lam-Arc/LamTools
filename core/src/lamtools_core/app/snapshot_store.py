@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import Integer, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -582,13 +583,36 @@ class SqlAlchemyThreadSnapshotStore:
         item_model: type[Any],
         projector: CoreAppSnapshotProjector | None = None,
         event_model: type[Any] | None = None,
+        rust_db: Any | None = None,
     ) -> None:
         self.snapshot_model = snapshot_model
         self.item_model = item_model
         self.projector = projector or CoreAppSnapshotProjector()
         self.event_model = event_model
+        self._rust_db = rust_db
         # thread_id -> (revision, snapshot_seq, parsed metadata state).
         self._metadata_cache: dict[str, tuple[int, int, dict[str, Any]]] = {}
+
+    def _can_use_rust(self, db: Any) -> Any | None:
+        if (
+            self._rust_db is not None
+            and self._rust_db.is_active
+            and not db.in_transaction()
+            and not getattr(db, "new", None)
+            and not getattr(db, "dirty", None)
+            and not getattr(db, "deleted", None)
+        ):
+            return self._rust_db
+        return None
+
+    async def _finish_rust_result(
+        self, db: AsyncSession, thread_id: str, res: dict[str, Any]
+    ) -> dict[str, Any]:
+        state = res["state"]
+        if res.get("needs_usage_hydration"):
+            await self._hydrate_resource_usage(db, state, thread_id)
+            return self._finish_state(state, res.get("active_turn_id"))
+        return state
 
     def invalidate_metadata_cache(self, thread_id: str | None = None) -> None:
         """Drop the parsed-metadata cache for one thread (or all of them)."""
@@ -596,6 +620,8 @@ class SqlAlchemyThreadSnapshotStore:
             self._metadata_cache.clear()
         else:
             self._metadata_cache.pop(thread_id, None)
+        if self._rust_db is not None and self._rust_db.is_active:
+            self._rust_db.invalidate_thread(thread_id)
 
     def _remember_metadata(
         self, thread_id: str, revision: int, snapshot_seq: int, state: dict[str, Any]
@@ -623,6 +649,9 @@ class SqlAlchemyThreadSnapshotStore:
             turns = core.get("turns")
             if isinstance(turns, dict):
                 core["turns"] = dict(turns)
+            artifacts = core.get("artifacts")
+            if isinstance(artifacts, dict):
+                core["artifacts"] = dict(artifacts)
         turns = copy.get("turns")
         if isinstance(turns, dict):
             copy["turns"] = dict(turns)
@@ -735,8 +764,16 @@ class SqlAlchemyThreadSnapshotStore:
             and core.get("resource_usage_version") == 1
         ):
             cached_core["resource_usage_version"] = 1
+            if isinstance(core.get("turns"), dict):
+                cached_core["turns"] = dict(core["turns"])
+            if isinstance(state.get("turns"), dict):
+                cached_state["turns"] = dict(state["turns"])
 
     async def load(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            res = await rust_db.call("load_snapshot_full", {"thread_id": thread_id})
+            return await self._finish_rust_result(db, thread_id, res)
         meta = await self._metadata_state(db, thread_id)
         if meta is None:
             return self.projector.empty(thread_id)
@@ -783,12 +820,16 @@ class SqlAlchemyThreadSnapshotStore:
             item["seq"] = item_row.seq
             items[str(item_row.item_id)] = item
             order.append(str(item_row.item_id))
+        await self._hydrate_body_refs(db, thread_id, items)
         core = state.get("core")
         if not isinstance(core, dict):
             core = empty_thread_snapshot(thread_id)
             state["core"] = core
         core["items"] = items
         core["item_order"] = order
+        await self._hydrate_split_artifacts(db, thread_id, state)
+        await self._hydrate_split_turns(db, thread_id, state)
+        core = state["core"]
         decisions = await self._load_open_interactions(db, thread_id)
         core["decisions"] = decisions
         core["interactions"] = decisions
@@ -803,6 +844,10 @@ class SqlAlchemyThreadSnapshotStore:
         full item-table scan and JSON parse here. ``core.items`` is empty by
         design; consumers must not treat this as a complete snapshot.
         """
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            res = await rust_db.call("load_snapshot_metadata", {"thread_id": thread_id})
+            return await self._finish_rust_result(db, thread_id, res)
         meta = await self._metadata_state(db, thread_id)
         if meta is None:
             return self.projector.empty(thread_id)
@@ -817,6 +862,8 @@ class SqlAlchemyThreadSnapshotStore:
             state["core"] = core
         core.setdefault("items", {})
         core.setdefault("item_order", [])
+        await self._hydrate_split_turns(db, thread_id, state)
+        core = state["core"]
         decisions = await self._load_open_interactions(db, thread_id)
         core["decisions"] = decisions
         core["interactions"] = decisions
@@ -950,6 +997,19 @@ class SqlAlchemyThreadSnapshotStore:
         Top-level (user) items live inside the metadata row, so they are always
         present; only the per-item conversation rows are bounded.
         """
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            # user:“加载/切换/多会话多 agent 同时读写”+(会话切换的分页、条目预算、决策池与计划在 Rust 单次调用内完成，并命中 64 槽位元数据缓存)。
+            res = await rust_db.call(
+                "load_snapshot_page",
+                {
+                    "thread_id": thread_id,
+                    "before_seq": int(before_seq) if before_seq is not None else None,
+                    "before_item_id": before_item_id,
+                    "item_byte_budget": int(item_byte_budget),
+                },
+            )
+            return await self._finish_rust_result(db, thread_id, res)
         state, core, active_turn_id = await self._page_state(db, thread_id)
         if state is None:
             return self.projector.empty(thread_id)
@@ -959,6 +1019,8 @@ class SqlAlchemyThreadSnapshotStore:
             db, thread_id, before_seq=before_seq, item_byte_budget=item_byte_budget
         )
         core["items"] = loaded
+        await self._hydrate_split_turns(db, thread_id, state)
+        core = state["core"]
         core["_page_has_older_items"] = await self._has_older_items(
             db, thread_id, loaded, before_seq=before_seq
         )
@@ -968,6 +1030,8 @@ class SqlAlchemyThreadSnapshotStore:
         # a row here. The page builder needs it for ``total_items`` and would
         # otherwise union two id lists that are as long as the whole thread.
         core["_page_total_items"] = await self._item_row_count(db, thread_id)
+        if before_seq is not None:
+            core["_page_before_seq"] = before_seq
         # 决策池必须随分页快照一起下发：会话重开/断线重连走的是 load_page，
         # 之前只有完整 load 才注入 interactions，客户端只好退回消息树兜底，
         # 桌宠与主界面都会丢掉审批/提问的标题、选项和子代理来源。
@@ -1058,6 +1122,13 @@ class SqlAlchemyThreadSnapshotStore:
         """
         if not text_marker:
             return await self.load_metadata(db, thread_id)
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            res = await rust_db.call(
+                "load_items_by_kind",
+                {"thread_id": thread_id, "text_marker": text_marker, "limit": int(limit)},
+            )
+            return await self._finish_rust_result(db, thread_id, res)
         state = await self.load_metadata(db, thread_id)
         if not state or not state.get("thread_id"):
             return state
@@ -1066,11 +1137,17 @@ class SqlAlchemyThreadSnapshotStore:
             core = {}
             state["core"] = core
         model = self.item_model
+        # user:“继续”+(瘦身条目剥离 payload 后，Python 回退路径优先按 item_type 列精准命中)
+        type_filter = (
+            (model.item_type == text_marker) | model.item_json.like(f'%"{text_marker}"%')
+            if hasattr(model, "item_type")
+            else model.item_json.like(f'%"{text_marker}"%')
+        )
         stmt = (
             select(model)
             .where(
                 model.thread_id == thread_id,
-                model.item_json.like(f'%"{text_marker}"%'),
+                type_filter,
             )
             .order_by(model.seq.asc(), model.item_id.asc())
             .limit(limit)
@@ -1080,6 +1157,7 @@ class SqlAlchemyThreadSnapshotStore:
             item = dict(item_row.item_json or {})
             item["seq"] = item_row.seq
             items[str(item_row.item_id)] = item
+        await self._hydrate_body_refs(db, thread_id, items)
         core["items"] = items
         return state
 
@@ -1094,6 +1172,14 @@ class SqlAlchemyThreadSnapshotStore:
         """
         if not item_id:
             return None
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            res = await rust_db.call(
+                "resolve_item_seq",
+                {"thread_id": thread_id, "item_id": item_id},
+            )
+            val = res.get("seq")
+            return int(val) if val is not None else None
         seq = await self._item_seq(db, thread_id, item_id)
         if seq is not None:
             return seq
@@ -1142,6 +1228,21 @@ class SqlAlchemyThreadSnapshotStore:
         Returns ``(seq, snapshot)``; a ``None`` seq means the id is not in this
         thread, and an empty page is returned.
         """
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            res = await rust_db.call(
+                "load_page_around",
+                {
+                    "thread_id": thread_id,
+                    "item_id": item_id,
+                    "item_byte_budget": int(item_byte_budget),
+                },
+            )
+            anchor = res.get("anchor_seq")
+            if anchor is None:
+                return None, self.projector.empty(thread_id)
+            state = await self._finish_rust_result(db, thread_id, res["page"])
+            return int(anchor), state
         seq = await self.resolve_item_seq(db, thread_id, item_id)
         if seq is None:
             return None, self.projector.empty(thread_id)
@@ -1174,7 +1275,12 @@ class SqlAlchemyThreadSnapshotStore:
         """
         budget = max(1, int(item_byte_budget))
         model = self.item_model
-        sizes = select(model.seq, model.item_id, func.length(model.item_json)).where(
+        # user:“继续”+(分页字节预算优先采用 _body_ref.byte_len，并在读取时从事件流批量水合瘦身条目)
+        size_expr = func.coalesce(
+            func.cast(func.json_extract(model.item_json, "$._body_ref.byte_len"), Integer),
+            func.length(model.item_json),
+        )
+        sizes = select(model.seq, model.item_id, size_expr).where(
             model.thread_id == thread_id
         )
         if before_seq is not None:
@@ -1204,7 +1310,149 @@ class SqlAlchemyThreadSnapshotStore:
             item = dict(item_row.item_json or {})
             item["seq"] = item_row.seq
             items[str(item_row.item_id)] = item
+        await self._hydrate_body_refs(db, thread_id, items)
         return items
+
+
+    async def _hydrate_body_refs(
+        self, db: AsyncSession, thread_id: str, items: dict[str, Any]
+    ) -> None:
+        # user:“继续”+(Python 回退读取路径从 core_app_events 批量重建含 _body_ref 的瘦身条目)
+        if not items or self.event_model is None:
+            return
+        ref_targets: list[tuple[str, str]] = []
+        max_seq = 0
+        unbounded = False
+        for map_id, val in items.items():
+            if not isinstance(val, dict):
+                continue
+            ref_obj = val.get("_body_ref")
+            if not isinstance(ref_obj, dict):
+                continue
+            target_iid = str(ref_obj.get("item_id") or "").strip() or str(map_id)
+            ref_seq = int(ref_obj.get("last_seq") or 0)
+            if ref_seq > 0:
+                max_seq = max(max_seq, ref_seq)
+            else:
+                unbounded = True
+            ref_targets.append((str(map_id), target_iid))
+        if not ref_targets:
+            return
+
+        unique_iids = list(dict.fromkeys(target_iid for _, target_iid in ref_targets))
+        model = self.event_model
+        recon_state = empty_thread_snapshot(thread_id)
+        for start in range(0, len(unique_iids), 200):
+            chunk = unique_iids[start : start + 200]
+            stmt = (
+                select(model)
+                .where(
+                    model.thread_id == thread_id,
+                    model.item_id.in_(chunk),
+                    model.method == CORE_RUN_ITEM_METHOD,
+                )
+            )
+            if not unbounded and max_seq > 0:
+                stmt = stmt.where(model.seq <= max_seq)
+            stmt = stmt.order_by(model.seq.asc())
+            for event_row in (await db.execute(stmt)).scalars():
+                payload = dict(event_row.payload_json or {})
+                payload["seq"] = event_row.seq
+                payload.setdefault("thread_id", thread_id)
+                if not payload.get("event_id") and getattr(event_row, "event_id", None):
+                    payload["event_id"] = event_row.event_id
+                apply_run_item_event_in_place(recon_state, RunItemEvent.from_dict(payload))
+
+        recon_items = recon_state.get("items")
+        for map_id, target_iid in ref_targets:
+            item_obj = items.get(map_id)
+            if not isinstance(item_obj, dict):
+                continue
+            recon_obj = recon_items.get(target_iid) if isinstance(recon_items, dict) else None
+            if isinstance(recon_obj, dict):
+                for key in ("content", "deltas", "payload", "artifacts"):
+                    if key in recon_obj:
+                        item_obj[key] = deepcopy(recon_obj[key])
+                    else:
+                        item_obj.pop(key, None)
+            item_obj.pop("_body_ref", None)
+
+    async def _has_auxiliary_table(self, db: AsyncSession, table_name: str) -> bool:
+        row = (
+            await db.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:name LIMIT 1"),
+                {"name": table_name},
+            )
+        ).first()
+        return row is not None
+
+    async def _hydrate_split_artifacts(
+        self, db: AsyncSession, thread_id: str, state: dict[str, Any]
+    ) -> None:
+        # user:“嗯”+(Python 读取兜底：回填拆分存盘的 core.artifacts)
+        if not await self._has_auxiliary_table(db, "core_thread_snapshot_artifacts"):
+            return
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT artifact_id, artifact_json FROM core_thread_snapshot_artifacts "
+                    "WHERE thread_id = :tid"
+                ),
+                {"tid": thread_id},
+            )
+        ).all()
+        if not rows:
+            return
+        raw_core = state.get("core")
+        core = dict(raw_core) if isinstance(raw_core, dict) else empty_thread_snapshot(thread_id)
+        state["core"] = core
+        raw_registry = core.get("artifacts")
+        registry = dict(raw_registry) if isinstance(raw_registry, dict) else {}
+        core["artifacts"] = registry
+        for artifact_id, raw_json in rows:
+            aid = str(artifact_id)
+            if aid in registry:
+                continue
+            val = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+            if isinstance(val, dict):
+                registry[aid] = val
+
+    async def _hydrate_split_turns(
+        self, db: AsyncSession, thread_id: str, state: dict[str, Any]
+    ) -> None:
+        # user:“嗯”+(Python 读取兜底：回填拆分存盘的 turns / core.turns)
+        if not await self._has_auxiliary_table(db, "core_thread_snapshot_turns"):
+            return
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT turn_id, core_turn_json, app_turn_json FROM core_thread_snapshot_turns "
+                    "WHERE thread_id = :tid ORDER BY seq ASC, turn_id ASC"
+                ),
+                {"tid": thread_id},
+            )
+        ).all()
+        if not rows:
+            return
+        raw_core = state.get("core")
+        core = dict(raw_core) if isinstance(raw_core, dict) else empty_thread_snapshot(thread_id)
+        state["core"] = core
+        raw_core_turns = core.get("turns")
+        core_turns = dict(raw_core_turns) if isinstance(raw_core_turns, dict) else {}
+        core["turns"] = core_turns
+        raw_app_turns = state.get("turns")
+        app_turns = dict(raw_app_turns) if isinstance(raw_app_turns, dict) else {}
+        state["turns"] = app_turns
+        for turn_id, raw_core, raw_app in rows:
+            tid = str(turn_id)
+            if isinstance(core_turns, dict) and raw_core is not None and tid not in core_turns:
+                c_val = json.loads(raw_core) if isinstance(raw_core, str) else raw_core
+                if isinstance(c_val, dict):
+                    core_turns[tid] = c_val
+            if isinstance(app_turns, dict) and raw_app is not None and tid not in app_turns:
+                a_val = json.loads(raw_app) if isinstance(raw_app, str) else raw_app
+                if isinstance(a_val, dict):
+                    app_turns[tid] = a_val
 
 
     async def _hydrate_resource_usage(self, db: AsyncSession, state: dict[str, Any], thread_id: str) -> None:
@@ -1292,6 +1540,7 @@ class SqlAlchemyThreadSnapshotStore:
                 item = dict(item_row.item_json or {})
                 item["seq"] = item_row.seq
                 items[str(item_row.item_id)] = item
+            await self._hydrate_body_refs(db, thread_id, items)
         core["items"] = items
         core["item_order"] = order
         if needs_anchors:
@@ -1528,22 +1777,32 @@ class SqlAlchemyThreadSnapshotStore:
         metadata_state = slim_registry_inline_images(metadata_state)
         metadata_state.pop("_item_seq_map", None)
         now = datetime.now()
+        supports_item_type = hasattr(self.item_model, "item_type")
         for item_id, item in items.items():
             seq = int(item.get("seq") or 0) if isinstance(item, dict) else 0
+            item_type = ""
+            if isinstance(item, dict):
+                raw_type = item.get("type") or (
+                    item.get("payload").get("type") if isinstance(item.get("payload"), dict) else ""
+                )
+                item_type = str(raw_type or "").strip()
             existing = await db.get(self.item_model, (thread_id, str(item_id)))
             if existing is None:
-                db.add(
-                    self.item_model(
-                        thread_id=thread_id,
-                        item_id=str(item_id),
-                        seq=seq,
-                        item_json=item,
-                        updated_at=now,
-                    )
-                )
+                kwargs: dict[str, Any] = {
+                    "thread_id": thread_id,
+                    "item_id": str(item_id),
+                    "seq": seq,
+                    "item_json": item,
+                    "updated_at": now,
+                }
+                if supports_item_type:
+                    kwargs["item_type"] = item_type
+                db.add(self.item_model(**kwargs))
             else:
                 existing.seq = seq
                 existing.item_json = item
+                if supports_item_type:
+                    existing.item_type = item_type
                 existing.updated_at = now
         row.snapshot_seq = int(state.get("snapshot_seq") or 0)
         if hasattr(row, "revision"):

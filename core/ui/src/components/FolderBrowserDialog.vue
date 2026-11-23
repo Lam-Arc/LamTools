@@ -3,7 +3,7 @@
        its own target (audit 19 S3 — hardcoding ".workspace-shell" silently
        broke rendering in hosts without the shell). -->
   <Teleport :to="resolvedTarget">
-    <Transition name="fb-overlay">
+    <Transition name="sunday-motion-fade" @before-leave="el => el.setAttribute('inert', '')">
       <div
         v-if="visible"
         ref="backdropEl"
@@ -11,7 +11,7 @@
       >
       <section
         ref="dialogRef"
-        class="fb-dialog"
+        class="fb-dialog sunday-motion-popover"
         role="dialog"
         aria-modal="true"
         aria-labelledby="fb-dialog-title"
@@ -301,26 +301,7 @@ function confirm() {
   color: var(--text);
   box-shadow: var(--shadow-md);
   overflow: hidden;
-  /* 入场：scale+淡入（与弹层统一节奏） */
-  animation: popover-in 160ms var(--ease-out);
   transform-origin: center;
-}
-
-/* 离场过渡：遮罩淡出 + 对话框轻微下沉（B6） */
-.fb-overlay-enter-active,
-.fb-overlay-leave-active {
-  transition: opacity var(--dur-base) ease;
-}
-.fb-overlay-enter-active .fb-dialog,
-.fb-overlay-leave-active .fb-dialog {
-  transition: transform var(--dur-base) var(--ease-out);
-}
-.fb-overlay-enter-from,
-.fb-overlay-leave-to {
-  opacity: 0;
-}
-.fb-overlay-leave-to .fb-dialog {
-  transform: translateY(4px);
 }
 
 .fb-dialog-header {
@@ -501,15 +482,4 @@ function confirm() {
   .fb-dialog-footer { padding: 10px 14px; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .fb-dialog {
-    animation: none;
-  }
-  .fb-overlay-enter-active,
-  .fb-overlay-leave-active,
-  .fb-overlay-enter-active .fb-dialog,
-  .fb-overlay-leave-active .fb-dialog {
-    transition: none;
-  }
-}
 </style>

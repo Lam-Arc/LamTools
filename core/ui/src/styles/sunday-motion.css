@@ -1,0 +1,51 @@
+/* user:“做”+(浮层开合、列表和消息入场共用动作；减少动效时直接到达可用状态)。 */
+.sunday-motion-popover {
+  animation: popover-in var(--dur-base) var(--ease-out);
+}
+
+.sunday-motion-fade-enter-active,
+.sunday-motion-fade-leave-active {
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.sunday-motion-fade-leave-active { pointer-events: none; }
+
+.sunday-motion-fade-enter-from,
+.sunday-motion-fade-leave-to { opacity: 0; }
+
+.sunday-motion-row,
+.assistant-message--live,
+.process-stream--live,
+.settings-panel {
+  animation: stream-enter var(--motion-row-duration, var(--dur-base)) var(--ease-out) both;
+}
+
+.settings-panel {
+  --motion-row-offset: 6px;
+  --motion-row-opacity: 0;
+  --motion-row-duration: 260ms;
+}
+
+@keyframes popover-in {
+  from { opacity: 0; transform: translateY(-3px) scale(.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes stream-enter {
+  from { opacity: var(--motion-row-opacity, .68); transform: translateY(var(--motion-row-offset, 2px)); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 展厅的系统偏好模拟只在其文档里启用。 */
+.sunday-motion-preview-reduced :is(.sunday-motion-popover, .sunday-motion-row, .assistant-message--live, .process-stream--live, .settings-panel) {
+  animation: none;
+}
+
+.sunday-motion-preview-reduced :is(.sunday-motion-fade-enter-active, .sunday-motion-fade-leave-active) {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.sunday-motion-popover, .sunday-motion-row, .assistant-message--live, .process-stream--live, .settings-panel) { animation: none; }
+  :is(.sunday-motion-fade-enter-active, .sunday-motion-fade-leave-active) { transition: none; }
+}

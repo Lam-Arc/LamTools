@@ -371,13 +371,32 @@
       @update:input-value="folderNameDraft = $event"
       @confirm="confirmFolderName"
     />
+    <!-- user:“文件树、资料库、预览器里对文件加「发送到设备」”+(资料库这一份入口：
+         设备清单贴在点击处，选中即开始传输；点空白处收起)。 -->
+    <div v-if="sendTarget" class="materials-send-layer" data-materials-send @click="sendTarget = null">
+      <SendToDeviceMenu
+        class="materials-send-menu"
+        :style="sendStyle"
+        :path="sendTarget.path"
+        :name="sendTarget.name"
+        :size="sendTarget.size"
+        @sent="onSent"
+        @close="sendTarget = null"
+      />
+    </div>
+
+    <p v-if="sendNotice" class="full-area-note" role="status" data-materials-send-notice>
+      {{ sendNotice }}<button class="library-link" type="button" @click="sendNotice = ''">{{ t("知道了") }}</button>
+    </p>
   </section>
+
 </template>
 
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
 import LibraryViewToggle from '@/components/LibraryViewToggle.vue'
 import LibrarySearchField from '@/components/LibrarySearchField.vue'
+import SendToDeviceMenu from '@/components/SendToDeviceMenu.vue'
 
 /**
  * MaterialsView — 资料库的「资料」分区：项目里进出的文件（用户 / 中间产物 / 产物）。
@@ -404,8 +423,10 @@ import '@/library/style-runtime.ts'
 import CoreConfirmDialog from '@/components/CoreConfirmDialog.vue'
 import LibraryConfirmDialog from '@/components/LibraryConfirmDialog.vue'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
-import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
+import { useOptionalWorkspace } from '@/workspace/context'
 import { openFileInSplit } from '@/split/openFile'
+import { openInLightbox, previewLightboxAvailable } from '@/preview/usePreviewLightbox'
+import { filePreviewTarget } from '@/preview/target'
 import { copyText } from '@/helpers/clipboard.ts'
 import { useLibraryZoom } from '@/composables/useLibraryZoom.ts'
 import { openContextMenu, type ContextMenuEntry } from '@/components/context-menu/index.ts'
@@ -493,6 +514,17 @@ const pendingRemove = ref<ProjectArtifact[] | null>(null)
 const uploading = ref(false)
 const thumbs = ref<Map<string, string>>(new Map())
 const actionError = ref('')
+/**
+ * 「发送到设备」的当前目标与落点。
+ *
+ * user:“文件树、资料库、预览器里对文件加「发送到设备」”+(资料库这一份入口：卡片菜单里
+ * 选中文件后才出现设备清单，不选文件时不占位置)。
+ */
+const sendTarget = ref<{ path: string; name: string; size: number } | null>(null)
+const sendStyle = ref<Record<string, string>>({})
+const sendNotice = ref('')
+/** 正在转换的条目 id；转换有 IO，重复点会写第二份产物。 */
+const convertingId = ref('')
 let fetchRevision = 0
 /** 缩略图代次：换项目或卸载时 +1，让还在路上的取图结果作废，不落进新一面墙。 */
 let thumbRevision = 0
@@ -853,7 +885,7 @@ function open(item: ProjectArtifact): void {
   void openDefault(item)
 }
 
-const splitWorkspace = useOptionalSplitWorkspace()
+const splitWorkspace = useOptionalWorkspace()
 
 /**
  * user:“默认打开也跟文本文件一样 用分屏预览打开”+
@@ -864,29 +896,86 @@ async function openDefault(item: ProjectArtifact): Promise<void> {
   await openWithSystem(item)
 }
 
+/**
+ * 条目的真实磁盘路径：工作区文件直接展开，上传原件先向附件通道换路径。
+ *
+ * user:“在资料库条目上补：预览、转换、用默认应用打开”+
+ * (三个动作都要落在同一个真实文件上，所以路径解析只写这一处，不让三份各猜一遍。)
+ */
+async function resolveActualPath(item: ProjectArtifact): Promise<string> {
+  const reference = item.path || item.uri || ''
+  if (!reference) return ''
+  try {
+    if (!reference.startsWith('attachment://')) return absoluteArtifactPath(item, props.workRoot)
+    const attachmentId = reference.slice('attachment://'.length)
+    const response = await props.transport?.request<TransportHttpResponse>({
+      kind: 'http', method: 'GET', path: `/attachments/${encodeURIComponent(attachmentId)}/preview`,
+    })
+    if (!response || response.status !== 200) return ''
+    const meta = JSON.parse(new TextDecoder().decode(response.body))
+    return typeof meta.path === 'string' ? meta.path : ''
+  } catch { return '' }
+}
+
 /** 附件先换取磁盘真实路径，工作区文件直接展开；拿不到路径就交给原通道。 */
 async function openInSplit(item: ProjectArtifact): Promise<boolean> {
   if (!splitWorkspace) return false
-  const reference = item.path || item.uri || ''
-  if (!reference) return false
-  let actual = ''
-  try {
-    if (reference.startsWith('attachment://')) {
-      const attachmentId = reference.slice('attachment://'.length)
-      const response = await props.transport?.request<TransportHttpResponse>({
-        kind: 'http', method: 'GET', path: `/attachments/${encodeURIComponent(attachmentId)}/preview`,
-      })
-      if (!response || response.status !== 200) return false
-      const meta = JSON.parse(new TextDecoder().decode(response.body))
-      if (typeof meta.path === 'string') actual = meta.path
-    } else {
-      actual = absoluteArtifactPath(item, props.workRoot)
-    }
-  } catch { return false }
+  const actual = await resolveActualPath(item)
   if (!actual) return false
   try {
     return Boolean(openFileInSplit(splitWorkspace, actual, { workRoot: props.workRoot || '', projectId: props.projectId || undefined }))
   } catch { return false }
+}
+
+/**
+ * user:“预览（走统一链路）”+
+ * (灯箱就是那条统一链路：同一个 resolve 三态决定能看什么、看不了时说什么；
+ * 这里不判断扩展名，也不自己找渲染器。)
+ */
+async function previewItem(item: ProjectArtifact): Promise<void> {
+  actionError.value = ''
+  const actual = await resolveActualPath(item)
+  if (!actual) { actionError.value = '拿不到这个文件的真实路径，无法预览'; return }
+  if (!previewLightboxAvailable()) { actionError.value = '预览器还没就绪，稍后再试'; return }
+  openInLightbox(filePreviewTarget(actual, { workRoot: props.workRoot || '', projectId: props.projectId || undefined }))
+}
+
+/** 后端失败时尽量把它那句人话取出来，取不到再退回可读的兜底。 */
+function failureDetail(payload: Uint8Array, fallback: string): string {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(payload))
+    return typeof parsed.detail === 'string' ? parsed.detail : fallback
+  } catch { return fallback }
+}
+
+/**
+ * user:“转换（复用现有 document_normalize.py 的 docx/pdf/xlsx → Markdown）”+
+ * (转换是一个完整动作：后端写进「转换/」并登记成条目，成功后就地刷新这面墙；
+ * 失败把原因放在就近的错误行上，不允许点了没反应。)
+ */
+async function convertItem(item: ProjectArtifact): Promise<void> {
+  actionError.value = ''
+  const actual = await resolveActualPath(item)
+  if (!actual) { actionError.value = '拿不到这个文件的真实路径，无法转换'; return }
+  if (!props.transport) { actionError.value = '转换需要在桌面应用中使用'; return }
+  convertingId.value = item.artifact_id
+  try {
+    const response = await props.transport.request<{ status: number; body: Uint8Array }>({
+      kind: 'http', method: 'POST', path: '/files/convert',
+      headers: { 'Content-Type': 'application/json' },
+      body: new TextEncoder().encode(JSON.stringify({
+        path: actual,
+        work_root: props.workRoot || '',
+        project_id: props.projectId || '',
+      })),
+    })
+    if (response.status < 200 || response.status >= 300) throw new Error(failureDetail(response.body, '转换失败'))
+    await reload()
+  } catch (cause) {
+    actionError.value = cause instanceof Error ? cause.message : '转换失败'
+  } finally {
+    convertingId.value = ''
+  }
 }
 
 /** 引用给人看的形态：workspace:// 展开成磁盘绝对路径，其余原样。 */
@@ -1099,6 +1188,35 @@ async function uploadHere(): Promise<void> {
   }
 }
 
+/**
+ * 打开「发送到设备」：先确认这条资料在本机有绝对路径，再把设备清单浮在原地。
+ *
+ * user:“对端离线/未配对给可读原因，不要静默失败”+(没有本机路径的资料根本发不了，
+ * 这里当场说明，而不是打开一个空清单让用户猜)。
+ */
+function openSendToDevice(item: ProjectArtifact, event: MouseEvent): void {
+  const path = displayPath(item)
+  if (!path) {
+    actionError.value = t("这条资料没有本机路径，不能直接发送。")
+    return
+  }
+  const size = typeof item.size === 'number' && item.size > 0 ? item.size : 0
+  sendTarget.value = { path, name: item.name || '', size }
+  // 菜单贴着点击处出现，但不许跑出窗口。
+  const width = 300
+  const height = 260
+  const left = Math.min(Math.max(8, event.clientX), Math.max(8, window.innerWidth - width - 8))
+  const top = Math.min(Math.max(8, event.clientY), Math.max(8, window.innerHeight - height - 8))
+  sendStyle.value = { left: `${left}px`, top: `${top}px` }
+  sendNotice.value = ''
+}
+
+/** 发送真的开始了：给一句本地反馈，传输进度在「设备连接」的传输面板里看。 */
+function onSent(payload: { name: string }): void {
+  sendTarget.value = null
+  sendNotice.value = t("已开始发送：{0}", { 0: payload.name })
+}
+
 function openMenu(event: MouseEvent, item: ProjectArtifact): void {
   const children: ContextMenuEntry[] = [
     { id: 'folder-root', get label() { return t("不归档") }, disabled: !folderOf(item), action: () => void moveToFolder(item, '') },
@@ -1123,7 +1241,26 @@ function openMenu(event: MouseEvent, item: ProjectArtifact): void {
       // 语义分组：文件级操作与整理操作各成一组（组头可折叠、状态有记忆）；
       // 危险操作不入组，始终裸露在菜单尾部，不能被折叠藏起来。
       { id: 'open', get label() { return t("打开") }, group: MATERIALS_FILE_GROUP, action: () => void openDefault(item) },
+      // user:“在资料库条目上补：预览（走统一链路）、转换…、用默认应用打开”+
+      // (预览进灯箱、转换产出 Markdown 条目；两者都只调用既有能力。)
+      { id: 'preview', get label() { return t("预览") }, group: MATERIALS_FILE_GROUP, action: () => void previewItem(item) },
+      {
+        id: 'convert',
+        get label() { return convertingId.value === item.artifact_id ? t("转换中…") : t("转换成 Markdown") },
+        group: MATERIALS_FILE_GROUP,
+        disabled: convertingId.value === item.artifact_id,
+        action: () => void convertItem(item),
+      },
       { id: 'open-system', get label() { return t("使用默认应用打开") }, group: MATERIALS_FILE_GROUP, action: () => void openWithSystem(item) },
+      // user:“文件树、资料库、预览器里对文件加「发送到设备」——列出已信任设备（含在线状态与
+      // 直连/中继），选中后开始传输”+(资料库这一条入口：路径取同一条 absoluteArtifactPath，
+      // 不另算一遍；发送本身交给统一的设备清单组件)。
+      {
+        id: 'send',
+        get label() { return t("发送到设备") },
+        group: MATERIALS_FILE_GROUP,
+        action: () => openSendToDevice(item, event),
+      },
       { id: 'copy', get label() { return t("复制路径") }, group: MATERIALS_FILE_GROUP, action: () => void (props.copyPath ?? copyText)(displayPath(item)) },
       {
         id: 'favorite',

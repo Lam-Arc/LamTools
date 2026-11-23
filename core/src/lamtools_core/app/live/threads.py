@@ -19,6 +19,41 @@ from ..thread_outline import build_thread_outline, normalize_thread_outline_char
 from .context import CoreLiveContext, CoreLiveOperationOutcome
 
 
+async def _try_rust_wire_page(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    params: dict[str, Any],
+    before_item_id: str | None = None,
+    before_seq: int | None = None,
+    anchor_item_id: str | None = None,
+) -> dict[str, Any] | None:
+    from ..rust_db import get_rust_db
+    from ..snapshot_store import SqlAlchemyThreadSnapshotStore
+
+    rust_db = get_rust_db(context.session_factory)
+    if rust_db is None or not rust_db.is_active:
+        return None
+    snap_store = getattr(context.persistence, "snapshot_store", None)
+    if not isinstance(snap_store, SqlAlchemyThreadSnapshotStore):
+        return None
+    res = await rust_db.call(
+        "load_wire_page",
+        {
+            "thread_id": thread_id,
+            "before_item_id": before_item_id,
+            "before_seq": before_seq,
+            "char_limit": _history_char_limit(params),
+            "turn_limit": _history_turn_limit(params),
+            "byte_limit": _history_byte_budget(params),
+            "anchor_item_id": anchor_item_id,
+        },
+    )
+    if not isinstance(res, dict) or res.get("needs_usage_hydration"):
+        return None
+    return res
+
+
 async def handle_thread_resume_operation(
     *,
     request_id: int | str | None,
@@ -42,31 +77,53 @@ async def handle_thread_resume_operation(
     full_journal = params.get("full_journal") is True
     page_limit = max(1, min(_int_param(params.get("limit"), default=500), 500))
     before_item_id, before_seq = _history_cursor(params)
-    async with context.session_factory() as db:
-        # The snapshot is the durable authority for everything up to its
-        # snapshot_seq.  Journal paging therefore starts after that seq unless
-        # the client opts out of the snapshot or explicitly asks for the raw
-        # journal (replay-style clients that rebuild state from events).
-        # Re-delivering events the snapshot already covers made every session
-        # switch fetch and serialize up to 500 stale events (~8.5MB on long
-        # threads) that snapshot-hydrating clients immediately discard.
-        snapshot = await _load_thread_page(
+    rust_wire = (
+        await _try_rust_wire_page(
             context=context,
-            db=db,
             thread_id=thread_id,
             params=params,
-            page_bytes=_history_byte_budget(params),
+            before_item_id=before_item_id,
+            before_seq=before_seq,
         )
+        if include_snapshot
+        else None
+    )
+    if rust_wire is not None:
+        snapshot = rust_wire["snapshot"] or {}
         journal_after_seq = after_seq
         if include_snapshot and not full_journal:
-            projected_seq = _int_param(
-                snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None,
-                default=0,
-            )
+            projected_seq = _int_param(rust_wire.get("snapshot_seq"), default=0)
             journal_after_seq = max(after_seq, projected_seq)
-        events = await context.persistence.list_after(
-            db, thread_id=thread_id, after_seq=journal_after_seq, limit=page_limit
-        )
+        async with context.session_factory() as db:
+            events = await context.persistence.list_after(
+                db, thread_id=thread_id, after_seq=journal_after_seq, limit=page_limit
+            )
+    else:
+        async with context.session_factory() as db:
+            # The snapshot is the durable authority for everything up to its
+            # snapshot_seq.  Journal paging therefore starts after that seq unless
+            # the client opts out of the snapshot or explicitly asks for the raw
+            # journal (replay-style clients that rebuild state from events).
+            # Re-delivering events the snapshot already covers made every session
+            # switch fetch and serialize up to 500 stale events (~8.5MB on long
+            # threads) that snapshot-hydrating clients immediately discard.
+            snapshot = await _load_thread_page(
+                context=context,
+                db=db,
+                thread_id=thread_id,
+                params=params,
+                page_bytes=_history_byte_budget(params),
+            )
+            journal_after_seq = after_seq
+            if include_snapshot and not full_journal:
+                projected_seq = _int_param(
+                    snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None,
+                    default=0,
+                )
+                journal_after_seq = max(after_seq, projected_seq)
+            events = await context.persistence.list_after(
+                db, thread_id=thread_id, after_seq=journal_after_seq, limit=page_limit
+            )
     await _reconcile_cancelled_runtime_state(context=context, thread_id=thread_id, snapshot=snapshot)
     last_event_seq = max((event.seq for event in events), default=journal_after_seq)
     snapshot_seq = _int_param(snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None, default=last_event_seq)
@@ -84,13 +141,17 @@ async def handle_thread_resume_operation(
         "next_after_seq": last_event_seq,
     }
     if include_snapshot:
-        result["snapshot"] = _character_page_snapshot(
-            snapshot,
-            before_item_id=before_item_id,
-            before_seq=before_seq,
-            char_limit=_history_char_limit(params),
-            turn_limit=_history_turn_limit(params),
-            byte_limit=_history_byte_budget(params),
+        result["snapshot"] = (
+            snapshot
+            if rust_wire is not None
+            else _character_page_snapshot(
+                snapshot,
+                before_item_id=before_item_id,
+                before_seq=before_seq,
+                char_limit=_history_char_limit(params),
+                turn_limit=_history_turn_limit(params),
+                byte_limit=_history_byte_budget(params),
+            )
         )
     return CoreLiveOperationOutcome(
         response=rpc_result(request_id, result)
@@ -149,6 +210,38 @@ async def handle_thread_read_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
     before_item_id, before_seq = _history_cursor(params)
+    rust_wire = await _try_rust_wire_page(
+        context=context,
+        thread_id=thread_id,
+        params=params,
+        before_item_id=before_item_id,
+        before_seq=before_seq,
+    )
+    if rust_wire is not None:
+        from ..live_member import DefaultCoreLiveMemberHooks
+
+        wire_snapshot = rust_wire["snapshot"] or {}
+        if type(context.host.member_hooks).augment_thread_read is DefaultCoreLiveMemberHooks.augment_thread_read:
+            member_payload = {}
+        else:
+            async with context.session_factory() as db:
+                member_payload = await context.host.member_hooks.augment_thread_read(
+                    db=db,
+                    thread_id=thread_id,
+                    result={"snapshot": wire_snapshot, "events": []},
+                )
+        await _reconcile_cancelled_runtime_state(context=context, thread_id=thread_id, snapshot=wire_snapshot)
+        return CoreLiveOperationOutcome(
+            response=rpc_result(
+                request_id,
+                {
+                    "thread": {"id": thread_id},
+                    "events": [],
+                    "snapshot": wire_snapshot,
+                    **member_payload,
+                },
+            )
+        )
     async with context.session_factory() as db:
         snapshot = await _load_thread_page(
             context=context,
@@ -207,6 +300,24 @@ async def handle_thread_history_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
+    rust_wire = await _try_rust_wire_page(
+        context=context,
+        thread_id=thread_id,
+        params=params,
+        before_item_id=before_item_id or None,
+        # user:“规划并实现”+(只传 before_item_id 未传 before_seq 时应交由 Rust 解析锚点 seq，不能把默认 0 当作 seq<0 过滤)
+        before_seq=before_seq if before_seq > 0 else None,
+    )
+    if rust_wire is not None:
+        return CoreLiveOperationOutcome(
+            response=rpc_result(
+                request_id,
+                {
+                    "thread": {"id": thread_id},
+                    "snapshot_page": rust_wire["snapshot"],
+                },
+            )
+        )
     async with context.session_factory() as db:
         snapshot = await _load_thread_page(
             context=context,
@@ -223,7 +334,7 @@ async def handle_thread_history_operation(
                 "snapshot_page": _character_page_snapshot(
                     snapshot,
                     before_item_id=before_item_id or None,
-                    before_seq=before_seq,
+                    before_seq=before_seq if before_seq > 0 else None,
                     char_limit=_history_char_limit(params),
                     turn_limit=_history_turn_limit(params),
                     byte_limit=_history_byte_budget(params),
@@ -283,6 +394,26 @@ async def handle_thread_page_around_operation(
                 request_id,
                 code=INVALID_REQUEST,
                 message="direct history locate is unavailable",
+            )
+        )
+    rust_wire = await _try_rust_wire_page(
+        context=context,
+        thread_id=thread_id,
+        params=params,
+        anchor_item_id=item_id,
+    )
+    if rust_wire is not None:
+        if not rust_wire.get("found"):
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {"thread": {"id": thread_id}, "found": False, "snapshot_page": None},
+                )
+            )
+        return CoreLiveOperationOutcome(
+            response=rpc_result(
+                request_id,
+                {"thread": {"id": thread_id}, "found": True, "snapshot_page": rust_wire["snapshot"]},
             )
         )
     page_bytes = _history_byte_budget(params)
@@ -345,6 +476,21 @@ async def handle_thread_outline_operation(
     limit = normalize_thread_outline_char_limit(
         params.get("char_limit") or params.get("charLimit")
     )
+    from ..rust_db import get_rust_db
+    from ..snapshot_store import SqlAlchemyThreadSnapshotStore
+
+    rust_db = get_rust_db(context.session_factory)
+    if (
+        rust_db is not None
+        and rust_db.is_active
+        and isinstance(getattr(context.persistence, "snapshot_store", None), SqlAlchemyThreadSnapshotStore)
+    ):
+        outline_res = await rust_db.call(
+            "build_thread_outline",
+            {"thread_id": thread_id, "char_limit": limit},
+        )
+        if isinstance(outline_res, dict) and not outline_res.get("needs_usage_hydration"):
+            return CoreLiveOperationOutcome(response=rpc_result(request_id, outline_res["outline"]))
     async with context.session_factory() as db:
         # The outline needs each turn's own closing assistant body, which can sit
         # arbitrarily deep inside a turn that ends with child output (measured:
@@ -401,8 +547,9 @@ async def handle_thread_start_operation(
     params: dict[str, Any],
     context: CoreLiveContext,
 ) -> CoreLiveOperationOutcome:
-    from .events import _append_app_event
+    from .events import _app_event_input, _append_app_event
     from .params import _expected_revision, _thread_id_from_params
+    from ..live_member import DefaultCoreLiveMemberHooks
     thread_id = _thread_id_from_params(params)
     if not thread_id:
         return CoreLiveOperationOutcome(
@@ -413,30 +560,55 @@ async def handle_thread_start_operation(
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
 
-    async def write(db: AsyncSession):
-        # user:“宿主能力补齐和接口完善与文档更新”+(插件创建新会话必须在事务内排除已有实体，不能覆盖 revision=0 的项目空白会话)。
-        if params.get("require_new") is True:
-            row = await db.get(context.persistence.snapshot_store.snapshot_model, thread_id)
-            if row is not None:
-                return None, None
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
+    can_rust = getattr(context.persistence, "can_use_rust_write", False) and isinstance(
+        context.host.member_hooks, DefaultCoreLiveMemberHooks
+    )
+    if can_rust:
         member_payload = await context.host.member_hooks.materialize_thread(
-            db=db,
+            db=None,  # type: ignore[arg-type]
             thread_id=thread_id,
             params=params,
         )
-        event = await _append_app_event(
-            db,
-            context=context,
-            event=AppEventInput(
+        ev_input = _app_event_input(
+            AppEventInput(
                 thread_id=thread_id,
                 method="thread/started",
                 payload={"type": "thread", "status": "idle", **params, **member_payload},
-            ),
+            )
         )
-        return event, await context.persistence.load(db, thread_id)
+        envelopes, snapshot = await context.persistence.append_batch_atomic(
+            app_events=[ev_input],
+            return_state=True,
+            expected_revision=expected_revision,
+            revision_thread_id=thread_id,
+            require_new=(params.get("require_new") is True),
+        )
+        event = envelopes[0] if envelopes else None
+    else:
+        async def write(db: AsyncSession):
+            # user:“宿主能力补齐和接口完善与文档更新”+(插件创建新会话必须在事务内排除已有实体，不能覆盖 revision=0 的项目空白会话)。
+            if params.get("require_new") is True:
+                row = await db.get(context.persistence.snapshot_store.snapshot_model, thread_id)
+                if row is not None:
+                    return None, None
+            await context.persistence.assert_revision(db, thread_id, expected_revision)
+            member_payload = await context.host.member_hooks.materialize_thread(
+                db=db,
+                thread_id=thread_id,
+                params=params,
+            )
+            event = await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    thread_id=thread_id,
+                    method="thread/started",
+                    payload={"type": "thread", "status": "idle", **params, **member_payload},
+                ),
+            )
+            return event, await context.persistence.load(db, thread_id)
 
-    event, snapshot = await context.persistence.write(write)
+        event, snapshot = await context.persistence.write(write)
     if event is None:
         return CoreLiveOperationOutcome(response=rpc_error(
             request_id, code=INVALID_REQUEST, message="session already exists",

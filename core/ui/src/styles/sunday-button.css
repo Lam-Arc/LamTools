@@ -66,37 +66,25 @@
   background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #f2efeb)) var(--alpha-press), transparent);
 }
 
-/* 文本式按钮：透明底，文字跟随所在面板，不能用控件文字色，
-   否则「亮主区 + 暗控件」的主题下白字会压在浅色面板上。 */
-.btn--quiet {
+/* user:“UI 请按语义整理并展示”+(轻量操作共用一套颜色和状态，旧 ghost 名继续兼容已有的紧凑布局)。 */
+:is(.btn--quiet, .btn--ghost) {
   background: transparent;
-  /* user:“确保视觉、功能和交互不退化”+(轻量按钮随当前主题文字色变化，浅色背景仍清晰可读) */
   color: var(--settings-main-text, var(--theme-main-text, #f2efeb));
 }
 
-.btn--quiet:hover:not(:disabled) {
+:is(.btn--quiet, .btn--ghost):hover:not(:disabled) {
   background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #f2efeb)) var(--alpha-hover), transparent);
-  color: var(--settings-main-text, var(--theme-main-text, #f2efeb));
-  filter: none;
+}
+
+:is(.btn--quiet, .btn--ghost):active:not(:disabled) {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #f2efeb)) var(--alpha-active), transparent);
 }
 
 .btn--ghost {
   min-height: 32px;
   padding: 0 7px;
   border-radius: var(--radius-sm);
-  background: transparent;
-  /* user:“确保视觉、功能和交互不退化”+(浅色主题下文字随主区域变化，避免固定灰字对比不足) */
-  color: var(--settings-main-text, var(--theme-main-text, #f2efeb));
   font-size: 12px;
-}
-
-.btn--ghost:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #f2efeb)) var(--alpha-hover), transparent);
-  color: var(--settings-main-text, var(--theme-main-text, #f2efeb));
-}
-
-.btn--ghost:active:not(:disabled) {
-  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #f2efeb)) var(--alpha-active), transparent);
 }
 
 .btn--danger {

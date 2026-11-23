@@ -1,0 +1,63 @@
+/* user:“把胶囊做了，自己思考什么时候输入栏变胶囊，输入后要不要换回去。不要自造，
+   它只是现在输入栏的形态变体，不是新样式”+(胶囊不是另画一层皮：卡片、描边、底色、
+   阴影全部沿用现有输入栏，只把形态收成一行。)
+   
+   收起时机：没有文字、没有待发附件、不在运行、且没有聚焦。
+   换回时机：点进去（聚焦）或开始输入，立刻恢复成完整形态；清空并失焦后再收回。
+   这样它只在“还没开始写”的时候安静地占一行，一开始写就把该有的东西都给回来。 */
+.composer-root--compact {
+  --composer-radius: 9999px;
+}
+
+.composer-root--compact .floating-composer {
+  border-radius: 9999px;
+}
+
+.composer-root--compact .composer-main-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 4px 8px 4px 14px;
+}
+
+.composer-root--compact .composer-main-card > * {
+  min-width: 0;
+}
+
+/* 单行形态不摆工具栏：附件、执行控件、模型这些都留给完整形态。 */
+.composer-root--compact .composer-bottom {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+}
+
+.composer-root--compact .composer-bottom .tool-row {
+  display: none;
+}
+
+.composer-root--compact .inline-file-composer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 收起态本来就没有内容，编辑器保持单行高度即可；一旦有字就会换回完整形态。 */
+.composer-root--compact .inline-file-composer .cm-editor,
+.composer-root--compact .inline-file-composer .cm-scroller {
+  max-height: 22px;
+  overflow: hidden;
+}
+
+.composer-root--compact .inline-file-composer .cm-content {
+  padding: 0 0 8px;
+  min-height: 22px;
+}
+
+.composer-root--compact textarea {
+  height: 22px;
+  max-height: 22px;
+  padding: 0 0 8px;
+  line-height: 22px;
+}

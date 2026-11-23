@@ -1,0 +1,20 @@
+/* =========================================================================
+   流式落定动画（方案 C：块级落定）
+   ========================================================================= */
+/* user:“做C”+(文字立即落地，只给刚写完的一块一次 180ms 淡入 + 2px 上移；
+   不做逐字 span，所以高频 chunk 不会叠出成百上千个动画节点)。
+   用 position:relative + top 而不是 transform：行内元素上 transform 不生效，
+   而 top 只改绘制位置、不触发重排。 */
+.stream-block-enter {
+  position: relative;
+  animation: stream-block-in 180ms var(--ease-out, ease-out) both;
+}
+
+@keyframes stream-block-in {
+  from { opacity: 0.45; top: 2px; }
+  to { opacity: 1; top: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-block-enter { animation: none; }
+}

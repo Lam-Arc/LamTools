@@ -296,6 +296,49 @@ async def _append_interrupting_record(
     from .terminal_state import _paused_turn_id
     del expected_revision  # validated at request time only
 
+    if getattr(context.persistence, "can_use_rust_write", False):
+        async with context.session_factory() as db:
+            loader = getattr(context.persistence, "load_metadata", context.persistence.load)
+            snapshot = await loader(db, thread_id)
+        if generation is not None and context.host.runtime_task_registry.control_generation(thread_id) != generation:
+            return ""
+        turn_id = requested_turn_id or latest_active_turn_id(snapshot) or _paused_turn_id(snapshot) or live_turn_id
+        if not turn_id:
+            turn_id = context.host.runtime_task_registry.active_run_id(thread_id) or ""
+        if requested_turn_id and not _is_stoppable_turn(snapshot, requested_turn_id):
+            turn_id = ""
+        if not turn_id or _turn_is_terminal(snapshot, turn_id):
+            return ""
+        core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+        turns = core.get("turns") if isinstance(core, dict) else {}
+        turn_view = turns.get(turn_id) if isinstance(turns.get(turn_id), dict) else {}
+        if str(turn_view.get("status") or "") == "interrupting":
+            return turn_id
+        interrupted_input = AppEventInput(
+            thread_id=thread_id,
+            method="turn/interrupted",
+            turn_id=turn_id,
+            payload={"type": "turn", "reason": "user_interrupt"},
+        )
+        execution_id = _turn_execution_id(snapshot, turn_id)
+        status_event = RunItemEvent(
+            kind="status",
+            thread_id=thread_id,
+            event_id=f"{execution_id}:interrupting",
+            run_id=execution_id,
+            turn_id=turn_id,
+            item_id=f"{turn_id}:interrupting",
+            status="interrupting",
+            payload={"type": "turn", "status": "interrupting", "raw_end_reason": "user_interrupt"},
+        )
+        envelopes = await context.persistence.append_batch_atomic(
+            app_events=[interrupted_input],
+            run_item_events=[status_event],
+        )
+        for envelope in envelopes:
+            await context.hub.publish(envelope)
+        return turn_id
+
     async def write_action(db: AsyncSession):
         loader = getattr(context.persistence, "load_metadata", context.persistence.load)
         snapshot = await loader(db, thread_id)
@@ -433,64 +476,112 @@ async def handle_turn_force_reset_operation(
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "").strip()
 
-    async def write(db: AsyncSession) -> tuple[list[AppEventEnvelope], dict[str, Any]]:
-        snapshot = await context.persistence.load(db, thread_id)
+    if getattr(context.persistence, "can_use_rust_write", False):
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, thread_id)
         turn_id = requested_turn_id or _latest_turn_id_any_status(snapshot)
         if not turn_id:
-            return [], snapshot
-        await context.persistence.assert_revision(db, thread_id, expected_revision)
-        events: list[AppEventEnvelope] = []
-        # 1. Close dangling non-terminal items (half-baked tool_calls etc.)
-        # before the turn-level terminal event, so the per-item cancelled
-        # status is recorded in the event log rather than masked by the
-        # turn-terminal projection lock.
-        for item_id in _collect_non_terminal_turn_item_ids(snapshot, turn_id):
-            events.append(
-                await _append_run_item(
-                    db,
-                    context=context,
-                    event=_build_interrupted_tool_event(
+            events = []
+        else:
+            run_items: list[RunItemEvent] = []
+            for item_id in _collect_non_terminal_turn_item_ids(snapshot, turn_id):
+                run_items.append(
+                    _build_interrupted_tool_event(
                         thread_id=thread_id,
                         turn_id=turn_id,
                         item_id=item_id,
                         reason="force_reset",
                         message="已中断",
+                    )
+                )
+            already_terminal = _turn_is_terminal(snapshot, turn_id)
+            if not already_terminal or run_items:
+                run_items.append(
+                    RunItemEvent(
+                        kind="status",
+                        thread_id=thread_id,
+                        event_id=f"{turn_id}:force_reset",
+                        run_id=turn_id,
+                        turn_id=turn_id,
+                        item_id=f"{turn_id}:terminal",
+                        status="cancelled",
+                        payload={
+                            "type": "turn",
+                            "status": "cancelled",
+                            "raw_end_reason": "force_reset",
+                            "message": "已中断。",
+                        },
+                    )
+                )
+            if run_items:
+                events, snapshot = await context.persistence.append_batch_atomic(
+                    run_item_events=run_items,
+                    return_state=True,
+                    expected_revision=expected_revision,
+                    revision_thread_id=thread_id,
+                )
+            else:
+                await context.persistence.assert_revision_atomic(thread_id, expected_revision)
+                events = []
+    else:
+        async def write(db: AsyncSession) -> tuple[list[AppEventEnvelope], dict[str, Any]]:
+            snapshot = await context.persistence.load(db, thread_id)
+            turn_id = requested_turn_id or _latest_turn_id_any_status(snapshot)
+            if not turn_id:
+                return [], snapshot
+            await context.persistence.assert_revision(db, thread_id, expected_revision)
+            events: list[AppEventEnvelope] = []
+            # 1. Close dangling non-terminal items (half-baked tool_calls etc.)
+            # before the turn-level terminal event, so the per-item cancelled
+            # status is recorded in the event log rather than masked by the
+            # turn-terminal projection lock.
+            for item_id in _collect_non_terminal_turn_item_ids(snapshot, turn_id):
+                events.append(
+                    await _append_run_item(
+                        db,
+                        context=context,
+                        event=_build_interrupted_tool_event(
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            item_id=item_id,
+                            reason="force_reset",
+                            message="已中断",
+                        ),
+                    )
+                )
+            # 2. Write/refresh a turn-level cancelled status (skip if already
+            # terminal AND we appended no per-item events — a terminal turn with
+            # no dangling items needs no new turn event).
+            already_terminal = _turn_is_terminal(snapshot, turn_id)
+            if not already_terminal or events:
+                status_event = await _append_run_item(
+                    db,
+                    context=context,
+                    event=RunItemEvent(
+                        kind="status",
+                        thread_id=thread_id,
+                        event_id=f"{turn_id}:force_reset",
+                        run_id=turn_id,
+                        turn_id=turn_id,
+                        # Same identity as the kernel's terminal projection: a
+                        # force reset refreshes the turn's single cancel row
+                        # instead of stacking a second one.
+                        item_id=f"{turn_id}:terminal",
+                        status="cancelled",
+                        payload={
+                            "type": "turn",
+                            "status": "cancelled",
+                            "raw_end_reason": "force_reset",
+                            "message": "已中断。",
+                        },
                     ),
                 )
-            )
-        # 2. Write/refresh a turn-level cancelled status (skip if already
-        # terminal AND we appended no per-item events — a terminal turn with
-        # no dangling items needs no new turn event).
-        already_terminal = _turn_is_terminal(snapshot, turn_id)
-        if not already_terminal or events:
-            status_event = await _append_run_item(
-                db,
-                context=context,
-                event=RunItemEvent(
-                    kind="status",
-                    thread_id=thread_id,
-                    event_id=f"{turn_id}:force_reset",
-                    run_id=turn_id,
-                    turn_id=turn_id,
-                    # Same identity as the kernel's terminal projection: a
-                    # force reset refreshes the turn's single cancel row
-                    # instead of stacking a second one.
-                    item_id=f"{turn_id}:terminal",
-                    status="cancelled",
-                    payload={
-                        "type": "turn",
-                        "status": "cancelled",
-                        "raw_end_reason": "force_reset",
-                        "message": "已中断。",
-                    },
-                ),
-            )
-            events.append(status_event)
-        snapshot = await context.persistence.load(db, thread_id)
-        return events, snapshot
+                events.append(status_event)
+            snapshot = await context.persistence.load(db, thread_id)
+            return events, snapshot
 
-    write_result = await context.persistence.write(write)
-    events, snapshot = write_result
+        write_result = await context.persistence.write(write)
+        events, snapshot = write_result
     turn_id = requested_turn_id or _latest_turn_id_any_status(snapshot)
     if turn_id:
         await _persist_cancelled_runtime_state(context=context, thread_id=thread_id, turn_id=turn_id)

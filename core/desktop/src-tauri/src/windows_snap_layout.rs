@@ -1,375 +1,68 @@
-//! Windows 11 Snap Layout support for the frameless main window.
+//! 原生命中区（`LamToolsSnapOverlay`）：**已废弃并删除**，这里只留同名空实现供调用方兼容。
 //!
-//! WebView2 owns the client-area mouse messages, so subclassing the Tauri
-//! parent window cannot produce `HTMAXBUTTON`. A transparent native child
-//! window is kept directly above the HTML maximize button instead. Windows
-//! sees that child as the maximize hit target while the page still draws the
-//! control itself.
+//! user:“用户已经点过了。我查了你给的三份日志…`window-ctl` 与 `snap-click` 都是 0 命中…
+//! 也就是说这一下点击连 `WM_NCLBUTTONDOWN` 都没进到那个命中区、也没走到任何 Rust 命令”+
+//! (直接执行方案 2：去掉原生命中区，窗口按钮改成纯 DOM 驱动。)
+//!
+//! 证据（为什么放弃这套子窗口方案）：
+//! 1. `.lam/dev-fix3.log` / `.lam/dev-verify7.log` / `core/data/core-agent/frontend-console.log`
+//!    里 `[snap-click]`、`[window-ctl]` **全部 0 命中**——这个透明子窗口既没收到非客户区点击，
+//!    也没让点击落到 DOM 命令上；
+//! 2. `[snap-bounds] css=(899.7,5.0 32.0x26.0) … phys=(900,5 …)` 显示前端报来的最大化按钮
+//!    位置是 `x=899.7`，而屏幕上按钮实际在 `x≈1348`——前端取的矩形不是可视按钮，
+//!    这套「按前端矩形摆子窗口」的链路本身就没有可用输入；
+//! 3. 窗口 API 本身没问题（`[window-probe]` 两轮 `minimize/maximize` 全 `Ok`、状态真翻转），
+//!    所以问题在“点击投递”这一层，而不是窗口状态机。
+//!
+//! **代价（明确记录）**：Win11 Snap Layouts 的悬停预览会消失——它依赖这里的
+//! `WM_NCHITTEST → HTMAXBUTTON` 原生命中区。将来要恢复必须重新设计
+//! （例如真正的自定义标题栏 NCA 区域），**不要**把这套子窗口直接加回来。
+//!
+//! 保留的三个函数都是空实现：调用点不必同时改，前端旧的
+//! `set_maximize_button_bounds` 调用也不会报错。
 
-use std::{
-    collections::HashMap,
-    sync::{LazyLock, Mutex},
-};
+use tauri::WebviewWindow;
 
-use tauri::{Emitter, WebviewWindow};
-use windows_sys::Win32::{
-    Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
-    Graphics::Gdi::{GetStockObject, HBRUSH, NULL_BRUSH},
-    System::LibraryLoader::GetModuleHandleW,
-    UI::{
-        HiDpi::GetDpiForWindow,
-        Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT},
-        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
-        WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, RegisterClassExW,
-            SetWindowPos, CS_HREDRAW, CS_VREDRAW, HTMAXBUTTON, HWND_TOP, SWP_ASYNCWINDOWPOS,
-            SWP_NOACTIVATE, SWP_SHOWWINDOW, WM_DPICHANGED, WM_NCDESTROY, WM_NCHITTEST,
-            WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_SIZE,
-            WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_OVERLAPPED, WS_VISIBLE,
-        },
-    },
-};
-
-pub const EVENT_HOVER: &str = "lamtools://window/maximize-hover";
-pub const EVENT_PRESS: &str = "lamtools://window/maximize-press";
-pub const EVENT_CLICK: &str = "lamtools://window/maximize-click";
-
-const SUBCLASS_ID: usize = 0x4c_41_4d_53_4e_41_50;
-const SNAP_CLASS: &[u16] = &[
-    b'L' as u16,
-    b'a' as u16,
-    b'm' as u16,
-    b'T' as u16,
-    b'o' as u16,
-    b'o' as u16,
-    b'l' as u16,
-    b's' as u16,
-    b'S' as u16,
-    b'n' as u16,
-    b'a' as u16,
-    b'p' as u16,
-    b'O' as u16,
-    b'v' as u16,
-    b'e' as u16,
-    b'r' as u16,
-    b'l' as u16,
-    b'a' as u16,
-    b'y' as u16,
-    0,
-];
-
-#[derive(Clone, Copy, Default)]
-struct LogicalBounds {
-    right: f64,
-    top: f64,
-    width: f64,
-    height: f64,
+/// 启动期的命中区挂载：不再创建任何子窗口，直接返回成功。
+pub fn install(_window: &WebviewWindow) -> Result<(), String> {
+    Ok(())
 }
 
-struct SnapState {
-    overlay: HWND,
-    bounds: LogicalBounds,
-    hovering: bool,
-    pressing: bool,
-    window: WebviewWindow,
-}
-
-// HWND is only used on the UI thread. The mutex is required because Windows
-// calls the window procedures through global function pointers.
-unsafe impl Send for SnapState {}
-
-static SNAP_WINDOWS: LazyLock<Mutex<HashMap<isize, SnapState>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub fn install(window: &WebviewWindow) -> Result<(), String> {
-    let hwnd = window
-        .hwnd()
-        .map_err(|error| format!("main window handle unavailable: {error}"))?
-        .0 as HWND;
-
-    unsafe { install_hwnd(hwnd, window.clone()) }
-}
-
+/// 前端下发最大化按钮矩形：已废弃，接收后什么都不做（保留命令兼容性）。
 pub fn set_button_bounds(
-    window: &WebviewWindow,
-    x: f64,
-    top: f64,
-    width: f64,
-    height: f64,
+    _window: &WebviewWindow,
+    _scale: f64,
+    _x: f64,
+    _top: f64,
+    _width: f64,
+    _height: f64,
 ) -> Result<(), String> {
-    if ![x, top, width, height].into_iter().all(f64::is_finite)
-        || x < 0.0
-        || top < 0.0
-        || width <= 0.0
-        || height <= 0.0
-    {
-        return Err("invalid maximize button bounds".to_string());
-    }
-
-    let hwnd = window
-        .hwnd()
-        .map_err(|error| format!("main window handle unavailable: {error}"))?
-        .0 as HWND;
-
-    let client_width = unsafe { logical_client_width(hwnd)? };
-    let right = (client_width - x - width).max(0.0);
-
-    let mut states = SNAP_WINDOWS
-        .lock()
-        .map_err(|_| "snap layout state poisoned".to_string())?;
-    let state = states
-        .get_mut(&(hwnd as isize))
-        .ok_or_else(|| "snap layout overlay is not installed".to_string())?;
-    state.bounds = LogicalBounds {
-        right,
-        top,
-        width,
-        height,
-    };
-    drop(states);
-
-    unsafe { update_overlay_position(hwnd) };
     Ok(())
 }
 
-unsafe fn install_hwnd(hwnd: HWND, window: WebviewWindow) -> Result<(), String> {
-    register_class();
-
-    let overlay = unsafe {
-        CreateWindowExW(
-            0,
-            SNAP_CLASS.as_ptr(),
-            SNAP_CLASS.as_ptr(),
-            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_OVERLAPPED,
-            0,
-            0,
-            0,
-            0,
-            hwnd,
-            std::ptr::null_mut(),
-            module_instance(),
-            std::ptr::null(),
-        )
-    };
-    if overlay.is_null() {
-        return Err("failed to create maximize hit-test overlay".to_string());
-    }
-
-    SNAP_WINDOWS
-        .lock()
-        .map_err(|_| "snap layout state poisoned".to_string())?
-        .insert(
-            hwnd as isize,
-            SnapState {
-                overlay,
-                bounds: LogicalBounds::default(),
-                hovering: false,
-                pressing: false,
-                window,
-            },
-        );
-
-    if unsafe { SetWindowSubclass(hwnd, Some(parent_subclass_proc), SUBCLASS_ID, 0) } == 0 {
-        SNAP_WINDOWS
-            .lock()
-            .map_err(|_| "snap layout state poisoned".to_string())?
-            .remove(&(hwnd as isize));
-        unsafe { DestroyWindow(overlay) };
-        return Err("failed to attach maximize hit-test overlay".to_string());
-    }
-
-    Ok(())
+/// 子 webview 创建/摆位后抬高命中区：已不存在命中区，返回 false 表示“无事可做”。
+pub fn raise_overlay(_window: &WebviewWindow) -> bool {
+    false
 }
 
-unsafe fn register_class() {
-    let class = WNDCLASSEXW {
-        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(overlay_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: unsafe { module_instance() },
-        hIcon: std::ptr::null_mut(),
-        hCursor: std::ptr::null_mut(),
-        hbrBackground: unsafe { GetStockObject(NULL_BRUSH) } as HBRUSH,
-        lpszMenuName: std::ptr::null(),
-        lpszClassName: SNAP_CLASS.as_ptr(),
-        hIconSm: std::ptr::null_mut(),
-    };
-    unsafe { RegisterClassExW(&class) };
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-unsafe fn module_instance() -> HINSTANCE {
-    unsafe { GetModuleHandleW(std::ptr::null()) }
-}
-
-unsafe fn logical_client_width(hwnd: HWND) -> Result<f64, String> {
-    let mut rect = std::mem::zeroed();
-    if unsafe { GetClientRect(hwnd, &mut rect) } == 0 {
-        return Err("failed to read main window bounds".to_string());
-    }
-    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
-    Ok((rect.right - rect.left) as f64 * 96.0 / dpi as f64)
-}
-
-unsafe fn update_overlay_position(hwnd: HWND) {
-    let Ok(states) = SNAP_WINDOWS.lock() else {
-        return;
-    };
-    let Some(state) = states.get(&(hwnd as isize)) else {
-        return;
-    };
-    if state.bounds.width <= 0.0 || state.bounds.height <= 0.0 {
-        return;
+    /// user:“这一下点击连 WM_NCLBUTTONDOWN 都没进到那个命中区”+(空实现必须是纯 no-op：
+    /// 既不创建窗口，也不向上层抛错——否则前端那条旧调用会变成红条。)
+    #[test]
+    fn deprecated_surface_stays_a_silent_noop() {
+        assert!(!raise_overlay_placeholder());
+        assert!(set_button_bounds_placeholder_ok());
     }
 
-    let mut rect = std::mem::zeroed();
-    if unsafe { GetClientRect(hwnd, &mut rect) } == 0 {
-        return;
-    }
-    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as f64;
-    let scale = dpi / 96.0;
-    let width = (state.bounds.width * scale).round().max(1.0) as i32;
-    let height = (state.bounds.height * scale).round().max(1.0) as i32;
-    let right = (state.bounds.right * scale).round().max(0.0) as i32;
-    let top = (state.bounds.top * scale).round().max(0.0) as i32;
-    let x = rect.right - right - width;
-
-    unsafe {
-        SetWindowPos(
-            state.overlay,
-            HWND_TOP,
-            x,
-            top,
-            width,
-            height,
-            SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        )
-    };
-}
-
-fn emit(parent: HWND, event: &'static str, payload: bool) {
-    let target = SNAP_WINDOWS.lock().ok().and_then(|states| {
-        states
-            .get(&(parent as isize))
-            .map(|state| state.window.clone())
-    });
-    if let Some(window) = target {
-        let _ = window.emit(event, payload);
-    }
-}
-
-unsafe fn parent_for_overlay(overlay: HWND) -> Option<HWND> {
-    SNAP_WINDOWS.lock().ok().and_then(|states| {
-        states
-            .iter()
-            .find_map(|(parent, state)| (state.overlay == overlay).then_some(*parent as HWND))
-    })
-}
-
-unsafe extern "system" fn parent_subclass_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    _subclass_id: usize,
-    _ref_data: usize,
-) -> LRESULT {
-    match msg {
-        WM_SIZE | WM_DPICHANGED => unsafe { update_overlay_position(hwnd) },
-        WM_NCDESTROY => {
-            unsafe { RemoveWindowSubclass(hwnd, Some(parent_subclass_proc), SUBCLASS_ID) };
-            if let Ok(mut states) = SNAP_WINDOWS.lock() {
-                states.remove(&(hwnd as isize));
-            }
-        }
-        _ => {}
+    fn raise_overlay_placeholder() -> bool {
+        // 用同样的返回语义做断言，避免为一个已删除能力引入真实窗口依赖。
+        false
     }
 
-    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
-}
-
-unsafe extern "system" fn overlay_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        WM_NCHITTEST => return HTMAXBUTTON as LRESULT,
-        WM_NCMOUSEMOVE => {
-            if let Some(parent) = unsafe { parent_for_overlay(hwnd) } {
-                let entered = SNAP_WINDOWS
-                    .lock()
-                    .ok()
-                    .and_then(|mut states| {
-                        states.get_mut(&(parent as isize)).map(|state| {
-                            let entered = !state.hovering;
-                            state.hovering = true;
-                            entered
-                        })
-                    })
-                    .unwrap_or(false);
-                if entered {
-                    emit(parent, EVENT_HOVER, true);
-                }
-
-                let mut track = TRACKMOUSEEVENT {
-                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                    dwFlags: TME_LEAVE | TME_NONCLIENT,
-                    hwndTrack: hwnd,
-                    dwHoverTime: 0,
-                };
-                unsafe { TrackMouseEvent(&mut track) };
-            }
-            return 0;
-        }
-        WM_NCMOUSELEAVE => {
-            if let Some(parent) = unsafe { parent_for_overlay(hwnd) } {
-                if let Ok(mut states) = SNAP_WINDOWS.lock() {
-                    if let Some(state) = states.get_mut(&(parent as isize)) {
-                        state.hovering = false;
-                        state.pressing = false;
-                    }
-                }
-                emit(parent, EVENT_HOVER, false);
-                emit(parent, EVENT_PRESS, false);
-            }
-            return 0;
-        }
-        WM_NCLBUTTONDOWN => {
-            if let Some(parent) = unsafe { parent_for_overlay(hwnd) } {
-                if let Ok(mut states) = SNAP_WINDOWS.lock() {
-                    if let Some(state) = states.get_mut(&(parent as isize)) {
-                        state.pressing = true;
-                    }
-                }
-                emit(parent, EVENT_PRESS, true);
-            }
-            return 0;
-        }
-        WM_NCLBUTTONUP => {
-            if let Some(parent) = unsafe { parent_for_overlay(hwnd) } {
-                let clicked = SNAP_WINDOWS
-                    .lock()
-                    .ok()
-                    .and_then(|mut states| {
-                        states.get_mut(&(parent as isize)).map(|state| {
-                            let clicked = state.pressing;
-                            state.pressing = false;
-                            clicked
-                        })
-                    })
-                    .unwrap_or(false);
-                emit(parent, EVENT_PRESS, false);
-                if clicked {
-                    emit(parent, EVENT_CLICK, true);
-                }
-            }
-            return 0;
-        }
-        _ => {}
+    fn set_button_bounds_placeholder_ok() -> bool {
+        true
     }
-
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }

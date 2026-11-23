@@ -54,12 +54,17 @@ async def _default_runner(args: list[str], cwd: str, timeout: float) -> tuple[in
     executable = shutil.which(args[0])
     if executable is None:
         raise GithubError(f"command not found on this machine: {args[0]}")
+    # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(gh 每次调用都不许弹控制台；
+    # stdout/stderr 仍走管道解析)。
+    from lamtools_core.win_spawn import hidden_kwargs
+
     process = await asyncio.create_subprocess_exec(
         executable,
         *args[1:],
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **hidden_kwargs(),
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)

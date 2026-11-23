@@ -73,7 +73,8 @@ const props = withDefaults(defineProps<{
   textareaAriaLabel?: string
   disabled?: boolean
   actionMode?: 'send' | 'stop' | 'resume'
-  variant?: 'floating' | 'embedded'
+  /** 完整形态；compact = 单行胶囊（同一套外观，只收成一行）。 */
+  variant?: 'floating' | 'embedded' | 'compact'
   sendLabel?: string
   stopLabel?: string
   sendTitle?: string
@@ -152,3 +153,5 @@ function onFormKeydown(event: KeyboardEvent) {
   }
 }
 </style>
+
+<style src="../styles/composer-compact.css"></style>

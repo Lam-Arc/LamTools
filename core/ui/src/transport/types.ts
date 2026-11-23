@@ -22,6 +22,12 @@ export interface TransportHttpRequest {
   body?: Uint8Array
   signal?: AbortSignal
   timeoutMs?: number
+  /**
+   * user:“标注后无法引用”+(预览器用 `<img>` 先以 no-cors 缓存过同一个地址，
+   * 之后 CORS `fetch` 同一 URL 会被浏览器判成“没有 ACAO”而直接失败；
+   * 读字节必须显式绕过缓存，`no-store` 让它每次走网络)。
+   */
+  cache?: RequestCache
 }
 
 export interface TransportRpcRequest {

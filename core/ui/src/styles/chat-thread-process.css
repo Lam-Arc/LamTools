@@ -433,9 +433,6 @@
 
 .sub-line-block .user-bubble {
   max-width: min(76%, 520px);
-  border-radius: var(--radius);
-  border-bottom-right-radius: 6px;
-  padding: 7px 10px;
   font-size: 12px;
   line-height: 1.5;
 }

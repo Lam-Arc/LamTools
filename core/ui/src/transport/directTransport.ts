@@ -61,6 +61,7 @@ export class DirectHttpTransport {
         headers: { ...this.defaultHeaders, ...(input.headers || {}) },
         body: input.body as unknown as BodyInit | undefined,
         signal: controller.signal,
+        ...(input.cache ? { cache: input.cache } : {}),
       }).then(async (response) => {
         const buffer = await response.arrayBuffer()
         const headers: Record<string, string> = {}

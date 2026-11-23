@@ -1,7 +1,7 @@
 """Generic visibility gate for sessions owned by plugins.
 
 user:“study/workflow 会话被误判禁用”+可见性必须读唯一账本（PluginHost），
-不再经过旧 v1 注册表；每判一次都重新发现，开关插件立刻生效。
+每次查询重新读取，开关插件在下一次查询生效。
 """
 
 from __future__ import annotations
@@ -22,22 +22,54 @@ class PluginSessionVisibility:
         self._host = host
 
     def __call__(self, session_id: str, metadata: dict[str, Any]) -> bool:
-        owner = str(metadata.get("owner_plugin") or "").strip()
-        plugins = self._host.discover()
-        if owner:
-            return any(
-                plugin.name == owner and plugin.enabled
-                for plugin in plugins
-            )
+        return self.snapshot()(session_id, metadata)
 
-        # Pre-plugin resource sessions did not have owner metadata. Plugins
-        # may declare their historical identifiers in the same manifest that
-        # owns their runtime, allowing Core to keep compatibility without
-        # knowing any plugin-specific prefix.
-        for plugin in plugins:
-            if any(str(session_id).startswith(prefix) for prefix in _legacy_prefixes(plugin.raw)):
-                return plugin.enabled
-        return True
+    def snapshot(self) -> SessionVisibility:
+        plugins = self._host.discover()
+        enabled = {plugin.name for plugin in plugins if plugin.enabled}
+        legacy = tuple(
+            (prefix, plugin.enabled)
+            for plugin in plugins
+            for prefix in _legacy_prefixes(plugin.raw)
+        )
+
+        def visible(session_id: str, metadata: dict[str, Any]) -> bool:
+            owner = str(metadata.get("owner_plugin") or "").strip()
+            if owner:
+                return owner in enabled
+            # Legacy resources identify their owner by a manifest prefix.
+            session_id = str(session_id)
+            for prefix, plugin_enabled in legacy:
+                if session_id.startswith(prefix):
+                    return plugin_enabled
+            return True
+
+        return visible
+
+
+def _visible_without_plugin_owner(_session_id: str, metadata: dict[str, Any]) -> bool:
+    return not bool(str(metadata.get("owner_plugin") or "").strip())
+
+
+def session_visibility_for_batch(visibility: SessionVisibility) -> SessionVisibility:
+    # user:“优化”+(批量查询只扫描一次插件目录，下一次查询重新读取插件状态)。
+    snapshot = visibility.snapshot if isinstance(visibility, PluginSessionVisibility) else None
+    resolver = visibility
+
+    def visible(session_id: str, metadata: dict[str, Any]) -> bool:
+        nonlocal resolver, snapshot
+        if snapshot is not None:
+            try:
+                resolver = snapshot()
+            except Exception:  # Keep an unavailable owner gate closed for this batch.
+                resolver = _visible_without_plugin_owner
+            snapshot = None
+        try:
+            return bool(resolver(session_id, metadata))
+        except Exception:
+            return _visible_without_plugin_owner(session_id, metadata)
+
+    return visible
 
 
 def _legacy_prefixes(raw: dict[str, Any]) -> list[str]:
@@ -46,4 +78,4 @@ def _legacy_prefixes(raw: dict[str, Any]) -> list[str]:
     return [str(item) for item in prefixes if isinstance(item, str) and str(item)]
 
 
-__all__ = ["PluginSessionVisibility", "SessionVisibility"]
+__all__ = ["PluginSessionVisibility", "SessionVisibility", "session_visibility_for_batch"]

@@ -1,6 +1,6 @@
 import type { CoreAppEvent, CoreAppSnapshot } from '@/appServer/protocol.ts'
 import type { LamToolsTransport, TransportConnectionState, TransportMessage } from '@/transport/index.ts'
-import { TransportRequestTimeoutError } from '@/transport/index.ts'
+import { TransportRequestTimeoutError, TransportRpcError } from '@/transport/index.ts'
 
 export class CoreRequestAcceptanceUnknownError extends Error {
   readonly code = 'ACCEPTANCE_UNKNOWN'
@@ -67,6 +67,20 @@ export class CoreAppServerClosedError extends Error {
   constructor() {
     super('Core App Server transport closed')
     this.name = 'AbortError'
+  }
+}
+
+/**
+ * The server refused a business call because this connection never completed
+ * the initialize handshake, and one automatic re-handshake did not fix it.
+ * user:"界面出现 Connection is not initialized"+(不要把英文协议原句丢给用户：
+ * 面向用户的文案只说清「连接正在重连、稍后再试」，技术原因留在 code 里)。
+ */
+export class CoreAppServerNotReadyError extends Error {
+  readonly code = 'NOT_READY'
+  constructor() {
+    super('与主程序的连接还没就绪，正在重新连接，请稍后再试。')
+    this.name = 'CoreAppServerNotReadyError'
   }
 }
 
@@ -142,14 +156,37 @@ export class CoreAppServerClient {
   }
 
   async request(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+    await this.ensureHandshake(method)
+    try {
+      return await this.performRequest(method, params, timeoutMs)
+    } catch (error) {
+      // user:"界面出现 Connection is not initialized"+(服务器这条可重试错误是唯一的
+      // 自愈信号：说明当前 socket 换过、但客户端还认为握过手。把标记重置后在当前连接上
+      // 补一次 initialize，再重试一次；否则按秒轮询会永远静默地撞在同一个拒绝上。)
+      if (method === 'initialize' || !isNotInitializedError(error)) throw error
+      this.initialized = false
+      await this.ensureHandshake(method)
+      try {
+        return await this.performRequest(method, params, timeoutMs)
+      } catch (retryError) {
+        if (!isNotInitializedError(retryError)) throw retryError
+        throw new CoreAppServerNotReadyError()
+      }
+    }
+  }
+
+  private async ensureHandshake(method: string): Promise<void> {
     if (this.closed) throw new CoreAppServerClosedError()
+    if (method === 'initialize') return
     // A transport can publish `connected` before this protocol client has
     // completed initialize. Every business RPC shares the current initialize
     // promise so reconnect callbacks cannot overtake the handshake.
-    if (method !== 'initialize' && !this.initialized) {
-      await this.connect(this.lastConnectParams)
-      if (this.closed || !this.initialized) throw new CoreAppServerClosedError()
-    }
+    if (this.initialized) return
+    await this.connect(this.lastConnectParams)
+    if (this.closed || !this.initialized) throw new CoreAppServerClosedError()
+  }
+
+  private async performRequest(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
     const clientId = String(params.client_message_id || '')
     if (!clientId || (method !== 'turn/start' && method !== 'turn/resume')) {
       return await this.requestRaw(method, params, timeoutMs)
@@ -279,6 +316,25 @@ export class CoreAppServerClient {
 function asEventEnvelope(method: string | undefined, params: Record<string, unknown>): CoreAppEvent {
   if (typeof params.method === 'string') return params as unknown as CoreAppEvent
   return { ...params, method: method ?? '' } as unknown as CoreAppEvent
+}
+
+// Dedicated server code for "business frame before initialize".
+const NOT_INITIALIZED_CODE = -32002
+
+/**
+ * Recognize the pre-handshake rejection. Newer Core builds send the dedicated
+ * code plus `data.reason`; older builds reused INVALID_REQUEST for the same
+ * meaning, so the reason string is the fallback.
+ */
+function isNotInitializedError(error: unknown): boolean {
+  if (!(error instanceof TransportRpcError)) return false
+  if (error.code === NOT_INITIALIZED_CODE) return true
+  const data = error.data
+  return Boolean(
+    data
+    && typeof data === 'object'
+    && (data as { reason?: unknown }).reason === 'not_initialized',
+  )
 }
 
 function mapTransportState(state: TransportConnectionState): 'connecting' | 'open' | 'closed' | 'error' {

@@ -14,6 +14,8 @@ import * as bridge from '../bridge.ts'
 import { defaultConfig, parseConfigText } from '../config.ts'
 import { createPetAgentClient } from '../agent/client.ts'
 import { PetAgentHost } from '../agent/host.ts'
+import { createDirectTransport, type DirectTransport } from '@/transport/directTransport.ts'
+import { createTranslator, type TranslateInput, type TranslateOutcome } from '../translate/client.ts'
 
 const props = defineProps<{
   frame: CapturedFrame | null
@@ -29,6 +31,9 @@ const initialRegion = computed(() => (
 ))
 const error = ref(props.bootError)
 let heartbeat = 0
+let generation = 0
+let activeClient: ReturnType<typeof createPetAgentClient> | null = null
+let closing = false
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
@@ -37,11 +42,20 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 async function cancel(): Promise<void> {
-  if (busy.value) return
+  // user:“任何步骤按 Esc 都可以安全退出”+(关闭时使进行中的发送失效并停止客户端)。
+  if (closing) return
+  closing = true
+  generation++
+  activeClient?.close()
+  activeClient = null
+  busy.value = false
   try {
     await bridge.closePingCapture()
   } catch (cause) {
     console.error('[capture] close failed', cause)
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    closing = false
   }
 }
 
@@ -49,13 +63,20 @@ async function send(payload: { blob: Blob; text: string; meta: CaptureSelectionM
   if (busy.value) return
   busy.value = true
   error.value = ''
-  const configText = await bridge.readConfigText().catch(() => null)
-  const config = configText ? parseConfigText(configText).config : defaultConfig()
-  const base = await bridge.apiBase()
-  const client = createPetAgentClient(base)
+  const run = ++generation
+  let client: ReturnType<typeof createPetAgentClient> | undefined
+  // user:“确保视觉、功能和交互不退化”+(准备阶段失败也显示错误并解除忙碌，允许重试或退出)。
   try {
+    const configText = await bridge.readConfigText().catch(() => null)
+    if (run !== generation) return
+    const config = configText ? parseConfigText(configText).config : defaultConfig()
+    const base = await bridge.apiBase()
+    if (run !== generation) return
+    client = createPetAgentClient(base)
+    activeClient = client
     const host = new PetAgentHost(client, config.bindings)
     const target = await host.pingTarget()
+    if (run !== generation) return
     const channel = host.channel(target.projectId || null, target.sessionId)
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     const upload = await client.uploadScreenshot(
@@ -64,21 +85,46 @@ async function send(payload: { blob: Blob; text: string; meta: CaptureSelectionM
       payload.blob,
       `ping-select-${stamp}.png`,
     )
+    if (run !== generation) return
     // user:“ping的所有东西都是按引导进去的，不是按排队进去的”+
     // (发送走与 Ping 环相同的通道：活动回合里是引导，不排队。)
     const result = await channel.send(payload.text, [client.attachmentInput(upload)])
+    if (run !== generation) return
     if (result.status === 'ignored') {
       throw new Error(result.message || 'Ping 消息未能送达目标会话')
     }
     console.log('[capture] sent', JSON.stringify(payload.meta))
     await bridge.openMainSession(target.projectId || null, target.sessionId)
+    if (run !== generation) return
     await bridge.closePingCapture()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
-    busy.value = false
+    if (run === generation) {
+      error.value = cause instanceof Error ? cause.message : String(cause)
+      busy.value = false
+    }
   } finally {
-    client.close()
+    if (activeClient === client) { client?.close(); activeClient = null }
   }
+}
+
+/**
+ * 屏幕翻译：复用直调（direct.*）这条不进 Agent Loop 的直路。
+ *
+ * user:“用现有模型直调通道…不要接第三方翻译 API”+(截图窗口已经握着同一套
+ * DirectTransport；这里只把 JSON-RPC 包成编辑器要的翻译函数，挑模型、发起与
+ * 轮询都在 translate/client.ts，窗口自己不碰模型细节)。
+ */
+let translateTransport: DirectTransport | null = null
+
+async function translateScreen(input: TranslateInput): Promise<TranslateOutcome> {
+  if (!translateTransport) {
+    const base = await bridge.apiBase()
+    translateTransport = createDirectTransport({ apiBase: `${base}/api/core` })
+  }
+  const transport = translateTransport
+  const translate = createTranslator((method, params) =>
+    transport.request<Record<string, unknown>>({ kind: 'rpc', method, params }))
+  return await translate(input)
 }
 
 onMounted(() => {
@@ -93,8 +139,14 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  generation++
+  activeClient?.close()
+  activeClient = null
   window.removeEventListener('keydown', onKeydown)
   if (heartbeat) window.clearInterval(heartbeat)
+  // 窗口关掉就把这条直调通道一起收掉，不留下半开的 WebSocket。
+  void translateTransport?.close()
+  translateTransport = null
 })
 </script>
 
@@ -105,6 +157,7 @@ onBeforeUnmount(() => {
     :busy="busy"
     :preset-region="initialRegion"
     :error="error"
+    :translate="translateScreen"
     @cancel="cancel"
     @send="send"
   />

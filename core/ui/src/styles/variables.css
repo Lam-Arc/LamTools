@@ -99,6 +99,10 @@
   --optical-glass-shadow: 0 7px 14px rgba(30, 40, 35, .12), 0 1px 4px rgba(30, 40, 35, .06);
   /* 低透玻璃（.optical-glass--low-trans）：重着色，浮层/菜单用；
      高透（默认 16%）只留给右侧栏等大面积承载面。 */
+  /* user:“尤其是气泡和玻璃效果”+(消息色是装饰色，和失败红、成功绿等状态色分开)。 */
+  --message-bubble-user-color: #f2a3b7;
+  --message-bubble-assistant-color: #a7c6f5;
+  --optical-glass-reading-tint: 88%;
   --optical-glass-low-trans-tint: 40%;
   --optical-glass-low-trans-fallback-tint: 58%;
 
@@ -121,6 +125,9 @@
   --ease-emphasized: cubic-bezier(.16, 1, .3, 1);     /* 强调入场 */
 
   /* —— Sunday 交互几何（range / switch / segmented / progress 共用）—— */
+  /* user:“都缩小一些，不需要那么大”+(右上角只占一小簇：单键 24、胶囊内边距 2、
+     拖拽空白 56；圆的直径与胶囊外高一致)。 */
+  --window-control-size: 24px;
   --interaction-height-sm: 28px;
   --interaction-height: 34px;
   --interaction-height-lg: 42px;
@@ -129,6 +136,19 @@
   --interaction-thumb: 16px;
   --interaction-thumb-sm: 14px;
   --interaction-progress-height: 6px;
+  /* user:“不再留拖拽的空位，而是非交互区域均可拖拽”+
+     (右上角一簇只剩标签抽屉圆底 + 三键胶囊；拖窗改由标题带的空白区域承担)。 */
+  --window-control-gap: 4px;
+  --window-capsule-pad: 2px;
+  /* user:“大小一致化，胶囊多大圆就多大”+
+     (胶囊外高 = 三键高 + 内边距 + 1px 描边；圆形抽屉键取同一个直径)。 */
+  --window-capsule-size: calc(var(--window-control-size) + var(--window-capsule-pad) * 2 + 2px);
+  --window-cluster-height: calc(var(--window-capsule-size) + var(--space-1));
+  /* 宽度公式把描边与左右内边距算进去，免得标题带让位不够。 */
+  --window-cluster-width: calc(
+    var(--window-capsule-size) + var(--window-control-gap) +
+      var(--window-control-size) * 3 + var(--window-capsule-pad) * 2 + 2px + var(--space-2) * 2
+  );
   /* 右侧栏收起时长：面板先以此时长收回，抬升的层级在收回结束后才下移。
      与 useShellLayout.ts 的 RIGHT_DRAWER_RETRACT_MS 必须一致。 */
   --right-drawer-retract: 180ms;
@@ -145,11 +165,10 @@
   --sidebar-width: var(--layout-sidebar-width, 186px);
   --sidebar-width-mid: 230px;
   --sidebar-width-full: 267px;
-  /* 标题栏高度：原生标题栏存在时由 TitleBar 写入 --titlebar-native-height；
-     编辑器布局变量优先，全站统一从这条链读取。 */
+  /* user:“把标题栏取消”+(桌面顶部贴边，保留系统安全区偏移)。 */
   /* user:“内容没有为上方标题栏让位（会与手机上方的 bar 重叠）”+(窗口是 edge-to-edge 的，
      系统不会替我们缩；--native-safe-area-top 由宿主报上来，没有它的平台就是 0)。 */
-  --titlebar-offset: calc(var(--layout-titlebar-height, var(--titlebar-native-height, 0px)) + var(--native-safe-area-top, 0px));
+  --titlebar-offset: var(--native-safe-area-top, 0px);
   --sidebar-padding-x: 14px;
   --sidebar-padding-y: 0;
   --sidebar-font: 14px;

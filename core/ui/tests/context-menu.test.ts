@@ -73,7 +73,7 @@ function touchPointerEvent(
 
 function menuPanel(level = 0): HTMLElement | null {
   // 退场中的面板（关闭动效未播完）不算数：查询一律排除。
-  return document.querySelector<HTMLElement>(`[data-context-menu-level="${level}"]:not(.context-menu-leave-active)`)
+  return document.querySelector<HTMLElement>(`[data-context-menu-level="${level}"]:not([inert])`)
 }
 
 function menuButton(index: number, level = 0): HTMLButtonElement {
@@ -110,7 +110,8 @@ describe('ContextMenuHost', () => {
     expect(opticalGlassCss).toMatch(/\.optical-glass::after\s*\{[\s\S]*?radial-gradient[\s\S]*?optical-glass-refraction-color/)
     expect(opticalGlassCss).not.toContain('conic-gradient')
     expect(opticalGlassCss).not.toContain('mask-composite')
-    expect(contextMenuPanelSource).toMatch(/\.context-menu-panel-content\s*\{[\s\S]*?animation: popover-in var\(--dur-base\) var\(--ease-out\);/)
+    // user:“做”+(固定定位面板不位移，只让内容层复用浮层入场)。
+    expect(contextMenuPanelSource).toContain('class="context-menu-panel-content sunday-motion-popover"')
     expect(contextMenuPanelSource).not.toMatch(/\.context-menu-panel\s*\{[^}]*animation:/)
   })
 
@@ -660,10 +661,8 @@ describe('ContextMenuHost', () => {
   })
 
   it('animates entry, exit, group folding, and falls back for reduced motion', () => {
-    // 出场是内容层的 popover-in（既有契约）；退场是面板层短淡出；
+    // 组折叠是组件自己负责的动作，浮层退场由共享样式负责。
     // 组折叠与箭头转向都有过渡；减弱动态下全部退化为直切。
-    expect(contextMenuPanelSource).toMatch(/\.context-menu-leave-active\s*\{[^}]*transition: opacity/)
-    expect(contextMenuPanelSource).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.context-menu-leave-active\s*\{[^}]*transition: none/)
     expect(contextMenuPanelSource).toMatch(/\.context-menu-group-body\s*\{[^}]*grid-template-rows: 1fr/)
     expect(contextMenuPanelSource).toMatch(/\.context-menu-group-body\.is-collapsed\s*\{[^}]*grid-template-rows: 0fr/)
     expect(contextMenuPanelSource).toMatch(/\.context-menu-group-chevron\s*\{[^}]*transition: transform/)

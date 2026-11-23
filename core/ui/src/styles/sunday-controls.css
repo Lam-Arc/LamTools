@@ -306,6 +306,8 @@
   animation: sunday-progress-indeterminate 1.4s ease-in-out infinite alternate;
 }
 
+.sunday-motion-preview-reduced .sunday-progress--indeterminate .sunday-progress__fill { animation: none; }
+
 @keyframes sunday-progress-indeterminate {
   from { transform: translateX(0); }
   to { transform: translateX(185.7%); }

@@ -14,7 +14,7 @@
     @click.stop
     @contextmenu.prevent.stop
   >
-    <div class="context-menu-panel-content">
+    <div class="context-menu-panel-content sunday-motion-popover">
       <template v-for="run in itemRuns" :key="run.key">
         <div class="context-menu-run" :class="{ 'context-menu-run--group': run.group }">
           <button
@@ -443,7 +443,6 @@ defineExpose({
   max-height: inherit;
   overflow-y: auto;
   padding: var(--space-1);
-  animation: popover-in var(--dur-base) var(--ease-out);
 }
 
 .context-menu-item {
@@ -624,24 +623,7 @@ defineExpose({
   opacity: 0;
 }
 
-/* ── 菜单退场：短淡出，消失与出现同节奏。 ── */
-.context-menu-leave-active {
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-
-.context-menu-leave-to {
-  opacity: 0;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .context-menu-panel-content {
-    animation: none;
-  }
-
-  .context-menu-leave-active {
-    transition: none;
-  }
-
   .context-menu-group-body,
   .context-menu-group-chevron {
     transition: none;

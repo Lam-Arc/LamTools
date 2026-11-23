@@ -6,6 +6,7 @@
       shellClass,
       composerShellClass,
       {
+        'workspace-shell--compact-chrome': compactChrome,
         'workspace-shell--empty-session': emptySession,
         'workspace-shell--full-bleed': mainContentFullBleed,
         'workspace-shell--workflow': workflowMode,
@@ -53,18 +54,60 @@
       <PanelLeft :size="18" :stroke-width="1.8" aria-hidden="true" />
     </button>
 
-    <!-- Edge hover triggers -->
+    <!-- user:“左侧窄竖栏位置再分配…其余项做成左侧栏，与右侧栏保持样式同套系”+
+         (左栏常驻：容器占住 --rail-width 这一列，内部只放应用导航；
+          项目侧栏仍由按钮控制，唤出热区挪到左栏右缘)。 -->
     <div
-      class="edge edge-left"
+      class="workspace-left-rail"
+      data-app-rail-shell
       :inert="rightDrawerModal || undefined"
-      role="button"
-      tabindex="0"
-      :aria-label="t('打开左侧会话栏')"
-      @mouseenter="!leftPinned && !collapseLeftSidebar && openLeftDrawer()"
-      @focus="!leftPinned && !collapseLeftSidebar && openLeftDrawer()"
-      @keydown.enter.prevent="!collapseLeftSidebar && openLeftDrawer()"
-      @keydown.space.prevent="!collapseLeftSidebar && openLeftDrawer()"
+      @mouseleave="onLeftSurfaceLeave"
+    >
+      <div
+        class="edge edge-left"
+        role="button"
+        tabindex="0"
+        :aria-label="t(compactChrome ? '主导航' : '打开左侧栏')"
+        @mouseenter="!compactChrome && !leftPinned && !collapseLeftSidebar && openLeftDrawer()"
+        @focus="!compactChrome && !leftPinned && !collapseLeftSidebar && openLeftDrawer()"
+        @keydown.enter.prevent="!compactChrome && !collapseLeftSidebar && openLeftDrawer()"
+        @keydown.space.prevent="!compactChrome && !collapseLeftSidebar && openLeftDrawer()"
+      ></div>
+      <div class="workspace-left-rail-content">
+        <slot name="app-rail" />
+        <PluginSystemContributions v-if="props.pluginRpc" :request-rpc="props.pluginRpc" region="appRail" />
+      </div>
+    </div>
+    <!-- user:“左侧窄竖栏位置再分配”+(项目侧栏的唤出入口挪到左栏右缘的窄热区：
+         指针贴上去就展开，和旧版“贴左边缘展开”的手感一致)。 -->
+    <div
+      v-if="compactChrome && !collapseLeftSidebar && !leftDrawerShown"
+      class="workspace-rail-seam"
+      data-app-rail-seam
+      aria-hidden="true"
+      @mouseenter="openLeftDrawer"
     ></div>
+    <div
+      v-if="$slots['root-entry']"
+      class="core-root-bento-anchor"
+      data-ws2-root-anchor
+    >
+      <!-- user:“手动缩回后也应该有打开方式”+(左上角同一按钮明确显示打开和收起状态)。 -->
+      <button
+        v-if="compactChrome && !collapseLeftSidebar && !requireLeftSidebar"
+        class="btn btn--ghost project-sidebar-toggle"
+        type="button"
+        data-project-sidebar-toggle
+        :aria-controls="leftDrawerId"
+        :aria-expanded="leftDrawerShown"
+        :aria-label="projectSidebarToggleLabel"
+        :title="projectSidebarToggleLabel"
+        @click="toggleLeftDrawer"
+      >
+        <PanelLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+      </button>
+      <slot name="root-entry" />
+    </div>
     <div
       v-if="showRightPanel"
       class="edge edge-right"
@@ -77,14 +120,10 @@
       @keydown.space.prevent="openRightDrawer"
     ></div>
 
-    <!-- ===== App Rail（最左竖栏：整界面导航，常驻） ===== -->
-    <slot name="app-rail" />
-    <PluginSystemContributions v-if="props.pluginRpc" :request-rpc="props.pluginRpc" region="appRail" />
-
     <!-- ===== Left Drawer ===== -->
     <LeftSidebarShell
       :id="leftDrawerId"
-      :open="leftOpen && !collapseLeftSidebar"
+      :open="leftDrawerShown"
       :pinned="leftPinned"
       :title="sidebarTitle"
       :show-sidebar-header="showSidebarHeader"
@@ -94,7 +133,7 @@
       :show-settings-action="showSidebarSettingsAction"
       @close="closeDrawers"
       @toggle-pinned="onSidebarTogglePinned"
-      @mouseleave="onLeftDrawerLeave"
+      @mouseleave="onLeftSurfaceLeave"
       @new-session="$emit('new-session')"
       @settings="$emit('settings')"
       @plugins="$emit('plugins')"
@@ -120,6 +159,16 @@
         <LeftPluginDock v-if="props.pluginRpc" :request-rpc="props.pluginRpc" />
       </template>
     </LeftSidebarShell>
+
+    <!-- user:“会话栏与主区之间不应再有「两张卡片之间的空隙」…A. 让两者共用一个外层背景，
+         缝隙处只留选中行高度的内凹圆角过渡（其余高度上是同色连续面，看不出接缝）”+
+         (这一层只是把那条 3px 的缝填成两侧同色：它不吃指针、不参与布局，
+          上下两端贴着标题栏与底边，于是整条缝消失；选中行的高亮再由 .session-fusion 跨过去)。 -->
+    <div class="session-seam" data-session-seam aria-hidden="true"></div>
+    <!-- user:“当前选中的会话与右侧内容区形成连续轮廓…连接处上下用内凹圆角过渡”+
+         (连接处必须画在聊天卡之上，所以这一层在壳上：几何由会话栏量出来写进变量，这里只负责画。
+          装饰可被主题关掉/换掉：见 --session-fusion-plate-display 等令牌)。 -->
+    <div class="session-fusion" data-session-fusion-plate aria-hidden="true"></div>
 
     <!-- user:“让左侧栏和主内容区中间的边界可以被拖动”+(会话栏与聊天卡之间那条缝
          就是宽度把手：拖动改宽度、双击回默认档，键盘左右键逐档微调)。 -->
@@ -172,6 +221,12 @@
       />
     </main>
 
+    <!-- user:“层级应为红>绿>黄”+(标签页抽屉放在主区之外，绘制和命中均在工作区浮窗上方)。 -->
+    <div v-if="$slots['workspace-overlays']" class="workspace-chrome-overlays">
+      <slot name="workspace-overlays" />
+    </div>
+    <slot name="window-controls" />
+
     <!-- ===== Floating Composer ===== -->
     <ComposerBar
       v-if="!hideComposer"
@@ -188,7 +243,7 @@
       :data-workflow-composer-state="workflowMode ? composerActionMode : undefined"
       :data-workflow-composer-has-value="workflowMode ? String(workflowComposerHasValue) : undefined"
       :inert="rightDrawerModal || undefined"
-      variant="floating"
+      :variant="composerCompact ? 'compact' : 'floating'"
       :placeholder="defaultUiText(composerPlaceholder, '输入内容...')"
       :disabled="composerDisabled"
       :action-mode="composerActionMode"
@@ -314,9 +369,12 @@ import ComposerBar from '@/components/ComposerBar.vue'
 import CoreSendStopButton from '@/components/CoreSendStopButton.vue'
 import CoreToastHost from '@/components/CoreToastHost.vue'
 import LeftSidebarShell from '@/components/LeftSidebarShell.vue'
+import { useComposerColumn } from '@/composables/useComposerColumn'
 
 const props = withDefaults(
   defineProps<{
+    compactChrome?: boolean
+    requireLeftSidebar?: boolean
     productName: string
     pluginRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
     sidebarTitle?: string
@@ -325,6 +383,10 @@ const props = withDefaults(
     showSidebarSearchAction?: boolean
     showSidebarPluginsAction?: boolean
     showSidebarSettingsAction?: boolean
+    /** Runtime platform（desktop / mobile）：窄窗的移动端语义只对 mobile 生效。 */
+    platform?: string
+    /** 输入栏是否收起成单行胶囊（由宿主按“没字、没附件、没在跑、没聚焦”决定）。 */
+    composerCompact?: boolean
     storageKey?: string
     density?: 'compact' | 'standard' | 'loose'
     contentWidth?: number
@@ -435,6 +497,7 @@ const rightDrawerId = `${drawerId}-right-drawer`
 
 const {
   leftOpen,
+  leftDrawerShown,
   rightOpen,
   leftPinned,
   rightPinned,
@@ -452,6 +515,7 @@ const {
   onLeftDrawerLeave,
   onRightDrawerLeave: closeRightDrawer,
   openLeftDrawer,
+  toggleLeftDrawer,
   openRightDrawer,
   closeDrawers,
   setSidebarCollapsed,
@@ -459,6 +523,9 @@ const {
   setLeftWidth,
   resetLeftWidth,
 } = useShellLayout({
+  platform: props.platform,
+  compactChrome: props.compactChrome,
+  requiresLeftDrawer: () => Boolean(props.requireLeftSidebar),
   storageKey: props.storageKey,
   density: props.density,
   contentWidth: props.contentWidth,
@@ -466,11 +533,19 @@ const {
   showRightPanel: props.showRightPanel,
 })
 
+const projectSidebarToggleLabel = computed(() => t(leftDrawerShown.value ? '收起项目侧栏' : '打开项目侧栏'))
+
 watch(
   () => props.collapseLeftSidebar,
   (collapsed) => setSidebarCollapsed(Boolean(collapsed)),
   { immediate: true },
 )
+
+function onLeftSurfaceLeave(event: MouseEvent): void {
+  const next = event.relatedTarget
+  if (next instanceof Element && next.closest('.workspace-left-rail, .drawer-left')) return
+  onLeftDrawerLeave()
+}
 
 const rightDrawerRef = ref<HTMLElement | null>(null)
 
@@ -494,6 +569,9 @@ watch(
 )
 
 const shellElement = ref<HTMLElement | null>(null)
+// user:“输入栏必须限制在主内容列内…若主列几何变量缺失，就回退到主区容器 getBoundingClientRect()”+
+// (把主区的实测矩形写成 --composer-measured-left/width，CSS 优先读它们；分屏/主内容=浏览器/聚焦全屏都覆盖)。
+useComposerColumn(shellElement)
 
 /* user:“让左侧栏和主内容区中间的边界可以被拖动”+
    (分界线把手贴在会话栏右缘：拖动改宽度，松手落盘，双击回默认档。
@@ -832,6 +910,7 @@ defineExpose({
   closeLeftDrawer,
   rightPinned,
   openLeftDrawer,
+  toggleLeftDrawer,
   toggleLeftPinned,
   toggleRightPinned,
   resetComposerLayout: composerLayout.resetForSession,

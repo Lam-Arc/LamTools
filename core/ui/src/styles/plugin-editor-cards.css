@@ -153,42 +153,16 @@
 
 .plugin-card {
   position: relative;
-  min-width: 0;
   display: grid;
   gap: var(--space-2);
-  padding: var(--space-4);
-  border: 1px solid var(--plugin-border);
-  border-radius: var(--radius-lg);
-  background: var(--plugin-card);
+  padding: var(--space-3);
   color: var(--settings-card-text, var(--plugin-text));
-  transition:
-    border-color var(--dur-base) var(--ease-out),
-    box-shadow var(--dur-base) var(--ease-out),
-    transform var(--dur-base) var(--ease-out),
-    background var(--dur-base) var(--ease-out);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
-.plugin-card::before {
-  content: '';
-  position: absolute;
-  inset: -1px -1px auto;
-  height: 2px;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  background: linear-gradient(90deg, transparent, var(--plugin-accent) 30%, var(--plugin-accent) 70%, transparent);
-  opacity: 0;
-  transition: opacity var(--dur-base) var(--ease-out);
-  pointer-events: none;
-}
-
-.plugin-card:hover {
+.plugin-card:hover,
+.plugin-card:focus-within {
   border-color: var(--plugin-border-strong);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-2px);
-}
-
-.plugin-card:hover::before,
-.plugin-card:focus-within::before {
-  opacity: .55;
 }
 
 .plugin-card.is-attention {

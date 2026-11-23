@@ -17,6 +17,8 @@ import './frontendConsoleLog'
 import { createApp } from 'vue'
 import '@/styles/variables.css'
 import '@/styles/base.css'
+// user:“统一与去重”+(独立截图窗口加载共享语言下拉的样式)。
+import '@/styles/ui-select.css'
 import CaptureApp from '@/pet/ui/CaptureApp.vue'
 import { closePingCapture, fetchPingCaptureFrame, fetchPingCaptureRegion } from '@/pet/bridge.ts'
 

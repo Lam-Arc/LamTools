@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import CoreSplitPreview from '@/components/CoreSplitPreview.vue'
-import type { SplitTab } from '@/split/layout'
+import { resolvePreviewDocument, type PreviewDocument, type PreviewResolveTransport } from '@/preview/resolve'
+import type { PreviewTarget } from '@/preview/target'
+import type { SplitTab } from '@/workspace/types'
 import type { LamToolsTransport } from '@/transport'
 import '@/styles/split-workspace.css'
 
@@ -9,6 +11,18 @@ import '@/styles/split-workspace.css'
 const tab = reactive<SplitTab>({ id: 'gallery-file-preview', kind: 'preview', resource: '示例.md', title: '示例.md' })
 const fail = ref(false)
 const opened = ref(false)
+/**
+ * 图片示例在展厅里没有后台可读，把内联 SVG 直接变成 data 地址交给解析层：
+ * 共用查看器能真正解码，缩放/标注才有得演示。
+ */
+const SVG_SAMPLE = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" rx="12" fill="#79bcff"/><circle cx="80" cy="50" r="24" fill="#1f1f1f"/></svg>'
+function resolveSample(target: PreviewTarget, resolveTransport: PreviewResolveTransport): Promise<PreviewDocument> {
+  if (target.kind === 'file' && target.path.endsWith('.svg')) {
+    return Promise.resolve({ mode: 'native', url: `data:image/svg+xml;utf8,${encodeURIComponent(SVG_SAMPLE)}`, mime: 'image/svg+xml', title: '示例.svg' })
+  }
+  return resolvePreviewDocument(target, resolveTransport, { localRenderers: true })
+}
+
 const transport = {
   async request(request: { method?: string; path: string }) {
     if (request.method === 'POST' && request.path === '/files/open-reference') { opened.value = true; return { status: 200, body: new Uint8Array() } }
@@ -31,7 +45,7 @@ const transport = {
       <button class="btn btn--secondary" type="button" @click="tab.resource = '示例.svg'">图片示例</button>
       <label><input v-model="fail" class="sunday-checkbox" type="checkbox" />模拟读取失败</label>
     </div>
-    <div class="file-preview-shell" data-gallery-file-preview><CoreSplitPreview :tab="tab" root="" :transport="transport" /></div>
+    <div class="file-preview-shell" data-gallery-file-preview><CoreSplitPreview :tab="tab" root="" :transport="transport" :resolver="resolveSample" /></div>
     <span v-if="opened">本地模拟打开</span>
   </div>
 </template>

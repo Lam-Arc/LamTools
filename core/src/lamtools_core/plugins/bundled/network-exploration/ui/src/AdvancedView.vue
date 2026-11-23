@@ -20,15 +20,21 @@ const creating = ref(false),
   target = ref("github.com"),
   interval = ref("30"),
   devices = ref(null),
-  sample = ref(String(props.session.state?.settings?.sample_seconds || 5));
+  sample = ref(String(props.session.state?.settings?.sample_seconds || 5)),
+  savingSample = ref(false);
 // user:“确保视觉、功能和交互不退化”+(选择采样间隔时保持原有保存请求与版本)。
 const intervalOptions = [{ value: '15', label: '每 15 分钟' }, { value: '30', label: '每 30 分钟' }, { value: '60', label: '每小时' }, { value: '360', label: '每 6 小时' }];
 const sampleOptions = [2, 5, 10, 30].map(value => ({ value: String(value), label: `每 ${value} 秒` }));
-function setSample(value) {
-  // user:“确保视觉、功能和交互不退化”+(重复选中当前值不重复发出保存请求)。
-  if (value === sample.value) return;
-  sample.value = value;
-  void props.session.run('settings.update', { revision: props.session.state.revision, settings: { sample_seconds: Number(value) } }, '更新频率已保存');
+async function setSample(value) {
+  // user:“确保视觉、功能和交互不退化”+(成功后才显示新频率；取消或失败可重试)。
+  if (savingSample.value || value === sample.value) return;
+  savingSample.value = true;
+  try {
+    const result = await props.session.run('settings.update', { revision: props.session.state.revision, settings: { sample_seconds: Number(value) } }, '更新频率已保存');
+    if (result && !result.cancelled) sample.value = value;
+  } finally {
+    savingSample.value = false;
+  }
 }
 async function save(rows) {
   return props.session.run(
@@ -54,7 +60,7 @@ async function add() {
       interval_minutes: Number(interval.value),
     },
   ]);
-  if (result) creating.value = false;
+  if (result && !result.cancelled) creating.value = false;
 }
 async function toggle(index) {
   const rows = props.session.state.automations.map((row, i) => ({
@@ -200,7 +206,7 @@ async function loadDevices() {
         <span
           ><strong>网速更新频率</strong
           ><small>降低更新频率可以减少后台采样。</small></span
-        ><UiSelect :model-value="sample" :options="sampleOptions" aria-label="网速采样间隔" data-network-sampling :menu-min-width="140" @update:model-value="setSample" />
+        ><UiSelect :model-value="sample" :options="sampleOptions" :disabled="Boolean(session.busy) || savingSample" aria-label="网速采样间隔" data-network-sampling :menu-min-width="140" @update:model-value="setSample" />
       </div>
       <div>
         <span

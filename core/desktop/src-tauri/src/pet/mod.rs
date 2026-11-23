@@ -82,6 +82,12 @@ pub struct PetState {
     /// 配置读改写串行化：主界面设置、桌宠面板、Ping 面板可能同时写同一份
     /// config.json，patch 必须在同一把锁内完成 read-modify-write。
     config_write: Mutex<()>,
+    /// 覆盖层页面失联后先标记不可用：不再向它投递光标/命中事件，只做退避销毁。
+    /// user:“一旦遇到无法访问页面的时候，立刻把这个窗口关掉”+(标记不可用是为了
+    /// 先止血：页面已经没人画了，继续 8ms 一轮地给它投递消息只会把主线程拖住)。
+    overlay_unusable: AtomicBool,
+    /// 销毁失败的退避进度（200ms → 1s → 5s，最多 4 次，超限放弃）。
+    overlay_retire: Mutex<RetireState>,
 }
 
 /// capture 模式最长占用时间：超过就强制恢复穿透。
@@ -94,6 +100,80 @@ const CAPTURE_HOLD_LIMIT: Duration = Duration::from_secs(8);
 
 fn capture_timed_out(since: Option<Instant>) -> bool {
     since.map(|at| at.elapsed() >= CAPTURE_HOLD_LIMIT).unwrap_or(false)
+}
+
+/// user:“销毁失败 → 立刻重试”把界面拖死的修复+(看门狗每 8ms 一轮，销毁失败后
+/// 下一轮立刻再试，等于拿主线程消息泵当靶子打：实测窗口 `Responding=False`，
+/// 累计 CPU 却几乎不动——是被阻塞等待，不是渲染死循环。)
+///
+/// 现在：失败按 200ms → 1s → 5s 退避，最多 4 次尝试（首次 + 3 次重试）；
+/// 到上限就停止尝试、只记一条 ERROR，等用户重新打开桌宠（重开时整套状态复位）。
+const DESTROY_BACKOFF: [Duration; 3] = [
+    Duration::from_millis(200),
+    Duration::from_secs(1),
+    Duration::from_secs(5),
+];
+/// 首次立即销毁 + 3 次退避重试。
+const DESTROY_MAX_ATTEMPTS: u32 = 4;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct DestroyRetry {
+    /// 已经尝试过的销毁次数。
+    attempts: u32,
+    /// 已经报过一次失败：重试过程不再逐次刷日志。
+    warned: bool,
+    /// 已经放弃：不再尝试，也不再产生新日志。
+    gave_up: bool,
+}
+
+impl DestroyRetry {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// 记一次失败：返回下一次尝试前要等的时长；`None` 表示到达上限、不再尝试。
+    fn on_failure(&mut self) -> Option<Duration> {
+        if self.gave_up {
+            return None;
+        }
+        self.attempts = self.attempts.saturating_add(1);
+        if self.attempts >= DESTROY_MAX_ATTEMPTS {
+            self.gave_up = true;
+            return None;
+        }
+        Some(DESTROY_BACKOFF[(self.attempts - 1) as usize])
+    }
+
+    /// 这次失败要不要打日志：只有第一次返回 true。
+    fn take_warning(&mut self) -> bool {
+        if self.warned {
+            return false;
+        }
+        self.warned = true;
+        true
+    }
+}
+
+/// 覆盖层退役进度：退避状态 + 下次允许尝试的时间点。
+#[derive(Default)]
+struct RetireState {
+    retry: DestroyRetry,
+    next_at: Option<Instant>,
+}
+
+impl RetireState {
+    fn reset(&mut self) {
+        self.retry.reset();
+        self.next_at = None;
+    }
+
+    /// 现在是否允许再尝试销毁：退避期内不试，放弃后永不再试。
+    fn due(&self) -> bool {
+        if self.retry.gave_up {
+            return false;
+        }
+        self.next_at.map(|at| Instant::now() >= at).unwrap_or(true)
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -204,6 +284,12 @@ fn diag_bounds() -> OverlayBounds {
 fn open_overlay_window(app: &AppHandle) -> Result<OverlayBounds, String> {
     let bounds = if diag_mode() { diag_bounds() } else { virtual_screen_bounds()? };
     let state = app.state::<PetState>();
+    // user:“销毁失败 → 立刻重试”+ (用户重新打开桌宠 = 一次新的机会：把「不可用」标记与
+    // 退避计数一起清零，否则上次放弃后这次就再也不尝试销毁，也不再看门狗了。)
+    state.overlay_unusable.store(false, Ordering::SeqCst);
+    if let Ok(mut retire) = state.overlay_retire.lock() {
+        retire.reset();
+    }
     // 诊断：把进程里所有窗口的真实状态打出来，判断"拿不到窗口 API 响应"
     // 是这个窗口独有的，还是所有窗口都一样。
     for (label, handle) in app.webview_windows() {
@@ -625,10 +711,16 @@ fn poll_loop(app: AppHandle) {
                 "[pet] ping capture mode held too long; forcing click-through so the desktop stays usable"
             );
         }
-        let inside = pet_window
-            .as_ref()
-            .map(|window| apply_pointer_mode(&state, window, PointerTarget::Pet, cx, cy))
-            .unwrap_or(false);
+        // user:“销毁失败 → 立刻重试”+(覆盖层已被判定不可用：不再给它投递命中/穿透状态，
+        // 页面已经没人画了，继续投递只会把主线程拖住。)
+        let inside = if state.overlay_unusable.load(Ordering::SeqCst) {
+            false
+        } else {
+            pet_window
+                .as_ref()
+                .map(|window| apply_pointer_mode(&state, window, PointerTarget::Pet, cx, cy))
+                .unwrap_or(false)
+        };
         if let Some(window) = &ping_window {
             apply_pointer_mode(&state, window, PointerTarget::Ping, cx, cy);
         }
@@ -669,11 +761,16 @@ fn poll_loop(app: AppHandle) {
         // 宽限期见 page_alive：报过心跳 6 秒，首次加载 12 秒。
         // Ping 覆盖层是独立窗口（可能还在用轮询），不能因为桌宠页面失联就退出。
         if let Some(window) = &pet_window {
-            if !page_alive(&state) {
+            if !state.overlay_unusable.load(Ordering::SeqCst) && !page_alive(&state) {
+                // user:“一旦遇到无法访问页面的时候，立刻把这个窗口关掉”+
+                // user:“销毁失败 → 立刻重试”+ (页面失联先止血：标记不可用、停止向它投递
+                //  光标/命中事件；销毁本身走退避重试，绝不再 8ms 一轮地立即重来。)
+                state.overlay_unusable.store(true, Ordering::SeqCst);
                 eprintln!(
-                    "[pet] overlay page unreachable; closing the overlay window immediately"
+                    "[pet] overlay page unreachable; marking window unusable and retiring it with backoff"
                 );
-                destroy_overlay_now(&app, window);
+            }
+            if state.overlay_unusable.load(Ordering::SeqCst) && retire_overlay_step(&state, window) {
                 if ping_window.is_none() {
                     state.poll_running.store(false, Ordering::SeqCst);
                     break;
@@ -708,6 +805,73 @@ fn point_in_rect_padded(x: i32, y: i32, rect: &[f64; 4], pad: f64) -> bool {
 /// user:“打开桌宠你用 cli”+(命令行给出 `--pet` 或 `--open-pet` 时，应用启动完就
 ///  自动开覆盖层，不依赖托盘点击；同时保留 `SUNDAY_PET_OPEN=1` 环境变量通道，
 ///  因为 tauri dev 会把 `--` 之后的参数塞给 cargo 自己，自动化走环境变量更稳。)
+/// user:“记忆上次的桌宠状态来决定是否自启桌宠”+(持久化键：写在现有的
+/// `lam_home()/pet/config.json` 里，和桌宠其它设置同一份文件，不新开一套配置)。
+pub const LAST_SESSION_KEY: &str = "lastSession";
+/// 持久化的值：`open` / `closed`。没有记录 = 首次运行。
+pub const SESSION_OPEN: &str = "open";
+pub const SESSION_CLOSED: &str = "closed";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PetSessionState {
+    Open,
+    Closed,
+    Unknown,
+}
+
+/// 唯一的“上次状态”解析入口（纯函数，便于单测）。
+pub fn session_state_from_config(config: Option<&Value>) -> PetSessionState {
+    match config.and_then(|value| value.get(LAST_SESSION_KEY)).and_then(|value| value.as_str()) {
+        Some(SESSION_OPEN) => PetSessionState::Open,
+        Some(SESSION_CLOSED) => PetSessionState::Closed,
+        _ => PetSessionState::Unknown,
+    }
+}
+
+/// 本次启动是否自启桌宠。
+///
+/// user:“记忆上次的桌宠状态来决定是否自启桌宠”+(决策表：
+/// - 上次 `open` → 自启（沿用现有 autostart 路径）；
+/// - 上次 `closed` → **不自启**，即使 `enabled` 写着开启；
+/// - 没有记录（首次运行）→ 只看本次的显式要求（`--pet` / `--open-pet` / `SUNDAY_PET_OPEN=1`），
+///   默认**不开**：没有记录时不去猜用户意图，也避免给没装角色的人凭空开一块全屏窗口；
+/// - 显式要求优先于历史状态：用户这次就是要开，尊重这次。)
+pub fn should_autostart(last: PetSessionState, explicit_request: bool) -> bool {
+    match last {
+        PetSessionState::Open => true,
+        PetSessionState::Closed => explicit_request,
+        PetSessionState::Unknown => explicit_request,
+    }
+}
+
+/// 当前持久化下来的“上次状态”。
+pub fn current_session_state() -> PetSessionState {
+    session_state_from_config(read_config_json().as_ref())
+}
+
+/// 记录用户**主动**的开关结果。
+///
+/// user:“崩溃/被杀不算关闭”+(只有用户主动打开/关闭的路径会调用这里；
+/// 进程异常退出、系统重启不会走到，所以不会把 `open` 误写成 `closed`，
+/// 用户也就不会遇到「我开着它，重启后不见了」。)
+pub fn record_session_state(state: PetSessionState) {
+    let raw = match state {
+        PetSessionState::Open => SESSION_OPEN,
+        PetSessionState::Closed => SESSION_CLOSED,
+        PetSessionState::Unknown => return,
+    };
+    let mut config = read_config_json().unwrap_or_else(|| Value::Object(Default::default()));
+    if !config.is_object() {
+        config = Value::Object(Default::default());
+    }
+    if let Some(map) = config.as_object_mut() {
+        map.insert(LAST_SESSION_KEY.to_string(), Value::String(raw.to_string()));
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&config) {
+        let _ = write_config_text(&text);
+    }
+}
+
 pub fn open_requested_from(args: &[String], pet_open_env: Option<&str>) -> bool {
     args.iter().any(|arg| arg == "--pet" || arg == "--open-pet")
         || pet_open_env.map(|value| value == "1").unwrap_or(false)
@@ -715,7 +879,10 @@ pub fn open_requested_from(args: &[String], pet_open_env: Option<&str>) -> bool 
 
 pub fn open_requested() -> bool {
     let args: Vec<String> = std::env::args().collect();
-    open_requested_from(&args, std::env::var("SUNDAY_PET_OPEN").ok().as_deref())
+    let explicit = open_requested_from(&args, std::env::var("SUNDAY_PET_OPEN").ok().as_deref());
+    // user:“记忆上次的桌宠状态来决定是否自启桌宠”+(显式要求优先；否则按上次的用户开关状态：
+    // 上次主动开着就自启，上次主动关了就不自启——不再让「配置里 enabled」单独决定。)
+    should_autostart(current_session_state(), explicit)
 }
 
 /// 所有 WebView 窗口共用的基线参数：窗口被隐藏/遮挡时不要节流渲染器与定时器。
@@ -770,6 +937,11 @@ pub async fn pet_autostart(app: AppHandle) -> Result<bool, String> {
     if !(enabled && has_pets) {
         return Ok(false);
     }
+    // user:“记忆上次的桌宠状态来决定是否自启桌宠”+(上次是用户主动关闭的，就不自启——
+    // 即使配置里 `enabled` 仍写着开启。这条把「配置开着」与「用户上次关了」收敛成一处判定。)
+    if !should_autostart(session_state_from_config(Some(&config)), false) {
+        return Ok(false);
+    }
     open_overlay_and_poll(app)?;
     Ok(true)
 }
@@ -778,6 +950,10 @@ pub async fn pet_autostart(app: AppHandle) -> Result<bool, String> {
 /// 这些调用方都在自己的线程上，不在 WebView2 的 IPC 回调里，等待主线程是安全的）。
 pub fn open_overlay_and_poll(app: AppHandle) -> Result<OverlayBounds, String> {
     let bounds = open_overlay_window(&app)?;
+    // user:“记忆上次的桌宠状态来决定是否自启桌宠”+(用户主动打开（托盘/命令/启动恢复）
+    // 都收敛到这一个入口，成功即记 `open`；下次启动据此自启。
+    // 只有用户主动路径会走到这里，异常退出不会。)
+    record_session_state(PetSessionState::Open);
     // 窗口的显示由页面自己触发（`pet_overlay_ready`）：页面没画出东西之前，
     // 这块全屏窗口保持隐藏，永远不会变成盖住桌面的黑块。
     start_polling(&app);
@@ -843,9 +1019,63 @@ fn destroy_overlay_now(app: &AppHandle, window: &tauri::WebviewWindow) {
     }
 }
 
+/// 覆盖层退役一步：到退避时间点才尝试销毁；失败按 200ms→1s→5s 退避，
+/// 到上限就放弃并只记一条 ERROR（返回 true = 这个窗口不用再管了）。
+///
+/// user:“销毁失败 → 立刻重试”+(看门狗 8ms 一轮，若每次失败都立刻重来，
+/// 就等于拿主线程消息泵当靶子打：实测窗口 `Responding=False`、CPU 几乎不动。
+///  这里必须退避 + 有次数上限，超限后停止尝试、不再刷屏。)
+fn retire_overlay_step(state: &PetState, window: &tauri::WebviewWindow) -> bool {
+    let mut guard = match state.overlay_retire.lock() {
+        Ok(guard) => guard,
+        Err(_) => return true,
+    };
+    if guard.retry.gave_up {
+        return true;
+    }
+    if !guard.due() {
+        return false;
+    }
+    guard.next_at = None;
+    match window.destroy() {
+        Ok(()) => {
+            guard.reset();
+            true
+        }
+        Err(error) => {
+            // 销毁失败也先把窗口藏起来，绝不让一块没人画的置顶窗口继续盖住桌面。
+            let _ = window.hide();
+            match guard.retry.on_failure() {
+                Some(delay) => {
+                    guard.next_at = Some(Instant::now() + delay);
+                    if guard.retry.take_warning() {
+                        eprintln!(
+                            "[pet] destroy overlay window failed: {error}; retrying with backoff (attempt {}/{DESTROY_MAX_ATTEMPTS})",
+                            guard.retry.attempts
+                        );
+                    }
+                    false
+                }
+                None => {
+                    // 放弃：只记一条 ERROR，之后既不再尝试、也不再产生新日志。
+                    eprintln!(
+                        "[pet] ERROR destroy overlay window failed {} times, giving up (reason: {error})",
+                        guard.retry.attempts
+                    );
+                    true
+                }
+            }
+        }
+    }
+}
+
 /// 同步关闭覆盖层：托盘菜单在主线程上调用，不能走 async 命令。
 pub fn close_overlay_sync(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<PetState>();
+    // user:“崩溃/被杀不算关闭”+(这里是**用户主动**关闭的唯一入口：托盘开关与
+    // `pet_overlay_close` 命令。看门狗收窗口走的是 `destroy_overlay_now`，不经过这里，
+    // 所以页面崩溃/进程被杀都不会把状态写成 `closed`。)
+    record_session_state(PetSessionState::Closed);
     // 只有 Ping 窗口也关着时才停轮询；Ping 还开着时轮询要继续为它工作。
     if app.get_webview_window(PING_OVERLAY_LABEL).is_none() {
         stop_polling(&state);
@@ -2203,6 +2433,61 @@ mod tests {
         assert!(normalize_rel("a/b.png").is_ok());
     }
 
+    /// user:“记忆上次的桌宠状态来决定是否自启桌宠”+(决策表：上次 open→自启；
+    /// 上次 closed→不自启；无记录→只看本次显式要求；显式要求优先于历史状态)。
+    #[test]
+    fn autostart_decision_table() {
+        use PetSessionState::*;
+        assert!(should_autostart(Open, false), "上次开着 → 自启");
+        assert!(should_autostart(Open, true));
+        assert!(!should_autostart(Closed, false), "上次用户主动关了就不许自启（即使 enabled=true）");
+        assert!(should_autostart(Closed, true), "本次显式要求优先于历史状态");
+        assert!(!should_autostart(Unknown, false), "首次运行默认不自启");
+        assert!(should_autostart(Unknown, true));
+    }
+
+    /// user:“崩溃/被杀不算关闭”+(只认 `open`/`closed` 两个已写值；缺失或写坏一律 Unknown，
+    /// 不会被当成“关闭”，所以异常退出后不会把用户开着桌宠的状态改掉)。
+    #[test]
+    fn session_state_parses_only_explicit_values() {
+        let open = serde_json::json!({ "lastSession": "open" });
+        let closed = serde_json::json!({ "lastSession": "closed" });
+        assert_eq!(session_state_from_config(Some(&open)), PetSessionState::Open);
+        assert_eq!(session_state_from_config(Some(&closed)), PetSessionState::Closed);
+        assert_eq!(session_state_from_config(None), PetSessionState::Unknown);
+        assert_eq!(
+            session_state_from_config(Some(&serde_json::json!({}))),
+            PetSessionState::Unknown
+        );
+        assert_eq!(
+            session_state_from_config(Some(&serde_json::json!({ "lastSession": "garbage" }))),
+            PetSessionState::Unknown
+        );
+    }
+
+    /// user:“用户关闭后重启不自启 / 用户打开后重启自启”+(往返：写进 config 的值必须能读回来，
+    /// 且与 `enabled` 解耦——配置写着开启也不能覆盖用户主动关闭)。
+    #[test]
+    fn session_state_roundtrip_and_decoupled_from_enabled() {
+        for (state, raw) in [
+            (PetSessionState::Open, SESSION_OPEN),
+            (PetSessionState::Closed, SESSION_CLOSED),
+        ] {
+            let mut config = serde_json::json!({ "enabled": true, "pets": ["a"] });
+            config
+                .as_object_mut()
+                .expect("object")
+                .insert(LAST_SESSION_KEY.to_string(), serde_json::Value::String(raw.to_string()));
+            assert_eq!(session_state_from_config(Some(&config)), state, "写入后必须读回同一状态");
+            if state == PetSessionState::Closed {
+                assert!(
+                    !should_autostart(state, false),
+                    "enabled=true 也不能覆盖用户主动关闭"
+                );
+            }
+        }
+    }
+
     #[test]
     fn capture_timeout_forces_passthrough() {
         assert!(!capture_timed_out(None::<Instant>));
@@ -2210,6 +2495,56 @@ mod tests {
         assert!(capture_timed_out(Some(
             Instant::now() - CAPTURE_HOLD_LIMIT - Duration::from_secs(1)
         )));
+    }
+
+    /// user:“销毁失败 → 立刻重试”+(退避必须递增，不能每 8ms 重来一次)。
+    #[test]
+    fn destroy_retry_backs_off_progressively() {
+        let mut retry = DestroyRetry::default();
+        assert_eq!(retry.on_failure(), Some(Duration::from_millis(200)));
+        assert_eq!(retry.on_failure(), Some(Duration::from_secs(1)));
+        assert_eq!(retry.on_failure(), Some(Duration::from_secs(5)));
+        assert_eq!(retry.attempts, 3);
+        assert!(!retry.gave_up);
+    }
+
+    /// user:“有次数上限，超限后停止尝试并只记一条 ERROR”+(放弃之后既不再尝试，也不再加计数)。
+    #[test]
+    fn destroy_retry_stops_after_limit() {
+        let mut retry = DestroyRetry::default();
+        for _ in 0..3 {
+            assert!(retry.on_failure().is_some());
+        }
+        assert_eq!(retry.on_failure(), None, "第 4 次失败即到达上限");
+        assert!(retry.gave_up);
+        assert_eq!(retry.attempts, DESTROY_MAX_ATTEMPTS);
+        // 放弃后不再产生任何新尝试
+        assert_eq!(retry.on_failure(), None);
+        assert_eq!(retry.attempts, DESTROY_MAX_ATTEMPTS);
+    }
+
+    /// user:“不再刷屏”+(失败只报一次；放弃后既不尝试也不再打日志)。
+    #[test]
+    fn destroy_retry_warns_once_and_then_quiet() {
+        let mut retry = DestroyRetry::default();
+        assert!(retry.take_warning(), "第一次失败要报");
+        assert!(!retry.take_warning(), "后续重试不再刷屏");
+        while retry.on_failure().is_some() {}
+        assert!(retry.gave_up);
+        assert!(!retry.take_warning(), "放弃之后不再产生新日志");
+    }
+
+    /// user:“退避期内不许重试”+(时间点没到就跳过；放弃后永不再试)。
+    #[test]
+    fn retire_state_respects_backoff_window() {
+        let mut state = RetireState::default();
+        assert!(state.due(), "初始状态应允许立刻尝试");
+        state.next_at = Some(Instant::now() + Duration::from_secs(60));
+        assert!(!state.due(), "退避期内不允许再试");
+        state.reset();
+        assert!(state.due());
+        state.retry.gave_up = true;
+        assert!(!state.due(), "放弃后永不再试");
     }
 
     #[test]

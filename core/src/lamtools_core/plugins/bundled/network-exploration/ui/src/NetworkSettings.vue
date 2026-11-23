@@ -49,7 +49,8 @@ async function saveDns() {
     },
     "DNS 设置已更新",
   );
-  if (result) {
+  // user:“确保视觉、功能和交互不退化”+(取消修改后保留编辑表单，不能误报完成)。
+  if (result && !result.cancelled) {
     editing.value = false;
     const response = await props.session.read("interfaces");
     if (response) props.session.interfaces = response.interfaces || [];

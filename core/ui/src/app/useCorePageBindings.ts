@@ -39,6 +39,7 @@ export function useCorePageBindings(context: {
   modelCatalogView: any
   modelGroups: any
   openFileFromSearch: any
+  openLibraryProjectFile: (path: string, scope: { workRoot: string; projectId?: string }) => Promise<void>
   openPluginsFromSearch: any
   openSessionFromSearch: any
   persistSettingsCatalog: any
@@ -80,7 +81,7 @@ export function useCorePageBindings(context: {
   updateState: any
   uploadArtifactFiles: any
 }) {
-  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups, openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
+  const { activeAppModeKey, activeProjectId, agentsContent, agentsError, agentsLoading, agentsSaving, allowAccessOutsideWorkdir, appRuntime, arrangeHeading, arrangeRef, availableModels, availableProviders, closeFullArea, closeProjectSettings, commandShellPlatform, contentWidth, createModel, createModelGroup, createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup, deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit, lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups, openFileFromSearch, openLibraryProjectFile, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError, projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId, refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands, selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef, settingsSection, startPlanFromLibrary, theme, themeMode, themeSchedule, transport, uiPreferences, updateAllowAccessOutsideWorkdir, updateModel, updateModelCatalogView, updateModelGroup, updatePermissionPreset, updateProjectVisual, updateProvider, updateState, uploadArtifactFiles } = context
   return computed<Record<string, Record<string, any>>>(() => ({
 
   arrange: {
@@ -126,6 +127,7 @@ export function useCorePageBindings(context: {
     'requestRpc': unref(requestConfigOperation),
     'artifactSignal': unref(lastWorkbenchEvent),
     'uploadFiles': unref(uploadArtifactFiles),
+    'openProjectFile': openLibraryProjectFile,
     'refreshSignal': unref(libraryRefreshTick),
     'platform': appRuntime.platform,
     'onBack': unref(closeFullArea),
@@ -154,6 +156,9 @@ export function useCorePageBindings(context: {
     'allowAccessOutsideWorkdir': unref(allowAccessOutsideWorkdir),
     'commandShellPlatform': unref(commandShellPlatform),
     'requestRpc': unref(requestConfigOperation),
+    // user:“放进设置-模型与供应商里面作为一个子功能”+(调用台跟着设置进来，保存到资料库仍要当前项目身份)。
+    'projectId': activeProjectId.value ?? selectedProjectId.value,
+    'workRoot': currentWorkRoot(),
     'updateState': unref(updateState),
     'onClose': unref(closeFullArea),
     'onSectionChange': ($event: any) => { settingsSection.value = $event },

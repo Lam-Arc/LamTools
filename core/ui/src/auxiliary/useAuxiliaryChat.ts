@@ -6,7 +6,7 @@ import { coreThinkingModeOptions, coreThinkingPayload, normalizeCoreThinkingMode
 import { insertReferences, replaceReference, referenceSpans, type ReferenceSelection } from '@/composer/fileReferences'
 import { encodeMultipartFile } from '@/composer/upload'
 import type { CoreAttachment } from '@/types'
-import type { SplitTab } from '@/split/layout'
+import type { SplitTab } from '@/workspace/types'
 
 // user:“实现”辅助对话”功能”+(复用已有会话存储、流式回答与停止能力；每个侧屏独立运行，不借用主区连接)。
 export function useAuxiliaryChat(tab: SplitTab, environment: AuxiliaryEnvironment) {

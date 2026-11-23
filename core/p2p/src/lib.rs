@@ -13,19 +13,34 @@ pub use iroh;
 
 pub mod events;
 pub mod identity;
+pub mod gate;
 pub mod link;
+pub mod pair;
+pub mod recovery;
 pub mod proxy;
 pub mod qr;
 pub mod rpc;
 pub mod scan;
+pub mod state;
 pub mod ticket;
+pub mod transfer;
 pub mod trust;
+pub mod watch;
 
 pub use identity::{dialable_addr, relay_summary, Identity, ALPN};
-pub use events::pump_core_events;
-pub use link::{Client, Frame, ServerLink};
+pub use events::{event_seq, initialize_params, pump_core_events, Cursor};
+/// 状态通道的事件类型与解析器：宿主与传输进程共用同一份（宿主不能引 iroh，但能引它）。
+pub use sunday_p2p_status::{
+    parse_line as parse_status_line, StatusError, StatusEvent, PREFIX as STATUS_PREFIX,
+};
+pub use gate::{Admission, CODE_PAIRING_EXPIRED, CODE_PAIRING_INVALID, CODE_PAIRING_USED, CODE_REVOKED, CODE_UNPAIRED};
+pub use link::{Client, Frame, PathKind, ServerLink};
+pub use pair::{PairingGrants, PairingTicket};
+pub use recovery::{Backoff, Delivery, Outbox, SendStart};
+pub use state::{CoreLayer, DeviceLayer, Layers, Reason, SessionLayer, View};
 pub use proxy::call_core;
 pub use qr::ticket_qr_svg;
 pub use scan::{decode_qr_luma, scan_qr_file};
-pub use ticket::{decode_ticket, encode_ticket};
+pub use ticket::{decode_any_ticket, decode_ticket, encode_ticket};
 pub use trust::{TrustStore, TrustedDevice};
+pub use watch::{PendingSend, ReliableSend, WatchOptions};

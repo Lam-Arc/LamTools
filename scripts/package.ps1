@@ -47,6 +47,9 @@ Write-Host "`n=== Step 2/4: PyInstaller backend bundle ===" -ForegroundColor Cya
 # 与 CI release.yml 完全一致）。不要用仓库根遗留的旧 spec（已删除）。
 Push-Location "$Root\core"
 try {
+    # user:“打包发布，更新安装”+(本地和 CI 都在冻结前构建 Rust 会话数据库)。
+    & cargo build --locked --release --manifest-path sunday-core/Cargo.toml -p sunday-core-db
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & py -3.14 -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[FAIL] PyInstaller build failed." -ForegroundColor Red
@@ -88,7 +91,20 @@ try {
 # 3. Tauri application executable
 # ------------------------------------------------------------------
 if (-not $SkipTauri) {
-    Write-Host "`n=== Step 3/4: Tauri application executable ===" -ForegroundColor Cyan
+    Write-Host "`n=== Step 3/4: P2P transport + Tauri application executable ===" -ForegroundColor Cyan
+
+    # user:“sunday-p2p.exe 纳入正式构建与安装”+(远程连接跑在它里面；与 CI 用同一条命令，
+    # 免得本地打出来的包装上去以后远程连接不可用)。
+    Push-Location $Root
+    try {
+        & cargo build --release --manifest-path core/p2p/Cargo.toml
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] P2P transport build failed." -ForegroundColor Red
+            exit 1
+        }
+    } finally {
+        Pop-Location
+    }
 
     Push-Location "$Root\core\desktop"
     try {
@@ -123,6 +139,12 @@ if (-not $SkipTauri) {
         throw "Backend bundle is missing: $BackendBundle"
     }
     Copy-Item -LiteralPath $TauriBinary -Destination (Join-Path $StageDir "Sunday.exe")
+    # user:“正式安装包”+(传输程序与 Sunday.exe 同级：宿主按这个位置找它)。
+    $TransportBinary = Join-Path $Root "core\p2p\target\release\sunday-p2p.exe"
+    if (-not (Test-Path -LiteralPath $TransportBinary -PathType Leaf)) {
+        throw "P2P transport binary is missing: $TransportBinary"
+    }
+    Copy-Item -LiteralPath $TransportBinary -Destination (Join-Path $StageDir "sunday-p2p.exe")
     Copy-Item -LiteralPath $BackendBundle -Destination (Join-Path $StageDir "sunday-backend") -Recurse
 
     # user:“在这一次的 setup 里头再打一个清理脚本”+(安装包带上 Constant 数据库

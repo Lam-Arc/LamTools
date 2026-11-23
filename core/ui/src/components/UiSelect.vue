@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import '@/styles/sunday-motion.css'
 import { t } from '@/i18n/index.ts'
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -331,34 +332,37 @@ onUnmounted(() => {
     <!-- 菜单传送到 body：卡片（整版界面滚动区、右栏玻璃面）都有 overflow，
          就地展开会被裁掉。坐标按触发器实算，仍贴着触发器出现。 -->
     <Teleport to="body">
-      <div
-        v-if="open"
-        ref="menuEl"
-        class="ui-select-menu"
-        :class="{ 'ui-select-menu--up': placement.up }"
-        :style="menuStyle"
-        @keydown="onMenuKeydown"
-      >
-        <div v-for="group in groupedOptions" :key="group.group || 'default'" class="ui-select-group">
-          <div v-if="group.group" class="ui-select-group-label">{{ group.group }}</div>
-          <button
-            v-for="option in group.options"
-            :key="option.value"
-            class="ui-select-option"
-            :class="{
-              active: option.selected ?? option.value === modelValue,
-              'active-accent': option.activeAccent,
-              'separator-before': option.separatorBefore,
-              disabled: option.disabled,
-            }"
-            type="button"
-            :disabled="option.disabled"
-            @click="selectOption(option)"
-          >
-            {{ option.label }}
-          </button>
+      <!-- user:“做”+(真实下拉使用共有浮层开合，关闭时立即退出交互)。 -->
+      <Transition name="sunday-motion-fade" @before-leave="el => el.setAttribute('inert', '')">
+        <div
+          v-if="open"
+          ref="menuEl"
+          class="ui-select-menu sunday-motion-popover"
+          :class="{ 'ui-select-menu--up': placement.up }"
+          :style="menuStyle"
+          @keydown="onMenuKeydown"
+        >
+          <div v-for="group in groupedOptions" :key="group.group || 'default'" class="ui-select-group">
+            <div v-if="group.group" class="ui-select-group-label">{{ group.group }}</div>
+            <button
+              v-for="option in group.options"
+              :key="option.value"
+              class="ui-select-option"
+              :class="{
+                active: option.selected ?? option.value === modelValue,
+                'active-accent': option.activeAccent,
+                'separator-before': option.separatorBefore,
+                disabled: option.disabled,
+              }"
+              type="button"
+              :disabled="option.disabled"
+              @click="selectOption(option)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
         </div>
-      </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

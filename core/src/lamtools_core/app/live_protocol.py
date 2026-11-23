@@ -9,6 +9,13 @@ from pydantic import BaseModel, Field
 PROTOCOL_VERSION = "core.app_server.v1"
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
+# A business request arrived on a connection that has not completed the
+# ``initialize`` handshake yet (typically a socket replaced by a reconnect that
+# never re-handshook). It must be a dedicated code so a client can tell it apart
+# from a genuine malformed request and recover by re-initializing instead of
+# treating it as fatal. user:"界面出现 Connection is not initialized"+(未握手的
+# 连接要能自愈：专用错误码让客户端重新握手并重试，而不是把帧丢进黑洞)。
+NOT_INITIALIZED = -32002
 SERVER_ERROR = -32000
 
 # Notification the server sends on the reliable control lane when the lossy
@@ -87,6 +94,7 @@ def iso_now() -> str:
 __all__ = [
     "INVALID_REQUEST",
     "METHOD_NOT_FOUND",
+    "NOT_INITIALIZED",
     "PROTOCOL_VERSION",
     "SERVER_ERROR",
     "THREAD_GAP_METHOD",

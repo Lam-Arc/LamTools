@@ -256,7 +256,7 @@ _hiddenimports = [
     "lamtools_core.app.persistence_host",
     "lamtools_core.app.project_context",
     "lamtools_core.app.project_store",
-    "lamtools_core.app.queue_state",
+    "lamtools_core.app.queue_state", "lamtools_core.app.rust_db",
     "lamtools_core.app.snapshot_store",
     "lamtools_core.app.sqlite_write",
     "lamtools_core.app.turn_acceptance",
@@ -420,7 +420,7 @@ _hiddenimports = [
 a = Analysis(
     [str(_PROJECT_ROOT / "desktop_backend.py")],
     pathex=[str(_PROJECT_ROOT / "src")],
-    binaries=[],
+    binaries=[((str(_PROJECT_ROOT / "sunday-core" / "target" / "release" / ("sunday_core_db.dll" if _IS_WINDOWS else "libsunday_core_db.so")), "lamtools_core/app")) ] if (_PROJECT_ROOT / "sunday-core" / "target" / "release" / ("sunday_core_db.dll" if _IS_WINDOWS else "libsunday_core_db.so")).is_file() else [],
     datas=_datas,
     hiddenimports=_hiddenimports,
     hookspath=[],

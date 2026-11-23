@@ -666,3 +666,29 @@ describe('Shared Core App settings entry', () => {
     expect(wrapper.findComponent(CoreConfirmDialog).exists()).toBe(true)
   })
 })
+
+// user:“去把模型调用台从左竖栏 apprail 中移除，放进设置-模型与供应商里面作为一个子功能，自行设计”+
+// (调用台是「模型与供应商」里的第二个子视图：默认停在供应商与模型，切过去才加载并调用模型。)
+describe('settings models sub views', () => {
+  it('hosts the direct call console as a sub view of models', async () => {
+    const requestRpc = vi.fn(async (method: string) => (
+      method === 'direct.catalog'
+        ? { models: [], imagegen: { configured: false, model: '' } }
+        : { calls: [] }
+    ))
+    const wrapper = mountSettings(requestRpc)
+
+    const switcher = wrapper.get('[data-settings-models-view]')
+    expect(switcher.findAll('[role="radio"]').map(item => item.text())).toEqual(['供应商与模型', '调用台'])
+    expect(wrapper.find('[data-direct-embedded]').exists()).toBe(false)
+    expect(wrapper.find('.models-view-body').isVisible()).toBe(true)
+
+    await switcher.findAll('[role="radio"]')[1].trigger('click')
+    await flushPromises()
+
+    // 嵌入式调用台：不再重复整版页面的标题，直接接进这一分区。
+    expect(wrapper.find('[data-direct-embedded]').exists()).toBe(true)
+    expect(wrapper.find('[data-direct-embedded]').find('h1').exists()).toBe(false)
+    expect(requestRpc).toHaveBeenCalledWith('direct.catalog', { project_id: '' })
+  })
+})

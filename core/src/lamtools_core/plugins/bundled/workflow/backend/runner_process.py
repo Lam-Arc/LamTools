@@ -100,7 +100,11 @@ async def _create_workflow_process(
         "stderr": asyncio.subprocess.PIPE,
     }
     if sys.platform == "win32":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(workflow runner 的 node 进程
+        # 不许弹窗；它自己的独立进程组照旧，取消时仍能整组收掉)。
+        from lamtools_core.win_spawn import apply_hidden_window
+
+        apply_hidden_window(kwargs, new_process_group=True)
     else:
         kwargs["start_new_session"] = True
     return await asyncio.create_subprocess_exec(*argv, **kwargs)
@@ -112,6 +116,8 @@ async def _terminate_workflow_process(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is None:
         if sys.platform == "win32" and getattr(proc, "pid", None):
             try:
+                from lamtools_core.win_spawn import hidden_kwargs
+
                 killer = await asyncio.create_subprocess_exec(
                     "taskkill",
                     "/PID",
@@ -120,6 +126,7 @@ async def _terminate_workflow_process(proc: asyncio.subprocess.Process) -> None:
                     "/F",
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
+                    **hidden_kwargs(),
                 )
                 await killer.communicate()
             except (OSError, ValueError):

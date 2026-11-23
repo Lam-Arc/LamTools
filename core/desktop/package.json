@@ -1,10 +1,10 @@
 {
   "name": "lamtools-core-desktop",
   "private": true,
-  "version": "0.3.42",
+  "version": "0.3.43",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5173",
+    "dev": "node scripts/ensure-dev-port.mjs && vite --port 5173 --strictPort",
     "build": "vite build",
     "build:app": "tauri build --no-bundle",
     "package:linux": "bash ../../scripts/package-linux.sh",

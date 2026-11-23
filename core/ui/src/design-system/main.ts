@@ -5,6 +5,7 @@ import '@/styles/variables.css'
 import '@/styles/base.css'
 // user:“直接渲染项目真实组件”+(设置预览加载主应用真实的卡片与布局样式)。
 import '@/styles/layout.css'
+import '@/styles/app-page.css'
 // user:“直接渲染项目真实组件”+(学习侧栏预览加载主窗口的导航样式)。
 import '@/styles/workspace-shell.css'
 // user:“直接渲染项目真实组件”+(主题区域预览使用应用中的主题编辑器样式)。

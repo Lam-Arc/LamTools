@@ -265,4 +265,40 @@ describe('system row next to an earlier conclusion', () => {
     expect((first?.processParts ?? []).map(part => part.id)).not.toContain('a1')
     expect(first?.content).not.toContain('renderer_dev')
   })
+
+  // user:“子代理信息结束…那条消息 UI 显示的时候记得折叠成一行胶囊”+
+  // (默认单行胶囊，点开才展开明细；记忆续跑这类低频行不受影响。)
+  it('collapses a member wake into one-line pill and expands on click', async () => {
+    const text = '子代理 renderer_dev 已完成：渲染器与冒烟脚本都已交付。'
+    const wrapper = mount(CoreSystemEventRow, {
+      props: {
+        event: { kind: 'member_wake' as const, text, entries: parseMemberWakeEntries(text) },
+      },
+    })
+    const row = wrapper.find('[data-system-event-row]')
+    expect(row.classes()).toContain('core-system-event--pill')
+    expect(row.classes()).not.toContain('core-system-event--open')
+    expect(row.attributes('role')).toBe('button')
+    expect(row.attributes('aria-expanded')).toBe('false')
+    expect(row.attributes('title')).toBe(text)
+
+    await row.trigger('click')
+    expect(wrapper.find('[data-system-event-row]').classes()).toContain('core-system-event--open')
+    expect(wrapper.find('[data-system-event-row]').attributes('aria-expanded')).toBe('true')
+
+    await wrapper.find('[data-system-event-row]').trigger('click')
+    expect(wrapper.find('[data-system-event-row]').classes()).not.toContain('core-system-event--open')
+    wrapper.unmount()
+  })
+
+  it('keeps the memory-resume row as a plain status line instead of a pill', () => {
+    const wrapper = mount(CoreSystemEventRow, {
+      props: { event: { kind: 'memory_resume' as const, text: '记忆续跑：继续上次未完成的任务。', entries: [] } },
+    })
+    const row = wrapper.find('[data-system-event-row]')
+    expect(row.classes()).not.toContain('core-system-event--pill')
+    expect(row.attributes('role')).toBe('status')
+    expect(row.attributes('tabindex')).toBeUndefined()
+    wrapper.unmount()
+  })
 })

@@ -1,6 +1,6 @@
 <script setup>
 // user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(网络按钮复用共享角色样式，保留原操作与紧凑尺寸)。
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ArrowLeftRight, Search, RefreshCw } from "lucide-vue-next";
 const props = defineProps({ session: Object });
 const filter = ref(""),
@@ -8,17 +8,24 @@ const filter = ref(""),
   total = ref(0),
   limit = ref(150),
   loading = ref(true);
+let generation = 0;
 async function query() {
+  // user:“确保视觉、功能和交互不退化”+(只接受最近一次搜索结果，旧请求不能提前结束加载)。
+  const current = ++generation;
   loading.value = true;
-  const result = await props.session.read("connections", {
-    filter: filter.value,
-  });
-  if (result) {
-    rows.value = result.connections || [];
-    total.value = result.total || rows.value.length;
-    limit.value = 150;
+  try {
+    const result = await props.session.read("connections", {
+      filter: filter.value,
+    });
+    if (current !== generation) return;
+    if (result) {
+      rows.value = result.connections || [];
+      total.value = result.total ?? rows.value.length;
+      limit.value = 150;
+    }
+  } finally {
+    if (current === generation) loading.value = false;
   }
-  loading.value = false;
 }
 const visible = computed(() => rows.value.slice(0, limit.value));
 function status(value) {
@@ -34,6 +41,7 @@ function status(value) {
   );
 }
 onMounted(query);
+onBeforeUnmount(() => { generation += 1; });
 </script>
 <template>
   <div class="nx-view-stack">

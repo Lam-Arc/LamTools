@@ -1,0 +1,143 @@
+/* user:“全部统一以这个为示例 可复用化，可调参数为胶囊/卡片,填充颜色,是否玻璃”
+   +(气泡只保留这一份材质：形状、填充、是否玻璃都是参数；宿主类只负责尺寸与排布，
+     角色（用户/助手）只提供默认填充色。任何新气泡都套这个材质，不要再各写一套
+     圆角、边框、毛玻璃和内高光)。
+
+   user:“然后你再调整一下气泡样式吧，去除黑边，不需要明显的黑边，但建议保留极淡的暗色边缘。
+   液态玻璃的边框可以这样处理：顶部、左侧：1px 半透明白边，模拟迎光面。
+   底部、右侧：1px 极淡的深灰边，模拟玻璃厚度。连接处圆角颜色自然过度
+   主体：不使用完整黑色描边，依靠背景模糊和柔和投影区分轮廓。”
+   +(不再用整圈深色描边：1px 环用锥形渐变做迎光/厚度两种边，圆角处自然过渡；
+     外轮廓交给背景模糊 + 小半径柔影)。
+
+   user:“这里的阴影为什么会有清晰边界？能够解决吗？”+
+   (backdrop-filter 的模糊层会把同一元素上的投影一起圈进去，纹理/图片背景上就会在
+     投影范围外出现一块矩形硬边。所以外壳 .message-surface 只负责投影和圆角，
+     毛玻璃与填充放到内层 .message-surface__body：模糊层边界与气泡轮廓重合，
+     投影在外层正常衰减，不再被裁成矩形)。
+
+   参数（都能在宿主上直接覆盖）：
+   --message-surface-radius      圆角，card 默认 28px，capsule 为全圆
+   --message-surface-padding     内边距，默认样例的 20px 23px
+   --message-surface-fill        填充颜色：任意 CSS 颜色；留空按角色色算
+   --message-surface-fill-image  填充叠加层：任意渐变；留空用样例的薄渐变
+   --message-surface-color       角色默认填充色（由 message-bubbles.css 按角色给）
+   --message-surface-blur        玻璃模糊半径，默认 18px
+   --message-surface-saturation  玻璃饱和增强，默认 1.42
+   --message-surface-edge-light  迎光边：顶部/左侧的半透明白
+   --message-surface-edge-dark   玻璃厚度：底部/右侧的极淡深灰
+   --message-surface-shadow      外投影，默认 none（需要时再给完整 shadow 值）
+
+   形状：.message-surface--card（卡片） / .message-surface--capsule（胶囊）
+   玻璃：.message-surface--glass（毛玻璃） / .message-surface--solid（实色）
+   组件：core/ui/src/components/CoreMessageSurface.vue（props: shape / fill / glass） */
+
+.message-surface {
+  --message-surface-color: var(--theme-main-text);
+  --message-surface-radius: 28px;
+  --message-surface-padding: 20px 23px;
+  --message-surface-blur: 18px;
+  --message-surface-saturation: 1.42;
+  --message-surface-edge-light: color-mix(in srgb, #fff 52%, transparent);
+  --message-surface-edge-dark: color-mix(in srgb, #0b1620 10%, transparent);
+  --message-surface-edge-mid: color-mix(in srgb, #fff 26%, transparent);
+  /* 由组件按元素宽高写入：右上角相对正上方的角度（θ=atan2(w,h)） */
+  --message-surface-edge-angle: 45deg;
+  /* user:“依旧泾渭分明，直接去除阴影”+(投影在纹理/图片背景上仍会露出矩形范围，
+     默认不要投影；轮廓只靠 1px 迎光边与厚度边区分) */
+  --message-surface-shadow: none;
+  position: relative;
+  border-radius: var(--message-surface-radius);
+  box-shadow: var(--message-surface-shadow);
+  color: var(--theme-main-text);
+  isolation: isolate;
+}
+
+/* 内层：填充、毛玻璃与 1px 迎光/厚度边都落在这里；
+   模糊层的边界就是气泡轮廓，投影留在外层，不会被一起模糊成矩形。 */
+.message-surface__body {
+  position: relative;
+  padding: var(--message-surface-padding);
+  border-radius: inherit;
+  color: inherit;
+  isolation: isolate;
+}
+
+/* 方向性 1px 玻璃边：一圈锥形渐变，顶部/左侧白（迎光），底部/右侧极淡深灰（厚度），
+   其余角度平滑过渡；用遮罩扣掉内部，只留 1px 环，不做整圈黑色描边。 */
+.message-surface__body::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  padding: 1px;
+  border-radius: inherit;
+  /* user:“按对角线”+(锥形渐变从右上角方向起算：0° 右上、90° 右下、180° 左下；
+     深灰覆盖右侧与底部，白色覆盖左侧与顶部，两处分界正好落在两个几何角上，
+     宽胶囊与窄气泡都对齐；--message-surface-edge-angle 由组件按宽高比写入)。 */
+  background: conic-gradient(
+    from var(--message-surface-edge-angle),
+    var(--message-surface-edge-mid) 0deg,
+    var(--message-surface-edge-dark) 8deg,
+    var(--message-surface-edge-dark) 172deg,
+    var(--message-surface-edge-mid) 180deg,
+    var(--message-surface-edge-light) 188deg,
+    var(--message-surface-edge-light) 352deg,
+    var(--message-surface-edge-mid) 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.message-surface__body > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* 卡片：样例的 28px 大圆角；胶囊：两端全圆，适合短句 */
+.message-surface--card {
+  --message-surface-radius: 28px;
+}
+
+.message-surface--capsule {
+  --message-surface-radius: 999px;
+  --message-surface-padding: 12px 22px;
+}
+
+/* 玻璃：底色 + 薄渐变两层（样例的 .big/.small 就是同一层渐变换色）；
+   底色与渐变分开写，任意一层都能单独覆盖，计算后的底色仍能区分角色。 */
+.message-surface--glass .message-surface__body {
+  background-color: var(
+    --message-surface-fill,
+    color-mix(in srgb, var(--message-surface-color) 34%, transparent)
+  );
+  background-image: var(
+    --message-surface-fill-image,
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--message-surface-color) 30%, transparent),
+      transparent 72%
+    )
+  );
+  -webkit-backdrop-filter: blur(var(--message-surface-blur)) saturate(var(--message-surface-saturation));
+  backdrop-filter: blur(var(--message-surface-blur)) saturate(var(--message-surface-saturation));
+}
+
+/* 不玻璃：同一套几何换实色填充，去掉背景采样，边缘与柔影保持一致 */
+.message-surface--solid .message-surface__body {
+  background-color: var(
+    --message-surface-fill,
+    color-mix(in srgb, var(--theme-main-solid) 84%, var(--message-surface-color))
+  );
+  background-image: var(--message-surface-fill-image, none);
+}
+
+/* 不支持背景采样的 WebView：玻璃退回更实的底色，形状与间距不变 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .message-surface--glass .message-surface__body {
+    background-color: color-mix(in srgb, var(--theme-main-solid) 78%, var(--message-surface-color));
+  }
+}

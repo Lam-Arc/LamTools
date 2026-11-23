@@ -14,8 +14,12 @@
  */
 
 @import './optical-glass.css';
+@import './message-bubbles.css';
 @import './workspace-shell.css';
 @import './session-sidebar.css';
+@import './page-surfaces.css';
+@import './sunday-motion.css';
+@import './sunday-spinner.css';
 
 /* =========================================================================
    Main card — centered content area with top rounding & shadow
@@ -30,9 +34,11 @@
   height: calc(100vh - var(--titlebar-offset, 0px) - var(--shell-bottom-inset, 6px));
   overflow: hidden;
   padding: 44px var(--main-x-padding) var(--composer-height, 120px) var(--main-x-padding);
-  border: 1px solid var(--theme-main-border);
-  border-radius: var(--workspace-panel-radius-inner) var(--workspace-panel-radius-outer)
-    var(--workspace-panel-radius-outer) var(--workspace-panel-radius-inner);
+  /* user:“原有背景层让位，让主界面填充全屏”+
+     (主界面不再是浮在背景板上的一张卡：没有外框描边、圆角和外投影，
+      四边直接贴到窗口/竖栏内缘，背景层不再从衬边露出来)。 */
+  border: 0;
+  border-radius: 0;
   background: var(--theme-main-background);
   /* user:“再加一项/图片……玻璃代表我们的低透或高透玻璃样式”+
      (图片样式按适应方式铺进主卡；玻璃样式给主卡挂毛玻璃滤镜，其余样式为 none。) */
@@ -45,7 +51,7 @@
   color: var(--theme-main-text);
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   transition:
     left var(--dur-morph) var(--ease-inout),
     right var(--dur-morph) var(--ease-inout),
@@ -203,7 +209,8 @@
   display: grid;
   grid-auto-rows: max-content;
   align-content: start;
-  gap: 16px;
+  /* user:“消息区的内容渲染要更加紧凑”+(消息块之间从 16 收到 12)。 */
+  gap: 12px;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -320,6 +327,9 @@
   min-height: 46px;
   padding-bottom: 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
+  /* user:“上方的所有标题文字无法被左键拖动选中”+(标题带默认不参与文本选择；
+     只有会话标题点进编辑后，输入框自己把选择开回来)。 */
+  user-select: none;
 }
 .thread-header h1 { font-size: 17px; line-height: 1.2; }
 .thread-header span { color: var(--muted); font-size: 12px; margin-right: 10px; }
@@ -439,7 +449,7 @@
   z-index: var(--z-composer, 40);
   width: var(--composer-full-width);
   transform: translateX(-50%);
-  border: 1px solid var(--theme-main-border);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) var(--alpha-active), transparent);
   border-radius: var(--composer-radius);
   background: var(--theme-composer-background);
   /* 输入栏同样跟随颜色样式：图片按适应方式铺，玻璃挂毛玻璃滤镜。 */
@@ -590,8 +600,9 @@
     0 4px 12px rgba(0,0,0,.08),
     0 1px 2px rgba(0,0,0,.04);
 }
-.floating-composer:focus-within {
-  border-color: var(--theme-main-border);
+/* user:“这个组内的 UI 设计与风格”+(主输入框和胶囊共用输入区描边，焦点清晰但不加一层底色)。 */
+.floating-composer:focus-within:not(.dragover) {
+  border-color: color-mix(in srgb, var(--theme-composer-text) 38%, transparent);
 }
 .floating-composer:has(.command-palette),
 .floating-composer:has(.core-queued-input-tray) {
@@ -1088,13 +1099,7 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   gap: var(--space-5);
 }
 
-.settings-title {
-  min-width: 0;
-  display: grid;
-  gap: var(--space-2);
-}
-.settings-title h1 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
-.settings-title p { max-width: 72ch; margin: 0; color: color-mix(in srgb, var(--settings-main-text, #fff) 58%, transparent); font-size: 13px; line-height: 1.55; }
+.settings-title { min-width: 0; }
 
 .settings-panel {
   display: grid;
@@ -1102,8 +1107,6 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   gap: var(--space-5);
   min-width: 0;
   min-height: 360px;
-  /* 设置 section 切换：v-if 重挂载时播放入场（与 SettingsShell 的 contentEnter 同节奏） */
-  animation: panel-enter 260ms var(--ease-emphasized);
 }
 
 /* Every settings page uses one primary surface. Inner sections are separated
@@ -1124,7 +1127,7 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 
 .settings-surface--stack > .setting-card {
   margin: 0;
-  padding: var(--space-5);
+  padding: var(--space-4);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2603,9 +2606,8 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   .settings-main { padding: 28px 24px 48px; }
 }
 @media (max-width: 820px) {
-  /* user:“小尺寸时（独屏）标题换到“sunday”那里，不占地”+(会话标题已进标题栏，
-     窄窗口不再单独占一行。) */
-  .thread-header[data-session-header] { display: none; }
+  /* user:“把标题栏取消”+(窄桌面窗口也保留主区里的会话标题编辑入口)。 */
+  .workspace-shell:not(.workspace-shell--compact-chrome) .thread-header[data-session-header] { display: none; }
   .floating-composer { width: var(--composer-full-width); }
   .route-purpose-row,
   .command-policy-row {
@@ -2810,17 +2812,10 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 }
 .user-bubble {
   max-width: min(72%, 620px);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent);
-  border-radius: 20px;
-  border-bottom-right-radius: 8px;
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent);
-  color: var(--theme-main-text, #f2efeb);
-  padding: 10px 14px;
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-main-text, #fff) 3.5%, transparent);
 }
 .user-stack .user-bubble {
   max-width: 100%;
@@ -2842,10 +2837,19 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 }
 /* 待生效的引导（已发出、模型还没接手）：虚线边 + 呼吸，与落位后的实色气泡区分 */
 .user-bubble--pending {
+  border-width: 1px;
   border-style: dashed;
   border-color: color-mix(in srgb, var(--theme-main-text, #fff) 28%, transparent);
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
   animation: guidance-pending-breath 1.6s ease-in-out infinite;
+}
+
+/* 待生效引导：底色随气泡内层一起换成虚线态，自己表达状态，不再叠加迎光边 */
+.user-bubble--pending .message-surface__body {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
+}
+
+.user-bubble--pending .message-surface__body::before {
+  display: none;
 }
 
 @keyframes guidance-pending-breath {
@@ -2871,9 +2875,6 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   width: 100%;
   padding: 0 2px;
   color: var(--theme-main-text, #f2efeb);
-}
-.assistant-message--live {
-  animation: stream-enter .18s ease-out both;
 }
 .assistant-meta,
 .reply-label {
@@ -3198,9 +3199,6 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
 .process-step {
   min-width: 0;
 }
-.process-stream--live {
-  animation: stream-enter .16s ease-out both;
-}
 .process-stream--complete {
   color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, transparent);
 }
@@ -3402,7 +3400,6 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
   border-top-color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
-  animation: stream-spin .9s linear infinite;
   flex: 0 0 auto;
 }
 
@@ -3423,7 +3420,6 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   border-top-color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray);
   background: transparent;
   border-radius: 50%;
-  animation: stream-spin .9s linear infinite;
 }
 .part-dot--completed { background: color-mix(in srgb, var(--theme-main-text, #fff) 50%, gray); }
 .part-dot--error { background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
@@ -3442,46 +3438,19 @@ a.file-reference-link[data-reference-error='true'] .file-reference-badge {
   color: color-mix(in srgb, var(--theme-main-text, #fff) 44%, transparent);
 }
 
-@keyframes stream-spin {
-  to { transform: rotate(360deg); }
-}
-@keyframes stream-enter {
-  from { opacity: .68; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
-}
 @keyframes part-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: .45; }
 }
 
-/* ── Motion: CSS 入场 keyframes（GSAP 离散动效之外的轻量入场统一收敛在此）── */
-@keyframes stream-spin {
-  to { transform: rotate(360deg); }
-}
-@keyframes popover-in {
-  from { opacity: 0; transform: translateY(-3px) scale(.98); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes panel-enter {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
 
 @media (prefers-reduced-motion: reduce) {
-  /* user:“梳理所有可见的组件、样式、布局、动效及交互”+(减少动态效果时，实时消息及过程内容直接显示)。 */
-  .assistant-message--live,
-  .process-stream--live {
-    animation: none;
-  }
   .workspace-drawer,
   .workspace-main,
   .floating-composer {
     transition-duration: .5s !important;
   }
   .conversation .status.waiting {
-    animation: none;
-  }
-  .settings-panel {
     animation: none;
   }
   /* 折叠展开由 GSAP 驱动（motion/expandPanel.ts），reduced-motion 时直切无动画 */

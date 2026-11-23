@@ -24,6 +24,20 @@ const OPEN_FENCE = FENCE_LINES.slice(0, 2).join('\n')
  * user:“交互式 UI 不要正文完全落定再显示，流式出来了闭合了就显示，多媒体加载也是同理”
  * +(流式分段的已闭合围栏当场挂载交互块，只有还没闭合的那截继续按代码块显示。)
  */
+
+// 方案 C：chunk 只标脏，画面在下一帧合并渲染 —— 断言前先等一帧。
+async function nextFrame(): Promise<void> {
+  // 假定时器下 rAF 也被接管：直接推进时间，别让断言等真帧。
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(20)
+    return
+  }
+  await new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
+    else setTimeout(resolve, 16)
+  })
+}
+
 describe('MarkdownRenderer progressive heavy blocks while streaming', () => {
   it('mounts a closed interactive fence while the reply is still streaming', async () => {
     const wrapper = mount(MarkdownRenderer, {
@@ -33,7 +47,8 @@ describe('MarkdownRenderer progressive heavy blocks while streaming', () => {
         interactive: true,
       },
     })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[data-inline-visualization]').exists()).toBe(true)
     expect(wrapper.find('.inline-visualization-frame').exists()).toBe(true)
@@ -44,13 +59,15 @@ describe('MarkdownRenderer progressive heavy blocks while streaming', () => {
     const wrapper = mount(MarkdownRenderer, {
       props: { content: `开场一段。\n\n${OPEN_FENCE}`, streaming: true, interactive: true },
     })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[data-inline-visualization]').exists()).toBe(false)
     expect(wrapper.find('pre code').exists()).toBe(true)
 
     await wrapper.setProps({ content: `开场一段。\n\n${CLOSED_FENCE}\n\n后面还在写。` })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.inline-visualization-frame').exists()).toBe(true)
     wrapper.unmount()
@@ -60,7 +77,8 @@ describe('MarkdownRenderer progressive heavy blocks while streaming', () => {
     const wrapper = mount(MarkdownRenderer, {
       props: { content: `开场一段。\n\n${CLOSED_FENCE}`, streaming: true, interactive: false },
     })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[data-inline-visualization]').exists()).toBe(false)
     wrapper.unmount()
@@ -78,7 +96,8 @@ describe('MarkdownRenderer progressive svg', () => {
     const wrapper = mount(MarkdownRenderer, {
       props: { content: `开场。\n\n\`\`\`svg\n${SVG}\n\`\`\`\n\n还在写。`, streaming: true },
     })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.study-inline-svg').exists()).toBe(true)
     expect(wrapper.find('.study-inline-svg svg').exists()).toBe(true)
@@ -90,7 +109,8 @@ describe('MarkdownRenderer progressive svg', () => {
     const wrapper = mount(MarkdownRenderer, {
       props: { content: `开场。\n\n\`\`\`svg\n<svg viewBox="0 0 100 50"><text x="5" y="15">R1`, streaming: true },
     })
-    await wrapper.vm.$nextTick()
+    await nextFrame()
+  await wrapper.vm.$nextTick()
 
     expect(wrapper.find('.study-inline-svg').exists()).toBe(false)
     expect(wrapper.text()).toContain('<svg')

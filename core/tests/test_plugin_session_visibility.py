@@ -110,3 +110,60 @@ async def test_disabled_plugin_sessions_are_not_materialized_or_listed(
         session.id for session in await db.project_store.list_sessions(project.id)
     }
     await db.close()
+
+
+# user:“优化”+(全局与项目列表逐条过滤会话时，每次查询只扫描一次插件目录)。
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_only", [False, True])
+async def test_session_list_scans_plugins_once_per_refresh(tmp_path, monkeypatch, project_only):
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    host = PluginHost(roots=[bundled_plugins_dir()], state_path=tmp_path / "plugin-system.jsonc")
+    visibility = PluginSessionVisibility(host=host)
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        sessions = CoreDbSessionStore(lambda: db, session_visible=visibility)
+        db.project_store.set_session_visibility(visibility)
+        project, _ = await db.project_store.create(tmp_path / "project")
+        for session_id, owner in (("chat", ""), ("chat-2", ""), ("wf_legacy", ""), ("workflow:demo", "workflow")):
+            await sessions.create(SessionRecord(
+                id=session_id, member_id="core", title=session_id, status="idle",
+                metadata={"work_root": project.work_root, "owner_plugin": owner},
+            ))
+
+        fingerprint = host._fingerprint
+        calls = 0
+
+        def counted_fingerprint():
+            nonlocal calls
+            calls += 1
+            return fingerprint()
+
+        async def visible_ids():
+            records = await db.project_store.list_sessions(project.id) if project_only else await sessions.list()
+            return {record.id for record in records}
+
+        all_ids = await visible_ids()
+        assert {"chat", "chat-2", "wf_legacy", "workflow:demo"} <= all_ids
+        monkeypatch.setattr(host, "_fingerprint", counted_fingerprint)
+        assert await visible_ids() == all_ids
+        assert calls == 1
+        host.disable("workflow")
+        calls = 0
+        assert await visible_ids() == all_ids - {"wf_legacy", "workflow:demo"}
+        assert calls == 1
+        host.enable("workflow")
+        calls = 0
+        assert await visible_ids() == all_ids
+        assert calls == 1
+
+        def unavailable_fingerprint():
+            nonlocal calls
+            calls += 1
+            raise OSError("plugin directory unavailable")
+
+        monkeypatch.setattr(host, "_fingerprint", unavailable_fingerprint)
+        calls = 0
+        assert await visible_ids() == all_ids - {"workflow:demo"}
+        assert calls == 1
+    finally:
+        await db.close()

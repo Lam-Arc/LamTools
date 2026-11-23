@@ -91,12 +91,16 @@ interface DirectCall {
   finished: boolean
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   projectId?: string | null
   workRoot?: string | null
   bandActions?: boolean
-}>()
+  /** user:“放进设置-模型与供应商里面作为一个子功能”+(嵌进设置里时不再自带整版页面的标题栏)。 */
+  embedded?: boolean
+  /** user:“交互测试”+(隔离展厅不读取或写入真实调用参数)。 */
+  persistParameters?: boolean
+}>(), { persistParameters: true })
 
 const models = ref<DirectModel[]>([])
 const history = ref<DirectCall[]>([])
@@ -106,13 +110,21 @@ const systemPrompt = ref('')
 const activeCall = ref<DirectCall | null>(null)
 const loading = ref(false)
 const running = ref(false)
+const submitting = ref(false)
+let disposed = false
+let contextGeneration = 0
 const saving = ref(false)
 const error = ref('')
+const historyError = ref('')
 const notice = ref('')
 const imagegen = ref<{ configured: boolean; model: string }>({ configured: false, model: '' })
 const historyFilter = ref<HistoryFilter>('all')
 const historyOffset = ref(0)
 const historyHasMore = ref(false)
+const historyPageLoading = ref(false)
+let historyGeneration = 0
+let catalogGeneration = 0
+let refreshGeneration = 0
 const referenceUrls = ref('')
 
 const temperature = ref('0.7')
@@ -211,6 +223,7 @@ function statusLabel(status: DirectCall['status'] | DirectResult['status']): str
 const PARAM_STORAGE_KEY = 'lamtools.direct.params'
 
 function readStoredParams(modelId: string): Record<string, unknown> {
+  if (props.persistParameters === false) return {}
   try {
     const all = JSON.parse(window.localStorage.getItem(PARAM_STORAGE_KEY) || '{}')
     const value = all && typeof all === 'object' ? (all as Record<string, unknown>)[modelId] : null
@@ -221,6 +234,7 @@ function readStoredParams(modelId: string): Record<string, unknown> {
 }
 
 function writeStoredParams(modelId: string, params: Record<string, unknown>): void {
+  if (props.persistParameters === false) return
   try {
     const all = JSON.parse(window.localStorage.getItem(PARAM_STORAGE_KEY) || '{}')
     const next = all && typeof all === 'object' ? all as Record<string, unknown> : {}
@@ -247,7 +261,12 @@ function applyStoredParams(modelId: string): void {
 /* ---- 数据加载 ---- */
 
 async function loadCatalog(): Promise<void> {
-  const result = await props.requestRpc('direct.catalog', { project_id: props.projectId || '' })
+  // user:“确保视觉、功能和交互不退化”+(只使用最近一次项目模型请求的结果)。
+  const generation = ++catalogGeneration
+  let result: Record<string, unknown>
+  try { result = await props.requestRpc('direct.catalog', { project_id: props.projectId || '' }) }
+  catch (cause) { if (disposed || generation !== catalogGeneration) return; throw cause }
+  if (disposed || generation !== catalogGeneration) return
   models.value = Array.isArray(result.models) ? result.models as DirectModel[] : []
   const status = result.imagegen
   imagegen.value = status && typeof status === 'object'
@@ -259,27 +278,40 @@ async function loadCatalog(): Promise<void> {
 }
 
 async function loadHistory(reset = true): Promise<void> {
+  // user:“确保视觉、功能和交互不退化”+(筛选切换后忽略旧结果，分页期间防止重复加载)。
+  if (!reset && historyPageLoading.value) return
+  const generation = reset ? ++historyGeneration : historyGeneration
   const offset = reset ? 0 : historyOffset.value
-  const result = await props.requestRpc('direct.list', {
-    limit: 20,
-    offset,
-    output_type: historyFilter.value === 'all' ? '' : historyFilter.value,
-  })
-  const calls = Array.isArray(result.calls) ? result.calls as DirectCall[] : []
-  history.value = reset ? calls : [...history.value, ...calls]
-  historyOffset.value = offset + calls.length
-  historyHasMore.value = calls.length === 20
+  historyPageLoading.value = true
+  historyError.value = ''
+  try {
+    const result = await props.requestRpc('direct.list', {
+      limit: 20,
+      offset,
+      output_type: historyFilter.value === 'all' ? '' : historyFilter.value,
+    })
+    if (disposed || generation !== historyGeneration) return
+    const calls = Array.isArray(result.calls) ? result.calls as DirectCall[] : []
+    history.value = reset ? calls : [...history.value, ...calls]
+    historyOffset.value = offset + calls.length
+    historyHasMore.value = calls.length === 20
+  } catch (cause) {
+    if (!disposed && generation === historyGeneration) historyError.value = messageOf(cause)
+  } finally {
+    if (generation === historyGeneration) historyPageLoading.value = false
+  }
 }
 
 async function refreshAll(): Promise<void> {
+  const generation = ++refreshGeneration
   loading.value = true
   error.value = ''
   try {
     await Promise.all([loadCatalog(), loadHistory(true)])
   } catch (cause) {
-    error.value = messageOf(cause)
+    if (!disposed && generation === refreshGeneration) error.value = messageOf(cause)
   } finally {
-    loading.value = false
+    if (!disposed && generation === refreshGeneration) loading.value = false
   }
 }
 
@@ -316,7 +348,8 @@ function buildParams(): Record<string, unknown> {
 }
 
 async function run(): Promise<void> {
-  if (!selectedModel.value || !promptCount.value || running.value) return
+  // user:“确保视觉、功能和交互不退化”+(请求创建期间阻止重复提交，避免启动多次调用)。
+  if (!selectedModel.value || !promptCount.value || running.value || submitting.value) return
   if (!modelReady.value) {
     error.value = t('这个供应商还没有密钥，先到 设置 → 模型与供应商 补上')
     return
@@ -324,26 +357,36 @@ async function run(): Promise<void> {
   error.value = ''
   notice.value = ''
   const params = buildParams()
+  const modelId = selectedModelId.value
+  const generation = contextGeneration
+  submitting.value = true
   try {
     const result = await props.requestRpc('direct.run', {
-      model_ref: selectedModelId.value,
+      model_ref: modelId,
       prompts: prompts.value,
       system: systemPrompt.value,
       params,
       project_id: props.projectId || '',
     })
-    writeStoredParams(selectedModelId.value, params)
+    // user:“确保视觉、功能和交互不退化”+(页面关闭或切换项目后，迟到的启动响应不能继续轮询)。
+    if (disposed || generation !== contextGeneration) return
+    // user:“确保视觉、功能和交互不退化”+(请求期间切换模型时仍把参数记在发起调用的模型上)。
+    writeStoredParams(modelId, params)
     activeCall.value = result.call as DirectCall
     running.value = !activeCall.value.finished
     startPolling(activeCall.value.id)
   } catch (cause) {
     error.value = messageOf(cause)
+  } finally {
+    submitting.value = false
   }
 }
 
 let pollTimer: number | null = null
+let pollGeneration = 0
 
 function stopPolling(): void {
+  pollGeneration++
   if (pollTimer !== null) {
     window.clearTimeout(pollTimer)
     pollTimer = null
@@ -352,9 +395,11 @@ function stopPolling(): void {
 
 function startPolling(callId: string): void {
   stopPolling()
+  const generation = pollGeneration
   const tick = async () => {
     try {
       const result = await props.requestRpc('direct.get', { call_id: callId })
+      if (disposed || generation !== pollGeneration) return
       activeCall.value = result.call as DirectCall
       if (activeCall.value?.finished) {
         running.value = false
@@ -363,6 +408,7 @@ function startPolling(callId: string): void {
         return
       }
     } catch (cause) {
+      if (disposed || generation !== pollGeneration) return
       error.value = messageOf(cause)
       running.value = false
       return
@@ -509,6 +555,9 @@ function onComposerKeydown(event: KeyboardEvent): void {
 }
 
 watch(() => props.projectId, () => {
+  contextGeneration++
+  stopPolling()
+  running.value = false
   activeCall.value = null
   void refreshAll()
 })
@@ -522,17 +571,19 @@ watch(historyFilter, () => {
 })
 
 onMounted(() => { void refreshAll() })
-onBeforeUnmount(() => { stopPolling() })
+onBeforeUnmount(() => { disposed = true; contextGeneration++; historyGeneration++; catalogGeneration++; refreshGeneration++; stopPolling() })
 </script>
 
 <template>
-  <div class="direct-call full-area-view" data-ui-id="direct-call.root" @keydown="onComposerKeydown">
-    <header class="dc-head">
+  <!-- user:“放进设置-模型与供应商里面作为一个子功能”+(同一个组件：独立页面时占满整版，嵌进设置时只作为分区内的子视图)。 -->
+  <div class="direct-call" :class="embedded ? 'direct-call--embedded' : 'full-area-view'" :data-direct-embedded="embedded ? '' : undefined" data-ui-id="direct-call.root" @keydown="onComposerKeydown">
+    <!-- user:“这个组内的 UI 设计与风格”+(调用台复用标题、面板和反馈的实际页面样式)。 -->
+    <header class="dc-head sunday-page-heading">
       <div class="dc-heading">
         <span class="dc-mark" aria-hidden="true"><Sparkles :size="16" :stroke-width="1.8" /></span>
         <div>
-          <h1>{{ t('调用台') }}</h1>
-          <p>{{ t('直接调用模型，不进对话流程；结果可以存进资料库') }}</p>
+          <h1 v-if="!embedded" class="sunday-page-title">{{ t('调用台') }}</h1>
+          <p class="sunday-page-description">{{ t('直接调用模型，不进对话流程；结果可以存进资料库') }}</p>
         </div>
       </div>
       <button class="dc-icon-btn" type="button" :disabled="loading" :title="t('刷新')" @click="refreshAll">
@@ -540,19 +591,19 @@ onBeforeUnmount(() => { stopPolling() })
       </button>
     </header>
 
-    <p v-if="error" class="dc-banner dc-banner--error" role="alert"><AlertCircle :size="14" />{{ error }}</p>
-    <p v-else-if="notice" class="dc-banner">{{ notice }}</p>
+    <p v-if="error || historyError" class="sunday-page-status sunday-page-status--error" role="alert"><AlertCircle :size="14" />{{ error || historyError }}</p>
+    <p v-else-if="notice" class="sunday-page-status">{{ notice }}</p>
 
     <div v-if="!models.length && !loading" class="dc-empty">
       <p>{{ t('还没有可用模型') }}</p>
-      <span>{{ t('先到 设置 → 模型与供应商 添加供应商和模型，再回来调用。') }}</span>
+      <span>{{ t('先在「模型与供应商」里添加供应商和模型，再来这里调用。') }}</span>
       <button v-if="imagegen.configured" class="btn" type="button" data-direct-import-imagegen @click="importImagegen">
         <Download :size="13" />{{ t('把生图工具的模型带进来') }}
       </button>
     </div>
 
     <div v-else class="dc-layout">
-      <aside class="dc-models" :aria-label="t('可用模型')">
+      <aside class="dc-models sunday-page-panel" :aria-label="t('可用模型')">
         <template v-for="group in groupedModels" :key="group.value">
           <p class="dc-group">{{ group.label }}</p>
           <button
@@ -583,7 +634,7 @@ onBeforeUnmount(() => { stopPolling() })
       </aside>
 
       <section class="dc-work">
-        <div class="dc-compose">
+        <div class="dc-compose sunday-page-panel">
           <label class="dc-field">
             <span>{{ inputLabel }}</span>
             <textarea
@@ -663,13 +714,13 @@ onBeforeUnmount(() => { stopPolling() })
             <button v-if="running" class="btn dc-stop" type="button" data-direct-cancel @click="cancel">
               <Square :size="13" :stroke-width="2.2" />{{ t('取消') }}
             </button>
-            <button v-else class="btn btn--primary" type="button" :disabled="!promptCount || !modelReady" data-direct-run @click="run">
+            <button v-else class="btn btn--primary" type="button" :disabled="!promptCount || !modelReady || submitting" data-direct-run @click="run">
               <Play :size="13" :stroke-width="2.2" />{{ t('运行') }}
             </button>
           </footer>
         </div>
 
-        <div v-if="activeCall" class="dc-results" data-direct-results>
+        <div v-if="activeCall" class="dc-results sunday-page-panel" data-direct-results>
           <header class="dc-results-head">
             <div>
               <strong>{{ activeCall.display_name }}</strong>
@@ -739,7 +790,7 @@ onBeforeUnmount(() => { stopPolling() })
         </div>
       </section>
 
-      <aside class="dc-history" :aria-label="t('调用历史')">
+      <aside class="dc-history sunday-page-panel" :aria-label="t('调用历史')">
         <header class="dc-history-head">
           <span><History :size="14" :stroke-width="1.9" />{{ t('历史') }}</span>
         </header>
@@ -756,26 +807,26 @@ onBeforeUnmount(() => { stopPolling() })
           >{{ item.label }}</button>
         </div>
         <p v-if="!history.length" class="dc-history-empty">{{ t('还没有调用记录') }}</p>
-        <button
+        <!-- user:“确保视觉、功能和交互不退化”+(记录和删除为独立按钮，键盘可直接删除而不会打开记录)。 -->
+        <div
           v-for="call in history"
           :key="call.id"
-          type="button"
-          class="dc-history-item"
-          :class="{ 'is-active': activeCall?.id === call.id }"
-          :data-direct-history="call.id"
-          @click="loadCall(call)"
+          class="dc-history-row"
         >
-          <span class="dc-history-name">{{ call.display_name }}</span>
-          <span class="dc-history-meta">{{ statusLabel(call.status) }} · {{ call.created_at.replace('T', ' ') }}</span>
-          <span class="dc-history-remove" role="button" tabindex="0" :title="t('删除记录')" @click="removeCall(call, $event)">
+          <button type="button" class="dc-history-item" :class="{ 'is-active': activeCall?.id === call.id }" :data-direct-history="call.id" @click="loadCall(call)">
+            <span class="dc-history-name">{{ call.display_name }}</span>
+            <span class="dc-history-meta">{{ statusLabel(call.status) }} · {{ call.created_at.replace('T', ' ') }}</span>
+          </button>
+          <button class="dc-history-remove" type="button" :title="t('删除记录')" :aria-label="t('删除记录 {0}', { 0: call.display_name })" @click="removeCall(call, $event)">
             <Trash2 :size="12" />
-          </span>
-        </button>
+          </button>
+        </div>
         <button
           v-if="historyHasMore"
           class="dc-more"
           type="button"
           data-direct-history-more
+          :disabled="historyPageLoading"
           @click="loadHistory(false)"
         >{{ t('加载更多') }}</button>
       </aside>
@@ -784,6 +835,11 @@ onBeforeUnmount(() => { stopPolling() })
 </template>
 
 <style scoped>
+/* user:“放进设置-模型与供应商里面作为一个子功能”+(嵌入式只去掉整版页面的内外边距，内部排版一字不动)。 */
+.direct-call--embedded {
+  padding: 0;
+}
+
 .direct-call {
   display: flex;
   flex-direction: column;
@@ -792,12 +848,7 @@ onBeforeUnmount(() => { stopPolling() })
   container: direct-call / inline-size;
 }
 
-.dc-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
+
 
 .dc-heading {
   display: flex;
@@ -817,18 +868,9 @@ onBeforeUnmount(() => { stopPolling() })
   flex: 0 0 auto;
 }
 
-.dc-heading h1 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
 
-.dc-heading p {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--theme-main-text) 58%, transparent);
-}
+
+
 
 .dc-icon-btn,
 .dc-text-btn {
@@ -854,20 +896,9 @@ onBeforeUnmount(() => { stopPolling() })
   cursor: default;
 }
 
-.dc-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--theme-main-soft-background);
-  font-size: 12px;
-}
 
-.dc-banner--error {
-  color: var(--red);
-}
+
+
 
 .dc-hint {
   margin: var(--space-2) 0 0;
@@ -908,12 +939,8 @@ onBeforeUnmount(() => { stopPolling() })
 .dc-history {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  gap: var(--space-1);
   padding: var(--space-2);
-  border: 1px solid var(--theme-main-border);
-  border-radius: var(--radius);
-  background: var(--theme-main-soft-background);
 }
 
 .dc-group {
@@ -998,10 +1025,6 @@ onBeforeUnmount(() => { stopPolling() })
 .dc-compose,
 .dc-results {
   padding: var(--space-3);
-  border: 1px solid var(--theme-main-border);
-  border-radius: var(--radius);
-  background: var(--theme-main-background);
-  box-shadow: var(--shadow-md);
 }
 
 .dc-field {
@@ -1269,6 +1292,8 @@ onBeforeUnmount(() => { stopPolling() })
   color: color-mix(in srgb, var(--theme-main-text) 45%, transparent);
 }
 
+.dc-history-row { position: relative; }
+
 .dc-history-item {
   position: relative;
   display: flex;
@@ -1308,13 +1333,17 @@ onBeforeUnmount(() => { stopPolling() })
   place-items: center;
   width: 18px;
   height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   border-radius: var(--radius-sm);
   opacity: 0;
   color: color-mix(in srgb, var(--theme-main-text) 55%, transparent);
 }
 
-.dc-history-item:hover .dc-history-remove,
-.dc-history-item:focus-within .dc-history-remove {
+.dc-history-row:hover .dc-history-remove,
+.dc-history-row:focus-within .dc-history-remove {
   opacity: 1;
 }
 

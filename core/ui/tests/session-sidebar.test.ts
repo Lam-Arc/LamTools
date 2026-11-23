@@ -84,6 +84,51 @@ describe('SessionSidebar sections', () => {
     expect(titleRule).not.toContain('border')
   })
 
+  // user:“再track目前最大卡顿因素是什么，然后修复”+(身份和顺序不变时，状态更新不能启动排序布局测量)。
+  it('skips sidebar reorder layout reads when only session status changes', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: { projectGroups: groups },
+      global: { stubs: { TransitionGroup: false } },
+    })
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    try {
+      await wrapper.setProps({ projectGroups: groups.map(group => ({
+        ...group,
+        sessions: group.sessions.map(session => ({ ...session, status: 'running' })),
+      })) })
+      expect(wrapper.get('[data-session-row="s1"] .session-status').classes()).toContain('running')
+      expect(bounds.mock.contexts.filter(el => el.matches('.project-block, [data-session-row]'))).toHaveLength(0)
+    } finally {
+      bounds.mockRestore()
+      wrapper.unmount()
+    }
+  })
+
+  it('plays sidebar reorder motion when existing sessions exchange positions', async () => {
+    const sessions = [{ id: 'first', title: 'First' }, { id: 'second', title: 'Second' }]
+    const project = { id: 'project', name: 'Project', sessions }
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: [project] }, attachTo: document.body })
+    const list = wrapper.get('.conversation-list .conversation-items').element as HTMLElement
+    list.style.setProperty('--dur-base', '180ms')
+    list.style.setProperty('--ease-out', 'ease-out')
+    const rows = [...list.children] as HTMLElement[]
+    const animate = vi.fn(() => ({ cancel: vi.fn() }))
+    const positions = rows.map(row => vi.spyOn(row, 'getBoundingClientRect').mockImplementation(
+      () => new DOMRect(0, [...list.children].indexOf(row) * 24, 100, 24),
+    ))
+    for (const row of rows) Object.defineProperty(row, 'animate', { value: animate, configurable: true })
+    try {
+      await wrapper.get('[data-session-row="second"]').trigger('dragstart')
+      await wrapper.get('[data-session-row="first"]').trigger('dragover', { clientY: 0 })
+      expect([...list.children].map(row => row.getAttribute('data-session-row'))).toEqual(['second', 'first'])
+      expect(animate).toHaveBeenCalledTimes(2)
+      expect(animate).toHaveBeenCalledWith([{ translate: '0px 24px' }, { translate: '0px 0px' }], { duration: 180, easing: 'ease-out' })
+    } finally {
+      for (const position of positions) position.mockRestore()
+      wrapper.unmount()
+    }
+  })
+
   it('renders the 最近 section as a flat cross-project list', () => {
     const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
     const recent = wrapper.get('[data-sidebar-section="recent"]')
@@ -520,7 +565,6 @@ describe('SessionSidebar sections', () => {
     expect(css).toMatch(/\.project-name strong \{[\s\S]*?font-size: var\(--sidebar-text-size\);/)
     expect(css).toMatch(/\.conversation strong \{[\s\S]*?font-size: var\(--sidebar-text-size\);/)
     expect(css).not.toMatch(/\.session-row\.is-active \.session-title\s*\{[\s\S]*?font-weight:/)
-    expect(css).toMatch(/\.sidebar-sort-move\s*\{[\s\S]*?transition: transform var\(--dur-base\) var\(--ease-out\);/)
     expect(css).toMatch(/\.project-row\.is-dragging,[\s\S]*?\.conversation\.is-dragging\s*\{[\s\S]*?opacity: 1;/)
     expect(css).not.toMatch(/\.is-drag-over::after/)
   })

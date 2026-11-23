@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!-- 结构样本：百度桌面结果页（按真实页面结构手写）。
+     关键点：自然结果 `div.result.c-container`；推广 `data-tuiguang` / `ec_result`；
+     特殊卡片 `div.result-op`；结果链接是 `/link?url=` 加密中转（解不出目标，必须保留并标注）。 -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>哔哩哔哩_百度搜索</title>
+</head>
+<body>
+  <div id="head">
+    <a href="https://passport.baidu.com/">登录</a>
+  </div>
+  <div id="s_tab"><a href="https://www.baidu.com/s?wd=bilibili&amp;rtt=1">新闻</a></div>
+
+  <div id="content_left">
+    <div class="result c-container xpath-log new-pmd" id="1">
+      <h3 class="t"><a href="http://www.baidu.com/link?url=AbC123token&amp;wd=bilibili&amp;eqid=xyz">哔哩哔哩 (゜-゜)つロ 干杯~-bilibili</a></h3>
+      <div class="c-abstract">哔哩哔哩是国内知名的视频弹幕网站，这里有及时的动漫新番、活跃的ACG氛围。</div>
+      <span class="c-color-gray2">2024年5月1日</span>
+    </div>
+
+    <div class="cr-content ec_result" data-tuiguang="1">
+      <h3 class="t"><a href="https://ads.example.com/baidu">视频会员 限时特惠-广告</a></h3>
+      <div class="c-abstract">开通会员立减，海量影视免费看。</div>
+    </div>
+
+    <div class="result-op c-container" mu="baike" id="2">
+      <h3 class="t"><a href="https://baike.baidu.com/item/哔哩哔哩">哔哩哔哩_百度百科</a></h3>
+      <div class="c-abstract">哔哩哔哩（bilibili）是一个以年轻人为主要用户的视频分享平台。</div>
+    </div>
+
+    <div class="result c-container" id="3">
+      <h3 class="t"><a href="http://www.baidu.com/link?url=DeF456token&amp;wd=bilibili">哔哩哔哩专栏 - 文章频道</a></h3>
+      <div class="c-abstract">专栏是哔哩哔哩的图文创作社区，包含动画、游戏、科技等分区。</div>
+    </div>
+
+    <div class="result c-container" id="4">
+      <h3 class="t"><a href="http://www.baidu.com/link?url=AbC123token&amp;wd=bilibili">哔哩哔哩 (゜-゜)つロ 干杯~-bilibili</a></h3>
+      <div class="c-abstract">重复结果：与第一条是同一个中转链接，应该被去重。</div>
+    </div>
+  </div>
+
+  <div id="rs">相关搜索：b站、bilibili 官网、bilibili 直播</div>
+  <div id="foot"><a href="https://www.baidu.com/duty/">使用百度前必读</a></div>
+</body>
+</html>

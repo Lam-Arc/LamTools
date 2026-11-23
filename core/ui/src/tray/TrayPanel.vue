@@ -1,11 +1,15 @@
 <template>
   <div ref="cardRef" class="tray-panel" :data-material="material" role="menu" aria-label="Sunday 托盘面板">
     <template v-for="row in rows" :key="row.id">
+      <!-- user:“确保视觉、功能和交互不退化”+(托盘整行支持键盘操作，内层开关仍使用自身键盘行为)。 -->
       <!-- 开关行：整行可点，控件仍然是主界面那套 SundaySwitch，不另做一个。 -->
       <div
         v-if="row.kind === 'toggle'"
         class="tray-row tray-row--toggle"
         role="menuitemcheckbox"
+        tabindex="0"
+        @keydown.enter.self.prevent="onToggleRow(row)"
+        @keydown.space.self.prevent="onToggleRow(row)"
         :aria-checked="row.value ? 'true' : 'false'"
         :class="{ 'is-busy': pending === row.id }"
         @click="onToggleRow(row)"
@@ -56,7 +60,10 @@ import { useOverlayTheme } from '@/pet/ui/overlayTheme.ts'
 import * as bridge from './bridge.ts'
 import { trayRows, type TrayRow } from './model.ts'
 
-useOverlayTheme()
+// user:“直接渲染项目真实组件”+(展厅注入本地操作，独立窗口继续使用真实宿主)。
+const props = defineProps<{ services?: typeof bridge }>()
+const services = props.services ?? bridge
+if (!props.services) useOverlayTheme()
 
 const POLL_MS = 800
 /** 开覆盖层要建窗，等它出现的最长时间。 */
@@ -94,7 +101,7 @@ function iconOf(id: TrayRow['id']) {
 async function refresh(): Promise<void> {
   if (disposed) return
   try {
-    const snapshot = await bridge.panelState()
+    const snapshot = await services.panelState()
     petOpen.value = snapshot.pet_open
     overlayOpen.value = snapshot.overlay_open
   } catch {
@@ -119,7 +126,7 @@ async function onToggleRow(row: TrayRow): Promise<void> {
   pending.value = target
   try {
     // 宿主在后台线程建窗，这里立刻返回，随后轮询到真实状态。
-    await bridge.toggleTarget(target)
+    await services.toggleTarget(target)
     await waitFor(target, want)
   } catch {
     await refresh()
@@ -130,10 +137,10 @@ async function onToggleRow(row: TrayRow): Promise<void> {
 
 async function onActionRow(row: TrayRow): Promise<void> {
   if (row.id === 'main') {
-    await bridge.revealMain().catch(() => undefined)
+    await services.revealMain().catch(() => undefined)
     return
   }
-  if (row.id === 'quit') await bridge.quitApp().catch(() => undefined)
+  if (row.id === 'quit') await services.quitApp().catch(() => undefined)
 }
 
 /** 把窗口调到刚好装下内容，避免缩放不同把最后一行裁掉。 */
@@ -143,13 +150,13 @@ async function fitPanel(): Promise<void> {
   if (!card) return
   const height = Math.ceil(card.scrollHeight + 2)
   if (Math.abs(window.innerHeight - height) <= 1) return
-  await bridge.fitPanel(PANEL_WIDTH, height, window.devicePixelRatio).catch(() => undefined)
+  await services.fitPanel(PANEL_WIDTH, height, window.devicePixelRatio).catch(() => undefined)
 }
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
   event.preventDefault()
-  void bridge.closePanel().catch(() => undefined)
+  void services.closePanel().catch(() => undefined)
 }
 
 const onWindowFocus = (): void => {
@@ -157,7 +164,7 @@ const onWindowFocus = (): void => {
 }
 
 onMounted(() => {
-  void bridge.panelMaterial().then(value => (material.value = value)).catch(() => undefined)
+  void services.panelMaterial().then(value => (material.value = value)).catch(() => undefined)
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('focus', onWindowFocus)
   void refresh().then(() => fitPanel())

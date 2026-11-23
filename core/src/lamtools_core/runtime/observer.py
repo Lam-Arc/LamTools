@@ -796,11 +796,15 @@ def _terminate_tree(process: asyncio.subprocess.Process) -> None:
         return
     if os.name == "nt":
         try:
+            # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(收尸用的 taskkill 也不许弹窗)。
+            from lamtools_core.win_spawn import hidden_kwargs
+
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
                 capture_output=True,
                 timeout=5,
                 check=False,
+                **hidden_kwargs(),
             )
             return
         except (OSError, subprocess.TimeoutExpired):

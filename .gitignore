@@ -73,6 +73,7 @@ archive/members/writer/frontend/src-tauri/gen/
 archive/members/writer/frontend/.electron-app-stage/
 .acceptance/
 core/desktop/src-tauri/target/
+core/desktop/browser-assert/target/
 core/mobile/src-tauri/target/
 core/runtime-rs/target/
 core/remote/relay/target/

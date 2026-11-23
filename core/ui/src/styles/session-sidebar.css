@@ -230,9 +230,6 @@
   opacity: 1;
   cursor: grabbing;
 }
-.sidebar-sort-move {
-  transition: transform var(--dur-base) var(--ease-out);
-}
 .project-row,
 .session-row {
   background: transparent;
@@ -356,8 +353,7 @@
 @media (prefers-reduced-motion: reduce) {
   .sidebar-search-wrap,
   .sidebar-search,
-  .project-btns,
-  .sidebar-sort-move {
+  .project-btns {
     transition: none;
   }
 }
@@ -367,12 +363,15 @@
   display: grid;
   gap: var(--sidebar-row-gap);
 }
+/* user:“红框位置的这个选择标签样式没有对齐，观感很参差”+
+   (行的右缩进由外层统一给出（项目块 8px、最近列表 8px），会话行不再另加右内边距：
+    否则项目行最右的 ⊕、会话行的状态环、标题省略号会分别落在三条不同的竖线上。) */
 .conversation {
   width: 100%; min-width: 0;
   border: 0;
   border-radius: var(--sidebar-row-radius);
   background: transparent;
-  padding: 0 10px 0 var(--space-2);
+  padding: 0 0 0 var(--space-2);
   height: var(--sidebar-row-height);
   min-height: var(--sidebar-row-height);
   display: flex;
@@ -494,25 +493,37 @@
   display: block; margin-top: 0;
   color: var(--sidebar-text-muted); font-size: var(--sidebar-meta-text-size);
 }
+/* user:“红框位置的这个选择标签样式没有对齐，观感很参差”+
+   (尾部是固定 18px 的图标槽（= --sidebar-icon-size），槽内内容居中，
+    所以状态环和项目行的 ⊕ 共用一条中心轴。这个槽即使当前行没有状态也保留：
+    否则会话开始/结束运行会让标题的可截断宽度横向跳动。) */
 .conversation-actions {
   position: relative;
-  min-width: 22px;
-  min-height: 22px;
+  flex: 0 0 var(--sidebar-icon-size);
+  width: var(--sidebar-icon-size);
+  min-width: 0;
+  min-height: var(--sidebar-icon-size);
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
 }
+/* 状态与「···」同时出现时并排放在同一槽里，槽再让出宽度。 */
 .conversation-actions:has(.session-menu-button) {
-  min-width: 44px;
-  min-height: 44px;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: var(--sidebar-icon-size);
   gap: 2px;
 }
 .session-menu-button {
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  /* user:“红框位置的这个选择标签样式没有对齐，观感很参差”+(
+     「···」的点击区比图标槽宽一档，用等量负边距把它压在同一个中心轴上：
+     既不挤动标题，悬停底衬也不会越出侧栏内边距)。 */
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  margin-inline: calc((var(--sidebar-icon-size) - 28px) / 2);
   padding: 0;
   background: transparent;
   color: var(--sidebar-text-muted);
@@ -537,15 +548,14 @@
   height: var(--sidebar-icon-size);
   stroke-width: 1.8;
 }
-.conversation-actions:has(.session-menu-button) .conversation-status {
-  position: static;
-}
 .session-status {
   flex: 0 0 auto;
 }
+/* user:“红框位置的这个选择标签样式没有对齐，观感很参差”+
+   (状态不再用 absolute + right:7px 贴在尾部空列里，而是始终落在图标槽中心，
+    和项目行的 ⊕ 同一条轴；是否显示「···」也不再改变它的位置。) */
 .conversation-status {
-  position: absolute;
-  right: 7px;
+  position: static;
   transition: opacity .12s ease;
 }
 
@@ -566,7 +576,6 @@
   background: transparent;
   border-radius: 50%;
   box-shadow: none;
-  animation: stream-spin .9s linear infinite;
 }
 .conversation .status.completed {
   background: var(--theme-backdrop-text);
@@ -609,8 +618,7 @@
     transform: scale(.86);
   }
 }
-/* 运行态 spinner 与等待回复的 stream-spinner 同源——后者本就无视 reduced-motion 始终转动，
-   此处保持一致，避免系统开"减少动画"时侧栏运行点静止而聊天区等待圆环仍转的割裂。 */
+
 
 /* Sidebar empty state */
 .sidebar-empty {
@@ -681,6 +689,13 @@
   .project-action {
     min-width: 44px;
     min-height: 44px;
+  }
+  /* user:“红框位置的这个选择标签样式没有对齐，观感很参差”+
+     (这一档里项目的 ⊕ 被放大成 44px 触摸靶，会话尾部图标槽要同步放大，
+      两边的中心轴才继续重合。) */
+  .conversation-actions {
+    flex-basis: 44px;
+    width: 44px;
   }
   .project-btns {
     flex-basis: 44px;
@@ -779,4 +794,63 @@
   .full-area-sidebar-nav__item {
     transition: none;
   }
+}
+/* =========================================================================
+   Agent 纵向标签轴 + 选中会话与内容区的连接处
+   ========================================================================= */
+/* user:“Agent 根入口在左上角，项目/会话在其下方纵向排列”+
+   (轴顶端只放一枚根入口，和下面的项目/会话共用同一列左边距：靠对齐与留白拉开层级，不套背景块)。 */
+.session-sidebar-axis {
+  display: flex;
+  align-items: center;
+  min-height: var(--sidebar-row-height);
+  padding: 0 var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+/* user:“当前选中的会话与右侧内容区形成连续轮廓：选中项背景与内容区一致/连续”+
+   (选中行改成一块实底，颜色和连接处同源：深浅主题都由 --theme-main-text 与 --theme-main-background 混出，
+    不用 rgba 白，也不写死 hex。右缘一直铺到会话栏内边，再由壳上的连接处铺到聊天卡，
+    两者同色，所以看起来是一块面而不是两个并排的卡片)。 */
+.conversation.is-fused {
+  color: var(--sidebar-text-primary);
+}
+.conversation.is-fused::before {
+  right: calc(var(--space-2) * -1 - var(--session-fusion-row-bleed, 0px));
+  border-radius: var(--sidebar-row-radius) 0 0 var(--sidebar-row-radius);
+  background: var(--session-fusion-fill);
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* user:“选中态用背景 + 少量强调（例如左侧 2px 指示条），不靠强色块”+
+   (强调只留一条短竖条：宽度、颜色都是令牌，换成 0 就是关掉)。 */
+.conversation.is-fused::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: var(--session-fusion-indicator-width);
+  height: calc(100% - var(--space-2) * 2);
+  transform: translateY(-50%);
+  border-radius: var(--radius-sm);
+  background: var(--session-fusion-indicator);
+  pointer-events: none;
+}
+
+
+/* user:“底部「最近 / 新会话 MyProject」那一行的高亮块没有顶到侧栏右缘，比上面那个窄一截”+
+   (项目会话挂在 .project-block > .conversation-list 里，「最近」直接挂在 .conversation-items 里；
+    两边容器各自带了不同的内边距，「同一栏里的选中行」于是右缘不一致。这里把两个容器的横向几何对齐)。 */
+.conversation-list,
+.sidebar-section .conversation-items {
+  padding-left: 0;
+  padding-right: 0;
+  margin-inline: 0;
+}
+/* user:“红框位置的这个选择标签样式没有对齐，观感很参差”+
+   (「最近」的行不在项目块里，缺了那 8px 缩进；补上之后两种列表的行盒子同宽，
+    尾部图标槽与标题截断位置才对得齐。) */
+.sidebar-section[data-sidebar-section="recent"] > .conversation-items {
+  padding: 0 var(--space-2);
 }

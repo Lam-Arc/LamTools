@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import mimetypes
-import os
 import re
-import subprocess
-import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .window_foreground import ForegroundResult
 
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".csv", ".tsv", ".log", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".ps1", ".bat", ".sh", ".toml", ".ini", ".cfg", ".sql"}
 TEXT_MIME_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml"}
@@ -130,14 +131,18 @@ def assert_safe_default_open(path: Path) -> None:
         raise ValueError("This file type cannot be opened for safety")
 
 
-def open_with_default_app(path: Path) -> None:
+def open_with_default_app(path: Path) -> "ForegroundResult":
+    """用系统默认应用打开，并把目标程序的窗口带到前台。
+
+    user:“‘以默认应用打开’后窗口不再最上层，还要单独翻任务栏”+
+    (Windows 上只调 ShellExecute 会把窗口起在下面。置前、解除前台锁、超时闪
+    任务栏这一整套收在 attachment/window_foreground.py，这里只留安全校验与分流，
+    不再直接 os.startfile——那个接口没有 PID，事后无处可找窗口)。
+    """
     assert_safe_default_open(path)
-    if sys.platform.startswith("win"):
-        os.startfile(str(path))  # type: ignore[attr-defined]
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(path)])
+    from .window_foreground import open_and_raise
+
+    return open_and_raise(str(path))
 
 
 __all__ = ["assert_safe_default_open", "attachment_modality", "decode_transport_filename", "detect_mime", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path"]

@@ -1,8 +1,9 @@
 <template>
   <Teleport to="body">
-    <template v-if="contextMenuState.open">
-      <Transition name="context-menu">
+    <!-- user:“做”+(关闭菜单时只淡出画面，马上解除交互与焦点)。 -->
+    <Transition name="sunday-motion-fade" @before-leave="el => el.setAttribute('inert', '')">
         <ContextMenuPanel
+          v-if="contextMenuState.open"
           :items="contextMenuState.items"
           :anchor="rootAnchor"
           :level="0"
@@ -16,10 +17,11 @@
           @close="closeContextMenu"
         />
       </Transition>
+    <template v-if="contextMenuState.open">
       <Transition
         v-for="panel in submenuPanels"
         :key="panel.path.join('.')"
-        name="context-menu"
+        name="sunday-motion-fade"
       >
         <ContextMenuPanel
           :key="panel.path.join('.')"
@@ -42,6 +44,7 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/sunday-motion.css'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import ContextMenuPanel from '@/components/context-menu/ContextMenuPanel.vue'
 import {

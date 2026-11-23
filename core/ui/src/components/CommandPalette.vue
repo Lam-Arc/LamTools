@@ -1,5 +1,5 @@
 <template>
-  <div v-if="commands.length" class="command-palette" role="listbox" :aria-label="t('命令')">
+  <div v-if="commands.length" class="command-palette sunday-motion-popover" role="listbox" :aria-label="t('命令')">
     <div ref="listEl" class="command-list">
       <section v-for="group in groupedCommands" :key="group.kind" class="command-group">
         <div v-if="!commands.some(c => c.metadata?.reference_path)" class="command-group-label">{{ group.label }}</div>
@@ -116,7 +116,6 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   background: var(--theme-composer-background);
   color: var(--text);
   box-shadow: var(--shadow-md);
-  animation: popover-in var(--dur-base) var(--ease-out);
   transform-origin: bottom;
 }
 
@@ -267,9 +266,4 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .command-palette {
-    animation: none;
-  }
-}
 </style>

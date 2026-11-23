@@ -4184,3 +4184,112 @@ async def test_child_approval_routes_to_the_child_session_not_the_completed_pare
         assert parent_jobs == []
     finally:
         await engine.dispose()
+
+
+# user:“需不需要 rust 化？” -> “修”
+# (回合写库提交后须先向订阅方广播并启动后台运行，可选的整库响应快照装配不得卡住界面可见与任务启动。)
+@pytest.mark.asyncio
+async def test_turn_start_publishes_and_starts_runtime_before_response_snapshot_assembly(tmp_path):
+    engine, context = await _context(tmp_path)
+    thread_id = "thread-publish-before-snap"
+    queue = context.hub.subscribe(thread_id)
+    snapshot_entered = asyncio.Event()
+    snapshot_release = asyncio.Event()
+    runtime_started = asyncio.Event()
+    runtime_finish = asyncio.Event()
+
+    async def runtime_op(_request):
+        runtime_started.set()
+        await runtime_finish.wait()
+        return OperationResult(name="turn.start")
+
+    context.operations.register("turn.start", runtime_op)
+    original_load = context.persistence.load
+
+    async def slow_response_load(db, target_thread_id):
+        if target_thread_id == thread_id:
+            snapshot_entered.set()
+            await snapshot_release.wait()
+        return await original_load(db, target_thread_id)
+
+    context.persistence.load = slow_response_load  # type: ignore[method-assign]
+    task = asyncio.create_task(
+        handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": thread_id,
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+    )
+    try:
+        await _wait_for_event(snapshot_entered, label="snapshot assembly")
+        # While response snapshot assembly is still blocked, live subscribers and runtime have already moved forward.
+        await _wait_for_event(runtime_started, label="runtime task start")
+        published = []
+        while not queue.empty():
+            published.append(queue.get_nowait().method)
+        assert published == ["turn/accepted", "item/started", "core/runItem"]
+        assert not task.done()
+
+        snapshot_release.set()
+        outcome = await asyncio.wait_for(task, timeout=5.0)
+        assert isinstance(outcome.response["result"]["snapshot"], dict)
+    finally:
+        snapshot_release.set()
+        runtime_finish.set()
+        await asyncio.gather(task, return_exceptions=True)
+        live = context.runtime_task_registry.task(thread_id)
+        if live is not None:
+            await live
+        context.hub.unsubscribe(thread_id, queue)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_steer_ended_turn_fallback_opts_out_of_internal_snapshot_load(tmp_path, monkeypatch):
+    import lamtools_core.app.live.turn_start as turn_start_module
+
+    llm = BlockingCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    thread_id = "thread-steer-fallback-no-snap"
+    seen_include_snapshot: list[Any] = []
+    original_start = turn_start_module.handle_turn_start_operation
+
+    async def spy_start(*, request_id, params, context):
+        seen_include_snapshot.append(params.get("include_snapshot"))
+        return await original_start(request_id=request_id, params=params, context=context)
+
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={"thread_id": thread_id, "input": [{"type": "text", "text": "first"}], "include_snapshot": False},
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        await llm.started.wait()
+        llm.release.set()
+        await _wait_turn_terminal(context, thread_id, turn_id)
+
+        monkeypatch.setattr(turn_start_module, "handle_turn_start_operation", spy_start)
+        steered = await handle_turn_steer_operation(
+            request_id=2,
+            params={
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "client_message_id": "steer-after-end",
+                "input": [{"type": "text", "text": "follow up"}],
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+        assert steered.response["result"]["submitted"] is True
+        assert seen_include_snapshot == [False]
+        follow_task = context.runtime_task_registry.task(thread_id)
+        if follow_task is not None:
+            await follow_task
+    finally:
+        llm.release.set()
+        context.runtime_task_registry.clear()
+        await engine.dispose()

@@ -181,6 +181,37 @@ export function startStartupSplash(): void {
   })
 }
 
+// user:“dev 界面一直卡在加载中”+(启动期一旦抛错，界面必须说清失败原因，不能无限转圈)：
+// 纯函数只负责文案，DOM 触点在下面单独一层，方便单测覆盖。
+export function formatStartupFailure(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '')
+  const reason = raw.trim() || '未知错误'
+  return `Sunday 启动失败：${reason}。请重新启动应用；若持续失败，请查看 core/data/core-agent/frontend-console.log`
+}
+
+/** 把失败文案写进启动画面：保持可见、可读，而不是让它一直转圈。 */
+export function showStartupFailure(error: unknown): void {
+  const text = formatStartupFailure(error)
+  console.error('[Startup]', error)
+  const root = getSplash()
+  if (!root) return
+  stopMotion()
+  root.setAttribute('data-startup-failed', 'true')
+  root.setAttribute('aria-label', text)
+  let line = root.querySelector<HTMLElement>('[data-startup-error]')
+  if (!line) {
+    line = document.createElement('p')
+    line.setAttribute('data-startup-error', '')
+    line.setAttribute('role', 'alert')
+    line.style.cssText = [
+      'position:absolute', 'left:50%', 'bottom:12%', 'transform:translateX(-50%)',
+      'max-width:78%', 'margin:0', 'text-align:center',
+      'font:13px/1.6 system-ui,sans-serif', 'color:var(--theme-main-text,#ddd)', 'opacity:.92',
+    ].join(';')
+    root.appendChild(line)
+  }
+  line.textContent = text
+}
 export function completeStartupSplash(): void {
   const root = getSplash()
   const app = document.querySelector<HTMLElement>('#app')

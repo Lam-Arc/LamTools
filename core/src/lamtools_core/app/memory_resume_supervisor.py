@@ -280,15 +280,10 @@ class MemoryResumeSupervisor:
         thread_ids = list_threads_with_pending_wakes(database)
         if not thread_ids:
             return 0
-        woken = 0
-        for thread_id in thread_ids:
-            try:
-                woken += 1 if await self._wake_member_thread(thread_id) else 0
-            except asyncio.CancelledError:
-                raise
-            except BaseException:
-                _logger.exception("[member-wake] wake failed thread_id=%s", thread_id)
-        return woken
+        # user:“修”+(各会话唤醒互相独立，并发执行避免单个慢会话串行卡死其余会话与巡检)。
+        return await _run_threads_concurrently(
+            thread_ids, self._wake_member_thread, log_prefix="[member-wake] wake failed"
+        )
 
     async def _wake_member_thread(self, thread_id: str) -> bool:
         context = self._context
@@ -478,15 +473,9 @@ class MemoryResumeSupervisor:
                 resume_threshold_gb(),
             )
             return 0
-        resumed = 0
-        for thread_id in thread_ids:
-            try:
-                resumed += 1 if await self._resume_thread(thread_id) else 0
-            except asyncio.CancelledError:
-                raise
-            except BaseException:
-                _logger.exception("[memory-resume] resume failed thread_id=%s", thread_id)
-        return resumed
+        return await _run_threads_concurrently(
+            thread_ids, self._resume_thread, log_prefix="[memory-resume] resume failed"
+        )
 
     async def _resume_thread(self, thread_id: str) -> bool:
         context = self._context
@@ -572,6 +561,8 @@ class MemoryResumeSupervisor:
                 "thread_id": thread_id,
                 "input": [{"type": "text", "text": prompt}],
                 "client_message_id": f"{thread_id}:{kind}:{uuid.uuid4().hex[:12]}",
+                # user:“修”+(后台续跑/成员唤醒不消费返回的 snapshot，显式关闭整库重装避免长会话卡顿)。
+                "include_snapshot": False,
                 **({"origin": origin} if origin else {}),
             },
             context=self._context,
@@ -582,6 +573,29 @@ class MemoryResumeSupervisor:
             detail = failure.get("message") if isinstance(failure, dict) else failure
             return str(detail or "start refused")
         return ""
+
+
+async def _run_threads_concurrently(
+    thread_ids: list[str],
+    worker: Any,
+    *,
+    log_prefix: str,
+) -> int:
+    """Run one per-thread pass concurrently with per-thread exception isolation."""
+
+    async def _run_one(thread_id: str) -> int:
+        try:
+            return 1 if await worker(thread_id) else 0
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            _logger.exception("%s thread_id=%s", log_prefix, thread_id)
+            return 0
+
+    if len(thread_ids) == 1:
+        return await _run_one(thread_ids[0])
+    counts = await asyncio.gather(*(_run_one(thread_id) for thread_id in thread_ids))
+    return sum(counts)
 
 
 def _rearm(state: Any, pending: dict[str, Any]) -> None:

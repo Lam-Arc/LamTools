@@ -18,7 +18,14 @@
       <!-- User message -->
       <div v-else-if="msg.role === 'user'" class="user-row" data-role="user">
         <div class="user-stack" :class="{ 'user-stack--editing': editingMessageId === msg.id }">
-          <div v-if="editingMessageId === msg.id" class="user-bubble user-bubble--editing">
+          <CoreMessageSurface
+            v-if="editingMessageId === msg.id"
+            class="user-bubble user-bubble--editing message-bubble message-bubble--user"
+            :shape="bubbleShape"
+            :fill="userBubbleFill"
+            :glass="false"
+            tone="user"
+          >
             <AutoTextarea
               ref="editInputRef"
               v-model="editDraft"
@@ -44,9 +51,17 @@
                 @click="cancelEditMessage"
               >{{ t("取消") }}</button>
             </div>
-          </div>
+          </CoreMessageSurface>
           <template v-else>
-            <div class="user-bubble" :class="{ 'user-bubble--folded': isUserBubbleFolded(msg) }" data-context-selection-scope>
+            <CoreMessageSurface
+              class="user-bubble message-bubble message-bubble--user"
+              :class="{ 'user-bubble--folded': isUserBubbleFolded(msg) }"
+              :shape="bubbleShape"
+              :glass="bubbleGlass"
+              :fill="userBubbleFill"
+              tone="user"
+              data-context-selection-scope
+            >
               <!-- user:“更适配新的UI”+(辅助对话的引用在原文栏展示，气泡保留真实语义文本供后续选文定位)。 -->
               <!-- user:“令用户气泡过长时自动折叠”+(超长消息默认只留 6 行并向下渐隐，
                    右下角按钮展开/收起；折叠只是展示层，选区与复制仍拿到完整原文)。 -->
@@ -61,7 +76,7 @@
                 :aria-expanded="isUserBubbleFolded(msg) ? 'false' : 'true'"
                 @click="toggleUserBubbleFold(msg)"
               >{{ isUserBubbleFolded(msg) ? t("展开") : t("收起") }}</button>
-            </div>
+            </CoreMessageSurface>
           </template>
           <ReferenceItems
             compact
@@ -689,10 +704,14 @@
                     class="process-guidance"
                   >
                     <div class="user-guide-label" data-user-guide-label>{{ t("引导") }}</div>
-                    <div
-                      class="user-bubble"
+                    <CoreMessageSurface
+                      class="user-bubble message-bubble message-bubble--user"
                       :class="{ 'user-bubble--pending': isPendingGuidancePart(group.part) }"
-                    >{{ group.part.content }}</div>
+                      :shape="bubbleShape"
+                      :fill="userBubbleFill"
+                      :glass="false"
+                      tone="user"
+                    >{{ group.part.content }}</CoreMessageSurface>
                   </div>
 
                   <div v-else-if="group.part.partType === 'error'" class="process-step process-step--error">
@@ -933,22 +952,23 @@
               <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
             </slot>
             <template v-else-if="answerBubbleParts.length > 1 || answerBubblesVisible">
-              <div
+              <CoreMessageSurface
                 v-for="(bubble, index) in answerBubbleParts"
                 :key="bubble.key"
-                :class="[
-                  'assistant-bubble',
-                  {
-                    'assistant-bubble--boxed': answerBubblesVisible,
-                    'optical-glass': answerBubblesVisible,
-                    'optical-glass--low-trans': answerBubblesVisible,
-                  },
-                ]"
+                class="assistant-bubble"
+                :class="{
+                  'assistant-bubble--boxed message-bubble message-bubble--assistant': answerBubblesVisible,
+                }"
+                :surface="answerBubblesVisible"
+                :glass="answerBubblesVisible && bubbleGlass"
+                :shape="bubbleShape"
+                :fill="assistantBubbleFill"
+                tone="assistant"
                 :data-assistant-bubble="String(index)"
                 data-context-selection-scope
               >
                 <MarkdownRenderer class="part-text-content" :content="bubble.content" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
-              </div>
+              </CoreMessageSurface>
             </template>
             <MarkdownRenderer v-else class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" :auto-plot-math="autoPlotMath" :interactive="true" />
           </div>
@@ -1100,13 +1120,16 @@ import { isCoreSystemEvent, type CoreSystemEvent } from '@/appServer/systemEvent
 // user:“合并去重”+(消息附件已统一走 ReferenceItems 图标引用，附件卡导入已无调用方，删除)
 import ReferenceItems from '@/components/ReferenceItems.vue'
 import UserReferenceText from '@/components/UserReferenceText.vue'
+import CoreMessageSurface from '@/components/CoreMessageSurface.vue'
 import { artifactListingReference, artifactPathsInText, normalizeArtifactReference, shouldListTurnArtifact, workspaceRelativeFromReportPath } from '@/artifacts/model.ts'
 import { isNativeContextTarget, openContextMenu } from '@/components/context-menu/context-menu.ts'
 import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import MessageView from '@/components/MessageView.vue'
 import ProcessIcon, { ProcessChevron } from '@/components/process/ProcessIcon.vue'
-import ProcessMediaPreview from '@/components/process/ProcessMediaPreview.vue'
-import ProcessResultPills from '@/components/process/ProcessResultPills.vue'
+import ProcessMediaPreview from '@/components/process/ProcessMediaPreview.vue'
+
+import ProcessResultPills from '@/components/process/ProcessResultPills.vue'
+
 import ProcessKvPill from '@/components/process/ProcessKvPill.vue'
 import { autoFollowScrollDirective as vAutoFollowScroll } from '@/directives/autoFollowScroll.ts'
 import { panelEnter, panelLeave } from '@/motion/expandPanel.ts'
@@ -1205,6 +1228,8 @@ const props = withDefaults(
     /** Single message rendered by this component (stable reference from the projection cache). */
     msg: CoreMessage
     assistantLabel?: string
+    /** user:“尤其是气泡和玻璃效果”+(展厅在当前实例切换气泡，无须改写会话偏好)。 */
+    assistantBubbleAppearance?: 'boxed' | 'plain'
     /** Set of message ids whose process section is expanded */
     processExpandedIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
@@ -1342,7 +1367,16 @@ const assistantTimestamp = computed(() => formatAssistantTimestamp(props.msg.tim
 // user:“Assistant 可选择是否使用消息气泡”“支持自定义 Assistant 显示名称和头像”
 // +(显示偏好放在模块级共享状态里：设置面板一改，这里立刻跟着重渲染，
 // 既不用改 ChatThread 的 props，也不进入消息协议与会话历史)。
-const answerBubblesVisible = computed(() => assistantDisplayPreferences.bubblesEnabled)
+// user:“界面中是否可以设置？颜色与材质配置？”+(外观参数来自显示偏好，
+// 用户与助手气泡共用形状/玻璃，填充色各用各的；空色继续用主题角色色)
+const bubbleShape = computed(() => assistantDisplayPreferences.bubbleShape)
+const bubbleGlass = computed(() => assistantDisplayPreferences.bubbleGlass)
+const userBubbleFill = computed(() => assistantDisplayPreferences.bubbleUserColor)
+const assistantBubbleFill = computed(() => assistantDisplayPreferences.bubbleAssistantColor)
+
+const answerBubblesVisible = computed(() => props.assistantBubbleAppearance
+  ? props.assistantBubbleAppearance === 'boxed'
+  : assistantDisplayPreferences.bubblesEnabled)
 const assistantAvatarSrc = computed(() => assistantDisplayPreferences.avatar.trim())
 const assistantAvatarVisible = computed(() => assistantAvatarSrc.value !== '' || answerBubblesVisible.value)
 // user:“头上头像显示大小太小了 设成可调节，裁切也是圆角率可调节”+

@@ -34,10 +34,22 @@ OPERATION_LEVELS = {
     # 任务本身仍可 pause/stop)。
     "computer_use": 1,
     "computer_use.start": 1, "computer_use.screenshot": 1, "computer_use.snapshot": 1,
+    # user:“把「截图/选中区域 → 提取文字」做通”+(只读屏幕，不改任何状态，和截图同级)。
+    "computer_use.ocr": 1,
     "computer_use.status": 1, "computer_use.pause": 1, "computer_use.stop": 1,
     "computer_use.resume": 1, "computer_use.click": 1, "computer_use.type": 1,
     "computer_use.key": 1, "computer_use.scroll": 1, "computer_use.drag": 1,
     "computer_use.focus": 1,
+    # user:“让 Agent Loop 能直接调用”+(browser 按动作分级：读与普通交互都是 1 级，
+    # 关闭标签会丢状态所以给 2 级；payment/delete/publish/auth 由宿主拒绝未经审批的声明)。
+    "browser": 1, "browser.open": 1, "browser.tabs": 1, "browser.activate": 1,
+    "browser.close": 2, "browser.snapshot": 1, "browser.screenshot": 1,
+    "browser.click": 1, "browser.type": 1, "browser.clear": 1, "browser.hover": 1,
+    "browser.scroll": 1, "browser.select": 1, "browser.pressKey": 1,
+    "browser.waitFor": 1, "browser.control": 1,
+    # user:“让 Sunday 的内置浏览器同时承担普通网页浏览、Agent 网页搜索和网页信息获取”+
+    # (搜索与阅读都是只读网页；它们会开后台标签，但不覆盖用户当前页面)。
+    "browser.search": 1, "browser.open_result": 1, "browser.read_page": 1, "browser.inspect_page": 1,
     # Preserve the existing Study/Workflow domain behavior outside this migration's scope.
     "get_knowledge_net": 1, "build_knowledge_net": 1, "sign": 1, "notes": 1, "exam": 1,
     "workflow_graph": 1, "workflow_add_node": 2, "workflow_connect": 2,
@@ -48,6 +60,13 @@ OPERATION_LEVELS = {
 
 def valid_level(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+# user:“高风险操作审批回流…接到现有统一审批机制上”+
+# (带 payment/delete/publish/auth 声明的浏览器写操作按 3 级判级：审批闸门会先问用户，
+#  用户批准后由宿主把 approved 写进 call.metadata["approval"]；模型给的参数永远不算授权)。
+# 这份集合与 lamtools_core.browser.tools.HIGH_RISK_INTENTS 必须一致（tests 里钉住）。
+BROWSER_APPROVAL_INTENTS = ("payment", "delete", "publish", "auth")
 
 
 def command_level(command: str) -> int:
@@ -75,6 +94,10 @@ def operation_level(tool_name: str, params: dict[str, Any], *, levels: dict[str,
                     mcp_level=None, mcp_call_level=None) -> int:
     table = {**OPERATION_LEVELS, **(levels or {})}
     action = str(params.get("action") or "")
+    # user:“高风险操作审批回流”+(动作本身仍是 1 级交互，只有用户/模型声明了高风险 intent
+    # 才升到 3 级：这样闸门一定会先问，批准前那条操作保持拒绝)。
+    if tool_name == "browser" and str(params.get("intent") or "") in BROWSER_APPROVAL_INTENTS:
+        return 3
     # user:“按 MCP 调的东西来分 1、2、3 级”+(mcp 入口只做查询时是 1 级；
     # action=run 的等级取自目标 MCP 工具的声明，而不是入口工具的静态表)。
     if tool_name == "mcp" and action == "run":

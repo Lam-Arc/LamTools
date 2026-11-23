@@ -13,7 +13,8 @@
   /* —— 消息正文 —— */
   --ms-body-font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --ms-body-font-size: 14px;
-  --ms-body-line-height: 1.6;
+  /* user:“消息区的内容渲染要更加紧凑”+(正文行高 1.6 → 1.5)。 */
+  --ms-body-line-height: 1.5;
   --ms-body-para-gap: 12px;
 
   /* —— 过程行标题（固定单行垂直居中）—— */

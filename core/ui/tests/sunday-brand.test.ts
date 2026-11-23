@@ -150,10 +150,10 @@ describe('Sunday ivory and graphite brand assets', () => {
     }
   })
 
-  it('keeps the title-bar brand as a wordmark without the app-icon logo', () => {
+  it('keeps branding out of the corner window controls', () => {
     const titleBar = read('src/components/TitleBar.vue')
 
-    expect(titleBar).toContain('<strong class="brand-name">Sunday</strong>')
+    expect(titleBar).not.toContain('brand-name')
     expect(titleBar).not.toContain('SundayLogo')
     expect(titleBar).not.toContain('effectiveThemeMode')
   })

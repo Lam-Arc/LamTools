@@ -478,3 +478,14 @@ def test_session_composer_operation_is_registered_for_live_dispatch():
         is handle_session_composer_set_operation
     )
     assert "session.composer.set" in CORE_WORKBENCH_OPERATION_NAMES
+
+def test_hidden_auto_mode_is_still_accepted_by_the_backend():
+    """user:“后端/内核里 auto 的处理逻辑保留（旧会话、旧存档、旧 API 调用仍能跑通）”
+    “不需要改后端，只加一条断言说明兼容”+(界面从下个版本起只给聊天/工作，但后端这一层
+    不改：auto 仍然读得出来、存得回去，superagent 这个旧名也照旧归一到 auto，
+    旧会话与旧 API 调用不会因为界面隐藏了入口而报错。)
+    """
+    assert normalize_composer_state({"active_mode": "auto"})["active_mode"] == "auto"
+    assert normalize_composer_state({"active_mode": "superagent"})["active_mode"] == "auto"
+    assert normalize_composer_state({"active_mode": "consider"})["active_mode"] == "chat"
+    assert normalize_composer_state({"active_mode": "execute"})["active_mode"] == "work"

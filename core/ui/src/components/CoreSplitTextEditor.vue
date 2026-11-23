@@ -9,10 +9,10 @@ import { markdown } from '@codemirror/lang-markdown'
 import { json } from '@codemirror/lang-json'
 import { RefreshCw, Save } from 'lucide-vue-next'
 import CoreConfirmDialog from './CoreConfirmDialog.vue'
-import type { SplitTab } from '@/split/layout'
-import type { SplitWorkspaceController } from '@/split/useSplitWorkspace'
+import type { SplitTab } from '@/workspace/types'
+import type { WorkspaceController } from '@/workspace/types'
 import type { createSplitDocuments } from '@/split/documents'
-const props = defineProps<{ tab: SplitTab; root: string; controller: SplitWorkspaceController; documents: ReturnType<typeof createSplitDocuments>; visible?: boolean }>()
+const props = defineProps<{ tab: SplitTab; root: string; controller: WorkspaceController; documents: ReturnType<typeof createSplitDocuments>; visible?: boolean }>()
 const emit = defineEmits<{ dirty: [id: string, value: boolean] }>()
 const view = props.documents.get(props.root, props.tab.resource, props.tab.id), { doc, dirty } = view
 const host = ref<HTMLElement | null>(null), savePath = ref(props.tab.resource), pending = ref<(() => void) | null>(null)

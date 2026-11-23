@@ -1,7 +1,5 @@
 import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 
 import TitleBar from '../src/components/TitleBar.vue'
 
@@ -11,71 +9,38 @@ afterEach(() => {
   ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = originalTauriInternals
 })
 
-describe('TitleBar mobile pairing', () => {
-  it('scopes narrow-screen hiding to the sidebar pin controls', () => {
-    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke: vi.fn() }
-    const wrapper = mount(TitleBar, {
-      props: { leftPinned: true, rightPinned: true },
-    })
-
-    expect(wrapper.find('[data-titlebar-sidebar-controls]').exists()).toBe(true)
-    expect(wrapper.findAll('[data-titlebar-sidebar-controls] .pin-btn')).toHaveLength(2)
-    expect(wrapper.find('.window-controls').exists()).toBe(true)
-
-    const source = readFileSync(resolve(process.cwd(), 'src/components/TitleBar.vue'), 'utf8')
-    expect(source).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.titlebar-sidebar-controls\s*\{[\s\S]*?display:\s*none;/)
-    expect(source).not.toMatch(/@media \(max-width: 640px\)[\s\S]*?\.titlebar-right\s*\{[\s\S]*?display:\s*none;/)
+describe('Sunday window controls', () => {
+  it('keeps the desktop-only window controls separate from full-width chrome', () => {
+    const wrapper = mount(TitleBar, { props: { showInPreview: true } })
+    expect(wrapper.findAll('[data-window-control]')).toHaveLength(3)
+    expect(wrapper.find('.titlebar').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('keeps the wordmark and workflow tabs, with the account bubble gone', () => {
-    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke: vi.fn() }
-    const wrapper = mount(TitleBar, { props: { modeLabel: 'Agent', canToggleMode: false } })
-
-    expect(wrapper.get('.titlebar-left .brand-name').text()).toBe('Sunday')
-    expect(wrapper.find('.titlebar-left .brand-tagline').exists()).toBe(false)
-    expect(wrapper.find('[data-titlebar-workflow-tabs]').exists()).toBe(true)
-    const source = readFileSync(resolve(process.cwd(), 'src/components/TitleBar.vue'), 'utf8')
-    expect(source).toContain('var(--titlebar-main-left, 18px)')
-    expect(source).toContain('var(--titlebar-main-right, 18px)')
-    // 账号与配对码气泡属于旧账号体系，已整体删除。
-    expect(source).not.toContain('mobile-pairing')
-    wrapper.unmount()
-  })
-
-  it('registers the maximize button bounds and reflects native hover state', async () => {
+  // user:“窗口按钮改为纯 DOM 驱动，不再依赖原生命中区”+
+  // (Rust 侧 set_maximize_button_bounds 已成空实现、也不再发 lamtools:maximize-hover，
+  //  所以这条断言反过来锁：不再注册那个 bounds，拦截到废弃事件也不再改任何样式。
+  //  按钮点击直接发命令的用例在 tests/titlebar-window-controls.test.ts)。
+  it('no longer registers maximize bounds or mirrors the retired native hover', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined)
-    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke }
     const wrapper = mount(TitleBar, {
-      props: { modeLabel: 'Agent', canToggleMode: false },
+      props: { showInPreview: true },
     })
-
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('set_maximize_button_bounds', expect.objectContaining({
-        x: expect.any(Number),
-        top: expect.any(Number),
-        width: expect.any(Number),
-        height: expect.any(Number),
-      }))
-    })
-
-    const maximize = wrapper.get('.window-controls .ctrl-btn:nth-child(2)')
-    window.dispatchEvent(new CustomEvent('lamtools:maximize-hover', { detail: true }))
     await wrapper.vm.$nextTick()
-    expect(maximize.classes()).toContain('native-hover')
 
-    window.dispatchEvent(new CustomEvent('lamtools:maximize-hover', { detail: false }))
+    expect(invoke).not.toHaveBeenCalledWith('set_maximize_button_bounds', expect.anything())
+
+    const maximize = wrapper.get('[data-window-control="maximize"]')
+    expect(maximize.attributes('data-window-control')).toBe('maximize')
+    window.dispatchEvent(new CustomEvent('lamtools:maximize-hover', { detail: true }))
     await wrapper.vm.$nextTick()
     expect(maximize.classes()).not.toContain('native-hover')
     wrapper.unmount()
   })
 
-  it('keeps the brand as a wordmark, with no app-icon logo in the title bar', () => {
-    ;(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = { invoke: vi.fn() }
-    const wrapper = mount(TitleBar, { props: { modeLabel: 'Agent', canToggleMode: false } })
-
-    expect(wrapper.get('.titlebar-left .brand-name').text()).toBe('Sunday')
-    expect(wrapper.find('.titlebar-left .sunday-logo').exists()).toBe(false)
+  it('leaves the controls out on mobile', () => {
+    const wrapper = mount(TitleBar, { props: { showInPreview: true, hideOnMobile: true } })
+    expect(wrapper.find('[data-window-controls]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

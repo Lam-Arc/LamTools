@@ -569,3 +569,98 @@ async def test_member_event_notify_is_debounced(tmp_path: Path) -> None:
         assert runner._wake.is_set()
     finally:
         await db.close()
+
+
+# user:“需不需要 rust 化？” -> “修”
+# (后台唤醒与内存恢复不依赖返回值里的完整快照，必须传 include_snapshot=False；
+#  且多会话唤醒互相独立，慢会话不得串行卡住其它会话的唤醒与巡检。)
+@pytest.mark.asyncio
+async def test_continuation_start_opts_out_of_full_snapshot_assembly(
+    tmp_path: Path, allow_memory: None, recorded_starts: list[dict[str, Any]]
+) -> None:
+    db_wake, context_wake, _store_wake, data_dir = await _open_members(tmp_path / "wake")
+    db_mem, context_mem, _store_mem = await _open(tmp_path / "mem")
+    try:
+        assert await supervisor.MemoryResumeSupervisor(
+            context=context_wake, sub_agent_data_dir=data_dir
+        ).tick() == 1
+        assert await supervisor.MemoryResumeSupervisor(context=context_mem).tick() == 1
+        assert len(recorded_starts) == 2
+        for params in recorded_starts:
+            assert params.get("include_snapshot") is False
+    finally:
+        await db_wake.close()
+        await db_mem.close()
+
+
+@pytest.mark.asyncio
+async def test_member_wake_does_not_block_other_threads_behind_a_slow_wake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    from lamtools_core.sub_agent_supervisor import SubAgentRecord, SubAgentSupervisor
+
+    db = await open_core_app_db(tmp_path / "core.db")
+    store = InMemoryRuntimeStateStore()
+    await store.save(RuntimeState(session_id="thread-slow", run_id="t1", status="completed", metadata={}))
+    await store.save(RuntimeState(session_id="thread-fast", run_id="t2", status="completed", metadata={}))
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "sub_agents.sqlite3"
+    for tid in ("thread-slow", "thread-fast"):
+        owner = SubAgentSupervisor(parent_thread_id=tid, runner=object(), database_path=db_path)
+        owner._write_member_event(
+            SubAgentRecord(
+                parent_thread_id=tid,
+                type="execute",
+                name="worker",
+                model_id="fake-model",
+                reasoning_level="high",
+                status="idle",
+                summary="done",
+                started_at=900.0,
+                completed_at=1000.0,
+                elapsed_ms=1000,
+            ),
+            "member_finished",
+        )
+    context = CoreLiveContext(
+        operations=OperationCatalog(),
+        session_factory=db.session_factory,
+        persistence=db.persistence,
+        runtime_state_store=store,
+        runtime_task_registry=_FakeRegistry(),
+        hub=CoreAppEventHub(),
+    )
+    first_entered = asyncio.Event()
+    first_release = asyncio.Event()
+    second_started = asyncio.Event()
+    started_threads: list[str] = []
+
+    async def _fake_start(*, request_id: Any, params: dict[str, Any], context: Any):
+        del request_id, context
+        tid = params["thread_id"]
+        started_threads.append(tid)
+        if len(started_threads) == 1:
+            first_entered.set()
+            await first_release.wait()
+        else:
+            second_started.set()
+
+        class _Outcome:
+            response: dict[str, Any] = {"result": {}}
+
+        return _Outcome()
+
+    monkeypatch.setattr(supervisor, "handle_turn_start_operation", _fake_start)
+    try:
+        runner = supervisor.MemoryResumeSupervisor(context=context, sub_agent_data_dir=data_dir)
+        tick_task = asyncio.create_task(runner.tick())
+        await asyncio.wait_for(first_entered.wait(), timeout=2.0)
+        # While the first thread is still waiting, the second thread must already wake instead of queueing behind it.
+        await asyncio.wait_for(second_started.wait(), timeout=2.0)
+        first_release.set()
+        assert await asyncio.wait_for(tick_task, timeout=2.0) == 2
+    finally:
+        first_release.set()
+        await db.close()

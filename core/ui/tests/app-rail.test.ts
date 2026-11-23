@@ -27,7 +27,9 @@ describe('AppRail', () => {
 
     const entries = wrapper.findAll('[data-rail-entry]')
     expect(entries.map(entry => entry.attributes('data-rail-entry'))).toEqual([
-      'chat', 'direct', 'superagent', 'arrange', 'library', 'plugins', 'settings', 'account',
+      // user:“去把模型调用台从左竖栏 apprail 中移除”+(竖栏只剩对话与整版界面，调用台已并入设置)。
+      // user:“浏览器/悬浮浏览器从其中删除，已有其它入口”+(两者不再占用竖栏位，顺序只剩整版分区与远程连接)。
+      'chat', 'arrange', 'library', 'plugins', 'settings', 'account',
     ])
     // 仅图标：按钮内没有可见文字，靠 aria-label/title 说明。
     for (const entry of entries) {
@@ -40,6 +42,15 @@ describe('AppRail', () => {
 
     await wrapper.get('[data-rail-entry="arrange"]').trigger('click')
     expect(wrapper.emitted('open')?.[0]).toEqual(['arrange'])
+  })
+
+  // user:“浏览器/悬浮浏览器从其中删除，已有其它入口”+
+  // (两者不再有竖栏按钮；浏览器仍有标签抽屉与 Ctrl+Shift+B，悬浮浏览器仍在分屏抽屉里)。
+  it('no longer spends rail slots on the browser entries', () => {
+    const wrapper = mount(AppRail, { props: { active: 'chat' } })
+
+    expect(wrapper.find('[data-rail-entry="browser"]').exists()).toBe(false)
+    expect(wrapper.find('[data-rail-entry="browser-float"]').exists()).toBe(false)
   })
 
   it('keeps the account entry at the bottom after a spacer', async () => {

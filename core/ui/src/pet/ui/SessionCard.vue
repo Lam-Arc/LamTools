@@ -41,9 +41,11 @@ const props = defineProps<{
   execution?: ExecutionControls | null
 }>()
 
+// user:“把智能模式隐藏掉，从下个版本开始，仅聊天和工作模式”+(桌宠卡片也是选运行模式的
+// 地方，两个选项统一叫聊天/工作；旧名 consider/execute 仍能被归一，只是不再作为标签出现)。
 const modeOptions = computed(() => [
-  { value: 'consider', get label() { return t('思索') } },
-  { value: 'execute', get label() { return t('执行') } },
+  { value: 'chat', get label() { return t('聊天') } },
+  { value: 'work', get label() { return t('工作') } },
 ])
 
 const channel = computed(() => props.ping.host.value?.get(props.card.sessionId) || null)

@@ -13,6 +13,7 @@ import type {
   CoreRuntimeSnapshot,
   CoreAppThreadStatus,
 } from '@/appServer/protocol.ts'
+import { showToast } from '@/composables/useCoreToast.ts'
 import { TransportRpcError } from '@/transport/index.ts'
 import type { CoreSyncChangeNotification, CoreThreadGapNotification } from '@/appServer/client.ts'
 import { CoreRequestAcceptanceUnknownError } from '@/appServer/client.ts'
@@ -23,6 +24,14 @@ import {
   snapshotRevision as sessionSnapshotRevision,
   snapshotSequence,
 } from '@/appServer/sessionState.ts'
+
+/** 后端可靠消息队列的压力报告。 */
+export interface CoreBackpressureNotification {
+  thread_id?: string
+  reason?: string
+  control_queue_depth?: number
+  control_queue_limit?: number
+}
 
 export interface CoreAppServerRuntimeClient {
   capabilities?: Record<string, unknown>
@@ -555,6 +564,16 @@ export function createCoreAppServerRuntimeController<
     }
   }
 
+  function reportBackpressure(report: CoreBackpressureNotification): void {
+    // user:“事件通道压力过高：可靠通道 0/64；已丢弃 400 帧可丢进度；正在自动恢复，无需操作”+(旧后端的报告也须确认可靠消息实际积压，只提示会话更新可能延迟)
+    if (report.reason !== 'control_queue_pressure') {
+      const depth = report.control_queue_depth ?? 0
+      const limit = report.control_queue_limit ?? 0
+      if (limit <= 0 || depth < Math.max(8, Math.floor(limit / 2))) return
+    }
+    showToast('notice', '消息较多，会话更新可能延迟。', 8000)
+  }
+
   function enqueueEvent(event: CoreAppEvent) {
     if (event.method === 'turn/started' && event.client_message_id && event.turn_id) {
       const key = JSON.stringify([event.thread_id, event.turn_id])
@@ -565,6 +584,11 @@ export function createCoreAppServerRuntimeController<
     // triggers a resync from our own last applied sequence.
     if (event.method === 'thread/gap') {
       scheduleGapResync(event as unknown as CoreThreadGapNotification)
+      return
+    }
+    // Pressure reports are control notifications, like thread/gap.
+    if (event.method === 'core/backpressure') {
+      reportBackpressure(event as unknown as CoreBackpressureNotification)
       return
     }
     const eventId = runItemEventId(event)

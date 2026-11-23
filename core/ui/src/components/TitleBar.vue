@@ -1,374 +1,125 @@
 <template>
-  <div v-if="shouldDisplayTitleBar" class="titlebar" data-tauri-drag-region data-ui-id="shell.titlebar">
-    <div class="titlebar-left">
-      <span class="brand" :class="{ 'brand--session': Boolean(props.sessionTitle) }">
-        <strong class="brand-name">Sunday</strong>
-        <!-- user:“小尺寸时（独屏）标题换到“sunday”那里，不占地”+(窄窗口把会话标题
-             放进标题栏，原来的会话标题行不再单独占一行。) -->
-        <strong v-if="props.sessionTitle" class="brand-session-name" :title="props.sessionTitle">{{ props.sessionTitle }}</strong>
-      </span>
-    </div>
-
-    <div class="titlebar-workflow-tabs" data-titlebar-workflow-tabs></div>
-
-    <div class="titlebar-right">
-      <!-- sidebar pin buttons -->
-      <div class="titlebar-sidebar-controls" data-titlebar-sidebar-controls>
-        <button
-          class="pin-btn"
-          :class="{ active: props.leftPinned }"
-          :title="props.leftPinned ? t('取消固定左侧栏') : t('固定左侧栏')"
-          @click="$emit('toggleLeftPinned')"
-        >
-          <svg viewBox="0 0 14 14" class="pin-icon pin-left">
-            <rect x="1" y="2" width="5.5" height="10" rx="2" fill="currentColor" />
-            <rect x="7.5" y="2" width="5.5" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
-          </svg>
-        </button>
-        <button
-          class="pin-btn"
-          :class="{ active: props.rightPinned }"
-          :title="props.rightPinned ? t('取消固定右侧栏') : t('固定右侧栏')"
-          @click="$emit('toggleRightPinned')"
-        >
-          <svg viewBox="0 0 14 14" class="pin-icon pin-right">
-            <rect x="1" y="2" width="5.5" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
-            <rect x="7.5" y="2" width="5.5" height="10" rx="2" fill="currentColor" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- window controls -->
-      <div class="window-controls">
-        <button class="ctrl-btn" :title="t('最小化')" @click="onMinimize">
+  <!-- user:“把标题栏取消，主区自然向上填充，右侧预留出最小化，最大化，关闭的按钮区域”+(只保留右上角系统按钮和一小块窗口拖动区)。 -->
+  <div
+    v-if="visible || $slots.default"
+    class="window-controls"
+    :class="{ 'window-controls--preview': props.inline }"
+    data-window-controls
+    :data-native-window-controls="visible || undefined"
+    data-ui-id="shell.window-controls"
+    @pointerdown="startWindowDragFromBlank"
+  >
+    <!-- user:“不再留拖拽的空位”+(这一簇里不再单独占一段可拖拽空白；拖窗交给标题带的空白区域)。 -->
+    <!-- user:“与最大化、最小化以及关闭并列”+(工作区按钮放在系统窗口按钮之前，和它们共用一行)。 -->
+    <slot />
+    <!-- user:“对当前的标题按钮（最小化/最大化/关闭处使用一个胶囊底包裹…填充底色采用墨黑色/石英白）”+
+         (三枚系统按钮共用一只胶囊底，描边与填充都由令牌给出，深浅主题各自成立)。 -->
+    <template v-if="visible">
+      <div class="window-control-capsule" data-window-control-capsule>
+        <button type="button" class="ctrl-btn window-control-button" data-window-control="minimize" :title="t('最小化')" :aria-label="t('最小化')" @click="onMinimize">
           <svg viewBox="0 0 14 14"><rect x="2" y="6" width="10" height="1.5" rx="0.75" /></svg>
         </button>
         <button
-          ref="maximizeButton"
-          class="ctrl-btn"
-          :class="{ 'native-hover': maximizeNativeHover, 'native-active': maximizeNativeActive }"
+          type="button"
+          class="ctrl-btn window-control-button"
+          data-window-control="maximize"
           :title="t('最大化')"
+          :aria-label="t('最大化')"
           @click="onMaximize"
         >
           <svg viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>
         </button>
-        <button class="ctrl-btn close" :title="t('关闭')" @click="onClose">
+        <button type="button" class="ctrl-btn window-control-button close" data-window-control="close" :title="t('关闭')" :aria-label="t('关闭')" @click="onClose">
           <svg viewBox="0 0 14 14"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
         </button>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { t } from '@/i18n/index.ts'
+// user:“非圆/胶囊区是否可拖拽移动？”+(深灰底这层也算标题带的空白：按住就拖窗，按钮照旧)。 
+import { startWindowDragFromBlank } from '@/composables/useWindowDrag.ts'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { isTauri } from '@tauri-apps/api/core'
+import { computed } from 'vue'
 
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+const props = defineProps<{ showInPreview?: boolean; hideOnMobile?: boolean; inline?: boolean }>()
+const visible = computed(() => !props.hideOnMobile && (isTauri() || props.showInPreview))
 
-const props = defineProps<{
-  leftPinned?: boolean
-  rightPinned?: boolean
-  modeLabel?: string
-  modeTitle?: string
-  canToggleMode?: boolean
-  /** 小窗口（独屏）时显示在“Sunday”位置的当前会话标题。 */
-  sessionTitle?: string
-  showInPreview?: boolean
-  hideOnMobile?: boolean
-}>()
+type WindowAction = 'minimize' | 'toggleMaximize' | 'close'
 
-const emit = defineEmits<{
-  toggleLeftPinned: []
-  toggleRightPinned: []
-  cycleMode: []
-}>()
-
-type TauriInternals = {
-  invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>
-}
-
-const tauriWindow = typeof window === 'undefined'
-  ? null
-  : window as Window & { __TAURI_INTERNALS__?: TauriInternals }
-const isTauri = ref(Boolean(tauriWindow?.__TAURI_INTERNALS__?.invoke))
-const shouldDisplayTitleBar = computed(() => !props.hideOnMobile && (isTauri.value || props.showInPreview === true))
-const maximizeButton = ref<HTMLButtonElement | null>(null)
-const maximizeNativeHover = ref(false)
-const maximizeNativeActive = ref(false)
-let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<any>) | null = null
-let maximizeBoundsFrame: number | null = null
-
-function syncMaximizeButtonBounds(): void {
-  if (!tauriInvoke || !maximizeButton.value) return
-  const bounds = maximizeButton.value.getBoundingClientRect()
-  void tauriInvoke('set_maximize_button_bounds', {
-    x: bounds.x,
-    top: bounds.y,
-    width: bounds.width,
-    height: bounds.height,
-  }).catch(() => undefined)
-}
-
-function scheduleMaximizeButtonBoundsSync(): void {
-  if (maximizeBoundsFrame !== null) cancelAnimationFrame(maximizeBoundsFrame)
-  maximizeBoundsFrame = requestAnimationFrame(() => {
-    maximizeBoundsFrame = null
-    syncMaximizeButtonBounds()
-  })
-}
-
-function handleMaximizeNativeHover(event: Event): void {
-  maximizeNativeHover.value = Boolean((event as CustomEvent<boolean>).detail)
-}
-
-function handleMaximizeNativePress(event: Event): void {
-  maximizeNativeActive.value = Boolean((event as CustomEvent<boolean>).detail)
-}
-
-function syncTitlebarOffset(): void {
-  // user:“把布局规则全部都做成变量”+(标题栏只登记原生高度，
-  //  --titlebar-offset 由 variables.css 统一推导，编辑器布局变量才能覆盖)
-  if (shouldDisplayTitleBar.value) {
-    document.documentElement.style.setProperty('--titlebar-native-height', '36px')
-  } else {
-    document.documentElement.style.removeProperty('--titlebar-native-height')
+// user:“改用官方 window API，不再依赖全局注入”+
+// (三个按钮分别调 getCurrentWindow() 的 minimize / toggleMaximize / close；
+//  非 Tauri 环境（展厅、纯浏览器预览、单测）里 getCurrentWindow() 会抛，这里包一层，
+//  dev 里留一条 error 日志，生产静默，不影响预览与测试)。
+// user:“保留一条日志，但用 console.error”+(前端落盘只收 warn/error，之前用 info 所以一条都看不到)。
+function runWindowAction(action: WindowAction): void {
+  if (props.inline) return
+  try {
+    const win = getCurrentWindow()
+    const pending = action === 'minimize' ? win.minimize() : action === 'toggleMaximize' ? win.toggleMaximize() : win.close()
+    void Promise.resolve(pending).then(
+      () => console.error('[window-ctl]', { command: action, ok: true }),
+      (error: unknown) => console.error('[window-ctl]', { command: action, ok: false, error: String(error) }),
+    )
+  } catch (error) {
+    if (import.meta.env?.DEV) console.error('[window-ctl]', { command: action, ok: false, error: String(error) })
   }
 }
 
-watch(shouldDisplayTitleBar, syncTitlebarOffset)
-
-onMounted(() => {
-  const tauri = tauriWindow?.__TAURI_INTERNALS__
-  if (tauri && tauri.invoke) {
-    isTauri.value = true
-    const invoke = tauri.invoke
-    tauriInvoke = (cmd: string, args?: Record<string, unknown>) => invoke(cmd, args)
-    scheduleMaximizeButtonBoundsSync()
-  }
-  syncTitlebarOffset()
-  window.addEventListener('resize', scheduleMaximizeButtonBoundsSync)
-  window.addEventListener('lamtools:maximize-hover', handleMaximizeNativeHover)
-  window.addEventListener('lamtools:maximize-press', handleMaximizeNativePress)
-})
-
-function onMinimize() { tauriInvoke?.('minimize_window') }
-function onMaximize() { tauriInvoke?.('toggle_maximize_window') }
-function onClose() { tauriInvoke?.('close_window') }
-
-onUnmounted(() => {
-  if (maximizeBoundsFrame !== null) cancelAnimationFrame(maximizeBoundsFrame)
-  document.documentElement.style.removeProperty('--titlebar-native-height')
-  window.removeEventListener('resize', scheduleMaximizeButtonBoundsSync)
-  window.removeEventListener('lamtools:maximize-hover', handleMaximizeNativeHover)
-  window.removeEventListener('lamtools:maximize-press', handleMaximizeNativePress)
-})
+function onMinimize() { runWindowAction('minimize') }
+function onMaximize() { runWindowAction('toggleMaximize') }
+function onClose() { runWindowAction('close') }
 </script>
 
 <style scoped>
-.titlebar {
+/* user:“此四控件与其左侧的可拖拽空白区域，使用深灰色底”+
+   “不再留拖拽的空位，而是非交互区域均可拖拽”+
+   (右上角这一簇 = 标签页抽屉圆底 + 三键胶囊，只有这一簇吃深灰底；
+    颜色走主题注入的令牌，深浅主题都保持深灰)。 */
+.window-controls {
   position: fixed;
-  inset: 0 0 auto 0;
-  z-index: var(--z-toast, 90);
+  inset: 0 0 auto auto;
+  z-index: var(--z-popover);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  height: 36px;
-  padding: 0 8px;
-  background: transparent;
+  gap: var(--window-control-gap);
+  height: var(--window-cluster-height);
+  /* user:“稍微给留一点点白，现在那个圆和左边已经紧贴了，光学中心式留白”+
+   (左右同样留 8px：圆键不再贴边，整簇在深灰底里居中)。 */
+  padding: 0 var(--space-2);
+  /* user:“右上那个组的背景，你考虑过深浅变化吗？”+
+     (底色是主题派生的一档灰；再叠一层对角深浅：上缘掺一点字色、下缘压一档暗，
+      深色主题是“微亮到更深”，浅色主题是“微深到更沉”，不再是整块平涂)。 */
+  background-color: var(--theme-window-chrome-background);
+  background-image: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--theme-main-text) 6%, transparent) 0%,
+    transparent 52%,
+    color-mix(in srgb, #000 18%, transparent) 100%
+  );
+  border-bottom-left-radius: var(--radius-lg);
+  /* 图标色 = 72% 主区文字色，与按钮静默态一致。
+     user:“边再淡一点，（统一）”+(圆键与胶囊共用同一档描边：只用一条变量、比图标淡一档，
+       不再各算各的 alpha——一个 40%、一个 72% 的差就是从这里来的)。 */
+  --window-capsule-border: color-mix(in srgb, var(--theme-main-text) 28%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text) 72%, transparent);
   user-select: none;
 }
 
-.brand {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 76%, transparent);
-  line-height: 22px;   /* match .mode-toggle height → shared vertical center */
-  white-space: nowrap;
-}
-
-.brand-name {
-  color: var(--theme-backdrop-text, #f2efeb);
-  font-size: 13px;
-  font-weight: 680;
-  letter-spacing: .01em;
-}
-
-/* 会话标题默认不占位；窄窗口下顶替 Sunday 品牌名。 */
-.brand-session-name {
-  display: none;
-  min-width: 0;
-  max-width: 42vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--theme-backdrop-text, #f2efeb);
-  font-size: 13px;
-  font-weight: 680;
-  letter-spacing: .01em;
-}
-
-@media (max-width: 820px) {
-  .brand--session .brand-name { display: none; }
-  .brand-session-name { display: inline-block; }
-}
-
-.titlebar-left {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.titlebar-workflow-tabs {
-  position: absolute;
-  top: 0;
-  right: max(
-    calc(var(--titlebar-main-right, 18px) + var(--radius-xl) + var(--space-6)),
-    190px
-  );
-  bottom: 0;
-  left: max(
-    calc(var(--titlebar-main-left, 18px) + var(--radius-xl) + var(--space-6)),
-    190px
-  );
-  min-width: 0;
-  pointer-events: none;
-  transition:
-    left var(--dur-morph) var(--ease-inout),
-    right var(--dur-morph) var(--ease-inout);
-}
-
-/* ── Generic application mode toggle ── */
-.mode-toggle {
-  display: inline-grid;
-  align-items: center;
-  justify-items: start;
-  padding: 0;
-  height: 22px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-  font-family: inherit;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
-}
-
-.mode-toggle:disabled {
-  cursor: default;
-}
-
-.mode-toggle:focus-visible {
-  outline: 2px solid var(--blue, #79bcff);
-  outline-offset: 1px;
-}
-
-.mode-word {
-  grid-area: 1 / 1;
-  white-space: nowrap;
-  line-height: 22px;        /* match .brand → shared baseline */
-  font-weight: 560;
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 58%, transparent);
-}
-
-.titlebar-right {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.titlebar-sidebar-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* ── Pin buttons ── */
-.pin-btn {
-  width: 26px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease;
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 30%, transparent);
-}
-
-.pin-btn:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-hover), transparent);
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
-}
-
-.pin-btn.active {
-  color: var(--green);
-}
-
-.pin-icon {
-  width: 13px;
-  height: 13px;
-}
-
-/* ── Window controls ── */
-.window-controls {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.ctrl-btn {
-  width: 32px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease;
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 42%, transparent);
-}
-
-.ctrl-btn:hover,
-.ctrl-btn.native-hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-hover), transparent);
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 92%, transparent);
-}
-
-.ctrl-btn.native-active {
-  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-active), transparent);
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 92%, transparent);
+.window-controls--preview {
+  position: static;
+  width: fit-content;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-lg);
 }
 
 .ctrl-btn.close:hover {
   background: var(--red);
-  color: var(--theme-backdrop-text, #f2efeb);
+  color: white;
 }
 
-.ctrl-btn svg {
-  width: 13px;
-  height: 13px;
-  fill: currentColor;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .titlebar-workflow-tabs {
-    transition: none;
-  }
-}
-
-@media (max-width: 640px) {
-  .titlebar-sidebar-controls {
-    display: none;
-  }
-}
+.ctrl-btn svg { fill: currentColor; }
 </style>

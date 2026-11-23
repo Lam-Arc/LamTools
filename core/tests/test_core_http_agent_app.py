@@ -491,6 +491,43 @@ def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path, isolated_co
     assert any(p.read_bytes() == b"line one" + bytes([10]) + b"line two" for p in stored)
 
 
+def test_core_agent_http_accepts_browser_multipart_with_cjk_filename(
+    tmp_path: Path,
+    isolated_config_root: Path,
+) -> None:
+    # user:“标注后无法引用”+(灯箱标注出来的图没有磁盘路径，只能按浏览器真实写法
+    # 上传：multipart 头里直接写 UTF-8 中文文件名。httpx 的 files= 会换成 RFC 5987
+    # 编码，测不到这条通道，所以这里手拼原始字节，和 composer/upload.ts 完全一致)。
+    _write_jsonc_config(isolated_config_root)
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+    boundary = "----LamToolsBoundaryProbe"
+    filename = "01-图片-风景-标注.png"
+    png = b"\x89PNG\r\n\x1a\n" + b"annotated-bytes"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: image/png\r\n\r\n"
+    ).encode("utf-8")
+    body = head + png + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    with TestClient(app) as client:
+        uploaded = client.post(
+            "/api/core/sessions/thread-annotated/attachments",
+            content=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+    assert uploaded.status_code == 200, uploaded.text
+    record = uploaded.json()
+    # 合成图必须真的落盘且带绝对路径，输入框才能把它变成引用。
+    assert record["filename"] == filename
+    assert Path(record["path"]).is_file()
+    assert Path(record["path"]).read_bytes() == png
+
+
 def test_core_agent_http_accepts_multiple_attachments_in_one_turn(
     tmp_path: Path,
     monkeypatch,

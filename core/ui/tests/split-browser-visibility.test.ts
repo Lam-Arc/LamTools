@@ -4,7 +4,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import CoreSplitBrowser from '../src/components/CoreSplitBrowser.vue'
 import { browserNative } from '../src/split/native'
 
-vi.mock('../src/split/native', () => ({ browserNative: vi.fn().mockResolvedValue(undefined), hasSplitNative: () => true }))
+vi.mock('../src/split/native', () => ({
+  browserNative: vi.fn().mockResolvedValue(undefined),
+  forgetBrowserTab: vi.fn(),
+  hasSplitNative: () => true,
+  subscribeBrowserEvents: vi.fn(async () => () => undefined),
+  webviewBoundsArgs: (input: { surfaceId: string; contentRect: { x: number; y: number; width: number; height: number }; visible: boolean }) => ({
+    label: input.surfaceId,
+    x: Math.round(input.contentRect.x), y: Math.round(input.contentRect.y),
+    width: Math.max(1, Math.round(input.contentRect.width)), height: Math.max(1, Math.round(input.contentRect.height)),
+    visible: input.visible,
+  }),
+}))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => undefined) }))
 vi.mock('@/helpers/openUrl', () => ({ openExternalUrl: vi.fn() }))
 

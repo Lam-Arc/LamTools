@@ -5,7 +5,7 @@ import { hydrateSnapshot } from '@/appServer/snapshot'
 import type { CoreAppSnapshot } from '@/appServer/protocol'
 import type { CoreMessage, CoreSubAgentRun } from '@/types'
 import type { LamToolsTransport } from '@/transport'
-import type { SplitTab } from './layout'
+import type { SplitTab } from '@/workspace/types'
 // user:“多界面分屏”+(子代理绑定来源聊天，主屏切换后仍读来源记录，绝不匹配新聊天中的同名代理)。
 export function useSplitAgent(props: { tab: SplitTab; visible: boolean; messages: CoreMessage[]; activeSessionId: string; transport: LamToolsTransport }) {
   const cached = shallowRef<CoreSubAgentRun>(), error = ref(''), loading = ref(false)

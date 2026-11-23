@@ -608,8 +608,10 @@ function drawNavigator(): void {
   context.clearRect(0, 0, width, height)
   const color = getComputedStyle(root).color || 'currentcolor'
   const markerUnit = nextLayout.markerUnit
-  context.lineCap = 'round'
-  context.strokeStyle = color
+  // user:“可以从短横线换成圆点”+(标记改成同一列上的实心圆点：选中更大、引导更小，
+  // 透明度沿用原来的远近层级；圆心与上下翻页键对齐在同一条中心线上)。
+  const markerCenterX = markerUnit + (markerUnit * 3) / 2
+  context.fillStyle = color
 
   const active = selectedPageIndex.value
   nextLayout.positions.forEach((position, index) => {
@@ -619,11 +621,13 @@ function drawNavigator(): void {
     const guide = isGuideOutlineItem(outline.value[nextLayout.pageStart + index])
     const scale = guide ? 0.62 : 1
     context.globalAlpha = guide ? style.opacity * 0.78 : style.opacity
-    context.lineWidth = Math.max(1, markerUnit * (guide ? 0.55 : 0.75))
+    const radius = Math.max(
+      1.5,
+      Math.min(markerUnit * 1.5, (style.length * scale) / 2 + markerUnit * 0.2),
+    )
     context.beginPath()
-    context.moveTo(markerUnit, position)
-    context.lineTo(Math.min(width - markerUnit, markerUnit + style.length * scale), position)
-    context.stroke()
+    context.arc(markerCenterX, position, radius, 0, Math.PI * 2)
+    context.fill()
   })
   context.globalAlpha = 1
 }
@@ -868,7 +872,10 @@ defineExpose({ updateScroll, refreshOutline })
 .chat-outline-navigator {
   --text: var(--theme-main-text);
   position: absolute;
-  left: var(--space-4);
+  /* user:“导航条应该独立，且内容为其让位，可以紧凑，但是不能重叠”+
+     (导航条不再贴着正文左缘：它落在正文左侧留白里，右缘与文字之间固定留 16px，
+       最左也至少离窗口内缘 4px；留白不够时由 --outline-rail-lane 把正文整体推出去)。 */
+  left: max(var(--space-1), calc(var(--main-x-padding) - var(--space-5) - var(--space-4)));
   /* user:“把导航栏大小收缩到响应式大小 根据需要”+(整条栏收窄到控件所需宽度，高度由脚本按内容算) */
   width: var(--space-5);
   min-height: 0;

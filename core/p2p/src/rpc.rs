@@ -48,6 +48,18 @@ pub struct CoreRpc {
 impl CoreRpc {
     /// Connects to `ws://127.0.0.1:{port}/app-server` and completes the handshake.
     pub async fn connect(port: u16, token: &str) -> Result<Self> {
+        Self::connect_from(port, token, 0, None).await
+    }
+
+    /// user:“事件泵重连不带游标”+(这条桥也会在 Core 重启后重建。重建时没有位点，Core
+    /// 只从「现在」开始推送，断掉那几秒的 journal 事件就补不回来；宿主把上一次看到的
+    /// `seq` 与会话交回来，Core 就会从那里续订)。
+    pub async fn connect_from(
+        port: u16,
+        token: &str,
+        last_seen_seq: u64,
+        thread: Option<&str>,
+    ) -> Result<Self> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
         let url = format!("ws://127.0.0.1:{port}/api/core/app-server");
@@ -71,7 +83,7 @@ impl CoreRpc {
                     "jsonrpc": "2.0",
                     "id": 0,
                     "method": "initialize",
-                    "params": { "clientInfo": { "name": "sunday-p2p", "version": "0.1.0" } },
+                    "params": crate::events::initialize_params(last_seen_seq, thread),
                 })
                 .to_string()
                 .into(),

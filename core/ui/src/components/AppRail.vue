@@ -12,8 +12,11 @@
       @click="emit('open', item.id)"
       @contextmenu.prevent="openSplitMenu($event, item.id)"
     >
-      <component :is="item.icon" :size="20" :stroke-width="item.strokeWidth ?? 1.8" aria-hidden="true" />
+      <component :is="item.icon" :size="18" :stroke-width="item.strokeWidth ?? 1.8" aria-hidden="true" />
     </button>
+    <!-- user:“浏览器/悬浮浏览器从其中删除，已有其它入口”+
+         (浏览器仍有标签抽屉与快捷键，悬浮浏览器仍在分屏抽屉里；竖栏不再重复摆这两枚，
+          把位置留给真正的整版分区)。 -->
     <!-- user:“左竖栏多余的插件提供的按钮折叠进一个···，悬浮时再右侧弹一个透明抽屉”
          +(插件导航按钮一个都不常驻：竖栏只保留“···”，悬浮/键盘聚焦时从竖栏右侧弹出低透玻璃抽屉
          列出全部插件页面；条目仍可左键打开、右键选择分屏)。 -->
@@ -30,7 +33,7 @@
         data-rail-plugin-more
         @click="openMoreDrawer"
       >
-        <MoreHorizontal :size="20" :stroke-width="1.8" aria-hidden="true" />
+        <MoreHorizontal :size="18" :stroke-width="1.8" aria-hidden="true" />
       </button>
       <div
         v-if="moreOpen"
@@ -74,22 +77,10 @@
     >
       <component
         :is="updateAction === 'install' ? PackageCheck : Download"
-        :size="19"
+        :size="18"
         :stroke-width="1.9"
         aria-hidden="true"
       />
-    </button>
-    <!-- user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
-         (「?」常驻在竖栏底部：忘了怎么用、想重看一遍，找它就是，不必翻设置)。 -->
-    <button
-      class="app-rail__button"
-      type="button"
-      :aria-label="t('新手引导')"
-      :title="t('新手引导')"
-      data-rail-guide
-      @click="emit('guide')"
-    >
-      <CircleHelp :size="20" :stroke-width="1.8" aria-hidden="true" />
     </button>
     <button
       class="app-rail__button"
@@ -101,7 +92,7 @@
       @click="emit('open', 'account')"
       @contextmenu.prevent="openSplitMenu($event, 'account')"
     >
-      <MonitorSmartphone :size="20" :stroke-width="1.8" aria-hidden="true" />
+      <MonitorSmartphone :size="18" :stroke-width="1.8" aria-hidden="true" />
     </button>
   </nav>
 </template>
@@ -116,6 +107,10 @@ import { t } from '@/i18n/index.ts'
  * 设置），底部远程连接，上方是「有新版本」时的更新入口。记忆不再单开入口
  * ——它在资料库里面。
  *
+ * user:“其余项做成左侧栏，与右侧栏保持样式同套系”+
+ * (底色、圆角、静默/悬停/选中层级与右栏共用同一组令牌；图标比右栏大半档，
+ *  因为这里是主导航。浏览器与悬浮浏览器不再占用竖栏位——它们已有别的入口)。
+ *
  * 图标只用最简形状：这里只有 20px，多一个细节就糊一层。并且同一个入口用
  * 同一个图形——「插件」的插头与搜索页一致。点击分区时整个界面切走（会话栏退场），由宿主决定具体
  * 的切换与折叠语义；这里只负责渲染与上报。
@@ -124,10 +119,10 @@ import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { contributionState } from '@/plugins/contributions'
 import type { PluginPageEntry } from '@/plugins/pages'
 import { openContextMenu } from '@/components/context-menu/context-menu'
-import { Bot, CalendarClock, CircleHelp, Download, House, MonitorSmartphone, MoreHorizontal, Network, PackageCheck, Settings, Sparkles } from 'lucide-vue-next'
+import { Bot, CalendarClock, Download, House, MonitorSmartphone, MoreHorizontal, Network, PackageCheck, Settings } from 'lucide-vue-next'
 import { BookOne, Receive } from '@icon-park/vue-next'
 
-export type AppRailView = 'chat' | 'direct' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
+export type AppRailView = 'chat' | 'arrange' | 'library' | 'plugins' | 'settings' | 'account'
 
 const props = defineProps<{
   /** 当前所处的整界面分区；'chat' 表示在聊天界面。 */
@@ -146,8 +141,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   open: [view: AppRailView]
   update: []
-  /** 打开新手引导：竖栏底部那枚「?」的唯一职责。 */
-  guide: []
   'open-split': [view: AppRailView, edge: 'right' | 'bottom']
   'open-plugin-page': [page: PluginPageEntry]
   'split-plugin-page': [page: PluginPageEntry, edge: 'right' | 'bottom']
@@ -252,9 +245,8 @@ interface RailEntry {
 
 const topItems: RailEntry[] = [
   { id: 'chat', get label() { return t("聊天") }, icon: House },
-  // user:“实现，先读现在的模型配置与管理的代码，尽可能复用，如果代码与需求不匹配，咋考虑新增功能”
-  // +(调用台是绕过对话直接问模型的地方，紧挨聊天，避免用户去设置里找入口。)
-  { id: 'direct', get label() { return t("调用台") }, icon: Sparkles },
+  // user:“去把模型调用台从左竖栏 apprail 中移除，放进设置-模型与供应商里面作为一个子功能”+
+  // (竖栏只留对话与整版界面；调用台属于模型配置的延伸，不再在这里单开一格。)
 
   // 定时任务用 lucide 的 calendar-clock：IconPark 的时间家族里没有「日历+时钟」这一枚。
   { id: 'arrange', get label() { return t("定时任务") }, icon: CalendarClock },

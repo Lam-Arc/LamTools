@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import CoreSplitBrowser, { type SplitBrowserServices } from '@/components/CoreSplitBrowser.vue'
-import type { SplitTab } from '@/split/layout'
+import type { BrowserNativeEvent } from '@/split/native'
+import type { SplitTab } from '@/workspace/types'
 import '@/styles/split-workspace.css'
 
 // user:“交互测试”+(所有浏览器动作只记录在内存，绝不打开网页或系统浏览器)。
 const tab = reactive<SplitTab>({ id: 'gallery-browser', kind: 'browser', resource: '', title: '浏览器' })
 const fail = ref(false), navigation = ref(''), external = ref('')
-let callback: ((event: { id: string; url: string; loading: boolean }) => void) | undefined
+let callback: ((event: BrowserNativeEvent) => void) | undefined
 const services: SplitBrowserServices = {
   available: () => true,
   async call(id, action, options) {

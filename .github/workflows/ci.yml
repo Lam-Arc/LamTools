@@ -213,3 +213,26 @@ jobs:
           test -x artifacts/linux-x64/sidecar/SundayCore
           test -n "$(find core/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name 'Sunday_*_amd64.AppImage' -print -quit)"
           test -n "$(find core/desktop/src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name 'Sunday_*_amd64.deb' -print -quit)"
+
+  browser-assert:
+    # user:“browser_security_assert 的 CI 可跑性…拆成不依赖 bin 的独立测试 crate，并接线到 CI”+
+    # (这些断言只读源码与配置文本，不依赖 tauri/webview/可执行文件：CI 里不构建 Sunday.exe，
+    #  本机开着 dev/安装版时也不会再撞 os error 5。同时兜住「新增 browser 标签页能力」：
+    #  src/browser 的命令表、main.rs 的注册表、agent 桥白名单互相对账，漏一处就红。)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core/desktop/browser-assert -> target
+
+      - name: Run browser security assertions
+        run: cargo test --manifest-path core/desktop/browser-assert/Cargo.toml

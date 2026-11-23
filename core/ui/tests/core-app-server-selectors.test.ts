@@ -1005,3 +1005,75 @@ describe('cancelled turn explanation collapse', () => {
     expect(selectLatestTurnStatus(snapshot)).toBe('completed')
   })
 })
+
+describe('paged outer-less turn chronology', () => {
+  it('keeps older turns without outer headers ahead of newer turns rather than appending below the latest message', () => {
+    // user:“查一下 constant 内会话为什么出现了：部分消息在最新消息的下方”
+    // +(缺少外层开场行的历史回合出现在更早的 seq 时，不得被吞进兜底循环甩到最新消息下方)
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-paged-order',
+      snapshot_seq: 110,
+      status: 'completed',
+      items: {
+        'turn-new:user': {
+          item_id: 'turn-new:user',
+          turn_id: 'turn-new',
+          type: 'userMessage',
+          status: 'completed',
+          seq: 100,
+          content: [{ type: 'text', text: '最新一条问题' }],
+        },
+      },
+      item_order: ['turn-new:user'],
+      turns: {
+        'turn-old': { turn_id: 'turn-old', status: 'completed', items: ['old-msg'] },
+        'turn-mid': { turn_id: 'turn-mid', status: 'completed', items: ['mid-msg'] },
+        'turn-new': { turn_id: 'turn-new', status: 'completed', items: ['turn-new:user', 'new-msg'] },
+      },
+      core: {
+        thread_id: 'thread-paged-order',
+        snapshot_seq: 110,
+        status: 'completed',
+        item_order: ['old-msg', 'mid-msg', 'new-msg'],
+        turns: {
+          'turn-old': { turn_id: 'turn-old', status: 'completed', items: ['old-msg'] },
+          'turn-mid': { turn_id: 'turn-mid', status: 'completed', items: ['mid-msg'] },
+          'turn-new': { turn_id: 'turn-new', status: 'completed', items: ['new-msg'] },
+        },
+        items: {
+          'old-msg': {
+            item_id: 'old-msg',
+            turn_id: 'turn-old',
+            kind: 'message',
+            status: 'completed',
+            seq: 10,
+            content: '较早的系统通知回答',
+            payload: { type: 'agentMessage', content: '较早的系统通知回答', final_response: true },
+          },
+          'mid-msg': {
+            item_id: 'mid-msg',
+            turn_id: 'turn-mid',
+            kind: 'message',
+            status: 'completed',
+            seq: 50,
+            content: '中间的系统通知回答',
+            payload: { type: 'agentMessage', content: '中间的系统通知回答', final_response: true },
+          },
+          'new-msg': {
+            item_id: 'new-msg',
+            turn_id: 'turn-new',
+            kind: 'message',
+            status: 'completed',
+            seq: 105,
+            content: '最新一条回答',
+            payload: { type: 'agentMessage', content: '最新一条回答', final_response: true },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectChatMessages(snapshot)
+    expect(messages.map(m => m.turnId)).toEqual(['turn-old', 'turn-mid', 'turn-new', 'turn-new'])
+    expect(messages.at(-1)?.content).toBe('最新一条回答')
+  })
+})

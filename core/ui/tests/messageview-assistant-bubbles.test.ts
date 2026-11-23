@@ -59,19 +59,19 @@ describe('MessageView assistant display preferences', () => {
     expect(wrapper.find('.assistant-label').text()).toBe('Sunday')
   })
 
-  it('renders boxed bubbles on the shared low-transmission glass surface', () => {
-    // user:“气泡连上低透玻璃样式”+(盒子气泡复用 .optical-glass 底材，
-    // 不再自己写一套半透明底色；未开气泡的正文不套玻璃)
+  it('renders boxed bubbles on the shared message surface', () => {
+    // user:“全部统一以这个为示例 可复用化，可调参数为胶囊/卡片,填充颜色,是否玻璃”
+    // +(盒子气泡与用户气泡走同一份材质；未开气泡的正文不套材质)
     setAssistantDisplayPreferences({ bubblesEnabled: true })
     const boxed = mountMessage(message('一段正文。'))
     const bubble = boxed.get('.assistant-bubble')
-    expect(bubble.classes()).toContain('optical-glass')
-    expect(bubble.classes()).toContain('optical-glass--low-trans')
+    expect(bubble.classes()).toContain('message-surface')
+    expect(bubble.classes()).toContain('message-surface--glass')
     boxed.unmount()
 
     setAssistantDisplayPreferences({ bubblesEnabled: false, splitEnabled: true })
     const plain = mountMessage(message('第一段。\n\n## 小节\n\n第二段。'))
-    expect(plain.get('.assistant-bubble').classes()).not.toContain('optical-glass')
+    expect(plain.get('.assistant-bubble').classes()).not.toContain('message-surface')
     plain.unmount()
   })
 

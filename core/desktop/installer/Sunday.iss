@@ -161,6 +161,9 @@ Source: "sunday-release-files.ps1"; Flags: dontcopy
 ; 安装时只做加载，不在用户机器上调用 csc。
 Source: "{#RestartManagerDll}"; Flags: dontcopy
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; user:“sunday-p2p.exe 纳入正式构建与安装”+(远程连接跑在它里面；缺了它，装好的用户点
+; 「生成配对二维码」只会得到一句“找不到传输程序”。)
+Source: "{#SourceDir}\sunday-p2p.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\sunday-backend\*"; DestDir: "{app}\sunday-backend"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; user:“在这一次的 setup 里头再打一个清理脚本”+(随安装包分发；安装后位于应用
 ; 目录，默认清理本目录 .lam\core.db，停进程后剥历史内联图片并压缩同步日志)。

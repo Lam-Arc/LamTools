@@ -33,8 +33,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_DB = Path(r"E:\setuptest\constant\.lam\core.db")
-DEFAULT_BACKUP_DIR = Path(r"E:\setuptest\constant\.lam\backups")
+# user:“就把以后的 constant 装到 c 盘” -> “sunday/ 现在就迁吧”+(Constant 常驻实例已迁移至 C:\sunday\constant)
+DEFAULT_DB = Path(r"C:\sunday\constant\.lam\core.db")
+DEFAULT_BACKUP_DIR = Path(r"C:\sunday\constant\.lam\backups")
 PATH_RE = re.compile(r"图片文件:\s*(.+?)[（(]")
 DATA_URL_RE = re.compile(r"^data:([^;,]+)[;,]?")
 

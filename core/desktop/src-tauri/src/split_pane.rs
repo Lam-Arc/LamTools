@@ -1,9 +1,14 @@
-// user:“内置浏览器、内置文本编辑器、内置文件树”+(桌面原生宿主独立实现，网页不依赖 iframe，文件写入检查外部修改)。
-use serde::{Deserialize, Serialize};
+// user:“内置浏览器、内置文本编辑器、内置文件树”+(这一层只剩文件能力：文件树与文本读写；浏览器宿主已迁到 browser/ 模块，不做两套)。
+use serde::Serialize;
 use std::{fs, io::Write, path::{Path, PathBuf}};
-use tauri::{Emitter, Manager};
 
 const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
+
+// user:“require_main 提升为公共函数”+(浏览器与文件能力共用同一条主窗口校验，不在两个文件里各写一份)。
+fn require_main(view: &tauri::Webview) -> Result<(), String> {
+    crate::browser::url_policy::require_main(view).map_err(|error| error.message)
+}
+
 fn scoped_root(root: &str) -> Result<PathBuf, String> {
     #[cfg(windows)]
     let root = root.replace('/', "\\");
@@ -52,7 +57,6 @@ fn write_text(path: &Path, content: &str, original: Option<&str>) -> Result<(), 
     if result.is_err() { let _ = fs::remove_file(&tmp); }
     result
 }
-fn require_main(view: &tauri::Webview) -> Result<(), String> { if view.label() == "main" { Ok(()) } else { Err("此操作仅供主工作区使用".into()) } }
 #[derive(Serialize)]
 pub struct FileEntry { name: String, path: String, directory: bool }
 #[tauri::command]
@@ -82,50 +86,6 @@ pub async fn split_file_list(webview: tauri::Webview, root: String, path: String
         entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
         Ok(entries)
     }).await.map_err(|e| e.to_string())?
-}
-
-#[derive(Deserialize)]
-pub struct BrowserRequest { id: String, action: String, url: Option<String>, x: Option<f64>, y: Option<f64>, width: Option<f64>, height: Option<f64>, visible: Option<bool> }
-#[derive(Clone, Serialize)]
-struct BrowserEvent { id: String, url: String, loading: bool }
-fn web_url(raw: &str) -> Result<url::Url, String> {
-    let url = url::Url::parse(raw).map_err(|_| "请输入完整网页地址")?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() { return Err("仅支持 HTTP 或 HTTPS 网页".into()); }
-    Ok(url)
-}
-#[tauri::command]
-pub async fn split_browser(app: tauri::AppHandle, webview: tauri::Webview, request: BrowserRequest) -> Result<(), String> {
-    require_main(&webview)?;
-    if request.id.len() > 100 || !request.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { return Err("无效的浏览器标签".into()); }
-    let label = format!("split-browser-{}", request.id);
-    let existing = app.get_webview(&label);
-    if request.action == "close" { if let Some(view) = existing { view.close().map_err(|e| e.to_string())?; } return Ok(()); }
-    if request.action == "create" && existing.is_none() {
-        let url = web_url(request.url.as_deref().unwrap_or("https://example.com"))?;
-        let id = request.id.clone(); let events = app.clone();
-        let builder = tauri::webview::WebviewBuilder::new(label, tauri::WebviewUrl::External(url))
-            .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
-            .on_page_load(move |view, payload| {
-                let _ = events.emit_to("main", "lamtools://split-browser", BrowserEvent { id: id.clone(), url: view.url().map(|u| u.to_string()).unwrap_or_default(), loading: matches!(payload.event(), tauri::webview::PageLoadEvent::Started) });
-            });
-        webview.window().add_child(builder, tauri::LogicalPosition::new(request.x.unwrap_or(0.), request.y.unwrap_or(0.)), tauri::LogicalSize::new(request.width.unwrap_or(320.).max(1.), request.height.unwrap_or(240.).max(1.))).map_err(|e| e.to_string())?;
-    }
-    let view = app.get_webview(&format!("split-browser-{}", request.id)).ok_or("网页尚未打开")?;
-    match request.action.as_str() {
-        "create" | "bounds" => {
-            let values = [request.x.unwrap_or(0.), request.y.unwrap_or(0.), request.width.unwrap_or(1.), request.height.unwrap_or(1.)];
-            if !values.iter().all(|v| v.is_finite() && *v >= 0.) { return Err("无效的网页区域".into()); }
-            view.set_position(tauri::LogicalPosition::new(values[0], values[1])).map_err(|e| e.to_string())?;
-            view.set_size(tauri::LogicalSize::new(values[2].max(1.), values[3].max(1.))).map_err(|e| e.to_string())?;
-            if request.visible.unwrap_or(true) { view.show() } else { view.hide() }.map_err(|e| e.to_string())?;
-        }
-        "navigate" => view.navigate(web_url(request.url.as_deref().unwrap_or_default())?).map_err(|e| e.to_string())?,
-        "back" => view.eval("history.back()").map_err(|e| e.to_string())?,
-        "forward" => view.eval("history.forward()").map_err(|e| e.to_string())?,
-        "reload" => view.reload().map_err(|e| e.to_string())?,
-        _ => return Err("未知的浏览器操作".into()),
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -163,10 +123,5 @@ mod tests {
         write_text(&path, "second", Some("first")).unwrap();
         assert_eq!(read_text(&path).unwrap(), "second");
         fs::remove_file(path).unwrap(); fs::remove_dir(base).unwrap();
-    }
-    #[test]
-    fn split_pane_browser_rejects_non_web_navigation() {
-        for raw in ["file:///C:/Windows", "javascript:alert(1)", "data:text/html,x", "https://"] { assert!(web_url(raw).is_err()); }
-        assert!(web_url("https://example.com/docs").is_ok());
     }
 }

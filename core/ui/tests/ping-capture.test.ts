@@ -268,8 +268,14 @@ describe('前端：退出、发送与旧的整屏标注路径', () => {
 
   it('标注工具齐全且不使用阻塞式 prompt（会停掉心跳）', () => {
     const editor = readFileSync(resolve(uiRoot, 'pet/ui/CaptureEditor.vue'), 'utf8')
-    for (const tool of ['question', 'exclamation', 'arrow', 'text', 'pen', 'region']) {
-      expect(editor).toContain(`'${tool}'`)
+    // user:“可以复用ping的框选那里的标注功能与样式，将这一个功能抽出来共用”+
+    // (工具集搬到了共用模块：宿主只要接上共用工具条，工具本身在 annotation/ 里齐全)。
+    const toolbar = readFileSync(resolve(uiRoot, 'annotation/AnnotationToolbar.vue'), 'utf8')
+    const model = readFileSync(resolve(uiRoot, 'annotation/model.ts'), 'utf8')
+    expect(editor).toContain('AnnotationToolbar')
+    expect(editor).toContain("'region'")
+    for (const tool of ['question', 'exclamation', 'arrow', 'text', 'pen']) {
+      expect(toolbar + model).toContain(`'${tool}'`)
     }
     expect(editor).toContain('undo')
     expect(editor).toContain('redo')

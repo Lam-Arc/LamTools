@@ -7,8 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
+from lamtools_core.plugin_system.session_visibility import session_visibility_for_batch
 from lamtools_core.session import MessageRecord, SessionRecord
 
 from .core_db import (
@@ -19,9 +20,12 @@ from .core_db import (
     CoreCheckpointV2SessionMessages,
     CoreCheckpointV2SessionHistory,
     CoreGoal, CoreHandoffContext, CoreHistoryEntry, CoreRestoreOperation, CoreRuntimeSession,
-    CoreProject, CoreThreadSnapshot, CoreThreadSnapshotItem, CoreWorkspaceManifest,
+    CoreProject, CoreThreadSnapshot, CoreThreadSnapshotArtifact, CoreThreadSnapshotItem,
+    CoreThreadSnapshotTurn, CoreWorkspaceManifest,
 )
+from .persistence_host import RevisionConflictError
 from .queue_state import effective_thread_status
+from .rust_db import RustDbError
 from .session_autotitle import is_default_title
 from .snapshot_store import CoreAppSnapshotProjector, prune_orphan_turns, slim_registry_inline_images
 from .runtime_permissions import (
@@ -29,6 +33,26 @@ from .runtime_permissions import (
     session_runtime_preferences,
     with_session_runtime_preferences,
 )
+
+
+def _translate_rust_session_error(
+    exc: RustDbError, *, session_id: str, expected_revision: int | None
+) -> None:
+    if exc.code == "conflict":
+        import json as _json
+
+        try:
+            info = _json.loads(str(exc))
+        except ValueError:
+            info = {}
+        raise RevisionConflictError(
+            thread_id=str(info.get("thread_id") or session_id),
+            expected_revision=int(info.get("expected_revision") or (expected_revision or 0)),
+            current_revision=int(info.get("current_revision") or 0),
+        ) from exc
+    if exc.code == "invalid":
+        raise ValueError(str(exc)) from exc
+    raise exc
 
 
 class CoreDbSessionStore:
@@ -117,6 +141,37 @@ class CoreDbSessionStore:
         session.metadata = with_session_runtime_preferences(session.metadata)
 
         change_ids: list[str] = []
+        rust_db = getattr(db, "rust_db", None)
+        if rust_db is not None and rust_db.is_active:
+            try:
+                res = await rust_db.call(
+                    "session_create",
+                    {
+                        "session_id": session.id,
+                        "member_id": session.member_id,
+                        "title": session.title,
+                        "status": session.status,
+                        "metadata": dict(session.metadata),
+                        "created_at_iso": session.created_at.isoformat(),
+                        "updated_at_str": session.updated_at.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        "emit_sync": self._sync_journal is not None,
+                        "workspace_id": str(getattr(self._sync_journal, "workspace_id", "") or "")
+                        if self._sync_journal is not None
+                        else "",
+                    },
+                )
+            except RustDbError as exc:
+                if exc.code == "invalid":
+                    raise ValueError(str(exc)) from exc
+                raise
+            change_ids = list((res or {}).get("change_ids") or [])
+            py_cache = getattr(db.snapshot_store, "_metadata_cache", None)
+            if isinstance(py_cache, dict):
+                py_cache.pop(session.id, None)
+            self._remember_runtime_preferences(session)
+            await self._publish_sync_changes(change_ids)
+            return session
 
         async def write(connection):
             change_ids.clear()
@@ -145,6 +200,8 @@ class CoreDbSessionStore:
             await connection.flush()
 
         await db.persistence.write(write)
+        if getattr(db, "rust_db", None) is not None:
+            db.rust_db.invalidate_thread(session.id)
         self._remember_runtime_preferences(session)
         await self._publish_sync_changes(change_ids)
         return session
@@ -165,6 +222,12 @@ class CoreDbSessionStore:
         if not self._default_visibility:
             return (await self.get(session_id)) is not None
         db = self._db_provider()
+        rust_db = getattr(db, "rust_db", None)
+        if rust_db is not None and rust_db.is_active:
+            meta = await rust_db.call("session_exists_meta", {"thread_id": session_id})
+            if not meta or not meta.get("exists"):
+                return False
+            return self._is_visible(session_id, {"owner_plugin": str(meta.get("owner_plugin") or "")})
         model = CoreThreadSnapshot
         async with db.session_factory() as connection:
             result = await connection.execute(
@@ -226,26 +289,58 @@ class CoreDbSessionStore:
         return result, len(rows) > scan_limit
 
     async def list(self, member_id: str | None = None) -> list[SessionRecord]:
+        # user:“优化”+(一次会话列表刷新共用同一份插件可见性判断)。
+        is_visible = session_visibility_for_batch(self._session_visible)
         db = self._db_provider()
-        async with db.session_factory() as connection:
-            rows = (
-                await connection.execute(
-                    select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc())
+        rust_db = getattr(db, "rust_db", None)
+        if rust_db is not None and rust_db.is_active:
+            # user:“加载/切换/多会话多 agent 同时读写”+(会话列表仅从 Rust 缓存读取轻量摘要，避免把整库 snapshot_json 拖进 Python)。
+            summaries = await rust_db.call("list_session_summaries")
+            records = []
+            for item in summaries:
+                tid = str(item.get("id") or "")
+                meta = dict(item.get("metadata") or {})
+                if not is_visible(tid, meta):
+                    continue
+                updated_at = _datetime(item.get("updated_at"), fallback=datetime.now())
+                created_at = _datetime(item.get("created_at"), fallback=updated_at)
+                records.append(
+                    SessionRecord(
+                        id=tid,
+                        member_id=str(item.get("member_id") or "core"),
+                        title=str(item.get("title") or tid),
+                        status=str(item.get("status") or "idle"),
+                        metadata=meta,
+                        created_at=created_at,
+                        updated_at=updated_at,
+                    )
                 )
-            ).scalars().all()
-        records = [
-            session_record_from_snapshot(row)
-            for row in rows
-            if self._row_is_visible(row)
-        ]
+        else:
+            async with db.session_factory() as connection:
+                rows = (
+                    await connection.execute(
+                        select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc())
+                    )
+                ).scalars().all()
+            records = [
+                session_record_from_snapshot(row)
+                for row in rows
+                if is_visible(str(row.thread_id), _session_metadata(row.snapshot_json))
+            ]
         legacy_fork_records = _inherit_legacy_fork_project_metadata(records)
         if legacy_fork_records:
             await _persist_legacy_fork_project_metadata(db, *legacy_fork_records)
+            if rust_db is not None and rust_db.is_active:
+                for rec in legacy_fork_records:
+                    rust_db.invalidate_thread(rec.id)
         legacy_records = [record for record in records if "runtime_preferences" not in record.metadata]
         for record in legacy_records:
             record.metadata = with_session_runtime_preferences(record.metadata)
         if legacy_records:
             await _persist_legacy_runtime_preferences(db, *legacy_records)
+            if rust_db is not None and rust_db.is_active:
+                for rec in legacy_records:
+                    rust_db.invalidate_thread(rec.id)
         for record in records:
             self._remember_runtime_preferences(record)
         return [record for record in records if member_id is None or record.member_id == member_id]
@@ -257,6 +352,40 @@ class CoreDbSessionStore:
         session.updated_at = datetime.now()
 
         change_ids: list[str] = []
+        rust_db = getattr(db, "rust_db", None)
+        if rust_db is not None and rust_db.is_active and self._default_visibility:
+            try:
+                res = await rust_db.call(
+                    "session_update",
+                    {
+                        "session_id": session.id,
+                        "member_id": session.member_id,
+                        "title": session.title,
+                        "status": session.status,
+                        "metadata": dict(session.metadata),
+                        "created_at_iso": session.created_at.isoformat(),
+                        "expected_revision": expected_revision,
+                        "now_str": session.updated_at.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        "emit_sync": self._sync_journal is not None,
+                        "workspace_id": str(getattr(self._sync_journal, "workspace_id", "") or "")
+                        if self._sync_journal is not None
+                        else "",
+                    },
+                )
+            except RustDbError as exc:
+                _translate_rust_session_error(
+                    exc, session_id=session.id, expected_revision=expected_revision
+                )
+            if not (res or {}).get("found"):
+                raise KeyError(session.id)
+            if isinstance(res.get("metadata"), dict):
+                session.metadata = dict(res["metadata"])
+            py_cache = getattr(db.snapshot_store, "_metadata_cache", None)
+            if isinstance(py_cache, dict):
+                py_cache.pop(session.id, None)
+            self._remember_runtime_preferences(session)
+            await self._publish_sync_changes(list((res or {}).get("change_ids") or []))
+            return session
 
         async def write(connection):
             change_ids.clear()
@@ -292,6 +421,8 @@ class CoreDbSessionStore:
             await connection.flush()
 
         await db.persistence.write(write)
+        if getattr(db, "rust_db", None) is not None:
+            db.rust_db.invalidate_thread(session.id)
         self._remember_runtime_preferences(session)
         await self._publish_sync_changes(change_ids)
         return session
@@ -308,6 +439,49 @@ class CoreDbSessionStore:
     ) -> SessionRecord | None:
         db = self._db_provider()
         change_ids: list[str] = []
+        rust_db = getattr(db, "rust_db", None)
+        if rust_db is not None and rust_db.is_active and self._default_visibility:
+            now_dt = datetime.now()
+            try:
+                res = await rust_db.call(
+                    "session_patch",
+                    {
+                        "session_id": session_id,
+                        "title": title,
+                        "status": status,
+                        "metadata": dict(metadata) if metadata is not None else None,
+                        "only_if_title_default": bool(only_if_title_default),
+                        "expected_revision": expected_revision,
+                        "now_str": now_dt.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        "emit_sync": self._sync_journal is not None,
+                        "workspace_id": str(getattr(self._sync_journal, "workspace_id", "") or "")
+                        if self._sync_journal is not None
+                        else "",
+                    },
+                )
+            except RustDbError as exc:
+                _translate_rust_session_error(
+                    exc, session_id=session_id, expected_revision=expected_revision
+                )
+            if not (res or {}).get("updated") or not isinstance((res or {}).get("record"), dict):
+                await self._publish_sync_changes(list((res or {}).get("change_ids") or []))
+                return None
+            rec = res["record"]
+            patched = SessionRecord(
+                id=str(rec.get("id") or session_id),
+                member_id=str(rec.get("member_id") or "core"),
+                title=str(rec.get("title") or session_id),
+                status=str(rec.get("status") or "idle"),
+                metadata=dict(rec.get("metadata") or {}),
+                created_at=_datetime(rec.get("created_at"), fallback=now_dt),
+                updated_at=_datetime(rec.get("updated_at"), fallback=now_dt),
+            )
+            py_cache = getattr(db.snapshot_store, "_metadata_cache", None)
+            if isinstance(py_cache, dict):
+                py_cache.pop(session_id, None)
+            self._remember_runtime_preferences(patched)
+            await self._publish_sync_changes(list((res or {}).get("change_ids") or []))
+            return patched
 
         async def write(connection):
             change_ids.clear()
@@ -361,6 +535,8 @@ class CoreDbSessionStore:
 
         result = await db.persistence.write(write)
         if result is not None:
+            if getattr(db, "rust_db", None) is not None:
+                db.rust_db.invalidate_thread(session_id)
             self._remember_runtime_preferences(result)
         await self._publish_sync_changes(change_ids)
         return result
@@ -368,6 +544,41 @@ class CoreDbSessionStore:
     async def delete(self, session_id: str, *, expected_revision: int | None = None) -> bool:
         db = self._db_provider()
         change_ids: list[str] = []
+        rust_db = getattr(db, "rust_db", None)
+        if rust_db is not None and rust_db.is_active and self._default_visibility:
+            try:
+                res = await rust_db.call(
+                    "session_delete",
+                    {
+                        "session_id": session_id,
+                        "expected_revision": expected_revision,
+                        "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        "emit_sync": self._sync_journal is not None,
+                        "workspace_id": str(getattr(self._sync_journal, "workspace_id", "") or "")
+                        if self._sync_journal is not None
+                        else "",
+                    },
+                )
+            except RustDbError as exc:
+                _translate_rust_session_error(
+                    exc, session_id=session_id, expected_revision=expected_revision
+                )
+            deleted = bool((res or {}).get("deleted"))
+            if deleted:
+                for storage_path in (res or {}).get("unlink_paths") or []:
+                    if not storage_path:
+                        continue
+                    try:
+                        Path(str(storage_path)).unlink(missing_ok=True)
+                    except OSError:
+                        continue
+                py_cache = getattr(db.snapshot_store, "_metadata_cache", None)
+                if isinstance(py_cache, dict):
+                    for oid in (res or {}).get("owned_ids") or [session_id]:
+                        py_cache.pop(oid, None)
+                self._runtime_preferences_by_session.pop(session_id, None)
+            await self._publish_sync_changes(list((res or {}).get("change_ids") or []))
+            return deleted
 
         async def write(connection):
             change_ids.clear()
@@ -394,6 +605,8 @@ class CoreDbSessionStore:
 
         result = bool(await db.persistence.write(write))
         if result:
+            if getattr(db, "rust_db", None) is not None:
+                db.rust_db.invalidate_thread(session_id)
             self._runtime_preferences_by_session.pop(session_id, None)
         await self._publish_sync_changes(change_ids)
         return result
@@ -566,6 +779,20 @@ async def _persist_legacy_fork_project_metadata(
     }
     if not canonical:
         return
+    rust_db = getattr(db, "rust_db", None)
+    if rust_db is not None and rust_db.is_active:
+        await rust_db.call(
+            "session_persist_legacy_metadata",
+            {
+                "mode": "fork_project",
+                "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "entries": [
+                    {"session_id": sid, "title": info["title"], "metadata": info["metadata"]}
+                    for sid, info in canonical.items()
+                ],
+            },
+        )
+        return
 
     async def write(connection):
         for session_id, inherited in canonical.items():
@@ -604,6 +831,20 @@ async def _persist_legacy_runtime_preferences(db: CoreAppDb, *records: SessionRe
         if "runtime_preferences" in record.metadata
     }
     if not canonical:
+        return
+    rust_db = getattr(db, "rust_db", None)
+    if rust_db is not None and rust_db.is_active:
+        await rust_db.call(
+            "session_persist_legacy_metadata",
+            {
+                "mode": "runtime_preferences",
+                "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "entries": [
+                    {"session_id": sid, "runtime_preferences": meta["runtime_preferences"]}
+                    for sid, meta in canonical.items()
+                ],
+            },
+        )
         return
 
     async def write(connection):
@@ -708,6 +949,13 @@ async def delete_session_records(connection, session_ids: list[str]) -> None:
     await connection.execute(delete(CoreHandoffContext).where(CoreHandoffContext.thread_id.in_(owned_ids)))
     await connection.execute(delete(CoreRuntimeSession).where(CoreRuntimeSession.thread_id.in_(owned_ids)))
     await connection.execute(delete(CoreThreadSnapshotItem).where(CoreThreadSnapshotItem.thread_id.in_(owned_ids)))
+    await connection.execute(delete(CoreThreadSnapshotArtifact).where(CoreThreadSnapshotArtifact.thread_id.in_(owned_ids)))
+    await connection.execute(delete(CoreThreadSnapshotTurn).where(CoreThreadSnapshotTurn.thread_id.in_(owned_ids)))
+    if owned_ids:
+        await connection.execute(
+            text("DELETE FROM core_thread_outlines WHERE thread_id IN (" + ",".join(f":id{i}" for i in range(len(owned_ids))) + ")"),
+            {f"id{i}": v for i, v in enumerate(owned_ids)},
+        )
     await connection.execute(delete(CoreThreadSnapshot).where(CoreThreadSnapshot.thread_id.in_(owned_ids)))
     checkpoint_ids = select(CoreCheckpoint.id).where(CoreCheckpoint.root_session_id.in_(owned_ids))
     await connection.execute(delete(CoreCheckpointAttachmentRef).where(CoreCheckpointAttachmentRef.checkpoint_id.in_(checkpoint_ids)))

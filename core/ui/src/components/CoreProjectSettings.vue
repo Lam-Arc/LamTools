@@ -18,81 +18,84 @@
                 <p>{{ t("项目作用域的元信息与 AGENTS.md 指令。") }}</p>
               </header>
 
-              <article class="setting-card">
-                <form class="core-project-rename" @submit.prevent="commitProjectName">
-                  <label>
-                    <span>{{ t("项目名称") }}</span>
-                    <input
-                      v-model="projectNameInput"
-                      class="field-input"
-                      data-project-name-input
+              <!-- user:“这个组内的 UI 设计与风格”+(项目名称、会话与规则按同一页内分区整理)。 -->
+              <div class="settings-surface settings-surface--stack sunday-project-sheet">
+                <article class="setting-card">
+                  <form class="core-project-rename" @submit.prevent="commitProjectName">
+                    <label>
+                      <span>{{ t("项目名称") }}</span>
+                      <input
+                        v-model="projectNameInput"
+                        class="field-input"
+                        data-project-name-input
+                        :disabled="projectActionLoading"
+                        @change="commitProjectName"
+                        @blur="commitProjectName"
+                        @keydown.enter.prevent="commitProjectName"
+                      />
+                    </label>
+                  </form>
+                  <div class="core-project-visual-settings">
+                    <div class="core-project-visual-heading">
+                      <span>{{ t("项目外观") }}</span>
+                      <small>{{ t("用于侧边栏中的项目辨识。") }}</small>
+                    </div>
+                    <ProjectVisualPicker
+                      :icon-key="projectIconKey"
+                      :color-key="projectColorKey"
                       :disabled="projectActionLoading"
-                      @change="commitProjectName"
-                      @blur="commitProjectName"
-                      @keydown.enter.prevent="commitProjectName"
+                      @update:icon-key="selectProjectIcon"
+                      @update:color-key="selectProjectColor"
                     />
-                  </label>
-                </form>
-                <div class="core-project-visual-settings">
-                  <div class="core-project-visual-heading">
-                    <span>{{ t("项目外观") }}</span>
-                    <small>{{ t("用于侧边栏中的项目辨识。") }}</small>
                   </div>
-                  <ProjectVisualPicker
-                    :icon-key="projectIconKey"
-                    :color-key="projectColorKey"
-                    :disabled="projectActionLoading"
-                    @update:icon-key="selectProjectIcon"
-                    @update:color-key="selectProjectColor"
+                  <p v-if="projectActionLoading" class="project-save-status" role="status">{{ t("正在保存项目更改…") }}</p>
+                  <p v-if="project.workRoot" class="hook-meta">{{ t("工作根目录：") }}<code>{{ project.workRoot }}</code></p>
+                </article>
+
+                <article v-if="sessionId" class="setting-card project-session-card" data-project-session>
+                  <div class="project-session-heading">
+                    <div class="project-session-details">
+                      <span>{{ t("当前会话") }}</span>
+                      <code data-project-session-id>#{{ sessionId.slice(0, 8) }}</code>
+                    </div>
+                    <button
+                      class="btn btn--ghost project-session-copy"
+                      :class="{ 'is-copied': copiedSessionId }"
+                      type="button"
+                      data-project-session-copy
+                      :data-copied="copiedSessionId ? '' : undefined"
+                      :aria-label="copiedSessionId ? t('已复制完整会话 ID') : t('复制完整会话 ID')"
+                      :title="copiedSessionId ? t('已复制完整会话 ID') : t('复制完整会话 ID')"
+                      @click="copySessionId"
+                    >
+                      <Check v-if="copiedSessionId" :size="14" :stroke-width="1.8" aria-hidden="true" />
+                      <Copy v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+                      <span>{{ copiedSessionId ? t("已复制") : t("复制完整 ID") }}</span>
+                    </button>
+                  </div>
+                </article>
+
+                <article class="setting-card">
+                  <div class="subhead">
+                    <span class="muted subhead-title">{{ t("项目规则") }}<span class="subhead-sub">AGENTS.md</span>
+                    </span>
+                    <div class="subhead-actions">
+                      <button class="btn btn--quiet btn--sm" type="button" :disabled="agentsLoading || agentsSaving" @click="rulesDraft.requestReplace(() => emit('refresh-agents'))">{{ t("刷新") }}</button>
+                      <button class="btn btn--primary btn--sm" type="button" :disabled="agentsLoading || agentsSaving" @click="saveRules">{{ t("保存") }}</button>
+                    </div>
+                  </div>
+                  <textarea
+                    v-model="agentsDraft"
+                    class="guide-editor"
+                    rows="14"
+                    spellcheck="false"
+                    :placeholder="agentsLoading ? t('加载中…') : t('# 项目级约束\n项目专属指令，会叠加在全局约束之上…')"
+                    :disabled="agentsLoading || agentsSaving"
                   />
-                </div>
-                <p v-if="projectActionLoading" class="project-save-status" role="status">{{ t("正在保存项目更改…") }}</p>
-                <p v-if="project.workRoot" class="hook-meta">{{ t("工作根目录：") }}<code>{{ project.workRoot }}</code></p>
-              </article>
-
-              <article v-if="sessionId" class="setting-card project-session-card" data-project-session>
-                <div class="project-session-heading">
-                  <div class="project-session-details">
-                    <span>{{ t("当前会话") }}</span>
-                    <code data-project-session-id>#{{ sessionId.slice(0, 8) }}</code>
-                  </div>
-                  <button
-                    class="btn btn--ghost project-session-copy"
-                    :class="{ 'is-copied': copiedSessionId }"
-                    type="button"
-                    data-project-session-copy
-                    :data-copied="copiedSessionId ? '' : undefined"
-                    :aria-label="copiedSessionId ? t('已复制完整会话 ID') : t('复制完整会话 ID')"
-                    :title="copiedSessionId ? t('已复制完整会话 ID') : t('复制完整会话 ID')"
-                    @click="copySessionId"
-                  >
-                    <Check v-if="copiedSessionId" :size="14" :stroke-width="1.8" aria-hidden="true" />
-                    <Copy v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
-                    <span>{{ copiedSessionId ? t("已复制") : t("复制完整 ID") }}</span>
-                  </button>
-                </div>
-              </article>
-
-              <article class="setting-card">
-                <div class="subhead">
-                  <span class="muted subhead-title">{{ t("项目规则") }}<span class="subhead-sub">AGENTS.md</span>
-                  </span>
-                  <div class="subhead-actions">
-                    <button class="btn btn--ghost" type="button" :disabled="agentsLoading || agentsSaving" @click="rulesDraft.requestReplace(() => emit('refresh-agents'))">{{ t("刷新") }}</button>
-                    <button class="btn btn--ghost" type="button" :disabled="agentsLoading || agentsSaving" @click="saveRules">{{ t("保存") }}</button>
-                  </div>
-                </div>
-                <textarea
-                  v-model="agentsDraft"
-                  class="guide-editor"
-                  rows="14"
-                  spellcheck="false"
-                  :placeholder="agentsLoading ? t('加载中…') : t('# 项目级约束\n项目专属指令，会叠加在全局约束之上…')"
-                  :disabled="agentsLoading || agentsSaving"
-                />
-                <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
-                <p class="hook-meta">{{ t("保存到") }}<code>{{ project.workRoot || t("(项目根)") }}/AGENTS.md</code>{{ t("。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 上下文」内编辑。") }}</p>
-              </article>
+                  <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
+                  <p class="hook-meta">{{ t("保存到") }}<code>{{ project.workRoot || t("(项目根)") }}/AGENTS.md</code>{{ t("。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 上下文」内编辑。") }}</p>
+                </article>
+              </div>
 
               <p v-if="projectActionError" class="skill-error" role="alert">{{ projectActionError }}</p>
             </section>

@@ -1,11 +1,14 @@
 import { inject } from 'vue'
-import { Copy, ExternalLink, FolderOpen } from 'lucide-vue-next'
+import { Copy, ExternalLink, FolderOpen, Globe } from 'lucide-vue-next'
 import { openContextMenu } from '@/components/context-menu/context-menu'
 import { copyText } from '@/helpers/clipboard'
 import { openExternalUrl } from '@/helpers/openUrl'
+// user:“右键菜单加「在内置浏览器中打开」（与现有「在系统浏览器打开」并存）”+
+// (链接不再直接塞进分屏：走 browser/entry 的可用性判定，不可用时原样说出原因)。
+import { openInBrowser } from '@/browser/entry'
 import { normalizeWebLink } from './webLinks'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
-import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
+import { useOptionalWorkspace } from '@/workspace/context'
 import { openFileInSplit } from '@/split/openFile'
 
 export function absoluteReference(path: string, root = ''): string {
@@ -15,7 +18,7 @@ export function absoluteReference(path: string, root = ''): string {
 }
 
 export function useReferenceActions(explicitTransport?: LamToolsTransport, explicitRoot?: () => string) {
-  const splitWorkspace = useOptionalSplitWorkspace()
+  const splitWorkspace = useOptionalWorkspace()
   const transport = explicitTransport || inject<LamToolsTransport | undefined>('lamtools-reference-transport', undefined)
   const injectedRoot = inject<() => string>('lamtools-reference-root', () => '')
   const workRoot = () => explicitRoot?.() || injectedRoot()
@@ -118,8 +121,11 @@ export function useReferenceActions(explicitTransport?: LamToolsTransport, expli
     }
     const url = normalizeWebLink(raw), path = url || absoluteReference(raw, workRoot())
     // user:“右键弹窗与右键成果一致”+(正文和成果共用同一套文件与链接操作)。
+    // user:“右键菜单加「在内置浏览器中打开」（与现有「在系统浏览器打开」并存）”+
+    // (链接的「在分屏中打开」就是内置浏览器入口：同一套可用性判定，不可用时说原因而不是点了没反应)。
     openContextMenu({ event, ownerId: 'file-reference', ariaLabel: url ? '链接操作' : '文件操作', items: [
-      ...(splitWorkspace ? [{ id: 'open-split', label: '在分屏中打开', icon: ExternalLink, action: async () => { try { const actual = url || await resolve(path); if (url) splitWorkspace.add('browser', actual, new URL(url).hostname, undefined, undefined, workRoot()); else openFileInSplit(splitWorkspace, actual, { workRoot: workRoot(), force: true }) } catch (error) { notice(error instanceof Error ? error.message : '原文件不存在') } } }] : []),
+      ...(url ? [{ id: 'open-internal', label: '在内置浏览器中打开', icon: Globe, action: () => { const opened = openInBrowser(url); if (!opened.ok) notice(opened.reason) } }] : []),
+      ...(splitWorkspace && !url ? [{ id: 'open-split', label: '在分屏中打开', icon: ExternalLink, action: async () => { try { openFileInSplit(splitWorkspace, await resolve(path), { workRoot: workRoot(), force: true }) } catch (error) { notice(error instanceof Error ? error.message : '原文件不存在') } } }] : []),
       { id: 'open-default', label: url ? '使用默认浏览器打开' : '使用默认应用打开文件', icon: ExternalLink, action: () => openDefault(path) },
       ...(!url ? [{ id: 'open-folder', label: '打开文件夹', icon: FolderOpen, action: () => openDefault(path, true) }] : []),
       { id: 'copy-path', label: url ? '复制链接' : '复制路径', icon: Copy, action: async () => { try { await copyText(url || await resolve(path)) } catch (error) { notice(error instanceof Error ? error.message : '复制失败') } } },

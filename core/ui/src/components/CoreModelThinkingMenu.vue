@@ -49,6 +49,8 @@
         data-model-thinking-card
         :aria-label="dialogLabel"
       >
+        <!-- user:“尤其是气泡和玻璃效果”+(材质用共享底板，卡片揭开动画仍只移动装饰层)。 -->
+        <span class="core-model-thinking-menu__glass optical-glass optical-glass--low-trans" aria-hidden="true" />
         <div class="core-model-thinking-menu__body">
           <!-- user:“卡片左上角“模型”两个字不要了”“思考强度和其数值均靠右显示”“还应该有一个栏是组或者供应商的实际名”
                +(顶栏从左到右是分类开关、分组选择器，思考强度与当前等级靠右成组)。 -->
@@ -71,7 +73,7 @@
                 <span class="core-model-thinking-menu__group-label">{{ activeGroupLabel }}</span>
                 <ChevronDown class="core-model-thinking-menu__group-chevron" :size="13" :stroke-width="2" aria-hidden="true" />
               </button>
-              <div v-if="groupMenuOpen" class="core-model-thinking-menu__group-menu" role="listbox" :aria-label="t('模型分组')">
+              <div v-if="groupMenuOpen" class="core-model-thinking-menu__group-menu optical-glass optical-glass--low-trans" role="listbox" :aria-label="t('模型分组')">
                 <button
                   v-for="group in groupSelectOptions"
                   :key="group.key"
@@ -144,6 +146,7 @@
               @pointerenter="cancelHoverHide"
               @pointerleave="scheduleHoverHide"
             >
+              <span v-if="hoverMode && !open" class="core-model-thinking-menu__hover-glass optical-glass optical-glass--low-trans" aria-hidden="true" />
               <ThinkingIntensitySlider
                 :model-value="thinkingMode"
                 :options="thinkingModeOptions"
@@ -775,22 +778,11 @@ onUnmounted(() => {
   transform-origin: bottom center;
 }
 
-/* user:“向右滑动的过程中，把这个卡片给划出来”
-   +(底板移到 ::before 并用 --thinking-card-reveal 控制显现：
-   飞入时底板从左缘向右“划”开，飞行中的滑条本体不受卡片裁切/透明度影响)。
-   user:“为什么前面那个面板没有模糊”“修”+(底板不能只有半透明底色，
-   要跟其它浮层一样挂毛玻璃滤镜，否则背后资源卡的文字会原样透出来)。 */
-.core-model-thinking-menu__card::before {
-  content: '';
+.core-model-thinking-menu__glass {
   position: absolute;
   inset: 0;
-  z-index: 0;
-  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  --optical-glass-surface: var(--theme-composer-solid, var(--theme-main-solid));
   border-radius: var(--radius-lg);
-  background: var(--theme-composer-background);
-  -webkit-backdrop-filter: var(--optical-glass-filter);
-  backdrop-filter: var(--optical-glass-filter);
-  box-shadow: var(--shadow-md);
   opacity: var(--thinking-card-reveal, 1);
   transform: scaleX(calc(0.9 + 0.1 * var(--thinking-card-reveal, 1)));
   transform-origin: left center;
@@ -832,26 +824,15 @@ onUnmounted(() => {
   height: 180px;
 }
 
-/* user:“再给 hover 时的那个思考条加一个低透玻璃的胶囊样式包裹住它”
-   +(悬浮条外套一层低透过率的磨砂玻璃胶囊：半透明主题底色 + 背景模糊 + 细边与柔影，
-   随滑条一起放倒平移，卡片展开后不出现)。 */
 .core-model-thinking-menu__panel.is-hover-preview .core-model-thinking-menu__slider-wrap {
   position: relative;
 }
 
-.core-model-thinking-menu__panel.is-hover-preview .core-model-thinking-menu__slider-wrap::before {
-  content: '';
+.core-model-thinking-menu__hover-glass {
   position: absolute;
-  inset: -6px;
-  z-index: 0;
-  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  inset: calc(-1 * var(--space-2));
+  --optical-glass-surface: var(--theme-composer-solid, var(--theme-main-solid));
   border-radius: 999px;
-  background: color-mix(in srgb, var(--theme-composer-background) 60%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent),
-    0 8px 22px color-mix(in srgb, #000 16%, transparent);
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
   pointer-events: none;
 }
 
@@ -933,12 +914,8 @@ onUnmounted(() => {
   display: grid;
   gap: 2px;
   padding: var(--space-1);
-  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  --optical-glass-surface: var(--theme-composer-solid, var(--theme-main-solid));
   border-radius: var(--radius);
-  background: var(--theme-composer-background);
-  -webkit-backdrop-filter: var(--optical-glass-filter);
-  backdrop-filter: var(--optical-glass-filter);
-  box-shadow: var(--shadow-md);
 }
 
 .core-model-thinking-menu__group-option {

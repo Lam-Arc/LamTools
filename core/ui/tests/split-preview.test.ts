@@ -3,8 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import CoreSplitPreview from '../src/components/CoreSplitPreview.vue'
 import ReferenceItems from '../src/components/ReferenceItems.vue'
 import UserReferenceText from '../src/components/UserReferenceText.vue'
-import { SplitWorkspaceKey } from '../src/split/useSplitWorkspace'
-import { createSplitState, openTab, splitPane, restoreSplitState } from '../src/split/layout'
+import { WorkspaceKey } from '../src/workspace/context'
+import { createWorkspace, parseWorkspace, serializeWorkspace } from '../src/workspace'
 import { openFileInSplit } from '../src/split/openFile'
 import { isTextPath, previewKindFor, splitContentFor } from '../src/split/preview'
 import { useSplitPreviewPreference } from '../src/split/previewPreference'
@@ -43,13 +43,11 @@ describe('split file preview routing', () => {
     expect(splitContentFor('')).toBe('editor')
   })
 
-  it('restores a persisted preview tab and still drops an unknown kind', () => {
-    const state = createSplitState(), right = splitPane(state, 'main', 'right')!
-    openTab(state, right, { id: 'preview-1', kind: 'preview', title: 'a.png', resource: 'E:/p/a.png', root: 'E:/p' })
-    const restored = restoreSplitState(JSON.stringify(state))
-    expect(restored.panes[right]?.tabs[0]?.kind).toBe('preview')
-    openTab(state, right, { id: 'bad', kind: 'video' as never, title: 'a.mp4', resource: 'E:/p/a.mp4' })
-    expect(restoreSplitState(JSON.stringify(state)).panes[right]).toBeUndefined()
+  it('restores a persisted preview tab', () => {
+    const model = createWorkspace([{ id: 'preview-1', kind: 'preview', title: 'a.png', resource: 'E:/p/a.png' }], 'preview-1')
+    const restored = parseWorkspace(serializeWorkspace(model), createWorkspace([], ''))
+    expect(restored.model.surfaces['preview-1']?.kind).toBe('preview')
+    expect(restored.dropped).toBe(0)
   })
 
   it('opens through the same entry as text: previews reuse a preview pane, text reuses an editor pane', () => {
@@ -78,10 +76,10 @@ describe('split file preview routing', () => {
     expect(openFileInSplit(controller, 'E:/p/photo.png', { workRoot: 'E:/p' })).not.toBeNull()
   })
 
-  it('renders an image read through the backend instead of the text editor', async () => {
-    const createObjectURL = vi.fn(() => 'blob:preview'), revokeObjectURL = vi.fn()
-    Object.assign(URL, { createObjectURL, revokeObjectURL })
-    const request = vi.fn().mockResolvedValue({ status: 200, headers: { 'content-type': 'image/png' }, body: new Uint8Array([137, 80, 78, 71]) })
+  // user:“与灯箱共用同一条解析与呈现链路”+(分屏不再把整段字节搬进 blob，
+  // 直接用解析层给出的本机地址；图片走 native 三态，和灯箱是同一个地址)。
+  it('renders an image through the same resolved native address the lightbox uses', async () => {
+    const request = vi.fn().mockResolvedValue({ status: 200, headers: {}, body: new Uint8Array() })
     const wrapper = mount(CoreSplitPreview, {
       props: {
         tab: { id: 'p', kind: 'preview', title: 'a.png', resource: 'E:/p/a.png', root: 'E:/p' },
@@ -90,10 +88,30 @@ describe('split file preview routing', () => {
       },
     })
     await flushPromises()
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'http', method: 'GET', path: expect.stringContaining('/files/read-reference') }))
-    expect(wrapper.find('img').attributes('src')).toBe('blob:preview')
+    const src = wrapper.find('img').attributes('src') || ''
+    expect(src).toContain('/api/core/files/read-reference')
+    expect(src).toContain('inline=1')
+    expect(new URL(src, 'http://127.0.0.1:1').searchParams.get('path')).toBe('E:/p/a.png')
+    // 图片是浏览器原生能显示的类型：解析层不读字节，也就没有第二份拷贝。
+    expect(request).not.toHaveBeenCalled()
     wrapper.unmount()
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+  })
+
+  it('shows the same reason and exit for a file neither surface can display', async () => {
+    // user:“不能看的，给的原因和动作与灯箱一致”+(原因取自同一解析层，不是分屏自己写的一句)。
+    const request = vi.fn().mockResolvedValue({ status: 200, headers: {}, body: new Uint8Array() })
+    const wrapper = mount(CoreSplitPreview, {
+      props: {
+        tab: { id: 'zip', kind: 'preview', title: 'a.zip', resource: 'E:/p/a.zip', root: 'E:/p' },
+        root: 'E:/p',
+        transport: { request } as never,
+      },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('浏览器无法直接显示这种文件类型')
+    expect(wrapper.text()).toContain('使用默认应用打开')
+    expect(request).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('routes Markdown artifact chips to the split preview without a floating preview', async () => {
@@ -106,7 +124,7 @@ describe('split file preview routing', () => {
         transport: { request } as never,
         workRoot: 'E:/p',
       },
-      global: { provide: { [SplitWorkspaceKey as symbol]: { tabs: { value: [] }, state: { activePane: 'main' }, split: () => null, add } } },
+      global: { provide: { [WorkspaceKey as unknown as string]: { tabs: { value: [] }, state: { activePane: 'main' }, split: () => null, add } } },
     })
     await flushPromises()
     await wrapper.get('button.reference-item').trigger('click')
@@ -128,7 +146,7 @@ describe('split file preview routing', () => {
       global: {
         provide: {
           'lamtools-reference-transport': { request },
-          [SplitWorkspaceKey as symbol]: { tabs: { value: [] }, state: { activePane: 'main' }, split: () => null, add },
+          [WorkspaceKey as unknown as string]: { tabs: { value: [] }, state: { activePane: 'main' }, split: () => null, add },
         },
       },
     })

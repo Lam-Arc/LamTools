@@ -53,14 +53,15 @@ export function useComposerMenuMotion(root: Ref<HTMLElement | null>) {
     })
   }
 
-  function animateSubmenuCard(card: HTMLElement | null, side: SubmenuSide, itemSelector: string): void {
-    if (!card || !context || !motionEnabled) return
+  function animateSubmenuCard(card: HTMLElement | null, side: SubmenuSide, itemSelector: string, onComplete?: () => void): void {
+    // user:“确保视觉、功能和交互不退化”+(子菜单显示后再交付键盘焦点)。
+    if (!card || !context || !motionEnabled) { onComplete?.(); return }
     submenuTimeline?.kill()
     const items = Array.from(card.querySelectorAll<HTMLElement>(itemSelector))
     const x = side === 'right' ? 12 : -12
 
     context.add(() => {
-      submenuTimeline = gsap.timeline({ defaults: { overwrite: 'auto' } })
+      submenuTimeline = gsap.timeline({ defaults: { overwrite: 'auto' }, onComplete })
       submenuTimeline
         .fromTo(
           card,

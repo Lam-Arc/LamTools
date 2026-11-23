@@ -407,16 +407,16 @@ const activeModule = computed<RailModule | null>(() => (
    不上 transform（transform 会另开 backdrop root，模糊同样会失效）。 */
 .right-sidebar-card {
   position: fixed;
-  /* 竖直居中收在窗口标题栏与底部内缩之间：无论窗口多矮、内容多长，卡片都不
-     越过顶部标题区（原先 top: 0 居中时，矮窗口会把卡片顶进标题区）。 */
-  top: var(--titlebar-offset, 0px);
+  /* user:“右侧预留出最小化，最大化，关闭的按钮区域”+(右侧悬浮卡再高也留开窗口按钮)。 */
+  --right-card-top: max(var(--titlebar-offset, 0px), var(--window-corner-height, 0px));
+  top: var(--right-card-top);
   bottom: var(--shell-bottom-inset, 6px);
   right: calc(var(--right-rail-width, 46px) + var(--space-2));
   margin-block: auto;
   height: fit-content;
   /* 宽度上限给主区（含它的标题带）留出最小可读宽度：窗口再窄也不会横跨过去。 */
   width: min(285px, calc(100vw - var(--right-rail-width, 46px) - var(--space-2) - var(--right-card-main-min, 240px)));
-  max-height: min(505px, calc(100dvh - var(--titlebar-offset, 0px) - var(--shell-bottom-inset, 6px) - var(--right-card-vertical-gap, 24px)));
+  max-height: min(505px, calc(100dvh - var(--right-card-top) - var(--shell-bottom-inset, 6px) - var(--right-card-vertical-gap, 24px)));
   z-index: var(--z-popover);
   display: flex;
   flex-direction: column;

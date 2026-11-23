@@ -959,6 +959,41 @@ class TurnStore:
     # Agent runs
     # ------------------------------------------------------------------
     async def upsert_agent_run(self, agent_run: AgentRun) -> AgentRun:
+        if self._session is None:
+            from lamtools_core.app.rust_db import get_rust_db
+
+            rust_db = get_rust_db(self.session_factory)
+            if rust_db is not None:
+                # user:“加载/切换/多会话多 agent 同时读写”+(多子代理状态写入与轮询列表走 Rust，避免占满 Python 连接池)。
+                await rust_db.call(
+                    "agent_run_upsert",
+                    {
+                        "agent_run_id": agent_run.agent_run_id,
+                        "parent_thread_id": str(
+                            agent_run.parent_thread_id or agent_run.metadata.get("parent_thread_id") or ""
+                        ),
+                        "parent_turn_id": agent_run.parent_turn_id,
+                        "parent_run_id": agent_run.parent_run_id,
+                        "name": agent_run.name,
+                        "type": agent_run.type,
+                        "model_id": agent_run.model_id,
+                        "reasoning_level": agent_run.reasoning_level,
+                        "status": agent_run.status,
+                        "lease_until_ms": int(agent_run.lease_until_ms),
+                        "sub_session_id": agent_run.sub_session_id,
+                        "source_call_id": agent_run.source_call_id,
+                        "source_run_id": agent_run.source_run_id,
+                        "source_turn_id": agent_run.source_turn_id,
+                        "summary": agent_run.summary,
+                        "started_at_ms": int(agent_run.started_at_ms),
+                        "completed_at_ms": int(agent_run.completed_at_ms),
+                        "elapsed_ms": int(agent_run.elapsed_ms),
+                        "metadata": dict(agent_run.metadata),
+                        "now_str": _now_datetime().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                    },
+                )
+                return agent_run
+
         async def write(db: Any) -> AgentRun:
             row = await db.get(CoreAgentRun, agent_run.agent_run_id)
             values = _agent_run_values(agent_run)
@@ -973,6 +1008,13 @@ class TurnStore:
         return await self._write(write)
 
     async def get_agent_run(self, agent_run_id: str) -> AgentRun | None:
+        if self._session is None:
+            from lamtools_core.app.rust_db import get_rust_db
+
+            rust_db = get_rust_db(self.session_factory)
+            if rust_db is not None:
+                row = await rust_db.call("agent_run_get", {"agent_run_id": agent_run_id})
+                return _agent_run_from_dict(row) if isinstance(row, dict) else None
         async with self._read() as db:
             row = await db.get(CoreAgentRun, agent_run_id)
         return _agent_run_from_row(row) if row is not None else None
@@ -984,6 +1026,20 @@ class TurnStore:
         parent_thread_id: str | None = None,
         live_only: bool = False,
     ) -> list[AgentRun]:
+        if self._session is None:
+            from lamtools_core.app.rust_db import get_rust_db
+
+            rust_db = get_rust_db(self.session_factory)
+            if rust_db is not None:
+                rows = await rust_db.call(
+                    "agent_run_list",
+                    {
+                        "parent_turn_id": parent_turn_id,
+                        "parent_thread_id": parent_thread_id,
+                        "live_only": bool(live_only),
+                    },
+                )
+                return [_agent_run_from_dict(r) for r in rows]
         conditions: list[Any] = []
         if parent_turn_id:
             conditions.append(CoreAgentRun.parent_turn_id == parent_turn_id)
@@ -1241,6 +1297,30 @@ def _agent_run_values(agent_run: AgentRun) -> dict[str, Any]:
 
 def _agent_run_row(agent_run: AgentRun) -> CoreAgentRun:
     return CoreAgentRun(agent_run_id=agent_run.agent_run_id, **_agent_run_values(agent_run))
+
+
+def _agent_run_from_dict(row: dict[str, Any]) -> AgentRun:
+    return AgentRun(
+        agent_run_id=str(row.get("agent_run_id") or ""),
+        parent_turn_id=str(row.get("parent_turn_id") or ""),
+        parent_thread_id=str(row.get("parent_thread_id") or ""),
+        parent_run_id=str(row.get("parent_run_id") or ""),
+        name=str(row.get("name") or ""),
+        type=str(row.get("type") or "execute"),
+        model_id=str(row.get("model_id") or ""),
+        reasoning_level=str(row.get("reasoning_level") or ""),
+        status=str(row.get("status") or "idle"),  # type: ignore[arg-type]
+        lease_until_ms=int(row.get("lease_until_ms") or 0),
+        sub_session_id=str(row.get("sub_session_id") or ""),
+        source_call_id=str(row.get("source_call_id") or ""),
+        source_run_id=str(row.get("source_run_id") or ""),
+        source_turn_id=str(row.get("source_turn_id") or ""),
+        summary=str(row.get("summary") or ""),
+        started_at_ms=int(row.get("started_at_ms") or 0),
+        completed_at_ms=int(row.get("completed_at_ms") or 0),
+        elapsed_ms=int(row.get("elapsed_ms") or 0),
+        metadata=dict(row.get("metadata") or {}),
+    )
 
 
 def _agent_run_from_row(row: CoreAgentRun) -> AgentRun:

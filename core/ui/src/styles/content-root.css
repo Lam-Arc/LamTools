@@ -1,0 +1,82 @@
+/**
+ * 内容层统一根入口（左上角「Agent ▾」）。
+ *
+ * user:“所有的 UI 设计都走简洁大气、高可自定义性”+
+ * (同一个按钮两种落点，只差密度：主区标题栏里是紧凑的控件，会话栏顶端是这一列的标题。
+ *  颜色、字号、圆角、间距全部读语义令牌，装饰只用一个箭头，不加描边也不加阴影。)
+ */
+
+.content-root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--theme-main-text);
+  font: inherit;
+  font-size: var(--type-sm);
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.content-root:hover,
+.content-root:focus-visible {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+}
+.content-root:focus-visible {
+  outline: var(--focus-ring-width) solid color-mix(in srgb, var(--focus-ring-color) 75%, transparent);
+  outline-offset: var(--focus-ring-offset);
+}
+.content-root__label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.content-root__chevron {
+  flex: 0 0 auto;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  opacity: 0.6;
+}
+.content-root:hover .content-root__chevron {
+  opacity: 1;
+}
+
+/* 主区标题栏：极轻的控件底色，靠内边距和标签栏里的其他元素对齐。 */
+.content-root--bar {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  background: var(--theme-control-soft-background);
+}
+
+/* Agent 纵向标签轴的顶端：这一列的标题，不是按钮样式的控件。
+   user:“Agent 根入口在左上角，项目/会话在其下方纵向排列”+
+   (它比项目名略重一点点就够了，靠字号和留白拉开层级，不额外加背景块)。 */
+.content-root--axis {
+  padding: var(--space-1) 0;
+  color: var(--sidebar-text-primary, var(--theme-main-text));
+  font-size: var(--type-md);
+}
+.content-root--axis .content-root__label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.content-root--axis:hover,
+.content-root--axis:focus-visible {
+  background: transparent;
+  color: var(--theme-main-text);
+}
+.content-root--axis .content-root__chevron {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.content-root--axis[aria-expanded='true'] .content-root__chevron {
+  transform: rotate(180deg);
+}

@@ -1,7 +1,8 @@
 <!--
-  子代理分屏视图：从主线程里点开某个子代理后，占住对话区右侧的一块只读聊天区。
+  子代理分屏视图：从主线程里点开某个子代理后，作为辅助分屏里的一个标签只读展示。
   它只读——没有输入框，不改变子代理；看的是这个子代理自己的过程：它的任务、
-  模型的输出、每一次工具调用与结果。
+  模型的输出、每一次工具调用与结果。页眉同时是切换器：名字/模型/思考等级/耗时，
+  点开可切到本会话的另一个子代理（由宿主导航标签）。
 
   数据来自实时消息投影解析出的 run（父组件每次消息更新重算），所以子代理运行时
   这里会跟着流式更新，不需要额外轮询。
@@ -47,7 +48,66 @@
       >
         <ArrowLeft :size="15" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <strong class="sub-agent-pane-name" :title="run.name">{{ run.name }}</strong>
+      <!-- user:“页眉显示子代理名/模型/思考等级/时间，且这个页眉同时作为下拉框，可切换到别的子代理”+
+           (名字在上、模型/思考等级/耗时在下；整块都是切换入口，展开后列出本会话已有的子代理)。 -->
+      <div class="sub-agent-pane-switch" :class="{ 'is-open': switchOpen }">
+        <button
+          type="button"
+          class="sub-agent-pane-switch-trigger"
+          data-sub-agent-pane-switch
+          :disabled="!loadRuns"
+          :aria-expanded="switchOpen"
+          :aria-haspopup="loadRuns ? 'listbox' : undefined"
+          :title="loadRuns ? t('切换到别的子代理') : run.name"
+          @click="toggleSwitch"
+          @keydown.esc.stop.prevent="closeSwitch"
+        >
+          <span class="sub-agent-pane-switch-line">
+            <strong class="sub-agent-pane-name">{{ run.name }}</strong>
+            <ChevronDown v-if="loadRuns" class="sub-agent-pane-switch-caret" :size="12" aria-hidden="true" />
+          </span>
+          <span class="sub-agent-pane-switch-meta" data-sub-agent-pane-meta>
+            <span class="sub-agent-pane-switch-meta-item" :title="modelLabel">{{ modelLabel }}</span>
+            <template v-if="reasoningLabel">
+              <span class="sub-agent-pane-switch-sep" aria-hidden="true">·</span>
+              <span class="sub-agent-pane-switch-meta-item" :title="reasoningLabel">{{ reasoningLabel }}</span>
+            </template>
+            <template v-if="elapsedLabel">
+              <span class="sub-agent-pane-switch-sep" aria-hidden="true">·</span>
+              <span class="sub-agent-pane-switch-meta-item">{{ elapsedLabel }}</span>
+            </template>
+            <span class="sub-agent-pane-switch-sep" aria-hidden="true">·</span>
+            <span class="sub-agent-pane-switch-meta-item">{{ typeToken }}</span>
+          </span>
+        </button>
+        <div
+          v-if="switchOpen"
+          class="sub-agent-pane-switch-menu"
+          data-sub-agent-pane-switch-menu
+          role="listbox"
+          :aria-label="t('子代理')"
+          @keydown.esc.stop.prevent="closeSwitch"
+        >
+          <button
+            v-for="item in switchRuns"
+            :key="item.subSessionId || item.id || item.name"
+            type="button"
+            class="sub-agent-pane-switch-item"
+            :class="{ 'is-current': isCurrentRun(item) }"
+            role="option"
+            :aria-selected="isCurrentRun(item)"
+            :data-sub-agent-pane-switch-item="item.subSessionId || item.id || item.name"
+            @click="chooseRun(item)"
+          >
+            <span class="sub-agent-pane-switch-item-main">
+              <span class="sub-agent-pane-switch-item-name">{{ item.name }}</span>
+              <span class="sub-agent-pane-switch-item-status">{{ runStatusLabel(item) }}</span>
+            </span>
+            <span class="sub-agent-pane-switch-item-meta">{{ runMetaLabel(item) }}</span>
+          </button>
+          <p v-if="!switchRuns.length" class="sub-agent-pane-switch-empty">{{ t('还没有其他子代理') }}</p>
+        </div>
+      </div>
       <span
         class="sub-agent-pane-status"
         :class="`sub-agent-pane-status--${statusTone}`"
@@ -65,17 +125,6 @@
         {{ statusLabel }}
       </span>
     </header>
-
-    <div class="sub-agent-pane-meta">
-      <span class="sub-agent-pane-meta-item">{{ typeToken }}</span>
-      <span class="sub-agent-pane-meta-sep" aria-hidden="true">·</span>
-      <span class="sub-agent-pane-meta-item" :title="modelLabel">{{ modelLabel }}</span>
-      <span class="sub-agent-pane-meta-item" :title="reasoningLabel">{{ reasoningLabel }}</span>
-      <template v-if="elapsedLabel">
-        <span class="sub-agent-pane-meta-sep" aria-hidden="true">·</span>
-        <span class="sub-agent-pane-meta-item">{{ elapsedLabel }}</span>
-      </template>
-    </div>
 
     <div
       ref="scrollElement"
@@ -134,8 +183,8 @@
 import { t } from '@/i18n/index.ts'
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { reconcileCoreSubAgentRun } from '@/agents/subAgentProjection.ts'
-import { ArrowDown, ArrowLeft, LoaderCircle } from 'lucide-vue-next'
+import { reconcileCoreSubAgentRun, type CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
+import { ArrowDown, ArrowLeft, ChevronDown, LoaderCircle } from 'lucide-vue-next'
 import type { CoreSubAgentDurableRecord, CoreSubAgentRun } from '@/types.ts'
 import type { LamToolsTransport } from '@/transport/index.ts'
 import type { CoreDecisionOption } from '@/appServer/pendingDecisions.ts'
@@ -166,6 +215,8 @@ const props = withDefaults(defineProps<{
    *  比监督者记录的下一次轮询更准。 */
   memberStatuses?: Record<string, string>
   memberStatusRecords?: Record<string, CoreSubAgentDurableRecord>
+  /** 本会话可供切换的子代理列表；点开下拉时才调用，避免流式期间重算所有时间线。 */
+  loadRuns?: (() => CoreSubAgentRun[]) | null
 }>(), {
   get emptyText() { return t("这个子代理还没有产生过程记录。") },
   embedded: true,
@@ -176,6 +227,7 @@ const props = withDefaults(defineProps<{
   runningMemberNames: () => [],
   mainRunning: false,
   memberStatuses: () => ({}),
+  loadRuns: null,
 })
 
 const resourceSummary = computed(() => buildCoreResourceSummary(props.run.timeline))
@@ -189,7 +241,59 @@ const emit = defineEmits<{
   /** 子代理自己的提问/审批卡被作答：交给宿主用同一条决策通道回传（按 requestId
    *  回到发问的那个子代理），面板本身不直接调 RPC。 */
   'decision-select': [payload: { partId: string; option: CoreDecisionOption; response: string }]
+  /** user:“页眉同时作为下拉框，可切换到别的子代理”+(交给宿主在同一个分屏里切标签/补标签)。 */
+  'open-sub-agent': [ref: CoreSubAgentRef]
 }>()
+
+// user:“子代理的页算标签吗？我觉得应该算…页眉显示子代理名/模型/思考等级/时间，且这个页眉同时作为下拉框”+
+// (页眉第一行是名字，第二行是模型/思考等级/耗时；点开列出本会话已有的子代理，选中后由宿主导航)。
+const switchOpen = ref(false)
+const switchRuns = ref<CoreSubAgentRun[]>([])
+function closeSwitch() { switchOpen.value = false }
+function toggleSwitch() {
+  if (!props.loadRuns) return
+  if (switchOpen.value) { closeSwitch(); return }
+  switchRuns.value = props.loadRuns()
+  switchOpen.value = true
+}
+function isCurrentRun(item: CoreSubAgentRun): boolean {
+  const own = props.run.subSessionId || props.run.id
+  const target = item.subSessionId || item.id
+  if (own && target) return own === target || (props.run.subSessionIds || []).includes(target)
+  return item.name === props.run.name
+}
+function chooseRun(item: CoreSubAgentRun) {
+  closeSwitch()
+  if (isCurrentRun(item)) return
+  emit('open-sub-agent', { subSessionId: item.subSessionId || item.id, name: item.name })
+}
+function runStatusLabel(item: CoreSubAgentRun): string { return subAgentStatusLabel(item.status) }
+function runElapsed(item: CoreSubAgentRun): string {
+  // 读一次 tick：运行中的耗时才会每秒更新。
+  void nowTick.value
+  const start = Date.parse(item.startedAt || '')
+  if (item.status === 'running') return Number.isFinite(start) ? formatSubAgentElapsed(Math.max(0, Date.now() - start)) : ''
+  if (typeof item.elapsedMs === 'number' && item.elapsedMs > 0) return formatSubAgentElapsed(item.elapsedMs)
+  const completed = Date.parse(item.completedAt || '')
+  return Number.isFinite(start) && Number.isFinite(completed) && completed > start ? formatSubAgentElapsed(completed - start) : ''
+}
+function runMetaLabel(item: CoreSubAgentRun): string {
+  const parts = [String(item.modelId || item.model || '—').trim() || '—']
+  const reasoning = String(item.reasoningLevel || '').trim()
+  if (reasoning) parts.push(reasoning)
+  const elapsed = runElapsed(item)
+  if (elapsed) parts.push(elapsed)
+  return parts.join(' · ')
+}
+function onPaneSwitchOutside(event: PointerEvent) {
+  if (!switchOpen.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('[data-sub-agent-pane-switch], [data-sub-agent-pane-switch-menu]')) return
+  closeSwitch()
+}
+onMounted(() => window.addEventListener('pointerdown', onPaneSwitchOutside, true))
+onBeforeUnmount(() => window.removeEventListener('pointerdown', onPaneSwitchOutside, true))
+watch(() => props.run.subSessionId || props.run.id, closeSwitch)
 
 // ── 面板宽度拖拽：与右侧栏那条把手同一套口径（左拖加宽、限宽、方向键、指针捕获）。──
 // 下限保住面板内过程卡片的可读宽度；上限保证聊天区不被挤没（聊天区最小宽 + 右栏 + 缝）。
@@ -519,12 +623,15 @@ onBeforeUnmount(() => {
 }
 
 .sub-agent-pane-head {
+  position: relative;
+  z-index: 2;
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--theme-main-background);
 }
 
 .sub-agent-pane-back {
@@ -551,8 +658,60 @@ onBeforeUnmount(() => {
   outline-offset: 1px;
 }
 
-.sub-agent-pane-name {
+/* 页眉本身就是切换器：两行文字 + 一个下拉菜单。 */
+.sub-agent-pane-switch {
+  position: relative;
   flex: 1 1 auto;
+  min-width: 0;
+}
+.sub-agent-pane-switch-trigger {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sub-agent-pane-switch-trigger:disabled { cursor: default; opacity: 1; color: inherit; }
+.sub-agent-pane-switch-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+.sub-agent-pane-switch-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-width: 0;
+}
+.sub-agent-pane-switch-caret {
+  flex: 0 0 auto;
+  opacity: .55;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.sub-agent-pane-switch.is-open .sub-agent-pane-switch-caret { transform: rotate(180deg); }
+.sub-agent-pane-switch-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+  white-space: nowrap;
+}
+.sub-agent-pane-switch-meta-item { overflow: hidden; text-overflow: ellipsis; }
+.sub-agent-pane-switch-sep { flex: 0 0 auto; }
+
+.sub-agent-pane-name {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   font-size: 13px;
@@ -561,8 +720,76 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.sub-agent-pane-switch-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: var(--z-popover, 60);
+  width: min(360px, 100%);
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+  box-shadow: var(--shadow-md);
+}
+.sub-agent-pane-switch-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sub-agent-pane-switch-item:hover,
+.sub-agent-pane-switch-item:focus-visible {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  outline: none;
+}
+.sub-agent-pane-switch-item.is-current { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.sub-agent-pane-switch-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.sub-agent-pane-switch-item-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sub-agent-pane-switch-item-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+.sub-agent-pane-switch-item-meta {
+  overflow: hidden;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sub-agent-pane-switch-empty {
+  margin: 0;
+  padding: var(--space-2);
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+}
+
 .sub-agent-pane-status {
   flex: 0 0 auto;
+  align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -585,28 +812,6 @@ onBeforeUnmount(() => {
 .sub-agent-pane-status-icon { animation: sub-agent-pane-spin 1.4s linear infinite; }
 @keyframes sub-agent-pane-spin { to { transform: rotate(360deg); } }
 
-.sub-agent-pane-meta {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-3) 0;
-  overflow: hidden;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--text) 65%, transparent);
-  white-space: nowrap;
-}
-.sub-agent-pane-meta-item {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sub-agent-pane-meta-sep { flex: 0 0 auto; }
-
-
-/* 过程正文沿用主线程那一套：容器带上 `thread` 类，
-   `.thread` 作用域的规则（过程组标题的网格、思考/工具卡片的排版）才会生效。
-   但这些规则里属于「线程容器几何」的部分归分屏卡自己——全出血、composer 底部
-   留白、顶部渐隐都在这里收回，其余（网格间距、滚动条、卡片排版）保持与主线程一致。 */
 .sub-agent-pane-scroll {
   width: auto;
   margin-inline: 0;

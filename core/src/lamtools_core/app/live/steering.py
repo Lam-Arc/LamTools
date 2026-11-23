@@ -11,6 +11,7 @@ from lamtools_core.runtime import normalize_run_id
 from ..event_store import AppEventEnvelope, AppEventInput
 from ..live_protocol import INVALID_REQUEST, rpc_error, rpc_result
 from ..queue_state import input_items_text, latest_active_turn_id
+from ..steering import GUIDANCE_CONSUMED_METHOD, _consumed_event_id, pending_steering
 from .context import CoreLiveContext, CoreLiveOperationOutcome
 
 
@@ -213,6 +214,8 @@ async def _deliver_as_next_user_turn(
         "thread_id": thread_id,
         "client_message_id": client_message_id,
         "input": [dict(item) for item in input_items if isinstance(item, dict)],
+        # user:“修”+(内部转新回合不消费响应快照，外层 steer 会按需自行装配，避免重复整库重装)。
+        "include_snapshot": False,
         **_forwarded_turn_params(params),
     }
     started: dict[str, Any] | None = None
@@ -274,6 +277,8 @@ async def _queue_refused_guidance(
         "client_message_id": client_message_id,
         "input": input_items,
         "mode": "next_turn",
+        # user:“修”+(内部回退排队只检查 queue_item，禁止白装整库快照)。
+        "include_snapshot": False,
         **_forwarded_turn_params(params),
     }
     try:
@@ -488,3 +493,101 @@ async def handle_turn_steer_operation(
         response=rpc_result(request_id, response_payload),
         publish_events=[event],
     )
+
+
+async def hand_off_pending_guidance(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+) -> dict[str, Any]:
+    """把没有被任何回合消费的引导投成一个新回合。
+
+    user:“引导的回合归属，应由其所在 Step 的最终结果决定，而不是引导到达时的
+    回合状态”+(回合已经越过最终步：仍在登记表里的引导一律属于下一回合。这里把
+    它们当作一条普通用户消息重新发送，并留下消费回执，恢复时不得再投一次)。
+    """
+    from .background import _logger
+
+    empty = {"delivered": False, "guidance_ids": [], "turn_id": ""}
+    if not thread_id or context.session_factory is None or context.persistence is None:
+        return empty
+    try:
+        items = await pending_steering(context.session_factory, thread_id)
+    except BaseException:
+        _logger.exception(
+            "[live:steer] failed to read pending guidance thread_id=%s", thread_id
+        )
+        return empty
+    if not items:
+        return empty
+    guidance_ids = [str(item.get("id") or "") for item in items if item.get("id")]
+    input_items: list[dict[str, Any]] = []
+    for item in items:
+        raw = item.get("input") or []
+        if isinstance(raw, list) and raw:
+            input_items.extend(dict(entry) for entry in raw if isinstance(entry, dict))
+        elif str(item.get("content") or "").strip():
+            input_items.append({"type": "text", "text": str(item["content"])})
+    if not guidance_ids or not input_items:
+        return {**empty, "guidance_ids": guidance_ids}
+    delivered = await _deliver_as_next_user_turn(
+        context=context,
+        thread_id=thread_id,
+        params={},
+        input_items=input_items,
+        client_message_id=guidance_ids[0],
+    )
+    new_turn_id = str(delivered.get("turn_id") or "")
+    await _record_guidance_handoff(
+        context=context,
+        thread_id=thread_id,
+        turn_id=new_turn_id,
+        guidance_ids=guidance_ids,
+    )
+    return {
+        "delivered": bool(delivered.get("submitted") or delivered.get("queued")),
+        "guidance_ids": guidance_ids,
+        "turn_id": new_turn_id,
+    }
+
+
+async def _record_guidance_handoff(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    turn_id: str,
+    guidance_ids: list[str],
+) -> None:
+    """把「已交给新回合」落成消费事实，避免恢复时重复投递。"""
+    from .background import _logger
+    from .events import _append_app_event
+
+    ids = [
+        str(guidance_id).strip()
+        for guidance_id in guidance_ids
+        if str(guidance_id or "").strip()
+    ]
+    if not ids or context.persistence is None:
+        return
+
+    async def write(db: Any) -> None:
+        for guidance_id in ids:
+            await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    event_id=_consumed_event_id(thread_id, guidance_id),
+                    thread_id=thread_id,
+                    turn_id=turn_id or None,
+                    client_message_id=guidance_id,
+                    method=GUIDANCE_CONSUMED_METHOD,
+                    payload={"guidance_ids": [guidance_id], "handoff": True},
+                ),
+            )
+
+    try:
+        await context.persistence.write(write)
+    except BaseException:
+        _logger.exception(
+            "[live:steer] failed to record guidance handoff thread_id=%s", thread_id
+        )

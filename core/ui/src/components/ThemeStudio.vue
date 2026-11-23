@@ -1770,7 +1770,6 @@ const LAYOUT_SIZE_VARIABLES: Record<string, { variable: string; axis: 'width' | 
   'shell.app-rail': { variable: '--layout-rail-width', axis: 'width' },
   'shell.left-drawer': { variable: '--layout-sidebar-width', axis: 'width' },
   'shell.right-drawer': { variable: '--layout-right-drawer-width', axis: 'width' },
-  'shell.titlebar': { variable: '--layout-titlebar-height', axis: 'height' },
   // user:“我认为主区和分屏本质是一个容器”+(分屏主面板宽度写内容区变量，主区/输入栏一起跟随)
   'shell.split': { variable: '--layout-split-primary-width', axis: 'width' },
 }

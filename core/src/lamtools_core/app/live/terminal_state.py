@@ -124,14 +124,12 @@ async def _persist_cancelled_terminal(
     from .recovery import _turn_execution_id, _turn_is_terminal
     await _persist_cancelled_runtime_state(context=context, thread_id=thread_id, turn_id=turn_id)
 
-    async def write(db: AsyncSession) -> AppEventEnvelope | None:
-        # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(终止状态只读取回合元数据，避免每次收尾装载整段会话)。
-        loader = getattr(context.persistence, "load_metadata", context.persistence.load)
-        snapshot = await loader(db, thread_id)
+    if getattr(context.persistence, "can_use_rust_write", False):
+        async with context.session_factory() as db:
+            loader = getattr(context.persistence, "load_metadata", context.persistence.load)
+            snapshot = await loader(db, thread_id)
         if _turn_is_terminal(snapshot, turn_id):
             return None
-        # user:“结束事件不能创建回合”+没有这个回合就什么都不写：宁可留下一个
-        # 未落终态的执行，也不用执行编号造出一个假的逻辑回合（AR-06）。
         known_turns = snapshot.get("turns") if isinstance(snapshot.get("turns"), dict) else {}
         core = snapshot.get("core")
         core_turns = core.get("turns") if isinstance(core, dict) else None
@@ -149,10 +147,38 @@ async def _persist_cancelled_terminal(
         terminal.run_id = execution_id
         terminal.event_id = _terminal_event_id(thread_id, turn_id, execution_id, "cancelled")
         terminal.item_id = f"{turn_id}:terminal"
-        event = await _append_run_item(db, context=context, event=terminal)
-        return event
+        envelopes = await context.persistence.append_batch_atomic(run_item_events=[terminal])
+        event = envelopes[0] if envelopes else None
+    else:
+        async def write(db: AsyncSession) -> AppEventEnvelope | None:
+            # user:“该修修，该重构重构，有必要就重新设计架构或者迁到 Rust”+(终止状态只读取回合元数据，避免每次收尾装载整段会话)。
+            loader = getattr(context.persistence, "load_metadata", context.persistence.load)
+            snapshot = await loader(db, thread_id)
+            if _turn_is_terminal(snapshot, turn_id):
+                return None
+            # user:“结束事件不能创建回合”+没有这个回合就什么都不写：宁可留下一个
+            # 未落终态的执行，也不用执行编号造出一个假的逻辑回合（AR-06）。
+            known_turns = snapshot.get("turns") if isinstance(snapshot.get("turns"), dict) else {}
+            core = snapshot.get("core")
+            core_turns = core.get("turns") if isinstance(core, dict) else None
+            if turn_id not in known_turns and not (
+                isinstance(core_turns, dict) and turn_id in core_turns
+            ):
+                _logger.warning(
+                    "[live] refused a terminal for an unknown turn thread=%s turn=%s",
+                    thread_id,
+                    turn_id,
+                )
+                return None
+            terminal = build_cancelled_turn_event(thread_id=thread_id, turn_id=turn_id)
+            execution_id = _turn_execution_id(snapshot, turn_id)
+            terminal.run_id = execution_id
+            terminal.event_id = _terminal_event_id(thread_id, turn_id, execution_id, "cancelled")
+            terminal.item_id = f"{turn_id}:terminal"
+            event = await _append_run_item(db, context=context, event=terminal)
+            return event
 
-    event = await context.persistence.write(write)
+        event = await context.persistence.write(write)
     if event is None:
         return None
     await context.hub.publish(event)

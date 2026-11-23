@@ -173,6 +173,51 @@ export async function closePingCapture(): Promise<void> {
 }
 
 /**
+ * 截图取字：把截好的一块图交给 Windows 自带的识别引擎（离线，不联网）。
+ *
+ * user:“把「截图/选中区域 → 提取文字」做通，结果可复制、可直接送进会话”+
+ * (识别在 Rust 侧走 Windows.Media.Ocr；这里只负责传图，失败时把宿主的错误码带出来，
+ *  界面才能给出「去装语言包」这类可操作提示，而不是一句含糊的失败。)
+ */
+export interface OcrLine {
+  text: string
+  /** 这一行在图片里的位置 [x, y, width, height]，图片像素。 */
+  bounds: [number, number, number, number]
+}
+
+export interface OcrResult {
+  text: string
+  lines: OcrLine[]
+  language: string
+  image_width: number
+  image_height: number
+  max_image_dimension: number
+  available_languages: string[]
+}
+
+export class OcrFailure extends Error {
+  code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'OcrFailure'
+    this.code = code
+  }
+}
+
+export async function ocrImage(image: string, language?: string): Promise<OcrResult> {
+  try {
+    return await invoke<OcrResult>('ocr_image', language ? { image, language } : { image })
+  } catch (thrown) {
+    // 宿主把失败包成 {code, message, retriable}：拆开再抛，界面按 code 说话。
+    const candidate = (thrown ?? {}) as Record<string, unknown>
+    const code = typeof candidate.code === 'string' ? candidate.code : 'ocr_failed'
+    const message = typeof candidate.message === 'string' ? candidate.message : String(thrown)
+    throw new OcrFailure(code, message)
+  }
+}
+
+/**
  * 覆盖层心跳：告诉宿主"这块窗口还有人画"。
  *
  * user:“从你启动开始就一直是黑屏未响应状态”+(宿主侧没人画的全屏窗口必须能被

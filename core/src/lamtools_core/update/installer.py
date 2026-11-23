@@ -303,11 +303,16 @@ def _launch_installer(candidate: Path) -> None:
         _record_launch(candidate, arguments, log_path, failure_path, process_id=0, mode="shell")
         return
 
-    try:
-        _confirm_installer_survives(process, candidate, arguments, log_path, failure_path)
-    finally:
-        if process.returncode is not None:
-            process.close()
+    # user:“有用户提到「更新器那个 Popen.close()的bug」，查一下是否存在，修掉”+
+    # (确实存在：subprocess.Popen 没有 close() 方法，原来那句只要执行到就是
+    #  AttributeError。它偏偏在「安装程序启动后立即退出（退出码 N）」这条路径上执行，
+    #  于是真正的失败原因被一句属性错误顶掉：设置页只看到莫名其妙的报错，重试也永远
+    #  读不到退出码。)
+    #
+    # 安装程序没有接任何管道（stdout/stderr 都是 None），没有可关的句柄；已退出的子
+    # 进程已由 poll() 收走；仍在运行的那个必须活过本进程——这正是下面的检查要证明的
+    # 事。所以这里不做任何「关闭」动作。
+    _confirm_installer_survives(process, candidate, arguments, log_path, failure_path)
 
 
 #: How long a freshly started setup has to prove it is alive and outside our job.

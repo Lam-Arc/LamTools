@@ -89,7 +89,8 @@ async function walk(path) {
     if (entry.name === 'node_modules' || entry.name === 'dist') continue
     const full = join(path, entry.name)
     if (entry.isDirectory()) result.push(...await walk(full))
-    else if (['.vue', '.css', '.html', '.ts', '.js', '.mjs'].includes(extname(entry.name))) result.push(full)
+    // user:“全面盘点：梳理所有可见的组件、样式、布局、动效及交互”+(类型声明不是界面源码，不混入盘点结果)。
+    else if (!entry.name.endsWith('.d.ts') && ['.vue', '.css', '.html', '.ts', '.js', '.mjs'].includes(extname(entry.name))) result.push(full)
   }
   return result
 }

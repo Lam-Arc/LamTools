@@ -16,6 +16,19 @@ from .context import CoreLiveContext, CoreLiveOperationOutcome
 from .handoff import complete_turn_handoff
 
 
+def _turn_start_lock(context: CoreLiveContext, thread_id: str) -> asyncio.Lock:
+    """Per-thread lock serializing Rust-backed turn acceptance without blocking other threads."""
+    locks = getattr(context.persistence, "_rust_turn_start_locks", None)
+    if not isinstance(locks, dict):
+        locks = {}
+        setattr(context.persistence, "_rust_turn_start_locks", locks)
+    lock = locks.get(thread_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[thread_id] = lock
+    return lock
+
+
 def _resume_target_turn(snapshot: dict[str, Any], requested: str) -> tuple[dict[str, Any], str]:
     """Pick the paused turn a resume request names, not the highest seq."""
     turns = snapshot.get("turns") if isinstance(snapshot.get("turns"), dict) else {}
@@ -331,7 +344,7 @@ async def handle_turn_start_operation(
     _t_prepared = time_module.perf_counter()
 
 
-    async def write(db):
+    async def _run_turn_acceptance(db: Any, *, use_atomic_append: bool = False):
         nonlocal run_claimed
         _w0 = time_module.perf_counter()
         existing = await context.persistence.find_client_event(
@@ -346,14 +359,6 @@ async def handle_turn_start_operation(
             return ("existing", existing, None, None, None, False)
 
         _w2 = time_module.perf_counter()
-        # 回合创建是幂等追加（client_message_id 去重）：它只追加 turn/accepted、
-        # user item 与 running 状态，不读改写任何共享字段，真正的并发保护是下面的
-        # 活跃回合判定（注册表 + 元数据行）。因此这里不做修订号 CAS：活跃回合持续
-        # 追加事件会把会话修订号一路推高，而本写又要排队数秒才执行，客户端在发起
-        # RPC 前读到的修订号几乎必然落后，CAS 会把一条合法的新回合打成
-        # REVISION_CONFLICT，还盖住了本该返回的 SESSION_BUSY（2026-10-12）。
-        # 只需要轮次状态与顶层用户条目顺序（活跃轮判定 + 首条消息判定），
-        # 全部存放在元数据行——这里曾装配整个会话的条目表，大会话上阻塞写锁秒级。
         snapshot = await context.persistence.load_metadata(db, thread_id)
         _w3 = time_module.perf_counter()
         _logger.info("[PERF:turn_start:write] load_metadata=%.3fs", _w3 - _w2)
@@ -371,18 +376,11 @@ async def handle_turn_start_operation(
                     },
                 )
             )
-        # A continuation of the paused turn runs through this same executor, so
-        # the gate below must let its own resume pass and only refuse a *new*
-        # turn started behind the paused one.
         is_continuation = str(
             params.get("origin") or params.get("turn_origin") or ""
         ).strip() == "turn_resume"
         paused_turn_id = "" if is_continuation else _paused_turn_id(snapshot)
         if paused_turn_id:
-            # One session, one turn: a paused turn owns the session until the
-            # user continues or terminates it. Clients turn a send into a
-            # continue, so reaching here means a caller tried to start a second
-            # turn behind the paused one.
             return CoreLiveOperationOutcome(
                 response=rpc_error(
                     request_id,
@@ -395,8 +393,6 @@ async def handle_turn_start_operation(
                     },
                 )
             )
-        # Detect a first message: the snapshot has no items yet. Captured before
-        # the user item is appended so it reflects the pre-turn state.
         prior_item_order = snapshot.get("item_order") if isinstance(snapshot, dict) else None
         is_first_message = not prior_item_order
         if not context.host.runtime_task_registry.accept_run(thread_id, turn_id, turn_id=turn_id):
@@ -441,8 +437,6 @@ async def handle_turn_start_operation(
                 user_payload_extra={
                     **materialized.user_payload_extra,
                     **(
-                        # An automatic turn's input is a SYSTEM message, not the
-                        # user's: the interface must not render it as their text.
                         {"origin": turn_origin, "type": "systemMessage", "role": "system"}
                         if turn_origin
                         else {}
@@ -451,16 +445,20 @@ async def handle_turn_start_operation(
                 include_turn_status=materialized.include_turn_status,
             )
             _w4 = time_module.perf_counter()
-            envelopes = await context.persistence.append_batch(
-                db,
-                app_events=[_app_event_input(plan.turn_accepted), _app_event_input(plan.user_item)],
-                run_item_events=[plan.running_status],
-            )
+            if use_atomic_append:
+                envelopes = await context.persistence.append_batch_atomic(
+                    app_events=[_app_event_input(plan.turn_accepted), _app_event_input(plan.user_item)],
+                    run_item_events=[plan.running_status],
+                )
+            else:
+                envelopes = await context.persistence.append_batch(
+                    db,
+                    app_events=[_app_event_input(plan.turn_accepted), _app_event_input(plan.user_item)],
+                    run_item_events=[plan.running_status],
+                )
             _w5 = time_module.perf_counter()
             _logger.info("[PERF:turn_start:write] append_batch=%.3fs", _w5 - _w4)
             accepted, user, running = envelopes[0], envelopes[1], envelopes[2]
-            # 响应快照不再在写锁内装配（曾有一次全量 load + 一次 return_state 全量
-            # load）；需要快照的调用方在事务提交后于锁外装配。
             return ("applied", accepted, user, running, materialized, is_first_message)
         except BaseException:
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
@@ -468,7 +466,13 @@ async def handle_turn_start_operation(
             raise
 
     try:
-        write_result = await context.persistence.write(write)
+        if context.persistence.can_use_rust_write:
+            # user:“实现，我需要最后可感觉到的体验优化”+(发送确认走 Rust 读池+单写事务，不再占着 Python SQLiteWriteCoordinator)。
+            async with _turn_start_lock(context, thread_id):
+                async with context.session_factory() as read_db:
+                    write_result = await _run_turn_acceptance(read_db, use_atomic_append=True)
+        else:
+            write_result = await context.persistence.write(_run_turn_acceptance)
     except BaseException:
         if run_claimed:
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
@@ -479,9 +483,9 @@ async def handle_turn_start_operation(
     include_snapshot = _include_snapshot_param(params)
     response_snapshot: dict[str, Any] | None = None
     outcome_kind, accepted, user, running, materialized, is_first_message = write_result
-    if include_snapshot:
-        response_snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
     if outcome_kind == "existing":
+        if include_snapshot:
+            response_snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
         response_payload: dict[str, Any] = {"events": [accepted.to_dict()]}
         if response_snapshot is not None:
             response_payload["snapshot"] = response_snapshot
@@ -589,6 +593,10 @@ async def handle_turn_start_operation(
         # 失败终态快照比提交后的常规快照更新（含 failed 终态），必须覆盖。
         if include_snapshot:
             response_snapshot = failure_snapshot
+    elif include_snapshot:
+        # user:“修”+(可选的完整响应快照装配放到事件广播与后台启动之后，
+        # 避免慢快照把界面可见与任务开跑卡在“已写 running 但未通知”的窗口里)。
+        response_snapshot = await _load_snapshot_outside_write_lock(context, thread_id)
     _logger.info("[live:handle_turn_start] dispatched background task thread_id=%s turn_id=%s model=%s",
                   thread_id, turn_id, runtime_start.get("model_id") or "default")
     response_payload = {

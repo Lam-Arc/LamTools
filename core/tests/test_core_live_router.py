@@ -17,7 +17,7 @@ from lamtools_core.app.event_store import SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventGap, CoreAppEventHub
 from lamtools_core.app.live_operations import CoreLiveContext, CoreLiveOperationOutcome
 from lamtools_core.app.live_operations import handle_thread_resume_operation
-from lamtools_core.app.live_protocol import JsonRpcRequest, rpc_result
+from lamtools_core.app.live_protocol import NOT_INITIALIZED, JsonRpcRequest, rpc_result
 from lamtools_core.app.live_router import (
     CoreLiveConnection,
     CoreLiveConnectionAdapter,
@@ -1699,3 +1699,89 @@ def test_core_live_multi_client_fans_out_events_and_keeps_rpc_responses_owned() 
             mobile._unsubscribe()
 
     asyncio.run(run())
+
+
+def _make_not_initialized_context(tmp_path, db_name: str):
+    async def make_context() -> CoreLiveContext:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / db_name}", future=True)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        return CoreLiveContext(
+            session_factory=session_factory,
+            event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
+            snapshot_store=SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            ),
+            operations=OperationCatalog(),
+            hub=CoreAppEventHub(),
+        )
+
+    return make_context
+
+
+def test_core_live_router_replies_not_initialized_with_retriable_signal(tmp_path):
+    # user:"界面出现 Connection is not initialized"+(未握手的连接收到业务帧时，
+    # 必须立刻回一条可识别的错误：专用错误码 + reason/retriable 标记，客户端据此
+    # 重新握手并重试，而不是把它当成普通参数错误静默吞掉，也不是把帧丢进黑洞)。
+    app = FastAPI()
+    app.include_router(
+        create_core_live_router(_make_not_initialized_context(tmp_path, "not-init-signal.db")),
+        prefix="/api/core",
+    )
+    client = TestClient(app)
+
+    with client.websocket_connect("/api/core/app-server") as websocket:
+        websocket.send_json({"id": 1, "method": "goal.list", "params": {}})
+        rejected = websocket.receive_json()
+
+        assert rejected["id"] == 1
+        assert rejected["error"]["code"] == NOT_INITIALIZED
+        assert rejected["error"]["data"]["reason"] == "not_initialized"
+        assert rejected["error"]["data"]["retriable"] is True
+
+        # 同一条连接握手后必须继续可用：拒绝不能把连接、订阅或发送队列弄坏。
+        websocket.send_json({
+            "id": 2,
+            "method": "initialize",
+            "params": {"clientInfo": {"name": "test"}},
+        })
+        initialized = websocket.receive_json()
+        assert initialized["id"] == 2
+        assert "result" in initialized
+
+        websocket.send_json({"id": 3, "method": "goal.list", "params": {}})
+        served = websocket.receive_json()
+        assert served["id"] == 3
+        assert (served.get("error") or {}).get("code") != NOT_INITIALIZED
+
+
+def test_core_live_router_replies_every_frame_before_initialize_without_log_flood(tmp_path, caplog):
+    # user:"这次为什么又卡死到必须重启"+(未握手期间客户端按秒轮询时，每个请求都必须
+    # 拿到回包；同时重复拒绝的日志要按采样输出，不能一秒一行把 backend.log 写成风暴)。
+    app = FastAPI()
+    app.include_router(
+        create_core_live_router(_make_not_initialized_context(tmp_path, "not-init-flood.db")),
+        prefix="/api/core",
+    )
+    client = TestClient(app)
+    request_count = 40
+
+    with caplog.at_level(logging.INFO, logger="lamtools_core.app.live_router"):
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            for index in range(request_count):
+                websocket.send_json({"id": index + 1, "method": "goal.list", "params": {}})
+                reply = websocket.receive_json()
+                # 每个帧都有回包：绝不静默丢弃。
+                assert reply["id"] == index + 1
+                assert reply["error"]["code"] == NOT_INITIALIZED
+
+    rejection_lines = [
+        record for record in caplog.records
+        if "core.rpc.rejected" in record.getMessage()
+    ]
+    assert len(rejection_lines) <= 5, [record.getMessage() for record in rejection_lines]
+    # 采样日志必须带累计次数，运维才能看出这是一条循环而不是零星误报。
+    assert any("core.rpc.rejected" in record.getMessage() for record in rejection_lines)

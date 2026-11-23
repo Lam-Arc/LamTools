@@ -34,6 +34,8 @@ def clean_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     yield
     installer._VERIFIED.clear()
     installer._CANCEL.clear()
+    # 进度是模块级状态：一个测试留下的 "downloading" 不该被下一个测试当成真的在下载。
+    installer._set_progress(state="idle", received=0, total=0, name="", sha256="", path="", error="")
 
 
 @pytest.fixture()
@@ -127,8 +129,9 @@ class FakeSetup:
         self.pid = 4321
         self._exit_code = exit_code
         self.terminated = False
-        self.closed = False
         self.returncode = exit_code
+        # 真实的 subprocess.Popen 没有 close()：假对象也不许有，否则"更新器调用了
+        # 不存在的 close()"这种 bug 会被这层假实现挡住（曾经就挡住了）。
 
     def poll(self) -> int | None:
         return self._exit_code
@@ -140,9 +143,6 @@ class FakeSetup:
         self._exit_code = 1
         self.returncode = 1
         return 1
-
-    def close(self) -> None:
-        self.closed = True
 
 
 @pytest.fixture(autouse=True)
@@ -389,6 +389,38 @@ def test_run_installer_reveals_without_quitting_elsewhere(
     assert outcome["quit"] is False
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the platform with a single installer step")
+def test_an_installer_that_exited_at_once_reports_its_exit_code(
+    artifact_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """user:“有用户提到「更新器那个 Popen.close()的bug」，查一下是否存在，修掉”+
+
+    真实对象上根本没有 ``Popen.close()``。旧代码在"安装程序已经退出"时调用它，
+    抛出的 AttributeError 会把"退出码 N"这条真正的报错顶掉。这里让一个真的、已经
+    退出的 Popen 走完整条交接路径：必须看到退出码，而不是属性错误。
+    """
+    import subprocess
+
+    download_update(artifact_server, DIGEST)
+    exited = subprocess.Popen(
+        [sys.executable, "-c", "raise SystemExit(5)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        exited.wait(timeout=120)
+        assert not hasattr(exited, "close"), "Popen 没有 close()，这条断言是那个 bug 的根"
+        monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: exited)
+        monkeypatch.setattr(installer, "_process_is_in_a_job", lambda pid: False)
+
+        with pytest.raises(UpdateInstallError, match="退出码 5"):
+            run_installer()
+    finally:
+        if exited.poll() is None:
+            exited.kill()
+            exited.wait(timeout=30)
+
+
 def test_the_operations_are_registered() -> None:
     from lamtools_core.update.operations import build_update_operation_catalog
 
@@ -425,6 +457,28 @@ def test_update_download_refuses_when_the_manifest_has_no_digest(monkeypatch: py
 
     assert result.payload["ok"] is False
     assert "sha256" in result.payload["error"]
+
+
+def test_update_download_hands_back_the_running_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """user:“再次点更新键后的卡片继承进度”+(已经在下载时直接把当前进度交回去)。
+
+    重新点一次“更新”不能变成第二条传输，也不该为了拿地址和摘要再把清单读一遍：
+    那一步要走网络，慢的时候“继承进度”会先卡住，清单暂时取不到时还会把正在跑的
+    下载报成失败。
+    """
+    from lamtools_core.update import operations
+
+    installer._set_progress(state="downloading", received=10, total=100, message="")
+    checked: list[int] = []
+    monkeypatch.setattr(operations, "check_update", lambda: checked.append(1) or {})
+
+    catalog = operations.build_update_operation_catalog()
+    result = asyncio.run(catalog.execute("update.download", {}))
+
+    assert result.payload["ok"] is True
+    assert result.payload["state"] == "downloading"
+    assert result.payload["received"] == 10
+    assert checked == [], "清单不该被再读一遍"
 
 
 def _wait_for_state(expected: str, timeout_seconds: float = 15.0) -> dict:

@@ -28,13 +28,39 @@ class _ProjectionSink:
     async def emit(self, event: Any) -> None:
         context = self.context
         items = core_events_to_run_items([event], thread_id=event.session_id)
-        async def write(db):
-            missing = [item for item in items if await db.get(CoreAppEvent, item.event_id) is None]
-            return await context.persistence.append_batch(db, run_item_events=missing)
-        envelopes = await context.persistence.write(write)
+        if not items:
+            return
+        # user:“check，事件通道压力过高：可靠通道 32/64；已丢弃 257 帧可丢进度；正在自动恢复，无需操作”+(对账投影只补发真正新落库的缺失状态，避免向活跃连接重复推送旧事件)
+        if hasattr(context.persistence, "append_batch_atomic"):
+            envelopes = await context.persistence.append_batch_atomic(
+                run_item_events=items,
+                only_new=True,
+            )
+        else:
+            async def write(db):
+                missing = [item for item in items if await db.get(CoreAppEvent, item.event_id) is None]
+                return await context.persistence.append_batch(db, run_item_events=missing)
+            envelopes = await context.persistence.write(write)
         if context.hub is not None:
             for envelope in envelopes:
                 await context.hub.publish(envelope)
+
+
+async def _existing_event_ids(context: Any, event_ids: list[str]) -> set[str]:
+    """Return the subset of deterministic status event IDs already persisted."""
+    unique_ids = list(dict.fromkeys(eid for eid in event_ids if eid))
+    session_factory = getattr(context, "session_factory", None)
+    if not unique_ids or session_factory is None:
+        return set()
+    existing: set[str] = set()
+    async with session_factory() as db:
+        for start in range(0, len(unique_ids), 400):
+            chunk = unique_ids[start:start + 400]
+            rows = (await db.execute(
+                select(CoreAppEvent.event_id).where(CoreAppEvent.event_id.in_(chunk))
+            )).scalars().all()
+            existing.update(str(row) for row in rows if row)
+    return existing
 
 
 async def reconcile_sub_agent_state(*, context: Any, data_dir: Path | str,
@@ -45,13 +71,14 @@ async def reconcile_sub_agent_state(*, context: Any, data_dir: Path | str,
     with closing(sqlite3.connect(database)) as db:
         parents = [row[0] for row in db.execute("SELECT DISTINCT parent_thread_id FROM sub_agents")]
     repaired = 0
+    projection_sink = _ProjectionSink(context)
     for parent in parents:
         # user:“修 问题严重的话 就重新设计”+(对账复用真实所有者；冷启动的投影对象不取得执行权)。
         supervisor = find_sub_agent_supervisor(parent, data_dir=database.parent) or SubAgentSupervisor(
             parent_thread_id=parent,
             database_path=database,
             runner=SimpleNamespace(state_store=context.runtime_state_store,
-                                   parent_event_sink=_ProjectionSink(context)),
+                                   parent_event_sink=projection_sink),
             agent_run_store=getattr(context, "turn_store", None),
         )
         await supervisor.recover()
@@ -61,6 +88,7 @@ async def reconcile_sub_agent_state(*, context: Any, data_dir: Path | str,
             # The projection is a read model; never let it block registry
             # repair or member finalization below.
             pass
+        status_candidates: list[tuple[Any, str, str]] = []
         for payload in await supervisor.list():
             record = supervisor._required(payload["name"])
             if record.status == "running":
@@ -130,7 +158,21 @@ async def reconcile_sub_agent_state(*, context: Any, data_dir: Path | str,
                 # A process can stop after the registry commit but before its
                 # outbox insert. Reconstruct the same idempotent lifecycle fact.
                 supervisor._write_member_event(record, event)
-            await supervisor._publish_member_status(record, event=event)
+            # user:“check，事件通道压力过高：可靠通道 32/64；已丢弃 257 帧可丢进度；正在自动恢复，无需操作”+(仅对数据库里尚不存在的缺失状态通过幂等投影 sink 补发，不再向活跃连接重播全部历史子代理)
+            status_candidates.append((record, event, supervisor._member_status_event_id(record)))
+        if status_candidates:
+            existing_ids = await _existing_event_ids(
+                context, [eid for _, _, eid in status_candidates]
+            )
+            for record, event, eid in status_candidates:
+                if eid in existing_ids:
+                    continue
+                await supervisor._publish_member_status(
+                    record,
+                    event=event,
+                    sink=projection_sink,
+                )
+                existing_ids.add(eid)
     return repaired
 
 

@@ -6,13 +6,17 @@ import logging
 import os
 import time as _time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
+import json
+import uuid
 from typing import Any, Iterable, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lamtools_core.event import RunItemEvent
 
-from .event_store import AppEventEnvelope, AppEventInput, SqlAlchemyAppEventStore
+from .event_store import CORE_RUN_ITEM_METHOD, AppEventEnvelope, AppEventInput, SqlAlchemyAppEventStore
+from .rust_db import RustDbError, get_rust_db
 from .snapshot_store import SqlAlchemyThreadSnapshotStore
 from .sqlite_write import SQLiteWriteCoordinator, database_identity
 
@@ -83,10 +87,226 @@ class AppPersistenceHost:
             return self._write_coordinator_factory(session_factory)
         return SQLiteWriteCoordinator(session_factory)
 
+    def _active_rust_db(self) -> Any | None:
+        rust_db = getattr(self.snapshot_store, "_rust_db", None)
+        if rust_db is not None and rust_db.is_active:
+            return rust_db
+        rust_db = getattr(self.event_store, "_rust_db", None)
+        if rust_db is not None and rust_db.is_active:
+            return rust_db
+        if self._write_coordinator is not None:
+            return get_rust_db(getattr(self._write_coordinator, "session_factory", None))
+        return None
+
+    @property
+    def can_use_rust_write(self) -> bool:
+        return (
+            self._active_rust_db() is not None
+            and type(self).write is AppPersistenceHost.write
+            and "write" not in self.__dict__
+        )
+
     async def write(self, action: Callable[[AsyncSession], Awaitable[T]]) -> T:
         if self._write_coordinator is None:
             raise RuntimeError("AppPersistenceHost requires a session factory for writes")
         return await self._write_coordinator.run(action)
+
+    async def append_batch_atomic(
+        self,
+        *,
+        app_events: Iterable[AppEventInput] = (),
+        run_item_events: Iterable[RunItemEvent] = (),
+        return_state: bool = False,
+        project_snapshot: bool = True,
+        expected_revision: int | None = None,
+        revision_thread_id: str | None = None,
+        require_new: bool = False,
+        only_new: bool = False,
+    ) -> list[AppEventEnvelope] | tuple[list[AppEventEnvelope], dict[str, Any] | None]:
+        """Run ``append_batch`` atomically in Rust when available, or fall back to ``write``."""
+        app_event_list = list(app_events)
+        run_item_list = list(run_item_events)
+        if not app_event_list and not run_item_list:
+            return ([], None) if return_state else []
+
+        rust_db = self._active_rust_db() if self.can_use_rust_write else None
+        if rust_db is not None:
+            # user:“实现，我需要最后可感觉到的体验优化”+(事件批量写库与快照增量投影合并为 Rust 单次事务，提交后原地刷新缓存)。
+            from .core_db import _json_safe
+
+            serialized_events: list[dict[str, Any]] = []
+            touched_threads: set[str] = set()
+            for ev in app_event_list:
+                eid = ev.event_id or uuid.uuid4().hex
+                touched_threads.add(ev.thread_id)
+                serialized_events.append(
+                    {
+                        "event_id": eid,
+                        "thread_id": ev.thread_id,
+                        "method": ev.method,
+                        "turn_id": ev.turn_id,
+                        "item_id": ev.item_id,
+                        "parent_item_id": ev.parent_item_id,
+                        "client_message_id": ev.client_message_id,
+                        "payload": _json_safe(dict(ev.payload or {})),
+                        "workspace_id": str(
+                            ev.workspace_id or getattr(self.event_store, "workspace_id", "") or ""
+                        ),
+                        "entity_type": str(ev.entity_type or "thread.event"),
+                        "event_type": str(ev.event_type or ev.method),
+                    }
+                )
+            for item in run_item_list:
+                eid = item.event_id or uuid.uuid4().hex
+                touched_threads.add(item.thread_id)
+                serialized_events.append(
+                    {
+                        "event_id": eid,
+                        "thread_id": item.thread_id,
+                        "method": CORE_RUN_ITEM_METHOD,
+                        "turn_id": item.turn_id or None,
+                        "item_id": item.item_id or None,
+                        "parent_item_id": item.parent_item_id or None,
+                        "client_message_id": None,
+                        "payload": _json_safe(item.to_dict()),
+                        "workspace_id": str(getattr(self.event_store, "workspace_id", "") or ""),
+                        "entity_type": "thread.event",
+                        "event_type": CORE_RUN_ITEM_METHOD,
+                    }
+                )
+            projector = getattr(self.snapshot_store, "projector", None)
+            member_defaults = getattr(projector, "member_defaults", None)
+            emit_sync = getattr(self.event_store, "sync_change_model", None) is not None
+            try:
+                # user:“check，事件通道压力过高：可靠通道 32/64；已丢弃 257 帧可丢进度；正在自动恢复，无需操作”+(透传 only_new 并在无新增事件时免于清缓存/广播)
+                res = await rust_db.call(
+                    "append_and_project_batch",
+                    {
+                        "events": serialized_events,
+                        "project_snapshot": bool(project_snapshot),
+                        "expected_revision": int(expected_revision) if expected_revision is not None else None,
+                        "revision_thread_id": revision_thread_id,
+                        "workspace_id": str(getattr(self.event_store, "workspace_id", "") or ""),
+                        "emit_sync": emit_sync,
+                        "return_state": bool(return_state),
+                        "require_new": bool(require_new),
+                        "only_new": bool(only_new),
+                        "member_defaults": member_defaults if isinstance(member_defaults, dict) else None,
+                        "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                    },
+                )
+            except RustDbError as exc:
+                if exc.code == "conflict":
+                    try:
+                        info = json.loads(str(exc))
+                    except ValueError:
+                        info = {}
+                    if info.get("code") == "SESSION_ALREADY_EXISTS":
+                        return ([], None) if return_state else []
+                    raise RevisionConflictError(
+                        thread_id=str(info.get("thread_id") or revision_thread_id or ""),
+                        expected_revision=int(info.get("expected_revision") or (expected_revision or 0)),
+                        current_revision=int(info.get("current_revision") or 0),
+                    ) from exc
+                if exc.code == "invalid":
+                    raise ValueError(str(exc)) from exc
+                raise
+
+            envelopes = [
+                self.event_store._envelope_from_dict(row)
+                for row in (res.get("envelopes") or [])
+            ]
+            py_cache = getattr(self.snapshot_store, "_metadata_cache", None)
+            if isinstance(py_cache, dict) and envelopes:
+                for tid in touched_threads:
+                    py_cache.pop(tid, None)
+
+            if return_state:
+                return envelopes, res.get("state")
+            return envelopes
+
+        async def _fallback_write(db: AsyncSession):
+            if require_new and app_event_list:
+                snap_model = getattr(self.snapshot_store, "snapshot_model", None)
+                if snap_model is not None and await db.get(snap_model, str(app_event_list[0].thread_id)) is not None:
+                    return ([], None) if return_state else []
+            filtered_app = app_event_list
+            filtered_run = run_item_list
+            if only_new:
+                event_model = getattr(self.event_store, "event_model", None)
+                if event_model is not None:
+                    if expected_revision is not None:
+                        target_tid = revision_thread_id or (
+                            app_event_list[0].thread_id if app_event_list else run_item_list[0].thread_id
+                        )
+                        await self.assert_revision(db, target_tid, expected_revision)
+                    seen_batch: dict[str, str] = {}
+                    filtered_app = []
+                    for ev in app_event_list:
+                        eid = str(ev.event_id or "").strip()
+                        if eid:
+                            if eid in seen_batch:
+                                if seen_batch[eid] != ev.thread_id:
+                                    raise ValueError("Event identity belongs to another thread")
+                                continue
+                            existing = await db.get(event_model, eid)
+                            if existing is not None:
+                                if existing.thread_id != ev.thread_id:
+                                    raise ValueError("Event identity belongs to another thread")
+                                continue
+                            seen_batch[eid] = ev.thread_id
+                        filtered_app.append(ev)
+                    filtered_run = []
+                    for item in run_item_list:
+                        eid = str(item.event_id or "").strip()
+                        if eid:
+                            if eid in seen_batch:
+                                if seen_batch[eid] != item.thread_id:
+                                    raise ValueError("Event identity belongs to another thread")
+                                continue
+                            existing = await db.get(event_model, eid)
+                            if existing is not None:
+                                if existing.thread_id != item.thread_id:
+                                    raise ValueError("Event identity belongs to another thread")
+                                continue
+                            seen_batch[eid] = item.thread_id
+                        filtered_run.append(item)
+                    if not filtered_app and not filtered_run:
+                        return ([], None) if return_state else []
+            return await self.append_batch(
+                db,
+                app_events=filtered_app,
+                run_item_events=filtered_run,
+                return_state=return_state,
+                project_snapshot=project_snapshot,
+                expected_revision=expected_revision,
+                revision_thread_id=revision_thread_id,
+            )
+
+        return await self.write(_fallback_write)
+
+    async def assert_revision_atomic(
+        self,
+        thread_id: str,
+        expected_revision: int | None,
+    ) -> int:
+        if expected_revision is None:
+            return 0
+        rust_db = self._active_rust_db() if self.can_use_rust_write else None
+        if rust_db is not None:
+            meta = await rust_db.call(
+                "load_snapshot_metadata",
+                {"thread_id": str(thread_id)},
+            )
+            current = max(0, int(((meta or {}).get("state") or {}).get("revision") or 0))
+            if int(expected_revision) != current:
+                raise RevisionConflictError(
+                    thread_id=str(thread_id),
+                    expected_revision=int(expected_revision),
+                    current_revision=current,
+                )
+            return current
+        return await self.write(lambda db: self.assert_revision(db, thread_id, expected_revision))
 
     async def _refresh_envelopes(
         self,
@@ -147,6 +367,7 @@ class AppPersistenceHost:
         project_snapshot: bool = True,
         expected_revision: int | None = None,
         revision_thread_id: str | None = None,
+        require_new: bool = False,
     ) -> list[AppEventEnvelope] | tuple[list[AppEventEnvelope], dict[str, Any] | None]:
         """Append multiple events in one savepoint with a single batch projection.
 

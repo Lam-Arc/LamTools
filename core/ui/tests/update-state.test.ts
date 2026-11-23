@@ -309,6 +309,79 @@ describe('install hand-off and app exit', () => {
   })
 })
 
+describe('background download and inherited progress', () => {
+  it('adopts a transfer the host is already running instead of starting a new one', async () => {
+    let hostState = 'downloading'
+    const rpc = vi.fn(async (method: string) => {
+      if (method !== 'update.status') throw new Error(`unexpected ${method}`)
+      return hostState === 'downloading'
+        ? { ok: true, state: 'downloading', received: 30, total: 90, message: '' }
+        : { ok: true, state: 'verified', received: 90, total: 90, message: '' }
+    })
+    const state = useCoreUpdateState(rpc as never)
+
+    // 卡片重新打开：先问主机，进度直接继承下来（同一条传输，不从头开始）。
+    await state.syncFromHost()
+    expect(state.installState.value).toBe('downloading')
+    expect(state.installReceived.value).toBe(30)
+    expect(state.installTotal.value).toBe(90)
+
+    // 再点一次「更新」：接上同一条轮询，而不是再发一次 update.download。
+    const settled = state.downloadInstaller()
+    hostState = 'verified'
+    await expect(settled).resolves.toBe(true)
+    expect(rpc.mock.calls.filter(([method]) => method === 'update.download')).toHaveLength(0)
+    expect(state.installState.value).toBe('downloaded')
+  })
+
+  it('joins the running loop when 更新 is clicked again', async () => {
+    let statusCalls = 0
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'update.download') return { ok: true, state: 'downloading' }
+      if (method === 'update.status') {
+        statusCalls += 1
+        return statusCalls >= 2
+          ? { ok: true, state: 'verified', received: 90, total: 90, message: '' }
+          : { ok: true, state: 'downloading', received: 10, total: 90, message: '' }
+      }
+      throw new Error(`unexpected ${method}`)
+    })
+    const state = useCoreUpdateState(rpc as never)
+
+    const first = state.downloadInstaller()
+    const second = state.downloadInstaller()
+    expect(second).toBe(first)
+
+    await expect(second).resolves.toBe(true)
+    await expect(first).resolves.toBe(true)
+    expect(rpc.mock.calls.filter(([method]) => method === 'update.download')).toHaveLength(1)
+  })
+
+  it('shows a finished background download as ready to install', async () => {
+    const state = useCoreUpdateState((async (method: string) => {
+      if (method !== 'update.status') throw new Error(`unexpected ${method}`)
+      return { ok: true, state: 'verified', received: 90, total: 90, message: '已下载并校验 Sunday_9.9.9_x64-setup.exe' }
+    }) as never)
+
+    await state.syncFromHost()
+
+    expect(state.installState.value).toBe('downloaded')
+    expect(state.installMessage.value).toContain('已下载并校验')
+  })
+
+  it('does not stay stuck on a download the host no longer knows about', async () => {
+    const state = useCoreUpdateState((async (method: string) => {
+      if (method !== 'update.status') throw new Error(`unexpected ${method}`)
+      return { ok: true, state: 'idle' }
+    }) as never)
+
+    await state.syncFromHost()
+
+    expect(state.installState.value).toBe('idle')
+    expect(state.installProgress.value).toBeNull()
+  })
+})
+
 describe('CoreSettings 关于与更新 section (source contract)', () => {
   // The settings panel mounts inside SettingsShell and the existing test
   // environment cannot render it reliably (pre-existing recursive-update issue
@@ -343,8 +416,10 @@ describe('CoreSettings 关于与更新 section (source contract)', () => {
   it('wires the shared update state and the rail entry in the Shared Core App', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
     expect(source).toContain('useCoreUpdateState(requestConfigOperation)')
-    expect(source).toContain(':update-state="updateState"')
     expect(source).toContain('readUpdateAutoCheck()')
+    // 设置页由 page bindings 挂载，更新状态从应用层传进去（同一条进度，不再各算各的）。
+    const bindings = readFileSync(resolve(process.cwd(), 'src/app/useCorePageBindings.ts'), 'utf8')
+    expect(bindings).toContain("'updateState': unref(updateState)")
 
     // 新版本只有一个入口：左侧竖栏里、账号上方那一枚（AppRail 自己渲染），
     // 横幅已经下线——横跨窗口的提示条只留给后端崩溃。
@@ -361,7 +436,12 @@ describe('CoreSettings 关于与更新 section (source contract)', () => {
     expect(source).toContain('<CoreUpdateCard')
     expect(source).toContain('@confirm="onUpdateConfirm"')
     expect(source).toContain('@cancel="onUpdateCardCancel"')
-    expect(source).toContain("if (state === 'downloaded' && updateAutoInstall.value) installUpdateNow()")
+    expect(source).toContain('@closed="onUpdateCardClosed"')
+    // user:“更新时可以后台下载。再次点更新键后的卡片继承进度”+(打开卡片先接主机进度；
+    // 只有卡片还开着才自动安装——关掉时下载继续，安装交给「立即安装」。)
+    expect(source).toContain('void updateState.syncFromHost()')
+    expect(source).toContain("if (state !== 'downloaded') return")
+    expect(source).toContain('updateAutoInstall.value && updateCardOpen.value')
     expect(source).toContain('updateState.cancelDownload()')
   })
 })

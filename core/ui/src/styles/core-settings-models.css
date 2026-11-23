@@ -5,6 +5,17 @@
   gap: var(--space-5);
 }
 
+/* user:“放进设置-模型与供应商里面作为一个子功能，自行设计”+(子视图切换贴着分区顶部、左对齐，不加卡片)。 */
+.models-view-switch {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.models-view-body {
+  min-width: 0;
+}
+
 .models-title {
   align-items: flex-end;
   justify-content: space-between;

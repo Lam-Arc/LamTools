@@ -3,6 +3,12 @@ import { t } from '@/i18n/index.ts'
 import { copyText } from '@/helpers/clipboard.ts'
 import type { ContextMenuAnchor, ContextMenuEntry, ContextMenuAttributes, OpenContextMenuOptions } from '@/components/context-menu/types.ts'
 
+// user:“网页 z 轴太高…右键菜单服务统一在这里登记/注销，一处覆盖大部分场景”+
+// (菜单浮在网页之上时原生 webview 必须先让位；登记表只记「有几层浮层开着」，判定仍只有 browserVisibility 一份)。
+import { openOverlay } from '@/split/browserOverlays'
+
+let menuOverlayRelease: (() => void) | null = null
+
 export interface ContextMenuState {
   /** Changes for every open call, including replacement of an already open menu. */
   revision: number
@@ -502,6 +508,9 @@ export function openContextMenu(options: OpenContextMenuOptions): void {
   contextMenuState.ownerId = options.ownerId
   contextMenuState.panelAttributes = options.panelAttributes
   contextMenuState.ariaLabel = options.ariaLabel || t('上下文菜单')
+  // user:“菜单打开立刻 hide”+(先登记再装监听：登记后下一次 bounds 同步就会把网页藏起来)。
+  menuOverlayRelease?.()
+  menuOverlayRelease = openOverlay('context-menu')
   installListeners()
 }
 
@@ -513,6 +522,9 @@ export function closeContextMenu(options: { restoreFocus?: boolean } = {}): void
   const callback = closeCallback
   restoreFocusTarget = null
   closeCallback = undefined
+  // user:“关闭后一帧再 show”+(释放登记只说明「没有浮层了」，真正的恢复由调用方下一帧的 bounds 同步完成)。
+  menuOverlayRelease?.()
+  menuOverlayRelease = null
   contextMenuState.open = false
   contextMenuState.items = []
   contextMenuState.anchor = null

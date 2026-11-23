@@ -38,7 +38,8 @@
               <X :size="13" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </div>
-          <nav class="search-tabs" :aria-label="t('搜索范围')">
+          <!-- user:“同时收敛一下套系”+(搜索范围使用资料库与任务列表共用的筛选样式)。 -->
+          <nav class="search-tabs sunday-page-tabs" :aria-label="t('搜索范围')">
             <button
               v-for="category in CATEGORIES"
               :key="category.id"
@@ -56,9 +57,9 @@
         </header>
 
         <main class="search-body full-area-column">
-          <p v-if="actionError" class="search-status search-error" role="alert">{{ actionError }}</p>
+          <p v-if="actionError" class="sunday-page-status sunday-page-status--error" role="alert">{{ actionError }}</p>
           <p v-if="searching" class="search-status">{{ t("搜索中…") }}</p>
-          <p v-else-if="error" class="search-status search-error" role="alert">{{ error }}</p>
+          <p v-else-if="error" class="sunday-page-status sunday-page-status--error" role="alert">{{ error }}</p>
           <p v-else-if="!visibleRows.length" class="search-status search-hint">{{ hintText }}</p>
 
           <ul v-else :id="searchListId" class="search-results" role="listbox" :aria-label="t('搜索结果')">
@@ -806,38 +807,6 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   color: var(--theme-composer-text);
 }
 
-/* 范围切换：分段控件，与输入框同宽同轴。 */
-.search-tabs {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.search-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: 4px var(--space-2);
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 62%, transparent);
-  font-size: 12.5px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-
-.search-tabs button:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-}
-
-.search-tabs button.active {
-  background: var(--theme-control-background);
-  color: var(--theme-control-text);
-  border-color: color-mix(in srgb, var(--text) 12%, transparent);
-}
-
 .search-tab-icon {
   display: inline-flex;
 }
@@ -856,9 +825,6 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   font-size: 13px;
 }
 
-.search-status.search-error {
-  color: var(--red);
-}
 
 .search-status.search-hint {
   padding-top: var(--space-3);
@@ -1028,9 +994,4 @@ async function safeCatalog(call: () => Promise<Record<string, unknown>>): Promis
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .search-tabs button {
-    transition: none;
-  }
-}
 </style>

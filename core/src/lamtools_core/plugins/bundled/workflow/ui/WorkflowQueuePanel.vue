@@ -13,16 +13,17 @@
       <button type="button" role="tab" :aria-selected="tab === 'queue'" :tabindex="tab === 'queue' ? 0 : -1" :class="{ active: tab === 'queue' }" @click="tab = 'queue'">{{ t("当前队列") }}</button>
       <button type="button" role="tab" :aria-selected="tab === 'history'" :tabindex="tab === 'history' ? 0 : -1" :class="{ active: tab === 'history' }" @click="tab = 'history'">{{ t("运行历史") }}</button>
     </div>
+    <!-- user:“同时收敛一下套系”+(加入队列是主操作，清理与清空用共享危险按钮)。 -->
     <div class="wf-queue-actions">
-      <button type="button" class="wf-queue-primary" :disabled="loading || disabled" @click="enqueue">{{ t("加入队列") }}</button>
-      <button type="button" class="wf-queue-danger" :disabled="loading || !history.length" @click="requestClear(false)">{{ t("清理历史") }}</button>
-      <button type="button" class="wf-queue-danger wf-queue-danger-muted" :disabled="loading || (!items.length && !history.length)" @click="requestClear(true)">{{ t("清空全部") }}</button>
+      <button type="button" class="btn btn--primary btn--sm" :disabled="loading || disabled" @click="enqueue">{{ t("加入队列") }}</button>
+      <button type="button" class="btn btn--danger btn--sm" :disabled="loading || !history.length" @click="requestClear(false)">{{ t("清理历史") }}</button>
+      <button type="button" class="btn btn--danger btn--sm" :disabled="loading || (!items.length && !history.length)" @click="requestClear(true)">{{ t("清空全部") }}</button>
     </div>
     <div v-if="pendingClear !== null" class="wf-queue-confirm" role="alertdialog" :aria-label="t('确认清理队列')">
       <p>{{ t("此操作不可撤销，将") }}{{ pendingClear ? t("删除全部队列项和历史") : t("删除已结束历史") }}。</p>
       <div>
-        <button type="button" @click="pendingClear = null">{{ t("取消") }}</button>
-        <button type="button" class="wf-queue-danger" @click="confirmClear">{{ t("确认清理") }}</button>
+        <button type="button" class="btn btn--quiet btn--sm" @click="pendingClear = null">{{ t("取消") }}</button>
+        <button type="button" class="btn btn--danger btn--sm" @click="confirmClear">{{ t("确认清理") }}</button>
       </div>
     </div>
     <ul v-if="visibleItems.length" class="wf-queue-list" aria-live="polite">
@@ -145,16 +146,10 @@ function formatTimestamp(value: string | null | undefined): string {
 .wf-queue-tabs button { flex: 1 1 0; min-height: 28px; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent); cursor: pointer; font-size: 10px; }
 .wf-queue-tabs button:hover, .wf-queue-tabs button.active { background: color-mix(in srgb, var(--blue) 18%, transparent); color: var(--theme-backdrop-text); }
 .wf-queue-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-.wf-queue-actions button, .wf-queue-confirm button { min-height: 28px; border: 0; border-radius: var(--radius-sm); padding: 0 var(--space-2); cursor: pointer; font-size: 10px; }
-.wf-queue-primary { background: var(--theme-control-background); color: var(--theme-control-text); font-weight: 650; }
-.wf-queue-primary:hover:not(:disabled) { filter: brightness(.94); }
-.wf-queue-danger { background: var(--red); color: var(--theme-control-text); font-weight: 650; }
-.wf-queue-danger-muted { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
-.wf-queue-actions button:disabled { opacity: .4; cursor: default; }
+.wf-queue-actions .btn, .wf-queue-confirm .btn { min-height: var(--interaction-height-sm); padding-inline: var(--space-2); }
 .wf-queue-confirm { display: grid; gap: var(--space-2); padding: var(--space-2); border: 1px solid color-mix(in srgb, var(--orange) 40%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--orange) 8%, transparent); }
 .wf-queue-confirm p { margin: 0; color: color-mix(in srgb, var(--theme-backdrop-text) 75%, transparent); font-size: 10px; line-height: 1.4; }
 .wf-queue-confirm > div { display: flex; justify-content: flex-end; gap: var(--space-1); }
-.wf-queue-confirm button:first-child { background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text) 72%, transparent); }
 .wf-queue-list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
 .wf-queue-item { display: flex; min-width: 0; align-items: stretch; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-backdrop-text) 4%, transparent); }
 .wf-queue-item.selected { background: color-mix(in srgb, var(--blue) 14%, transparent); }

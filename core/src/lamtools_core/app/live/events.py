@@ -60,17 +60,14 @@ async def _persist_operation_result(
     raw_items = payload.get("run_items")
     if not isinstance(raw_items, list):
         return
-    async def write(db: AsyncSession) -> list[AppEventEnvelope]:
-        run_item_list: list[RunItemEvent] = []
-        for raw in raw_items:
-            if not isinstance(raw, dict):
-                continue
-            item = RunItemEvent.from_dict({**raw, "thread_id": raw.get("thread_id") or thread_id, "turn_id": raw.get("turn_id") or turn_id})
-            run_item_list.append(item)
-        if not run_item_list:
-            return []
-        return await context.persistence.append_batch(db, run_item_events=run_item_list)
-
-    events = await context.persistence.write(write)
+    run_item_list: list[RunItemEvent] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        item = RunItemEvent.from_dict({**raw, "thread_id": raw.get("thread_id") or thread_id, "turn_id": raw.get("turn_id") or turn_id})
+        run_item_list.append(item)
+    if not run_item_list:
+        return
+    events = await context.persistence.append_batch_atomic(run_item_events=run_item_list)
     for event in events:
         await context.hub.publish(event)

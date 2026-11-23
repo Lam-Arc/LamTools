@@ -1,0 +1,13 @@
+[package]
+name = "browser-assert"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Sunday 内置浏览器的静态安全断言（不依赖 tauri / webview / 可执行文件）"
+
+# user:“browser_security_assert 的 CI 可跑性…拆成不依赖 bin 的独立测试 crate”+
+# (这份 crate 只读源码与配置文本：没有 tauri 依赖，就没有 Sunday.exe，也就不会被
+#  本机正在运行的 dev/安装版锁住（cargo 构建 bin 时的 os error 5）。
+#  运行方式：cargo test --manifest-path core/desktop/browser-assert/Cargo.toml)
+[dependencies]
+serde_json = "1"

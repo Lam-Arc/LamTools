@@ -2897,8 +2897,17 @@ dependencies = [
  "rqrr",
  "serde",
  "serde_json",
+ "sunday-p2p-status",
  "tokio",
  "tokio-tungstenite",
+]
+
+[[package]]
+name = "sunday-p2p-status"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

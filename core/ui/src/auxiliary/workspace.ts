@@ -1,6 +1,6 @@
 import { inject, type InjectionKey, type Ref } from 'vue'
 import type { LamToolsTransport } from '@/transport'
-import type { SplitWorkspaceController } from '@/split/useSplitWorkspace'
+import type { WorkspaceController } from '@/workspace/types'
 import type { MarkAnchor, StudyMark } from '@/study/types'
 import type { RuntimeFileCapabilities } from '@/app/runtime'
 import type { CoreExecutionModelSource, CoreModelCatalogView } from '@/composer/execution'
@@ -34,7 +34,7 @@ export interface AuxiliaryEnvironment {
   refreshSessions(): void | Promise<void>
 }
 // user:“侧屏，笔误”+(辅助对话作为分屏内容打开，主聊天和已有选文记录保持独立)。
-export function createAuxiliaryWorkspace(controller: SplitWorkspaceController, environment: AuxiliaryEnvironment) {
+export function createAuxiliaryWorkspace(controller: WorkspaceController, environment: AuxiliaryEnvironment) {
   const attachmentTargets = new Map<string, (files: ArrayLike<File | { path: string; name: string }>) => void>()
   // user:“包括附件上传”+(桌面原生拖入和全窗口上传按当前分屏路由，不能把辅助会话附件发给主聊天)。
   function registerAttachmentTarget(id: string, upload: (files: ArrayLike<File | { path: string; name: string }>) => void) {
@@ -44,7 +44,7 @@ export function createAuxiliaryWorkspace(controller: SplitWorkspaceController, e
   function routeAttachmentDrop(files: ArrayLike<File | { path: string; name: string }>) {
     if (controller.state.hidden || controller.state.activePane === 'main') return false
     const pane = controller.state.panes[controller.state.activePane]
-    const upload = pane && attachmentTargets.get(pane.activeTab)
+    const upload = pane && pane.activeTab ? attachmentTargets.get(pane.activeTab) : undefined
     if (!upload) return false
     upload(files)
     return true
@@ -56,12 +56,13 @@ export function createAuxiliaryWorkspace(controller: SplitWorkspaceController, e
       && tab.context.anchor.start === anchor.start && tab.context.anchor.end === anchor.end && tab.context.anchor.quote === anchor.quote)
     if (existing) {
       if (context?.mark && !existing.tab.contextSent) existing.tab.context = { ...context, anchor }
-      controller.state.focused = null; controller.show(existing.pane); controller.activate(existing.pane, existing.tab.id)
+      controller.show(existing.pane)
+      controller.activate(existing.pane, existing.tab.id)
       return existing.tab
     }
     const title = anchor?.quote ? anchor.quote.replace(/\s+/g, ' ').slice(0, 24) : '辅助对话'
-    const id = controller.add('conversation', '', title, target, anchor?.session_id || environment.sourceSessionId.value || undefined, environment.workRoot.value)
-    const tab = controller.tabs.value.find(({ tab }) => tab.id === id)?.tab
+    const created = controller.add('conversation', '', title, target, anchor?.session_id || environment.sourceSessionId.value || undefined, environment.workRoot.value)
+    const tab = created
     if (tab) { tab.context = context ? { ...context, anchor } : undefined; tab.modelId = environment.modelId.value; tab.projectId = environment.projectId.value || undefined }
     return tab || null
   }

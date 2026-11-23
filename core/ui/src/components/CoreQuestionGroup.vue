@@ -12,20 +12,40 @@
     tabindex="0"
     @keydown="onKeydown"
   >
-    <!-- 收起态：摘要胶囊。点开可以追加回答，不是终点。 -->
-    <button
-      v-if="collapsed"
-      type="button"
-      class="question-group__pill"
-      data-question-open
-      @click="expand"
-    >
-      <span class="question-group__pill-dot" aria-hidden="true" />
-      <span>{{ pillLabel }}</span>
-      <span class="question-group__pill-chev" aria-hidden="true">{{ t('展开') }}</span>
-    </button>
+    <!-- user:“询问卡右上角加一个复制图标按钮”+
+         (复制按钮只写一处：展开时浮在卡片右上角，收起时并到摘要胶囊右侧。
+          收起态仍是摘要胶囊，点开可以追加回答，不是终点。) -->
+    <div class="question-group__toprow">
+      <button
+        v-if="collapsed"
+        type="button"
+        class="question-group__pill"
+        data-question-open
+        @click="expand"
+      >
+        <span class="question-group__pill-dot" aria-hidden="true" />
+        <span>{{ pillLabel }}</span>
+        <span class="question-group__pill-chev" aria-hidden="true">{{ t('展开') }}</span>
+      </button>
+      <button
+        type="button"
+        class="question-group__copy"
+        :class="{
+          'question-group__copy--inline': collapsed,
+          'is-done': copyState === 'done',
+          'is-error': copyState === 'error',
+        }"
+        data-question-copy
+        :title="copyLabel"
+        :aria-label="copyLabel"
+        @click="copyCard"
+      >
+        <Check v-if="copyState === 'done'" :size="14" :stroke-width="2" aria-hidden="true" />
+        <Copy v-else :size="14" :stroke-width="1.7" aria-hidden="true" />
+      </button>
+    </div>
 
-    <template v-else>
+    <template v-if="!collapsed">
       <p v-if="questions.length === 0" class="question-group__empty">{{ t('没有收到问题数据') }}</p>
 
       <div v-for="section in sections" :key="section.key" class="question-group__section">
@@ -116,7 +136,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { Check, Copy } from 'lucide-vue-next'
+// user:“询问卡右上角加一个复制图标按钮”+(复制正文整段拍成文本，走统一的剪贴板通道)。
+import { copyText } from '@/helpers/clipboard.ts'
+import { questionGroupCopyText } from '@/helpers/questionGroupCopy.ts'
 import { t } from '@/i18n/index.ts'
 import type { MessagePart } from '@/types.ts'
 import { answeredGroupAnswers, rememberAnsweredGroup } from '@/helpers/questionGroupAnswered.ts'
@@ -272,12 +296,52 @@ function answerFor(question: QuestionItem): string {
   return (selections[question.id] || []).join('、')
 }
 
+/** 题目上已经带着后端答案（历史消息重新挂载时本地没有选中态）。 */
+const backendAnswers = computed(() => answersFromPart())
+
+/** 复制时用的答案：本地填的优先，其次才是后端已经记下的。 */
+function answerText(question: QuestionItem): string {
+  return answerFor(question) || String(backendAnswers.value[question.id] || '').trim()
+}
+
 const hasRequired = computed(() => questions.value.some(question => question.required))
 const requiredLeft = computed(() => questions.value.filter(q => q.required && !answerFor(q)).length)
 const canSubmit = computed(() => requiredLeft.value === 0)
 const answeredCount = computed(() => questions.value.filter(q => answerFor(q)).length)
 const pillLabel = computed(() => t('已回答 {0} 个问题', { 0: answeredCount.value }))
 const hintText = computed(() => (requiredLeft.value > 0 ? t('还差 {0} 道必答', { 0: requiredLeft.value }) : ''))
+
+/* ── 右上角复制：把这张卡现在的样子拍成文本 ───────────────────── */
+const copyState = ref<'idle' | 'done' | 'error'>('idle')
+let copyTimer: number | undefined
+const copyLabel = computed(() => (
+  copyState.value === 'done' ? t('已复制')
+    : copyState.value === 'error' ? t('复制失败')
+      : t('复制这张询问卡')
+))
+
+async function copyCard(): Promise<void> {
+  const snapshot = sections.value.flatMap(section => section.items.map(item => ({
+    section: section.title,
+    sectionHint: section.hint,
+    title: item.title,
+    typeLabel: typeLabel(item),
+    description: item.description,
+    options: item.options.map(option => option.label),
+    answer: answerText(item),
+  })))
+  try {
+    await copyText(questionGroupCopyText(snapshot))
+    copyState.value = 'done'
+  } catch {
+    // 复制失败不添别的东西：图标只是变红。
+    copyState.value = 'error'
+  }
+  if (copyTimer !== undefined) window.clearTimeout(copyTimer)
+  copyTimer = window.setTimeout(() => { copyState.value = 'idle' }, 1600)
+}
+
+onBeforeUnmount(() => { if (copyTimer !== undefined) window.clearTimeout(copyTimer) })
 
 // 挂载即回填：同一次会话里这张卡重新挂上来时，仍然是「已回答」并带回当时的答案。
 watch([groupId, questions], () => {
@@ -596,9 +660,55 @@ nextTick(growAll)
   display: flex;
   align-items: baseline;
   gap: 6px;
-  padding: 7px 0 2px;
+  /* 右侧给右上角的复制键让位，分组说明不会被图标压住。 */
+  padding: 7px 26px 2px 0;
   font-size: 11px;
   letter-spacing: 0.04em;
+}
+
+/* user:“询问卡右上角加一个复制图标按钮”+(幽灵图标：平时 45% 文字色，悬停才浮现底色)。 */
+.question-group__toprow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.question-group__copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 8px);
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+  cursor: pointer;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.question-group__copy:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: color-mix(in srgb, var(--text) 75%, transparent);
+}
+
+.question-group__copy:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 40%, transparent);
+  outline-offset: 1px;
+}
+
+.question-group__copy.is-done { color: color-mix(in srgb, var(--green, var(--text)) 75%, var(--text)); }
+
+.question-group__copy.is-error { color: var(--red, var(--text)); }
+
+/* 收起态并到摘要胶囊右侧，不再浮在角落。 */
+.question-group__copy--inline {
+  position: static;
 }
 
 .question-group__ghead b {

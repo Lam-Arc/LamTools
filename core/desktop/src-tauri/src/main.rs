@@ -12,7 +12,7 @@ use std::{
         Mutex,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(target_os = "linux")]
@@ -40,8 +40,13 @@ use tauri::{
 
 mod computer_use_overlay;
 mod backend_startup;
+// user:“一个新模块，不要两套浏览器”+(浏览器宿主全部收在 browser/，split_pane 只留文件能力)。
+mod browser;
 mod desktop_overlay;
 mod tray_panel;
+// user:“优先用 Windows 内置 OCR（Windows.Media.Ocr）”+(截图取字单独一个模块，只做
+// 「图片字节 → 文字 + 逐行位置」；截图与裁剪仍归 computer_use/capture 与 Ping 界面)。
+mod ocr;
 mod migration;
 mod p2p_host;
 mod pet;
@@ -162,48 +167,109 @@ fn enable_startup_glass(window: WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// user:“依旧无法最小化”+(不需要人点也能判定：环境变量 `SUNDAY_WINDOW_PROBE=1` 时，
+/// 启动若干秒后自己调一次 minimize / maximize，并打印返回值与真实窗口状态。
+/// 这一步用来区分「点击没到命令」与「命令到了但窗口 API 在子 webview 可见时失效」。)
+#[cfg(windows)]
+fn spawn_window_probe(app: tauri::AppHandle) {
+    if std::env::var("SUNDAY_WINDOW_PROBE").ok().as_deref() != Some("1") {
+        return;
+    }
+    std::thread::spawn(move || {
+        // 两轮：第一轮通常在网页标签还没打开时（对照组），第二轮等网页起来后（实验组）。
+        for round in 1..=2u32 {
+            std::thread::sleep(std::time::Duration::from_secs(if round == 1 { 12 } else { 28 }));
+            let Some(window) = app.get_webview_window("main") else {
+                eprintln!("[window-probe] round={round} main window not found");
+                return;
+            };
+            eprintln!("[window-probe] round={round} begin");
+            let result = window.minimize();
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            eprintln!(
+                "[window-probe] round={round} minimize result={:?} is_minimized={:?}",
+                result,
+                window.is_minimized()
+            );
+            let _ = window.unminimize();
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            let result = window.maximize();
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            eprintln!(
+                "[window-probe] round={round} maximize result={:?} is_maximized={:?} size={:?}",
+                result,
+                window.is_maximized(),
+                window.inner_size()
+            );
+            let _ = window.unmaximize();
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            eprintln!(
+                "[window-probe] round={round} restore is_maximized={:?} size={:?}",
+                window.is_maximized(),
+                window.inner_size()
+            );
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn spawn_window_probe(_app: tauri::AppHandle) {}
+
 #[tauri::command]
 fn minimize_window(window: tauri::WebviewWindow) {
-    let _ = window.minimize();
+    // user:“窗口按钮改成纯 DOM 驱动…在点击路径上加一条无条件（非 dev-only 也建议保留）日志”+
+    // (这条日志就是以后排查「点了没反应」的唯一证据：出现 = 点击确实到了命令；
+    //  不出现 = 点击在到达应用之前就丢了，直接去看窗口样式/浮层那条线。)
+    let result = window.minimize();
+    let state = window.is_minimized();
+    eprintln!(
+        "[window-ctl] minimize source=dom label={} result={result:?} is_minimized={state:?}",
+        window.label()
+    );
 }
 
 #[tauri::command]
 fn toggle_maximize_window(window: tauri::WebviewWindow) {
-    let _ = if window.is_maximized().unwrap_or(false) {
+    // user:“窗口按钮改成纯 DOM 驱动”+(同上：无条件日志，record 点击是否真的进到命令)。
+    let before = window.is_maximized().unwrap_or(false);
+    let result = if before {
         window.unmaximize()
     } else {
         window.maximize()
     };
+    let after = window.is_maximized();
+    eprintln!(
+        "[window-ctl] toggle-maximize source=dom label={} before={before} result={result:?} after={after:?} inner={:?}",
+        window.label(),
+        window.inner_size()
+    );
 }
 
 #[tauri::command]
 fn set_maximize_button_bounds(
     window: tauri::WebviewWindow,
+    webview: tauri::Webview,
     x: f64,
     top: f64,
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        if window.label() != "main" {
-            return Err(
-                "maximize button bounds are only supported for the main window".to_string(),
-            );
-        }
-        windows_snap_layout::set_button_bounds(&window, x, top, width, height)
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = (window, x, top, width, height);
-        Ok(())
-    }
+    // user:“去掉原生命中区…命令保留但空实现，返回 Ok，避免前端报错”+
+    // (这套「按前端矩形摆透明子窗口」的链路已证伪：`[snap-click]` 从 0 命中，
+    //  且前端报来的按钮 x=899.7 与屏幕实际 x≈1348 不符。命令留着只为兼容前端，
+    //  等前端那条调用移除后再删。)
+    let _ = (window, webview, x, top, width, height);
+    Ok(())
 }
 
 #[tauri::command]
 fn close_window(window: tauri::WebviewWindow) {
-    let _ = window.close();
+    // user:“窗口按钮改成纯 DOM 驱动”+(关闭也留一条无条件日志，三个按钮的证据口径一致)。
+    let result = window.close();
+    eprintln!(
+        "[window-ctl] close source=dom label={} result={result:?}",
+        window.label()
+    );
 }
 
 #[tauri::command]
@@ -601,16 +667,66 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// user:“会闪退，修复”+(启动期主窗口句柄尚未就绪或已关闭时，Win32 钩子挂载不得用 `?` 终止 `.setup()`；
+// 应幂等跳过已挂载项并按需延后重试，彻底消除启动/重入时的 panic 闪退。)
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MainWindowHookProgress {
+    snap_layout: bool,
+    close_request: bool,
+    taskbar_icon: bool,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl MainWindowHookProgress {
+    fn is_complete(&self) -> bool {
+        self.snap_layout && self.close_request && self.taskbar_icon
+    }
+
+    fn try_step<FSnap, FClose, FIcon>(
+        &mut self,
+        mut install_snap: FSnap,
+        mut install_close: FClose,
+        mut install_icon: FIcon,
+    ) -> String
+    where
+        FSnap: FnMut() -> Result<(), String>,
+        FClose: FnMut() -> Result<(), String>,
+        FIcon: FnMut() -> Result<(), String>,
+    {
+        let mut pending = Vec::new();
+        if !self.snap_layout {
+            match install_snap() {
+                Ok(()) => self.snap_layout = true,
+                Err(error) => pending.push(format!("snap_layout={error}")),
+            }
+        }
+        if !self.close_request {
+            match install_close() {
+                Ok(()) => self.close_request = true,
+                Err(error) => pending.push(format!("close_request={error}")),
+            }
+        }
+        if !self.taskbar_icon {
+            match install_icon() {
+                Ok(()) => self.taskbar_icon = true,
+                Err(error) => pending.push(format!("taskbar_icon={error}")),
+            }
+        }
+        pending.join("; ")
+    }
+}
+
 #[cfg(windows)]
-fn install_taskbar_icon(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn install_taskbar_icon_for_window(window: &WebviewWindow) -> Result<(), String> {
     use windows_sys::Win32::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{LoadImageW, SendMessageW, IMAGE_ICON, LR_SHARED, WM_SETICON},
     };
-    let window = app
-        .get_webview_window("main")
-        .ok_or("main window missing")?;
-    let hwnd = window.hwnd()?.0 as windows_sys::Win32::Foundation::HWND;
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("main window handle unavailable: {error}"))?
+        .0 as windows_sys::Win32::Foundation::HWND;
     // Shared resource icons live for the process lifetime; never destroy them.
     let icon = unsafe {
         LoadImageW(
@@ -623,12 +739,90 @@ fn install_taskbar_icon(app: &tauri::App) -> Result<(), Box<dyn std::error::Erro
         )
     };
     if icon.is_null() {
-        return Err(std::io::Error::last_os_error().into());
+        return Err(std::io::Error::last_os_error().to_string());
     }
     unsafe {
         SendMessageW(hwnd, WM_SETICON, 1, icon as isize);
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn run_main_window_hooks_pass(
+    app: &tauri::AppHandle,
+    progress: &Mutex<MainWindowHookProgress>,
+) -> Option<String> {
+    let window = app.get_webview_window("main");
+    let Ok(mut guard) = progress.lock() else {
+        return Some("hook progress lock poisoned".to_string());
+    };
+    let summary = guard.try_step(
+        || match window.as_ref() {
+            Some(win) => windows_snap_layout::install(win),
+            None => Err("main window missing".to_string()),
+        },
+        || match window.as_ref() {
+            Some(win) => windows_close_request::install(win),
+            None => Err("main window missing".to_string()),
+        },
+        || match window.as_ref() {
+            Some(win) => install_taskbar_icon_for_window(win),
+            None => Err("main window missing".to_string()),
+        },
+    );
+    if guard.is_complete() {
+        None
+    } else {
+        Some(summary)
+    }
+}
+
+#[cfg(windows)]
+fn install_main_window_hooks(app: &tauri::App) {
+    let progress = std::sync::Arc::new(Mutex::new(MainWindowHookProgress::default()));
+    let Some(initial_summary) = run_main_window_hooks_pass(app.handle(), &progress) else {
+        return;
+    };
+
+    eprintln!(
+        "[sunday] main window native hooks deferred during setup ({initial_summary}); scheduling UI-thread retry"
+    );
+    let app_handle = app.handle().clone();
+    let _ = thread::Builder::new()
+        .name("main-window-hooks".into())
+        .spawn(move || {
+            let mut last_summary = initial_summary;
+            for _ in 0..50 {
+                if app_handle.state::<BackendState>().quitting.load(Ordering::SeqCst) {
+                    return;
+                }
+                let (tx, rx) = std::sync::mpsc::channel();
+                let main_app = app_handle.clone();
+                let main_progress = std::sync::Arc::clone(&progress);
+                if app_handle
+                    .run_on_main_thread(move || {
+                        let _ = tx.send(run_main_window_hooks_pass(&main_app, &main_progress));
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                    Ok(None) => {
+                        eprintln!("[sunday] main window native hooks attached on deferred retry");
+                        return;
+                    }
+                    Ok(Some(summary)) => {
+                        last_summary = summary;
+                    }
+                    Err(_) => return,
+                }
+                thread::sleep(std::time::Duration::from_millis(100));
+            }
+            eprintln!(
+                "[sunday] main window native hooks stayed unavailable after retries (non-fatal): {last_summary}"
+            );
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -645,6 +839,131 @@ fn apply_browser_args(mut context: tauri::Context<tauri::Wry>) -> tauri::Context
     context
 }
 
+// user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(崩溃可观测性：Rust 侧
+// panic 落盘到 `.lam/crash-<ts>.log`；正常与异常退出都写一条 exit reason=/code=
+// 到 `.lam/desktop-shell.log`。上一轮安装版 03:35 退出时既没有 CrashDump、事件
+// 日志也没有记录，只能靠日志猜，这次把结论直接留在磁盘上。)
+static LAM_HOME: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// 后端 storage paths 解析完成后调用；之后所有落盘日志都指向同一处 .lam。
+fn remember_lam_home(path: &Path) {
+    if let Ok(mut guard) = LAM_HOME.lock() {
+        *guard = Some(path.to_path_buf());
+    }
+}
+
+/// 解析不到 .lam（例如早期 panic）时回退到可执行文件旁的便携布局。
+fn lam_home_dir() -> Option<PathBuf> {
+    if let Some(path) = LAM_HOME.lock().ok().and_then(|guard| guard.clone()) {
+        return Some(path);
+    }
+    env::current_exe()
+        .ok()?
+        .parent()
+        .map(|directory| directory.join(".lam"))
+}
+
+/// 把 UNIX 秒换算成 UTC 民用时间（不引入 chrono，避免为了一行时间戳加依赖）。
+fn utc_parts(seconds: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let days = seconds.div_euclid(86_400);
+    let remainder = seconds.rem_euclid(86_400);
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 { shifted } else { shifted - 146_096 } / 146_097;
+    let day_of_era = (shifted - era * 146_097) as u64;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era as i64 + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_prime + 2) / 5 + 1) as u32;
+    let month = (if month_prime < 10 { month_prime + 3 } else { month_prime - 9 }) as u32;
+    let year = year + i64::from(month <= 2);
+    (
+        year,
+        month,
+        day,
+        (remainder / 3_600) as u32,
+        ((remainder % 3_600) / 60) as u32,
+        (remainder % 60) as u32,
+    )
+}
+
+fn iso_stamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let (year, month, day, hour, minute, second) = utc_parts(seconds);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn compact_stamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let (year, month, day, hour, minute, second) = utc_parts(seconds);
+    format!("{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}")
+}
+
+/// 一条桌面壳层事件：stderr 给人看，`.lam/desktop-shell.log` 给事后取证。
+fn append_shell_log(line: &str) {
+    eprintln!("[sunday] {line}");
+    let Some(home) = lam_home_dir() else {
+        return;
+    };
+    let path = home.join("desktop-shell.log");
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "{} {}", iso_stamp(), line);
+    }
+}
+
+fn write_panic_report(message: &str, location: &str, thread_name: &str) {
+    let backtrace = std::backtrace::Backtrace::force_capture();
+    let body = format!(
+        "time={}\npid={}\nthread={thread_name}\nlocation={location}\nmessage={message}\n\nbacktrace:\n{backtrace}\n",
+        iso_stamp(),
+        std::process::id(),
+    );
+    if let Some(home) = lam_home_dir() {
+        if fs::create_dir_all(&home).is_ok() {
+            let path = home.join(format!(
+                "crash-{}-{}.log",
+                compact_stamp(),
+                std::process::id()
+            ));
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = file.write_all(body.as_bytes());
+            }
+            append_shell_log(&format!("panic captured path={}", path.display()));
+            return;
+        }
+    }
+    // 连 .lam 都写不进去时，至少把原文留在 stderr。
+    eprintln!("[sunday] panic (no .lam directory): {body}");
+}
+
+fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        return (*text).to_string();
+    }
+    if let Some(text) = payload.downcast_ref::<String>() {
+        return text.clone();
+    }
+    "<non-string panic payload>".to_string()
+}
+
+fn exit_code_label(status: &std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(code) if code >= 0 => format!("{code}"),
+        Some(code) => format!("{code} (0x{:08X})", code as u32),
+        None => "signal".to_string(),
+    }
+}
+
 /// 桌宠覆盖层安全兜底：任何 panic 先把全屏置顶窗口关掉，再走原 panic 输出。
 /// user:"那个'强制置顶'，你一定要给我记着。如果它一旦发生错误，把它退出置顶
 /// 或者直接关闭。不然的话，就会出现无法访问，但是直接把我的屏幕全给占掉"
@@ -652,6 +971,16 @@ fn install_overlay_panic_safety() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         pet::emergency_close_overlays();
+        let location = info
+            .location()
+            .map(|position| format!("{}:{}:{}", position.file(), position.line(), position.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let thread_name = thread::current()
+            .name()
+            .unwrap_or("<unnamed>")
+            .to_string();
+        let message = panic_payload_text(info.payload());
+        write_panic_report(&message, &location, &thread_name);
         previous(info);
     }));
 }
@@ -723,20 +1052,18 @@ fn main() {
         // user:“P2P 作为独立、可复用的传输组件”+(桌面只托管那个进程与它的票据)。
         .manage(p2p_host::P2pHostState::default())
         .setup(|app| {
+            // user:“会闪退，修复”+(Win32 主窗口钩子在 `.setup()` 失败或句柄延迟就绪时改为日志+主线程重试，
+            // 不再用 `?` 抛 panic 导致应用启动阶段直接闪退)
             #[cfg(windows)]
-            if let Some(window) = app.get_webview_window("main") {
-                windows_snap_layout::install(&window)
-                    .map_err(|error| format!("snap layout setup failed: {error}"))?;
-                windows_close_request::install(&window)
-                    .map_err(|error| format!("system close handler setup failed: {error}"))?;
-            }
+            install_main_window_hooks(app);
+            // user:“依旧无法最小化”+(不需要人点也能判定：`SUNDAY_WINDOW_PROBE=1` 时
+            // 启动后自调 minimize/maximize，把返回值与真实窗口状态打进日志)。
+            spawn_window_probe(app.handle().clone());
 
             setup_tray(app)?;
             // user:“把它的入口设成跟 ping 一样”+(标注层圈选改成全局热键，
             // 和 Ping 同一套轮询实现；配置读不到就用默认 Ctrl+Alt+A)。
             desktop_overlay::start_capture_watch(app.handle());
-            #[cfg(windows)]
-            install_taskbar_icon(app)?;
             // user:“你看看 ping 环 要不也自己做窗口？”+(Ping 覆盖层独立于桌宠：
             // 应用启动就把窗口准备好（隐藏），全局热键随时可用；轮询直到事件循环就绪。)
             let ping_overlay_app = app.handle().clone();
@@ -764,6 +1091,20 @@ fn main() {
                         };
                         *api_slot = Some(api_base.clone());
                         drop(api_slot);
+                        // user:“发布版本启动后 P2P 服务能真的起来：给出启动状况的可见状态”+
+                        // (正式版启动就尝试拉起传输进程，不再等用户打开设备页；成功与失败
+                        // 都进 `p2p_status`，设备页直接显示运行状态或失败原因)。
+                        p2p_host::autostart(
+                            api_base.clone(),
+                            app.state::<p2p_host::P2pHostState>().inner().clone(),
+                        );
+                        // user:“清理无效轮询与监听：把托盘/状态面板里的定时轮询收敛到事件驱动”+
+                        // (宿主自己盯着状态，变了才推 `p2p-state`：界面不再每秒问一次，
+                        // 没人连的时候也不探测 Core)。
+                        p2p_host::start_emitter(
+                            app.clone(),
+                            app.state::<p2p_host::P2pHostState>().inner().clone(),
+                        );
                         // Watch the backend process: if it dies mid-run (panic,
                         // fatal Python exception) the frontend gets an event and
                         // can show a recovery banner instead of silently failing
@@ -848,7 +1189,40 @@ fn main() {
             split_pane::split_file_read,
             split_pane::split_file_write,
             split_pane::split_file_list,
-            split_pane::split_browser,
+            // user:“导航 + 标签骨架”+(浏览器命令全部只允许 main 发起；子 webview 的 label 不在任何 capability 里)。
+            browser::browser_open,
+            browser::browser_close,
+            browser::browser_activate,
+            browser::browser_reopen_closed,
+            browser::browser_bounds,
+            browser::browser_input,
+            browser::browser_nav,
+            browser::browser_state,
+            browser::browser_find,
+            browser::browser_zoom,
+            browser::browser_fullscreen,
+            // user:“会话三态、权限矩阵、证书阻断、站数据清理、越权自检”+(M2 新增命令，同样只允许 main 发起)。
+            browser::browser_profiles,
+            browser::browser_permission,
+            browser::browser_clear_site_data,
+            browser::browser_certificate,
+            browser::browser_diagnostics,
+            browser::browser_downloads,
+            browser::browser_download,
+            // user:“让 Agent Loop 能直接调用：打开/切换标签、快照、点击、输入、等待、截图”+
+            // (M4 新增 5 条：只读 snapshot/screenshot，写操作 act/waitFor 走 human-owned 闸门)。
+            browser::browser_snapshot,
+            browser::browser_act,
+            browser::browser_wait_for,
+            browser::browser_screenshot,
+            browser::browser_control,
+            browser::browser_tabs,
+            // user:“以结构化数据作为 Agent 的主要输入”+(搜索适配器用的唯一新命令：按选择器取回
+            // DOM 片段，只读、不给页面任何额外能力)。
+            browser::browser_html,
+            // user:“可在 Rust 侧加一个命令（例如 ocr_image(bytes) → {text, lines[]}）”+
+            // (界面与 Agent 工具都调这一条；语言包缺失时报 ocr_language_missing，不返回空字符串)。
+            ocr::ocr_image,
             append_frontend_console,
             enable_startup_glass,
             export_session_archive,
@@ -864,9 +1238,23 @@ fn main() {
             p2p_host::p2p_serve_start,
             p2p_host::p2p_serve_stop,
             p2p_host::p2p_status,
+            // user:“设备切换：多设备时切换当前连接，状态随之更新”+(切换只是改宿主里的
+            // 「当前那台」，状态与路径跟着它走)。
+            p2p_host::p2p_switch_device,
+            // user:“Android 前后台恢复”+(手机宿主回到前台时一次取全恢复所需的快照)。
+            p2p_host::p2p_resume_state,
             p2p_host::p2p_devices,
             p2p_host::p2p_revoke,
             p2p_host::p2p_allow,
+            // user:“发送入口…选中后开始传输”“支持取消”“完成后可「打开所在文件夹」”+
+            // (发送是宿主起一个 `sunday-p2p send` 进程；取消停掉它；定位交给系统文件管理器)。
+            p2p_host::p2p_send_file,
+            p2p_host::p2p_cancel_transfer,
+            p2p_host::p2p_reveal_path,
+            // user:“记住用户是否开启远程访问（持久化）”+(设备页的开关读写它；不新增窗口，
+            // 只加两个命令)。
+            p2p_host::p2p_config_get,
+            p2p_host::p2p_config_set,
             ping,
             get_app_info,
             pick_directory,
@@ -1154,6 +1542,12 @@ fn prod_backend_command(
     #[cfg(not(target_os = "linux"))]
     let storage_root = app_dir.clone();
     let paths = prod_backend_storage_paths(&app_dir, &storage_root, cfg!(target_os = "linux"));
+    // user:“授权表落盘位置”+(浏览器模块不自己猜路径：由宿主把 <lam_home> 注入，
+    // 站点授权只写在 `<lam_home>/core/config/browser-permissions.json`)。
+    browser::security::set_config_root(paths.lam_home.clone());
+    // user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(崩溃日志写到安装版
+    // 真正的 .lam：这里把解析结果交给桌面壳层的日志/panic 落盘统一使用。)
+    remember_lam_home(&paths.lam_home);
 
     let mut cmd = Command::new(&backend_exe);
     cmd.env("SUNDAY_CORE_PORT", port.to_string())
@@ -1345,8 +1739,15 @@ fn stop_backend(state: &BackendState) {
                     let _ = kill(process_group, SIGKILL);
                 }
             }
+            let backend_pid = child.id();
             let _ = child.kill();
             let _ = child.wait();
+            // user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(正常关闭同样
+            // 留一条 exit reason=，才能和上面的 crash 记录对照判断。)
+            append_shell_log(&format!(
+                "backend exit reason=shutdown code=0 pid={backend_pid} at={}",
+                iso_stamp()
+            ));
         }
     }
 }
@@ -1452,16 +1853,19 @@ fn spawn_backend_watcher(app_handle: tauri::AppHandle) {
             // Normal shutdown: stop_backend already took the child.
             return;
         }
-        let exited = match guard.as_mut().map(|child| child.try_wait()) {
-            Some(Ok(Some(_status))) => true,
-            Some(Ok(None)) => false,
-            _ => true, // try_wait error — treat as gone
+        // user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(异常退出原来只打
+        // 一行 eprintln、退出码被 _status 丢掉，事后完全无法判定是崩溃还是被外部
+        // 结束；这里把 reason 和 code 一起落盘。)
+        let (exited, code) = match guard.as_mut().map(|child| child.try_wait()) {
+            Some(Ok(Some(status))) => (true, exit_code_label(&status)),
+            Some(Ok(None)) => (false, String::new()),
+            _ => (true, "unknown".to_string()), // try_wait error — treat as gone
         };
         if exited {
             *guard = None;
             drop(guard);
             close_backend_job(state.inner());
-            eprintln!("[sunday] backend process exited unexpectedly");
+            append_shell_log(&format!("backend exit reason=crash code={code} at={}", iso_stamp()));
             let _ = app_handle.emit("backend-crashed", ());
             return;
         }
@@ -1531,6 +1935,104 @@ mod desktop_shell_tests {
                 projects_root: data_dir.join("lam_projects"),
             }
         );
+    }
+
+    // user:“会闪退，修复”+(启动期主窗口句柄尚未就绪或已关闭时，Win32 钩子挂载不得用 `?` 终止 `.setup()`；
+    // 应幂等跳过已挂载项并按需延后重试，彻底消除启动/重入时的 panic 闪退。)
+    #[test]
+    fn main_window_hooks_recover_after_transient_unavailable_handle() {
+        let mut progress = super::MainWindowHookProgress::default();
+        let mut snap_attempts = 0usize;
+        let mut close_attempts = 0usize;
+        let mut icon_attempts = 0usize;
+
+        // First pass: snap layout and close request fail with transient Tauri handle error,
+        // while taskbar icon also isn't ready yet — startup MUST NOT abort/panic.
+        let summary_1 = progress.try_step(
+            || {
+                snap_attempts += 1;
+                if snap_attempts < 3 {
+                    Err("main window handle unavailable: the underlying handle is not available".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                close_attempts += 1;
+                if close_attempts < 2 {
+                    Err("main window handle unavailable: the underlying handle is not available".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                icon_attempts += 1;
+                Ok(())
+            },
+        );
+        assert!(!progress.is_complete());
+        assert!(!summary_1.is_empty());
+        assert!(progress.taskbar_icon);
+        assert!(!progress.snap_layout);
+        assert!(!progress.close_request);
+
+        // Second pass: taskbar icon is already done and must NOT be re-run;
+        // close_request succeeds now, snap_layout succeeds on pass 3.
+        let _ = progress.try_step(
+            || {
+                snap_attempts += 1;
+                if snap_attempts < 3 {
+                    Err("main window handle unavailable: the underlying handle is not available".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                close_attempts += 1;
+                Ok(())
+            },
+            || {
+                icon_attempts += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(icon_attempts, 1);
+        assert!(progress.close_request);
+        assert!(!progress.snap_layout);
+
+        let summary_3 = progress.try_step(
+            || {
+                snap_attempts += 1;
+                Ok(())
+            },
+            || {
+                close_attempts += 1;
+                Ok(())
+            },
+            || {
+                icon_attempts += 1;
+                Ok(())
+            },
+        );
+        assert!(progress.is_complete());
+        assert!(summary_3.is_empty());
+        assert_eq!(snap_attempts, 3);
+        assert_eq!(close_attempts, 2);
+        assert_eq!(icon_attempts, 1);
+    }
+
+    #[test]
+    fn main_window_hooks_report_nonfatal_summary_when_handle_stays_unavailable() {
+        let mut progress = super::MainWindowHookProgress::default();
+        let summary = progress.try_step(
+            || Err("main window handle unavailable: the underlying handle is not available".to_string()),
+            || Err("main window handle unavailable: the underlying handle is not available".to_string()),
+            || Err("main window missing".to_string()),
+        );
+        assert!(!progress.is_complete());
+        assert!(summary.contains("snap_layout="));
+        assert!(summary.contains("close_request="));
+        assert!(summary.contains("taskbar_icon="));
     }
 }
 

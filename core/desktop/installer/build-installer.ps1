@@ -126,6 +126,9 @@ $buildTimeBackends = @(@(
 
 $requiredFiles = @(
     (Join-Path $source 'Sunday.exe'),
+    # user:“sunday-p2p.exe 纳入正式构建与安装”+(远程连接靠它；宁可打包失败，
+    # 也不要发出一个“远程连接默默不可用”的安装包)。
+    (Join-Path $source 'sunday-p2p.exe'),
     $icon,
     $scriptPath
 )

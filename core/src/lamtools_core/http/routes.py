@@ -34,6 +34,7 @@ from ..app.plan_library import (
     set_plan_favorite,
 )
 from ..app.project_store import ActiveProjectSessionsError, CoreProjectStore
+from ..app.session_items import SessionItemsError
 from ..app.project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
 from ..provider import ProviderConfig, ProviderRegistry
 from ..run_event import (
@@ -105,6 +106,14 @@ class MessageCreateRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+# user:“入参：{ items: [{ kind, role:'assistant', parts:[...] }] }”+(写入助手展示
+# 内容的请求体；client_item_id 是幂等键，turn_id 只在调用方明确要挂到既有回合时给。
+class SessionItemsCreateRequest(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    client_item_id: str = ""
+    turn_id: str = ""
+
+
 class TurnStartRequest(BaseModel):
     message: str = Field(min_length=1)
     approval_policy: str = "require"
@@ -165,6 +174,10 @@ def create_core_router(
     project_store: CoreProjectStore | Callable[[], CoreProjectStore] | None = None,
     publish_event: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
     export_service: ConversationExportService | Callable[[], ConversationExportService] | None = None,
+    # user:“新增 item 写入端点（推荐）”+(写入必须走真实 turn 的投影+广播路径，那条
+    # 路径只有宿主进程拿得到，所以由宿主注入；没注入时端点明确报 503，绝不假装
+    # 写入成功。)
+    write_items: Callable[[str, SessionItemsCreateRequest], Awaitable[dict[str, Any]]] | None = None,
 ) -> APIRouter:
     """Create an APIRouter with all core LamTools routes.
 
@@ -194,6 +207,7 @@ def create_core_router(
         _usage_ledger = usage_ledger
 
     _operations = operations
+    _write_items = write_items
 
     def require_project_store() -> CoreProjectStore:
         resolved = project_store() if callable(project_store) else project_store
@@ -292,6 +306,25 @@ def create_core_router(
             active.take_capture_request()
             return {"ok": True, **active.snapshot()}
         raise HTTPException(status_code=400, detail=f"不支持的 action: {action}")
+
+    # user:“让 Agent Loop 能直接调用：打开/切换标签、快照、点击、输入、等待、截图”+
+    # (Agent 的 browser 工具在 Core 进程里，网页在桌面宿主的子 webview 里；
+    # 主窗口轮询取走待执行请求、用 Tauri 命令执行，再把结构化结果写回来)。
+    @router.get("/browser/agent/pending")
+    async def browser_agent_pending() -> dict[str, Any]:
+        from lamtools_core import browser as browser_agent
+
+        return {"requests": browser_agent.take_pending()}
+
+    @router.post("/browser/agent/result")
+    async def browser_agent_result(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from lamtools_core import browser as browser_agent
+
+        body = payload or {}
+        try:
+            return browser_agent.submit_result(body)
+        except browser_agent.BrowserChannelError as exc:
+            raise HTTPException(status_code=422, detail=exc.message) from exc
 
     def require_export_service() -> ConversationExportService:
         resolved = export_service() if callable(export_service) else export_service
@@ -479,6 +512,22 @@ def create_core_router(
         session_id: str,
         body: MessageCreateRequest,
     ) -> dict[str, Any]:
+        # user:“把「写得进、看不见」这个陷阱堵上：若最终保留 POST /messages，
+        # 它要么改成写 items，要么返回明确提示（不要 201 静默成功）”+(这里只写
+        # 对话记录表 messages，界面气泡永远读不到它。助手内容一律指到 items 端点，
+        # 用户记录继续可写但回执里写明「界面不显示」。)
+        if str(body.role).strip().lower() == "assistant":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "ASSISTANT_MESSAGE_NOT_VISIBLE",
+                    "message": (
+                        "POST /messages 只写对话记录表，界面气泡不会出现这条内容。"
+                        "助手回复请用 POST /api/core/sessions/{session_id}/items。"
+                    ),
+                    "use": f"/api/core/sessions/{session_id}/items",
+                },
+            )
         record = MessageRecord(
             id=body.id,
             session_id=session_id,
@@ -488,7 +537,37 @@ def create_core_router(
             metadata=body.metadata,
         )
         await _store_call(_session_store.add_message, record)
-        return record.to_dict()
+        payload = record.to_dict()
+        # 明确的可见性回执：避免调用方把 201 当成「用户已经看到」。
+        payload["visible_in_ui"] = False
+        payload["visibility_notice"] = (
+            "这条记录只存在于对话记录表，界面不显示；要出现在会话里请用 items 端点。"
+        )
+        return payload
+
+    # user:“POST /api/core/sessions/{id}/items”+(写助手展示内容：core.items +
+    # item_order 由真实 turn 的投影路径落库，live 通道广播同一套 runItem 事件，
+    # 界面立即出气泡；不触发模型运行、不建 user turn、不写 messages 表。)
+    @router.post("/sessions/{session_id}/items", status_code=201)
+    async def create_session_items(
+        session_id: str,
+        body: SessionItemsCreateRequest,
+    ) -> dict[str, Any]:
+        session = await _store_call(_session_store.get, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if _write_items is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "ITEM_WRITE_UNAVAILABLE",
+                    "message": "这个进程没有接上 item 写入通道（缺少宿主注入的持久化与广播）。",
+                },
+            )
+        try:
+            return await _write_items(session_id, body)
+        except SessionItemsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @router.post("/sessions/{session_id}/turns")
     async def start_turn(

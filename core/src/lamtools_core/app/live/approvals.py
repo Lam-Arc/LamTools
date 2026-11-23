@@ -190,11 +190,7 @@ async def handle_approval_respond_operation(
             )
         )
     if thread_id and expected_revision is not None:
-        await context.persistence.write(
-            lambda db: context.persistence.assert_revision(
-                db, thread_id, expected_revision
-            )
-        )
+        await context.persistence.assert_revision_atomic(thread_id, expected_revision)
     # Child approvals are queued on the child session: that is also the claim
     # the continuation serializes against, and it keeps two children from
     # blocking each other or a new parent turn.

@@ -10,6 +10,8 @@ members = [
     "crates/sunday-tools",
     "crates/sunday-host",
     "crates/sunday-cli",
+    # user:“加载/切换/多会话多 agent 同时读写”+(新增原生 Rust SQLite 存储引擎 crate，加速加载、切换与多会话多代理并发读写)。
+    "crates/sunday-core-db",
 ]
 resolver = "2"
 

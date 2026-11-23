@@ -70,6 +70,8 @@ import StudySidebar from '@/study/StudySidebar.vue'
 import { LoaderCircle } from 'lucide-vue-next'
 import '@/styles/sunday-spinner.css'
 import spinnerSource from '@/styles/sunday-spinner.css?raw'
+import motionSource from '@/styles/sunday-motion.css?raw'
+import MotionPreview from './MotionPreview.vue'
 import type { KnowledgeItem } from '@/study/types.ts'
 import studySidebarSource from '@/study/StudySidebar.vue?raw'
 import { SUNDAY_DARK_THEME, SUNDAY_LIGHT_THEME, themeToCSSVars, type ThemeFillMode, type ThemeGlassPreference, type ThemeImageFit } from '@/helpers/theme'
@@ -104,6 +106,7 @@ import petEditorSource from '@/components/CorePetEditor.vue?raw'
 import workflowTriggersSource from '../../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue?raw'
 import computerUseSource from '@/computerUse/ComputerUseCapsule.vue?raw'
 import captureSource from '@/pet/ui/CaptureEditor.vue?raw'
+import traySource from '@/tray/TrayPanel.vue?raw'
 import pingRingSource from '@/pet/ui/PingRing.vue?raw'
 import type { PingRuntime } from '@/pet/ping/usePingRuntime.ts'
 // user:“源码定位”+(展示对话框共用的遮罩交互源码)。
@@ -124,6 +127,13 @@ import progressSource from '@/components/SundayProgress.vue?raw'
 import progressMetricsSource from '@/helpers/progressMetrics.ts?raw'
 import buttonSource from '@/styles/sunday-button.css?raw'
 import tokenSource from '@/styles/variables.css?raw'
+import glassSource from '@/styles/optical-glass.css?raw'
+import messageBubbleSource from '@/styles/message-bubbles.css?raw'
+import messageSurfaceSource from '@/styles/message-surface.css?raw'
+import CoreMessageSurface from '@/components/CoreMessageSurface.vue'
+import coreMessageSurfaceSource from '@/components/CoreMessageSurface.vue?raw'
+import CoreBubbleAppearance from '@/components/CoreBubbleAppearance.vue'
+import bubbleAppearanceSource from '@/components/CoreBubbleAppearance.vue?raw'
 import settingsThemeSource from '@/helpers/settingsTheme.ts?raw'
 import componentInventory from './component-inventory.json'
 import { copyText } from '@/helpers/clipboard'
@@ -131,11 +141,44 @@ import { copyText } from '@/helpers/clipboard'
 // user:“直接渲染项目真实组件，支持分类、搜索、筛选、实时预览、交互测试、参数调整、变体对比及源码定位”+(展厅直接使用生产组件，提供可操作参数和可查看的实际源码)
 // user:“提高前端一致性与开发效率”+(大型组合预览按需加载，避免打开展厅时同时初始化整个模型目录)
 // user:“直接渲染项目真实组件”+(消息视图按需加载，预览不接入真实会话)。
+const WindowControls = defineAsyncComponent(() => import('@/components/TitleBar.vue'))
 const MaterialsView = defineAsyncComponent(() => import('@/components/MaterialsView.vue'))
 const WorkflowCanvas = defineAsyncComponent(() => import('../../../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue'))
 const SplitWorkspacePreview = defineAsyncComponent(() => import('./SplitWorkspacePreview.vue'))
 const SplitFilePreview = defineAsyncComponent(() => import('./SplitFilePreview.vue'))
+// user:“直接渲染项目真实组件”+(预览灯箱只展示本地示例)。
+const LightboxPreview = defineAsyncComponent(() => import('./LightboxPreview.vue'))
+// user:“直接渲染项目真实组件”+(新手清单展示可调的本地进度)。
+const FirstRunPreview = defineAsyncComponent(() => import('./FirstRunPreview.vue'))
+// user:“直接渲染项目真实组件”+(网络首页只使用本地模拟状态)。
+const NetworkHomePreview = defineAsyncComponent(() => import('./NetworkHomePreview.vue'))
+// user:“直接渲染项目真实组件”+(下载页面以内存任务预览)。
+const NetworkTransferPreview = defineAsyncComponent(() => import('./NetworkTransferPreview.vue'))
+// user:“直接渲染项目真实组件”+(代理页面只使用隔离的订阅与节点示例)。
+const NetworkProxyPreview = defineAsyncComponent(() => import('./NetworkProxyPreview.vue'))
+// user:“直接渲染项目真实组件”+(连接与诊断使用隔离示例)。
+const NetworkInspectionPreview = defineAsyncComponent(() => import('./NetworkInspectionPreview.vue'))
+// user:“直接渲染项目真实组件”+(网络设置和防护使用隔离示例)。
+const NetworkSettingsPreview = defineAsyncComponent(() => import('./NetworkSettingsPreview.vue'))
+// user:“直接渲染项目真实组件”+(笔记树使用本地示例)。
+const StudyNoteTreePreview = defineAsyncComponent(() => import('./StudyNoteTreePreview.vue'))
+// user:“直接渲染项目真实组件”+(笔记工作区仅使用本地示例)。
+const StudyNotesPreview = defineAsyncComponent(() => import('./StudyNotesPreview.vue'))
+// user:“直接渲染项目真实组件”+(学习图谱使用隔离节点和关系)。
+const StudyGraphsPreview = defineAsyncComponent(() => import('./StudyGraphsPreview.vue'))
+// user:“直接渲染项目真实组件”+(标记面板使用隔离示例)。
+const StudyMarksPreview = defineAsyncComponent(() => import('./StudyMarksPreview.vue'))
+// user:“直接渲染项目真实组件”+(选区助手的请求仅使用本地示例)。
+const SelectionAssistantPreview = defineAsyncComponent(() => import('./SelectionAssistantPreview.vue'))
+// user:“直接渲染项目真实组件”+(技能和钩子仅操作隔离示例)。
+const SkillsHooksPreview = defineAsyncComponent(() => import('./SkillsHooksPreview.vue'))
+// user:“直接渲染项目真实组件”+(调用台仅使用内存模型和结果)。
+const DirectCallPreview = defineAsyncComponent(() => import('./DirectCallPreview.vue'))
+// user:“直接渲染项目真实组件”+(设备连接使用隔离的桌面示例)。
+const TransferPreview = defineAsyncComponent(() => import('./TransferPreview.vue'))
+const AccountPreview = defineAsyncComponent(() => import('./AccountPreview.vue'))
 const SplitBrowserPreview = defineAsyncComponent(() => import('./SplitBrowserPreview.vue'))
+const LibraryHomeView = defineAsyncComponent(() => import('@/components/LibraryHomeView.vue'))
 const CoreSplitFileTree = defineAsyncComponent(() => import('@/components/CoreSplitFileTree.vue'))
 const ComposerPreview = defineAsyncComponent(() => import('./ComposerPreview.vue'))
 const QueuedInputPreview = defineAsyncComponent(() => import('./QueuedInputPreview.vue'))
@@ -153,6 +196,7 @@ const PluginConfigPanel = defineAsyncComponent(() => import('@/components/Plugin
 const PluginMarket = defineAsyncComponent(() => import('@/components/PluginMarket.vue'))
 const MessageView = defineAsyncComponent(() => import('@/components/MessageView.vue'))
 const PingRing = defineAsyncComponent(() => import('@/pet/ui/PingRing.vue'))
+const TrayPreview = defineAsyncComponent(() => import('./TrayPreview.vue'))
 const CaptureEditor = defineAsyncComponent(() => import('@/pet/ui/CaptureEditor.vue'))
 const CoreModelCatalog = defineAsyncComponent(() => import('@/components/CoreModelCatalog.vue'))
 const CorePetEditor = defineAsyncComponent(() => import('@/components/CorePetEditor.vue'))
@@ -162,83 +206,119 @@ const RightSidebarProcesses = defineAsyncComponent(() => import('@/components/Ri
 const CoreArrangeManager = defineAsyncComponent(() => import('@/components/CoreArrangeManager.vue'))
 const entries = [
   // user:“直接渲染项目真实组件”+(资料库使用隔离文件示例)。
-  { name: 'MaterialsView', category: '组合', description: '资料浏览与标签补全；操作均模拟在本地', source: '', loadSource: () => Promise.all([import('@/components/MaterialsView.vue?raw'), import('@/styles/library-styles.css?raw'), import('./materialsPreviewData.ts?raw')]).then(([view, style, data]) => ({ default: `${view.default}\n\n/* src/styles/library-styles.css */\n${style.default}\n\n/* src/design-system/materialsPreviewData.ts */\n${data.default}` })) },
-  { name: 'MemoryView', category: '组合', description: '记忆浏览与编辑；仅修改本地示例', source: '', loadSource: () => Promise.all([import('@/components/MemoryView.vue?raw'), import('./libraryPreviewData.ts?raw')]).then(([view, data]) => ({ default: `${view.default}\n\n/* src/design-system/libraryPreviewData.ts */\n${data.default}` })) },
-  { name: 'PlanLibraryView', category: '组合', description: '方案浏览与编辑；仅修改本地示例', source: '', loadSource: () => Promise.all([import('@/components/PlanLibraryView.vue?raw'), import('./libraryPreviewData.ts?raw')]).then(([view, data]) => ({ default: `${view.default}\n\n/* src/design-system/libraryPreviewData.ts */\n${data.default}` })) },
+  { name: 'MaterialsView', category: '组合', group: '文件与资料', description: '资料浏览与标签补全；操作均模拟在本地', source: '', loadSource: () => Promise.all([import('@/components/MaterialsView.vue?raw'), import('@/styles/library-styles.css?raw'), import('./materialsPreviewData.ts?raw')]).then(([view, style, data]) => ({ default: `${view.default}\n\n/* src/styles/library-styles.css */\n${style.default}\n\n/* src/design-system/materialsPreviewData.ts */\n${data.default}` })) },
+  { name: 'MemoryView', category: '组合', group: '文件与资料', description: '记忆浏览与编辑；仅修改本地示例', source: '', loadSource: () => Promise.all([import('@/components/MemoryView.vue?raw'), import('./libraryPreviewData.ts?raw')]).then(([view, data]) => ({ default: `${view.default}\n\n/* src/design-system/libraryPreviewData.ts */\n${data.default}` })) },
+  { name: 'PlanLibraryView', category: '组合', group: '文件与资料', description: '方案浏览与编辑；仅修改本地示例', source: '', loadSource: () => Promise.all([import('@/components/PlanLibraryView.vue?raw'), import('./libraryPreviewData.ts?raw')]).then(([view, data]) => ({ default: `${view.default}\n\n/* src/design-system/libraryPreviewData.ts */\n${data.default}` })) },
   // user:“直接渲染项目真实组件”+(项目设置只编辑内存示例)。
-  { name: 'CoreProjectSettings', category: '组合', description: '项目名称、外观和规则；仅修改本地示例', source: '', loadSource: () => import('@/components/CoreProjectSettings.vue?raw') },
+  { name: 'CoreProjectSettings', category: '组合', group: '项目与工作区', description: '项目名称、外观和规则；仅修改本地示例', source: '', loadSource: () => import('@/components/CoreProjectSettings.vue?raw') },
   // user:“直接渲染项目真实组件”+(搜索仅使用内存中的任务与结果)。
-  { name: 'SearchShell', category: '组合', description: '全局搜索与分类筛选；仅使用本地示例', source: '', loadSource: () => import('@/components/SearchShell.vue?raw') },
+  { name: 'SearchShell', category: '组合', group: '项目与工作区', description: '全局搜索与分类筛选；仅使用本地示例', source: '', loadSource: () => import('@/components/SearchShell.vue?raw') },
   // user:“直接渲染项目真实组件”+(网速图只使用本地采样示例)。
   { name: 'SpeedChart', category: '反馈', description: '网络工具网速趋势与等待采样；示例数据仅在本地', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/SpeedChart.vue', loadSource: () => Promise.all([import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/SpeedChart.vue?raw'), import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/style.css?raw')]).then(([chart, style]) => ({ default: `${chart.default}\n\n/* network-exploration/ui/src/style.css */\n${style.default}` })) },
+  { name: 'NetworkHome', category: '组合', group: '网络工具', description: '网络工具首页快捷操作；加速、代理与下载均为本地模拟', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/HomeView.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/HomeView.vue?raw') },
+  { name: 'NetworkDashboard', category: '组合', group: '网络工具', description: '网络工具加速、趋势与网站检查；仅本地模拟', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/DashboardView.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/DashboardView.vue?raw') },
+  { name: 'NetworkConnections', category: '组合', group: '网络工具', description: '网络连接搜索与列表；仅使用本地示例', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/ConnectionsView.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/ConnectionsView.vue?raw') },
+  { name: 'NetworkDiagnose', category: '组合', group: '网络工具', description: '网站检查、报告与历史；仅使用本地示例', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/DiagnoseView.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/DiagnoseView.vue?raw') },
+  { name: 'NetworkSettings', category: '组合', group: '网络工具', description: '网络接口、DNS 与规则；仅本地模拟', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkSettings.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/NetworkSettings.vue?raw') },
+  { name: 'NetworkSecurity', category: '组合', group: '网络工具', description: '应用联网限制与设置恢复；仅本地模拟', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/SecurityView.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/SecurityView.vue?raw') },
+  { name: 'NetworkAdvanced', category: '组合', group: '网络工具', description: '定时检查、设备和采样设置；仅本地模拟', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/AdvancedView.vue?raw') },
+  { name: 'NetworkTransfer', category: '组合', group: '网络工具', description: '网络工具下载任务、设置与操作；只使用本地模拟', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/TransferView.vue', loadSource: () => import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/TransferView.vue?raw') },
+  { name: 'NetworkProxy', category: '组合', group: '网络工具', description: '网络工具订阅、代理连接与节点选择；仅本地模拟', source: '', sourcePath: '../src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue', alsoPreviews: ['core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/ImportProfile.vue', 'core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/NodePicker.vue'], loadSource: () => Promise.all([import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/ProxyView.vue?raw'), import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/ImportProfile.vue?raw'), import('../../../src/lamtools_core/plugins/bundled/network-exploration/ui/src/NodePicker.vue?raw')]).then(([view, profile, nodes]) => ({ default: `${view.default}\n\n/* ImportProfile.vue */\n${profile.default}\n\n/* NodePicker.vue */\n${nodes.default}` })) },
   // user:“直接渲染项目真实组件”+(上下文设置使用隔离数据和保存操作)。
-  { name: 'CoreSettings', category: '组合', description: '上下文和权限设置；只读写本地示例', alsoPreviews: ['core/ui/src/components/OperationTrustSettings.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreSettings.vue?raw'), import('@/components/OperationTrustSettings.vue?raw')]).then(([settings, trust]) => ({ default: `${settings.default}\n\n/* src/components/OperationTrustSettings.vue */\n${trust.default}` })) },
+  { name: 'CoreSettings', category: '组合', group: '设置与外观', description: '上下文和权限设置；只读写本地示例', alsoPreviews: ['core/ui/src/components/OperationTrustSettings.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreSettings.vue?raw'), import('@/components/OperationTrustSettings.vue?raw')]).then(([settings, trust]) => ({ default: `${settings.default}\n\n/* src/components/OperationTrustSettings.vue */\n${trust.default}` })) },
   // user:“直接渲染项目真实组件”+(插件动作和授权使用隔离示例)。
-  { name: 'PluginRegionBlocks', category: '组合', description: '插件区域、参数与授权操作；仅本地模拟', source: '', loadSource: () => Promise.all([import('@/components/PluginRegionBlocks.vue?raw'), import('@/plugins/consent.ts?raw')]).then(([panel, consent]) => ({ default: `${panel.default}\n\n/* src/plugins/consent.ts */\n${consent.default}` })) },
+  { name: 'PluginRegionBlocks', category: '组合', group: '插件与工具', description: '插件区域、参数与授权操作；仅本地模拟', source: '', loadSource: () => Promise.all([import('@/components/PluginRegionBlocks.vue?raw'), import('@/plugins/consent.ts?raw')]).then(([panel, consent]) => ({ default: `${panel.default}\n\n/* src/plugins/consent.ts */\n${consent.default}` })) },
   // user:“直接渲染项目真实组件”+(插件配置只读写本地示例)。
-  { name: 'PluginConfigPanel', category: '组合', description: '插件配置的字段与保存状态；仅操作本地示例', source: '', loadSource: () => import('@/components/PluginConfigPanel.vue?raw') },
+  { name: 'PluginConfigPanel', category: '组合', group: '插件与工具', description: '插件配置的字段与保存状态；仅操作本地示例', source: '', loadSource: () => import('@/components/PluginConfigPanel.vue?raw') },
   // user:“直接渲染项目真实组件”+(插件市场安装和链接只使用本地模拟)。
-  { name: 'PluginMarket', category: '组合', description: '插件市场安装、更新与错误；仅操作本地示例', source: '', loadSource: () => import('@/components/PluginMarket.vue?raw') },
+  { name: 'PluginMarket', category: '组合', group: '插件与工具', description: '插件市场安装、更新与错误；仅操作本地示例', source: '', loadSource: () => import('@/components/PluginMarket.vue?raw') },
   // user:“直接渲染项目真实组件”+(并列展示真实用户和助手消息，禁止外部操作)。
-  { name: 'MessageView', category: '组合', description: '用户、助手和问题卡；可切换只读，示例不访问会话', alsoPreviews: ['core/ui/src/components/CoreQuestionGroup.vue'], source: '', loadSource: () => Promise.all([import('@/components/MessageView.vue?raw'), import('@/components/CoreQuestionGroup.vue?raw')]).then(([message, question]) => ({ default: `${message.default}\n\n/* src/components/CoreQuestionGroup.vue */\n${question.default}` })) },
+  { name: 'MessageView', category: '组合', group: '聊天与输入', description: '消息气泡：用户、助手和问题卡，可切换助手气泡和只读状态', alsoPreviews: ['core/ui/src/components/CoreQuestionGroup.vue'], source: '', loadSource: () => Promise.all([import('@/components/MessageView.vue?raw'), import('@/components/CoreQuestionGroup.vue?raw')]).then(([message, question]) => ({ default: `${message.default}\n\n/* src/components/CoreQuestionGroup.vue */\n${question.default}` })) },
   // user:“直接渲染项目真实组件”+(工作流控制操作只记录本地示例)。
-  { name: 'WorkflowControlBar', category: '组合', description: '工作流运行、保存与冲突操作；仅本地模拟', source: workflowControlsSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowControlBar.vue' },
-  { name: 'WorkflowCanvas', category: '组合', description: '真实工作流画布；节点、布局和复制仅作用于本地示例', source: workflowCanvasSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue' },
-  { name: 'CoreSplitWorkspace', category: '组合', description: '工作区分屏、标签与文本编辑；仅使用本地示例', alsoPreviews: ['core/ui/src/components/CoreSplitTextEditor.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreSplitWorkspace.vue?raw'), import('@/components/CoreSplitTextEditor.vue?raw'), import('./SplitWorkspacePreview.vue?raw')]).then(([view, editor, preview]) => ({ default: `${view.default}\n\n/* src/components/CoreSplitTextEditor.vue */\n${editor.default}\n\n/* src/design-system/SplitWorkspacePreview.vue */\n${preview.default}` })) },
-  { name: 'CoreSplitPreview', category: '组合', description: '分屏文件预览、失败和重试；仅使用本地示例', source: '', loadSource: () => Promise.all([import('@/components/CoreSplitPreview.vue?raw'), import('./SplitFilePreview.vue?raw')]).then(([view, preview]) => ({ default: `${view.default}\n\n/* src/design-system/SplitFilePreview.vue */\n${preview.default}` })) },
-  { name: 'CoreSplitBrowser', category: '组合', description: '分屏浏览器地址、导航和错误；不打开真实网页', source: '', loadSource: () => Promise.all([import('@/components/CoreSplitBrowser.vue?raw'), import('./SplitBrowserPreview.vue?raw')]).then(([view, preview]) => ({ default: `${view.default}\n\n/* src/design-system/SplitBrowserPreview.vue */\n${preview.default}` })) },
-  { name: 'CoreSplitFileTree', category: '组合', description: '分屏文件树及键盘导航；仅使用本地目录', source: '', loadSource: () => import('@/components/CoreSplitFileTree.vue?raw') },
-  { name: 'InlineFileComposer', category: '组合', description: '输入区文本、文件与上下文补全；发送仅记录本地示例', alsoPreviews: ['core/ui/src/components/ComposerBar.vue', 'core/ui/src/components/CommandPalette.vue'], source: '', loadSource: () => Promise.all([import('@/components/InlineFileComposer.vue?raw'), import('@/components/ComposerBar.vue?raw'), import('@/components/CommandPalette.vue?raw'), import('./ComposerPreview.vue?raw')]).then(([input, bar, palette, preview]) => ({ default: `${input.default}\n\n/* src/components/ComposerBar.vue */\n${bar.default}\n\n/* src/components/CommandPalette.vue */\n${palette.default}\n\n/* src/design-system/ComposerPreview.vue */\n${preview.default}` })) },
-  { name: 'CoreQueuedInputTray', category: '组合', description: '待发送队列的编辑、排序与引导；只操作本地示例', source: '', loadSource: () => Promise.all([import('@/components/CoreQueuedInputTray.vue?raw'), import('./QueuedInputPreview.vue?raw')]).then(([tray, preview]) => ({ default: `${tray.default}\n\n/* src/design-system/QueuedInputPreview.vue */\n${preview.default}` })) },
-  { name: 'CoreExecutionControls', category: '组合', description: '输入区模型、思考等级、权限和工作环境；仅操作本地示例', alsoPreviews: ['core/ui/src/components/CoreRuntimeMenu.vue', 'core/ui/src/components/CoreModelThinkingMenu.vue', 'core/ui/src/components/CoreWorkspaceMenu.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreExecutionControls.vue?raw'), import('@/components/CoreRuntimeMenu.vue?raw'), import('@/components/CoreModelThinkingMenu.vue?raw'), import('@/components/CoreWorkspaceMenu.vue?raw')]).then(([controls, runtime, model, workspace]) => ({ default: `${controls.default}\n\n/* CoreRuntimeMenu.vue */\n${runtime.default}\n\n/* CoreModelThinkingMenu.vue */\n${model.default}\n\n/* CoreWorkspaceMenu.vue */\n${workspace.default}` })) },
+  { name: 'WorkflowControlBar', category: '组合', group: '工作流与任务', description: '工作流运行、保存与冲突操作；仅本地模拟', source: workflowControlsSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowControlBar.vue' },
+  { name: 'WorkflowCanvas', category: '组合', group: '工作流与任务', description: '真实工作流画布；节点、布局和复制仅作用于本地示例', source: workflowCanvasSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowCanvas.vue' },
+  { name: 'WindowControls', category: '按钮', description: '桌面右上角的最小化、最大化和关闭；展厅只预览外观', source: '', sourcePath: 'src/components/TitleBar.vue', loadSource: () => import('@/components/TitleBar.vue?raw') },
+  { name: 'CoreWorkspace', category: '组合', group: '项目与工作区', description: 'Agent 与 Browser 布局切换、分屏关闭保护和标签溢出；仅使用本地示例', alsoPreviews: ['core/ui/src/components/WorkspaceShell.vue', 'core/ui/src/components/CoreWorkspaceContentHost.vue', 'core/ui/src/components/CoreSplitTextEditor.vue', 'core/ui/src/components/CoreWorkspaceTabDrawer.vue', 'core/ui/src/components/CoreWorkspaceTabs.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreWorkspace.vue?raw'), import('@/components/CoreWorkspaceContentHost.vue?raw'), import('@/components/CoreSplitTextEditor.vue?raw'), import('@/components/CoreWorkspaceTabDrawer.vue?raw'), import('@/components/CoreWorkspaceTabs.vue?raw'), import('@/workspace/composition.ts?raw'), import('./SplitWorkspacePreview.vue?raw')]).then(([view, host, editor, drawer, tabs, composition, preview]) => ({ default: [view.default, host.default, editor.default, drawer.default, tabs.default, composition.default, preview.default].join('\n\n') })) },
+  { name: 'CoreSplitPreview', category: '组合', group: '文件与资料', description: '分屏文件预览、失败和重试；仅使用本地示例', source: '', loadSource: () => Promise.all([import('@/components/CoreSplitPreview.vue?raw'), import('./SplitFilePreview.vue?raw')]).then(([view, preview]) => ({ default: `${view.default}\n\n/* src/design-system/SplitFilePreview.vue */\n${preview.default}` })) },
+  { name: 'PreviewLightbox', category: '组合', group: '文件与资料', description: '灯箱和预览表面；图片可缩放拖动标注，只显示本地示例内容', source: '', sourcePath: 'src/preview/PreviewLightbox.vue', alsoPreviews: ['core/ui/src/preview/PreviewSurface.vue', 'core/ui/src/preview/PreviewImageViewer.vue', 'core/ui/src/annotation/AnnotationToolbar.vue'], loadSource: () => Promise.all([import('@/preview/PreviewLightbox.vue?raw'), import('@/preview/PreviewSurface.vue?raw'), import('@/preview/PreviewImageViewer.vue?raw'), import('@/annotation/AnnotationToolbar.vue?raw')]).then(([lightbox, surface, viewer, toolbar]) => ({ default: `${lightbox.default}\n\n/* src/preview/PreviewSurface.vue */\n${surface.default}\n\n/* src/preview/PreviewImageViewer.vue */\n${viewer.default}\n\n/* src/annotation/AnnotationToolbar.vue */\n${toolbar.default}` })) },
+  { name: 'FirstRunChecklist', category: '组合', group: '项目与工作区', description: '首次使用清单及各阶段；进度只保存在展厅', source: '', loadSource: () => import('@/components/FirstRunChecklist.vue?raw') },
+  { name: 'CoreSplitBrowser', category: '组合', group: '项目与工作区', description: '分屏浏览器地址、导航和错误；不打开真实网页', source: '', loadSource: () => Promise.all([import('@/components/CoreSplitBrowser.vue?raw'), import('./SplitBrowserPreview.vue?raw')]).then(([view, preview]) => ({ default: `${view.default}\n\n/* src/design-system/SplitBrowserPreview.vue */\n${preview.default}` })) },
+  { name: 'LibraryHomeView', category: '组合', group: '文件与资料', description: '统一资料库，包含项目文件、资料、记忆、方案和 Wiki；仅使用本地示例', source: '', loadSource: () => import('@/components/LibraryHomeView.vue?raw') },
+  { name: 'CoreSplitFileTree', category: '组合', group: '文件与资料', description: '分屏文件树及键盘导航；仅使用本地目录', source: '', loadSource: () => import('@/components/CoreSplitFileTree.vue?raw') },
+  { name: 'InlineFileComposer', category: '组合', group: '聊天与输入', description: '输入区文本、文件与上下文补全；发送仅记录本地示例', alsoPreviews: ['core/ui/src/components/ComposerBar.vue', 'core/ui/src/components/CommandPalette.vue'], source: '', loadSource: () => Promise.all([import('@/components/InlineFileComposer.vue?raw'), import('@/components/ComposerBar.vue?raw'), import('@/components/CommandPalette.vue?raw'), import('./ComposerPreview.vue?raw')]).then(([input, bar, palette, preview]) => ({ default: `${input.default}\n\n/* src/components/ComposerBar.vue */\n${bar.default}\n\n/* src/components/CommandPalette.vue */\n${palette.default}\n\n/* src/design-system/ComposerPreview.vue */\n${preview.default}` })) },
+  { name: 'CoreQueuedInputTray', category: '组合', group: '聊天与输入', description: '待发送队列的编辑、排序与引导；只操作本地示例', source: '', loadSource: () => Promise.all([import('@/components/CoreQueuedInputTray.vue?raw'), import('./QueuedInputPreview.vue?raw')]).then(([tray, preview]) => ({ default: `${tray.default}\n\n/* src/design-system/QueuedInputPreview.vue */\n${preview.default}` })) },
+  { name: 'CoreExecutionControls', category: '组合', group: '聊天与输入', description: '输入区模型、思考等级、权限和工作环境；仅操作本地示例', alsoPreviews: ['core/ui/src/components/CoreRuntimeMenu.vue', 'core/ui/src/components/CoreModelThinkingMenu.vue', 'core/ui/src/components/CoreWorkspaceMenu.vue'], source: '', loadSource: () => Promise.all([import('@/components/CoreExecutionControls.vue?raw'), import('@/components/CoreRuntimeMenu.vue?raw'), import('@/components/CoreModelThinkingMenu.vue?raw'), import('@/components/CoreWorkspaceMenu.vue?raw')]).then(([controls, runtime, model, workspace]) => ({ default: `${controls.default}\n\n/* CoreRuntimeMenu.vue */\n${runtime.default}\n\n/* CoreModelThinkingMenu.vue */\n${model.default}\n\n/* CoreWorkspaceMenu.vue */\n${workspace.default}` })) },
   { name: 'ContextMenuHost', category: '基础', description: '共享菜单、键盘导航和子菜单；操作仅记录在本地', source: '', sourcePath: 'src/components/context-menu/ContextMenuHost.vue', alsoPreviews: ['core/ui/src/components/context-menu/ContextMenuPanel.vue'], loadSource: () => Promise.all([import('@/components/context-menu/ContextMenuHost.vue?raw'), import('@/components/context-menu/ContextMenuPanel.vue?raw'), import('@/components/context-menu/context-menu.ts?raw')]).then(([host, panel, logic]) => ({ default: `${host.default}\n\n/* ContextMenuPanel.vue */\n${panel.default}\n\n/* context-menu.ts */\n${logic.default}` })) },
   // user:“直接渲染项目真实组件”+(草稿选择仅修改展厅示例)。
   { name: 'WorkflowSwitchGuard', category: '反馈', description: '工作流草稿的保存、放弃或取消；仅为本地示例', source: `${workflowGuardSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}`, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowSwitchGuard.vue' },
   // user:“直接渲染项目真实组件”+(工作流队列和清理仅使用本地示例)。
-  { name: 'WorkflowQueuePanel', category: '组合', description: '工作流队列、历史及清理确认；仅操作本地示例', source: `${workflowQueueSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}`, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowQueuePanel.vue' },
+  { name: 'WorkflowQueuePanel', category: '组合', group: '工作流与任务', description: '工作流队列、历史及清理确认；仅操作本地示例', source: `${workflowQueueSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}`, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowQueuePanel.vue' },
   // user:“直接渲染项目真实组件”+(工作流运行详情只展示本地状态)。
   { name: 'WorkflowNodeRuntimeDock', category: '反馈', description: '工作流节点运行状态和详情；使用本地示例', source: `${workflowRuntimeSource}\n\n/* src/styles/sunday-spinner.css */\n${spinnerSource}`, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowNodeRuntimeDock.vue' },
   // user:“直接渲染项目真实组件”+(附件操作只影响本地示例)。
-  { name: 'AttachmentTray', category: '组合', description: '输入区附件、上传失败和重试；使用本地示例', source: attachmentSource },
+  { name: 'AttachmentTray', category: '组合', group: '聊天与输入', description: '输入区附件、上传失败和重试；使用本地示例', source: attachmentSource },
   // user:“直接渲染项目真实组件”+(定时任务预览只读取空示例，真实提交操作不可用)。
-  { name: 'CoreArrangeManager', category: '组合', description: '定时任务列表与表单；仅使用本地示例', source: '', loadSource: () => import('@/components/CoreArrangeManager.vue?raw').then(module => ({ default: `${module.default}\n\n/* src/styles/full-area-buttons.css */\n${fullAreaButtonsSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` })) },
+  { name: 'CoreArrangeManager', category: '组合', group: '工作流与任务', description: '定时任务列表与表单；仅使用本地示例', source: '', loadSource: () => import('@/components/CoreArrangeManager.vue?raw').then(module => ({ default: `${module.default}\n\n/* src/styles/full-area-buttons.css */\n${fullAreaButtonsSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` })) },
   // user:“直接渲染项目真实组件”+(进程面板使用纯本地进程与日志，不访问系统进程)。
-  { name: 'RightSidebarProcesses', category: '组合', description: '后台进程与日志；操作仅作用于本地示例，旋转样式见 src/styles/sunday-spinner.css', source: '', loadSource: () => import('@/components/RightSidebarProcesses.vue?raw').then(module => ({ default: `${module.default}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` })) },
+  { name: 'RightSidebarProcesses', category: '组合', group: '工作流与任务', description: '后台进程与日志；操作仅作用于本地示例，旋转样式见 src/styles/sunday-spinner.css', source: '', loadSource: () => import('@/components/RightSidebarProcesses.vue?raw').then(module => ({ default: `${module.default}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` })) },
   // user:“直接渲染项目真实组件”+(插件管理使用隔离示例，不访问或变更已安装插件)。
-  { name: 'CorePluginSystemEditor', category: '组合', description: '插件管理与搜索；示例操作仅在本地', source: '', loadSource: () => import('@/components/CorePluginSystemEditor.vue?raw') },
+  { name: 'CorePluginSystemEditor', category: '组合', group: '插件与工具', description: '插件管理与搜索；示例操作仅在本地', alsoPreviews: ['core/ui/src/components/PluginWindowLauncher.vue'], source: '', loadSource: () => Promise.all([import('@/components/CorePluginSystemEditor.vue?raw'), import('@/components/PluginWindowLauncher.vue?raw')]).then(([editor, launcher]) => ({ default: `${editor.default}\n\n/* src/components/PluginWindowLauncher.vue */\n${launcher.default}` })) },
+  { name: 'CoreSkillsEditor', category: '组合', group: '插件与工具', description: '技能启停和分组；仅操作本地示例', source: '', loadSource: () => import('@/components/CoreSkillsEditor.vue?raw') },
+  { name: 'CoreHooksEditor', category: '组合', group: '插件与工具', description: '钩子筛选和信任；仅操作本地示例', source: '', loadSource: () => import('@/components/CoreHooksEditor.vue?raw') },
+  { name: 'DirectCallView', category: '组合', group: '插件与工具', description: '模型调用、参数与历史；仅使用本地示例', source: '', loadSource: () => import('@/components/DirectCallView.vue?raw') },
+  // user:“直接渲染项目真实组件”+(设备传输列表和发送菜单都可独立检索和操作)。
+  { name: 'TransferPanel', category: '组合', group: '文件与资料', description: '文件互传进度、取消和接收记录；仅使用本地示例', source: '', loadSource: () => import('@/components/TransferPanel.vue?raw') },
+  { name: 'SendToDeviceMenu', category: '组合', group: '文件与资料', description: '按设备状态发送文件；仅使用本地示例', source: '', loadSource: () => import('@/components/SendToDeviceMenu.vue?raw') },
+  { name: 'AccountShell', category: '组合', group: '桌面与设备', description: '桌面设备连接、配对状态与错误；仅使用本地示例', source: '', alsoPreviews: ['core/ui/src/components/RemoteConnectionPanel.vue'], loadSource: () => Promise.all([import('@/components/AccountShell.vue?raw'), import('@/components/RemoteConnectionPanel.vue?raw')]).then(([shell, panel]) => ({ default: `${shell.default}\n\n/* src/components/RemoteConnectionPanel.vue */\n${panel.default}` })) },
   // user:“直接渲染项目真实组件”+(工具模式预览使用内存中的数据和保存结果)。
-  { name: 'CoreLoadToolsEditor', category: '组合', description: '工具模式与工具搜索；保存仅修改本地示例', source: '', loadSource: () => import('@/components/CoreLoadToolsEditor.vue?raw') },
+  { name: 'CoreLoadToolsEditor', category: '组合', group: '设置与外观', description: '工具模式与工具搜索；保存仅修改本地示例', source: '', loadSource: () => import('@/components/CoreLoadToolsEditor.vue?raw') },
   // user:“变体对比”+(直接对照应用使用的三种加载速度和减少动态效果)。
+  // user:“做”+(集中展示共享动作，也能在动效分类找到真实业务动作)。
+  { name: 'SundayMotion', category: '动效', description: '浮层开合、列表与消息入场、加载等待和减少动效', source: motionSource + '\n\n' + spinnerSource, sourcePath: 'src/styles/sunday-motion.css' },
   { name: 'SundaySpinner', category: '反馈', description: '加载图标旋转及减少动态效果；支持四种速度', source: spinnerSource, sourcePath: 'src/styles/sunday-spinner.css' },
   // user:“直接渲染项目真实组件”+(学习侧栏使用本地数据演示导航，不访问学习资料)。
-  { name: 'StudySidebar', category: '组合', description: '学习导航、课程树和置顶；示例仅保存在本地', source: studySidebarSource, sourcePath: 'src/study/StudySidebar.vue' },
+  { name: 'StudySidebar', category: '组合', group: '学习与笔记', description: '学习导航、课程树和置顶；示例仅保存在本地', source: studySidebarSource, sourcePath: 'src/study/StudySidebar.vue' },
+  { name: 'StudyNoteTree', category: '组合', group: '学习与笔记', description: '学习笔记文件树、键盘导航与错误状态；仅使用本地示例', source: '', sourcePath: 'src/study/StudyNoteTree.vue', loadSource: () => import('@/study/StudyNoteTree.vue?raw') },
+  { name: 'NotesManager', category: '组合', group: '学习与笔记', description: '学习笔记编辑、保存与草稿保护；仅使用本地示例', source: '', sourcePath: 'src/study/NotesManager.vue', alsoPreviews: ['core/ui/src/study/StudyNoteReferences.vue'], loadSource: () => Promise.all([import('@/study/NotesManager.vue?raw'), import('@/study/StudyNoteReferences.vue?raw')]).then(([notes, references]) => ({ default: `${notes.default}\n\n/* src/study/StudyNoteReferences.vue */\n${references.default}` })) },
+  { name: 'StudyGraph', category: '组合', group: '学习与笔记', description: '学习知识图谱、缩放与节点；仅使用本地示例', source: '', sourcePath: 'src/study/StudyGraph.vue', loadSource: () => import('@/study/StudyGraph.vue?raw') },
+  { name: 'StudyNoteRelationGraph', category: '组合', group: '学习与笔记', description: '笔记关系图、节点及空状态；仅使用本地示例', source: '', sourcePath: 'src/study/StudyNoteRelationGraph.vue', loadSource: () => import('@/study/StudyNoteRelationGraph.vue?raw') },
+  { name: 'MarksPanel', category: '组合', group: '学习与笔记', description: '学习标记、解释、翻译和定位；仅使用本地示例', source: '', sourcePath: 'src/study/MarksPanel.vue', loadSource: () => import('@/study/MarksPanel.vue?raw') },
+  { name: 'SelectionAssistant', category: '组合', group: '学习与笔记', description: '选区解释、翻译和追问；仅使用本地示例', source: '', sourcePath: 'src/study/SelectionAssistant.vue', loadSource: () => import('@/study/SelectionAssistant.vue?raw') },
   // user:“直接渲染项目真实组件”+(资料库搜索使用本地示例，筛选不会访问真实资料)。
   { name: 'LibrarySearchField', category: '输入', description: '资料、记忆和方案的搜索输入', source: librarySearchSource },
   // user:“直接渲染项目真实组件”+(更新卡片只模拟状态和进度，不启动实际更新)。
   { name: 'CoreUpdateCard', category: '反馈', description: '更新弹窗及下载、安装和失败状态；仅本地模拟', source: `${updateCardSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}` },
   // user:“直接渲染项目真实组件”+(项目创建和目录选择只使用本地示例，不写入项目或调用系统选择器)。
-  { name: 'CoreProjectCreate', category: '组合', description: '项目创建弹窗，使用本地示例目录与结果', source: `${coreProjectCreateSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}\n\n/* src/composables/useOutsidePointerDismiss.ts */\n${outsidePointerSource}` },
+  { name: 'CoreProjectCreate', category: '组合', group: '项目与工作区', description: '项目创建弹窗，使用本地示例目录与结果', source: `${coreProjectCreateSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}\n\n/* src/composables/useOutsidePointerDismiss.ts */\n${outsidePointerSource}` },
   // user:“直接渲染项目真实组件”+(项目选择弹窗只处理本地示例项目)。
-  { name: 'CoreProjectPicker', category: '组合', description: '项目选择弹窗，使用本地示例项目', source: `${coreProjectPickerSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}\n\n/* src/composables/useOutsidePointerDismiss.ts */\n${outsidePointerSource}` },
+  { name: 'CoreProjectPicker', category: '组合', group: '项目与工作区', description: '项目选择弹窗，使用本地示例项目', source: `${coreProjectPickerSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}\n\n/* src/composables/useOutsidePointerDismiss.ts */\n${outsidePointerSource}` },
   // user:“直接渲染项目真实组件”+(项目图标与颜色选择器仅调整本地示例)。
   { name: 'ProjectVisualPicker', category: '选择', description: '项目图标与颜色选择；支持键盘操作', source: `${projectPickerSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` },
   // user:“直接渲染项目真实组件”+(主题区域编辑只修改本地示例，不改变当前应用主题)。
-  { name: 'ThemeAreaEditor', category: '组合', description: '主题区域填充、材质和透明度；只修改本地示例', source: `${themeAreaSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` },
+  { name: 'ThemeAreaEditor', category: '组合', group: '设置与外观', description: '主题区域填充、材质和透明度；只修改本地示例', source: `${themeAreaSource}\n\n/* src/composables/radioGroupKeyboard.ts */\n${radioKeyboardSource}` },
   // user:“直接渲染项目真实组件”+(资料库视图切换使用本地示例状态)。
   { name: 'LibraryViewToggle', category: '选择', description: '资料、记忆和方案的网格/列表切换；样式位于 src/styles/library-surface.css', source: libraryViewToggleSource },
   // user:“直接渲染项目真实组件”+(确认队列、断线和自由回复只使用本地示例)。
-  { name: 'CorePendingDecisionPanel', category: '组合', description: '输入区确认队列、选项与自由回复；仅本地模拟', source: pendingDecisionSource },
+  { name: 'CorePendingDecisionPanel', category: '组合', group: '聊天与输入', description: '输入区确认队列、选项与自由回复；仅本地模拟', source: pendingDecisionSource },
   // user:“直接渲染项目真实组件”+(设置、插件与项目共用框架提供本地导航预览)。
-  { name: 'SettingsShell', category: '组合', description: '设置页导航与内容框架；共享样式位于 src/styles/layout.css', source: settingsShellSource },
+  { name: 'SettingsShell', category: '组合', group: '设置与外观', description: '设置页导航与内容框架；共享样式位于 src/styles/layout.css', source: settingsShellSource },
   // user:“直接渲染项目真实组件”+(桌宠设置以本地隔离状态操作，避免读取或修改真实配置)。
-  { name: 'CorePetEditor', category: '组合', description: '桌宠设置；预览只操作本地示例', source: petEditorSource },
+  { name: 'CorePetEditor', category: '组合', group: '桌面与设备', description: '桌宠设置；预览只操作本地示例', source: petEditorSource },
   // user:“直接渲染项目真实组件”+(资料库命名表单仅修改本地示例，不访问项目)。
   { name: 'LibraryNameDialog', category: '输入', description: '资料库创建与重命名表单，支持键盘焦点循环', source: `${libraryNameSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}\n\n/* src/composables/useOutsidePointerDismiss.ts */\n${outsidePointerSource}` },
   // user:“直接渲染项目真实组件”+(完整警告文本的资料库确认框使用本地示例)。
   { name: 'LibraryConfirmDialog', category: '反馈', description: '资料库多行警告与删除确认，支持键盘焦点循环', source: `${libraryConfirmSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}\n\n/* src/composables/useOutsidePointerDismiss.ts */\n${outsidePointerSource}` },
   // user:“直接渲染项目真实组件”+(工作流触发器展示生产面板，所有示例操作仅作用于内存)。
-  { name: 'WorkflowTriggersPanel', category: '组合', description: '工作流触发器配置；保存仅修改本地示例', source: workflowTriggersSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue' },
-  { name: 'CoreSendStopButton', category: '按钮', description: '输入区专用的发送、暂停与继续动作', source: sendStopSource },
+  { name: 'WorkflowTriggersPanel', category: '组合', group: '工作流与任务', description: '工作流触发器配置；保存仅修改本地示例', source: workflowTriggersSource, sourcePath: '../src/lamtools_core/plugins/bundled/workflow/ui/WorkflowTriggersPanel.vue' },
+  // user:“UI 请按语义整理并展示”+(普通按钮和主输入栏会话控制并列展示)。
+  { name: 'SundayButton', category: '按钮', description: '普通操作 · 主操作、次操作、轻量操作和危险操作', source: buttonSource, sourcePath: 'src/styles/sunday-button.css' },
+  { name: 'CoreSendStopButton', category: '按钮', description: '主输入栏会话控制 · 发送、暂停（停止运行）、继续与长按终止', source: sendStopSource },
+  // user:“尤其是气泡和玻璃效果”+(展示生产材质在三种用途下的差异)。
+  { name: 'OpticalGlass', category: '材质', description: '同一玻璃材质的三种用途：承载面板、浮层菜单、阅读气泡', source: glassSource + '\n\n' + messageBubbleSource, sourcePath: 'src/styles/optical-glass.css', alsoPreviews: ['core/ui/src/styles/message-bubbles.css'] },
+  // user:“全部统一以这个为示例 可复用化，可调参数为胶囊/卡片,填充颜色,是否玻璃”+(气泡材质单列展项，四种组合并排对照)。
+  { name: 'CoreMessageSurface', category: '材质', description: '消息气泡材质：卡片/胶囊、填充颜色、玻璃开关；用户与助手共用', source: `${coreMessageSurfaceSource}\n\n/* src/styles/message-surface.css */\n${messageSurfaceSource}`, sourcePath: 'src/styles/message-surface.css', alsoPreviews: ['core/ui/src/components/CoreMessageSurface.vue'] },
+  // user:“放进 界面/主题”+(气泡外观卡片在展厅可交互，只改浏览器本地示例偏好)。
+  { name: 'CoreBubbleAppearance', category: '输入', description: '气泡外观：形状、玻璃与两侧填充色；示例只改本地偏好', source: bubbleAppearanceSource, sourcePath: 'src/components/CoreBubbleAppearance.vue' },
   { name: 'DesignTokens', category: '令牌', description: '主题区域、语义色与尺寸刻度；桌宠设置文字输入使用输入区配色', source: `${tokenSource}\n\n/* src/helpers/settingsTheme.ts */\n${settingsThemeSource}`, sourcePath: 'src/styles/variables.css' },
   { name: 'ThinkingIntensitySlider', category: '数值', description: '思考强度专用竖向滑条，保留独立动效与等级语义', source: thinkingSource },
   // user:“梳理所有可见的组件、样式、布局、动效及交互”+(展厅展示真实历史加载动画并允许切换状态)。
@@ -246,14 +326,16 @@ const entries = [
   // user:“实时预览、交互测试、参数调整、变体对比”+(用本地示例展示真实发送状态和重试操作)。
   // user:“直接渲染项目真实组件，支持分类、搜索、筛选、实时预览、交互测试、参数调整、变体对比及源码定位”+(截图编辑使用本地示例并按需载入)。
   // user:“梳理所有可见的组件、样式、布局、动效及交互”+(以本地示例展示真实 Ping 圆环及子环)。
-  { name: 'PingRing', category: '组合', description: 'Ping 圆环与子环；示例仅供预览', source: pingRingSource, sourcePath: 'src/pet/ui/PingRing.vue' },
-  { name: 'CaptureEditor', category: '组合', description: '截图框选与标注；仅使用本地示例', source: captureSource, sourcePath: 'src/pet/ui/CaptureEditor.vue' },
+  { name: 'PingRing', category: '组合', group: '桌面与设备', description: 'Ping 圆环与子环；示例仅供预览', source: pingRingSource, sourcePath: 'src/pet/ui/PingRing.vue' },
+  // user:“直接渲染项目真实组件”+(托盘使用隔离的本地宿主演示)。
+  { name: 'TrayPanel', category: '组合', group: '桌面与设备', description: '托盘面板；操作仅在本地演示', source: traySource, sourcePath: 'src/tray/TrayPanel.vue' },
+  { name: 'CaptureEditor', category: '组合', group: '桌面与设备', description: '截图框选、标注、取字、翻译与发送；仅使用本地示例', source: captureSource, sourcePath: 'src/pet/ui/CaptureEditor.vue' },
   // user:“变体对比”+(使用真实系统事件行对照子代理与记忆续跑两类内容)。
   // user:“直接渲染项目真实组件，支持分类、搜索、筛选、实时预览、交互测试、参数调整、变体对比及源码定位”+(状态胶囊用本地事件演示，不调用真实电脑操作)。
   // user:“实时预览、交互测试、参数调整、变体对比”+(用本地步骤演示真实计划卡的状态与展开交互)。
   // user:“直接渲染项目真实组件”+(编辑器只保存本地示例，不写入项目文件)。
   { name: 'CoreAgentsEditor', category: '输入', description: '项目说明文本编辑与保存', source: agentsEditorSource },
-  { name: 'RuntimeChecklistCard', category: '组合', description: '当前计划及侧栏步骤状态对照', alsoPreviews: ['core/ui/src/components/RightSidebarChecklist.vue'], source: `${planSource}\n\n/* src/components/RightSidebarChecklist.vue */\n${sidebarChecklistSource}\n\n/* src/styles/sunday-task-indicator.css */\n${taskIndicatorSource}\n\n/* src/helpers/runtimeStepStatus.ts */\n${runtimeStepStatusSource}` },
+  { name: 'RuntimeChecklistCard', category: '组合', group: '工作流与任务', description: '当前计划及侧栏步骤状态对照', alsoPreviews: ['core/ui/src/components/RightSidebarChecklist.vue'], source: `${planSource}\n\n/* src/components/RightSidebarChecklist.vue */\n${sidebarChecklistSource}\n\n/* src/styles/sunday-task-indicator.css */\n${taskIndicatorSource}\n\n/* src/helpers/runtimeStepStatus.ts */\n${runtimeStepStatusSource}` },
   { name: 'ComputerUseCapsule', category: '反馈', description: '电脑操作状态胶囊与结束入口', source: computerUseSource, sourcePath: 'src/computerUse/ComputerUseCapsule.vue' },
   { name: 'CoreSystemEventRow', category: '反馈', description: '子代理和系统事件的消息行', source: eventSource },
   { name: 'CoreSubmissionStatus', category: '反馈', description: '发送状态、失败重试与编辑', source: `${submissionSource}\n\n/* src/styles/sunday-spinner.css */\n${spinnerSource}` },
@@ -261,7 +343,6 @@ const entries = [
   { name: 'HistoryLoadingIndicator', category: '反馈', description: '历史消息加载状态与减少动态效果', source: historyLoadingSource },
   { name: 'SundayProgress', category: '反馈', description: '已知或未知总量的任务进度，使用主题控制区颜色', source: `${progressSource}\n\n/* src/helpers/progressMetrics.ts */\n${progressMetricsSource}\n\n/* src/styles/sunday-controls.css */\n${checkboxSource}` },
   // user:“建立组件目录、使用说明与复用规范”+(展厅注明紧凑主次按钮的实际使用场景)。
-  { name: 'SundayButton', category: '按钮', description: '主操作、次要操作、轻量与危险操作；工作流节点和条件编辑器使用紧凑按钮', source: buttonSource, sourcePath: 'src/styles/sunday-button.css' },
   { name: 'CoreConfirmDialog', category: '反馈', description: '确认、取消与可选输入，支持键盘焦点循环', source: `${confirmSource}\n\n/* src/composables/trapDialogTab.ts */\n${dialogFocusSource}\n\n/* src/composables/useOutsidePointerDismiss.ts */\n${outsidePointerSource}` },
   { name: 'SundayCheckbox', category: '选择', description: '原生复选框，支持表单与多选', source: checkboxSource, sourcePath: 'src/styles/sunday-controls.css' },
   { name: 'SundaySwitch', category: '开关', description: '布尔设置，支持尺寸和禁用状态；用于更新、钩子和技能设置；样式：src/styles/sunday-switch.css', source: `${switchSource}\n\n/* src/styles/sunday-switch.css */\n${switchStyleSource}` },
@@ -280,7 +361,7 @@ const entries = [
   // user:“超过 N 个键值折叠成「+N」（展开可看全部）”+(键值胶囊的折叠与三种状态徽章在展厅可切换)。
   { name: 'ProcessKvPill', category: '展示', description: 'API 与状态查询的键值胶囊：折叠 +N、成功/失败/进行中徽章与耗时', source: processKvPillSource, sourcePath: 'src/components/process/ProcessKvPill.vue' },
   // user:“提高前端一致性与开发效率”+(大型源码按需载入并缓存，避免打开整个展厅时先加载)。
-  { name: 'CoreModelCatalog', category: '组合', description: '模型目录、筛选与详情；示例数据仅在本地', source: '', loadSource: () => import('@/components/CoreModelCatalog.vue?raw') },
+  { name: 'CoreModelCatalog', category: '组合', group: '设置与外观', description: '模型目录、筛选与详情；示例数据仅在本地', source: '', loadSource: () => import('@/components/CoreModelCatalog.vue?raw') },
 ]
 // user:“建立统一的 Design Tokens”+(展示四个主题区域，便于核对桌宠和其他页面的输入区配色)。
 const colorTokens = ['--theme-backdrop-background', '--theme-backdrop-text', '--theme-main-background', '--theme-main-text', '--theme-composer-background', '--theme-composer-text', '--theme-control-background', '--theme-control-solid', '--theme-control-text', '--green', '--blue', '--orange', '--red', '--purple']
@@ -322,6 +403,7 @@ const galleryMessages: CoreMessage[] = [
   { id: 'gallery-question', role: 'assistant', content: '', timestamp: '', parts: [{ id: 'gallery-question-part', partType: 'questionGroup', status: 'pending', content: '', metadata: { question_group_id: 'sample', questions: [{ id: 'sample-question', title: '是否继续？', type: 'single', required: true, options: [{ label: '继续', description: '' }, { label: '稍后', description: '' }] }] } }] },
 ]
 const galleryMessageLive = ref(false)
+const galleryAssistantBubbles = ref(true)
 const galleryProcessExpanded = ref(new Set<string>())
 const galleryProcessMessage = computed<CoreMessage>(() => ({
   id: 'gallery-process', role: 'assistant', content: '示例处理结果', timestamp: '', metadata: { live: galleryMessageLive.value },
@@ -334,6 +416,9 @@ function toggleGalleryProcess(id: string) { const next = new Set(galleryProcessE
 const galleryMessageReadonly = ref(true)
 const galleryMessageResult = ref('')
 const galleryMessageTransport = { request: async () => { throw new Error('展厅不访问真实会话') } } as unknown as LamToolsTransport
+
+/** 展厅里的气泡外观只改本地示例偏好，不写真实设置。 */
+const bubbleAppearanceRpc = async () => ({ namespace: 'core.assistantDisplay', value: {} })
 const galleryWorkflowRunning = ref(false)
 const galleryWorkflowDirty = ref(true)
 const galleryWorkflowConflict = ref(false)
@@ -370,7 +455,7 @@ async function sampleProcessRpc(method: string, params?: Record<string, unknown>
 // user:“交互测试”+(权限确认与执行结果只记录在本地，不调用插件)。
 // user:“交互测试”+(上下文设置只读写本地内存，其他设置动作不支持)。
 // user:“提高前端一致性与开发效率”+(大型示例默认延迟初始化，搜索或手动打开时再加载)。
-const deferredPreviewNames = new Set(['MaterialsView', 'MemoryView', 'PlanLibraryView', 'WorkflowCanvas', 'CoreSplitWorkspace', 'CoreSplitPreview', 'CoreSplitBrowser', 'CoreSplitFileTree', 'InlineFileComposer', 'CoreProjectSettings', 'SearchShell', 'CoreSettings', 'PluginRegionBlocks', 'PluginConfigPanel', 'PluginMarket', 'MessageView'])
+const deferredPreviewNames = new Set(['LibraryHomeView', 'MaterialsView', 'MemoryView', 'PlanLibraryView', 'WorkflowCanvas', 'CoreWorkspace', 'CoreSplitPreview', 'PreviewLightbox', 'NetworkHome', 'NetworkDashboard', 'NetworkTransfer', 'NetworkProxy', 'NetworkConnections', 'NetworkDiagnose', 'NetworkSettings', 'NetworkSecurity', 'NetworkAdvanced', 'NotesManager', 'StudyGraph', 'StudyNoteRelationGraph', 'SelectionAssistant', 'CoreSkillsEditor', 'CoreHooksEditor', 'DirectCallView', 'AccountShell', 'CoreSplitBrowser', 'CoreSplitFileTree', 'InlineFileComposer', 'CoreProjectSettings', 'SearchShell', 'CoreSettings', 'PluginRegionBlocks', 'PluginConfigPanel', 'PluginMarket', 'MessageView'])
 const requestedPreviews = ref(new Set<string>())
 function requestPreview(name: string) { requestedPreviews.value = new Set([...requestedPreviews.value, name]) }
 const galleryNetworkEmpty = ref(false)
@@ -451,7 +536,9 @@ async function samplePluginRpc(method: string, params?: Record<string, unknown>)
     if (plugin) plugin.enabled = method === 'plugin.system.enable'
     return {}
   }
-  if (['plugin.system.ui', 'plugin.system.behavior', 'plugin.deps-status', 'plugin.market.list'].includes(method)) return {}
+  // user:“交互测试”+(窗口入口使用本地样例，浏览器中不会打开桌面窗口)。
+  if (method === 'plugin.system.ui') return { windows: [{ plugin: 'alpha', id: 'main', title: '示例插件窗口', url: '/example', width: 400, height: 300 }, { plugin: 'other', id: 'main', title: '其他示例窗口', url: '/example-other', width: 400, height: 300 }] }
+  if (['plugin.system.behavior', 'plugin.deps-status', 'plugin.market.list'].includes(method)) return {}
   throw new Error('展厅示例不支持此操作')
 }
 const loadToolsPreviewResult = ref('')
@@ -496,14 +583,30 @@ const updatePreviewResult = ref('')
 const updatePreviewStates = [{ value: 'idle', label: '待更新' }, { value: 'downloading', label: '下载中' }, { value: 'downloaded', label: '已下载' }, { value: 'installing', label: '安装中' }, { value: 'failed', label: '失败' }]
 const projectIcons = ['folder', 'code', 'idea', 'design', 'docs', 'work', 'rocket', 'sparkles'].map(value => ({ value, label: value }))
 const projectColors = ['gray', 'blue', 'violet', 'pink', 'red', 'orange', 'green', 'cyan', 'sunrise', 'aurora', 'ocean', 'violet-sky', 'berry', 'ember', 'forest', 'prism'].map(value => ({ value, label: value }))
-const query = ref('')
+// user:“具体设计参考这个文件，尤其是气泡和玻璃效果”+(链接可直接定位到真实消息或材质展项)。
+const query = ref(new URLSearchParams(globalThis.location?.search).get('q') ?? '')
 const showInventory = ref(false)
 const inventorySignal = ref('all')
 const inventoryPreview = ref('all')
 const inventorySignals = [{ value: 'all', label: '全部线索' }, ...['button', 'checkbox', 'switch', 'range', 'select', 'dialog', 'event', 'grid', 'flex', 'animation', 'reduced-motion', 'theme', 'tokens'].map(value => ({ value, label: value }))]
 const inventoryPreviewOptions = [{ value: 'all', label: '全部状态' }, { value: 'available', label: '已有预览' }, { value: 'pending', label: '待接入预览' }]
-const category = ref('全部')
-const categories = ['全部', '组合', '令牌', '按钮', '反馈', '开关', '数值', '选择', '输入', '展示'].map(value => ({ value, label: value }))
+// user:“收敛方式按照职能和语义整理”+(分类只从真实展项产生，新分类自动出现在筛选中)。
+const categories = ['全部', ...new Set(entries.map(item => item.category))].map(value => ({ value, label: value === '组合' ? '页面与组合' : value }))
+// user:“UI 请按语义整理并展示”+(可直接打开按钮分类，再用现有筛选浏览其他展项)。
+const initialCategory = new URLSearchParams(globalThis.location?.search).get('category')
+const category = ref(categories.find(option => option.value === initialCategory)?.value ?? '全部')
+// user:“按聊天、设置、文件、工作流等实际用途再分一层”+(组合按主要用途归一组，所有组和数量由展项生成)。
+const groupCounts = new Map<string, number>()
+for (const item of entries) {
+  if ('group' in item && item.group) groupCounts.set(item.group, (groupCounts.get(item.group) ?? 0) + 1)
+}
+const groupOptions = [
+  { value: '全部用途', label: '全部用途' },
+  ...Array.from(groupCounts, ([value, count]) => ({ value, label: `${value}（${count}）`, selectedLabel: value })),
+]
+const initialGroup = new URLSearchParams(globalThis.location?.search).get('group')
+const compositeGroup = ref(initialGroup && groupCounts.has(initialGroup) ? initialGroup : '全部用途')
+
 const themes = [{ value: 'dark', label: '深色' }, { value: 'light', label: '浅色' }]
 const disabled = ref(false)
 const theme = ref<'dark' | 'light'>('dark')
@@ -523,9 +626,39 @@ async function sampleCatalogRpc(method: string): Promise<Record<string, unknown>
   return { providers: {} }
 }
 const actionMode = ref<'send' | 'stop' | 'resume'>('send')
-const actionModes = [{ value: 'send', label: '发送' }, { value: 'stop', label: '停止' }, { value: 'resume', label: '继续' }]
+// user:“按钮是否包含主输入栏内的发送/暂停/停止按钮？UI 请按语义整理并展示”+(用真实按钮演示短按和长按的不同结果)。
+const actionModes = [
+  { value: 'send', label: '待发送' },
+  { value: 'stop', label: '运行中' },
+  { value: 'resume', label: '已暂停' },
+]
+const composerActionCards = [
+  { title: '发送', detail: '待发送时短按，开始回合。', mode: 'send' },
+  { title: '暂停', detail: '运行中短按「停止运行」，保留回合。', mode: 'stop' },
+  { title: '继续', detail: '已暂停时短按，接着运行。', mode: 'resume' },
+  { title: '终止', detail: '运行或暂停时长按，再确认结束回合。' },
+]
+const composerActionResult = ref('')
+const composerTerminateOpen = ref(false)
+const composerActionTransitions = {
+  send: { next: 'stop', result: '已发送' },
+  stop: { next: 'resume', result: '已暂停' },
+  resume: { next: 'stop', result: '已继续运行' },
+} as const
+
+function applySampleComposerAction(): void {
+  if (disabled.value) return
+  const action = composerActionTransitions[actionMode.value]
+  actionMode.value = action.next
+  composerActionResult.value = action.result
+}
+
+function confirmSampleComposerTermination(): void {
+  composerTerminateOpen.value = false
+  actionMode.value = 'send'
+  composerActionResult.value = '已终止回合'
+}
 const directions = [{ value: 'down', label: '向下' }, { value: 'up', label: '向上' }]
-const sendActions = ref(0)
 const agentEditorText = ref('# 示例说明')
 const agentEditorResult = ref('')
 const decisionOffline = ref(false)
@@ -584,6 +717,24 @@ const pingExample = computed(() => {
 })
 const captureRequested = ref(false)
 const captureResult = ref('')
+// user:“支持分类、搜索、筛选、实时预览、交互测试、参数调整、变体对比及源码定位”+(展厅可独立切换截图发送和错误状态)。
+const captureBusy = ref(false)
+const captureError = ref(false)
+// user:“实时预览、交互测试”+(展厅取字和翻译都使用本地示例)。
+async function recognizeSampleText() {
+  return {
+    text: '示例文本',
+    language: 'zh-Hans',
+    lines: [{ text: '示例文本', bounds: [12, 12, 76, 24] as [number, number, number, number] }],
+    image_width: 320,
+    image_height: 180,
+    max_image_dimension: 320,
+    available_languages: ['zh-Hans'],
+  }
+}
+async function translateSampleText() {
+  return { text: 'Example text', model: '示例模型' }
+}
 const captureFrame = { width: 320, height: 180, x: 0, y: 0, scale: 1, capturedAt: 0, data: new Uint8ClampedArray(320 * 180 * 4).fill(200) }
 const submissionState = ref<'preparing' | 'sending' | 'failed' | 'unknown'>('sending')
 const submissionStates = [{ value: 'preparing', label: '准备中' }, { value: 'sending', label: '发送中' }, { value: 'failed', label: '发送失败' }, { value: 'unknown', label: '接收待确认' }]
@@ -627,7 +778,14 @@ const submissionEdits = ref(0)
 const historyLoadingActive = ref(false)
 const progress = ref(40)
 const progressIndeterminate = ref(false)
-const buttonClicks = ref(0)
+// user:“UI 请按语义整理并展示”+(以实际动作解释四种普通按钮何时使用)。
+const buttonRoles = [
+  { id: 'primary', title: '主操作', action: '保存', detail: '当前区域最重要的一步。' },
+  { id: 'secondary', title: '次操作', action: '取消', detail: '与主操作并列的备选。' },
+  { id: 'quiet', title: '轻量操作', action: '刷新', detail: '查看、复制等辅助动作。' },
+  { id: 'danger', title: '危险操作', action: '删除', detail: '会移除数据或撤销权限。' },
+] as const
+const lastButtonAction = ref('')
 const buttonMaterial = ref(false)
 const buttonSmall = ref(false)
 const confirmOpen = ref(false)
@@ -681,7 +839,25 @@ const safeSelectWidth = computed(() => Math.max(80, Number(selectWidth.value) ||
 const safeMinRows = computed(() => Math.min(5, Math.max(1, Math.trunc(Number(minRows.value) || 1))))
 const safeMaxRows = computed(() => Math.max(safeMinRows.value, Math.min(10, Math.trunc(Number(maxRows.value) || 1))))
 // user:“支持分类、搜索、筛选、实时预览”+(组合预览中真实展示的组件也能按名称和路径检索)。
-const visible = computed(() => entries.filter(item => (category.value === '全部' || item.category === category.value) && `${item.name} ${item.category} ${item.description} ${sourcePath(item)} ${'alsoPreviews' in item ? item.alsoPreviews.join(' ') : ''}`.toLowerCase().includes(query.value.trim().toLowerCase())))
+const motionExamples = new Set([
+  'SundaySpinner', 'SundayProgress', 'HistoryLoadingIndicator', 'CoreSubAgentActivityIndicator',
+  'CoreSendStopButton', 'CoreExecutionControls', 'MessageView', 'WorkflowNodeRuntimeDock', 'ContextMenuHost',
+])
+const visible = computed(() => {
+  const needle = query.value.trim().toLowerCase()
+  const matches = entries.filter(item => {
+    const matchesMotion = category.value === '动效' && motionExamples.has(item.name)
+    if (category.value !== '全部' && item.category !== category.value && !matchesMotion) return false
+    const group = 'group' in item ? item.group : ''
+    if (category.value === '组合' && compositeGroup.value !== '全部用途' && group !== compositeGroup.value) return false
+    const relatedPaths = 'alsoPreviews' in item ? item.alsoPreviews.join(' ') : ''
+    return `${item.name} ${item.category} ${group} ${item.description} ${sourcePath(item)} ${relatedPaths}`.toLowerCase().includes(needle)
+  })
+  if (category.value === '动效') {
+    matches.sort((first, second) => Number(second.name === 'SundayMotion') - Number(first.name === 'SundayMotion'))
+  }
+  return matches
+})
 // user:“建立组件目录、使用说明与复用规范，让后续开发及 Agent 能快速检索”+(按源码线索、静态调用方和预览状态检索，索引不代表运行时完整调用关系)。
 const matchedInventory = computed(() => componentInventory.filter(item => {
   const available = previewByPath.has(item.path)
@@ -727,18 +903,22 @@ onBeforeUnmount(() => {
       <label>搜索 <input v-model="query" aria-label="搜索组件" placeholder="名称、用途或分类" /></label>
       <!-- user:“建立统一的 Design Tokens 和可复用组件体系”+(展厅的分类和主题筛选也使用项目自身的共享控件) -->
       <div class="filter-control">分类 <UiSelect v-model="category" :options="categories" data-gallery-category aria-label="组件分类" :menu-min-width="120" /></div>
+      <div v-if="category === '组合'" class="filter-control">用途
+        <UiSelect v-model="compositeGroup" :options="groupOptions" aria-label="组合用途" :menu-min-width="168" />
+      </div>
       <div class="filter-control">主题 <UiSelect :model-value="theme" :options="themes" data-gallery-theme aria-label="预览主题" :menu-min-width="120" @update:model-value="theme = $event === 'light' ? 'light' : 'dark'" /></div>
       <label><input v-model="disabled" class="sunday-checkbox" type="checkbox" aria-label="禁用支持此状态的控件" /> 禁用支持此状态的控件</label>
     </div>
-    <div class="inventory-header"><p class="count">{{ visible.length }} 个交互预览</p><button type="button" class="source-button" data-show-inventory :aria-expanded="showInventory" @click="showInventory = !showInventory">{{ showInventory ? '收起源码目录' : '搜索全部源码目录' }}</button></div>
+    <div class="inventory-header"><p class="count">{{ visible.length }} 个交互预览</p><button type="button" class="source-button btn btn--quiet btn--sm" data-show-inventory :aria-expanded="showInventory" @click="showInventory = !showInventory">{{ showInventory ? '收起源码目录' : '搜索全部源码目录' }}</button></div>
     <section v-if="showInventory" class="inventory" aria-label="源码组件目录">
       <div class="inventory-filters"><UiSelect v-model="inventorySignal" :options="inventorySignals" aria-label="源码线索筛选" :menu-min-width="150" /><UiSelect v-model="inventoryPreview" :options="inventoryPreviewOptions" aria-label="预览状态筛选" :menu-min-width="150" /></div>
       <p>匹配 {{ matchedInventory.length }} 个源码文件；线索和引用来自静态索引，可能包括仅导出且遗漏动态入口。待接入的条目只提供定位。</p>
-      <ul><li v-for="component in matchedInventory" :key="component.path" :data-inventory-path="component.path"><div><code>{{ component.path }}</code><p class="inventory-signals">{{ component.signals.join(' · ') || '无线索' }}</p><details v-if="component.callers.length || component.previewCallers.length"><summary>静态引用 {{ component.callers.length }} · 预览引用 {{ component.previewCallers.length }}</summary><div v-for="caller in component.callers" :key="caller"><code>{{ caller }}</code></div><div v-for="caller in component.previewCallers" :key="caller"><code>{{ caller }}</code>（预览）</div></details></div><div><button type="button" class="source-button" @click="copySource(component.path)">复制路径</button><button v-if="previewByPath.has(component.path)" type="button" class="source-button" @click="openInventoryPreview(component.path)">已有预览</button><span v-else>待接入预览</span><span v-if="copiedSource === component.path" role="status">路径已复制</span><span v-else-if="copySourceError === component.path" role="status">复制失败，请手动选择路径</span></div></li></ul>
+      <ul><li v-for="component in matchedInventory" :key="component.path" :data-inventory-path="component.path"><div><code>{{ component.path }}</code><p class="inventory-signals">{{ component.signals.join(' · ') || '无线索' }}</p><details v-if="component.callers.length || component.previewCallers.length"><summary>静态引用 {{ component.callers.length }} · 预览引用 {{ component.previewCallers.length }}</summary><div v-for="caller in component.callers" :key="caller"><code>{{ caller }}</code></div><div v-for="caller in component.previewCallers" :key="caller"><code>{{ caller }}</code>（预览）</div></details></div><div><button type="button" class="source-button btn btn--quiet btn--sm" @click="copySource(component.path)">复制路径</button><button v-if="previewByPath.has(component.path)" type="button" class="source-button btn btn--quiet btn--sm" @click="openInventoryPreview(component.path)">已有预览</button><span v-else>待接入预览</span><span v-if="copiedSource === component.path" role="status">路径已复制</span><span v-else-if="copySourceError === component.path" role="status">复制失败，请手动选择路径</span></div></li></ul>
     </section>
     <p v-if="!visible.length">没有匹配的交互预览；可调整筛选条件或搜索源码目录。</p>
-    <section v-for="item in visible" :key="item.name" class="specimen" :class="{ 'specimen--wide': item.name === 'MaterialsView' || item.name === 'CoreSplitWorkspace' || item.name === 'CoreSplitPreview' || item.name === 'WorkflowCanvas' || item.name === 'CoreProjectSettings' || item.name === 'SearchShell' || item.name === 'CoreSettings' || item.name === 'CoreModelCatalog' || item.name === 'CoreLoadToolsEditor' || item.name === 'CorePluginSystemEditor' || item.name === 'CoreArrangeManager' || item.name === 'CaptureEditor' || item.name === 'CorePetEditor' || item.name === 'SettingsShell' || item.name === 'CorePendingDecisionPanel' }">
-      <div><span class="category">{{ item.category }}</span><h2 :id="`specimen-${item.name}`" tabindex="-1">{{ item.name }}</h2><p>{{ item.description }}</p><div v-for="path in sourcePaths(item)" :key="path" :data-source-path="path"><code>{{ path }}</code><button class="source-button" type="button" @click="copySource(path)">复制源码路径</button><span v-if="copiedSource === path" role="status">路径已复制</span><span v-else-if="copySourceError === path" role="status">复制失败，请手动选择路径</span></div><div><button class="source-button" type="button" :data-source="item.name" :aria-expanded="openSource === item.name" @click="toggleSource(item)">{{ openSource === item.name ? '收起源码' : '查看源码' }}</button></div></div>
+    <!-- user:“实时预览”+(网络工具的整版页面使用宽预览以保留原布局)。 -->
+    <section v-for="item in visible" :key="item.name" class="specimen" :class="{ 'specimen--wide': item.category === '动效' || item.category === '按钮' || item.category === '材质' || item.name === 'MessageView' || item.name === 'DirectCallView' || item.name === 'CoreSkillsEditor' || item.name === 'CoreHooksEditor' || item.name === 'StudyGraph' || item.name === 'NotesManager' || item.name.startsWith('Network') || item.name === 'MaterialsView' || item.name === 'CoreWorkspace' || item.name === 'CoreSplitPreview' || item.name === 'WorkflowCanvas' || item.name === 'CoreProjectSettings' || item.name === 'SearchShell' || item.name === 'CoreSettings' || item.name === 'CoreModelCatalog' || item.name === 'CoreLoadToolsEditor' || item.name === 'CorePluginSystemEditor' || item.name === 'CoreArrangeManager' || item.name === 'CaptureEditor' || item.name === 'CorePetEditor' || item.name === 'SettingsShell' || item.name === 'CorePendingDecisionPanel' }">
+      <div><span class="category">{{ item.category === '组合' ? '页面与组合' : item.category }}<template v-if="'group' in item"> · <span data-composite-group>{{ item.group }}</span></template></span><h2 :id="`specimen-${item.name}`" tabindex="-1">{{ item.name }}</h2><p>{{ item.description }}</p><div v-for="path in sourcePaths(item)" :key="path" :data-source-path="path"><code>{{ path }}</code><button class="source-button btn btn--quiet btn--sm" type="button" @click="copySource(path)">复制源码路径</button><span v-if="copiedSource === path" role="status">路径已复制</span><span v-else-if="copySourceError === path" role="status">复制失败，请手动选择路径</span></div><div><button class="source-button btn btn--quiet btn--sm" type="button" :data-source="item.name" :aria-expanded="openSource === item.name" @click="toggleSource(item)">{{ openSource === item.name ? '收起源码' : '查看源码' }}</button></div></div>
       <!-- user:“实时预览、参数调整、变体对比”+(启用材质时提供本地主题渐变示例，不改应用主题)。 -->
       <div class="preview" :style="item.name === 'SundayButton' && buttonMaterial ? { '--theme-control-image': 'linear-gradient(135deg, var(--theme-control-solid), color-mix(in srgb, var(--theme-control-solid) 80%, var(--theme-control-text)))' } : undefined">
         <button v-if="deferredPreviewNames.has(item.name) && !query.trim() && !requestedPreviews.has(item.name)" type="button" class="btn btn--secondary" :data-load-preview="item.name" @click="requestPreview(item.name)">加载预览</button>
@@ -756,9 +936,38 @@ onBeforeUnmount(() => {
           <!-- user:“实时预览”+(显示示例节点的位置，便于确认拖拽已同步)。 -->
           <span data-gallery-canvas-position>节点位置：{{ galleryCanvas.nodes.find(node => node.id === 'sample-finish')?.position }}</span><span>本地更新次数：<span data-gallery-canvas-updates>{{ galleryCanvasUpdates }}</span> · 连线：<span data-gallery-canvas-edges>{{ galleryCanvas.edges.length }}</span></span>
         </template>
-        <SplitWorkspacePreview v-else-if="item.name === 'CoreSplitWorkspace'" />
+        <WindowControls v-else-if="item.name === 'WindowControls'" show-in-preview inline />
+        <SplitWorkspacePreview v-else-if="item.name === 'CoreWorkspace'" />
         <SplitFilePreview v-else-if="item.name === 'CoreSplitPreview'" />
+        <LightboxPreview v-else-if="item.name === 'PreviewLightbox'" />
+        <FirstRunPreview v-else-if="item.name === 'FirstRunChecklist'" />
+        <NetworkHomePreview v-else-if="item.name === 'NetworkHome'" />
+        <NetworkHomePreview v-else-if="item.name === 'NetworkDashboard'" view="dashboard" />
+        <NetworkTransferPreview v-else-if="item.name === 'NetworkTransfer'" />
+        <NetworkProxyPreview v-else-if="item.name === 'NetworkProxy'" />
+        <NetworkInspectionPreview v-else-if="item.name === 'NetworkConnections'" view="connections" />
+        <NetworkInspectionPreview v-else-if="item.name === 'NetworkDiagnose'" view="diagnose" />
+        <NetworkSettingsPreview v-else-if="item.name === 'NetworkSettings'" view="settings" />
+        <NetworkSettingsPreview v-else-if="item.name === 'NetworkSecurity'" view="security" />
+        <NetworkSettingsPreview v-else-if="item.name === 'NetworkAdvanced'" view="advanced" />
+        <StudyNoteTreePreview v-else-if="item.name === 'StudyNoteTree'" />
+        <StudyNotesPreview v-else-if="item.name === 'NotesManager'" />
+        <StudyGraphsPreview v-else-if="item.name === 'StudyGraph'" view="knowledge" />
+        <StudyGraphsPreview v-else-if="item.name === 'StudyNoteRelationGraph'" view="notes" />
+        <StudyMarksPreview v-else-if="item.name === 'MarksPanel'" />
+        <SelectionAssistantPreview v-else-if="item.name === 'SelectionAssistant'" />
+        <div v-else-if="item.name === 'CoreSkillsEditor' || item.name === 'CoreHooksEditor'" class="loadtools-preview" :style="settingsThemeVars(theme === 'light' ? SUNDAY_LIGHT_THEME : SUNDAY_DARK_THEME)"><SkillsHooksPreview :view="item.name === 'CoreSkillsEditor' ? 'skills' : 'hooks'" /></div>
+        <DirectCallPreview v-else-if="item.name === 'DirectCallView'" />
+        <TransferPreview v-else-if="item.name === 'TransferPanel'" mode="panel" />
+        <TransferPreview v-else-if="item.name === 'SendToDeviceMenu'" mode="menu" />
+        <AccountPreview v-else-if="item.name === 'AccountShell'" :theme="theme === 'light' ? SUNDAY_LIGHT_THEME : SUNDAY_DARK_THEME" />
         <SplitBrowserPreview v-else-if="item.name === 'CoreSplitBrowser'" />
+        <template v-else-if="item.name === 'LibraryHomeView'">
+          <div class="loadtools-preview core-app-page core-app-page--auxiliary" style="width: min(100%, 360px); height: 460px">
+            <LibraryHomeView :client="galleryLibraryClient" project-id="sample" work-root="示例项目" platform="desktop" :request-rpc="(method, params) => method.startsWith('artifact.') ? sampleMaterialsRpc(method, params) : sampleMemoryRpc(method, params)" :list-files="galleryTreeList" :open-project-file="path => { galleryTreeOpened = path }" />
+          </div>
+          <span v-if="galleryTreeOpened">本地打开：{{ galleryTreeOpened }}</span>
+        </template>
         <template v-else-if="item.name === 'CoreSplitFileTree'"><label><input v-model="galleryTreeFailure" type="checkbox" class="sunday-checkbox" />模拟目录读取失败</label><div class="loadtools-preview" style="width: 100%; height: 360px"><CoreSplitFileTree root="示例项目" :list-files="galleryTreeList" @open="galleryTreeOpened = $event.replace(/^示例项目\//, '')" /></div><span v-if="galleryTreeOpened">本地打开：{{ galleryTreeOpened }}</span></template>
         <ComposerPreview v-else-if="item.name === 'InlineFileComposer'" />
         <QueuedInputPreview v-else-if="item.name === 'CoreQueuedInputTray'" />
@@ -797,9 +1006,10 @@ onBeforeUnmount(() => {
           <span v-if="galleryMarketLink">本地链接示例：{{ galleryMarketLink }}</span>
         </template>
         <template v-else-if="item.name === 'MessageView'">
+          <label><input v-model="galleryAssistantBubbles" class="sunday-checkbox" type="checkbox" />助手气泡</label>
           <label><input v-model="galleryMessageReadonly" class="sunday-checkbox" type="checkbox" data-message-readonly />只读模式</label>
           <label><input v-model="galleryMessageLive" class="sunday-checkbox" type="checkbox" data-message-live />过程运行中</label>
-          <div class="chat-thread" style="width: 100%"><MessageView v-for="message in galleryMessages" :key="message.id" :msg="message" :transport="galleryMessageTransport" :message-actions="false" :decisions-disabled="galleryMessageReadonly" @question-submit="galleryMessageResult = $event.text" /></div>
+          <div class="chat-thread material-stage" style="width: 100%" data-gallery-bubbles><MessageView v-for="message in galleryMessages" :key="message.id" :msg="message" :transport="galleryMessageTransport" :assistant-bubble-appearance="galleryAssistantBubbles ? 'boxed' : 'plain'" :message-actions="false" :decisions-disabled="galleryMessageReadonly" @question-submit="galleryMessageResult = $event.text" /></div>
           <div class="chat-thread" style="width: 100%" data-gallery-process><MessageView :msg="galleryProcessMessage" :transport="galleryMessageTransport" :process-expanded-ids="galleryProcessExpanded" :turn-active="galleryMessageLive" @toggle-process="toggleGalleryProcess" /></div>
           <span v-if="galleryMessageResult">本地回答：{{ galleryMessageResult }}</span>
         </template>
@@ -838,13 +1048,14 @@ onBeforeUnmount(() => {
         </template>
         <template v-else-if="item.name === 'CorePluginSystemEditor'">
           <button v-if="!pluginEditorRequested && !query.trim()" type="button" class="btn btn--secondary" @click="pluginEditorRequested = true">加载插件管理预览</button>
-          <div v-else class="loadtools-preview" :style="settingsThemeVars(theme === 'light' ? SUNDAY_LIGHT_THEME : SUNDAY_DARK_THEME)"><CorePluginSystemEditor :request-rpc="samplePluginRpc" /></div>
+          <div v-else class="loadtools-preview" :style="settingsThemeVars(theme === 'light' ? SUNDAY_LIGHT_THEME : SUNDAY_DARK_THEME)"><CorePluginSystemEditor :request-rpc="samplePluginRpc" :open-window="async () => false" /></div>
         </template>
         <template v-else-if="item.name === 'CoreLoadToolsEditor'">
           <button v-if="!loadToolsRequested && !query.trim()" type="button" class="btn btn--secondary" @click="loadToolsRequested = true">加载工具模式预览</button>
           <div v-else class="loadtools-preview" :style="settingsThemeVars(theme === 'light' ? SUNDAY_LIGHT_THEME : SUNDAY_DARK_THEME)"><CoreLoadToolsEditor :request-rpc="sampleToolModesRpc" /></div>
           <span v-if="loadToolsPreviewResult">{{ loadToolsPreviewResult }}</span>
         </template>
+        <MotionPreview v-else-if="item.name === 'SundayMotion'" />
         <template v-else-if="item.name === 'SundaySpinner'">
           <div class="variant"><LoaderCircle class="sunday-spin sunday-spin--fast" aria-hidden="true" />快速</div>
           <div class="variant"><LoaderCircle class="sunday-spin" aria-hidden="true" />标准</div>
@@ -865,10 +1076,59 @@ onBeforeUnmount(() => {
             <CoreModelCatalog :models="showSampleModels ? sampleModels : []" :providers="showSampleProviders ? sampleProviders : []" :request-rpc="sampleCatalogRpc" :catalog-view="catalogView" @update:catalog-view="catalogView = $event" />
           </template>
         </template>
-        <template v-else-if="item.name === 'CoreSendStopButton'">
-          <div class="filter-control">动作状态 <UiSelect :model-value="actionMode" :options="actionModes" data-gallery-action-mode aria-label="动作状态" :menu-min-width="120" @update:model-value="actionMode = $event === 'stop' || $event === 'resume' ? $event : 'send'" /></div>
-          <form class="composer-preview" @submit.prevent="sendActions++"><CoreSendStopButton :action-mode="actionMode" :disabled="disabled" :hold-enabled="false" /></form>
-          <span>提交 {{ sendActions }} 次</span>
+        <div v-else-if="item.name === 'CoreSendStopButton'" class="action-specimen" data-composer-actions>
+          <ul class="action-grid" aria-label="主输入栏按钮语义">
+            <li v-for="action in composerActionCards" :key="action.title" :data-current="action.mode === actionMode || undefined">
+              <strong>{{ action.title }}</strong>
+              <p>{{ action.detail }}</p>
+            </li>
+          </ul>
+          <div class="action-toolbar">
+            <div class="filter-control">示例状态
+              <UiSelect
+                :model-value="actionMode"
+                :options="actionModes"
+                data-gallery-action-mode
+                aria-label="动作状态"
+                :menu-min-width="120"
+                @update:model-value="actionMode = $event === 'stop' || $event === 'resume' ? $event : 'send'"
+              />
+            </div>
+            <span v-if="composerActionResult" role="status">示例操作：{{ composerActionResult }}</span>
+          </div>
+          <form class="composer-preview" @submit.prevent="applySampleComposerAction">
+            <span>{{ actionModes.find(mode => mode.value === actionMode)?.label }}</span>
+            <CoreSendStopButton
+              :action-mode="actionMode"
+              :disabled="disabled"
+              :hold-enabled="actionMode !== 'send'"
+              @terminate="composerTerminateOpen = true"
+            />
+          </form>
+          <CoreConfirmDialog
+            :open="composerTerminateOpen"
+            title="终止这个回合？"
+            detail="示例回合将结束，无法再继续。"
+            confirm-label="终止"
+            @cancel="composerTerminateOpen = false"
+            @confirm="confirmSampleComposerTermination"
+          />
+        </div>
+        <div v-else-if="item.name === 'OpticalGlass'" class="material-stage glass-specimens">
+          <div class="optical-glass"><strong>承载面板</strong><span>保留背景层次，适合较大的浮动区域。</span></div>
+          <div class="optical-glass optical-glass--low-trans"><strong>浮层菜单</strong><span>减弱背后文字，便于选择和操作。</span></div>
+          <div class="optical-glass optical-glass--reading"><strong>阅读面板</strong><span>底色更稳，正文始终清晰。</span></div>
+        </div>
+        <template v-else-if="item.name === 'CoreMessageSurface'">
+          <div class="material-stage surface-specimens">
+            <CoreMessageSurface class="surface-demo message-bubble--user" shape="card"><strong>卡片 · 玻璃</strong><span>默认形状，底色跟随用户淡粉。</span></CoreMessageSurface>
+            <CoreMessageSurface class="surface-demo message-bubble--assistant" shape="capsule"><strong>胶囊 · 玻璃</strong><span>短句两端全圆，底色跟随助手淡蓝。</span></CoreMessageSurface>
+            <CoreMessageSurface class="surface-demo message-bubble--assistant" shape="card" :glass="false"><strong>卡片 · 实色</strong><span>关掉玻璃后不采样背景，圆角与间距不变。</span></CoreMessageSurface>
+            <CoreMessageSurface class="surface-demo message-bubble--user" shape="card" fill="rgb(255 215 106 / 45%)"><strong>自定义填充</strong><span>fill 可传任意颜色，渐变走 --message-surface-fill-image。</span></CoreMessageSurface>
+          </div>
+        </template>
+        <template v-else-if="item.name === 'CoreBubbleAppearance'">
+          <div class="bubble-appearance-preview"><CoreBubbleAppearance :request-rpc="bubbleAppearanceRpc" /></div>
         </template>
         <template v-else-if="item.name === 'DesignTokens'">
           <div class="token-list">
@@ -932,10 +1192,13 @@ onBeforeUnmount(() => {
             <CorePetEditor preview />
           </div>
         </template>
+        <TrayPreview v-else-if="item.name === 'TrayPanel'" />
         <template v-else-if="item.name === 'CaptureEditor'">
           <button v-if="!captureRequested" type="button" class="btn btn--secondary" data-load-capture @click="captureRequested = true">加载截图编辑预览</button>
           <template v-else>
-            <CaptureEditor :frame="captureFrame" :busy="false" error="" sandbox @cancel="captureRequested = false" @send="captureResult = `本地示例：${Math.round($event.meta.width)}×${Math.round($event.meta.height)}`" />
+            <label><input v-model="captureBusy" type="checkbox" class="sunday-checkbox" />模拟截图发送中</label>
+            <label><input v-model="captureError" type="checkbox" class="sunday-checkbox" />模拟截图错误</label>
+            <CaptureEditor :frame="captureFrame" :recognize-text="recognizeSampleText" :translate="translateSampleText" :busy="captureBusy" :error="captureError ? '示例发送失败' : ''" sandbox @cancel="captureRequested = false" @send="captureResult = `本地示例：${Math.round($event.meta.width)}×${Math.round($event.meta.height)}`" />
             <span v-if="captureResult" data-capture-result>{{ captureResult }}</span>
           </template>
         </template>
@@ -1004,13 +1267,27 @@ onBeforeUnmount(() => {
           <label><input v-model="progressIndeterminate" class="sunday-checkbox" type="checkbox" aria-label="模拟未知总量" /> 模拟未知总量</label>
           <SundayProgress :value="progress" :indeterminate="progressIndeterminate" :value-text="progressIndeterminate ? '处理中' : ''" label="示例进度" />
         </template>
-        <template v-else-if="item.name === 'SundayButton'">
-          <!-- user:“参数调整、变体对比”+(同一组按钮可切换紧凑尺寸及主按钮主题材质)。 -->
-          <label><input v-model="buttonMaterial" class="sunday-checkbox" type="checkbox" aria-label="主题材质" /> 主题材质</label>
-          <label><input v-model="buttonSmall" class="sunday-checkbox" type="checkbox" aria-label="紧凑尺寸" /> 紧凑尺寸</label>
-          <button v-for="variant in ['primary', 'secondary', 'quiet', 'ghost', 'danger']" :key="variant" type="button" class="btn" :class="[`btn--${variant}`, { 'btn--material': variant === 'primary' && buttonMaterial, 'btn--sm': buttonSmall }]" :disabled="disabled" @click="buttonClicks++">{{ variant }}</button>
-          <span>已点击 {{ buttonClicks }} 次</span>
-        </template>
+        <div v-else-if="item.name === 'SundayButton'" class="action-specimen">
+          <div class="action-toolbar">
+            <label><input v-model="buttonSmall" class="sunday-checkbox" type="checkbox" aria-label="紧凑尺寸" /> 紧凑尺寸</label>
+            <label><input v-model="buttonMaterial" class="sunday-checkbox" type="checkbox" aria-label="主题材质" /> 主题材质</label>
+            <span v-if="lastButtonAction" role="status">示例操作：{{ lastButtonAction }}</span>
+          </div>
+          <ul class="action-grid" aria-label="普通按钮语义">
+            <li v-for="role in buttonRoles" :key="role.id">
+              <strong>{{ role.title }}</strong>
+              <p>{{ role.detail }}</p>
+              <button
+                type="button"
+                class="btn"
+                :class="['btn--' + role.id, { 'btn--material': role.id === 'primary' && buttonMaterial, 'btn--sm': buttonSmall }]"
+                :data-button-role="role.id"
+                :disabled="disabled"
+                @click="lastButtonAction = role.action"
+              >{{ role.action }}</button>
+            </li>
+          </ul>
+        </div>
         <template v-else-if="item.name === 'CoreConfirmDialog'">
           <!-- user:“参数调整、交互测试”+(可检查输入和确认不可用时的键盘焦点)。 -->
           <label><input v-model="confirmHasInput" class="sunday-checkbox" type="checkbox" aria-label="包含输入框" /> 包含输入框</label>
@@ -1115,10 +1392,34 @@ input[type=number] { width: 80px; }
 .inventory li { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-1); }
 .inventory li code { overflow-wrap: anywhere; } .inventory li span { flex: none; color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); }
 [data-source-path] code { overflow-wrap: anywhere; }
-.source-button { margin-top: var(--space-3); padding: var(--space-2); border: 0; border-radius: var(--radius-sm); background: var(--theme-control-background); color: var(--theme-control-text); cursor: pointer; }
+.source-button { margin-top: var(--space-1); }
 .source { grid-column: 1 / -1; max-height: 400px; overflow: auto; white-space: pre; background: var(--theme-main-sunken-background); padding: var(--space-3); }
 .preview { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; padding: var(--space-4); background: var(--theme-main-background); border-radius: var(--radius-sm); }
-.composer-preview { display: flex; align-items: center; min-height: 48px; padding: var(--space-2); background: var(--theme-composer-background); border-radius: var(--radius); }
+/* user:“UI 请按语义整理并展示”+(用并列的用途和示例按钮建立可比较的层级)。 */
+.material-stage {
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background:
+    radial-gradient(ellipse at 10% 20%, color-mix(in srgb, var(--message-bubble-assistant-color) 25%, transparent), transparent 60%),
+    radial-gradient(ellipse at 90% 80%, color-mix(in srgb, var(--message-bubble-user-color) 25%, transparent), transparent 60%),
+    var(--theme-main-sunken-background);
+}
+.glass-specimens { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.glass-specimens > div { position: relative; width: auto; display: grid; align-content: start; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius); }
+.glass-specimens span { font-size: 12px; }
+.surface-specimens { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.surface-demo { display: grid; gap: 2px; font-size: 13px; }
+.surface-demo span { font-size: 12px; color: color-mix(in srgb, var(--theme-main-text) 62%, transparent); }
+.bubble-appearance-preview { width: min(560px, 100%); }
+.action-specimen { display: grid; gap: var(--space-3); width: 100%; }
+.action-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4); }
+.action-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.action-grid li { display: grid; grid-template-rows: auto 1fr auto; justify-items: start; padding: var(--space-3); border: 1px solid var(--theme-main-border); border-radius: var(--radius); }
+.action-grid li[data-current] { background: var(--theme-main-soft-background); }
+.action-grid strong { font-size: 13px; }
+.action-grid p, .action-toolbar [role='status'] { font-size: 12px; color: color-mix(in srgb, var(--theme-main-text) 65%, transparent); }
+.composer-preview { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: var(--space-2) var(--space-3); background: var(--theme-composer-background); color: var(--theme-composer-text); border-radius: var(--radius); }
+@media (max-width: 800px) { .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .token-list { display: grid; gap: var(--space-2); width: 100%; }
 .token-row { display: flex; align-items: center; gap: var(--space-2); }
 .token-swatch { width: 24px; height: 24px; border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm); }

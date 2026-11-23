@@ -820,6 +820,7 @@ onMounted(fetchSendBehavior)
   align-items: center;
 }
 
+
 .general-hint--inline {
   margin: 0;
 }

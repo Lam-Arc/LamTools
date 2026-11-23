@@ -46,6 +46,15 @@ def build_update_operation_catalog() -> OperationCatalog:
 
     async def update_download(request: OperationRequest) -> OperationResult:
         del request  # no payload: the host decides what may be downloaded
+        # user:“更新时可以后台下载。再次点更新键后的卡片继承进度”+(已经有一条下载在跑：
+        # 直接把它的进度交回去，不再重新读一遍清单——那一步要走网络，慢的时候会把“继承
+        # 进度”变成一次新的等待，清单暂时取不到时还会把正在跑的下载报成失败。)
+        running = await asyncio.to_thread(progress_snapshot)
+        if running.get("state") == "downloading":
+            return OperationResult(
+                name="update.download",
+                payload={"ok": True, **running, "message": _download_message(running)},
+            )
         checked: dict[str, Any] = await asyncio.to_thread(check_update)
         if checked.get("status") != "update_available":
             return OperationResult(

@@ -1,16 +1,17 @@
 <template>
   <!-- user:“插件页再加上插件市场的界面…你自己设计”+(沿用现有工作台主题，以插件用途、版本和安装状态组织市场)。 -->
   <section class="market" :aria-label="t('插件市场')" :aria-busy="loading || Boolean(busy)">
-    <div class="market-heading">
-      <div><h2>{{ t('从 GitHub 安装插件') }}</h2><p>{{ t('独立发布，按需安装。网络拓展可用时自动优化下载，安装前校验文件。') }}</p></div>
+    <!-- user:“这个组内的 UI 设计与风格”+(市场条目使用与已安装插件相同的标题和边框层次)。 -->
+    <div class="market-heading sunday-page-heading">
+      <div><h2 class="sunday-page-title">{{ t('从 GitHub 安装插件') }}</h2><p>{{ t('独立发布，按需安装。网络拓展可用时自动优化下载，安装前校验文件。') }}</p></div>
       <button class="btn btn--secondary" type="button" :disabled="loading || Boolean(busy)" @click="load"><RefreshCw :size="14" :class="{ 'sunday-spin sunday-spin--slow': loading }" />{{ t('检查更新') }}</button>
     </div>
-    <p v-if="error" class="market-error" role="alert"><CircleAlert :size="15" />{{ error }}</p>
-    <p v-if="cached" class="market-note" role="status">{{ t('当前显示缓存目录；安装时会重新核对 GitHub 最新发布。') }}</p>
-    <p v-if="notice" class="market-note" role="status">{{ notice }}</p>
+    <p v-if="error" class="sunday-page-status sunday-page-status--error" role="alert"><CircleAlert :size="15" />{{ error }}</p>
+    <p v-if="cached" class="sunday-page-status" role="status">{{ t('当前显示缓存目录；安装时会重新核对 GitHub 最新发布。') }}</p>
+    <p v-if="notice" class="sunday-page-status" role="status">{{ notice }}</p>
     <div v-if="loading && !plugins.length" class="market-loading" role="status"><LoaderCircle class="sunday-spin sunday-spin--slow" :size="18" />{{ t('正在连接插件市场…') }}</div>
     <ul v-else class="market-list">
-      <li v-for="plugin in plugins" :key="plugin.id" class="market-row" :data-market-plugin="plugin.id">
+      <li v-for="plugin in plugins" :key="plugin.id" class="market-row sunday-page-panel" :data-market-plugin="plugin.id">
         <div class="market-mark" aria-hidden="true"><component :is="plugin.id === 'qq-bot' ? MessagesSquare : Clapperboard" :size="26" :stroke-width="1.5" /></div>
         <div class="market-content">
           <div class="market-title"><h3>{{ t(plugin.title) }}</h3><span>{{ t(plugin.category) }}</span></div>
@@ -95,11 +96,13 @@ onMounted(load)
 
 <style scoped>
 .market { --text: var(--theme-main-text); container-type: inline-size; color: var(--text); padding-block: var(--space-4); }
-.market-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
-.market-heading h2 { margin: 0 0 var(--space-2); font-size: 18px; font-weight: 650; }
+.market-heading { margin-bottom: var(--space-3); }
+
 .market-heading p, .market-content p { margin: 0; color: color-mix(in srgb, var(--text) 65%, transparent); line-height: 1.65; max-width: 65ch; }
 .market-list, .market-capabilities { padding: 0; margin: 0; list-style: none; }
-.market-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: var(--space-4); align-items: start; padding-block: var(--space-5); border-top: 1px solid var(--theme-main-border); }
+.market-list { display: grid; gap: var(--space-2); }
+.market > .sunday-page-status { margin-bottom: var(--space-2); }
+.market-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: var(--space-4); align-items: start; padding: var(--space-3); }
 .market-mark { width: 48px; height: 48px; display: grid; place-items: center; border-radius: var(--radius); background: var(--theme-main-soft-background); }
 .market-title { display: flex; gap: var(--space-3); align-items: baseline; margin-bottom: var(--space-2); }
 .market-title h3 { margin: 0; font-size: 16px; font-weight: 650; }
@@ -108,9 +111,6 @@ onMounted(load)
 .market-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-3); font-variant-numeric: tabular-nums; }
 .market-meta button { display: inline-flex; align-items: center; gap: var(--space-1); }
 .market-action { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); padding-top: var(--space-1); }
-.market-error, .market-note { display: flex; align-items: center; gap: var(--space-2); padding-block: var(--space-3); line-height: 1.6; }
-.market-error { color: var(--red); }
-.market-note { color: color-mix(in srgb, var(--text) 65%, transparent); font-size: 13px; }
 .market-loading { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-5) 0; }
 @container (max-width: 620px) { .market-row { grid-template-columns: 40px minmax(0, 1fr); } .market-action { grid-column: 2; align-items: flex-start; } .market-heading { align-items: flex-start; flex-wrap: wrap; } }
 </style>

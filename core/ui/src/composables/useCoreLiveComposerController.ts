@@ -599,21 +599,34 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     publishSubmissions()
   }
 
-  async function submit(submissionOptions: { clearComposer?: boolean; specialSend?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
+  async function submit(submissionOptions: {
+    clearComposer?: boolean
+    specialSend?: boolean
+    /**
+     * user:“在我输入框已有内容的时候，我提交一个回复，会把原有的输入框内容给吞掉，且没有恢复”+
+     * (外部来源自带正文（提问卡答案）：只发这一条，既不读输入栏，也不清空或覆盖正在写的草稿。)
+     */
+    text?: string
+    /** 外部正文一起送来的附件；缺省为空——绝不把输入栏里待发的附件顺手发出去。 */
+    attachments?: CoreInputItem[]
+  } = {}): Promise<SubmitCoreComposerTaskResult | null> {
+    const external = submissionOptions.text !== undefined
     const pausedTurnId = options.resumableTurnId?.value || ''
     const resuming = Boolean(pausedTurnId || actionMode.value === 'resume')
     if (!resuming && actionMode.value === 'stop') { await stop(); return null }
     if (submitting.value) return null
     // user:“做吧”+(鼠标与键盘发送共用校验，停止操作不被发送条件阻挡)。
-    if (options.canSubmit && !options.canSubmit()) return null
+    // 外部正文已经由卡片刻校验过（必答都答了），不受输入栏「有没有内容」的限制。
+    if (!external && options.canSubmit && !options.canSubmit()) return null
     const threadId = options.activeThreadId.value || ''
     if (!threadId) { reportError(options.messages?.noActiveThread || 'An active thread is required'); return null }
-    const rawText = options.text.value
+    const rawText = submissionOptions.text ?? options.text.value
     const text = rawText.trim()
-    const attachments = copySubmissionValue(options.attachments.value || [])
+    const attachments = copySubmissionValue(external ? (submissionOptions.attachments || []) : (options.attachments.value || []))
     const catalog = copySubmissionValue(commandCatalog.value)
     if (!resuming && !text && !attachments.length) return { status: 'ignored' }
-    const command = attachments.length ? null : parseComposerInput(text, catalog)
+    // 外部正文不是用户在输入栏敲的命令，不参与命令解析。
+    const command = attachments.length || external ? null : parseComposerInput(text, catalog)
     if (!resuming && command?.kind === 'action') {
       const version = draftVersion
       submitting.value = true
@@ -647,7 +660,8 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       state: resuming ? 'sending' : 'preparing', error: '',
       draftVersion, activeTurnId: resuming ? pausedTurnId : options.activeTurnId?.value || '',
       status: options.status.value, catalog, workRoot: options.getWorkRoot(),
-      clearComposer: submissionOptions.clearComposer === true || resuming,
+      // user:“会把原有的输入框内容给吞掉，且没有恢复”+(外部提交不碰输入栏：草稿与待发附件都留在原地)。
+      clearComposer: !external && (submissionOptions.clearComposer === true || resuming),
       intent: sendIntent,
       resumeMembers: (options.resumableSubAgents?.value.length ?? 0) > 0,
     }

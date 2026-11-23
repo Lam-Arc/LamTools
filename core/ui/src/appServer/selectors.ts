@@ -688,6 +688,27 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
     }
   }
 
+  // user:“查一下 constant 内会话为什么出现了：部分消息在最新消息的下方”
+  // +(缺乏外层开场行的历史回合若早于首个 outerTurn，过去会被跳出 continuationsByOuterTurn
+  //   并在末尾兜底循环里甩到最新消息之后；改为优先按 seq 锚点归入正确时间位置，无 seq 时亦留在前方而非结尾)
+  const minSeqForTurn = (turnId: string): number | null => {
+    const group = turnItems.get(turnId)
+    if (!group) return null
+    let best = Number.POSITIVE_INFINITY
+    for (const id of group.outer) {
+      const s = Number((outerItems[id] as { seq?: unknown } | undefined)?.seq)
+      if (Number.isFinite(s) && s < best) best = s
+    }
+    for (const id of group.core) {
+      const s = Number((coreItems[id] as { seq?: unknown } | undefined)?.seq)
+      if (Number.isFinite(s) && s < best) best = s
+    }
+    return Number.isFinite(best) ? best : null
+  }
+  const outerTurnSeqs = outerTurnOrder.map(turnId => ({ turnId, seq: minSeqForTurn(turnId) }))
+  const hasAllOuterSeqs = outerTurnSeqs.length > 0 && outerTurnSeqs.every(entry => entry.seq !== null)
+
+  const leadingCoreTurns: string[] = []
   const continuationsByOuterTurn = new Map<string, string[]>()
   let precedingOuterTurn = ''
   for (const turnId of coreTurnOrder) {
@@ -695,7 +716,27 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
       precedingOuterTurn = turnId
       continue
     }
-    if (!precedingOuterTurn) continue
+    const coreSeq = hasAllOuterSeqs ? minSeqForTurn(turnId) : null
+    if (coreSeq !== null) {
+      let anchorTurn = ''
+      for (const outerEntry of outerTurnSeqs) {
+        if ((outerEntry.seq as number) <= coreSeq) {
+          anchorTurn = outerEntry.turnId
+        }
+      }
+      if (!anchorTurn) {
+        leadingCoreTurns.push(turnId)
+      } else {
+        const continuations = continuationsByOuterTurn.get(anchorTurn) ?? []
+        continuations.push(turnId)
+        continuationsByOuterTurn.set(anchorTurn, continuations)
+      }
+      continue
+    }
+    if (!precedingOuterTurn) {
+      leadingCoreTurns.push(turnId)
+      continue
+    }
     const continuations = continuationsByOuterTurn.get(precedingOuterTurn) ?? []
     continuations.push(turnId)
     continuationsByOuterTurn.set(precedingOuterTurn, continuations)
@@ -703,6 +744,11 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
 
   for (const itemId of [...looseOuter, ...looseCore]) {
     pushOnce(order, seen, itemId)
+  }
+  for (const turnId of leadingCoreTurns) {
+    for (const itemId of turnItems.get(turnId)?.core ?? []) {
+      pushOnce(order, seen, itemId)
+    }
   }
   for (const turnId of outerTurnOrder) {
     const group = turnItems.get(turnId)

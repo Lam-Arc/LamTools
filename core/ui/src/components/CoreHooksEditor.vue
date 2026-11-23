@@ -185,6 +185,7 @@
                 class="btn btn--ghost is-on"
                 type="button"
                 data-hook-trust
+                :disabled="pendingTrust.has(hook.id)"
                 @click="trustHook(hook.id)"
               >{{ t("信任") }}</button>
               <button
@@ -192,6 +193,7 @@
                 class="btn btn--ghost"
                 type="button"
                 data-hook-untrust
+                :disabled="pendingTrust.has(hook.id)"
                 @click="untrustHook(hook.id)"
               >{{ t("取消") }}</button>
               <button
@@ -199,6 +201,7 @@
                 class="btn btn--ghost btn--danger"
                 type="button"
                 :data-hook-delete="hook.id"
+                :disabled="pendingTrust.has(hook.id)"
                 @click="deleteHook(hook.id)"
               >{{ t("删除") }}</button>
             </div>
@@ -238,6 +241,7 @@ const error = ref('')
 const totalCount = ref(0)
 const trustedCount = ref(0)
 const trustableCount = ref(0)
+const pendingTrust = ref(new Set<string>())
 
 const showConfig = ref(false)
 const configDraft = ref('')
@@ -350,33 +354,28 @@ async function fetchHooks() {
   }
 }
 
-async function trustHook(id: string) {
+// user:“确保视觉、功能和交互不退化”+(同一钩子的信任变更只提交一次，完成前禁止重复操作)。
+async function setHookTrust(id: string, trusted: boolean) {
+  if (pendingTrust.value.has(id)) return
+  pendingTrust.value = new Set([...pendingTrust.value, id])
   try {
-    await props.requestRpc('hook.trust', { hook_id: id })
+    await props.requestRpc(trusted ? 'hook.trust' : 'hook.untrust', { hook_id: id })
     const idx = hooks.value.findIndex((h) => h.id === id)
     if (idx >= 0) {
-      hooks.value[idx] = { ...hooks.value[idx], trusted: true, status: 'trusted' }
-      trustedCount.value++
-      trustableCount.value = Math.max(0, trustableCount.value - 1)
+      const previous = hooks.value[idx]
+      hooks.value[idx] = { ...previous, trusted, status: trusted ? 'trusted' : 'pending_review' }
+      if (previous.trusted !== trusted) trustedCount.value = Math.max(0, trustedCount.value + (trusted ? 1 : -1))
+      if (previous.status === 'pending_review' && trusted) trustableCount.value = Math.max(0, trustableCount.value - 1)
+      else if (previous.status !== 'pending_review' && !trusted) trustableCount.value++
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    const next = new Set(pendingTrust.value); next.delete(id); pendingTrust.value = next
   }
 }
-
-async function untrustHook(id: string) {
-  try {
-    await props.requestRpc('hook.untrust', { hook_id: id })
-    const idx = hooks.value.findIndex((h) => h.id === id)
-    if (idx >= 0) {
-      hooks.value[idx] = { ...hooks.value[idx], trusted: false, status: 'pending_review' }
-      trustedCount.value = Math.max(0, trustedCount.value - 1)
-      trustableCount.value++
-    }
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  }
-}
+function trustHook(id: string) { return setHookTrust(id, true) }
+function untrustHook(id: string) { return setHookTrust(id, false) }
 
 const pendingDeleteHook = ref<{ label: string; id: string } | null>(null)
 
@@ -395,9 +394,14 @@ async function confirmDeleteHook(): Promise<void> {
   const id = pending.id
   try {
     await props.requestRpc('hook.delete', { hook_id: id })
+    // user:“确保视觉、功能和交互不退化”+(删除时按原信任状态分别更新统计)。
+    const removed = hooks.value.find(hook => hook.id === id)
     hooks.value = hooks.value.filter((h) => h.id !== id)
-    totalCount.value = Math.max(0, totalCount.value - 1)
-    trustedCount.value = Math.max(0, trustedCount.value - 1)
+    if (removed) {
+      totalCount.value = Math.max(0, totalCount.value - 1)
+      if (removed.trusted) trustedCount.value = Math.max(0, trustedCount.value - 1)
+      if (removed.status === 'pending_review') trustableCount.value = Math.max(0, trustableCount.value - 1)
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }

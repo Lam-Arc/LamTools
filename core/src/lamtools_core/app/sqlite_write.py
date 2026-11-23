@@ -26,6 +26,8 @@ SQLITE_WRITE_RETRY_DELAYS = (0.05, 0.15, 0.35)
 # 做 PASSIVE 检查点，请求路径不再承担检查点成本。
 SQLITE_WAL_AUTOCHECKPOINT_PAGES = 32768          # 兜底上界，约 128MB（仅在后台巡检卡住时才会用到）
 SQLITE_WAL_MAINTENANCE_PENDING_PAGES = 2048      # 未回写页超过这个水位就报警，约 8MB
+# user:“规划并实现”+(机械盘上即使 pending 追平到 0，曾经暴涨到数百 MB 的 WAL 文件也不会自行缩小；超过阈值趁空闲主动 TRUNCATE)
+SQLITE_WAL_MAX_BYTES = 64 * 1024 * 1024          # 64 MB
 SQLITE_WAL_MAINTENANCE_INTERVAL = 1.0            # 巡检间隔（秒）；被动检查点很快，间隔短才抢得到空档
 SQLITE_PRUNE_INTERVAL = 60.0                     # 派生数据（同步日志）裁剪间隔（秒）
 # 每个连接只拿 4MB 页缓存（默认是 2MB 且按页计）。4.1GB 的库靠 OS 缓存兜底，
@@ -45,26 +47,14 @@ def sqlite_database_path(session_factory: Any) -> Path | None:
     return Path(identity[len("sqlite:"):])
 
 
-async def wal_maintenance_once(session_factory: Any, *, aggressive: bool = False) -> dict[str, int]:
-    """Run one checkpoint and report the WAL frame state.
-
-    A passive checkpoint never waits for readers or writers, so running it from
-    a background task keeps the write path free of checkpoint stalls. The
-    returned frame counts are the only honest signal here: the WAL *file* keeps
-    its size after a checkpoint and is simply reused, so file size says nothing
-    about how much is actually outstanding.
-
-    ``aggressive`` asks SQLite to truncate the WAL afterwards. That needs
-    exclusive access, so it is only attempted from maintenance, startup and
-    shutdown, never from a request path, and a reader still holding a snapshot
-    simply makes it a no-op.
-    """
+async def wal_maintenance_once(session_factory: Any, *, aggressive: bool = False) -> dict[str, Any]:
+    """Run one checkpoint and report the WAL frame state."""
     path = sqlite_database_path(session_factory)
     if path is None:
-        return {"state": "no_file"}
+        return {"state": "no_file", "pending": 0, "wal_bytes": 0}
     wal = path.with_name(f"{path.name}-wal")
     if not wal.exists():
-        return {"state": "no_wal"}
+        return {"state": "no_wal", "pending": 0, "wal_bytes": 0}
     mode = "TRUNCATE" if aggressive else "PASSIVE"
     # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(维护不能等待已耗尽的业务读池；独立短连接在工作线程执行被动检查点，既不堵事件循环也不创建丢失的数据库)。
     def checkpoint():
@@ -74,11 +64,13 @@ async def wal_maintenance_once(session_factory: Any, *, aggressive: bool = False
             timeout=1.0 if aggressive else 0,
         )
         try:
-            return connection.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+            row = connection.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
         finally:
             connection.close()
+        size_after = wal.stat().st_size if wal.exists() else 0
+        return row, size_after
 
-    row = await asyncio.to_thread(checkpoint)
+    row, wal_bytes = await asyncio.to_thread(checkpoint)
     values = [int(value or 0) for value in (row or (0, 0, 0))]
     while len(values) < 3:
         values.append(0)
@@ -90,7 +82,45 @@ async def wal_maintenance_once(session_factory: Any, *, aggressive: bool = False
         "log": log_frames,
         "checkpointed": checkpointed,
         "pending": max(0, log_frames - checkpointed),
+        "wal_bytes": int(wal_bytes),
     }
+
+
+async def wal_maintenance_tick(
+    session_factory: Any,
+    *,
+    pending_pages: int = SQLITE_WAL_MAINTENANCE_PENDING_PAGES,
+    wal_max_bytes: int = SQLITE_WAL_MAX_BYTES,
+    allow_truncate: bool = False,
+) -> dict[str, Any]:
+    """Execute one PASSIVE pass and optional lock-coordinated TRUNCATE when pending OR size exceeds cap."""
+    result = await wal_maintenance_once(session_factory)
+    pending = int(result.get("pending") or 0)
+    wal_bytes = int(result.get("wal_bytes") or 0)
+    needs_truncate = pending >= pending_pages or wal_bytes >= wal_max_bytes
+    result["truncated"] = False
+    if not (allow_truncate and needs_truncate):
+        return result
+
+    identity = database_identity(session_factory)
+    # user:“规划并实现”+(与 Python/Rust 共用写锁后再做 TRUNCATE，避免与业务写冲突报 database is locked)
+    async with _write_lock(identity):
+        truncated = await wal_maintenance_once(session_factory, aggressive=True)
+    after_pending = int(truncated.get("pending") or 0)
+    after_bytes = int(truncated.get("wal_bytes") or 0)
+    shrank = (after_pending < pending // 2) or (wal_bytes > 0 and after_bytes < wal_bytes // 2) or (wal_bytes > 0 and after_bytes == 0)
+    truncated["truncated"] = bool(shrank)
+    if shrank:
+        logger.info(
+            "[sqlite] WAL truncated: pending %d -> %d frames, size %.1fMB -> %.1fMB",
+            pending,
+            after_pending,
+            wal_bytes / (1024 * 1024),
+            after_bytes / (1024 * 1024),
+        )
+    elif after_pending >= pending_pages:
+        logger.warning("[sqlite] WAL is still pinned by a reader: %s", truncated)
+    return truncated
 
 
 async def wal_maintenance_loop(
@@ -98,6 +128,7 @@ async def wal_maintenance_loop(
     *,
     interval: float = SQLITE_WAL_MAINTENANCE_INTERVAL,
     pending_pages: int = SQLITE_WAL_MAINTENANCE_PENDING_PAGES,
+    wal_max_bytes: int = SQLITE_WAL_MAX_BYTES,
     prune: Any = None,
     prune_interval: float = SQLITE_PRUNE_INTERVAL,
 ) -> None:
@@ -120,35 +151,26 @@ async def wal_maintenance_loop(
                 raise
             except Exception:  # noqa: BLE001 - maintenance must never kill the host
                 logger.warning("[sqlite] sync journal prune failed", exc_info=True)
+        allow_truncate = perf_counter() >= next_truncate
         try:
-            result = await wal_maintenance_once(session_factory)
+            result = await wal_maintenance_tick(
+                session_factory,
+                pending_pages=pending_pages,
+                wal_max_bytes=wal_max_bytes,
+                allow_truncate=allow_truncate,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - maintenance must never kill the host
             logger.warning("[sqlite] WAL maintenance checkpoint failed", exc_info=True)
             continue
-        if result.get("pending", 0) >= pending_pages:
-            # Readers are pinning the WAL. A PASSIVE checkpoint cannot reclaim
-            # what a live snapshot still needs, so try one exclusive truncation
-            # (rate limited) and say plainly whether it worked.
-            if perf_counter() >= next_truncate:
-                next_truncate = perf_counter() + SQLITE_WAL_TRUNCATE_COOLDOWN
-                try:
-                    truncated = await wal_maintenance_once(session_factory, aggressive=True)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:  # noqa: BLE001 - maintenance must never kill the host
-                    logger.warning("[sqlite] WAL truncate failed", exc_info=True)
-                else:
-                    if truncated.get("pending", 0) < result.get("pending", 0) // 2:
-                        logger.info(
-                            "[sqlite] WAL truncated: pending %d -> %d frames",
-                            result.get("pending", 0),
-                            truncated.get("pending", 0),
-                        )
-                        continue
-                    logger.warning("[sqlite] WAL is still pinned by a reader: %s", truncated)
-                    continue
+        if allow_truncate and (
+            int(result.get("pending") or 0) >= pending_pages
+            or int(result.get("wal_bytes") or 0) >= wal_max_bytes
+            or result.get("truncated")
+        ):
+            next_truncate = perf_counter() + SQLITE_WAL_TRUNCATE_COOLDOWN
+        if not allow_truncate and int(result.get("pending") or 0) >= pending_pages:
             logger.warning("[sqlite] WAL is not draining: %s", result)
 
 T = TypeVar("T")
@@ -358,11 +380,21 @@ def _is_sqlite_locked_error(exc: BaseException) -> bool:
     return "database is locked" in message or "database table is locked" in message
 
 
+def async_write_lock_for_identity(identity: str) -> asyncio.Lock:
+    """Return the shared asyncio write lock for a canonical database identity."""
+    return _write_lock(identity)
+
+
 __all__ = [
     "SQLITE_BUSY_TIMEOUT_MS",
+    "SQLITE_WAL_MAX_BYTES",
     "SQLiteWriteCoordinator",
     "_PragmaState",
     "_apply_connection_pragmas",
+    "async_write_lock_for_identity",
     "configure_sqlite_engine",
     "database_identity",
+    "wal_maintenance_loop",
+    "wal_maintenance_once",
+    "wal_maintenance_tick",
 ]

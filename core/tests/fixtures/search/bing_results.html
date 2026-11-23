@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!-- 结构样本：Bing 桌面结果页（按真实页面结构手写，用于离线回归）。
+     真实页面会多出大量渲染外壳；这里只保留适配器依赖的结构与字段。 -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>bilibili - 搜索</title>
+</head>
+<body>
+  <header id="b_header">
+    <form id="sb_form" action="/search">
+      <input id="sb_form_q" type="search" value="bilibili">
+    </form>
+    <nav><a href="https://www.bing.com/account">登录</a><a href="https://www.bing.com/preferences">设置</a></nav>
+  </header>
+
+  <main>
+    <ol id="b_results">
+      <li class="b_algo">
+        <h2><a href="https://www.bilibili.com/?spm_id_from=333.337.0.0&amp;utm_source=bing">哔哩哔哩 (゜-゜)つロ 干杯~-bilibili</a></h2>
+        <div class="b_caption">
+          <p class="b_lineclamp4">哔哩哔哩是国内知名的视频弹幕网站，这里有及时的动漫新番、活跃的ACG氛围、创意的Up主。</p>
+          <div class="b_attribution"><cite>www.bilibili.com</cite></div>
+        </div>
+        <div class="b_vlist">
+          <a href="https://www.bilibili.com/v/popular/all">热门</a>
+          <a href="https://www.bilibili.com/anime/">番剧</a>
+        </div>
+      </li>
+
+      <li class="b_ad">
+        <div class="b_adlabel">广告</div>
+        <h2><a href="https://ads.example.com/bili?utm_source=bing&amp;gclid=abc">某某视频会员 限时特惠</a></h2>
+        <p class="b_lineclamp2">推广：开通会员立减，海量影视免费看。</p>
+      </li>
+
+      <li class="b_algo">
+        <h2><a href="https://www.bilibili.com/read/home">哔哩哔哩专栏 - 文章频道</a></h2>
+        <div class="b_caption">
+          <p>专栏是哔哩哔哩的图文创作社区，包含动画、游戏、科技等分区。</p>
+        </div>
+        <span class="news_dt">2024-05-01</span>
+      </li>
+
+      <li class="b_algo">
+        <h2><a href="https://space.bilibili.com/2">哔哩哔哩 UP 主空间</a></h2>
+        <div class="b_caption">
+          <p>UP 主个人空间，视频、动态、收藏与关注都在这里。</p>
+        </div>
+      </li>
+
+      <li class="b_algo">
+        <h2><a href="https://www.bilibili.com/">哔哩哔哩 (゜-゜)つロ 干杯~-bilibili</a></h2>
+        <div class="b_caption">
+          <p>重复结果：与第一条同一地址，应该被去重。</p>
+        </div>
+      </li>
+    </ol>
+    <aside id="b_context">
+      <div class="b_ans"><h2>Bing 相关信息</h2><p>侧栏推荐不是自然结果。</p></div>
+    </aside>
+  </main>
+
+  <footer id="b_footer">
+    <nav><a href="https://www.bing.com/search?q=privacy">隐私</a></nav>
+  </footer>
+</body>
+</html>

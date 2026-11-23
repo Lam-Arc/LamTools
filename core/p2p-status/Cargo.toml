@@ -1,0 +1,22 @@
+[package]
+name = "sunday-p2p-status"
+version = "0.1.0"
+edition = "2021"
+description = "Sunday transport status channel: one versioned line format shared by the transport process and its host"
+license = "AGPL-3.0-or-later"
+
+# user:“SESSION 依赖解析子进程 stdout 文本（弱契约）→ 改为结构化状态通道（或至少加版本
+# 前缀 + 解析失败即明确报错，不要静默）”+(传输进程与宿主之间原来靠 `SESSION <id>`、
+# `PEER <id> trusted=...` 这种自由文本对话；字段一多就得靠切空格猜，改名或加字段会静默
+# 变成「没连上」。这里只做一件事：把那一行变成带版本前缀的 JSON，两端共用同一份实现)。
+#
+# 为什么单独一个 crate：它必须同时被 `sunday-p2p`（有 iroh）和桌面宿主（不能引 iroh，
+# wmi 的 windows 版本会撞车）依赖，所以只能有 serde——不绑 tokio、不绑网络。
+
+[lib]
+name = "sunday_p2p_status"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

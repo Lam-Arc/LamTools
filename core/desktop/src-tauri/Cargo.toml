@@ -1,6 +1,6 @@
 [package]
 name = "sunday"
-version = "0.3.42"
+version = "0.3.43"
 description = "Sunday desktop app"
 authors = ["Lam"]
 edition = "2021"
@@ -39,8 +39,22 @@ open = "5"
 url = "2"
 urlencoding = "2"
 ureq = { version = "3.4", default-features = false, features = ["json", "rustls"] }
+# 传输进程 → 宿主的状态行：带版本前缀的 JSON，两端共用同一份解析。
+# 只引这个瘦 crate（不引 iroh）：wmi 的 windows 版本会和桌面端已有的撞车。
+sunday-p2p-status = { path = "../../p2p-status" }
 
 [target.'cfg(windows)'.dependencies]
+# user:“平台能力只能在 Windows 上用 WebView2 COM 拿”+(webview2-com 之前只是 Tauri 的传递依赖，必须显式声明才能 use；
+# windows 版本固定 0.61 以复用 webview2-com 0.38.2 已锁定的同一份 crate，不新增第二份 windows 构建)。
+webview2-com = "0.38"
+# user:“截图走 CapturePreview + 内存流”+(SHCreateMemStream 需要 Win32_UI_Shell；只加这一个 feature，
+# windows crate 仍与 webview2-com 0.38.2 锁定的版本一致，不新增第二份构建)。
+# user:“优先用 Windows 内置 OCR（Windows.Media.Ocr）…不联网、不分发第三方二进制”+
+# (截图取字只用系统自带引擎：Media_Ocr 是识别本身，Graphics_Imaging 是系统解码图片，
+#  Storage_Streams 是把字节喂给解码器的内存流，Foundation/Globalization 是异步结果与语言标识。
+#  全部是同版本 windows crate 的 feature，不新增依赖、不新增第二份构建)。
+# user:“同窗口 Child WebView是更好的方案，实现”+(在同版本 windows 0.61 上启用 DirectComposition 与 D3D11/DXGI 特性，先做独立的 CompositionController 最小验证实验)
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Foundation", "Foundation_Collections", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams"] }
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

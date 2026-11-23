@@ -3,8 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { defineComponent, h, ref } from 'vue'
 import { mount } from '@vue/test-utils'
 import { createPluginPageInstance, findPluginFilePage, parsePluginPageKey, pluginPageKey } from '../src/plugins/pages'
-import { useSplitWorkspace } from '../src/split/useSplitWorkspace'
-import { restoreSplitState } from '../src/split/layout'
+import { useSplitWorkspace } from '../src/workspace/context'
+import { restoreSplitState } from '../src/workspace/types'
 afterEach(() => {localStorage.clear();vi.restoreAllMocks()})
 const page={plugin:'excalidraw',id:'canvas',title:'Excalidraw',entry_url:'/api/core/plugin-system/excalidraw/assets/ui/page.mjs',file_extensions:['.excalidraw.md','.excalidraw']}
 it('selects the longest declared extension and avoids ambiguous associations', () => {

@@ -14,7 +14,7 @@ import type { CoreModelCatalogView } from '@/composer/execution'
 import { useAuxiliaryWorkspace } from '@/auxiliary/workspace'
 import { useAuxiliaryChat } from '@/auxiliary/useAuxiliaryChat'
 import { useSplitKeyboardScope } from '@/split/keyboardScope'
-import type { SplitTab } from '@/split/layout'
+import type { SplitTab } from '@/workspace/types'
 import '@/styles/auxiliary-chat.css'
 const props = defineProps<{ tab: SplitTab; visible: boolean }>()
 const workspace = useAuxiliaryWorkspace()

@@ -55,6 +55,33 @@ describe('CoreUpdateCard', () => {
     expect(wrapper.emitted('closed')).toHaveLength(1)
   })
 
+  it('closes without cancelling while a download keeps running in the background', async () => {
+    const wrapper = mountCard({ state: 'downloading', received: 1, total: 2 })
+
+    expect(wrapper.get('[data-update-background-hint]').text()).toContain('不会中断下载')
+
+    await wrapper.get('[data-update-dismiss]').trigger('click')
+
+    // user:“更新时可以后台下载”+(X 只收卡片，传输继续；重新点更新图标回来接同一条进度)。
+    expect(wrapper.emitted('cancel')).toBeUndefined()
+    expect(wrapper.emitted('closed')).toHaveLength(1)
+  })
+
+  it('offers 立即安装 once a background download finished', async () => {
+    const wrapper = mountCard({ state: 'downloaded' })
+
+    expect(wrapper.get('[data-update-confirm]').text()).toBe('立即安装')
+    expect((wrapper.get('[data-update-confirm]').element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.get('[data-update-card-status]').text()).toContain('已下载并校验')
+
+    await wrapper.get('[data-update-confirm]').trigger('click')
+    expect(wrapper.emitted('confirm')).toHaveLength(1)
+
+    // 已下载只是“等着装”：卡片可以关掉，安装包还在，下次打开还能装。
+    await wrapper.get('[data-update-dismiss]').trigger('click')
+    expect(wrapper.emitted('closed')).toHaveLength(1)
+  })
+
   it('reports an install in progress and refuses to be dismissed', async () => {
     const wrapper = mountCard({ state: 'installing' })
 

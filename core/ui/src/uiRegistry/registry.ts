@@ -98,7 +98,7 @@ export const UI_REGISTRY: UiRegistryEntry[] = [
   {
     id: 'shell.split',
     label: '分屏布局',
-    owner: 'components/CoreSplitWorkspace.vue',
+    owner: 'components/CoreWorkspace.vue',
     // user:“我认为主区和分屏本质是一个容器”+
     // (分屏不是独立区域，而是内容区的布局模式：挂在 shell.main 下，尺寸写内容区宽度变量。)
     parent: 'shell.main',

@@ -16,7 +16,6 @@
     />
     <!-- user:“执行中图标带微弱呼吸脉冲或外圈细环旋转；完成转静态；失败着色警戒红并角标提示”
          +(运行态靠外圈细环旋转表达，完成态静态降透明度，失败态染色并加右下角标点。) -->
-    <span v-if="isFailed" class="process-icon__badge" aria-hidden="true" />
   </span>
 </template>
 <script setup lang="ts">
@@ -93,14 +92,16 @@ export const ProcessChevron = defineComponent({
 })
 </script>
 <style scoped>
-/* user:“颜色全部取主题变量”+(底色用过程图标专用色，运行态用正文色，失败态用警戒红，不写死 hex)。 */
+/* user:“过程行的那个思考怎么又变成紫色了？”+(语义图标跟随所在行的文字色，不再套
+   「过程图标专用色」——那个字段是给非语义的状态图标用的，套上来整排图标会变紫。
+   运行态用正文色、失败态用警戒红，颜色不写死 hex。) */
 .process-icon {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  color: var(--theme-process-icon-color, var(--process-icon-color, currentColor));
+  color: currentColor;
   transition: color var(--dur-base) var(--ease-out), opacity var(--dur-base) var(--ease-out);
 }
 
@@ -127,17 +128,8 @@ export const ProcessChevron = defineComponent({
 }
 
 /* 外圈细环：只描上边，转起来像一段弧，不抢图标的视线。 */
-/* 右下角标点：4px，和图标同色系但用警戒红强调。 */
-.process-icon__badge {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--red);
-}
-
+/* user:“我不是说错误标红吗？…就是仅仅简简单单地标红就行了”+(失败只把图标与摘要
+   标红，不再额外挂右下角小点。) */
 </style>
 <style>
 /* ProcessChevron 是同文件的具名导出组件，拿不到本 SFC 的 scoped 作用域标记，

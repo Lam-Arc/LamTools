@@ -28,7 +28,10 @@ def _listening_ports() -> list[tuple[int, int]]:
     if os.name != 'nt':
         return []
     try:
-        raw = subprocess.run(['netstat', '-ano', '-p', 'TCP'], capture_output=True, timeout=10).stdout
+        # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(网络插件读 netstat 也不许弹窗)。
+        from lamtools_core.win_spawn import hidden_kwargs
+
+        raw = subprocess.run(['netstat', '-ano', '-p', 'TCP'], capture_output=True, timeout=10, **hidden_kwargs()).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     rows: list[tuple[int, int]] = []
@@ -49,7 +52,9 @@ def _process_names() -> dict[int, str]:
     if os.name != 'nt':
         return {}
     try:
-        raw = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'], capture_output=True, timeout=10).stdout
+        from lamtools_core.win_spawn import hidden_kwargs
+
+        raw = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'], capture_output=True, timeout=10, **hidden_kwargs()).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
     names: dict[int, str] = {}

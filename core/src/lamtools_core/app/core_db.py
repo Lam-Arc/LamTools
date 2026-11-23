@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -48,6 +49,7 @@ from .db_pool import (
 from .event_store import SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
 from .project_visuals import DEFAULT_PROJECT_COLOR_KEY, DEFAULT_PROJECT_ICON_KEY
+from .rust_db import RustCoreDb, RustDbError, register_rust_db
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from .session_actor import SessionActorRegistry
 from ..superagent.store import SqlAlchemySuperagentStore
@@ -125,6 +127,8 @@ class CoreAppEvent(CoreDbBase):
         UniqueConstraint("thread_id", "seq", name="uq_core_app_events_thread_seq"),
         Index("idx_core_events_client_message", "thread_id", "client_message_id", "seq",
               sqlite_where=text("client_message_id IS NOT NULL")),
+        Index("idx_core_events_thread_item_seq", "thread_id", "item_id", "seq",
+              sqlite_where=text("item_id IS NOT NULL")),
     )
 
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -188,10 +192,44 @@ class CoreThreadSnapshotItem(CoreDbBase):
     thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # user:“规划并实现”+(记录条目类型供大纲索引直查，避免全量读大JSON文本)
+    item_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     item_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
-    __table_args__ = (Index("idx_core_snapshot_items_thread_seq", "thread_id", "seq"),)
+    __table_args__ = (
+        Index("idx_core_snapshot_items_thread_seq", "thread_id", "seq"),
+        Index("idx_core_snapshot_items_thread_type_seq", "thread_id", "item_type", "seq"),
+    )
+
+
+class CoreThreadSnapshotArtifact(CoreDbBase):
+    # user:“嗯”+(拆出 core.artifacts 登记表独立增量存盘，避免流式写入反复重写整块十多 MB 的 snapshot_json)
+
+    __tablename__ = "core_thread_snapshot_artifacts"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    artifact_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreThreadSnapshotTurn(CoreDbBase):
+    # user:“嗯”+(拆出 turns 元数据独立按回合增量存盘，仅更新当前活动回合，免重写全量历史回合)
+
+    __tablename__ = "core_thread_snapshot_turns"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    core_turn_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    app_turn_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    __table_args__ = (
+        Index("idx_core_snapshot_turns_status", "thread_id", "status"),
+    )
 
 
 class CoreRuntimeSession(CoreDbBase):
@@ -937,6 +975,81 @@ class CoreArtifactAlias(CoreDbBase):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class CoreFileAsset(CoreDbBase):
+    """Library 为本机文件附加的管理信息。
+
+    user:“任何被索引的文件，都可以在 Library 中搜索和浏览；用户对某个文件
+    执行收藏、评分、添加标签等操作后，Library 为其建立管理记录。不需要复制
+    原文件，也不需要改变原文件的位置”+(全盘搜索命中不落库，只有用户真正
+    管理过的文件才有这一行；身份优先用卷序列号 + 文件 ID，移动/重命名后
+    仍然指向同一份文件，取不到句柄时才退回路径指纹)。
+    """
+
+    __tablename__ = "core_file_assets"
+    __table_args__ = (
+        UniqueConstraint("identity_key", name="uq_core_file_assets_identity"),
+        Index("idx_core_file_assets_path_key", "path_key"),
+        Index("idx_core_file_assets_missing", "missing"),
+        Index("idx_core_file_assets_updated", "updated_at"),
+    )
+
+    asset_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # 文件身份：NTFS 上是 "<卷序列号>:<文件ID>"；弱身份时是 "path:<路径哈希>"。
+    identity_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    identity_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="fileid")
+    volume_serial: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    file_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # 当前位置：路径只表示"现在在哪"，不是身份。
+    path: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    path_key: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    extension: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mtime_ns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_dir: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Library 的用户状态。
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    note: Mapped[str] = mapped_column(String(4096), nullable=False, default="")
+    # 离线/缺失：保留记录与元数据，不因为磁盘拔掉就删资产。
+    missing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    missing_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreFileCollection(CoreDbBase):
+    """普通集合与智能集合共用一张表；智能集合的查询条件存在 query_json。"""
+
+    __tablename__ = "core_file_collections"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_core_file_collections_name"),
+    )
+
+    collection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
+    query_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreFileCollectionItem(CoreDbBase):
+    __tablename__ = "core_file_collection_items"
+    __table_args__ = (
+        UniqueConstraint("collection_id", "asset_id", name="uq_core_file_collection_item"),
+        Index("idx_core_file_collection_items_asset", "asset_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    collection_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
 class CoreCheckpointArtifactRef(CoreDbBase):
     """旧：检查点指向成果版本的指针。成果不再记版本，这里只留历史数据。"""
 
@@ -967,14 +1080,29 @@ class SqlAlchemyRuntimeStateStore:
         *,
         sync_journal: Any | None = None,
         sync_publisher: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        rust_db: RustCoreDb | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator
         self._sync_journal = sync_journal
         self._sync_publisher = sync_publisher
+        self._rust_db = rust_db
+        self._patch_locks: dict[str, asyncio.Lock] = {}
         # 旧库可能还没有 idx_core_sync_changes_entity；没有索引时退回追加式写入，
         # 不拿每次保存扫全表去换“一定合并”。
         self._runtime_journal_index_ready: bool | None = None
+
+    def _active_rust_db(self) -> RustCoreDb | None:
+        if self._rust_db is not None and self._rust_db.is_active:
+            return self._rust_db
+        return None
+
+    def _patch_lock(self, session_id: str) -> asyncio.Lock:
+        lock = self._patch_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._patch_locks[session_id] = lock
+        return lock
 
     def set_sync_publisher(self, publisher: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
         self._sync_publisher = publisher
@@ -985,6 +1113,18 @@ class SqlAlchemyRuntimeStateStore:
         await publish_committed_changes(self._sync_journal, self._sync_publisher, [change_id] if change_id else [])
 
     async def get(self, session_id: str) -> RuntimeState | None:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            # user:“加载/切换/多会话多 agent 同时读写”+(运行时状态读取走 Rust 原生读连接池，避免 SQLAlchemy 连接池竞争)。
+            row = await rust_db.call("runtime_get", {"session_id": session_id})
+            if not row or not row.get("found"):
+                return None
+            return _state_from_payload_dict(
+                session_id,
+                int(row.get("revision") or 0),
+                row.get("runtime_state_json"),
+                row.get("pending_approval_json"),
+            )
         async with self.session_factory() as db:
             row = await db.get(CoreRuntimeSession, session_id)
         if row is None:
@@ -1004,6 +1144,46 @@ class SqlAlchemyRuntimeStateStore:
         need a read-modify-write that cannot interleave, so this method does the
         whole cycle under the SQLite write coordinator.
         """
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            async with self._patch_lock(session_id):
+                row = await rust_db.call("runtime_get", {"session_id": session_id})
+                if not row or not row.get("found"):
+                    return None
+                expected_revision = int(row.get("revision") or 0)
+                state = _state_from_payload_dict(
+                    session_id,
+                    expected_revision,
+                    row.get("runtime_state_json"),
+                    row.get("pending_approval_json"),
+                )
+                mutate(state)
+                refresh_owner(state.metadata)
+                state_payload, pending_payload = _runtime_state_payloads(state)
+                now = datetime.now()
+                now_str = now.strftime("%Y-%m-%d %H:%M:%S.%f")
+                try:
+                    res = await rust_db.call(
+                        "runtime_cas_patch",
+                        {
+                            "session_id": session_id,
+                            "expected_revision": expected_revision,
+                            "state_payload": state_payload,
+                            "pending_payload": pending_payload,
+                            "last_event_seq": _last_event_seq(state),
+                            "emit_sync": self._sync_journal is not None,
+                            "workspace_id": getattr(self._sync_journal, "workspace_id", "") if self._sync_journal is not None else "",
+                            "change_id": f"sync_{uuid.uuid4().hex}",
+                            "now_str": now_str,
+                            "updated_iso": now.isoformat(),
+                        },
+                    )
+                except RustDbError as exc:
+                    if exc.code == "conflict":
+                        raise RuntimeStateConflictError(str(exc)) from exc
+                    raise
+                setattr(state, "_runtime_store_revision", int(res.get("revision") or expected_revision + 1))
+                return state
 
         def write(db: Any):
             async def action() -> RuntimeState | None:
@@ -1047,6 +1227,12 @@ class SqlAlchemyRuntimeStateStore:
         await self._publish_sync_change(change_id)
 
     async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            return await rust_db.call(
+                "runtime_get_history",
+                {"session_id": session_id, "after_seq": int(after_seq)},
+            )
         async with self.session_factory() as db:
             stmt = (
                 select(CoreHistoryEntry)
@@ -1068,6 +1254,12 @@ class SqlAlchemyRuntimeStateStore:
         # user:“上下文应当能够被精确召回”+(使用会话与序号索引限制读取数量，召回被压缩视图隐藏的原文)。
         if type(after_seq) is not int or after_seq < 0 or type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("Invalid history page bounds")
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            return await rust_db.call(
+                "runtime_read_history_page",
+                {"session_id": session_id, "after_seq": after_seq, "limit": limit},
+            )
         async with self.session_factory() as db:
             rows = (await db.execute(
                 select(CoreHistoryEntry).where(
@@ -1100,6 +1292,10 @@ class SqlAlchemyRuntimeStateStore:
         await self._publish_sync_change(change_id)
 
     async def history_max_seq(self, session_id: str) -> int:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call("runtime_history_max_seq", {"session_id": session_id})
+            return int(res.get("max_seq") or 0)
         async with self.session_factory() as db:
             result = await db.execute(
                 select(func.coalesce(func.max(CoreHistoryEntry.seq), 0)).where(
@@ -1125,6 +1321,21 @@ class SqlAlchemyRuntimeStateStore:
         what lets it be written alongside the existing compaction/rollback
         behaviour without changing it.
         """
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call(
+                "runtime_append_dialogue_record",
+                {
+                    "session_id": session_id,
+                    "id": uuid.uuid4().hex,
+                    "kind": str(kind or ""),
+                    "branch_epoch": max(0, int(branch_epoch)),
+                    "watermark": max(0, int(watermark)),
+                    "record": _json_safe(dict(record or {})),
+                    "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                },
+            )
+            return int(res.get("seq") or 0)
 
         async def write(db: Any) -> int:
             max_seq = int(
@@ -1155,6 +1366,23 @@ class SqlAlchemyRuntimeStateStore:
 
     async def list_dialogue_records(self, session_id: str) -> list[dict[str, Any]]:
         """Read a thread's control records in append order."""
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            rows = await rust_db.call(
+                "runtime_list_dialogue_records",
+                {"session_id": session_id},
+            )
+            return [
+                {
+                    "seq": int(r.get("seq") or 0),
+                    "kind": str(r.get("kind") or ""),
+                    "branch_epoch": int(r.get("branch_epoch") or 0),
+                    "watermark": int(r.get("watermark") or 0),
+                    "record": dict(r.get("record") or {}),
+                    "created_at": _parse_sqlite_datetime(r.get("created_at")),
+                }
+                for r in rows
+            ]
         async with self.session_factory() as db:
             rows = (
                 await db.execute(
@@ -1177,6 +1405,13 @@ class SqlAlchemyRuntimeStateStore:
 
     async def dialogue_record_epoch(self, session_id: str) -> int:
         """Highest branch epoch recorded for the thread (0 when none)."""
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call(
+                "runtime_dialogue_record_epoch",
+                {"session_id": session_id},
+            )
+            return int(res.get("epoch") or 0)
         async with self.session_factory() as db:
             result = await db.execute(
                 select(func.coalesce(func.max(CoreDialogueRecord.branch_epoch), 0)).where(
@@ -1200,6 +1435,23 @@ class SqlAlchemyRuntimeStateStore:
         historical cause of ``database is locked`` deadlocks.
         """
         if not messages:
+            return
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call(
+                "runtime_append_history",
+                {
+                    "session_id": session_id,
+                    "messages": [_json_safe(m) for m in messages],
+                    "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                },
+            )
+            seqs = res.get("assigned_seqs") or []
+            for msg, seq in zip(messages, seqs):
+                if isinstance(msg, dict):
+                    if not isinstance(msg.get("metadata"), dict):
+                        msg["metadata"] = {}
+                    msg["metadata"]["history_seq"] = int(seq)
             return
 
         await self.write_coordinator.run(
@@ -1274,6 +1526,21 @@ class SqlAlchemyRuntimeStateStore:
         ``BEGIN IMMEDIATE``) to avoid ``database is locked`` when a concurrent
         sub-agent ``append_history`` is in flight — the deadlock root cause.
         """
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            for i, msg in enumerate(messages, 1):
+                if isinstance(msg, dict) and isinstance(msg.get("metadata"), dict):
+                    msg["metadata"]["history_seq"] = i
+            await rust_db.call(
+                "runtime_replace_history",
+                {
+                    "session_id": session_id,
+                    "messages": [_json_safe(m) for m in messages],
+                    "now_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                },
+            )
+            return
+
         async def write(db) -> None:
             await db.execute(
                 delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id)
@@ -1305,6 +1572,16 @@ class SqlAlchemyRuntimeStateStore:
         behind by a crashed process is not live, while a row being written by a
         running process is.
         """
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            row = await rust_db.call("runtime_get", {"session_id": session_id})
+            if not row or not row.get("found"):
+                return None
+            payload = row.get("runtime_state_json") if isinstance(row.get("runtime_state_json"), dict) else {}
+            if not state_row_is_live(payload):
+                return None
+            metadata = payload.get("metadata")
+            return read_owner(metadata if isinstance(metadata, dict) else {})
         async with self.session_factory() as db:
             row = await db.get(CoreRuntimeSession, session_id)
         if row is None:
@@ -1317,6 +1594,9 @@ class SqlAlchemyRuntimeStateStore:
 
     async def list_thread_ids(self) -> list[str]:
         """Every thread with a runtime state row (cheap id-only read)."""
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            return [str(x) for x in await rust_db.call("runtime_list_thread_ids")]
         async with self.session_factory() as db:
             rows = (await db.execute(select(CoreRuntimeSession.thread_id))).scalars().all()
         return [str(row) for row in rows]
@@ -1331,6 +1611,15 @@ class SqlAlchemyRuntimeStateStore:
         """
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key or ""):
             return []
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            return [
+                str(x)
+                for x in await rust_db.call(
+                    "runtime_find_threads_with_metadata_key",
+                    {"key": key},
+                )
+            ]
         async with self.session_factory() as db:
             rows = (
                 await db.execute(
@@ -1352,6 +1641,24 @@ class SqlAlchemyRuntimeStateStore:
         filter then applies the semantic rules (question only, waiting, not
         paused).
         """
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            raw_rows = await rust_db.call("runtime_list_pending_approvals")
+            states: list[RuntimeState] = []
+            for row in raw_rows:
+                pending_root = row.get("pending_approval_json") if isinstance(row.get("pending_approval_json"), dict) else {}
+                pending = pending_root.get("pending_approval") if isinstance(pending_root, dict) else None
+                if not isinstance(pending, dict):
+                    continue
+                states.append(
+                    _state_from_payload_dict(
+                        str(row.get("thread_id") or ""),
+                        int(row.get("revision") or 0),
+                        row.get("runtime_state_json"),
+                        pending_root,
+                    )
+                )
+            return states
         async with self.session_factory() as db:
             rows = (
                 await db.execute(
@@ -1373,6 +1680,18 @@ class SqlAlchemyRuntimeStateStore:
         return states
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            raw_rows = await rust_db.call("runtime_list_pending_approvals")
+            for row in raw_rows:
+                pending_root = row.get("pending_approval_json") if isinstance(row.get("pending_approval_json"), dict) else {}
+                pending = pending_root.get("pending_approval") if isinstance(pending_root, dict) else None
+                tool_call = pending.get("tool_call") if isinstance(pending, dict) else None
+                pending_request_id = pending.get("request_id") if isinstance(pending, dict) else None
+                tool_call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+                if request_id in {str(pending_request_id or ""), str(tool_call_id or "")}:
+                    return await self.get(str(row.get("thread_id") or ""))
+            return None
         async with self.session_factory() as db:
             # Filter at the SQL layer to only sessions that actually carry a
             # pending_approval payload. Most sessions have an empty
@@ -1417,30 +1736,44 @@ class SqlAlchemyRuntimeStateStore:
             read_owner,
         )
 
-        async with self.session_factory() as db:
-            rows = (
-                await db.execute(
-                    select(CoreRuntimeSession).where(
-                        func.json_extract(
-                            CoreRuntimeSession.runtime_state_json, "$.status"
-                        ).in_(sorted(LIVE_RUN_STATES))
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            raw_rows = await rust_db.call("runtime_list_live_status_rows")
+            candidates: list[str] = []
+            for row in raw_rows:
+                payload = row.get("runtime_state_json") if isinstance(row.get("runtime_state_json"), dict) else {}
+                metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+                if _has_pending_decision(payload, row.get("pending_approval_json")):
+                    continue
+                owner = read_owner(metadata)
+                if owner and not is_own_token(owner) and owner_is_live(owner):
+                    continue
+                candidates.append(str(row.get("thread_id") or ""))
+        else:
+            async with self.session_factory() as db:
+                rows = (
+                    await db.execute(
+                        select(CoreRuntimeSession).where(
+                            func.json_extract(
+                                CoreRuntimeSession.runtime_state_json, "$.status"
+                            ).in_(sorted(LIVE_RUN_STATES))
+                        )
                     )
-                )
-            ).scalars().all()
+                ).scalars().all()
 
-        candidates: list[str] = []
-        for row in rows:
-            payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
-            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-            # user:“人工审批”+(停在用户决定上的会话不算失效占用：审批是持久的，重启之后
-            # 用户还要能回答它。回收它会连审批一起清掉，等于把用户正要点的卡片吞了)。
-            if _has_pending_decision(payload, row.pending_approval_json):
-                continue
-            owner = read_owner(metadata)
-            # 另一个进程还活着并且正握着这个会话：绝不回收。
-            if owner and not is_own_token(owner) and owner_is_live(owner):
-                continue
-            candidates.append(row.thread_id)
+            candidates = []
+            for row in rows:
+                payload = row.runtime_state_json if isinstance(row.runtime_state_json, dict) else {}
+                metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+                # user:“人工审批”+(停在用户决定上的会话不算失效占用：审批是持久的，重启之后
+                # 用户还要能回答它。回收它会连审批一起清掉，等于把用户正要点的卡片吞了)。
+                if _has_pending_decision(payload, row.pending_approval_json):
+                    continue
+                owner = read_owner(metadata)
+                # 另一个进程还活着并且正握着这个会话：绝不回收。
+                if owner and not is_own_token(owner) and owner_is_live(owner):
+                    continue
+                candidates.append(row.thread_id)
 
         released = 0
         for thread_id in candidates:
@@ -1477,6 +1810,65 @@ class SqlAlchemyRuntimeStateStore:
         state_payload, pending_payload = _runtime_state_payloads(state)
         expected_revision = getattr(state, "_runtime_store_revision", None)
         now = datetime.now()
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            now_str = now.strftime("%Y-%m-%d %H:%M:%S.%f")
+            change_uuid = f"sync_{uuid.uuid4().hex}"
+            req_payload: dict[str, Any] = {
+                "session_id": state.session_id,
+                "expected_revision": int(expected_revision) if expected_revision is not None else None,
+                "state_payload": state_payload,
+                "pending_payload": pending_payload,
+                "last_event_seq": _last_event_seq(state),
+                "history": _json_safe(history) if history is not None else None,
+                "append_messages": [_json_safe(m) for m in append_messages] if append_messages else [],
+                "emit_sync": self._sync_journal is not None,
+                "workspace_id": getattr(self._sync_journal, "workspace_id", "") if self._sync_journal is not None else "",
+                "change_id": change_uuid,
+                "now_str": now_str,
+                "updated_iso": now.isoformat(),
+            }
+            try:
+                res = await rust_db.call("runtime_save", req_payload)
+            except RustDbError as exc:
+                if exc.code == "conflict":
+                    raise RuntimeStateConflictError(str(exc)) from exc
+                raise
+            if res.get("status") == "check_owner":
+                existing_payload = res.get("existing_payload")
+                current_revision = int(res.get("current_revision") or 0)
+                if state_row_is_live(existing_payload if isinstance(existing_payload, dict) else {}):
+                    _logger.error(
+                        "[runtime-state] session %s is owned by a live run (expected=%s current=%s)",
+                        state.session_id,
+                        expected_revision,
+                        current_revision,
+                    )
+                    raise RuntimeStateConflictError(
+                        f"Session '{state.session_id}' is being written by another running process"
+                    )
+                _logger.warning(
+                    "[runtime-state] adopting session %s (stale stamp): expected_revision=%s current=%s",
+                    state.session_id,
+                    expected_revision,
+                    current_revision,
+                )
+                req_payload["adopt_revision"] = current_revision
+                try:
+                    res = await rust_db.call("runtime_save", req_payload)
+                except RustDbError as exc:
+                    if exc.code == "conflict":
+                        raise RuntimeStateConflictError(str(exc)) from exc
+                    raise
+            if append_messages:
+                seqs = res.get("assigned_seqs") or []
+                for msg, seq in zip(append_messages, seqs):
+                    if isinstance(msg, dict):
+                        if not isinstance(msg.get("metadata"), dict):
+                            msg["metadata"] = {}
+                        msg["metadata"]["history_seq"] = int(seq)
+            setattr(state, "_runtime_store_revision", int(res.get("revision") or 1))
+            return res.get("change_id")
 
         def blocked_by_live_owner(row: Any) -> bool:
             """Whether the row belongs to a run that is still in flight.
@@ -2500,8 +2892,12 @@ class CoreAppDb:
     # 写与读分池，写池只在关闭时释放，见 open_core_app_db。
     write_engine: AsyncEngine | None = None
     write_pool_telemetry: PoolTelemetry | None = None
+    rust_db: RustCoreDb | None = None
 
     async def close(self) -> None:
+        if self.rust_db is not None:
+            self.rust_db.close()
+        register_rust_db(self.session_factory, None)
         # user:“覆盖异常中断、任务取消、超时、并发竞争、数据库断连及应用退出等场景”+(退出前先停观测并把池的最终占用写进日志，留下“连接有没有回落”的证据，再释放所有池内连接)。
         write_telemetry = self.write_pool_telemetry
         if write_telemetry is not None:
@@ -2650,6 +3046,9 @@ async def open_core_app_db(
         # 写协调器只用自己的连接，读池再满也不影响事件落库。
         write_session_factory = async_sessionmaker(write_engine, expire_on_commit=False)
         write_coordinator = SQLiteWriteCoordinator(write_session_factory)
+        rust_db = RustCoreDb.try_open(db_path)
+        register_rust_db(session_factory, rust_db)
+        register_rust_db(write_session_factory, rust_db)
         from .project_store import CoreProjectStore
         from .sync_store import CoreSyncJournal
         from lamtools_core.artifact.store import ArtifactStore
@@ -2663,12 +3062,14 @@ async def open_core_app_db(
             CoreAppEvent,
             sync_change_model=CoreSyncChange,
             workspace_id=resolved_workspace_id,
+            rust_db=rust_db,
         )
         snapshot_store = SqlAlchemyThreadSnapshotStore(
             CoreThreadSnapshot,
             item_model=CoreThreadSnapshotItem,
             projector=CoreAppSnapshotProjector(),
             event_model=CoreAppEvent,
+            rust_db=rust_db,
         )
         persistence = AppPersistenceHost(
             event_store,
@@ -2687,6 +3088,7 @@ async def open_core_app_db(
                 session_factory,
                 write_coordinator,
                 sync_journal=sync_journal,
+                rust_db=rust_db,
             ),
             handoff_context_store=SqlAlchemyHandoffContextStore(
                 session_factory,
@@ -2716,6 +3118,7 @@ async def open_core_app_db(
             pool_telemetry=pool_telemetry,
             write_engine=write_engine,
             write_pool_telemetry=write_pool_telemetry,
+            rust_db=rust_db,
             artifact_store=ArtifactStore(
                 session_factory,
                 write_coordinator,
@@ -2731,6 +3134,13 @@ async def open_core_app_db(
 async def persist_core_run_items(db: CoreAppDb, run_items: list[RunItemEvent]) -> dict[str, Any] | None:
     if not run_items:
         return None
+    if db.persistence.can_use_rust_write:
+        # user:“实现，我需要最后可感觉到的体验优化”+(批量事件落库与快照增量投影直接走 Rust 单次事务，提交后立即刷新缓存)。
+        _, snapshot = await db.persistence.append_batch_atomic(
+            run_item_events=run_items,
+            return_state=True,
+        )
+        return snapshot
     snapshot: dict[str, Any] | None = None
     async def write(session):
         snapshot: dict[str, Any] | None = None
@@ -2747,6 +3157,8 @@ async def persist_core_run_items(db: CoreAppDb, run_items: list[RunItemEvent]) -
 
 
 async def list_core_sessions(db: CoreAppDb) -> list[dict[str, Any]]:
+    if db.rust_db is not None and db.rust_db.is_active:
+        return list(await db.rust_db.call("list_core_sessions"))
     async with db.session_factory() as session:
         result = await session.execute(select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc()))
         rows = result.scalars().all()
@@ -3170,6 +3582,58 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
         "CREATE INDEX IF NOT EXISTS ix_core_thread_snapshots_active_turn_id "
         "ON core_thread_snapshots (active_turn_id)"
     ))
+    snapshot_item_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_thread_snapshot_items)"))).mappings()
+    }
+    if "item_type" not in snapshot_item_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_thread_snapshot_items ADD COLUMN item_type VARCHAR(64)"
+        ))
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_core_snapshot_items_thread_type_seq "
+        "ON core_thread_snapshot_items (thread_id, item_type, seq)"
+    ))
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_core_events_thread_item_seq "
+        "ON core_app_events (thread_id, item_id, seq) WHERE item_id IS NOT NULL"
+    ))
+    await connection.execute(text(
+        "CREATE TABLE IF NOT EXISTS core_thread_outlines ("
+        "thread_id TEXT NOT NULL, "
+        "char_limit INTEGER NOT NULL, "
+        "revision INTEGER NOT NULL, "
+        "snapshot_seq INTEGER NOT NULL, "
+        "outline_json TEXT NOT NULL, "
+        "updated_at REAL NOT NULL, "
+        "PRIMARY KEY (thread_id, char_limit)"
+        ")"
+    ))
+    await connection.execute(text(
+        "CREATE TABLE IF NOT EXISTS core_thread_snapshot_artifacts ("
+        "thread_id TEXT NOT NULL, "
+        "artifact_id TEXT NOT NULL, "
+        "artifact_json TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "PRIMARY KEY (thread_id, artifact_id)"
+        ")"
+    ))
+    await connection.execute(text(
+        "CREATE TABLE IF NOT EXISTS core_thread_snapshot_turns ("
+        "thread_id TEXT NOT NULL, "
+        "turn_id TEXT NOT NULL, "
+        "seq INTEGER NOT NULL DEFAULT 0, "
+        "status TEXT NOT NULL DEFAULT '', "
+        "core_turn_json TEXT, "
+        "app_turn_json TEXT, "
+        "updated_at TEXT NOT NULL, "
+        "PRIMARY KEY (thread_id, turn_id)"
+        ")"
+    ))
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_core_snapshot_turns_status "
+        "ON core_thread_snapshot_turns (thread_id, status)"
+    ))
     if active_turn_index_added:
         # Upgrade-only compatibility pass. Runtime writes maintain this lookup
         # column incrementally; old databases pay the JSON scan exactly once.
@@ -3372,6 +3836,35 @@ async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -
             "ALTER TABLE core_restore_operations "
             "ADD COLUMN derived_checkpoint_id VARCHAR(64) NOT NULL DEFAULT ''"
         ))
+
+
+def _parse_sqlite_datetime(raw: Any) -> datetime:
+    if isinstance(raw, datetime):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return datetime.fromisoformat(raw.strip().replace(" ", "T"))
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def _state_from_payload_dict(
+    thread_id: str,
+    revision: int,
+    runtime_state_json: Any,
+    pending_approval_json: Any,
+) -> RuntimeState:
+    payload = dict(runtime_state_json or {}) if isinstance(runtime_state_json, dict) else {}
+    payload.setdefault("session_id", str(thread_id))
+    metadata = dict(payload.get("metadata") or {})
+    if isinstance(pending_approval_json, dict):
+        metadata.update(pending_approval_json)
+    payload["metadata"] = metadata
+    allowed = {"session_id", "run_id", "status", "position", "loop_state", "turn_count", "metadata"}
+    state = RuntimeState(**{key: value for key, value in payload.items() if key in allowed})
+    setattr(state, "_runtime_store_revision", int(revision or 0))
+    return state
 
 
 def _state_from_row(row: CoreRuntimeSession) -> RuntimeState:

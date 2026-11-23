@@ -1,17 +1,4 @@
 <template>
-  <TitleBar
-    :hide-on-mobile="runtime.platform === 'mobile'"
-    :show-in-preview="props.showPreviewTitleBar"
-    :left-pinned="leftPinned"
-    :right-pinned="rightPinned"
-    :mode-label="activeAppMode.title"
-    :mode-title="nextAppModeTitle"
-    :can-toggle-mode="appModes.length > 1"
-    :session-title="activeSessionTitle"
-    @toggle-left-pinned="toggleLeftPinned"
-    @toggle-right-pinned="toggleRightPinned"
-    @cycle-mode="cycleAppMode"
-  />
   <div v-if="backendCrashed" class="core-status-banner" role="alert" data-backend-crashed-banner>
     <span class="core-status-banner-text">{{ t("后端进程已停止响应（可能已崩溃）。请重启应用以恢复。") }}</span>
   </div>
@@ -30,22 +17,19 @@
     @skip="skipOnboarding"
     @finish="finishOnboarding"
   />
-  <!-- user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
-       (引导覆盖在整个应用之上，但聚光灯那一步会把中间挖空：被指到的按钮仍然能点，
-        学到的是真实位置，而不是看一张截图)。 -->
-  <GuideHost
-    ref="guideRef"
-    :has-provider="hasConfiguredProvider"
-    :theme="theme"
-    @open-area="onRailOpen"
-    @configure-provider="onGuideConfigureProvider"
-  />
   <WorkspaceShell
     ref="shellRef"
     product-name="Sunday"
     sidebar-title="Sunday"
     :plugin-rpc="requestConfigOperation"
-    :class="{ 'workspace-shell--split': splitEnabled && appRuntime.platform !== 'mobile' }"
+    :platform="appRuntime.platform"
+    :compact-chrome="appRuntime.platform !== 'mobile'"
+    :require-left-sidebar="Boolean(sidebarNavView)"
+    :class="{
+      'workspace-shell--split': splitEnabled && !workspace.state.hidden && !fullAreaView && !activePluginMode && appRuntime.platform !== 'mobile',
+      'workspace-shell--main-replaced': splitEnabled && !workspace.state.hidden && !fullAreaView && !activePluginMode && appRuntime.platform !== 'mobile' && Boolean(workspace.state.mainTab),
+      'workspace-shell--browser-live': splitEnabled && !workspace.state.hidden && !fullAreaView && !activePluginMode && appRuntime.platform !== 'mobile' && (workspace.tabs.value.some(e => e.tab.kind === 'browser' && Boolean(e.tab.resource)) || workspace.floats.value.some(f => f.tab.kind === 'browser' && Boolean(f.tab.resource))),
+    }"
     :style="[appRuntime.platform === 'mobile' ? {} : splitShellStyle, fullAreaMobileHeadStyle]"
     :storage-key="settingsStorageKey"
     :density="density"
@@ -56,7 +40,7 @@
     :show-sidebar-search-action="false"
     :show-sidebar-plugins-action="false"
     :show-sidebar-settings-action="false"
-    :collapse-left-sidebar="Boolean(fullAreaView && !sidebarNavView)"
+    :collapse-left-sidebar="Boolean((fullAreaView && !sidebarNavView) || (!fullAreaView && !activePluginMode && splitEnabled && !workspace.state.hidden && workspace.state.layout === 'browser'))"
     :hide-main-header="Boolean(sidebarNavView)"
     :show-drawer-toggle="!fullAreaView && !splitEnabled"
     :show-right-panel="appRuntime.platform !== 'mobile'"
@@ -68,6 +52,7 @@
     :composer-disabled="composerInputDisabled"
     :composer-send-disabled="composerSendDisabled"
     :composer-placeholder="composerPlaceholder"
+    :composer-compact="composerCompact"
     :composer-action-mode="composerActionMode"
     :composer-hold-enabled="composerHoldEnabled"
     :composer-stop-title="composerStopTitle"
@@ -79,7 +64,6 @@
     @focusin.capture="activateSplitMain"
     @new-session="handleShellNewSession"
     @update:left-open="onLeftDrawerChange"
-    @update:left-pinned="syncLeftPinned"
     @update:right-pinned="syncRightPinned"
     @settings="openSettings"
     @plugins="openPlugins"
@@ -88,6 +72,14 @@
     @composer-terminate="requestComposerTerminate"
     @composer-drop="handleComposerDrop"
   >
+    <template v-if="appRuntime.platform !== 'mobile'" #window-controls>
+      <WindowControls :show-in-preview="props.showPreviewTitleBar">
+        <CoreWorkspaceTabDrawer :controller="workspace" />
+      </WindowControls>
+    </template>
+    <template v-if="appRuntime.platform !== 'mobile' && !sidebarNavView && !fullAreaView && !activePluginMode" #root-entry>
+      <CoreContentRoot :controller="workspace" variant="axis" />
+    </template>
     <template v-if="appRuntime.platform !== 'mobile'" #app-rail>
       <AppRail
         ref="appRailRef"
@@ -102,7 +94,6 @@
         @open-plugin-page="openMainPluginPage"
         @split-plugin-page="openPluginPageSplit"
         @update="onRailUpdate"
-        @guide="openGuide"
       />
       <!-- 更新卡片：点竖栏那枚图标后从它身上长出来（动效在组件内部，走 GSAP）。 -->
       <CoreUpdateCard
@@ -118,13 +109,13 @@
         :error="updateInstallError"
         @confirm="onUpdateConfirm"
         @cancel="onUpdateCardCancel"
-        @closed="updateCardOpen = false"
+        @closed="onUpdateCardClosed"
       />
     </template>
 
     <template #primary>
       <div class="core-project-primary-actions">
-        <div class="core-sidebar-mode-row">
+        <div class="core-sidebar-mode-row" @pointerdown="startWindowDragFromBlank">
           <!-- user:“桌面端也有这个毛病，一起修”+(设置/插件/项目设置撤掉标题条时返回键跟着
                消失；这里在会话栏页名旁边补一个，动作与标题条里的那个完全一样)。 -->
           <button
@@ -143,18 +134,7 @@
             class="core-sidebar-mode is-static"
             data-sidebar-nav-title
           >{{ sidebarNavTitle }}</span>
-          <button
-            v-else
-            class="core-sidebar-mode"
-            type="button"
-            data-sidebar-mode-trigger
-            :aria-label="t('切换模式，当前 {0}', { 0: activeAppMode.title })"
-            :title="t('切换模式，当前 {0}', { 0: activeAppMode.title })"
-            @click="openModeMenu"
-          >
-            <span class="core-sidebar-mode__label">{{ activeAppMode.title }}</span>
-            <ChevronDown :size="13" :stroke-width="1.9" aria-hidden="true" />
-          </button>
+          <span v-else class="core-sidebar-mode-spacer" aria-hidden="true" />
           <button
             v-if="!sidebarNavView && appRuntime.platform !== 'mobile'"
             class="core-sidebar-search-entry"
@@ -293,7 +273,6 @@
     </template>
 
     <template #main-header>
-      <button v-if="appRuntime.platform !== 'mobile'" class="split-entry split-icon-button" type="button" :title="splitWorkspace.state.hidden || !splitEnabled ? t('打开分屏') : t('收起分屏')" :aria-label="splitWorkspace.state.hidden || !splitEnabled ? t('打开分屏') : t('收起分屏')" @click="splitWorkspace.toggle()"><Columns2 :size="16" :stroke-width="1.6" /></button>
       <!-- 整版界面：顶部标题跟着切换，返回键就放在标题原来的位置。
            设置 / 插件例外：会话栏已经写着页名并列出分区，标题条整条撤掉，内容独占一页
            （整版界面这一层仍然成立，不会被下面的插件头部顶替）。 -->
@@ -302,6 +281,7 @@
           v-if="!sidebarNavView"
           class="thread-header full-area-header"
           data-full-area-header
+          @pointerdown="startWindowDragFromBlank"
         >
           <button
             type="button"
@@ -321,7 +301,13 @@
         </div>
       </template>
       <div v-else-if="appRuntime.platform !== 'mobile' && activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
-      <div v-else-if="appRuntime.platform !== 'mobile' && activeSessionId" class="thread-header" data-session-header data-region="titlebar">
+      <div
+        v-else-if="appRuntime.platform !== 'mobile' && activeSessionId"
+        class="thread-header"
+        data-session-header
+        data-region="titlebar"
+        @pointerdown="startWindowDragFromBlank"
+      >
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
           :rename="renameActiveSession"
@@ -504,11 +490,12 @@
         >
           <ArrowLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
-        <CoreSplitWorkspace v-if="splitEnabled" :controller="splitWorkspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
+        <!-- user:“同时开启 browser 时无法切到别的页面”+(保持 CoreWorkspace 常驻并用 v-show 控制显隐，避免切回 Browser 时丢失几何尺寸测量而白屏；整版页面时置 visible=false 让原生网页同步让出层级) -->
+        <CoreWorkspace v-show="splitEnabled && !fullAreaView && !activePluginMode" :controller="workspace" :work-root="splitWorkRoot" :dirty="splitDirtyTabs" @geometry="splitShellStyle = $event">
         <template #default="{ tab, pane, visible }">
-          <CoreSplitContent :tab="tab" :pane="pane" :visible="visible" :controller="splitWorkspace" :documents="splitDocuments" :bindings="pageBindings" :work-root="splitWorkRoot" :transport="transport" :messages="messages" :active-session-id="activeSessionId || ''" :member-statuses="sessionActivity.memberStatuses" :member-status-records="sessionActivity.memberStatusRecords" :durable-records="effectiveSubAgentRecords" :member-wait-known="sessionActivity.memberWaitKnown" :running-member-names="sessionActivity.runningMemberNames" :main-running="activeTurnRunning" @dirty="setSplitDirty" @decision-select="handlePendingDecisionSelect" />
+          <CoreSplitContent v-if="tab && !(pane === 'main' && tab.kind === 'agent')" :key="tab.id" :tab="tab" :pane="pane" :visible="visible && splitEnabled && !fullAreaView && !activePluginMode" :controller="workspace" :documents="splitDocuments" :bindings="pageBindings" :work-root="splitWorkRoot" :transport="transport" :messages="messages" :active-session-id="activeSessionId || ''" :member-statuses="sessionActivity.memberStatuses" :member-status-records="sessionActivity.memberStatusRecords" :durable-records="effectiveSubAgentRecords" :member-wait-known="sessionActivity.memberWaitKnown" :running-member-names="sessionActivity.runningMemberNames" :main-running="activeTurnRunning" @dirty="setSplitDirty" @decision-select="handlePendingDecisionSelect" @open-sub-agent="openSubAgentPane" />
         </template>
-        </CoreSplitWorkspace>
+        </CoreWorkspace>
       </div>
       <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
     </template>
@@ -536,6 +523,20 @@
     </template>
 
     <template #composer-queue-panel>
+      <!-- user:“配置好你的 API key ，新建第一个项目与会话，发送第一条消息，就完事了”+
+           (开工清单贴在输入框上方：三格走完自己收起来，不挡内容也不讲功能)。 -->
+      <FirstRunChecklist
+        v-if="firstRunVisible"
+        :visible="firstRunVisible"
+        :has-provider="hasConfiguredProvider"
+        :has-project="projects.length > 0"
+        :has-session="coreSessions.length > 0"
+        :first-message-sent="firstRunMessageSent"
+        @action="firstRunAct"
+        @dismiss="firstRunDismiss"
+        @pick-example="firstRunPickExample"
+        @finished="firstRunFinish"
+      />
       <!-- user:“你悬浮的胶囊应该在它的上方，它不存在时在输入栏的上方”+(发送状态胶囊
            与目标/排队托盘共用输入栏上沿的同一挂载点，胶囊排在最上面)。 -->
       <CoreSubmissionStatus
@@ -670,6 +671,9 @@
   <!-- user:“我不是说这个胶囊放在屏幕的最上方，紧贴屏幕上面吗”+(状态胶囊搬进覆盖层窗口，这里不留副本。) -->
 
   <ContextMenuHost />
+  <!-- user：“灯箱：浮层盖在会话上，看完即关，不打断对话”+
+       (预览器宕位挂在应用层：任何界面里点了媒体文件都能盖上来，切界面也不丢。) -->
+  <PreviewLightbox :transport="transport" />
   <!-- user:“我只要切换界面，编辑就自动取消了，那它不是永远不可能编辑到主界面吗”+
        (编辑器挂在应用层：从设置页点开后切到任何界面都不卸载，贴着当前界面继续编辑。) -->
   <ThemeStudio v-if="themeStudioOpen" />
@@ -718,6 +722,9 @@ import { fileReference, insertReferences, replaceReference, referenceSpans, type
 import { readComposerDraft, writeComposerDraft, resolveComposerDraftStorage } from '@/composer/drafts'
 
 import { t } from '@/i18n/index.ts'
+// user:“让 Agent Loop 能直接调用”+(浏览器 Agent 通道的宿主侧执行器只在这个窗口里跑，
+// 网页本身永远拿不到 Tauri IPC)。
+import { startBrowserAgentBridge } from '@/browser/agentBridge'
 
 import { loadUiLanguage } from '@/i18n/index.ts'
 import {
@@ -745,6 +752,7 @@ import {
   ClipboardPaste,
   Copy,
   FolderOpen,
+  Globe,
   Library,
   LoaderCircle,
   MonitorPlay,
@@ -767,6 +775,8 @@ import type {
 } from '@/types.ts'
 import { isInternalSession, isPluginOwnedSession } from '@/sessions/visibility.ts'
 import { useSessionCompletionNotices } from '@/composables/useSessionCompletionNotices.ts'
+// user:“不再留拖拽的空位，而是非交互区域均可拖拽”+(标题带的空白处直接拖窗)。
+import { startWindowDragFromBlank } from '@/composables/useWindowDrag.ts'
 import { createModeSessionState } from '@/sessions/mode-state.ts'
 import {
   buildCoreProjectGroups,
@@ -783,6 +793,7 @@ import {
   type CoreQueuedInput,
 } from '@/appServer/index.ts'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport/index.ts'
+import { NOTICE_AFTER_MS, shouldNotify } from '@/app/remoteReconnect.ts'
 import type { LamToolsRuntime, RuntimeFileSource } from '@/app/runtime.ts'
 import { buildCoreComposerHighlightSegments } from '@/composer/inputItems.ts'
 import { resolveChecklistGroups } from '@/runtime/checklist.ts'
@@ -813,6 +824,8 @@ import ChatOutlineNavigator from '@/components/ChatOutlineNavigator.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import { useComputerUseOverlay } from '@/computerUse/useComputerUseOverlay'
 import AppRail, { type AppRailView } from '@/components/AppRail.vue'
+import FirstRunChecklist from '@/components/FirstRunChecklist.vue'
+import { firstRunStage, isFirstRunClosed, readFirstRunMemory, writeFirstRunMemory } from '@/firstRun/firstRun.ts'
 import CoreUpdateCard from '@/components/CoreUpdateCard.vue'
 import CoreExecutionControls from '@/components/CoreExecutionControls.vue'
 import CoreRunModeCapsule from '@/components/CoreRunModeCapsule.vue'
@@ -825,6 +838,8 @@ import CoreProjectPicker from '@/components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '@/components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '@/components/CoreSessionTitleEditor.vue'
 import { ContextMenuHost } from '@/components/context-menu/index.ts'
+import PreviewLightbox from '@/preview/PreviewLightbox.vue'
+import { PREVIEW_COMPOSER_KEY } from '@/preview/composerBridge'
 import { useThemeStudio } from '@/composables/useThemeStudio.ts'
 // 界面编辑器按需加载：打开才拉取编辑器代码，日常运行不为此付出体积（设计 §16 性能验收）。
 const ThemeStudio = defineAsyncComponent(() => import('@/components/ThemeStudio.vue'))
@@ -835,7 +850,6 @@ import { selectionEvents } from '@/study/annotations.ts'
 import { openContextMenu } from '@/components/context-menu/context-menu.ts'
 import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import OnboardingWizard from '@/components/OnboardingWizard.vue'
-import GuideHost from '@/guide/GuideHost.vue'
 import FullAreaSidebarNav from '@/components/FullAreaSidebarNav.vue'
 import { CORE_SETTINGS_SECTIONS, PLUGIN_SHELL_SECTIONS, PROJECT_SETTINGS_SECTIONS } from '@/components/settingsSections.ts'
 import { installOverlayAction } from '@/core-app/overlayAction.ts'
@@ -852,24 +866,33 @@ import WorkspaceShell from '@/components/WorkspaceShell.vue'
 import RightSidebarHost from '@/components/RightSidebarHost.vue'
 import CoreAppPage from '@/components/CoreAppPage.vue'
 import { useCorePageBindings } from '@/app/useCorePageBindings'
-import CoreSplitWorkspace from '@/components/CoreSplitWorkspace.vue'
+import CoreWorkspace from '@/components/CoreWorkspace.vue'
+import CoreWorkspaceTabDrawer from '@/components/CoreWorkspaceTabDrawer.vue'
+import CoreContentRoot from '@/components/CoreContentRoot.vue'
 import CoreSplitContent from '@/components/CoreSplitContent.vue'
-import { useSplitWorkspace } from '@/split/useSplitWorkspace'
+import { useWorkspace } from '@/workspace/useWorkspace'
 import { openFileInSplit, openFileWithDefaultApp } from '@/split/openFile'
+// user:“入口藏得深…会话里的链接可直接打开内置浏览器”+(四处入口共用同一套判定与同一个 opener)。
+import { openLinkInCurrentPage, registerBrowserEntry } from '@/browser/entry'
+import { bindBrowserTab, browserNative, forgetBrowserTab, splitTabForNative } from '@/split/native'
+import { listen } from '@tauri-apps/api/event'
 import { createAuxiliaryWorkspace, AuxiliaryWorkspaceKey } from '@/auxiliary/workspace'
 import { createSplitDocuments } from '@/split/documents'
-import { Columns2 } from 'lucide-vue-next'
+import { Columns2, PictureInPicture2 } from 'lucide-vue-next'
 import CoreSubAgentActivityIndicator from '@/components/CoreSubAgentActivityIndicator.vue'
 import { selectCoreSubAgentRun, type CoreSubAgentRef } from '@/agents/subAgentProjection.ts'
+import { pickSubAgentPane, subAgentTabMatches } from '@/agents/subAgentTabs'
 import { subAgentRunIdentity } from '@/agents/subAgentDisplay.ts'
-import TitleBar from '@/components/TitleBar.vue'
+import WindowControls from '@/components/TitleBar.vue'
 import PluginModeHost from '@/components/PluginModeHost.vue'
 import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
 import { refreshPluginUIModes } from '@/plugins/api.ts'
 import { contributionState, ensureContributions, setContributionsRpc } from '@/plugins/contributions.ts'
 import { findPluginFilePage, pluginPageKey, type PluginPageEntry } from '@/plugins/pages'
 import CoreSplitPluginPage from '@/components/CoreSplitPluginPage.vue'
-import type { SplitTab } from '@/split/layout'
+import type { SplitTab } from '@/workspace/types'
+// user:“悬浮窗的全局入口”“补一个全局切换（Ctrl+Shift+M 循环三态）”+
+// (宿主也是入口之一：竖栏、命令面板、快捷键都读 surfaceModes 的同一份可用性与互斥结论，不自己另算一套)。
 import { listModes } from '@/plugins/registry.ts'
 import {
   provideCorePluginModeContext,
@@ -880,7 +903,7 @@ import type { PluginModeSurface } from '@/plugins/context.ts'
 import type { PluginMode } from '@/plugins/types.ts'
 import type { CoreModelCatalogView, CorePermissionPreset } from '@/composer/execution.ts'
 import { coreModelSelectOptions } from '@/composer/execution.ts'
-import { readSessionComposerControls, sessionComposerParams } from '@/composer/sessionComposer.ts'
+import { migrateSessionRunModeMetadata, readSessionComposerControls, sessionComposerParams } from '@/composer/sessionComposer.ts'
 import { copyText } from '@/helpers/clipboard.ts'
 import { absoluteArtifactPath } from '@/artifacts/model.ts'
 
@@ -998,21 +1021,26 @@ const remoteLinkText = computed(() => (
   remoteWasOpen.value ? t('和电脑断开了，正在重连…') : t('正在连接电脑…')
 ))
 let remoteLinkTimer: number | null = null
+let remoteLinkDownSince = 0
 watch(workbench.connectionState, (state) => {
   if (!appRuntime.capabilities.remote) return
   if (state === 'open') {
     remoteWasOpen.value = true
     if (remoteLinkTimer !== null) window.clearTimeout(remoteLinkTimer)
     remoteLinkTimer = null
+    remoteLinkDownSince = 0
     remoteLinkDown.value = false
     return
   }
-  // 启动阶段本来就不是 open，先等两秒，避免刚进界面就误报断线。
+  // user:“短暂断线尽量无感（不弹提示），持续异常才轻量提示”+(换网、切后台回来、
+  // 对端重启通常几秒内就能连回去；这期间不该冒一句断线。阈值与重连策略共用一份，
+  // 两处各写一个数字迟早会说两套话)。
   if (remoteLinkTimer !== null) return
+  remoteLinkDownSince = Date.now()
   remoteLinkTimer = window.setTimeout(() => {
     remoteLinkTimer = null
-    remoteLinkDown.value = true
-  }, 2_000)
+    if (shouldNotify(Date.now() - remoteLinkDownSince)) remoteLinkDown.value = true
+  }, NOTICE_AFTER_MS)
 }, { immediate: true })
 onUnmounted(() => {
   if (remoteLinkTimer !== null) window.clearTimeout(remoteLinkTimer)
@@ -1038,6 +1066,14 @@ const lastWorkbenchEvent = workbench.lastEvent
 const composerText = workbench.composerText
 const composerCursor = workbench.composerCursor
 const composerTextareaEl = ref<ComposerEditorHandle | null>(null)
+// user:“自己思考什么时候输入栏变胶囊，输入后要不要换回去”+(只在还没开始写的时候收成
+// 单行胶囊：点进去或开始输入立刻换回完整形态，清空并失焦后再收回。)
+const composerFocused = ref(false)
+function syncComposerFocus(): void {
+  const active = document.activeElement
+  composerFocused.value = active instanceof Element
+    && Boolean(active.closest('[data-ui-id="shell.composer"]'))
+}
 const composerErrorText = ref('')
 
 // Status/error notifications go through the global toast service (single
@@ -1124,14 +1160,10 @@ const agentsLoading = ref(false)
 const agentsSaving = ref(false)
 const agentsError = ref('')
 const shellRef = ref<InstanceType<typeof WorkspaceShell> | null>(null)
-const leftPinned = ref(true)
 const rightPinned = ref(false)
 
-function toggleLeftPinned() {
-  shellRef.value?.toggleLeftPinned()
-}
-function syncLeftPinned(value: boolean) {
-  leftPinned.value = value
+function toggleProjectSidebar() {
+  shellRef.value?.toggleLeftDrawer()
 }
 function toggleRightPinned() {
   shellRef.value?.toggleRightPinned()
@@ -1162,7 +1194,7 @@ function handleSystemBack(event: Event): void {
   onFullAreaBack()
 }
 function closeMobileSplit(): void {
-  for (const pane of Object.keys(splitWorkspace.state.panes)) splitWorkspace.closePane(pane)
+  for (const pane of Object.keys(workspace.state.panes)) workspace.closePane(pane)
 }
 onMounted(() => window.addEventListener('sunday:back', handleSystemBack))
 onUnmounted(() => window.removeEventListener('sunday:back', handleSystemBack))
@@ -1188,9 +1220,24 @@ function openRelatedPluginPage(target: { plugin: string; id: string }) {
 async function openMainPluginFile(path: string, scope: {workRoot: string; projectId?: string; sessionId?: string}) {
   if (!contributionState().loaded) await ensureContributions(requestConfigOperation)
   const page = findPluginFilePage(contributionState().pages, path)
-  if (page) splitWorkspace.openPluginPage(page, undefined, {...scope, filePath:path})
+  if (page) { workspace.openPluginPage(page, undefined, { ...scope, filePath: path }); return true }
   // user:“分屏预览器不支持图片吗？”+(富媒体与 Office 文档按类型进预览器，文本仍用编辑器)。
-  else if (!openFileInSplit(splitWorkspace, path, scope)) void openFileWithDefaultApp(transport, path, scope.workRoot)
+  if (openFileInSplit(workspace, path, scope)) return true
+  void openFileWithDefaultApp(transport, path, scope.workRoot)
+  return false
+}
+
+// user:“把库和easy file统合到一起”+(在资料库点项目文件时，沿用已有的编辑、预览和默认应用打开方式)。
+async function openLibraryProjectFile(path: string, scope: { workRoot: string; projectId?: string }) {
+  try {
+    const openedInWorkspace = await openMainPluginFile(path, scope)
+    if (openedInWorkspace && fullAreaView.value === 'library') {
+      workspace.show()
+      closeFullArea()
+    }
+  } catch (error) {
+    showToast('error', messageFromError(error))
+  }
 }
 function onPluginPageRequest(event: Event) {
   const target = (event as CustomEvent<{ plugin?: string; id?: string }>).detail
@@ -1198,9 +1245,38 @@ function onPluginPageRequest(event: Event) {
 }
 onMounted(() => window.addEventListener('sunday:open-plugin-page', onPluginPageRequest))
 onBeforeUnmount(() => window.removeEventListener('sunday:open-plugin-page', onPluginPageRequest))
+
+// user:“第一次搜索建 agent-browser 分屏，之后 Agent 的标签都进这块”+
+// (Agent 从 Core 开的标签：前端不认识它 → 收养进 agent-browser 屏，并补上原生映射，
+//  后面的矩形同步/点击输入/状态事件才有归属。用户自己开的标签不走这条事件)。
+function onAgentBrowserTab(event: Event): void {
+  const detail = (event as CustomEvent<{ tab?: string; url?: string }>).detail
+  const native = String(detail?.tab ?? '')
+  if (!native || splitTabForNative(native)) return
+  const adopted = workspace.addAgentBrowserTab(String(detail?.url ?? ''))
+  if (adopted) bindBrowserTab(adopted.id, native)
+}
+
+onMounted(() => window.addEventListener('sunday:browser-agent-tab', onAgentBrowserTab))
+onBeforeUnmount(() => window.removeEventListener('sunday:browser-agent-tab', onAgentBrowserTab))
+
+// Rust 侧关标签 → 收掉对应分屏标签；null 表示这不是 Rust 事件（如占位），直接忽略。
+let stopBrowserClosed: (() => void) | null = null
+void listen<{ tab?: string }>('lamtools://browser-closed', ({ payload }) => {
+  const native = String(payload?.tab ?? '')
+  if (!native) return
+  const splitId = splitTabForNative(native)
+  if (!splitId) return
+  forgetBrowserTab(splitId)
+  const place = workspace.placementOf(splitId)
+  const entry = workspace.tabs.value.find(item => item.tab.id === splitId)
+  if (!place || !entry) return
+  workspace.closeTab(place.kind === 'area' ? place.areaId : 'float', entry.tab)
+}).then(unlisten => { stopBrowserClosed = unlisten })
+onBeforeUnmount(() => { stopBrowserClosed?.() })
 function openPluginPageSplit(page: PluginPageEntry, edge: 'right' | 'bottom') {
-  const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
-  if (pane) splitWorkspace.openPluginPage(page, pane)
+  const pane = workspace.split(workspace.state.activePane, edge)
+  if (pane) workspace.openPluginPage(page, pane)
 }
 const showSearch = computed(() => fullAreaView.value === 'search')
 const showArrange = computed(() => fullAreaView.value === 'arrange')
@@ -1292,17 +1368,97 @@ function requestSettingsNavigation(proceed: () => void): void {
 const railActiveView = computed<AppRailView>(() => {
   const view = fullAreaView.value
   // 项目设置是聊天所在项目的内页，竖栏仍停在聊天区。'search' 同理。
-  if (!view || view === 'search' || view === 'project' || view === 'plugin') return 'chat'
+  // user:“去把模型调用台从左竖栏 apprail 中移除”+(竖栏已没有调用台这一格，遗留的旧入口按聊天区显示)。
+  if (!view || view === 'search' || view === 'project' || view === 'plugin' || view === 'direct') return 'chat'
   return view
 })
 function openRailSplit(view: AppRailView, edge: 'right' | 'bottom' = 'right') {
   if (view === 'chat') return
-  const pane = splitWorkspace.split(splitWorkspace.state.activePane, edge)
-  if (pane) splitWorkspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接'), direct: t('调用台') })[view], pane)
+  const pane = workspace.split(workspace.state.activePane, edge)
+  if (pane) workspace.add('page', view, ({ library: t('资料库'), settings: t('设置'), arrange: t('定时任务'), plugins: t('插件'), account: t('远程连接') })[view], pane)
+}
+// user:“主导航入口：点击直接开一块分屏并创建浏览器标签（已有分屏则激活/聚焦那块屏，不重复建）”+
+// (入口只做一件事：把「开浏览器」翻成布局动作；失败一律回一句可读原因，不留点了没反应的按钮)。
+let disposeBrowserEntry: (() => void) | null = null
+function findBrowserTab(): { pane: string; tab: SplitTab } | null {
+  const found = workspace.tabs.value.find(entry => entry.tab.kind === 'browser')
+  return found ? { pane: found.pane, tab: found.tab } : null
+}
+// user:“浏览器/悬浮浏览器从其中删除，已有其它入口”+
+// (竖栏不再有这两枚，本文件只保留打开动作给快捷键与命令面板复用)。
+function browserTabTitle(url: string): string {
+  if (!url) return t('浏览器')
+  try { return new URL(url).hostname || t('浏览器') } catch { return t('浏览器') }
+}
+function openBrowserTarget(target: { url: string; title?: string; reuse?: boolean }): { ok: boolean; reason: string } {
+  const url = String(target.url || '')
+  const title = target.title || browserTabTitle(url)
+  const panes = Object.keys(workspace.state.panes)
+  // 1) 还没有分屏：直接建一块（容量检查在 add 里，放不下就返回原因，不假装成功）。
+  if (!panes.length) {
+    const created = workspace.add('browser', url, title)
+    return created ? { ok: true, reason: '' } : { ok: false, reason: t('当前窗口太小，无法分屏') }
+  }
+  workspace.state.hidden = false
+  const existing = findBrowserTab()
+  // 2) 已经有浏览器屏：激活它，不重复建；带链接时按「当前页 / 新标签」分流。
+  if (existing) {
+    workspace.activate(existing.pane, existing.tab.id)
+    if (!url) return { ok: true, reason: '' }
+    if (target.reuse) {
+      // user:“命令面板：在当前页打开链接”+(先按当前页导航；原生 webview 还没创建时退回开新标签)。
+      void browserNative(existing.tab.id, 'navigate', { url }).catch(() => { workspace.add('browser', url, title, existing.pane) })
+      return { ok: true, reason: '' }
+    }
+    const opened = workspace.add('browser', url, title, existing.pane)
+    return opened ? { ok: true, reason: '' } : { ok: false, reason: t('当前窗口太小，无法分屏') }
+  }
+  // 3) 有分屏但没有浏览器标签：在当前这块屏里开一个。
+  const pane = workspace.state.panes[workspace.state.activePane] ? workspace.state.activePane : panes[0]
+  const opened = workspace.add('browser', url, title, pane)
+  return opened ? { ok: true, reason: '' } : { ok: false, reason: t('当前窗口太小，无法分屏') }
+}
+/** 当前屏的活动标签：入口与快捷键都按“眼前这一块”判断，不猜用户想切哪一块屏。 */
+function activeSplitTab(): { pane: string; tab: SplitTab } | null {
+  const pane = workspace.state.panes[workspace.state.activePane]
+  const tab = pane?.tabs.find(item => item.id === pane.activeTab)
+  return tab && pane ? { pane: pane.id, tab } : null
+}
+// user:“悬浮窗的全局入口（现在只能从某个浏览器标签的工具栏进）”+
+// (竖栏与命令面板共用：先确保有一块浏览器标签，再把它切成悬浮——点一下就看见浮窗，不用先找菜单)。
+function openBrowserFloatFromRail(): void {
+  const result = openBrowserTarget({ url: '' })
+  if (!result.ok) { showToast('notice', result.reason, 5000); return }
+  const active = activeSplitTab()
+  if (active?.tab.kind === 'browser') workspace.setSurfaceMode(active.tab.id, 'float')
+}
+// user:“聚焦是一个无意义功能，移除”+(快捷键在分屏和浮层之间切换，沿用真实的工作区落点)。
+function cycleActiveSurface(): void {
+  const float = workspace.floats.value.find(entry => entry.tab.id === workspace.floatFocus.value)
+  if (float?.tab.kind === 'browser') { workspace.pinCommit(float.tab.id); return }
+  const active = activeSplitTab()
+  if (active?.tab.kind === 'browser') workspace.setSurfaceMode(active.tab.id, 'float')
+}
+function openBrowserFromRail(): void {
+  const result = openBrowserTarget({ url: '' })
+  if (!result.ok) showToast('notice', result.reason, 5000)
+}
+// user:“命令面板：在当前页打开链接”+(面板不弹输入框：读剪贴板里的链接，落在当前这块浏览器屏)。
+async function openLinkFromClipboard(): Promise<void> {
+  let text = ''
+  try {
+    text = await navigator.clipboard.readText()
+  } catch {
+    showToast('notice', t('无法读取剪贴板，请先复制一个链接'), 5000)
+    return
+  }
+  const result = openLinkInCurrentPage(text)
+  if (!result.ok) showToast('notice', result.reason, 5000)
 }
 function onRailOpen(view: AppRailView): void {
   if (view === 'chat') {
     closeFullArea()
+    workspace.setLayout('agent')
     return
   }
   if (view === 'account') {
@@ -1361,9 +1517,22 @@ function handleGlobalSearchKeydown(event: KeyboardEvent): void {
     openSearch()
     return
   }
+  // user:“快捷键 Ctrl+Shift+B”+(竖栏那枚浏览器图标与这个快捷键走同一个入口，行为一致)。
+  if (key === 'b' && event.shiftKey) {
+    event.preventDefault()
+    openBrowserFromRail()
+    return
+  }
   // The rest are document-level actions; inside a text field the browser's own
   // editing keys must win.
   if (isTextEntryTarget(event.target)) return
+  // user:“补一个全局切换（例如 Ctrl+Shift+M 循环三态）”+
+  // (文档级动作放在输入框判断之后：正在打字时让位给网页/输入法自己的按键)。
+  if (key === 'm' && event.shiftKey) {
+    event.preventDefault()
+    cycleActiveSurface()
+    return
+  }
   if (key === 'n') {
     event.preventDefault()
     void createStartPageSession()
@@ -1376,13 +1545,12 @@ function handleGlobalSearchKeydown(event: KeyboardEvent): void {
   }
   if (key === 'b') {
     event.preventDefault()
-    toggleLeftPinned()
+    toggleProjectSidebar()
     return
   }
 
 }
 const showOnboarding = ref(false)
-const guideRef = ref<InstanceType<typeof GuideHost> | null>(null)
 const wizardLoading = ref(false)
 const wizardError = ref('')
 // Rust 监视线程发现后端进程退出时置位，顶部横幅提示（audit 20 S3）。
@@ -1609,19 +1777,78 @@ const modelGroupsRevision = ref<number | undefined>(undefined)
 const modelCatalogView = ref<CoreModelCatalogView>('provider')
 const defaultModelId = ref('')
 
-/** user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
- * (有没有配过模型决定引导讲“怎么配”还是“在哪换”；入口常驻在左竖栏底部)。 */
+/** 有没有配过模型：开工清单第一格，以及引导讲“怎么配”还是“在哪换”都看它。 */
 const hasConfiguredProvider = computed(() => availableProviders.value.some(provider => provider.has_api_key === true))
-function openGuide(): void {
-  // 引导讲的是聊天界面的布局：不管现在停在哪一页，先回到对话再开始。
-  closeFullArea()
-  guideRef.value?.open()
+
+// user:“dev 界面一直卡在加载中”+(coreSessions 必须在使用之前声明：下面的开工清单计算属性在 setup 期
+// 就会被求值，声明放到后面会触发 TDZ「Cannot access coreSessions before initialization」，
+// 结果是 setup 抛错、应用从未挂载、启动画面永不消失)。
+const coreSessions = computed(() => sessions.value.filter((session) => !isInternalSession(session)))
+
+// --- 开工清单 -------------------------------------------------------------
+// user:“配置好你的 API key ，新建第一个项目与会话，发送第一条消息，就完事了”
+// +(不讲课：清单只认三件真实结果，三格打完自己收起来)。
+const firstRunMemoryState = ref(readFirstRunMemory())
+const firstRunClosed = ref(isFirstRunClosed(firstRunMemoryState.value))
+const firstRunMessageSent = ref(false)
+const firstRunVisible = computed(() => !showOnboarding.value && !firstRunClosed.value)
+const firstRunState = computed(() => ({
+  hasProvider: hasConfiguredProvider.value,
+  hasProject: projects.value.length > 0,
+  hasSession: coreSessions.value.length > 0,
+  firstMessageSent: firstRunMessageSent.value,
+}))
+const firstRunStageValue = computed(() => firstRunStage(firstRunState.value))
+
+// 一到“走完”就落盘：哪怕用户立刻切走、庆祝条被卸载，下次也不会再弹。
+watch(firstRunStageValue, (stage) => {
+  if (stage !== 'done') return
+  firstRunMemoryState.value = writeFirstRunMemory({ completed: true })
+})
+
+// 当前会话里出现过用户消息就算说过第一句话。用 workbench.messages 而不是解构后的
+// messages：这块声明在 messages 解构之前，直接 watch 会撞上暂时性死区。
+watch(workbench.messages, (list) => {
+  if (firstRunMessageSent.value) return
+  if (list.some(message => message.role === 'user')) firstRunMessageSent.value = true
+})
+
+function firstRunAct(): void {
+  const stage = firstRunStageValue.value
+  if (stage === 'provider') {
+    void reopenOnboarding()
+    return
+  }
+  if (stage === 'workspace') {
+    if (projects.value.length === 0) openProjectCreate()
+    else void createStartPageSession()
+    return
+  }
+  if (stage === 'message') {
+    if (!composerText.value.trim()) composerText.value = t("你好，先介绍一下你能做什么")
+    void nextTick(() => {
+      composerTextareaEl.value?.focus()
+      composerTextareaEl.value?.setSelectionRange(composerText.value.length, composerText.value.length)
+    })
+  }
 }
 
-/** 从引导里点「现在去配置」：先收起引导，否则两层浮层会叠在一起谁也点不动。 */
-function onGuideConfigureProvider(): void {
-  guideRef.value?.dismiss()
-  void reopenOnboarding()
+function firstRunPickExample(text: string): void {
+  composerText.value = text
+  void nextTick(() => {
+    composerTextareaEl.value?.focus()
+    composerTextareaEl.value?.setSelectionRange(text.length, text.length)
+  })
+}
+
+function firstRunDismiss(): void {
+  firstRunMemoryState.value = writeFirstRunMemory({ dismissed: true })
+  firstRunClosed.value = true
+}
+
+function firstRunFinish(): void {
+  firstRunMemoryState.value = writeFirstRunMemory({ completed: true })
+  firstRunClosed.value = true
 }
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
 const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
@@ -1866,7 +2093,6 @@ const modeOptions = computed(() =>
   activePluginMode.value ? [] : [
     { value: 'chat', get label() { return t("聊天") } },
     { value: 'work', get label() { return t("工作") } },
-    { value: 'auto', get label() { return t("智能") } },
   ]
 )
 const assistantModelLabels = computed<Record<string, string>>(() => {
@@ -1986,10 +2212,9 @@ function syncLatestActivityMotion(): void {
 
 watch([activeTurnRunning, latestActivityIndicator], syncLatestActivityMotion, { flush: 'post' })
 
-const coreSessions = computed(() => sessions.value.filter((session) => !isInternalSession(session)))
 const coreProjectGroups = computed(() => buildCoreProjectGroups(projects.value, coreSessions.value))
 const showCoreStartPage = computed(() => !activePluginMode.value && !activeSessionId.value)
-const shouldHideComposer = computed(() => Boolean(fullAreaView.value) || showCoreStartPage.value || readPluginSurface(activePluginSurface.value?.hideComposer, false))
+const shouldHideComposer = computed(() => Boolean(fullAreaView.value) || showCoreStartPage.value || readPluginSurface(activePluginSurface.value?.hideComposer, false) || Boolean(splitEnabled.value && !workspace.state.hidden && workspace.state.mainTab))
 const recentCoreProjects = computed<CoreRecentProject[]>(() => {
   const projectsById = new Map(projects.value.map((project) => [project.id, project]))
   return recentProjectOpenings.value.flatMap((entry): CoreRecentProject[] => {
@@ -2046,8 +2271,6 @@ const sidebarPrimaryActionLabel = computed(() => (
     ? readPluginSurface(activePluginSurface.value.sidebar.primaryActionLabel, '')
     : t("新建项目")
 ))
-// 没有活动会话时返回空串：TitleBar 以“是否非空”决定显示品牌名还是会话名，
-// 恒非空会让窄窗口永远顶掉 Sunday 品牌。
 const activeSessionTitle = computed(() => (
   activeSessionId.value
     ? (sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session')
@@ -2097,6 +2320,15 @@ const {
 } = liveComposerController
 // 长按终止只在能停/能继续的两态提供：发送态没有可终止的回合。
 const composerHoldEnabled = computed(() => composerActionMode.value !== 'send')
+
+/**
+ * user:“输入框现在分为完全态和胶囊态，但是胶囊态我说实话并不完善，所以暂时禁用，
+ * 任何时候均使用正常态即可”+
+ * (胶囊形态整体下线：不论有没有内容、有没有聚焦、是否在运行，输入栏都保持完整形态。
+ *  原来的判定条件保留在注释里，胶囊补完后再换回来：
+ *  composerActionMode === 'send' && !composerFocused && !composerText.trim() && 没有待发附件)。
+ */
+const composerCompact = computed(() => false)
 workbench.setShallowThinking(shallowThinkingEnabled.value)
 workbench.setTurnOptionsProvider(async () => {
   // user:“做吧”+(在等待插件前固定会话参数，切换聊天不能混入另一会话的模型设置)。
@@ -2172,10 +2404,11 @@ const isEmptySession = computed(() => (
   && messages.value.length === 0
 ))
 // user:“在胶囊和输入框中间放标志语”+(一句话说明这个模式会怎么对待这条会话)。
+// user:“把智能模式隐藏掉，从下个版本开始，仅聊天和工作模式”+(只有两种模式，标语表
+// 也只剩两条；auto 那句的翻译留在语言包里，界面不再有地方渲染它)。
 const EMPTY_SESSION_SLOGANS: Record<string, string> = {
   chat: '畅所欲言',
   work: '准备好了，随时效劳！',
-  auto: '交给我就好',
 }
 const emptySessionSlogan = computed(() => (
   EMPTY_SESSION_SLOGANS[activeMode.value] || EMPTY_SESSION_SLOGANS.work
@@ -2189,9 +2422,11 @@ const stepGroups = computed(() => resolveChecklistGroups(messages.value, snapsho
 // user:“主区无需标签”+(主区保持原有标题，新增内容由独立分屏宿主管理)。
 const splitStorageKey = computed(() => `${settingsStorageKey}:split-workspace`)
 const splitWorkRoot = computed(() => currentWorkRoot() || activeProject.value?.workRoot || selectedProject.value?.workRoot || '')
-const splitWorkspace = useSplitWorkspace(splitStorageKey, splitWorkRoot, computed(() => activeProjectId.value ?? selectedProjectId.value))
+const workspace = useWorkspace(splitStorageKey, splitWorkRoot, computed(() => activeProjectId.value ?? selectedProjectId.value), {
+  onInsufficient: () => showToast('error', t('当前窗口太小，无法分屏')),
+})
 // user:“搭配这个测评，实现”辅助对话”功能”+(独立侧屏承接自由对话与选文追问，不切换主区会话)。
-const auxiliaryWorkspace = createAuxiliaryWorkspace(splitWorkspace, {
+const auxiliaryWorkspace = createAuxiliaryWorkspace(workspace, {
   transport, modelId: selectedModelId, models: modelOptions, sourceSessionId: activeSessionId,
   executionModels: availableModels, thinkingMode: selectedThinkingMode, files: appRuntime.capabilities.files, request: appRuntime.request,
   shallowThinking: shallowThinkingEnabled,
@@ -2204,8 +2439,10 @@ const splitDocuments = createSplitDocuments()
 const splitShellStyle = ref<Record<string, string>>({})
 const splitDirtyTabs = ref(new Set<string>())
 function setSplitDirty(id: string, value: boolean) { if (value) splitDirtyTabs.value.add(id); else splitDirtyTabs.value.delete(id) }
-const splitEnabled = computed(() => Object.keys(splitWorkspace.state.panes).length > 0)
-function activateSplitMain(event: Event) { if (event.target instanceof Element && event.target.closest('.workspace-main, .composer-root--floating')) splitWorkspace.activate('main') }
+// user:“这是什么情况”+(panes 始终包含 main，只应统计除 main 之外的辅助分屏数量；没有辅助分屏、浮层且主区为 Agent 时不启用分屏宽度锁定，让主区自然铺满 100%)
+const splitPaneCount = computed(() => Object.keys(workspace.state.panes).filter(id => id !== 'main').length)
+const splitEnabled = computed(() => splitPaneCount.value > 0 || workspace.floats.value.length > 0 || Boolean(workspace.state.mainTab))
+function activateSplitMain(event: Event) { if (event.target instanceof Element && event.target.closest('.workspace-main, .composer-root--floating')) workspace.state.activePane = 'main' }
 const openSubAgentRef = ref<CoreSubAgentRef | null>(null)
 const openSubAgentRun = computed(() => openSubAgentRef.value ? selectCoreSubAgentRun(messages.value, openSubAgentRef.value) : undefined)
 // 每个会话共享同一份监督者记录：卡片、分屏和后台工作指示器同时刷新，
@@ -2277,12 +2514,48 @@ onBeforeUnmount(() => {
   subAgentRecordsTimer = null
 })
 
-function openSubAgentPane(target: CoreSubAgentRef | string): void {
-  const ref = typeof target === 'string' ? { subSessionId: target, name: '' } : target
+type SubAgentOpenRequest = CoreSubAgentRef | string | { ref?: CoreSubAgentRef | string; pane?: string }
+
+/** user:“若不存在分屏，则展开一个分屏并显示”+(子代理标签只进辅助分屏：主区的 agent 标签按设计是隐藏的，
+ *  加进主区等于没开；已经开过同一子代理就切过去，不重复开)。 */
+function subAgentPane(preferred?: string): string | null {
+  const existing = pickSubAgentPane(Object.keys(workspace.state.panes), workspace.state.activePane, preferred)
+  if (existing) return existing
+  if (workspace.state.hidden) workspace.show()
+  const created = workspace.split(workspace.state.activePane || 'main', 'right')
+  return created && created !== 'main' ? created : null
+}
+
+/** user:“点击子代理的时候若存在分屏则向分屏添加一个子代理标签页…页眉同时作为下拉框，可切换到别的子代理”+
+ *  (下拉只负责报一个 ref：标签的查找、创建和切换全部收在这里，聊天卡片/右栏/页眉三个入口同一套行为)。 */
+function openSubAgentPane(request: SubAgentOpenRequest): void {
+  const wrapped = Boolean(request && typeof request === 'object' && 'ref' in request)
+  const raw = wrapped ? (request as { ref?: CoreSubAgentRef | string }).ref : request
+  const preferredPane = wrapped ? (request as { pane?: string }).pane : undefined
+  const ref: CoreSubAgentRef = typeof raw === 'string'
+    ? { subSessionId: raw, name: '' }
+    : raw && typeof raw === 'object'
+      ? {
+          subSessionId: String((raw as CoreSubAgentRef).subSessionId || (raw as { id?: string }).id || ''),
+          name: String((raw as CoreSubAgentRef).name || ''),
+        }
+      : { subSessionId: '', name: '' }
   if (!ref.subSessionId && !ref.name) return
   openSubAgentRef.value = ref
   const run = selectCoreSubAgentRun(messages.value, ref)
-  if (run) splitWorkspace.add('agent', run.subSessionId || run.id, run.name, undefined, activeSessionId.value || '')
+  const sessionId = activeSessionId.value || ''
+  const resource = String(run?.subSessionId || run?.id || ref.subSessionId || '')
+  const title = String(run?.name || ref.name || '子代理').trim() || '子代理'
+  // 主区里的 agent 标签按设计是隐藏的：它不算“已经打开”，否则点了会看不见。
+  const existing = workspace.tabs.value.find(({ tab, pane }) => pane !== 'main' && subAgentTabMatches(tab, ref, run, sessionId))
+  if (existing) {
+    if (existing.pane === 'float') workspace.focusFloat(existing.tab.id)
+    else workspace.activate(existing.pane, existing.tab.id)
+    return
+  }
+  const pane = subAgentPane(preferredPane)
+  if (!pane) return
+  workspace.add('agent', resource, title, pane, sessionId)
 }
 
 function closeSubAgentPane(): void {
@@ -2293,11 +2566,42 @@ function closeSubAgentPane(): void {
 watch(openSubAgentIdentity, (identity) => {
   if (!identity && openSubAgentRef.value) openSubAgentRef.value = null
 })
-watch(activeSessionId, () => {
+// user:“来自其他聊天 · Agent · 提问与审批请回到来源聊天处理。这种东西不要出现了 该关就关，切回去再显示”+
+// (按来源会话暂存子代理分屏标签：离开来源会话时关闭分屏，切回来源会话时再恢复显示)。
+const parkedSubAgentTabs = new Map<string, Array<{ resource: string; title: string; pane: string }>>()
+function syncSubAgentTabsForSession(nextSessionId: string): void {
+  for (const entry of [...workspace.tabs.value]) {
+    const { tab, pane } = entry
+    if (tab.kind !== 'agent' || tab.id === 'agent-main') continue
+    const owner = tab.sessionId || ''
+    if (owner === nextSessionId) continue
+    if (owner) {
+      const list = parkedSubAgentTabs.get(owner) ?? []
+      if (!list.some(item => item.resource === tab.resource)) {
+        list.push({ resource: tab.resource, title: tab.title, pane })
+      }
+      parkedSubAgentTabs.set(owner, list)
+    }
+    workspace.closeTab(pane, tab)
+  }
+  if (!nextSessionId) return
+  const restore = parkedSubAgentTabs.get(nextSessionId)
+  if (!restore?.length) return
+  parkedSubAgentTabs.delete(nextSessionId)
+  for (const item of restore) {
+    const paneExists = Boolean(workspace.state.panes[item.pane])
+    const target = paneExists && item.pane !== 'main' ? item.pane : subAgentPane()
+    if (!target) continue
+    workspace.add('agent', item.resource, item.title, target, nextSessionId)
+  }
+}
+
+watch(activeSessionId, (nextSessionId) => {
   closeSubAgentPane()
   // 删除只对当前会话生效：换会话后由新会话自己的记录决定列表内容。
   dismissedSubAgentIdentities.value = []
-})
+  syncSubAgentTabsForSession(nextSessionId || '')
+}, { immediate: true })
 
 
 // Messages the backend already replaced with a context summary: their original
@@ -3010,6 +3314,9 @@ function restoreSessionComposer(id: string) {
     defaultPermissionPreset: defaultPermissionPreset.value,
     availableModelIds: availableModels.value.map((model) => model.id),
   }))
+  // user:“读入 mode:'auto' 的会话 → 显示工作、且持久化被改为 work”+(上面已经把界面
+  // 切成工作，这里把会话存档也改成工作：不然这条会话下一轮仍按智能模式派工)。
+  void migrateHiddenSessionRunMode(id)
 }
 
 async function refreshAfterRollback() {
@@ -3310,6 +3617,36 @@ async function uploadFiles(files: FileList | (File | { path: string; name: strin
     }
   }
 }
+
+/**
+ * user:“『引用』，直接将已标注/未标注则为原图直接加入输入框，等价与复制再粘贴”+
+ * (灯箱只把文件交出来；这里复用粘贴用的 `uploadFiles`——文本引用、附件托盘、
+ * 上传失败提示都是同一条路径，不另写一份“往输入框塞附件”的实现)。
+ */
+provide(PREVIEW_COMPOSER_KEY, {
+  // user:“现在本身就是存路径，可以直接把路径上传上去”+(文件与路径引用都交给同一条上传管线)。
+  attach: (items) => uploadFiles(items),
+  canAttach: () => Boolean(activeSessionId.value),
+  // user:“分屏预览的能力应该要比灯箱更多”+(分屏里选中文档原文直接递进输入框：
+  // 和用户自己粘贴一段文字等价，插在光标处，不碰附件托盘)。
+  insert: (text) => {
+    const editor = composerTextareaEl.value
+    const selection = attachmentSelection || (editor?.hasFocus() ? { start: editor.selectionStart, end: editor.selectionEnd } : null)
+    attachmentSelection = null
+    const current = composerText.value
+    const from = selection ? Math.max(0, Math.min(current.length, selection.start)) : current.length
+    const to = selection ? Math.max(from, Math.min(current.length, selection.end)) : from
+    const before = current.slice(0, from)
+    const after = current.slice(to)
+    const piece = `${before && !/\s$/.test(before) ? '\n' : ''}${text}${after && !/^\s/.test(after) ? '\n' : ''}`
+    composerText.value = before + piece + after
+    composerCursor.value = before.length + piece.length
+    void nextTick().then(() => {
+      composerTextareaEl.value?.focus()
+      composerTextareaEl.value?.setSelectionRange(composerCursor.value, composerCursor.value)
+    })
+  },
+})
 
 async function chooseAttachments(source: RuntimeFileSource = 'file') {
   const picker = appRuntime.capabilities.files
@@ -3651,8 +3988,6 @@ async function checkOnboarding(): Promise<boolean> {
 
 async function skipOnboarding() {
   showOnboarding.value = false
-  // 配置向导让位后，接着把“怎么用”讲完，避免两套引导互相盖住。
-  setTimeout(() => guideRef.value?.autoStart(), 400)
   // 跳过也算谈过：与 checkOnboarding 的自动标记保持一致。
   try {
     await requestConfigOperation('settings.update', {
@@ -3682,8 +4017,6 @@ async function onboardingCreateProvider(payload: CoreSettingsProviderPayload) {
 
 async function finishOnboarding() {
   showOnboarding.value = false
-  // 配置向导让位后，接着把“怎么用”讲完，避免两套引导互相盖住。
-  setTimeout(() => guideRef.value?.autoStart(), 400)
   try {
     await requestConfigOperation('settings.update', {
       namespace: 'core.onboarding',
@@ -3998,9 +4331,15 @@ const updateCardState = computed<'idle' | 'downloading' | 'downloaded' | 'instal
   return 'idle'
 })
 
-/** 竖栏那一枚图标被点击：开门，不再当场开始下载。 */
+/**
+ * 竖栏那一枚图标被点击：开门，不再当场开始下载。
+ *
+ * user:“再次点更新键后的卡片继承进度”+(开门先问一次主机：后台还在下载就接着显示同一条
+ * 进度，已经下好就变成「立即安装」；不需要再点一次「更新」，也不会从 0 重来。)
+ */
 function onRailUpdate(): void {
   updateCardOpen.value = true
+  void updateState.syncFromHost()
 }
 
 /** 卡片上的「更新 / 重试」：开始下载；已下载则直接进入安装。 */
@@ -4020,9 +4359,23 @@ function onUpdateCardCancel(): void {
   void updateState.cancelDownload()
 }
 
-// 下载并校验完成即自动安装：用户点过一次「更新」，不该再点第二次。
+/** 卡片收起来了：传输继续跑，但不再自动安装（免得在用户干别的事时把应用退掉）。 */
+function onUpdateCardClosed(): void {
+  updateCardOpen.value = false
+  updateAutoInstall.value = false
+}
+
+// 下载并校验完成：卡片还开着才自动安装——用户点过一次「更新」，不该再点第二次。
+// user:“更新时可以后台下载”+(卡片已经关掉时，下载在后台完成就停在「已下载」，由用户挑
+// 时机点「立即安装」；不能在他正干活时把应用退掉。)
 watch(updateInstallState, (state) => {
-  if (state === 'downloaded' && updateAutoInstall.value) installUpdateNow()
+  if (state !== 'downloaded') return
+  if (updateAutoInstall.value && updateCardOpen.value) {
+    updateAutoInstall.value = false
+    installUpdateNow()
+    return
+  }
+  updateAutoInstall.value = false
 })
 
 function currentWorkRoot(): string {
@@ -4055,6 +4408,32 @@ let composerPersistenceGeneration = 0
  * user:“模式、权限、思考强度在下一步生效（即时生效）”+(同一个 RPC 既落库又通知
  * 运行中的回合；后端在没有任何运行时会忽略即时应用的部分)。
  */
+/**
+ * 把旧会话存档里的隐藏模式（auto）改写成工作模式。
+ *
+ * user:“不是删除代码，是隐藏 + 兼容…前端读到历史 auto 时按 work 处理，并且把存储值
+ * 迁移成 work”+(不改后端、不改协议：auto 在存档里照样读得出来，这里用现成的
+ * PATCH /sessions/{id} 只把 composer_state.active_mode 这一格改成 work，其余 metadata 原样带回)。
+ * 迁移失败不回滚界面：界面已经按工作跑，下次打开这条会话会再试一次。
+ */
+async function migrateHiddenSessionRunMode(sessionId: string): Promise<void> {
+  const session = sessions.value.find((item) => item.id === sessionId)
+  const metadata = migrateSessionRunModeMetadata(session?.metadata)
+  if (!metadata) return
+  try {
+    const updated = toSession(await requestJson<RawSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: { metadata },
+    }))
+    sessions.value = sessions.value.map((item) => (
+      item.id === sessionId ? { ...item, metadata: updated.metadata } : item
+    ))
+  } catch (error) {
+    // 迁移不是用户动作，不弹错：界面按工作显示，存档下次打开再试。
+    console.warn('[run-mode] 旧会话的模式迁移失败', error)
+  }
+}
+
 function persistSessionComposerControls(controls: CoreComposerControls): Promise<void> {
   const sessionId = activeSessionId.value
   const session = sessions.value.find((item) => item.id === sessionId)
@@ -4182,6 +4561,11 @@ function handleSidebarSession(id: string): void {
       })
       return
     }
+    // user:“中间消失了”+(从 Agent 侧栏点选会话时切回聊天主区，同时保留原有标签和分屏)。
+    fullAreaView.value = null
+    if (appRuntime.platform !== 'mobile' && (workspace.state.layout !== 'agent' || workspace.state.mainTab)) {
+      workspace.setLayout('agent')
+    }
     void selectSession(id)
   })
 }
@@ -4278,7 +4662,7 @@ async function openFileFromSearch(hit: { path: string; line?: number }): Promise
       const result = response.status === 200 ? JSON.parse(new TextDecoder().decode(response.body)) : null
       if (typeof result?.path === 'string' && result.path) actual = result.path
     }
-    if (openFileInSplit(splitWorkspace, actual, { workRoot, projectId })) return
+    if (openFileInSplit(workspace, actual, { workRoot, projectId })) return
   }
   await appRuntime.requestRpc('artifact.open', { project_id: projectId, path })
 }
@@ -4293,17 +4677,19 @@ const searchCommands = computed<SearchCommand[]>(() => {
     { id: 'new-task', get label() { return t("新任务") }, group: '建议', shortcut: 'Ctrl+N', icon: Plus, run: () => void createStartPageSession() },
     { id: 'open-workspace', get label() { return t("打开工作区") }, group: '建议', shortcut: 'Ctrl+O', icon: FolderOpen, run: () => { showProjectPicker.value = true } },
     { id: 'settings', get label() { return t("设置") }, group: '建议', icon: Settings, run: () => openSettings() },
-    { id: 'toggle-sidebar', get label() { return t("切换侧栏") }, group: '面板', shortcut: 'Ctrl+B', icon: PanelLeft, run: () => toggleLeftPinned() },
+    { id: 'toggle-sidebar', get label() { return t("切换侧栏") }, group: '面板', shortcut: 'Ctrl+B', icon: PanelLeft, run: toggleProjectSidebar },
   ]
   if (appRuntime.platform !== 'mobile') {
     commands.push(
       
       { id: 'auxiliary-chat', label: t('辅助对话'), group: '面板', icon: Columns2, run: () => { auxiliaryWorkspace.open() } },
-      { id: 'split-right', label: t('向右分屏'), group: '面板', icon: Columns2, run: () => { splitWorkspace.split(splitWorkspace.state.activePane, 'right') } },
-      { id: 'split-bottom', label: t('向下分屏'), group: '面板', icon: Columns2, run: () => { splitWorkspace.split(splitWorkspace.state.activePane, 'bottom') } },
-      { id: 'split-toggle', label: t('收起 / 恢复分屏'), group: '面板', icon: Columns2, run: () => splitWorkspace.toggle() },
-      { id: 'split-focus', label: t('聚焦 / 还原当前屏'), group: '面板', icon: Columns2, run: () => splitWorkspace.focus(splitWorkspace.state.activePane) },
+      { id: 'split-right', label: t('向右分屏'), group: '面板', icon: Columns2, run: () => { workspace.split(workspace.state.activePane, 'right') } },
+      { id: 'split-bottom', label: t('向下分屏'), group: '面板', icon: Columns2, run: () => { workspace.split(workspace.state.activePane, 'bottom') } },
+      { id: 'split-toggle', label: t('收起 / 恢复分屏'), group: '面板', icon: Columns2, run: () => workspace.toggle() },
       { id: 'toggle-right-panel', get label() { return t("切换右侧栏") }, group: '面板', icon: PanelRight, run: () => toggleRightPinned() },
+      { id: 'open-browser', label: t('打开浏览器'), group: '面板', icon: Globe, run: () => openBrowserFromRail() },
+      { id: 'open-browser-float', label: t('悬浮浏览器'), group: '面板', icon: PictureInPicture2, run: () => openBrowserFloatFromRail() },
+      { id: 'open-link-in-browser', label: t('在当前页打开链接'), group: '面板', icon: Globe, run: () => void openLinkFromClipboard() },
     )
   }
   return commands
@@ -4524,7 +4910,6 @@ watch([activeSessionId, messages, latestStatus], ([threadId]) => {
 // Sync pin state from WorkspaceShell when it mounts
 watch(shellRef, (shell) => {
   if (shell) {
-    leftPinned.value = shell.leftPinned
     rightPinned.value = shell.rightPinned
   }
 })
@@ -4550,7 +4935,7 @@ const pageBindings = useCorePageBindings({
   createModelWithProvider, createProvider, currentWorkRoot, defaultPermissionPreset, deleteModel, deleteModelGroup,
   deleteProvider, density, effectiveThemeMode, handleCapabilitiesChanged, jumpToSearchedMessage, jumpToStudySearchHit,
   lastWorkbenchEvent, libraryHeading, libraryRef, libraryRefreshTick, modelCatalogView, modelGroups,
-  openFileFromSearch, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError,
+  openFileFromSearch, openLibraryProjectFile, openPluginsFromSearch, openSessionFromSearch, persistSettingsCatalog, pluginsSection, projectActionError,
   projectActionLoading, projectClient, projectNameDraft, projectSettingsRef, projectSettingsSection, projectSettingsSessionId,
   refreshAgentsContent, renameProject, reopenOnboarding, requestConfigOperation, saveAgents, searchCommands,
   selectedProject, selectedProjectId, sessions, setDefaultModel, setModelGroupMembers, settingsRef,
@@ -4586,6 +4971,10 @@ window.addEventListener('keydown', (event) => {
 
 onMounted(() => {
   void uiPreferences.load()
+  // user:“让 Agent Loop 能直接调用”+(主窗口负责把 Core 排队的浏览器指令翻译成 Tauri 命令)。
+  startBrowserAgentBridge()
+  // user:“会话里的链接可直接打开内置浏览器”+(宿主在这里注册真正的 opener，卸载时注销)。
+  disposeBrowserEntry = registerBrowserEntry(openBrowserTarget)
   // user:“而且为什么这个点了发布之后 它的修改不生效啊”+
   // (发布过的主题必须在启动时恢复应用为正式样式，不能只活在编辑器打开期间。)
   applyStoredPublishedTheme()
@@ -4595,6 +4984,8 @@ onMounted(() => {
   window.addEventListener('drop', handleWindowDrop)
   // Ctrl+K 全局搜索（与侧边栏「搜索」同一个 SearchShell——统一入口）
   window.addEventListener('keydown', handleGlobalSearchKeydown)
+  document.addEventListener('focusin', syncComposerFocus)
+  document.addEventListener('focusout', syncComposerFocus)
   window.addEventListener('lamtools:open-search', handleStudyOpenSearch)
   window.addEventListener('lamtools:projects-synced', handleProjectsSynced)
   // The scroll composable owns the sentinel observer; the host only resets
@@ -4604,11 +4995,12 @@ onMounted(() => {
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
   void loadInitialData().then(async () => {
-    const wizardShown = await checkOnboarding()
-    // user:“诉求是让哪怕没接触过电脑的小白也能用明白sunday”+
-    // (先让配置向导说完；没配过模型的人，接下来直接进入“怎么用”的引导。
-    //  手机端没有左竖栏与桌面控件，这套讲解只对桌面有意义，不在手机上弹。)
-    if (!wizardShown && appRuntime.platform !== 'mobile') setTimeout(() => guideRef.value?.autoStart(), 900)
+    await checkOnboarding()
+    // 老用户不打扰：启动时已经有会话，说明早就过了开工这一关。
+    if (coreSessions.value.length > 0) {
+      firstRunMemoryState.value = writeFirstRunMemory({ completed: true })
+      firstRunClosed.value = true
+    }
   })
   // user:“类似的时序问题不要再犯，检查”+(手机从后台回来时隧道可能已经断了、数据可能
   // 还是启动前那份：给没读到的启动数据一次立刻补齐的机会，而不是等用户重开应用)。
@@ -4628,6 +5020,9 @@ onMounted(() => {
   if ((window as any).__TAURI_INTERNALS__ && readUpdateAutoCheck()) {
     void updateState.check()
   }
+  // user:“再次点更新键后的卡片继承进度”+(进度属于主机、不属于某一张卡片：界面刚起来
+  // 就先把主机手里的下载接回来，竖栏和卡片一打开显示的就是真实进度，而不是“还没开始”。)
+  void updateState.syncFromHost()
   // 后端进程崩溃检测（Rust 侧监视线程发 backend-crashed）→ 显示恢复横幅
   // （audit 20 S3）。浏览器环境无 Tauri API，动态 import 静默跳过。
   if ((window as any).__TAURI_INTERNALS__) {
@@ -4662,6 +5057,10 @@ onUnmounted(() => {
   window.removeEventListener('dragleave', handleWindowDragLeave)
   window.removeEventListener('drop', handleWindowDrop)
   window.removeEventListener('keydown', handleGlobalSearchKeydown)
+  disposeBrowserEntry?.()
+  disposeBrowserEntry = null
+  document.removeEventListener('focusin', syncComposerFocus)
+  document.removeEventListener('focusout', syncComposerFocus)
   window.removeEventListener('lamtools:open-search', handleStudyOpenSearch)
   window.removeEventListener('lamtools:projects-synced', handleProjectsSynced)
   if (configNoticeTimer !== null) {
@@ -4706,14 +5105,12 @@ onUnmounted(() => {
   }
 }
 
-/* ── 运行状态提示条（fixed 在标题栏下方，36px = --titlebar-offset）──
-   新版本不再走这里：它只在左侧竖栏的远程连接上方出现（见 AppRail）。这条只留给
-   后端崩溃这类必须横跨整个窗口说的状态。 */
+/* user:“把标题栏取消”+(后端崩溃提示沿用顶部提示位，并留出右上角系统按钮)。 */
 .core-status-banner {
   position: fixed;
-  top: 36px;
+  top: var(--titlebar-offset, 0px);
   left: 0;
-  right: 0;
+  right: var(--window-corner-width, 0px);
   z-index: var(--z-modal, 80);
   display: flex;
   align-items: center;

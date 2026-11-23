@@ -6,8 +6,9 @@
   <section ref="pageEl" class="settings-panel plugin-page">
     <!-- user:“上方那个标题只用保留两个字‘插件’，而且字号不用太大，以简洁为主”+
          页头只留标题与右侧操作，不再放图标和说明句。 -->
-    <header class="plugin-hero">
-      <h1 class="plugin-hero-title">{{ t("插件") }}</h1>
+    <!-- user:“这个组内的 UI 设计与风格”+(插件页与其他整版页面共用标题与内容面板)。 -->
+    <header class="sunday-page-heading">
+      <h1 class="sunday-page-title">{{ t("插件") }}</h1>
 
       <div class="plugin-hero-actions">
         <div class="plugin-stats">
@@ -177,7 +178,7 @@
     </div>
 
     <div v-if="loading" class="plugin-grid plugin-grid--skeleton" aria-hidden="true">
-      <article v-for="index in 3" :key="index" class="plugin-card plugin-skeleton">
+      <article v-for="index in 3" :key="index" class="plugin-card plugin-skeleton sunday-page-panel">
         <div class="skeleton-head">
           <span class="skeleton-block"></span>
           <span class="skeleton-lines">
@@ -233,7 +234,7 @@
       <article
         v-for="plugin in column"
         :key="plugin.name"
-        class="plugin-card"
+        class="plugin-card sunday-page-panel"
         :class="{
           'is-disabled': !plugin.enabled,
           'is-attention': needsAttention(plugin),
@@ -497,6 +498,8 @@
     </section>
 
     <PluginSystemContributions :request-rpc="props.requestRpc" region="settings" />
+    <!-- user:“统一与去重”+(卡片已展示的窗口不重复列出，没有卡片的入口仍可使用)。 -->
+    <PluginWindowLauncher :windows="unmatchedWindows" @open="openWindow" />
 
     <CoreConfirmDialog
       :open="Boolean(pendingUninstall)"
@@ -556,11 +559,12 @@ import SundaySwitch from '@/components/SundaySwitch.vue'
 import PluginMarket from '@/components/PluginMarket.vue'
 import PluginConfigPanel from '@/components/PluginConfigPanel.vue'
 import PluginSystemContributions from '@/components/PluginSystemContributions.vue'
+import PluginWindowLauncher from '@/components/PluginWindowLauncher.vue'
 import { copyText } from '@/helpers/clipboard.ts'
 import { t } from '@/i18n/index.ts'
 import { contributionState, setPluginPageEntries, ensureContributions } from '@/plugins/contributions'
 import { openPluginWindow, type PluginWindowTarget } from '@/helpers/pluginWindow.ts'
-import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
+import { useOptionalWorkspace } from '@/workspace/context'
 
 interface PluginSystemCapabilities {
   tools: string[]
@@ -616,9 +620,10 @@ interface CapabilityChip {
   icon: Component
 }
 
-const props = defineProps<{ requestRpc: PluginSystemRpc }>()
+// user:“交互测试”+(展厅可接管窗口操作，正式应用默认使用桌面窗口入口)。
+const props = defineProps<{ requestRpc: PluginSystemRpc; openWindow?: (target: PluginWindowTarget) => Promise<boolean> }>()
 const pluginSection = ref('installed')
-const splitWorkspace = useOptionalSplitWorkspace()
+const splitWorkspace = useOptionalWorkspace()
 
 const CAPABILITY_META: Array<{ key: keyof PluginSystemCapabilities; label: string; icon: Component }> = [
   { key: 'tools', label: '工具', icon: Wrench },
@@ -658,6 +663,10 @@ const depsReport = ref<Record<string, string>>({})
 const depsBusy = ref('')
 const plugins = ref<PluginSystemEntry[]>([])
 const windows = ref<PluginSystemWindow[]>([])
+const unmatchedWindows = computed(() => {
+  const names = new Set(plugins.value.map(plugin => plugin.name))
+  return windows.value.filter(window => !names.has(window.plugin))
+})
 const configuring = ref('')
 const loadErrors = ref<PluginSystemError[]>([])
 const loading = ref(true)
@@ -881,7 +890,7 @@ async function openWindow(target: PluginSystemWindow): Promise<void> {
   notice.value = ''
   error.value = ''
   try {
-    const opened = await openPluginWindow(target as PluginWindowTarget)
+    const opened = await (props.openWindow || openPluginWindow)(target as PluginWindowTarget)
     if (!opened) {
       noticeTone.value = 'warning'
       notice.value = t('当前环境没有桌面窗口，插件窗口只能在桌面端打开。')

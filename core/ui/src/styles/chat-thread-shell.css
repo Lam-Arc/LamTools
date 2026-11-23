@@ -192,17 +192,6 @@
 .assistant-avatar__initial {
   line-height: 1;
 }
-/* user:“助手气泡大小自适应，不要每个都堆到最右边”“气泡连上低透玻璃样式”+
-   (气泡按内容收缩，短回复不再撑满整条消息栏，长内容仍以消息栏宽度为上限换行；
-   盒子本身改用共享的低透玻璃底材，这里只保留几何与间距，底色/边框/模糊交给
-   .optical-glass，避免出现第二套玻璃配方) */
-.assistant-bubble--boxed {
-  width: fit-content;
-  max-width: 100%;
-  padding: 10px 13px;
-  border-radius: var(--radius);
-  border-top-left-radius: var(--radius-sm);
-}
 .assistant-bubble + .assistant-bubble {
   margin-top: 8px;
 }
@@ -210,13 +199,7 @@
 .assistant-bubble:not(.assistant-bubble--boxed) + .assistant-bubble {
   margin-top: 10px;
 }
-.assistant-bubble > .part-text-content,
+.assistant-bubble .part-text-content,
 .sub-line-block .assistant-bubble {
   min-width: 0;
-}
-/* 子代理分屏里的气泡跟着整套缩一号 */
-.sub-line-block .assistant-bubble--boxed {
-  padding: 7px 10px;
-  border-radius: 11px;
-  border-top-left-radius: 4px;
 }

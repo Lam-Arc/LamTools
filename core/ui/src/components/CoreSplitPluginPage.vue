@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // user:“支持一下”+(标签只保存页面身份；从当前启用目录挂载，每个实例独立清理)。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { SplitTab } from '@/split/layout'
+import type { SplitTab } from '@/workspace/types'
 import type { PluginRpc } from '@/plugins/types'
 import { contributionState, ensureContributions } from '@/plugins/contributions'
 import { createPluginPageInstance, loadPluginPageModule, parsePluginPageKey } from '@/plugins/pages'

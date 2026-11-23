@@ -20,7 +20,7 @@ describe('gallery shared filter controls', () => {
     const wrapper = mount(Gallery, { global: { stubs: { Teleport: true } } })
     await wrapper.get('input[aria-label="搜索组件"]').setValue('CoreSendStopButton')
     await wrapper.get('[data-gallery-action-mode] .ui-select-trigger').trigger('click')
-    await wrapper.findAll('.ui-select-option').find(option => option.text() === '停止')!.trigger('click')
+    await wrapper.findAll('.ui-select-option').find(option => option.text() === '运行中')!.trigger('click')
     expect(wrapper.get('.core-send-stop-button').attributes('aria-label')).toBe('停止运行')
     await wrapper.get('input[aria-label="搜索组件"]').setValue('UiSelect')
     await wrapper.get('[data-gallery-direction] .ui-select-trigger').trigger('click')

@@ -10,6 +10,7 @@ import LamToolsApp from '@/app/LamToolsApp.vue'
 import { setPluginAssetBase } from '@/plugins/assets'
 import {
   completeStartupSplash,
+  showStartupFailure,
   startStartupSplash,
 } from '@/motion/startupSplash.ts'
 
@@ -161,4 +162,8 @@ async function init() {
     })
 }
 
-init();
+// user:“dev 界面一直卡在加载中”+(启动流程任何一步抛错都要给出可见原因，
+// 不能因为一个未捕获异常就让启动画面无限转圈)。
+void init().catch((error) => {
+  showStartupFailure(error)
+});

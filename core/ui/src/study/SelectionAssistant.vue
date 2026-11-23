@@ -196,6 +196,8 @@ function hit(event: MouseEvent): StudyMark | undefined {
   }
 }
 function click(event: MouseEvent) {
+  // user:“确保视觉、功能和交互不退化”+(加载时按钮可能被移除，仍按原始事件路径识别弹层内点击)。
+  if (card.value && event.composedPath().includes(card.value)) return
   if ((event.target as Element)?.closest('.selection-card,[data-context-menu-panel],.study-mark-icon')) return
   if (window.getSelection()?.toString().trim()) return
   const mark = hit(event)
@@ -285,6 +287,8 @@ onMounted(() => {
   observer.observe(document.body, { subtree: true, childList: true, characterData: true })
 })
 onBeforeUnmount(() => {
+  // user:“确保视觉、功能和交互不退化”+(卸载时取消未完成请求并忽略迟到结果)。
+  close()
   disposed = true; observer?.disconnect(); clearTimeout(timer); clearTimeout(hoverTimer)
   releaseSelectionMenu?.()
   document.removeEventListener('click', click); document.removeEventListener('mousemove', move); document.removeEventListener('pointermove', move as EventListener); document.removeEventListener('keydown', key); window.removeEventListener('resize', resize)

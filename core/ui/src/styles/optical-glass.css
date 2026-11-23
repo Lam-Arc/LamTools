@@ -13,7 +13,7 @@
      浅色主题文字深、玻璃压成深灰，暗色主题文字浅、玻璃泛白。 */
   background-color: color-mix(in srgb, var(--optical-glass-surface, var(--theme-main-solid, #f2efeb)) var(--optical-glass-tint), transparent);
   background-image: linear-gradient(var(--optical-glass-overlay, transparent), var(--optical-glass-overlay, transparent));
-  border: 2px solid var(--theme-optical-glass-border-color);
+  border: var(--optical-glass-edge-width, 2px) solid var(--optical-glass-edge, var(--theme-optical-glass-border-color));
   box-shadow: var(--optical-glass-shadow);
   overflow: hidden;
   -webkit-backdrop-filter: var(--optical-glass-filter);
@@ -66,4 +66,12 @@
 .optical-glass--low-trans {
   --optical-glass-tint: var(--optical-glass-low-trans-tint);
   --optical-glass-fallback-tint: var(--optical-glass-low-trans-fallback-tint);
+}
+
+/* user:“尤其是气泡和玻璃效果”+(阅读用玻璃更遮底、只留一圈细边；沿用统一滤镜与回退)。 */
+.optical-glass--reading {
+  --optical-glass-tint: var(--optical-glass-reading-tint);
+  --optical-glass-fallback-tint: 100%;
+  --optical-glass-edge-width: 1px;
+  --optical-glass-edge: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
 }

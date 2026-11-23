@@ -1,0 +1,464 @@
+/* user:“视觉只用既有令牌（--theme-* / --radius-* / --dur-fast / --ease-out / --space-*），
+   不写死颜色和 px；深色浅色都要成立”+
+   (V2 外壳只做布局与融合：底色、文字、描边、间距全部走令牌；未选中标签融进背景，
+    选中标签与内容面用一层 mask 内凹角连通，不再叠多层装饰)。 */
+
+/* user:“依旧不可见，你来完成新布局系统的开发工作：# Sunday UI 与统一工作区布局系统”+
+   (.ws2-root 与 Agent 主区占位必须透明且 pointer-events:none，绝不遮挡底层 .workspace-main 聊天区域)。 */
+.ws2-root {
+  position: absolute;
+  inset: var(--titlebar-offset, 0px) var(--main-right) var(--shell-bottom-inset, 6px) var(--main-left);
+  z-index: var(--z-main-surface);
+  color: var(--theme-main-text);
+  background: transparent;
+  border-radius: var(--workspace-panel-radius-inner, var(--radius));
+  overflow: hidden;
+  outline: none;
+  pointer-events: none;
+  contain: layout paint;
+}
+.ws2-root--hidden { display: none; }
+/* user:“迁移”+(DirectComposition 模式下只对包含活浏览器的区域内容槽做透明镂空，其余区域/标签栏/地址栏/浮层保持正常底色并压在网页之上) */
+html:has(.workspace-shell--browser-live),
+body:has(.workspace-shell--browser-live),
+.workspace-shell--browser-live {
+  background: transparent !important;
+}
+.workspace-shell--browser-live .app-rail,
+.ws2-area:has(.split-browser-host.is-composed-live) > .ws2-area__tabs,
+.ws2-float:has(.split-browser-host.is-composed-live) > .ws2-float__head,
+.split-browser:has(.split-browser-host.is-composed-live) > .split-browser-tabs,
+.split-browser:has(.split-browser-host.is-composed-live) > .split-browser-header,
+.split-browser:has(.split-browser-host.is-composed-live) > .split-browser-float-bar {
+  background: var(--theme-main-background);
+}
+.ws2-area:has(.split-browser-host.is-composed-live),
+.ws2-area:has(.split-browser-host.is-composed-live) > .ws2-area__content,
+.ws2-float:has(.split-browser-host.is-composed-live),
+.ws2-float:has(.split-browser-host.is-composed-live) > .ws2-float__body,
+.split-browser:has(.split-browser-host.is-composed-live) {
+  background: transparent !important;
+}
+
+/* 区域：矩形由引擎给，这里只画轮廓；内部交界平直，外轮廓才圆。
+   z-index: 1 创建独立层叠上下文，保证区域内的下拉菜单不会穿透压住上层浮层（.ws2-float）。 */
+.ws2-area {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  background: var(--theme-main-background);
+  overflow: hidden;
+  pointer-events: auto;
+}
+.ws2-area--agent-main,
+.ws2-area--agent-main .ws2-area__content {
+  background: transparent;
+  pointer-events: none;
+}
+
+.ws2-area__tabs {
+  position: absolute;
+  box-sizing: border-box;
+  z-index: 2;
+  pointer-events: auto;
+}
+.ws2-area__tabs--vertical {
+  display: flex;
+  align-items: stretch;
+}
+.ws2-area__tabs--horizontal {
+  /* user:“右侧预留出最小化，最大化，关闭的按钮区域”+(贴顶标签轴在右侧给窗口和工作区按钮让位)。 */
+  padding-right: max(0px, calc(var(--workspace-top-actions-inset, 0px) - var(--ws2-tab-gap-to-window-edge, 100vw)));
+  display: flex;
+  align-items: stretch;
+  box-shadow: inset 0 0 0 var(--split-tabbar-height, 36px) var(--theme-main-sunken-background);
+  /* user:“令拥挤状态下布局更紧凑”+(按这条标签轴自己的可用宽度收间距，不看窗口大小：
+     分屏、浮窗、窄栏里同一套规则都成立)。 */
+  container: area-tabs / inline-size;
+}
+
+@container area-tabs (max-width: 420px) {
+  .ws2-tabs { gap: 2px; }
+  .ws2-tabs--horizontal .ws2-tabs__viewport { padding-inline: 2px; }
+  .ws2-area__actions { gap: 2px; padding-inline: 2px; }
+  .ws2-area__action { padding: 0 3px; }
+}
+
+@container area-tabs (max-width: 320px) {
+  .ws2-tabs--horizontal .ws2-tab { padding-inline: var(--space-1); }
+  .ws2-tab__add { width: 20px; height: 20px; }
+}
+/* user:“‘agent’这个选项的位置可以从左栏独立出来，布局会更自然”+(独立左上角根入口锚点 + 横向主区标签栏在其右侧自然拼接) */
+.core-root-bento-anchor {
+  position: fixed;
+  left: calc(var(--rail-width, 46px) + var(--space-3));
+  top: var(--titlebar-offset, 0px);
+  height: var(--split-tabbar-height, 36px);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  z-index: calc(var(--z-main-surface) + 2);
+}
+.project-sidebar-toggle.btn {
+  width: var(--interaction-height-sm);
+  min-height: var(--interaction-height-sm);
+  padding: 0;
+}
+/* user:“出现了这个问题，以及 ping 窗口未响应”+(左栏收起时，Agent 根入口缩进到主区左内边距内，同时主区页眉向右让出空间，避免压住主区圆角边框与标题文字) */
+.workspace-shell:not(.left-open) .core-root-bento-anchor {
+  left: calc(var(--main-left) + var(--space-4));
+}
+.workspace-shell:not(.left-open) .thread-header {
+  padding-left: calc(var(--space-4) + 76px);
+}
+.workspace-shell:not(.left-open):has([data-project-sidebar-toggle]) .thread-header[data-session-header] {
+  padding-left: calc(var(--space-4) + 76px + var(--interaction-height-sm) + var(--space-1));
+}
+.core-sidebar-mode-spacer {
+  flex: 1 1 auto;
+  min-height: 28px;
+}
+.workspace-shell:not(.left-open) .ws2-area__tabs--with-root {
+  padding-left: var(--ws2-bento-root-width, 112px);
+}
+
+.ws2-area__content {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--theme-main-background);
+}
+.ws2-area__pane-slot {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ws2-area__pane-slot:has(.split-browser-host.is-composed-live) {
+  background: transparent !important;
+}
+.workspace-shell--browser-live .workspace-main {
+  clip-path: var(--ws2-main-cutout, none);
+}
+
+/* 融合式标签：一条轴，不是一排胶囊。 */
+.ws2-tabs {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  /* user:“上方的所有标题文字无法被左键拖动选中”+(标签标题不参与文本选择)。 */
+  user-select: none;
+}
+.ws2-tabs--horizontal { align-items: stretch; }
+.ws2-tabs--horizontal > .ws2-tab__add { align-self: center; }
+.ws2-tabs--vertical { padding-block: var(--space-2); }
+.ws2-tabs__rail,
+.ws2-tabs__viewport,
+.ws2-tabs__items {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.ws2-tabs--horizontal .ws2-tabs__rail { align-items: center; }
+.ws2-tabs--horizontal .ws2-tabs__viewport {
+  align-self: stretch;
+  overflow: auto hidden;
+  padding-inline: var(--radius-sm);
+  scrollbar-width: none;
+}
+.ws2-tabs--horizontal .ws2-tabs__items { align-items: end; }
+.ws2-tabs--vertical .ws2-tabs__items { flex-direction: column; gap: var(--space-1); }
+
+.ws2-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 220px;
+  height: calc(var(--split-tabbar-height, 36px) - var(--space-2));
+  margin-block: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--theme-main-text) 62%, transparent);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.ws2-tabs--vertical .ws2-tab {
+  max-width: none;
+  height: auto;
+  min-height: calc(var(--split-tabbar-height, 36px) - var(--space-2));
+  margin-block: 0;
+  margin-inline: var(--space-1);
+}
+/* user:“顶部标签页标签宽度未实时自适应，分屏拉宽后依旧保持了原有宽度”+
+   (标签是这条轴上的均分格：始终按当前可用宽度重新分配；旧写法带 220px 上限，
+    分屏拉宽后标签就停在原宽度、右边留一大片空白。放不下时由 iconOnly/paged 接管)。 */
+.ws2-tabs--horizontal .ws2-tab {
+  flex: 1 1 0;
+  min-width: var(--ws2-tab-min-width);
+  max-width: none;
+  height: calc(100% - var(--space-1));
+  margin: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.ws2-tabs--icons .ws2-tab {
+  flex: 0 0 var(--ws2-icon-tab-width);
+  min-width: var(--ws2-icon-tab-width);
+  justify-content: center;
+  padding: 0;
+}
+
+/* 未选中：只在 hover 提亮，不画独立胶囊。 */
+.ws2-tab:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+
+/* 选中：与内容面连成一体（单层内凹圆角 + 同底色），不是“叠在卡片上的另一个胶囊”。 */
+.ws2-tab.is-active {
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
+  box-shadow: none;
+}
+/* user:“标签页选中也请使用 Chrome 式标签样式，下方平滑链接，上方圆角”+(选中标签下缘与内容贴合，在两侧画出外展圆角)。 */
+.ws2-tabs--horizontal .ws2-tab.is-active {
+  --ws2-tab-fill: var(--theme-main-solid, var(--theme-main-background));
+  background: var(--ws2-tab-fill);
+  z-index: 1;
+}
+.ws2-tabs--horizontal .ws2-tab.is-active::before,
+.ws2-tabs--horizontal .ws2-tab.is-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: var(--radius-sm);
+  height: var(--radius-sm);
+  pointer-events: none;
+}
+.ws2-tabs--horizontal .ws2-tab.is-active::before {
+  right: 100%;
+  background: radial-gradient(circle at top left, transparent 68%, var(--ws2-tab-fill) 72%);
+}
+.ws2-tabs--horizontal .ws2-tab.is-active::after {
+  left: 100%;
+  background: radial-gradient(circle at top right, transparent 68%, var(--ws2-tab-fill) 72%);
+}
+.ws2-tabs--vertical .ws2-tab.is-active {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  margin-right: 0;
+  -webkit-mask-image:
+    radial-gradient(circle at 100% 0, transparent var(--radius-sm), #000 calc(var(--radius-sm) + .5px)),
+    radial-gradient(circle at 100% 100%, transparent var(--radius-sm), #000 calc(var(--radius-sm) + .5px));
+  mask-image:
+    radial-gradient(circle at 100% 0, transparent var(--radius-sm), #000 calc(var(--radius-sm) + .5px)),
+    radial-gradient(circle at 100% 100%, transparent var(--radius-sm), #000 calc(var(--radius-sm) + .5px));
+}
+
+.ws2-tab__add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 62%, transparent);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ws2-tab__add:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+.ws2-tab__page:disabled { opacity: .35; cursor: default; }
+
+.ws2-area__actions {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: auto;
+  gap: var(--space-1);
+  padding-inline: var(--space-1);
+  flex: 0 0 auto;
+}
+.ws2-area__action {
+  height: 22px;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 62%, transparent);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ws2-area__action:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+.ws2-area__action--icon { display: inline-grid; place-items: center; }
+
+.ws2-tab__icon {
+  flex: 0 0 auto;
+  width: var(--space-4);
+  height: var(--space-4);
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.ws2-tab__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws2-tab__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ws2-tab.is-active .ws2-tab__close,
+.ws2-tab:is(:hover, :focus-within) .ws2-tab__close { opacity: .7; }
+.ws2-tab__close:hover { opacity: 1; background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
+.ws2-tabs--icons .ws2-tab__close {
+  width: 100%;
+  height: 100%;
+  opacity: 1;
+  border-radius: inherit;
+}
+
+/* 分隔条：12px 命中，视觉只在 hover 时出现一条细线。 */
+.ws2-divider {
+  position: absolute;
+  z-index: 3;
+  background: transparent;
+  touch-action: none;
+  pointer-events: auto;
+}
+.ws2-divider--row { cursor: col-resize; }
+.ws2-divider--column { cursor: row-resize; }
+.ws2-divider::before {
+  content: '';
+  position: absolute;
+  /* user:“这个缝太大了。改成细线即可”+(分界线常显成 1px 细线：之前只有 hover 才画，
+     平时两块面板之间只剩一条看不见的间隙，看上去就是一道宽缝)。 */
+  background: color-mix(in srgb, var(--theme-main-text) 5%, transparent);
+  border-radius: 0;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.ws2-divider--row::before { left: 50%; top: 0; bottom: 0; width: .5px; transform: translateX(-50%); }
+.ws2-divider--column::before { top: 50%; left: 0; right: 0; height: .5px; transform: translateY(-50%); }
+.ws2-divider:is(:hover, :focus-visible)::before { background: color-mix(in srgb, var(--theme-main-text) 18%, transparent); }
+
+/* user:“把下面那一圈光晕给去掉”+(移除浮层用文字色绘制的扩散外光晕，仅保留边框与圆角轮廓)。 */
+.ws2-float {
+  position: absolute;
+  z-index: var(--z-composer, 40);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+  box-shadow: none;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.ws2-float__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--split-tabbar-height, 36px);
+  padding-inline: var(--space-2);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.ws2-float.is-dragging .ws2-float__head { cursor: grabbing; }
+.ws2-float.is-dragging .ws2-float__body {
+  pointer-events: none;
+  user-select: none;
+}
+
+.ws2-float__title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--theme-main-text);
+}
+
+.ws2-float__action {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ws2-float__action:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); color: var(--theme-main-text); }
+
+.ws2-float__body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ws2-float__grip {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  touch-action: none;
+  z-index: 2;
+}
+.ws2-float__grip--nw { left: 0; top: 0; cursor: nwse-resize; }
+.ws2-float__grip--ne { right: 0; top: 0; cursor: nesw-resize; }
+.ws2-float__grip--sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.ws2-float__grip--se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 55%, color-mix(in srgb, var(--theme-main-text) 28%, transparent) 55%);
+}
+
+/* 固定预览：画在浮层里的落地结果（不是估算），只做描边不挡指针。 */
+.ws2-float__preview {
+  position: absolute;
+  pointer-events: none;
+  border: 1px dashed color-mix(in srgb, var(--theme-main-text) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-text) 6%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws2-tab,
+  .ws2-tab__close,
+  .ws2-divider::before { transition: none; }
+}
+

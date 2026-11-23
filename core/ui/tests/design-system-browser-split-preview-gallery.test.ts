@@ -21,11 +21,16 @@ describe('split file preview gallery', () => {
       await page.getByLabel('模拟读取失败').uncheck(); await preview.getByRole('button', { name: '重试' }).click()
       expect(await preview.innerText()).toContain('示例纯文本')
       await page.getByRole('button', { name: '图片示例' }).click()
-      const picture = preview.getByRole('img', { name: '示例.svg' }); await picture.waitFor()
-      await preview.getByRole('button', { name: '放大预览' }).click()
-      expect(await preview.innerText()).toContain('125%')
-      await preview.getByRole('button', { name: '适应窗口' }).click()
-      expect(await preview.innerText()).toContain('100%')
+      // user:“灯箱有的，分屏也该有”+(图片交给共用查看器：缩放、拖动、双击、标注都在它里面，
+      //  所以这里按查看器自己的工具坞来验，分屏工具条不再重复一套缩放按钮)。
+      const stage = preview.locator('[data-preview-image]'); await stage.waitFor()
+      expect(await preview.getByRole('button', { name: '标注', exact: true }).count()).toBe(1)
+      expect(await preview.getByRole('button', { name: '复制' }).count()).toBe(1)
+      const percent = stage.locator('[data-preview-zoom-percent]')
+      await preview.getByRole('button', { name: '放大', exact: true }).click()
+      await expect.poll(async () => await percent.innerText()).toContain('125')
+      await preview.getByRole('button', { name: '适应窗口', exact: true }).click()
+      await expect.poll(async () => await percent.innerText()).toContain('100')
       await preview.getByRole('button', { name: '使用默认应用打开' }).click()
       expect(await page.locator('.preview').innerText()).toContain('本地模拟打开')
     } finally { await browser.close(); await server.close() }

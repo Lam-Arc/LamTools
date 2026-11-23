@@ -1,4 +1,5 @@
 import { normalizeCorePermissionPreset } from '@/composer/execution.ts'
+import { DEFAULT_RUN_MODE, isHiddenCoreRunMode, type CoreRunMode } from '@/composer/runMode.ts'
 import type { CoreComposerControls } from '@/composables/useCoreExecutionControlsState.ts'
 
 /**
@@ -58,6 +59,29 @@ export function readSessionComposerControls(
     if (available && !available.includes(group.modelId)) group.modelId = ''
   }
   return group
+}
+
+/**
+ * 旧存档里的隐藏模式（auto）改写成工作模式后的会话 metadata；没有要迁移的返回 null。
+ *
+ * user:“把智能模式隐藏掉，从下个版本开始，仅聊天和工作模式”“前端读到历史 auto 时按
+ * work 处理…并且把存储值迁移成 work”+(界面已经按工作显示，存档也必须变成工作，
+ * 否则这条会话下一轮仍会按智能模式派工)。纯函数只负责算出新 metadata，
+ * 落库由宿主用 PATCH /sessions/{id} 完成；不迁移时原样返回 null，不碰别人写的键。
+ */
+export function migrateSessionRunModeMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+  mode: CoreRunMode = DEFAULT_RUN_MODE,
+): Record<string, unknown> | null {
+  const source = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : null
+  if (!source) return null
+  const stored = source.composer_state
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return null
+  const group = stored as Record<string, unknown>
+  if (!isHiddenCoreRunMode(group.active_mode)) return null
+  return { ...source, composer_state: { ...group, active_mode: mode } }
 }
 
 export function sessionComposerParams(

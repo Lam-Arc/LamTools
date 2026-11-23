@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
+from lamtools_core.app.rust_db import (
+    RustCoreDb,
+    acquire_rust_db_for_path,
+    borrow_rust_db_for_path,
+    release_rust_db_for_path,
+)
 from lamtools_core.config.model_store import ModelStore
 from lamtools_core.llm import REASONING_LEVELS
 from lamtools_core.runtime_owner import (
@@ -352,7 +358,27 @@ class SubAgentSupervisor:
         # so the fact can be retracted for that same turn once the last member
         # it named finishes. Empty when no such fact is outstanding.
         self._member_wait_turn_id = ""
+        # user:“开始”+(复用或按路径引用计数打开 Rust WAL 数据库引擎，消除事件循环同步 sqlite3 阻塞)。
+        self._rust_db, self._owns_rust_db_ref = acquire_rust_db_for_path(self.database_path)
         self._init_db()
+
+    def _active_rust_db(self) -> RustCoreDb | None:
+        if self._rust_db is not None and self._rust_db.is_active:
+            return self._rust_db
+        return None
+
+    def release_db(self) -> None:
+        if getattr(self, "_owns_rust_db_ref", False):
+            self._owns_rust_db_ref = False
+            release_rust_db_for_path(self.database_path)
+        self._rust_db = None
+
+    def _raw_sub_agent_rows(self) -> list[sqlite3.Row]:
+        with self._connection() as db:
+            return db.execute(
+                "SELECT name,payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name",
+                (self.parent_thread_id,),
+            ).fetchall()
 
     def update_runner(self, runner: Any) -> None:
         self.runner = runner
@@ -404,6 +430,10 @@ class SubAgentSupervisor:
             connection.close()
 
     def _init_db(self) -> None:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            rust_db.call_sync("sub_agent_init_db")
+            return
         with self._connection() as db:
             db.execute(
                 """
@@ -499,39 +529,59 @@ class SubAgentSupervisor:
         async with self._lock:
             # The registry is shared with CLI/other hosts. Never reap work still
             # owned by a live process, including the pre-kernel launch boundary.
-            with self._connection() as db:
-                candidates = db.execute(
-                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
-                    (self.parent_thread_id,),
-                ).fetchall()
+            rust_db = self._active_rust_db()
+            if rust_db is not None:
+                res = await rust_db.call(
+                    "sub_agent_list",
+                    {"parent_thread_id": self.parent_thread_id},
+                )
+                candidates = list((res or {}).get("records") or [])
+            else:
+                candidates = [json.loads(row["payload"]) for row in self._raw_sub_agent_rows()]
             live_names: set[str] = set()
             store = getattr(self.runner, "state_store", None)
-            for row in candidates:
-                payload = json.loads(row["payload"])
+            for payload in candidates:
                 owner = payload.get("runtime_owner") or {}
                 if not owner and store is not None and payload.get("sub_session_id"):
                     state = await store.get(payload["sub_session_id"])
                     owner = read_owner(getattr(state, "metadata", {}))
-                if owner_is_live(owner):
-                    live_names.add(row["name"])
-            with self._connection() as db:
-                rows = db.execute(
-                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
-                    (self.parent_thread_id,),
-                ).fetchall()
-                for row in rows:
-                    payload = json.loads(row["payload"])
-                    if (payload.get("status") == "running" and row["name"] not in live_names
-                            and not owner_is_live(payload.get("runtime_owner"))):
-                        payload["status"] = "interrupted"
-                        payload["completed_at"] = time.time()
-                        if payload.get("started_at"):
-                            payload["elapsed_ms"] = int((payload["completed_at"] - payload["started_at"]) * 1000)
-                        db.execute(
-                            "UPDATE sub_agents SET payload=? WHERE parent_thread_id=? AND name=?",
-                            (json.dumps(payload), self.parent_thread_id, row["name"]),
-                        )
-                        interrupted.append(SubAgentRecord(**payload))
+                if owner_is_live(owner) and payload.get("name"):
+                    live_names.add(str(payload["name"]))
+            if rust_db is not None:
+                # Re-include records still owned inline by runtime_owner before Rust marks non-live running rows interrupted
+                still_live = set(live_names)
+                for payload in candidates:
+                    if payload.get("name") and owner_is_live(payload.get("runtime_owner")):
+                        still_live.add(str(payload["name"]))
+                res = await rust_db.call(
+                    "sub_agent_recover_mark_interrupted",
+                    {
+                        "parent_thread_id": self.parent_thread_id,
+                        "live_names": sorted(still_live),
+                        "now": time.time(),
+                    },
+                )
+                for payload in (res or {}).get("interrupted") or []:
+                    interrupted.append(SubAgentRecord(**payload))
+            else:
+                with self._connection() as db:
+                    rows = db.execute(
+                        "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
+                        (self.parent_thread_id,),
+                    ).fetchall()
+                    for row in rows:
+                        payload = json.loads(row["payload"])
+                        if (payload.get("status") == "running" and row["name"] not in live_names
+                                and not owner_is_live(payload.get("runtime_owner"))):
+                            payload["status"] = "interrupted"
+                            payload["completed_at"] = time.time()
+                            if payload.get("started_at"):
+                                payload["elapsed_ms"] = int((payload["completed_at"] - payload["started_at"]) * 1000)
+                            db.execute(
+                                "UPDATE sub_agents SET payload=? WHERE parent_thread_id=? AND name=?",
+                                (json.dumps(payload), self.parent_thread_id, row["name"]),
+                            )
+                            interrupted.append(SubAgentRecord(**payload))
         # 事件写入放在连接释放之后：独立连接不会与外层写事务互相锁住。
         for record in interrupted:
             await self._record_member_event(record, "member_interrupted", detail="进程重启时该成员仍在运行")
@@ -776,19 +826,26 @@ class SubAgentSupervisor:
             # removed: a failure here leaves the record in place for a retry
             # instead of orphaning rows nothing can find again.
             freed = await self._purge_sub_session(record)
-            with self._connection() as db:
-                db.execute(
-                    "DELETE FROM sub_agents WHERE parent_thread_id=? AND name=?",
-                    (self.parent_thread_id, child_name),
+            rust_db = self._active_rust_db()
+            if rust_db is not None:
+                await rust_db.call(
+                    "sub_agent_delete_member",
+                    {"parent_thread_id": self.parent_thread_id, "name": child_name},
                 )
-                db.execute(
-                    "DELETE FROM sub_agent_events WHERE parent_thread_id=? AND name=?",
-                    (self.parent_thread_id, child_name),
-                )
-                db.execute(
-                    "DELETE FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=?",
-                    (self.parent_thread_id, child_name),
-                )
+            else:
+                with self._connection() as db:
+                    db.execute(
+                        "DELETE FROM sub_agents WHERE parent_thread_id=? AND name=?",
+                        (self.parent_thread_id, child_name),
+                    )
+                    db.execute(
+                        "DELETE FROM sub_agent_events WHERE parent_thread_id=? AND name=?",
+                        (self.parent_thread_id, child_name),
+                    )
+                    db.execute(
+                        "DELETE FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=?",
+                        (self.parent_thread_id, child_name),
+                    )
             self._pending_prompts.pop(child_name, None)
             self._tasks.pop(child_name, None)
             self._offered_mail.pop(child_name, None)
@@ -846,7 +903,7 @@ class SubAgentSupervisor:
             call_id = str(ids.get("call_id") or "")
             run_id = str(ids.get("run_id") or "")
             message_key = f"{run_id}:{call_id}" if call_id else uuid.uuid4().hex
-            inserted = self._mail(
+            inserted, message_id = self._mail_with_id(
                 child_name,
                 "parent_to_child",
                 body,
@@ -855,12 +912,6 @@ class SubAgentSupervisor:
                 source_run_id=run_id,
                 source_turn_id=str(ids.get("turn_id") or ""),
             )
-            with self._connection() as db:
-                message_id = db.execute(
-                    "SELECT id FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=? "
-                    "AND direction='parent_to_child' AND message_key=?",
-                    (self.parent_thread_id, child_name, message_key),
-                ).fetchone()["id"]
             if not inserted:
                 return {
                     "accepted": True,
@@ -944,15 +995,10 @@ class SubAgentSupervisor:
             if member_name is not None:
                 self._required(validate_name(member_name))
             names = {member_name} if member_name is not None else set(self._tasks)
-            with self._connection() as db:
-                rows = db.execute(
-                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
-                    (self.parent_thread_id,),
-                ).fetchall()
-            for row in rows:
-                if member_name is not None and row["name"] != member_name:
+            for payload in self._list_rows():
+                if member_name is not None and payload.get("name") != member_name:
                     continue
-                record = SubAgentRecord(**json.loads(row["payload"]))
+                record = SubAgentRecord(**payload)
                 task = self._tasks.get(record.name)
                 active = record.status in {"running", "pending"} or (
                     task is not None and not task.done()
@@ -1143,13 +1189,8 @@ class SubAgentSupervisor:
                 return []
             self.pause_event.set()
             names = set(self._tasks)
-            with self._connection() as db:
-                rows = db.execute(
-                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=?",
-                    (self.parent_thread_id,),
-                ).fetchall()
-            for row in rows:
-                record = SubAgentRecord(**json.loads(row["payload"]))
+            for payload in self._list_rows():
+                record = SubAgentRecord(**payload)
                 task = self._tasks.get(record.name)
                 active = record.status in {"running", "pending"} or (
                     task is not None and not task.done()
@@ -1230,15 +1271,10 @@ class SubAgentSupervisor:
                 self._required(validate_name(member_name))
             if require_continuation and self._pause_event is not None and self._pause_event.is_set():
                 raise ValueError("Parent session is paused; resume it through the session controller")
-            with self._connection() as db:
-                rows = db.execute(
-                    "SELECT name,payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name",
-                    (self.parent_thread_id,),
-                ).fetchall()
-            for row in rows:
-                if member_name is not None and row["name"] != member_name:
+            for payload in self._list_rows():
+                if member_name is not None and payload.get("name") != member_name:
                     continue
-                record = SubAgentRecord(**json.loads(row["payload"]))
+                record = SubAgentRecord(**payload)
                 if record.status not in statuses:
                     continue
                 if not any(callable(getattr(self.runner, attr, None)) for attr in ("run", "resume_interrupted")):
@@ -1549,11 +1585,24 @@ class SubAgentSupervisor:
             else:
                 injected = bool(sink(*sink_args, guidance_metadata))
             if injected and not getattr(sink, "acknowledges_after_checkpoint", False):
-                with self._connection() as db:
-                    db.execute(
-                        "UPDATE sub_agent_mailbox SET delivered_at=? WHERE parent_thread_id=? AND name=? AND direction='child_to_parent' AND message_key=?",
-                        (time.time(), self.parent_thread_id, name, message_key),
+                rust_db = self._active_rust_db()
+                if rust_db is not None:
+                    rust_db.call_sync(
+                        "sub_agent_mail_mark_delivered_by_key",
+                        {
+                            "parent_thread_id": self.parent_thread_id,
+                            "name": name,
+                            "direction": "child_to_parent",
+                            "message_key": message_key,
+                            "now": time.time(),
+                        },
                     )
+                else:
+                    with self._connection() as db:
+                        db.execute(
+                            "UPDATE sub_agent_mailbox SET delivered_at=? WHERE parent_thread_id=? AND name=? AND direction='child_to_parent' AND message_key=?",
+                            (time.time(), self.parent_thread_id, name, message_key),
+                        )
         return {"accepted": True, "deduplicated": not inserted, "injected": injected, "type": child_type, "name": name}
 
     def ask_parent(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1595,6 +1644,13 @@ class SubAgentSupervisor:
         }
 
     def pending_guidance(self, name: str) -> list[dict[str, Any]]:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = rust_db.call_sync(
+                "sub_agent_pending_guidance",
+                {"parent_thread_id": self.parent_thread_id, "name": name},
+            )
+            return list((res or {}).get("rows") or [])
         with self._connection() as db:
             rows = db.execute(
                 "SELECT id,body,created_at,source_call_id,source_run_id,source_turn_id "
@@ -1632,6 +1688,20 @@ class SubAgentSupervisor:
         }} for row in rows]
 
     def acknowledge_guidance(self, name: str, ids: list[str]) -> None:
+        if not ids:
+            return
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            rust_db.call_sync(
+                "sub_agent_ack_guidance",
+                {
+                    "parent_thread_id": self.parent_thread_id,
+                    "name": name,
+                    "ids": [str(i) for i in ids],
+                    "now": time.time(),
+                },
+            )
+            return
         with self._connection() as db:
             db.executemany(
                 "UPDATE sub_agent_mailbox SET delivered_at=COALESCE(delivered_at,?) "
@@ -1645,11 +1715,25 @@ class SubAgentSupervisor:
 
     async def list(self) -> list[dict[str, Any]]:
         async with self._lock:
+            rust_db = self._active_rust_db()
+            if rust_db is not None:
+                res = await rust_db.call(
+                    "sub_agent_list",
+                    {"parent_thread_id": self.parent_thread_id},
+                )
+                return list((res or {}).get("records") or [])
             # user:“QueuePool limit of size 4 overflow 4 reached, connection timed out, timeout 30.00”+
             # (列表是被界面高频轮询的读操作：同步 sqlite 读放线程里，锁等待不再阻塞事件循环)。
             return await asyncio.to_thread(self._list_rows)
 
     def _list_rows(self) -> list[dict[str, Any]]:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = rust_db.call_sync(
+                "sub_agent_list",
+                {"parent_thread_id": self.parent_thread_id},
+            )
+            return list((res or {}).get("records") or [])
         with self._connection() as db:
             rows = db.execute(
                 "SELECT payload FROM sub_agents WHERE parent_thread_id=? ORDER BY name",
@@ -1721,6 +1805,17 @@ class SubAgentSupervisor:
 
     async def drain_parent_mailbox(self) -> list[dict[str, Any]]:
         async with self._lock:
+            rust_db = self._active_rust_db()
+            if rust_db is not None:
+                res = await rust_db.call(
+                    "sub_agent_drain_parent_mailbox",
+                    {
+                        "parent_thread_id": self.parent_thread_id,
+                        "mark_delivered": True,
+                        "now": time.time(),
+                    },
+                )
+                return list((res or {}).get("rows") or [])
             with self._connection() as db:
                 rows = db.execute(
                     "SELECT id,name,body,created_at FROM sub_agent_mailbox WHERE parent_thread_id=? AND direction='child_to_parent' AND delivered_at IS NULL ORDER BY created_at,id",
@@ -1740,6 +1835,13 @@ class SubAgentSupervisor:
         self._activity.set()
 
     def _pending_mail_count(self) -> int:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = rust_db.call_sync(
+                "sub_agent_pending_event_count",
+                {"parent_thread_id": self.parent_thread_id},
+            )
+            return int((res or {}).get("count") or 0)
         with self._connection() as db:
             row = db.execute(
                 "SELECT COUNT(*) AS n FROM sub_agent_events WHERE parent_thread_id=? AND delivered_at IS NULL",
@@ -1768,18 +1870,35 @@ class SubAgentSupervisor:
         }
         key = f"{event}:{record.name}:{record.completed_at or record.started_at or 0}"
         try:
-            with self._connection() as db:
-                cursor = db.execute(
-                    "INSERT OR IGNORE INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at) VALUES(?,?,?,?,?,?)",
-                    (event_id, self.parent_thread_id, record.name, json.dumps(event_payload, ensure_ascii=False), key, time.time()),
+            rust_db = self._active_rust_db()
+            if rust_db is not None:
+                res = rust_db.call_sync(
+                    "sub_agent_write_event",
+                    {
+                        "parent_thread_id": self.parent_thread_id,
+                        "name": record.name,
+                        "payload": event_payload,
+                        "event_key": key,
+                        "now": time.time(),
+                    },
                 )
+                returned_id = str((res or {}).get("event_id") or "")
+                if not returned_id:
+                    return ""
+                event_id = returned_id
+            else:
+                with self._connection() as db:
+                    cursor = db.execute(
+                        "INSERT OR IGNORE INTO sub_agent_events(id,parent_thread_id,name,payload,event_key,created_at) VALUES(?,?,?,?,?,?)",
+                        (event_id, self.parent_thread_id, record.name, json.dumps(event_payload, ensure_ascii=False), key, time.time()),
+                    )
+                if cursor.rowcount == 0:
+                    return ""
         except Exception:
             # Registry state survives; the application reconciliation retries
             # publication. Keep the failed outbox write observable in logs.
             _logger.exception("sub-agent lifecycle event write failed parent=%s name=%s event=%s",
                               self.parent_thread_id, record.name, event)
-            return ""
-        if cursor.rowcount == 0:
             return ""
         self._notify_activity()
         _notify_member_event()
@@ -1871,7 +1990,20 @@ class SubAgentSupervisor:
         self._write_member_event(record, event, detail=detail)
         await self._publish_member_status(record, event=event)
 
-    async def _publish_member_status(self, record: SubAgentRecord, *, event: str) -> None:
+    def _member_status_event_id(self, record: SubAgentRecord) -> str:
+        # user:“check，事件通道压力过高：可靠通道 32/64；已丢弃 257 帧可丢进度；正在自动恢复，无需操作”+(提取确定性状态事件 ID 供对账阶段提前判重)
+        return hashlib.sha256(
+            f"member-status:{self.parent_thread_id}:{record.name}:{record.status}:"
+            f"{record.started_at}:{record.completed_at}:{record.source_turn_id}".encode()
+        ).hexdigest()[:32]
+
+    async def _publish_member_status(
+        self,
+        record: SubAgentRecord,
+        *,
+        event: str,
+        sink: Any | None = None,
+    ) -> None:
         """Publish one member's durable status onto the parent's live stream.
 
         Driven by the member's own lifecycle (started / finished / failed /
@@ -1880,8 +2012,8 @@ class SubAgentSupervisor:
         staying "running" until the turn ends or the periodic record poll runs.
         Best-effort: an absent or failing sink never affects the member.
         """
-        sink = getattr(self.runner, "parent_event_sink", None)
-        if sink is None:
+        target_sink = sink if sink is not None else getattr(self.runner, "parent_event_sink", None)
+        if target_sink is None:
             return
         from lamtools_core.event import CoreEvent
 
@@ -1897,14 +2029,11 @@ class SubAgentSupervisor:
         })
 
         try:
-            await sink.emit(CoreEvent(
+            await target_sink.emit(CoreEvent(
                 name="runtime.sub_agent_status",
                 category="message",
                 payload={"event": event, "sub_agent": record_payload},
-                event_id=hashlib.sha256(
-                    f"member-status:{self.parent_thread_id}:{record.name}:{record.status}:"
-                    f"{record.started_at}:{record.completed_at}:{record.source_turn_id}".encode()
-                ).hexdigest()[:32],
+                event_id=self._member_status_event_id(record),
                 session_id=self.parent_thread_id,
                 run_id=str(record.source_run_id or ""),
                 turn_id=str(record.source_turn_id or ""),
@@ -1920,6 +2049,13 @@ class SubAgentSupervisor:
     async def drain_member_events(self) -> list[dict[str, Any]]:
         """Deliver (once) every pending member state-change event."""
         async with self._lock:
+            rust_db = self._active_rust_db()
+            if rust_db is not None:
+                res = await rust_db.call(
+                    "sub_agent_drain_member_events",
+                    {"parent_thread_id": self.parent_thread_id, "now": time.time()},
+                )
+                return list((res or {}).get("events") or [])
             with self._connection() as db:
                 rows = db.execute(
                     "SELECT id,payload,created_at FROM sub_agent_events WHERE parent_thread_id=? AND delivered_at IS NULL ORDER BY created_at,id",
@@ -2019,19 +2155,28 @@ class SubAgentSupervisor:
             names = [name for name, task in self._tasks.items() if not task.done()]
         if not names:
             return []
-        placeholders = ",".join("?" for _ in names)
-        try:
-            with self._connection() as db:
-                rows = db.execute(
-                    f"SELECT payload FROM sub_agents WHERE parent_thread_id=? AND name IN ({placeholders})",
-                    (self.parent_thread_id, *names),
-                ).fetchall()
-        except sqlite3.OperationalError:
-            return []
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call(
+                "sub_agent_list_by_names",
+                {"parent_thread_id": self.parent_thread_id, "names": names},
+            )
+            payloads = list((res or {}).get("records") or [])
+        else:
+            placeholders = ",".join("?" for _ in names)
+            try:
+                with self._connection() as db:
+                    rows = db.execute(
+                        f"SELECT payload FROM sub_agents WHERE parent_thread_id=? AND name IN ({placeholders})",
+                        (self.parent_thread_id, *names),
+                    ).fetchall()
+            except sqlite3.OperationalError:
+                return []
+            payloads = [json.loads(row["payload"]) for row in rows]
         now = time.time()
         out: list[dict[str, Any]] = []
-        for row in rows:
-            record = SubAgentRecord(**json.loads(row["payload"]))
+        for payload in payloads:
+            record = SubAgentRecord(**payload)
             out.append(
                 {
                     "name": record.name,
@@ -2113,6 +2258,7 @@ class SubAgentSupervisor:
         key = (str(self.database_path.parent.resolve()), self.parent_thread_id)
         if _SUPERVISORS.get(key) is self:
             _SUPERVISORS.pop(key, None)
+        self.release_db()
 
     def _required(self, name: str) -> SubAgentRecord:
         record = self._load(name)
@@ -2121,6 +2267,15 @@ class SubAgentSupervisor:
         return record
 
     def _load(self, name: str) -> SubAgentRecord | None:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = rust_db.call_sync(
+                "sub_agent_load",
+                {"parent_thread_id": self.parent_thread_id, "name": name},
+            )
+            if res and res.get("found") and isinstance(res.get("record"), dict):
+                return SubAgentRecord(**res["record"])
+            return None
         with self._connection() as db:
             row = db.execute("SELECT payload FROM sub_agents WHERE parent_thread_id=? AND name=?", (self.parent_thread_id, name)).fetchone()
         return SubAgentRecord(**json.loads(row["payload"])) if row else None
@@ -2128,25 +2283,49 @@ class SubAgentSupervisor:
     def _save(self, record: SubAgentRecord) -> None:
         if not record.execution_token:
             record.execution_token = uuid.uuid4().hex
-        with self._connection() as db:
-            db.execute(
-                "INSERT INTO sub_agents(parent_thread_id,name,payload) VALUES(?,?,?) ON CONFLICT(parent_thread_id,name) DO UPDATE SET payload=excluded.payload",
-                (self.parent_thread_id, record.name, json.dumps(record.to_dict(), ensure_ascii=False)),
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            rust_db.call_sync(
+                "sub_agent_save",
+                {
+                    "parent_thread_id": self.parent_thread_id,
+                    "name": record.name,
+                    "record": record.to_dict(),
+                },
             )
+        else:
+            with self._connection() as db:
+                db.execute(
+                    "INSERT INTO sub_agents(parent_thread_id,name,payload) VALUES(?,?,?) ON CONFLICT(parent_thread_id,name) DO UPDATE SET payload=excluded.payload",
+                    (self.parent_thread_id, record.name, json.dumps(record.to_dict(), ensure_ascii=False)),
+                )
         self._mirror_agent_run(record)
 
     def _save_if_current(self, record: SubAgentRecord, token: str) -> bool:
         # user:“修 问题严重的话 就重新设计”+(在同一数据库写入中校验执行凭据，其他连接提交的终止同样优先)。
-        with self._connection() as db:
-            changed = db.execute(
-                "UPDATE sub_agents SET payload=? WHERE parent_thread_id=? AND name=? "
-                "AND COALESCE(json_extract(payload, '$.execution_token'), '')=? "
-                "AND json_extract(payload, '$.status') NOT IN ('terminated','closed','deleted')",
-                (json.dumps(record.to_dict(), ensure_ascii=False), self.parent_thread_id, record.name, token),
-            ).rowcount
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = rust_db.call_sync(
+                "sub_agent_save_if_current",
+                {
+                    "parent_thread_id": self.parent_thread_id,
+                    "name": record.name,
+                    "token": token,
+                    "record": record.to_dict(),
+                },
+            )
+            changed = bool((res or {}).get("changed"))
+        else:
+            with self._connection() as db:
+                changed = bool(db.execute(
+                    "UPDATE sub_agents SET payload=? WHERE parent_thread_id=? AND name=? "
+                    "AND COALESCE(json_extract(payload, '$.execution_token'), '')=? "
+                    "AND json_extract(payload, '$.status') NOT IN ('terminated','closed','deleted')",
+                    (json.dumps(record.to_dict(), ensure_ascii=False), self.parent_thread_id, record.name, token),
+                ).rowcount)
         if changed:
             self._mirror_agent_run(record)
-        return bool(changed)
+        return changed
 
     def _mirror_agent_run(self, record: SubAgentRecord) -> None:
         """Project one durable record into the turn-control read model.
@@ -2204,12 +2383,61 @@ class SubAgentSupervisor:
         failed) and ``wake`` marks it as a reason to wake the parent: the wake
         watchdog reads this table, not the audit event table.
         """
+        inserted, _ = self._mail_with_id(
+            name,
+            direction,
+            body,
+            message_key=message_key,
+            tags=tags,
+            wake=wake,
+            source_call_id=source_call_id,
+            source_run_id=source_run_id,
+            source_turn_id=source_turn_id,
+            fetch_id=False,
+        )
+        return inserted
+
+    def _mail_with_id(
+        self,
+        name: str,
+        direction: str,
+        body: str,
+        *,
+        message_key: str,
+        tags: str = "",
+        wake: int = 0,
+        source_call_id: str = "",
+        source_run_id: str = "",
+        source_turn_id: str = "",
+        fetch_id: bool = True,
+    ) -> tuple[bool, str | None]:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = rust_db.call_sync(
+                "sub_agent_mail_insert",
+                {
+                    "parent_thread_id": self.parent_thread_id,
+                    "name": name,
+                    "direction": direction,
+                    "body": body,
+                    "message_key": message_key,
+                    "tags": str(tags or ""),
+                    "wake": 1 if wake else 0,
+                    "source_call_id": str(source_call_id or ""),
+                    "source_run_id": str(source_run_id or ""),
+                    "source_turn_id": str(source_turn_id or ""),
+                    "fetch_id": fetch_id,
+                    "now": time.time(),
+                },
+            )
+            return bool((res or {}).get("inserted")), (res or {}).get("message_id")
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        new_id = uuid.uuid4().hex
         with self._connection() as db:
             cursor = db.execute(
                 "INSERT OR IGNORE INTO sub_agent_mailbox(id,parent_thread_id,name,direction,body,digest,message_key,created_at,tags,wake,source_call_id,source_run_id,source_turn_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    uuid.uuid4().hex,
+                    new_id,
                     self.parent_thread_id,
                     name,
                     direction,
@@ -2224,7 +2452,16 @@ class SubAgentSupervisor:
                     str(source_turn_id or ""),
                 ),
             )
-            return cursor.rowcount > 0
+            inserted = cursor.rowcount > 0
+            msg_id: str | None = new_id if inserted else None
+            if not inserted and fetch_id:
+                row = db.execute(
+                    "SELECT id FROM sub_agent_mailbox WHERE parent_thread_id=? AND name=? "
+                    "AND direction=? AND message_key=?",
+                    (self.parent_thread_id, name, direction, message_key),
+                ).fetchone()
+                msg_id = str(row["id"]) if row else None
+            return inserted, msg_id
 
 
 _SUPERVISORS: dict[tuple[str, str], SubAgentSupervisor] = {}
@@ -2523,6 +2760,17 @@ def drain_parent_mailbox(
     path = Path(database_path)
     if not path.is_file():
         return []
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        res = rust_db.call_sync(
+            "sub_agent_drain_parent_mailbox",
+            {
+                "parent_thread_id": str(parent_thread_id),
+                "mark_delivered": bool(mark_delivered),
+                "now": time.time(),
+            },
+        )
+        return list((res or {}).get("rows") or [])
     with sqlite3.connect(path) as db:
         db.row_factory = sqlite3.Row
         try:
@@ -2551,6 +2799,13 @@ def acknowledge_parent_mailbox(
     path = Path(database_path)
     if not ids or not path.is_file():
         return
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        rust_db.call_sync(
+            "sub_agent_ack_parent_mailbox",
+            {"parent_thread_id": str(parent_thread_id), "ids": ids, "now": time.time()},
+        )
+        return
     placeholders = ",".join("?" for _ in ids)
     with closing(sqlite3.connect(path)) as db, db:
         db.execute(
@@ -2566,6 +2821,17 @@ def acknowledge_parent_guidance(database_path: str | Path, parent_thread_id: str
     path = Path(database_path)
     ids = set(guidance_ids)
     if not ids or not path.is_file():
+        return
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        rust_db.call_sync(
+            "sub_agent_ack_parent_guidance",
+            {
+                "parent_thread_id": str(parent_thread_id),
+                "guidance_ids": list(ids),
+                "now": time.time(),
+            },
+        )
         return
     with closing(sqlite3.connect(path)) as db:
         rows = db.execute(
@@ -2668,6 +2934,10 @@ def list_threads_with_pending_wakes(database_path: str | Path) -> list[str]:
     path = Path(database_path)
     if not path.is_file():
         return []
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        res = rust_db.call_sync("sub_agent_list_threads_with_pending_wakes")
+        return list((res or {}).get("threads") or [])
     try:
         with sqlite3.connect(path) as db:
             rows = db.execute(
@@ -2695,6 +2965,13 @@ def peek_wake_messages(
     path = Path(database_path)
     if not path.is_file():
         return []
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        res = rust_db.call_sync(
+            "sub_agent_peek_wake_messages",
+            {"parent_thread_id": str(parent_thread_id)},
+        )
+        return list((res or {}).get("messages") or [])
     try:
         with sqlite3.connect(path) as db:
             db.row_factory = sqlite3.Row
@@ -2732,6 +3009,13 @@ def bump_wake_counts(database_path: str | Path, parent_thread_id: str, ids: list
     path = Path(database_path)
     if not clean or not path.is_file():
         return 0
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        res = rust_db.call_sync(
+            "sub_agent_bump_wake_counts",
+            {"parent_thread_id": str(parent_thread_id), "ids": clean},
+        )
+        return int((res or {}).get("max_wake_count") or 0)
     placeholders = ",".join("?" for _ in clean)
     with closing(sqlite3.connect(path)) as db, db:
         db.execute(
@@ -2752,6 +3036,13 @@ def migrate_pending_member_events_to_wake(database_path: str | Path) -> int:
     path = Path(database_path)
     if not path.is_file():
         return 0
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        res = rust_db.call_sync(
+            "sub_agent_migrate_pending_member_events_to_wake",
+            {"now": time.time()},
+        )
+        return int((res or {}).get("migrated") or 0)
     with closing(sqlite3.connect(path)) as db, db:
         db.row_factory = sqlite3.Row
         try:
@@ -2804,6 +3095,13 @@ def auto_release_unanswered(
     path = Path(database_path)
     if not path.is_file():
         return []
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        res = rust_db.call_sync(
+            "sub_agent_auto_release_unanswered",
+            {"parent_thread_id": str(parent_thread_id), "limit": int(limit), "now": time.time()},
+        )
+        return list((res or {}).get("released") or [])
     released: list[str] = []
     with closing(sqlite3.connect(path)) as db, db:
         db.row_factory = sqlite3.Row
@@ -2850,6 +3148,13 @@ def peek_member_events(
     path = Path(database_path)
     if not path.is_file():
         return []
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        res = rust_db.call_sync(
+            "sub_agent_peek_member_events",
+            {"parent_thread_id": str(parent_thread_id)},
+        )
+        return list((res or {}).get("events") or [])
     try:
         with sqlite3.connect(path) as db:
             db.row_factory = sqlite3.Row
@@ -2881,6 +3186,13 @@ def mark_member_events_delivered(database_path: str | Path, ids: list[str]) -> N
     clean = [str(item) for item in ids if str(item)]
     path = Path(database_path)
     if not clean or not path.is_file():
+        return
+    rust_db = borrow_rust_db_for_path(path)
+    if rust_db is not None:
+        rust_db.call_sync(
+            "sub_agent_mark_member_events_delivered",
+            {"ids": clean, "now": time.time()},
+        )
         return
     placeholders = ",".join("?" for _ in clean)
     try:

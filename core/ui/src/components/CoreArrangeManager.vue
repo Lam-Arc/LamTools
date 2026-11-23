@@ -538,20 +538,21 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
       <!-- 列表 -->
       <template v-if="view === 'list'">
-        <p v-if="schedulerNotice" class="arrange-notice" role="status">
+        <!-- user:“这个组内的 UI 设计与风格”+(定时任务的模板、任务卡与提示使用共享页面样式)。 -->
+        <p v-if="schedulerNotice" class="arrange-notice sunday-page-status" role="status">
           <CircleAlert :size="14" :stroke-width="1.8" aria-hidden="true" />
           <span>{{ schedulerNotice }}</span>
         </p>
 
         <p v-if="loading" class="arrange-loading" role="status">{{ t("正在读取定时任务…") }}</p>
 
-        <div v-else-if="error" class="arrange-error" role="alert">
+        <div v-else-if="error" class="arrange-error sunday-page-status sunday-page-status--error" role="alert">
           <span>{{ error }}</span>
-          <button type="button" @click="loadJobs">{{ t("重试") }}</button>
+          <button class="btn btn--secondary btn--sm" type="button" @click="loadJobs">{{ t("重试") }}</button>
         </div>
 
         <template v-else>
-          <div class="filter-tabs" role="group" :aria-label="t('按状态筛选')">
+          <div class="filter-tabs sunday-page-tabs" role="group" :aria-label="t('按状态筛选')">
             <button
               v-for="f in filterDefs"
               :key="f.id"
@@ -574,7 +575,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
               <article
                 v-for="job in filteredJobs"
                 :key="job.id"
-                class="arrange-card"
+                class="arrange-card sunday-page-panel sunday-page-panel--action"
                 role="listitem"
                 tabindex="0"
                 :aria-label="t('打开 {0}', { 0: displayTitle(job) })"
@@ -601,7 +602,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           <section class="arrange-section">
             <h3 class="section-label">{{ t("定时任务模板") }}</h3>
             <div class="template-grid">
-              <button v-for="t in templates" :key="t.id" type="button" class="template-card" @click="applyTemplate(t)">
+              <button v-for="t in templates" :key="t.id" type="button" class="template-card sunday-page-panel sunday-page-panel--action" @click="applyTemplate(t)">
                 <span class="template-head">
                   <component :is="t.icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
                   <strong>{{ t.name }}</strong>
@@ -814,38 +815,15 @@ p { margin: 0; }
 button { font: inherit; }
 
 .arrange-loading { padding: var(--space-4) 0; font-size: 13px; color: color-mix(in srgb, var(--text) 62%, transparent); }
-.arrange-error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; color: var(--red); font-size: 13px; }
-.arrange-error button { flex: none; min-height: 28px; padding: 5px var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 12.5px; }
+.arrange-error { justify-content: space-between; }
+.arrange-error button { flex: none; }
 
 /* 调度器提示条 */
-.arrange-notice {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-  color: color-mix(in srgb, var(--text) 72%, transparent);
-  font-size: 12.5px;
-}
+.arrange-notice { margin-bottom: var(--space-3); }
 .arrange-notice svg { flex: 0 0 auto; color: color-mix(in srgb, var(--text) 55%, transparent); }
 
 /* 状态筛选 */
-.filter-tabs { display: flex; align-items: center; gap: var(--space-1); margin-bottom: var(--space-4); }
-.filter-tabs button {
-  padding: 4px var(--space-3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 65%, transparent);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-.filter-tabs button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
-.filter-tabs button.active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); font-weight: 600; }
+.filter-tabs { margin-bottom: var(--space-3); }
 
 /* 分区 */
 .arrange-section { display: grid; gap: var(--space-2); }
@@ -858,16 +836,11 @@ button { font: inherit; }
 
 .arrange-card {
   display: grid;
-  gap: 6px;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 10%, transparent));
-  border-radius: var(--radius);
-  background: var(--theme-main-soft-background, color-mix(in srgb, var(--text) 4%, transparent));
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  color: var(--text);
+  text-align: left;
 }
-.arrange-card:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
-.arrange-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .card-title {
   margin: 0;
@@ -899,8 +872,8 @@ button { font: inherit; }
   gap: 4px;
   padding: 2px var(--space-2);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--green) 12%, transparent);
-  color: color-mix(in srgb, var(--green) 78%, var(--text) 22%);
+  background: var(--theme-main-subtle-background);
+  color: var(--text);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -910,18 +883,11 @@ button { font: inherit; }
 .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-2); }
 .template-card {
   display: grid;
-  gap: 6px;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--text) 10%, transparent));
-  border-radius: var(--radius);
-  background: var(--theme-main-soft-background, color-mix(in srgb, var(--text) 4%, transparent));
-  color: inherit;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  color: var(--text);
   text-align: left;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
 }
-.template-card:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
-.template-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .template-head { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
 .template-head svg { color: color-mix(in srgb, var(--text) 65%, transparent); }
 .template-desc {

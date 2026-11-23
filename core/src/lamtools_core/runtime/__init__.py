@@ -92,6 +92,11 @@ class RuntimeTurnInput:
     # +(非正常收尾（等待输入/失败/暂停/取消）也要越过同一条结束边界：之后到达
     #   的引导一律改走新回合，而不是先被登记表收下、再随任务退出悄悄丢掉)。
     guidance_sealer: Callable[[], Any] | None = field(default=None, repr=False, compare=False)
+    # user:“引导的回合归属，应由其所在 Step 的最终结果决定，而不是引导到达时的
+    # 回合状态”+(本回合一旦给出「无工具调用」的自然结束答复，这段运行就不再接收
+    # 引导：此刻仍在队列里的引导不并入本回合，由执行层投成下一回合。主回合开启；
+    # 子代理的补充消息保持原语义，故默认关闭)。
+    defer_tail_guidance: bool = False
     # Pulls the latest composer parameter group for the next kernel step.
     # The callable returns ``(generation, patch)`` or ``None`` when nothing
     # newer than the caller's applied generation exists.

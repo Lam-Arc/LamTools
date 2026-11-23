@@ -21,6 +21,10 @@ class WorktreeError(RuntimeError):
 
 def _run_git(args: list[str], *, cwd: Path, timeout: float = 60.0) -> subprocess.CompletedProcess:
     try:
+        # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(建 worktree 的 git 也不许弹窗；
+        # 结果仍从管道取，输出解析不变)。
+        from lamtools_core.win_spawn import hidden_kwargs
+
         return subprocess.run(
             ["git", *args],
             cwd=str(cwd),
@@ -28,6 +32,7 @@ def _run_git(args: list[str], *, cwd: Path, timeout: float = 60.0) -> subprocess
             text=True,
             timeout=timeout,
             check=False,
+            **hidden_kwargs(),
         )
     except FileNotFoundError as exc:  # git 没装
         raise WorktreeError("git is not available on this machine") from exc

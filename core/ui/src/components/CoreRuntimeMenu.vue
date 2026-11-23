@@ -1,6 +1,7 @@
 <template>
   <div ref="root" class="core-runtime-menu" data-core-runtime-menu>
     <button
+      ref="trigger"
       class="core-runtime-menu__trigger"
       type="button"
       :disabled="disabled"
@@ -18,7 +19,7 @@
       <ShieldCheck class="core-runtime-menu__compact-icon" :size="16" :stroke-width="2" aria-hidden="true" />
     </button>
 
-    <div v-if="open" class="core-runtime-menu__panel" :style="viewportStyle" role="menu">
+    <div v-if="open" class="core-runtime-menu__panel" :style="viewportStyle" role="menu" @keydown="onMenuKeydown">
       <section ref="parameterCard" class="core-runtime-menu__card core-runtime-menu__card--parameters" :aria-label="t('运行模式与权限参数')">
         <button
           v-if="!hideMode"
@@ -152,6 +153,7 @@ const open = ref(false)
 const activeSection = ref<'mode' | 'permission' | null>(null)
 const submenuSide = ref<'left' | 'right'>('right')
 const root = ref<HTMLElement | null>(null)
+const trigger = ref<HTMLButtonElement | null>(null)
 const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
 const { animatePrimaryCard, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
@@ -192,7 +194,13 @@ function toggle(): void {
     return
   }
   updateViewportPosition()
-  void nextTick(() => animatePrimaryCard(parameterCard.value, ':scope > .core-runtime-menu__option'))
+  void nextTick(() => {
+    if (!open.value || props.disabled) return
+    animatePrimaryCard(parameterCard.value, ':scope > .core-runtime-menu__option', () => {
+      if (open.value && !props.disabled && document.activeElement === trigger.value)
+        parameterCard.value?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus({ preventScroll: true })
+    })
+  })
 }
 
 function activateSection(section: 'mode' | 'permission'): void {
@@ -223,10 +231,11 @@ function updateSubmenuSide(): void {
   else submenuSide.value = roomRight >= roomLeft ? 'right' : 'left'
 }
 
-function close(): void {
+function close(returnFocus = false): void {
   cancel()
   open.value = false
   activeSection.value = null
+  if (returnFocus && !props.disabled) trigger.value?.focus({ preventScroll: true })
 }
 
 // user:“确保视觉、功能和交互不退化”+(运行时禁用后立即关闭菜单，不能继续修改权限或模式)。
@@ -235,13 +244,48 @@ watch(() => props.disabled, value => { if (value) close() }, { flush: 'sync' })
 function selectMode(option: CoreSelectOption): void {
   if (props.disabled || option.disabled) return
   emit('update:activeMode', option.value)
-  close()
+  close(true)
 }
 
 function selectPermission(value: string): void {
   if (props.disabled) return
   emit('update:permissionPreset', normalizeCorePermissionPreset(value))
-  close()
+  close(true)
+}
+
+// user:“确保视觉、功能和交互不退化”+(两级菜单支持方向键、首尾跳转和返回上一级)。
+function onMenuKeydown(event: KeyboardEvent): void {
+  const target = event.target as HTMLElement
+  const inSubmenu = !!target.closest('[data-runtime-submenu]')
+  if (!inSubmenu && ['ArrowRight', 'Enter', ' '].includes(event.key)) {
+    const section = target.getAttribute('data-runtime-section') as 'mode' | 'permission' | null
+    if (!section) return
+    event.preventDefault()
+    activateSection(section)
+    void nextTick(() => {
+      const focusOption = () => {
+        if (!open.value || props.disabled || activeSection.value !== section || document.activeElement !== target) return
+        const options = submenuCard.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
+        ;(submenuCard.value?.querySelector<HTMLButtonElement>('button[aria-checked="true"]:not(:disabled)') || options?.[0])?.focus({ preventScroll: true })
+      }
+      // 重新启动同一子菜单动画，以确保焦点不会落在尚未显示的选项上。
+      animateSubmenuCard(submenuCard.value, submenuSide.value, ':scope > .core-runtime-menu__heading, :scope > .core-runtime-menu__option, :scope > .core-runtime-menu__empty, :scope > .core-runtime-menu__warning', focusOption)
+    })
+    return
+  }
+  if (inSubmenu && event.key === 'ArrowLeft') {
+    event.preventDefault()
+    parameterCard.value?.querySelector<HTMLButtonElement>(`[data-runtime-section="${activeSection.value}"]`)?.focus({ preventScroll: true })
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  const card = inSubmenu ? submenuCard.value : parameterCard.value
+  const options = [...(card?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])]
+  if (!options.length) return
+  event.preventDefault()
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : event.key === 'ArrowDown' ? (current + 1 + options.length) % options.length : (current - 1 + options.length) % options.length
+  options[index]?.focus({ preventScroll: true })
 }
 
 function onPointerDown(event: PointerEvent): void {
@@ -251,7 +295,7 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && open.value) close()
+  if (event.key === 'Escape' && open.value) { event.preventDefault(); close(true) }
 }
 
 onMounted(() => {
@@ -411,11 +455,12 @@ onUnmounted(() => {
   mask-image: linear-gradient(to right, transparent, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), transparent);
 }
 
-.core-runtime-menu__option:hover::before {
+.core-runtime-menu__option:hover::before,
+.core-runtime-menu__option:focus-visible::before {
   opacity: 1;
 }
 
-.core-runtime-menu__option.active::before {
+.core-runtime-menu__option.active:not(:focus-visible)::before {
   opacity: 0;
 }
 
@@ -473,8 +518,7 @@ onUnmounted(() => {
 }
 
 .core-runtime-menu__option:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--text) 24%, transparent);
-  outline-offset: -2px;
+  outline: none;
 }
 
 .core-runtime-menu__option.disabled,

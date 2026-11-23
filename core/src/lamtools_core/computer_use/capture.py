@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import io
 from dataclasses import dataclass
+from typing import Sequence
 
 from PIL import Image, ImageDraw
 
@@ -86,6 +87,48 @@ def encode_png(
         current = current.resize(
             (width, max(1, int(round(current.height * ratio)))), Image.LANCZOS
         )
+
+# OCR 只认图里那一块，所以裁剪后重新编码一次；给 2.5MB 上限，
+# 太长的 base64 走队列/IPC 会明显变慢，超了就让 encode_png 自己等比缩小。
+MAX_OCR_BYTES = 2_500_000
+
+
+def crop_frame(frame: Frame, area: Sequence[float] | None, *, max_bytes: int = MAX_OCR_BYTES) -> Frame:
+    """裁出截图里的一块，返回新的 Frame；不传 area 就原样返回。
+
+    user:“区域：支持整图与矩形裁剪（复用现有裁剪）”+
+    (整图不裁；给了 area 就按**这张截图自己的像素**裁，自动夹到图内，
+     完全落在图外时明确报错而不是给一张空图去识别)。
+    """
+    if area is None:
+        return frame
+    if not isinstance(area, (list, tuple)) or len(area) != 4:
+        raise ValueError("area 需要 [x, y, width, height]，单位是截图里的像素")
+    image = Image.open(io.BytesIO(frame.png))
+    image.load()
+    x, y, width, height = (int(round(float(value))) for value in area)
+    left = max(0, min(x, image.width))
+    top = max(0, min(y, image.height))
+    right = max(0, min(x + width, image.width))
+    bottom = max(0, min(y + height, image.height))
+    if right <= left or bottom <= top:
+        raise ValueError(
+            f"area {x},{y} {width}x{height} 落在截图 {image.width}x{image.height} 之外，"
+            "没有可识别的像素；area 用最近一次截图里的像素坐标"
+        )
+    cropped = image.crop((left, top, right, bottom))
+    png, image_w, image_h = encode_png(cropped, max_width=cropped.width, max_bytes=max_bytes)
+    # 裁剪块的屏幕位置由父截图换算关系推出：偏移和尺寸一起按 scale 放大，坐标换算才能接着用。
+    return Frame(
+        png=png,
+        image_width=image_w,
+        image_height=image_h,
+        screen_width=max(1, int(round((right - left) * frame.scale_x))),
+        screen_height=max(1, int(round((bottom - top) * frame.scale_y))),
+        origin_x=int(round(frame.origin_x + left * frame.scale_x)),
+        origin_y=int(round(frame.origin_y + top * frame.scale_y)),
+    )
+
 
 def annotate_grid(image: Image.Image, *, step: int = 200) -> Image.Image:
     """在截图上叠加坐标网格。模型反复点偏时用它建立坐标感。"""

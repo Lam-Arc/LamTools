@@ -381,8 +381,9 @@ def _character_page_snapshot(
         )
     if before_index is not None:
         ordered = full_order[:before_index]
-    elif before_seq is not None:
-        ordered = [entry for entry in full_order if entry[0] < before_seq]
+    elif before_seq is not None or isinstance(core.get("_page_before_seq"), int):
+        eff_before_seq = before_seq if before_seq is not None else core.get("_page_before_seq")
+        ordered = [entry for entry in full_order if entry[0] < eff_before_seq]
     else:
         ordered = full_order
 
@@ -438,7 +439,9 @@ def _character_page_snapshot(
     for index, raw_id in enumerate(raw_top_order, 1):
         item_id = str(raw_id)
         item = raw_top_items.get(item_id)
-        if not isinstance(item, dict) or str(item.get("type") or "") != "userMessage":
+        # user:“查一下 constant 内会话为什么出现了：部分消息在最新消息的下方”
+        # +(systemMessage 触发的回合跨分页边界时与 userMessage 一样需要保留开场条目)
+        if not isinstance(item, dict) or str(item.get("type") or "") not in ("userMessage", "systemMessage"):
             continue
         turn_id = str(item.get("turn_id") or "")
         max_seq = selected_turn_max_seq.get(turn_id)
@@ -486,6 +489,7 @@ def _character_page_snapshot(
     # Private store hints for the paging envelope; never part of the wire page.
     page_core.pop("_page_has_older_items", None)
     page_core.pop("_page_total_items", None)
+    page_core.pop("_page_before_seq", None)
     page_core["items"] = {
         item_id: _wire(item_id, raw_core_items, wired_core)
         for item_id in selected_ids

@@ -14,6 +14,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
+from lamtools_core.plugin_system.session_visibility import session_visibility_for_batch
 from lamtools_core.session import SessionRecord
 
 from .core_db import CoreDbMetadata, CoreProject, CoreThreadSnapshot
@@ -205,6 +206,11 @@ class CoreProjectStore:
             return project, created
 
         result = await self.write_coordinator.run(write)
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None and result[1]:
+            rust_db.invalidate_thread(None)
         await self._publish_sync_changes(change_ids)
         return result
 
@@ -305,6 +311,11 @@ class CoreProjectStore:
             return _record(project), migrated
 
         result = await self.write_coordinator.run(write)
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None and result[1]:
+            rust_db.invalidate_thread(None)
         await self._publish_sync_changes(change_ids)
         return result
 
@@ -339,6 +350,11 @@ class CoreProjectStore:
             )
 
         result = await self.write_coordinator.run(write)
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None:
+            rust_db.invalidate_thread(result[1].id)
         await self._publish_sync_changes(change_ids)
         return result
 
@@ -445,6 +461,11 @@ class CoreProjectStore:
             )
 
         result = await self.write_coordinator.run(write)
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None:
+            rust_db.invalidate_thread(result.id)
         await self._publish_sync_changes(change_ids)
         return result
 
@@ -545,11 +566,23 @@ class CoreProjectStore:
             return _record(project), session, created
 
         result = await self.write_coordinator.run(write)
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None:
+            rust_db.invalidate_thread(result[1].id)
         await self._publish_sync_changes(change_ids)
         return result
 
     async def delete(self, project_id: str, *, expected_revision: int | None = None) -> bool:
-        return await self._delete_with_sessions(project_id, expected_revision=expected_revision)
+        deleted = await self._delete_with_sessions(project_id, expected_revision=expected_revision)
+        if deleted:
+            from .rust_db import get_rust_db
+
+            rust_db = get_rust_db(self.session_factory)
+            if rust_db is not None:
+                rust_db.invalidate_thread(None)
+        return deleted
 
     async def list_sessions(
         self,
@@ -558,14 +591,56 @@ class CoreProjectStore:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[SessionRecord]:
+        from .rust_db import get_rust_db
+
+        # user:“优化”+(项目会话列表复用本次查询的插件可见性判断)。
+        is_visible = session_visibility_for_batch(self._session_visible)
+        rust_db = get_rust_db(self.session_factory)
         async with self.session_factory() as db:
             project = await db.get(CoreProject, project_id)
             if project is None:
                 return []
+            if rust_db is not None:
+                # user:“加载/切换/多会话多 agent 同时读写”+(项目会话列表复用 Rust 摘要缓存，不从 SQLite 拉取庞大 snapshot_json)。
+                summaries = await rust_db.call("list_session_summaries")
+                matched: list[tuple[tuple[int, int, str, str], SessionRecord]] = []
+                for item in summaries:
+                    meta = dict(item.get("metadata") or {})
+                    if meta.get("work_root") != project.work_root:
+                        continue
+                    tid = str(item.get("id") or "")
+                    updated_at = _parse_project_dt(item.get("updated_at"))
+                    created_at = _parse_project_dt(item.get("created_at"), fallback=updated_at)
+                    rec = SessionRecord(
+                        id=tid,
+                        member_id=str(item.get("member_id") or "core"),
+                        title=str(item.get("title") or tid),
+                        status=str(item.get("status") or "idle"),
+                        metadata=meta,
+                        created_at=created_at,
+                        updated_at=updated_at,
+                    )
+                    if not is_visible(rec.id, rec.metadata):
+                        continue
+                    order_val = item.get("workspace_session_order")
+                    sort_key = (
+                        1 if order_val is None else 0,
+                        int(order_val) if order_val is not None else 0,
+                        str(item.get("created_at") or "").replace("T", " "),
+                        tid,
+                    )
+                    matched.append((sort_key, rec))
+                matched.sort(key=lambda pair: pair[0])
+                ordered = [rec for _, rec in matched]
+                if offset:
+                    ordered = ordered[int(offset):]
+                if limit is not None:
+                    ordered = ordered[:max(1, int(limit))]
+                return ordered
             sessions = await _project_sessions(
                 db, project.work_root, limit=limit, offset=offset
             )
-        return [session for session in sessions if self._is_session_visible(session)]
+        return [session for session in sessions if is_visible(session.id, session.metadata)]
 
     async def get_session(self, project_id: str, session_id: str) -> SessionRecord | None:
         # user:“复用原宿主权威”+(按主键复核项目所属及原会话可见性，不扫描项目全部会话)。
@@ -603,7 +678,13 @@ class CoreProjectStore:
                 await db.flush()
             return await _project_pinned_session_ids(db, project, self._is_session_visible)
 
-        return await self.write_coordinator.run(write)
+        pinned = await self.write_coordinator.run(write)
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None:
+            rust_db.invalidate_thread(session_id)
+        return pinned
 
     async def unpin_session(self, project_id: str, session_id: str) -> list[str]:
         if type(project_id) is not str or not project_id or type(session_id) is not str or not session_id:
@@ -619,15 +700,49 @@ class CoreProjectStore:
                     await db.flush()
             return await _project_pinned_session_ids(db, project, self._is_session_visible) if project else []
 
-        return await self.write_coordinator.run(write)
+        pinned = await self.write_coordinator.run(write)
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None:
+            rust_db.invalidate_thread(session_id)
+        return pinned
 
     async def pinned_session_ids(self, project_id: str) -> list[str]:
         if type(project_id) is not str or not project_id:
             raise ValueError("project_id is required")
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
         async with self.session_factory() as db:
             project = await db.get(CoreProject, project_id)
             if project is None:
                 return []
+            if rust_db is not None:
+                summaries = await rust_db.call("list_session_summaries")
+                pinned_items: list[tuple[int, str]] = []
+                for item in summaries:
+                    pin_order = item.get("workspace_pin_order")
+                    if pin_order is None:
+                        continue
+                    meta = dict(item.get("metadata") or {})
+                    if meta.get("work_root") != project.work_root:
+                        continue
+                    tid = str(item.get("id") or "")
+                    updated_at = _parse_project_dt(item.get("updated_at"))
+                    rec = SessionRecord(
+                        id=tid,
+                        member_id=str(item.get("member_id") or "core"),
+                        title=str(item.get("title") or tid),
+                        status=str(item.get("status") or "idle"),
+                        metadata=meta,
+                        created_at=_parse_project_dt(item.get("created_at"), fallback=updated_at),
+                        updated_at=updated_at,
+                    )
+                    if self._is_session_visible(rec):
+                        pinned_items.append((int(pin_order), tid))
+                pinned_items.sort(key=lambda pair: (-pair[0], pair[1]))
+                return [tid for _, tid in pinned_items]
             return await _project_pinned_session_ids(db, project, self._is_session_visible)
 
     async def insert_session_before(
@@ -676,7 +791,14 @@ class CoreProjectStore:
             await db.flush()
             return reordered
 
-        return await self.write_coordinator.run(write)
+        reordered = await self.write_coordinator.run(write)
+        if reordered is not None:
+            from .rust_db import get_rust_db
+
+            rust_db = get_rust_db(self.session_factory)
+            if rust_db is not None:
+                rust_db.invalidate_thread(None)
+        return reordered
 
     async def count_sessions(self, project_id: str) -> int:
         """Total sessions the project owns, for "N more" in the sidebar."""
@@ -955,6 +1077,17 @@ async def _project_sessions(
         stmt = stmt.limit(max(1, int(limit)))
     rows = (await db.execute(stmt)).scalars().all()
     return [session_record_from_snapshot(row) for row in rows]
+
+
+def _parse_project_dt(raw: Any, *, fallback: datetime | None = None) -> datetime:
+    if isinstance(raw, datetime):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return datetime.fromisoformat(raw.strip().replace(" ", "T"))
+        except ValueError:
+            pass
+    return fallback or datetime.now()
 
 
 def _project_session_statement(work_root: str):

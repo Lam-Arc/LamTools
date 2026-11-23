@@ -34,11 +34,23 @@ unsafe impl Send for CloseRequest {}
 static WINDOWS: LazyLock<Mutex<HashMap<isize, CloseRequest>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+// user:“会闪退，修复”+(启动延迟重试时同一 HWND 只能注册一次关闭拦截子类)
+fn is_registered_hwnd(hwnd: HWND) -> bool {
+    WINDOWS
+        .lock()
+        .map(|windows| windows.contains_key(&(hwnd as isize)))
+        .unwrap_or(false)
+}
+
 pub fn install(window: &WebviewWindow) -> Result<(), String> {
     let hwnd = window
         .hwnd()
         .map_err(|error| format!("main window handle unavailable: {error}"))?
         .0 as HWND;
+
+    if is_registered_hwnd(hwnd) {
+        return Ok(());
+    }
 
     WINDOWS
         .lock()
@@ -133,5 +145,12 @@ mod tests {
         assert!(!is_system_quit_request(0x0010, 1));
         assert!(!is_system_quit_request(WM_ENDSESSION, 0));
         assert!(!is_system_quit_request(WM_NCDESTROY, 0));
+    }
+
+    // user:“会闪退，修复”+(延迟重试重复调用 install 时同一 HWND 不能重复挂载子类钩子)
+    #[test]
+    fn already_registered_hwnd_check_is_idempotent() {
+        let hwnd = 0x1234usize as HWND;
+        assert!(!is_registered_hwnd(hwnd));
     }
 }

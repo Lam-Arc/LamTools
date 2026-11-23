@@ -339,7 +339,57 @@ async def _fail_runtime_start(
     pending_key = (thread_id, turn_id)
     context.host.pending_terminal_failures[pending_key] = message
     try:
-        event, snapshot = await context.persistence.write(write)
+        if getattr(context.persistence, "can_use_rust_write", False):
+            async with context.session_factory() as db:
+                loader = getattr(context.persistence, "load_metadata", context.persistence.load)
+                snapshot = await loader(db, thread_id)
+                resolved_event: AppEventEnvelope | None = None
+                if _turn_is_terminal(snapshot, turn_id):
+                    resolved_event = await context.persistence.find_turn_event(
+                        db, thread_id=thread_id, turn_id=turn_id, terminal_only=True,
+                    )
+                if resolved_event is None:
+                    core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+                    requests = core.get("requests") if isinstance(core, dict) else {}
+                    denied_request = any(
+                        isinstance(pending, dict)
+                        and str(pending.get("turn_id") or "") == turn_id
+                        and str(pending.get("status") or "") == "resolved"
+                        and str(pending.get("decision") or pending.get("action") or "") in {"deny", "denied"}
+                        for pending in (requests.values() if isinstance(requests, dict) else [])
+                    )
+                    if denied_request:
+                        resolved_event = await context.persistence.find_turn_event(
+                            db, thread_id=thread_id, turn_id=turn_id,
+                        )
+            if resolved_event is not None:
+                event = resolved_event
+            else:
+                envelopes, loaded = await context.persistence.append_batch_atomic(
+                    run_item_events=[
+                        RunItemEvent(
+                            kind="status",
+                            thread_id=thread_id,
+                            event_id=f"{turn_id}:runtime-start-failed",
+                            run_id=turn_id,
+                            turn_id=turn_id,
+                            item_id=f"{turn_id}:runtime-start-failed",
+                            status="failed",
+                            payload={
+                                "type": "turn",
+                                "status": "failed",
+                                "raw_end_reason": "runtime_start_failed",
+                                "message": message,
+                            },
+                        )
+                    ],
+                    return_state=True,
+                )
+                event = envelopes[0]
+                if loaded is not None:
+                    snapshot = loaded
+        else:
+            event, snapshot = await context.persistence.write(write)
         context.host.pending_terminal_failures.pop(pending_key, None)
     finally:
         # Release the run claim only once the terminal event is durably
@@ -358,6 +408,7 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
     from .events import _persist_operation_result
     from .interactions import reconcile_open_interactions
     from .queue_dispatch import _dispatch_next_queue_item
+    from .steering import hand_off_pending_guidance
     from .terminal_state import _persist_cancelled_terminal
     thread_id = str(runtime_start.get("thread_id") or "")
     turn_id = str(runtime_start.get("turn_id") or "")
@@ -421,6 +472,14 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
                     "[live] post-turn interaction reconciliation failed thread_id=%s",
                     thread_id,
                 )
+        # user:“最终 Step 开始后收到的所有引导，都应开启下一回合”+(本回合没有
+        # 消费的尾部引导在这里投成新回合；先投递，再走队列派发，一次收口)。
+        try:
+            await hand_off_pending_guidance(context=context, thread_id=thread_id)
+        except BaseException:
+            _logger.exception(
+                "[live:_run_core_turn] guidance handoff failed thread_id=%s", thread_id
+            )
         await _dispatch_next_queue_item(
             context=context,
             thread_id=thread_id,

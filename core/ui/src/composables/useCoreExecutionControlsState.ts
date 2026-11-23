@@ -20,7 +20,7 @@ import {
   type CoreThinkingPayload,
   normalizeCorePermissionPreset,
 } from '@/composer/execution.ts'
-import { normalizeCoreRunMode } from '@/composer/runMode.ts'
+import { isHiddenCoreRunMode, normalizeCoreRunMode } from '@/composer/runMode.ts'
 
 export interface CoreExecutionControlsStorage {
   getItem(key: string): string | null
@@ -273,7 +273,8 @@ export function useCoreExecutionControlsState<
 
   function selectMode(mode: string): void {
     activeMode.value = normalizeCoreRunMode(mode)
-    try { options.storage?.setItem(storageKeys.activeMode, mode) } catch { /* noop */ }
+    // 存的永远是界面认识的那个模式：旧名字与隐藏模式都不会被写回本地存储。
+    try { options.storage?.setItem(storageKeys.activeMode, activeMode.value) } catch { /* noop */ }
   }
 
   function selectShallowThinking(enabled: boolean): void {
@@ -312,6 +313,9 @@ export function useCoreExecutionControlsState<
       shallowThinkingEnabled.value = next.shallowThinkingEnabled
     }
     if (typeof next.activeMode === 'string' && next.activeMode) {
+      // user:“把智能模式隐藏掉，从下个版本开始，仅聊天和工作模式”+(旧会话存档里写的
+      // 是 auto，这里统一按工作显示；会话存档本身的改写在宿主的 restoreSessionComposer，
+      // 本函数只负责本地这一格不再留 auto)。
       const mode = normalizeCoreRunMode(next.activeMode)
       activeMode.value = mode
       try { options.storage?.setItem(storageKeys.activeMode, mode) } catch { /* noop */ }
@@ -323,9 +327,14 @@ export function useCoreExecutionControlsState<
   }
 
   // Restore persisted activeMode on mount
+  // user:“前端读到历史 auto 时按 work 处理…并且把存储值迁移成 work”+(本地也写回一次：
+  // 否则下次启动又读到 auto，界面显示工作、存的却还是智能，永远对不上)。
   try {
     const stored = options.storage?.getItem(storageKeys.activeMode)
-    if (stored) activeMode.value = normalizeCoreRunMode(stored)
+    if (stored) {
+      activeMode.value = normalizeCoreRunMode(stored)
+      if (isHiddenCoreRunMode(stored)) options.storage?.setItem(storageKeys.activeMode, activeMode.value)
+    }
   } catch { /* noop */ }
 
   return {

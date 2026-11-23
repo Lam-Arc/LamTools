@@ -42,9 +42,9 @@ describe('布局规则变量统一', () => {
   it('分屏主面板宽度同样走布局变量覆盖链', () => {
     expect(splitCss).toContain('var(--layout-split-primary-width, var(--split-primary-width))')
   })
-  it('侧栏宽度与标题栏高度都经过 --layout-* 覆盖链', () => {
+  it('侧栏宽度可覆盖，顶部只让出系统安全区', () => {
     expect(variablesCss).toContain('--sidebar-width: var(--layout-sidebar-width')
-    expect(variablesCss).toContain('--titlebar-offset: calc(var(--layout-titlebar-height, var(--titlebar-native-height, 0px))')
+    expect(variablesCss).toContain('--titlebar-offset: var(--native-safe-area-top, 0px)')
     // 断点档位同样被覆盖链包住，任何窗口宽度下编辑器变量都优先。
     expect(shellCss).toContain('--sidebar-width: var(--layout-sidebar-width, var(--sidebar-width-mid))')
     expect(shellCss).toContain('--sidebar-width: var(--layout-sidebar-width, var(--sidebar-width-full))')
@@ -57,8 +57,8 @@ describe('布局规则变量统一', () => {
     expect(shellCss).toContain('--shell-bottom-inset: var(--layout-bottom-inset')
   })
 
-  it('标题栏只登记原生高度，不再直接写死偏移变量', () => {
-    expect(titleBar).toContain("'--titlebar-native-height'")
+  it('窗口按钮不再登记原生标题栏高度', () => {
+    expect(titleBar).not.toContain("'--titlebar-native-height'")
     expect(titleBar).not.toContain("style.setProperty('--titlebar-offset'")
   })
 })

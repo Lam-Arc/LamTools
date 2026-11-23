@@ -23,6 +23,18 @@ pub fn encode_ticket(addr: &EndpointAddr) -> Result<String> {
     ))
 }
 
+/// 任意票据 → 对端地址。
+///
+/// user:“扫码即可完成配对”+(扫到的是 `sunday2:` 配对票，它既带地址也带授权；已配对设备
+/// 重连时手里是 `sunday1:` 地址票。两条路只在这里分叉一次，上层不用关心)。
+pub fn decode_any_ticket(text: &str) -> Result<EndpointAddr> {
+    let trimmed = text.trim();
+    if crate::pair::is_pairing_ticket(trimmed) {
+        return Ok(crate::pair::verify(trimmed, None, crate::pair::now())?.addr);
+    }
+    decode_ticket(trimmed)
+}
+
 pub fn decode_ticket(text: &str) -> Result<EndpointAddr> {
     let trimmed = text.trim();
     let body = trimmed.strip_prefix(PREFIX).unwrap_or(trimmed);

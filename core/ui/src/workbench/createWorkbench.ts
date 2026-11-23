@@ -588,9 +588,11 @@ export function createWorkbench(options: WorkbenchRuntimeOptions) {
     respondApproval: (requestId, decision, guidance) => (
       runtimeController.respondApproval(requestId, decision, guidance)
     ),
+    // user:“在我输入框已有内容的时候，我提交一个回复，会把原有的输入框内容给吞掉，且没有恢复”+
+    // (答案本身就是一条完整消息：直接带着正文发出去，不往输入栏里写、也不清空它——
+    //  用户没发出去的草稿与待发附件都还在原地。)
     submitText: async (text) => {
-      composerText.value = text
-      await liveComposerController.submit({ clearComposer: true })
+      await liveComposerController.submit({ text, attachments: [] })
     },
     deferText: (text) => { composerText.value = text },
   })

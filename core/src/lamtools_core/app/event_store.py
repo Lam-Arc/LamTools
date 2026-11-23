@@ -95,12 +95,53 @@ class SqlAlchemyAppEventStore:
         max_seq_allocate_attempts: int = MAX_SEQ_ALLOCATE_ATTEMPTS,
         sync_change_model: type[Any] | None = None,
         workspace_id: str = "",
+        rust_db: Any | None = None,
     ) -> None:
         self.event_model = event_model
         self.protocol_version = protocol_version
         self.max_seq_allocate_attempts = max_seq_allocate_attempts
         self.sync_change_model = sync_change_model
         self.workspace_id = str(workspace_id or "").strip()
+        self._rust_db = rust_db
+
+    def _can_use_rust(self, db: Any) -> Any | None:
+        if (
+            self._rust_db is not None
+            and self._rust_db.is_active
+            and not db.in_transaction()
+            and not getattr(db, "new", None)
+            and not getattr(db, "dirty", None)
+            and not getattr(db, "deleted", None)
+        ):
+            return self._rust_db
+        return None
+
+    def _envelope_from_dict(self, row: dict[str, Any]) -> AppEventEnvelope:
+        raw_dt = str(row.get("created_at") or "").strip()
+        try:
+            created_at = datetime.fromisoformat(raw_dt.replace(" ", "T")) if raw_dt else datetime.now()
+        except ValueError:
+            created_at = datetime.now()
+        seq = int(row.get("seq") or 0)
+        return AppEventEnvelope(
+            event_id=str(row.get("event_id") or ""),
+            protocol_version=self.protocol_version,
+            seq=seq,
+            thread_id=str(row.get("thread_id") or ""),
+            method=str(row.get("method") or ""),
+            payload=dict(row.get("payload") or {}),
+            created_at=created_at,
+            turn_id=row.get("turn_id"),
+            item_id=row.get("item_id"),
+            parent_item_id=row.get("parent_item_id"),
+            client_message_id=row.get("client_message_id"),
+            workspace_id=str(row.get("workspace_id") or ""),
+            entity_type=str(row.get("entity_type") or "thread.event"),
+            entity_id=str(row.get("entity_id") or row.get("thread_id") or ""),
+            event_seq=int(row.get("event_seq") or seq),
+            revision=int(row.get("revision") or 0),
+            event_type=str(row.get("event_type") or row.get("method") or ""),
+        )
 
     async def append(self, db: AsyncSession, event: AppEventInput) -> AppEventEnvelope:
         event_id = event.event_id or _new_event_id()
@@ -203,6 +244,13 @@ class SqlAlchemyAppEventStore:
         after_seq: int = 0,
         limit: int = 500,
     ) -> list[AppEventEnvelope]:
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            rows = await rust_db.call(
+                "events_list_after",
+                {"thread_id": thread_id, "after_seq": int(after_seq), "limit": int(limit)},
+            )
+            return [self._envelope_from_dict(r) for r in rows]
         result = await db.execute(
             select(self.event_model)
             .where(self.event_model.thread_id == thread_id, self.event_model.seq > after_seq)
@@ -218,6 +266,13 @@ class SqlAlchemyAppEventStore:
         thread_id: str,
         limit: int | None = None,
     ) -> list[AppEventEnvelope]:
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            rows = await rust_db.call(
+                "events_list_thread",
+                {"thread_id": thread_id, "limit": int(limit) if limit is not None else None},
+            )
+            return [self._envelope_from_dict(r) for r in rows]
         query = (
             select(self.event_model)
             .where(self.event_model.thread_id == thread_id)
@@ -233,6 +288,13 @@ class SqlAlchemyAppEventStore:
         self, db: AsyncSession, *, thread_id: str, turn_id: str,
         terminal_only: bool = False,
     ) -> AppEventEnvelope | None:
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            row = await rust_db.call(
+                "events_find_turn_event",
+                {"thread_id": thread_id, "turn_id": turn_id, "terminal_only": bool(terminal_only)},
+            )
+            return self._envelope_from_dict(row) if isinstance(row, dict) else None
         model = self.event_model
         query = select(model).where(model.thread_id == thread_id, model.turn_id == turn_id)
         if terminal_only:
@@ -255,6 +317,17 @@ class SqlAlchemyAppEventStore:
         client_message_id: str,
         methods: set[str],
     ) -> AppEventEnvelope | None:
+        rust_db = self._can_use_rust(db)
+        if rust_db is not None:
+            row = await rust_db.call(
+                "events_find_client_event",
+                {
+                    "thread_id": thread_id,
+                    "client_message_id": client_message_id,
+                    "methods": sorted(str(m) for m in methods),
+                },
+            )
+            return self._envelope_from_dict(row) if isinstance(row, dict) else None
         result = await db.execute(
             select(self.event_model)
             .where(

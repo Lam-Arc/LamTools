@@ -21,6 +21,7 @@ from .live_operations import (
 from .live_protocol import (
     INVALID_REQUEST,
     METHOD_NOT_FOUND,
+    NOT_INITIALIZED,
     PROTOCOL_VERSION,
     SERVER_ERROR,
     THREAD_GAP_METHOD,
@@ -80,6 +81,58 @@ SNAPSHOT_NOTIFICATION_TURN_LIMIT = 10
 CONTROL_OUTBOUND_RUN_ITEM_KINDS = frozenset(
     {"approval_request", "approval_response", "interaction_update"}
 )
+
+# user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(进行中的工具进度
+# 帧没有 delta、不并入 20ms 合并窗口，却被旧规则当成可靠消息逐帧塞进 64 格控制
+# 通道，于是通道打满 → 1013 重连风暴 → 订阅者队列溢出 → WAL 停止回收。分流必须按
+# 「这帧丢了客户端会不会停在回不来的状态」判定，而不是按「有没有 delta」判定。)
+RELIABLE = "reliable"
+LOSSY = "lossy"
+DROP = "drop"
+
+# 进度类：后续帧总是重述同一 item 的全量状态（content / arguments / phase），所以
+# 「最新一帧胜出」就能收敛，中间帧丢了只是少画几帧。
+LOSSY_PROGRESS_RUN_ITEM_KINDS = frozenset(
+    {"message", "thinking", "tool_call", "model_phase"}
+)
+# 结果与决策类：丢一帧客户端就永远看不到工具结束/审批卡，必须可靠。
+RELIABLE_RUN_ITEM_KINDS = frozenset(
+    {
+        "tool_result",
+        "status",
+        "usage",
+        "error",
+        "artifact",
+        "verification",
+        "handoff",
+    }
+)
+
+# user:“事件通道压力过高：可靠通道 0/64；已丢弃 400 帧可丢进度；正在自动恢复，无需操作”+(只在可靠消息实际积压时提示，进度去重留在诊断日志)
+CONTROL_QUEUE_ALERT_RATIO = 0.5
+CONTROL_QUEUE_ALERT_MIN_DEPTH = 8
+BACKPRESSURE_NOTIFICATION_METHOD = "core/backpressure"
+BACKPRESSURE_MIN_INTERVAL_SECONDS = 10.0
+
+# user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(同一 item 的同一
+# 「进行中」帧只下发一次：模型流式生成工具参数时，每个 chunk 都重投影一次
+# 同一个 tool_call runItem；这类事件没有 delta、不走 20ms 合并窗口，原来逐帧
+# 直发，实测同一 item 1 秒下发 283 帧、19 分钟写满一个 16MB 的日志分片。
+# 终态与结果类事件绝不参与去重——吞掉一个终态帧就等于客户端永远等不到工具结束。)
+TERMINAL_RUN_ITEM_STATUSES = frozenset(
+    {"completed", "complete", "failed", "cancelled", "canceled",
+     "interrupted", "error", "denied", "done", "ok"}
+)
+NON_DEDUPED_RUN_ITEM_KINDS = frozenset(
+    {"tool_result", "status", "usage", "approval_request", "approval_response",
+     "interaction_update"}
+)
+# 指纹里必须剔除的簿记字段：它们每次重投影都不一样，却与界面状态无关。
+RUN_ITEM_VOLATILE_FIELDS = frozenset(
+    {"event_id", "_coalesced_event_ids", "seq", "event_seq", "revision",
+     "created_at", "updated_at", "timestamp"}
+)
+MAX_TRACKED_RUN_ITEM_KEYS = 4096
 CONTROL_OUTBOUND_ENQUEUE_TIMEOUT_SECONDS = 5.0
 OUTBOUND_DROP_LOG_INTERVAL_SECONDS = 10.0
 # After the lossy lane drops frames, tell the client to resynchronize from its
@@ -115,7 +168,7 @@ class CoreLiveConnectionAdapter:
     server_title: str = "Core App Server"
     accept_initialized_ack: bool = True
     invalid_request_message: str = "Invalid JSON-RPC request"
-    not_initialized_code: int = INVALID_REQUEST
+    not_initialized_code: int = NOT_INITIALIZED
     not_initialized_message: str = "Connection is not initialized"
     already_initialized_message: str = "Already initialized"
     handle_client_response: CoreLiveClientResponseHandler | None = None
@@ -191,6 +244,9 @@ class CoreLiveConnection:
         # self-grant auto-approval (see _dispatch).
         self.browser_origin = browser_origin
         self.initialized = False
+        # user:"Connection is not initialized"+(旧构建里未握手期间的轮询把同一个拒绝写成
+        # 了 3 万多行日志，淹没真正的问题；这里只保留累计计数，日志按采样输出。)
+        self._not_initialized_rejects = 0
         self.thread_id: str | None = None
         self.subscription: asyncio.Queue[Any | None] | None = None
         # Signalled when a subscription is active so _hub_reader can block
@@ -232,6 +288,25 @@ class CoreLiveConnection:
         # frame is never mutated afterwards.
         self._outbound_keys: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._request_methods: dict[str, str] = {}
+        # 上一次真正下发的「进行中」runItem 状态指纹，按 (thread, item, kind)
+        # 记录；命中即整帧丢弃：内容一模一样，客户端状态已经正确，重发只是把
+        # 发送通道和日志一起淹掉。
+        self._last_run_item_fingerprints: dict[tuple[str, str, str], str] = {}
+        self._suppressed_run_item_count = 0
+        self._suppressed_run_item_logged = 0
+        self._suppressed_run_item_last_log_at: float | None = None
+        # user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(可丢通道的
+        # 计数必须看得见：合并了多少、真丢了多少、可靠通道最深到过几格；这些就是
+        # 用户可见告警的依据。)
+        self._lossy_merged_count = 0
+        self._lossy_dropped_count = 0
+        self._lossy_stats_last_log_at: float | None = None
+        self._control_peak_depth = 0
+        self._control_frames_enqueued = 0
+        # 已被同一 item 的终态帧取代、但还排在可丢通道里的旧进度帧（按对象身份记，
+        # 出队时直接跳过，避免终态之后又来一条过期的 running 把工具行重新点亮）。
+        self._superseded_frames: set[int] = set()
+        self._backpressure_last_at: float | None = None
 
     async def run(self) -> None:
         await self.websocket.accept()
@@ -281,6 +356,14 @@ class CoreLiveConnection:
                 task.cancel()
             await asyncio.gather(*background, *pending, return_exceptions=True)
             self._unsubscribe()
+            if self._lossy_merged_count or self._lossy_dropped_count:
+                _trace(
+                    "core.lossy_lane_summary",
+                    merged=self._lossy_merged_count,
+                    dropped=self._lossy_dropped_count,
+                    control_peak_depth=self._control_peak_depth,
+                    thread_id=self.thread_id or "",
+                )
             if self._outbound_dropped_count:
                 _trace(
                     "core.outbound_notifications_dropped",
@@ -367,16 +450,33 @@ class CoreLiveConnection:
         sender it is no longer reachable through ``_outbound_keys`` and cannot be
         mutated while it is being serialized.
         """
-        message = self.outbound.get_nowait()
-        key = self._run_item_replace_key(message)
-        if key is not None:
-            self._outbound_keys.pop(key, None)
-        return message
+        while True:
+            message = self.outbound.get_nowait()
+            if id(message) in self._superseded_frames:
+                # 同一 item 的终态帧已经在可靠通道里等着了，这条过期进度再发出去只会
+                # 把客户端状态点回 running（甚至盖掉结果）。
+                self._superseded_frames.discard(id(message))
+                self._lossy_dropped_count += 1
+                continue
+            key = self._run_item_replace_key(message)
+            if key is not None:
+                self._outbound_keys.pop(key, None)
+            return message
 
     async def _send(self, message: dict[str, Any], *, force_control: bool = False) -> None:
         if self._closing:
             return
-        if force_control or _is_control_outbound(message):
+        # user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(先分流再投递：
+        # 进行中的工具进度帧与流式 delta 走可丢通道，终态/结果/审批/未知类型走可靠
+        # 通道；force_control 只留给必须插队的控制信号（快照、gap、应答）。)
+        lane = RELIABLE if force_control else classify_run_item_delivery(message)
+        if lane == RELIABLE:
+            if self._suppress_duplicate_run_item(message):
+                return
+            self._retire_pending_progress(message)
+            self._control_peak_depth = max(
+                self._control_peak_depth, self.control_outbound.qsize()
+            )
             # Backpressure is intentional for bounded control traffic. The
             # producer belongs to a request or reader task and is cancelled by
             # run() when the peer disconnects; a bounded timeout also forces a
@@ -405,7 +505,18 @@ class CoreLiveConnection:
                 except Exception as exc:
                     logger.debug("core-app-server saturated close failed: %s", exc)
                 return
+            self._control_frames_enqueued += 1
+            self._control_peak_depth = max(
+                self._control_peak_depth, self.control_outbound.qsize()
+            )
+            self._maybe_report_backpressure(now=time.monotonic())
             self._outbound_ready.set()
+            return
+        if lane == DROP:
+            self._record_lossy_drop()
+            return
+        if self._suppress_duplicate_run_item(message):
+            self._record_lossy_drop()
             return
         key = self._run_item_replace_key(message)
         if key is not None:
@@ -417,6 +528,8 @@ class CoreLiveConnection:
             pending = self._outbound_keys.get(key)
             if pending is not None:
                 _merge_run_item_message(pending, message)
+                self._lossy_merged_count += 1
+                self._log_lossy_lane_stats()
                 return
             try:
                 self.outbound.put_nowait(message)
@@ -434,30 +547,198 @@ class CoreLiveConnection:
         self._outbound_ready.set()
 
     def _run_item_replace_key(self, message: Mapping[str, Any]) -> tuple[str, str, str] | None:
-        """Return the replaceable key for a lossy runItem delta frame, else None.
+        """Return the merge key for a lossy runItem frame, else None.
 
-        Only non-control runItem frames carrying a live ``delta`` string are
-        replaceable; every state message (RPC reply, snapshot, approval, sync
-        change, non-delta runItem) is either control-lane or must keep every
-        frame, so it has no key and keeps the drop-on-full behaviour. The key
-        matches ``_enqueue_run_item`` so a frame flushed by the coalescer is
-        recognised against the one already queued.
+        user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(可丢通道里同一
+        item 只占一个格：delta 帧拼接文本，进行中的进度帧用最新状态覆盖，队列深度
+        因此不随帧数增长。)
+
+        Only frames the classifier sends to the lossy lane get a key. Every state
+        message (RPC reply, snapshot, approval, sync change, reliable runItem) is
+        control-lane and must keep every frame, so it has no key. The key matches
+        ``_enqueue_run_item`` so a frame flushed by the coalescer is recognised
+        against the one already queued.
         """
-        if "id" in message or message.get("method") != CORE_RUN_ITEM_METHOD:
+        if not isinstance(message, Mapping):
+            return None
+        if classify_run_item_delivery(message) != LOSSY:
             return None
         params = message.get("params")
         if not isinstance(params, Mapping):
             return None
-        if _run_item_kind(params) in CONTROL_OUTBOUND_RUN_ITEM_KINDS:
-            return None
         value = params.get("payload") if isinstance(params.get("payload"), Mapping) else params
-        inner = value.get("payload") if isinstance(value.get("payload"), Mapping) else {}
-        if not isinstance(inner.get("delta"), str):
+        item_id = str(value.get("item_id") or params.get("item_id") or "")
+        if not item_id:
             return None
         return (
             str(value.get("thread_id") or params.get("thread_id") or self.thread_id or ""),
-            str(value.get("item_id") or params.get("item_id") or ""),
+            item_id,
             str(value.get("kind") or ""),
+        )
+
+    def _retire_pending_progress(self, message: Mapping[str, Any]) -> None:
+        """Mark queued lossy frames of the same item superseded by a reliable one.
+
+        A terminal frame and the progress frames it ends can carry different
+        kinds (``tool_result`` vs ``tool_call``), so the match is deliberately
+        per item, not per (item, kind).
+        """
+        identity = _run_item_identity(message)
+        if identity is None:
+            return
+        thread_id, item_id = identity
+        for key, pending in list(self._outbound_keys.items()):
+            if key[1] != item_id:
+                continue
+            if thread_id and key[0] and key[0] != thread_id:
+                continue
+            self._outbound_keys.pop(key, None)
+            if len(self._superseded_frames) > 256:
+                self._superseded_frames.clear()
+            self._superseded_frames.add(id(pending))
+
+    def _suppress_duplicate_run_item(self, message: Mapping[str, Any]) -> bool:
+        """Drop a runItem frame that repeats the state already sent for this item.
+
+        user:“查清 constant 安装版为什么退出 + 修掉事件风暴”+(工具参数流式生成时，
+        每个 chunk 都重投影一次同一个 tool_call：没有 delta，不并入 20ms 合并
+        窗口，而是逐帧进控制通道。同一 item 的同一「进行中」状态只发一次；
+        内容变了、或到了终态（completed/failed/...），照常下发。)
+        """
+        if message.get("method") != CORE_RUN_ITEM_METHOD:
+            return False
+        params = message.get("params")
+        if not isinstance(params, Mapping):
+            return False
+        value = params.get("payload") if isinstance(params.get("payload"), Mapping) else params
+        if not isinstance(value, Mapping):
+            return False
+        item_id = str(value.get("item_id") or params.get("item_id") or "")
+        if not item_id:
+            return False
+        kind = str(value.get("kind") or "")
+        status = str(value.get("status") or "").lower()
+        key = (
+            str(value.get("thread_id") or params.get("thread_id") or self.thread_id or ""),
+            item_id,
+            kind,
+        )
+        if kind in NON_DEDUPED_RUN_ITEM_KINDS or status in TERMINAL_RUN_ITEM_STATUSES:
+            # 终态/结果帧一律放行，并让该 item 的去重状态失效：之后若再有同内容
+            # 的「进行中」帧（例如 resume 重跑），必须重新送达，不能被旧指纹吞掉。
+            self._last_run_item_fingerprints.pop(key, None)
+            return False
+        inner = value.get("payload") if isinstance(value.get("payload"), Mapping) else {}
+        if isinstance(inner.get("delta"), str):
+            # user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(delta 是
+            # 增量文本：两帧内容相同也可能是要拼进客户端的两个字，按内容去重会吞字。)
+            return False
+        try:
+            fingerprint = json.dumps(
+                _stable_run_item_payload(inner),
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        except (TypeError, ValueError):
+            return False
+        if self._last_run_item_fingerprints.get(key) == fingerprint:
+            self._suppressed_run_item_count += 1
+            self._log_suppressed_run_items()
+            return True
+        if len(self._last_run_item_fingerprints) > MAX_TRACKED_RUN_ITEM_KEYS:
+            self._last_run_item_fingerprints.clear()
+        self._last_run_item_fingerprints[key] = fingerprint
+        return False
+
+    def _log_suppressed_run_items(self) -> None:
+        """Rate-limited visibility: suppression itself must stay observable."""
+        now = time.monotonic()
+        last = self._suppressed_run_item_last_log_at
+        if last is not None and now - last < OUTBOUND_DROP_LOG_INTERVAL_SECONDS:
+            return
+        self._suppressed_run_item_last_log_at = now
+        logger.info(
+            "core-app-server suppressed %d duplicate runItem frame(s) (total=%d, thread=%s)",
+            self._suppressed_run_item_count - self._suppressed_run_item_logged,
+            self._suppressed_run_item_count,
+            self.thread_id or "-",
+        )
+        self._suppressed_run_item_logged = self._suppressed_run_item_count
+
+    def _should_trace_not_initialized_reject(self) -> bool:
+        """Sample repeated pre-handshake rejections instead of logging each one.
+
+        user:"这次为什么又卡死到必须重启"+(60 次/分钟的轮询拒绝曾被逐条写进日志，
+        19 分钟内写满 16MB 分片；前 3 次全记，之后每 100 次记一条并带累计数。)
+        """
+        count = self._not_initialized_rejects
+        return count <= 3 or count % 100 == 0
+
+    def _record_lossy_drop(self) -> None:
+        """Count one frame the lossy lane did not need to deliver."""
+        self._lossy_dropped_count += 1
+        self._log_lossy_lane_stats()
+
+    def _log_lossy_lane_stats(self, *, force: bool = False) -> None:
+        """Report merged/dropped frames on a 10s throttle.
+
+        user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(被合并/丢弃的
+        帧数按 10 秒节流打一条日志，别再让 283 帧/秒无声地滚过去。)
+        """
+        now = time.monotonic()
+        last = self._lossy_stats_last_log_at
+        if last is not None and now - last < OUTBOUND_DROP_LOG_INTERVAL_SECONDS:
+            return
+        merged = self._lossy_merged_count
+        dropped = self._lossy_dropped_count
+        if not merged and not dropped and not force:
+            return
+        self._lossy_stats_last_log_at = now
+        logger.info(
+            "core-app-server lossy lane merged=%d dropped=%d control_depth=%d "
+            "control_peak=%d thread=%s",
+            merged,
+            dropped,
+            self.control_outbound.qsize(),
+            self._control_peak_depth,
+            self.thread_id or "-",
+        )
+
+    def _maybe_report_backpressure(self, *, now: float) -> None:
+        """Report a backed-up control queue without blocking reliable delivery."""
+        if self._closing:
+            return
+        depth = self.control_outbound.qsize()
+        limit = self.control_outbound.maxsize or 1
+        threshold = max(
+            CONTROL_QUEUE_ALERT_MIN_DEPTH, int(limit * CONTROL_QUEUE_ALERT_RATIO)
+        )
+        if depth < threshold:
+            return
+        last = self._backpressure_last_at
+        if last is not None and now - last < BACKPRESSURE_MIN_INTERVAL_SECONDS:
+            return
+        self._backpressure_last_at = now
+        logger.warning(
+            "core-app-server reliable queue under pressure: control_depth=%d/%d thread=%s",
+            depth,
+            limit,
+            self.thread_id or "-",
+        )
+        # Keep capacity for real control traffic. WAL has its own maintenance loop.
+        if limit - depth <= 1:
+            return
+        self.control_outbound.put_nowait(
+            {
+                "method": BACKPRESSURE_NOTIFICATION_METHOD,
+                "params": {
+                    "thread_id": self.thread_id or "",
+                    "reason": "control_queue_pressure",
+                    "control_queue_depth": depth,
+                    "control_queue_limit": limit,
+                },
+            }
         )
 
     def _record_outbound_drop(self) -> None:
@@ -607,15 +888,22 @@ class CoreLiveConnection:
         them all seen and a later snapshot never replays them.
         """
         params = event_notification(event)["params"]
-        value = params.get("payload") if isinstance(params.get("payload"), dict) else params
-        inner = value.get("payload") if isinstance(value.get("payload"), dict) else {}
-        if not isinstance(inner.get("delta"), str):
-            # Non-delta runItem events (tool_result, status, usage, full
-            # content) carry completion/state — send immediately, ordered
-            # after any buffered deltas for the same item.
+        message = {"method": CORE_RUN_ITEM_METHOD, "params": params}
+        # user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(非 delta 的
+        # 进行中进度帧也进 20ms 合并窗口，并按同 item 覆盖：一次工具参数流式生成
+        # 不再逐帧直发，每个窗口最多出一帧；终态/结果帧先把缓冲冲出去再走可靠通道，
+        # 客户端看到的顺序不会倒。)
+        lane = classify_run_item_delivery(message)
+        if lane == RELIABLE:
+            # Reliable state frames go out immediately, ordered after any
+            # buffered lossy frames for the same item.
             await self._flush_run_item_buffer(control=True)
-            await self._send({"method": CORE_RUN_ITEM_METHOD, "params": params})
+            await self._send(message, force_control=True)
             return
+        if lane == DROP:
+            self._record_lossy_drop()
+            return
+        value = params.get("payload") if isinstance(params.get("payload"), dict) else params
         key = (
             str(value.get("thread_id") or params.get("thread_id") or self.thread_id or ""),
             str(value.get("item_id") or params.get("item_id") or ""),
@@ -631,12 +919,12 @@ class CoreLiveConnection:
                 str(value.get("event_id") or params.get("event_id") or ""),
             ]
         else:
-            b_inner = buffered["params"]["payload"]["payload"]
-            if isinstance(b_inner, dict):
-                b_inner["delta"] = f"{b_inner.get('delta') or ''}{inner['delta']}"
-            event_id = str(value.get("event_id") or params.get("event_id") or "")
-            if event_id:
-                buffered["params"]["payload"]["_coalesced_event_ids"].append(event_id)
+            # 同一 item 的下一帧：delta 拼接，进行中的进度帧用最新状态覆盖。
+            # 合并发生在这里（20ms 窗口内），队列层的覆盖是第二道保险。
+            _merge_run_item_message(
+                buffered, {"method": CORE_RUN_ITEM_METHOD, "params": _copy_run_item_params(params)}
+            )
+            self._lossy_merged_count += 1
         if self._run_item_flush_task is None:
             self._run_item_flush_task = asyncio.create_task(self._flush_run_items_soon())
 
@@ -773,13 +1061,18 @@ class CoreLiveConnection:
             )
             return
         if not self.initialized:
-            _trace(
-                "core.rpc.rejected",
-                request_id=request_id,
-                method=request.method,
-                reason="not_initialized",
-            )
+            # user:"界面出现 Connection is not initialized"+(先回包再记日志：回包是客户端
+            # 自愈的唯一依据，任何路径都不能让它落空；重复拒绝按采样记录。)
+            self._not_initialized_rejects += 1
             await self._send_not_initialized(request)
+            if self._should_trace_not_initialized_reject():
+                _trace(
+                    "core.rpc.rejected",
+                    request_id=request_id,
+                    method=request.method,
+                    reason="not_initialized",
+                    count=self._not_initialized_rejects,
+                )
             return
         if thread_id:
             self._subscribe(thread_id)
@@ -910,11 +1203,15 @@ class CoreLiveConnection:
         return self.adapter.invalid_request_message
 
     async def _send_not_initialized(self, request: JsonRpcRequest) -> None:
+        # user:"界面出现 Connection is not initialized"+(每个未握手的业务帧都要立刻拿到
+        # 一条可识别的回包：专用错误码 + reason/retriable。客户端据此重新握手并重试，
+        # 既不会把帧丢进黑洞，也不会把这条当成致命参数错误弹给用户看。)
         await self._send(
             rpc_error(
                 request.id,
                 code=self.adapter.not_initialized_code,
                 message=self.adapter.not_initialized_message,
+                data={"reason": "not_initialized", "retriable": True},
             )
         )
 
@@ -928,6 +1225,13 @@ class CoreLiveConnection:
             await self._send(rpc_error(request.id, code=INVALID_REQUEST, message="Invalid initialize params", data={"errors": exc.errors()}))
             return
         self.initialized = True
+        if self._not_initialized_rejects:
+            # 让运维能直接看出「这条连接曾经在未握手状态被拒了多少帧」。
+            _trace(
+                "core.rpc.not_initialized_recovered",
+                rejected_before_initialize=self._not_initialized_rejects,
+            )
+            self._not_initialized_rejects = 0
         client_name = ""
         if params.clientInfo is not None:
             client_name = str(getattr(params.clientInfo, "name", "") or "")
@@ -1181,30 +1485,96 @@ def _run_item_kind(event: Any) -> str:
     return ""
 
 
-def _is_control_outbound(message: Mapping[str, Any]) -> bool:
-    """Return whether a message needs reliable, priority-lane delivery.
+def _run_item_identity(message: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Return ``(thread_id, item_id)`` for a runItem notification, else None."""
+    if not isinstance(message, Mapping):
+        return None
+    if message.get("method") != CORE_RUN_ITEM_METHOD:
+        return None
+    params = message.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    value = params.get("payload") if isinstance(params.get("payload"), Mapping) else params
+    if not isinstance(value, Mapping):
+        return None
+    item_id = str(value.get("item_id") or params.get("item_id") or "")
+    if not item_id:
+        return None
+    return (
+        str(value.get("thread_id") or params.get("thread_id") or ""),
+        item_id,
+    )
 
-    High-volume runItem text deltas can be recovered from a later snapshot or
-    resume. RPC responses and every state notification use the bounded control
-    lane; non-delta runItem updates and approvals are also reliable.
+
+def classify_run_item_delivery(
+    message: Mapping[str, Any], *, already_delivered: bool = False
+) -> str:
+    """Decide how one outbound frame must travel: ``reliable`` | ``lossy`` | ``drop``.
+
+    user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(判定收成一个纯
+    函数：给定一帧判定可靠/可丢/丢且无新信息；未知类型一律按可靠处理，不能猜丢。)
+
+    Why these frames may be dropped (each rule is load-bearing):
+
+    * a frame carrying a ``delta`` string is *incremental* text — the client
+      concatenates deltas per item, so merging one into the next loses nothing;
+    * an in-progress frame without ``delta`` (tool_call arguments, thinking,
+      model_phase) restates the whole item every time, so the newest frame
+      supersedes the older ones and the client still converges;
+    * terminal frames and ``tool_result`` / ``status`` / ``usage`` /
+      ``approval_*`` / ``error`` are state boundaries and decision points:
+      losing one leaves the client with a tool row that never ends or an
+      approval card that never appears — those must stay reliable;
+    * an unknown kind, an unknown method or an RPC reply is reliable by
+      default: a newly added event type may be slow, never silently lost.
     """
+    if not isinstance(message, Mapping):
+        return RELIABLE
     if "id" in message:
-        return True
-    method = message.get("method")
-    if method == CORE_RUN_ITEM_METHOD:
-        params = message.get("params")
-        if not isinstance(params, dict):
-            return True
-        if _run_item_kind(params) in CONTROL_OUTBOUND_RUN_ITEM_KINDS:
-            return True
-        value = params.get("payload") if isinstance(params.get("payload"), dict) else params
-        inner = value.get("payload") if isinstance(value.get("payload"), dict) else {}
-        return not isinstance(inner.get("delta"), str)
-    # App-server state notifications are low-volume compared with runItem
-    # token deltas and need reliable delivery. Unknown notification methods
-    # stay on the control lane too so a newly added state event is safe by
-    # default.
-    return isinstance(method, str) and bool(method)
+        return RELIABLE
+    if message.get("method") != CORE_RUN_ITEM_METHOD:
+        return RELIABLE
+    params = message.get("params")
+    if not isinstance(params, Mapping):
+        return RELIABLE
+    kind = _run_item_kind(params)
+    value = params.get("payload") if isinstance(params.get("payload"), Mapping) else params
+    if not isinstance(value, Mapping):
+        return RELIABLE
+    inner = value.get("payload") if isinstance(value.get("payload"), Mapping) else {}
+    status = str(value.get("status") or "").strip().lower()
+    if kind in RELIABLE_RUN_ITEM_KINDS or kind in CONTROL_OUTBOUND_RUN_ITEM_KINDS:
+        return RELIABLE
+    if status in TERMINAL_RUN_ITEM_STATUSES:
+        return RELIABLE
+    if isinstance(inner.get("delta"), str):
+        # 增量文本：先于 kind 判定（旧实现也是这么分的）。客户端按 item 拼接 delta，
+        # 所以它可以被合并，但不能按内容去重（两帧同样的 "ha" 就是两个 "ha"）。
+        return LOSSY
+    if kind not in LOSSY_PROGRESS_RUN_ITEM_KINDS:
+        # 未知 kind 且没有 delta：宁可慢一点走可靠通道，也不能猜着丢。
+        return RELIABLE
+    if not str(value.get("item_id") or params.get("item_id") or ""):
+        # 没有 item 身份的进度帧客户端放不进任何一行，留着也应用不了。
+        return DROP
+    if already_delivered:
+        return DROP
+    return LOSSY
+
+
+def _stable_run_item_payload(value: Any, depth: int = 0) -> Any:
+    """Strip volatile bookkeeping fields so two identical states fingerprint alike."""
+    if depth > 3:
+        return value
+    if isinstance(value, Mapping):
+        return {
+            key: _stable_run_item_payload(item, depth + 1)
+            for key, item in value.items()
+            if key not in RUN_ITEM_VOLATILE_FIELDS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stable_run_item_payload(item, depth + 1) for item in value]
+    return value
 
 
 def _copy_run_item_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -1247,7 +1617,18 @@ def _merge_run_item_message(target: dict[str, Any], source: Mapping[str, Any]) -
     target_delta = target_inner.get("delta")
     source_delta = source_inner.get("delta")
     if isinstance(target_delta, str) and isinstance(source_delta, str):
+        # 增量文本：两段都要，拼起来下发。
         target_inner["delta"] = target_delta + source_delta
+        for key, value in source_inner.items():
+            if key != "delta":
+                target_inner[key] = value
+    elif source_inner:
+        # user:“22｜把「可丢的工具进度帧」从可靠控制通道迁到可丢通道”+(进行中的进度帧
+        # 每帧都是同一 item 的全量状态，最新一帧胜出：覆盖旧状态而不是拼接，客户端
+        # 据此收敛到最新的工具参数/思考内容。)
+        merged = {**target_inner, **source_inner}
+        target_inner.clear()
+        target_inner.update(merged)
     absorbed = target_value.get("_coalesced_event_ids")
     if not isinstance(absorbed, list):
         absorbed = target_value["_coalesced_event_ids"] = []
@@ -1265,4 +1646,12 @@ def _merge_run_item_message(target: dict[str, Any], source: Mapping[str, Any]) -
             absorbed.append(event_id)
 
 
-__all__ = ["CoreLiveConnection", "CoreLiveConnectionAdapter", "create_core_live_router"]
+__all__ = [
+    "DROP",
+    "LOSSY",
+    "RELIABLE",
+    "CoreLiveConnection",
+    "CoreLiveConnectionAdapter",
+    "classify_run_item_delivery",
+    "create_core_live_router",
+]

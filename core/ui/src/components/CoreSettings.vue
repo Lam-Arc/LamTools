@@ -61,6 +61,13 @@
       </section>
 
       <section v-if="activeSection === 'models'" class="settings-panel models-panel">
+        <!-- user:“去把模型调用台从左竖栏 apprail 中移除，放进设置-模型与供应商里面作为一个子功能，自行设计”+
+             (调用台是这一区的第二个子视图：配置默认停在供应商与模型，切过去才是直接调用模型试跑。
+              用 v-show 留住配置面板，切走再切回来不会丢掉正在编辑的草稿。) -->
+        <div class="models-view-switch" data-settings-models-view>
+          <SundaySegmented v-model="modelsView" :label="t('模型与供应商视图')" :options="modelsViewOptions" />
+        </div>
+        <div v-show="modelsView === 'catalog'" class="models-view-body">
         <CoreModelCatalog
           :models="models"
           :providers="providers"
@@ -84,6 +91,14 @@
           @set-model-group-members="(payload) => $emit('set-model-group-members', payload)"
           @create-model-with-provider="(payload) => $emit('create-model-with-provider', payload)"
           @import-environment="$emit('import-environment')"
+        />
+        </div>
+        <DirectCallView
+          v-if="modelsView === 'direct'"
+          embedded
+          :request-rpc="requestRpc || defaultRequestRpc"
+          :project-id="projectId ?? null"
+          :work-root="workRoot ?? null"
         />
       </section>
 
@@ -143,6 +158,9 @@
           :theme-mode="props.effectiveThemeMode || 'light'"
           @update:settings="(value) => $emit('update:messageStream', value)"
         />
+
+        <!-- user:“放进 界面/主题”+(气泡外观属于界面外观，与主题、消息流放在同一分区) -->
+        <CoreBubbleAppearance :request-rpc="requestRpc || defaultRequestRpc" />
 
         <!-- user:“可视化主题与布局编辑器”+(界面分区提供进入编辑器的入口，进入后是真实界面的编辑态) -->
         <article class="setting-card studio-entry">
@@ -576,8 +594,12 @@ import {
 import { openUpdatePage } from '@/helpers/update.ts'
 import SettingsShell from '@/components/SettingsShell.vue'
 import CoreModelCatalog from '@/components/CoreModelCatalog.vue'
+// user:“放进设置-模型与供应商里面作为一个子功能”+(直接复用调用台组件，不另写一份)。
+import DirectCallView from '@/components/DirectCallView.vue'
+import SundaySegmented from '@/components/SundaySegmented.vue'
 import { CORE_SETTINGS_SECTIONS, type SettingsSection } from '@/components/settingsSections.ts'
 import ThemeEditor from '@/components/ThemeEditor.vue'
+import CoreBubbleAppearance from '@/components/CoreBubbleAppearance.vue'
 import MessageStreamSettings from '@/components/settings/MessageStreamSettings.vue'
 import {
   DEFAULT_MESSAGE_STREAM,
@@ -645,6 +667,9 @@ const props = withDefaults(defineProps<{
   messageStream?: MessageStreamSettingsValue
   allowEnvironmentImport?: boolean
   commandShellPlatform?: 'windows' | 'linux' | 'mobile' | 'web' | 'other'
+  /** 模型调用台嵌进「模型与供应商」后仍要知道当前项目：保存到资料库要用。 */
+  projectId?: string | null
+  workRoot?: string | null
   permissionPreset?: CorePermissionPreset
   allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -701,6 +726,14 @@ const emit = defineEmits<{
 }>()
 
 const sections = CORE_SETTINGS_SECTIONS
+
+// user:“去把模型调用台从左竖栏 apprail 中移除，放进设置-模型与供应商里面作为一个子功能，自行设计”+
+// (默认仍是供应商与模型；调用台作为同区第二个子视图，名字沿用原来的「调用台」)。
+const modelsView = ref('catalog')
+const modelsViewOptions = computed(() => [
+  { value: 'catalog', label: t('供应商与模型') },
+  { value: 'direct', label: t('调用台') },
+])
 
 // ── 手机悬浮环与小窗：只有 Android 宿主有这些命令，桌面端整块不渲染 ──────────
 const mobileOverlayOn = computed(() => overlayStateRef.value.running)
@@ -1175,6 +1208,9 @@ onMounted(() => {
   void fetchLoadContext()
   void fetchContextCompactionSettings()
   void fetchCommandShellSettings()
+  // user:“再次点更新键后的卡片继承进度”+(设置页打开时也先问一次主机：后台正在下载就
+  // 显示真实进度，已经下好就直接出现「立即安装」，不必再点一次下载。)
+  void update.syncFromHost()
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)

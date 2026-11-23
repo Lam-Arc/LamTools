@@ -866,12 +866,17 @@ export interface ThemeCSSVars {
   '--theme-main-subtle-background': string
   '--theme-main-sunken-background': string
   '--theme-main-border': string
+  /* user:“填充底色采用墨黑色/石英白”+“此四控件与其左侧的可拖拽空白区域，使用深灰色底”+
+     (胶囊/圆底填充按明暗给墨黑或石英白；整簇底色两档都保持深灰)。 */
+  '--theme-window-capsule-fill': string
+  '--theme-window-chrome-background': string
   '--theme-main-glass-filter': string
   '--theme-main-image': string
   '--theme-main-image-size': string
   '--theme-main-image-repeat': string
   '--theme-optical-glass-border-color': string
   '--theme-composer-background': string
+  '--theme-composer-solid': string
   '--theme-composer-text': string
   '--theme-composer-soft-background': string
   '--theme-composer-glass-filter': string
@@ -928,12 +933,24 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
     '--theme-main-subtle-background': lightMain ? 'rgba(255, 254, 250, 0.52)' : 'rgba(255, 255, 255, 0.028)',
     '--theme-main-sunken-background': lightMain ? 'rgba(31, 31, 31, 0.06)' : 'rgba(0, 0, 0, 0.32)',
     '--theme-main-border': mainBorder,
+    // user:“胶囊边框采用与图标同色适应明暗主题1.5px，填充底色采用墨黑色/石英白”+
+    // “右上那个组的背景，你考虑过深浅变化吗？”+
+    // (描边走 currentColor，随图标色；填充按明暗给墨黑/石英白。
+    //  簇底色不再写死两档：# 以本主题的主区实色为底、把主区文字色按比例掺进去——
+    //  暗色主题掺浅字 → 比主区亮一档的深灰，浅色主题掺深字 → 比主区深一档的中灰，
+    //  深浅两边都是“从所在面色里派生的一档深度”，换主题时自然跟着变)。
+    '--theme-window-capsule-fill': lightMain ? '#F7F4EE' : '#0C0D10',
+    '--theme-window-chrome-background': lightMain
+      ? 'color-mix(in srgb, var(--theme-main-text) 30%, var(--theme-main-solid, #F2EFEB))'
+      : 'color-mix(in srgb, var(--theme-main-text) 10%, var(--theme-main-solid, #111111))',
     '--theme-main-glass-filter': themeAreaGlassFilter(theme, 'main'),
     '--theme-main-image': themeAreaImageLayer(theme, 'main'),
     '--theme-main-image-size': themeAreaImageSize(theme, 'main'),
     '--theme-main-image-repeat': themeAreaImageRepeat(theme, 'main'),
     '--theme-optical-glass-border-color': lightMain ? 'rgb(184 184 184)' : 'rgb(95 95 95)',
     '--theme-composer-background': themeAreaBackground(theme, 'composer'),
+    // user:“尤其是气泡和玻璃效果”+(输入栏菜单按本区实色着色，不叠加主题的透明度或渐变)。
+    '--theme-composer-solid': theme.composerStops[0]?.color || '#292929',
     '--theme-composer-text': theme.composerText,
     '--theme-composer-soft-background': lightComposer ? 'rgba(255, 254, 250, 0.70)' : 'rgba(255, 255, 255, 0.045)',
     '--theme-composer-glass-filter': themeAreaGlassFilter(theme, 'composer'),

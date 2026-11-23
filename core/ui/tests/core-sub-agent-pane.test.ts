@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import CoreSubAgentPane from '../src/components/CoreSubAgentPane.vue'
+import CoreSubAgentView from '../src/components/CoreSubAgentView.vue'
 import ChatThread from '../src/components/ChatThread.vue'
 import { findCoreSubAgentRun, selectCoreSubAgentRuns } from '../src/agents/subAgentProjection'
 import { formatSubAgentElapsed, normalizeSubAgentType, subAgentRunIdentity, subAgentStatusLabel } from '../src/agents/subAgentDisplay'
@@ -274,7 +275,7 @@ describe('CoreSubAgentPane', () => {
       },
     })
     await nextTick()
-    const meta = paneElement().querySelector('.sub-agent-pane-meta')?.textContent ?? ''
+    const meta = paneElement().querySelector('[data-sub-agent-pane-meta]')?.textContent ?? ''
     expect(meta).not.toContain('0ms')
     expect(meta).toContain('deepseek/deepseek-v4.1-flash')
     wrapper.unmount()
@@ -663,5 +664,40 @@ describe('CoreSubAgentPane member-wait settling', () => {
     })
     expect(paneElement().querySelector('.sub-agent-pane-head')?.textContent).toContain('运行中')
     wrapper.unmount()
+  })
+})
+
+// user:“页眉同时作为下拉框，可切换到别的子代理”+
+// (页眉就是切换入口；列表在本会话已有的子代理里选，选中后只报一个 ref，标签怎么开由宿主决定)。
+describe('CoreSubAgentView header switcher', () => {
+  it('lists the session sub-agents and emits the chosen one', async () => {
+    const current = paneRun()
+    const other = paneRun({
+      id: 'thread-1:sub:other_dev',
+      subSessionId: 'thread-1:sub:other_dev',
+      name: 'other_dev',
+      modelId: 'another/model',
+      reasoningLevel: 'low',
+    })
+    const wrapper = mount(CoreSubAgentView, {
+      props: { run: current, transport: testTransport, embedded: true, loadRuns: () => [current, other] },
+    })
+    try {
+      await nextTick()
+      const trigger = wrapper.get('[data-sub-agent-pane-switch]')
+      expect(trigger.attributes('aria-expanded')).toBe('false')
+      await trigger.trigger('click')
+      const items = wrapper.findAll('[data-sub-agent-pane-switch-item]')
+      expect(items).toHaveLength(2)
+      expect(items[0].classes()).toContain('is-current')
+      expect(items[1].text()).toContain('other_dev')
+      await items[1].trigger('click')
+      expect(wrapper.emitted('open-sub-agent')?.at(-1)).toEqual([
+        { subSessionId: 'thread-1:sub:other_dev', name: 'other_dev' },
+      ])
+      expect(wrapper.find('[data-sub-agent-pane-switch-menu]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

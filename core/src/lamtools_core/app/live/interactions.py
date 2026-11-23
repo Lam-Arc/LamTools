@@ -115,10 +115,14 @@ async def _append_interaction_lifecycle_event(
         },
     )
 
-    async def write(db: AsyncSession) -> AppEventEnvelope:
-        return await _append_run_item(db, context=context, event=event)
+    if getattr(context.persistence, "can_use_rust_write", False):
+        envelopes = await context.persistence.append_batch_atomic(run_item_events=[event])
+        envelope = envelopes[0]
+    else:
+        async def write(db: AsyncSession) -> AppEventEnvelope:
+            return await _append_run_item(db, context=context, event=event)
 
-    envelope = await context.persistence.write(write)
+        envelope = await context.persistence.write(write)
     if context.hub is not None:
         await context.hub.publish(envelope)
 

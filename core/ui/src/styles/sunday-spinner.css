@@ -1,7 +1,11 @@
 /* user:“统一与去重：建立统一的 Design Tokens 和可复用组件体系”+(统一加载旋转及减少动态效果，保留原有速度差异)。 */
-.sunday-spin { animation: sunday-spin .9s linear infinite; }
+/* user:“做”+(聊天、任务部件和侧栏状态的等待圆环使用同一个旋转)。 */
+:where(.sunday-spin, .stream-spinner, .part-dot--running, .conversation .status.running) { animation: sunday-spin .9s linear infinite; }
 .sunday-spin--fast { animation-duration: .8s; }
 .sunday-spin--slow { animation-duration: 1s; }
 .sunday-spin--task { animation-duration: 1.2s; }
 @keyframes sunday-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .sunday-spin { animation: none; } }
+.sunday-motion-preview-reduced :where(.sunday-spin, .stream-spinner, .part-dot--running, .conversation .status.running) { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :where(.sunday-spin, .stream-spinner, .part-dot--running, .conversation .status.running) { animation: none; }
+}

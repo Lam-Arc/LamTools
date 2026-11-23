@@ -1,5 +1,5 @@
 <template>
-  <div class="session-sidebar-content" data-ui-id="shell.sidebar">
+  <div ref="rootRef" class="session-sidebar-content" data-ui-id="shell.sidebar">
     <span ref="dragImageRef" class="sidebar-drag-image" aria-hidden="true"></span>
     <div
       v-if="localFilter || $slots['toolbar-actions']"
@@ -54,7 +54,7 @@
     </div>
 
     <section
-      v-for="section in projectSections"
+      v-for="section in renderedProjectSections"
       :key="section.id"
       class="sidebar-section"
       :data-sidebar-section="section.id"
@@ -75,9 +75,9 @@
           <ChevronUp v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
-      <TransitionGroup name="sidebar-sort" tag="div" class="sidebar-project-groups">
+      <div v-reorder-motion="section.visibleGroups" class="sidebar-project-groups">
         <article
-          v-for="group in visibleSectionGroups(section)"
+          v-for="{ group, sessions, hidden } in section.visibleGroups"
           :key="group.id"
           class="project-block"
           data-ui-template="template.project"
@@ -159,9 +159,9 @@
             {{ isProjectBusy(group.id) ? t("正在创建…") : `＋ ${defaultUiText(newSessionLabel, '新建会话')}` }}
           </button>
         </div>
-        <TransitionGroup name="sidebar-sort" tag="div" class="conversation-items" data-ui-id="shell.sidebar-items">
+        <div v-reorder-motion="isCollapsed(group.id) ? [] : sessions" class="conversation-items" data-ui-id="shell.sidebar-items">
           <div
-            v-for="s in visibleSessions(group, section.id)"
+            v-for="s in sessions"
             :key="s.id"
             v-motion-enter="!initialSessionIds.has(s.id)"
             class="conversation session-row"
@@ -171,6 +171,7 @@
               active: s.id === activeSessionId,
               'is-active': s.id === activeSessionId,
               'is-dragging': isDragging('session', s.id, group.id, section.id),
+              'is-fused': s.id === activeSessionId,
             }"
             :draggable="!normalizedQuery"
             :data-session-row="s.id"
@@ -236,20 +237,20 @@
             </button>
           </span>
           </div>
-        </TransitionGroup>
+        </div>
         <button
-          v-if="hiddenCount(group, section.id) > 0"
+          v-if="hidden > 0"
           type="button"
           class="conversation-more"
-          :title="t('展开另外 {0} 个会话', { 0: hiddenCount(group, section.id) })"
-          :aria-label="t('展开另外 {0} 个会话', { 0: hiddenCount(group, section.id) })"
+          :title="t('展开另外 {0} 个会话', { 0: hidden })"
+          :aria-label="t('展开另外 {0} 个会话', { 0: hidden })"
           @click.stop="toggleGroupExpand(group.id)"
         >
-          {{ hiddenCount(group, section.id) }} more…
+          {{ hidden }} more…
         </button>
         </div>
         </article>
-      </TransitionGroup>
+      </div>
     </section>
 
     <!-- 最近：跨项目的最近会话（平铺） -->
@@ -279,7 +280,7 @@
           v-for="entry in recentEntries"
           :key="`recent-${entry.session.id}`"
           class="conversation session-row"
-          :class="{ active: entry.session.id === activeSessionId, 'is-active': entry.session.id === activeSessionId }"
+          :class="{ active: entry.session.id === activeSessionId, 'is-active': entry.session.id === activeSessionId, 'is-fused': entry.session.id === activeSessionId }"
           :data-sidebar-recent-row="entry.session.id"
           @contextmenu="handleSessionContextMenu(entry.session.id, $event)"
         >
@@ -355,9 +356,11 @@ import {
   Trash2,
 } from 'lucide-vue-next'
 import { motionEnterDirective } from '@/directives/motionEnter.ts'
+import { reorderMotionDirective as vReorderMotion } from '@/directives/reorderMotion.ts'
 import { closeContextMenu, contextMenuState, isContextMenuOpen, openContextMenu } from '@/components/context-menu/context-menu.ts'
 import type { ContextMenuEntry } from '@/components/context-menu/types.ts'
 import ProjectVisualIcon from '@/components/ProjectVisualIcon.vue'
+import { useSessionFusion } from '@/composables/useSessionFusion'
 import type {
   CoreSessionExportFormat,
   ProjectGroup as CoreProjectGroup,
@@ -458,6 +461,13 @@ const emit = defineEmits<{
 
 export type SessionExportFormat = CoreSessionExportFormat
 
+// user:“当前选中的会话与右侧内容区形成连续轮廓”+
+// (这一列只负责量：选中行在哪、要往右多铺多少。连接处画在外壳上——它必须盖在聊天卡之上，
+//  放在会话栏里会被侧栏的 overflow 与层级截住)。
+const rootRef = ref<HTMLElement | null>(null)
+const sessionFusion = useSessionFusion(rootRef)
+watch(() => props.activeSessionId, () => sessionFusion.refresh(), { flush: 'post' })
+
 // ---------------------------------------------------------------------------
 // Group expand/collapse
 // ---------------------------------------------------------------------------
@@ -557,9 +567,13 @@ function isSectionCollapsed(sectionId: string): boolean {
   return Boolean(sectionCollapsed[sectionId])
 }
 
-function visibleSectionGroups(section: { id: string; groups: ProjectGroup[] }): ProjectGroup[] {
-  return isSectionCollapsed(section.id) ? [] : section.groups
-}
+// user:“再track目前最大卡顿因素是什么，然后修复”+(排序动效和渲染共用已经算好的可见顺序)。
+const renderedProjectSections = computed(() => projectSections.value.map(section => ({
+  ...section,
+  visibleGroups: isSectionCollapsed(section.id) ? [] : section.groups.map(group => ({
+    id: group.id, group, ...sessionRows(group, section.id),
+  })),
+})))
 
 function toggleSectionCollapsed(sectionId: string): void {
   sectionCollapsed[sectionId] = !sectionCollapsed[sectionId]
@@ -1275,25 +1289,18 @@ function isSessionPinProjection(group: ProjectGroup, sectionId: string): boolean
   return sectionId === 'pinned' && !isPinned(group.id)
 }
 
-function visibleSessions(group: ProjectGroup, sectionId = 'default'): SessionItem[] {
+function sessionRows(group: ProjectGroup, sectionId: string): { sessions: SessionItem[]; hidden: number } {
   const ordered = orderedSessions(group, sectionId)
   if (
     isSessionPinProjection(group, sectionId)
     || normalizedQuery.value
     || props.projectSessionLimit <= 0
     || groupExpanded[group.id]
-  ) return ordered
-  return ordered.slice(0, props.projectSessionLimit)
-}
-
-function hiddenCount(group: ProjectGroup, sectionId = 'default'): number {
-  if (
-    isSessionPinProjection(group, sectionId)
-    || normalizedQuery.value
-    || props.projectSessionLimit <= 0
-    || groupExpanded[group.id]
-  ) return 0
-  return Math.max(0, orderedSessions(group, sectionId).length - props.projectSessionLimit)
+  ) return { sessions: ordered, hidden: 0 }
+  return {
+    sessions: ordered.slice(0, props.projectSessionLimit),
+    hidden: Math.max(0, ordered.length - props.projectSessionLimit),
+  }
 }
 
 function isGroupActive(group: ProjectGroup): boolean {

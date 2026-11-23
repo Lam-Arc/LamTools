@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ChatOutlineNavigator from '../src/components/ChatOutlineNavigator.vue'
@@ -32,6 +34,22 @@ function message(id: string, role: CoreMessage['role'], content = id): CoreMessa
 }
 
 describe('ChatOutlineNavigator contracts', () => {
+  // user:“导航条应该独立，且内容为其让位，可以紧凑，但是不能重叠”+
+  // (导航条右缘与正文左缘之间固定留 16px；留给它的通道 = 导航条 24 + 间距 16 + 贴边 4，
+  //  正文留白至少这么宽——任一条被改窄都会重新压到文字上)。
+  it('keeps a dedicated lane between the rail and the message column', () => {
+    const navigator = readFileSync(resolve(__dirname, '../src/components/ChatOutlineNavigator.vue'), 'utf8')
+    const shellCss = readFileSync(resolve(__dirname, '../src/styles/workspace-shell.css'), 'utf8')
+    const splitCss = readFileSync(resolve(__dirname, '../src/styles/split-workspace.css'), 'utf8')
+
+    expect(navigator).toContain('left: max(var(--space-1), calc(var(--main-x-padding) - var(--space-5) - var(--space-4)));')
+    expect(shellCss).toContain('--outline-rail-lane: calc(var(--space-5) + var(--space-4) + var(--space-1));')
+    expect(shellCss).toContain('--main-x-padding: max(var(--outline-rail-lane), 5vw);')
+    expect(splitCss).toContain('--main-x-padding: max(var(--outline-rail-lane, var(--space-6)), var(--space-5));')
+    // 分屏的 padding 简写会把主区左内边距换掉：通道必须重新加回左内边距，否则正文从 0 起排又压到标记。
+    expect(splitCss).toContain('padding-left: calc(var(--ws2-yield-left, 0px) + var(--outline-rail-lane, var(--space-6)));')
+  })
+
   const originalGetContext = HTMLCanvasElement.prototype.getContext
 
   beforeEach(() => {
@@ -42,6 +60,9 @@ describe('ChatOutlineNavigator contracts', () => {
       moveTo: vi.fn(),
       lineTo: vi.fn(),
       stroke: vi.fn(),
+      // user:“可以从短横线换成圆点”+(标记改画圆点后，渲染器走 arc/fill)。
+      arc: vi.fn(),
+      fill: vi.fn(),
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext
   })
 

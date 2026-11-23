@@ -85,9 +85,12 @@ def _run_background_subprocess_blocking(
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", command.strip())[:48].strip("-") or "command"
     stdout_path = log_dir / f"{stamp}-{safe_name}.out.log"
     stderr_path = log_dir / f"{stamp}-{safe_name}.err.log"
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(后台命令同样不许弹窗；
+    # 输出仍写 .out.log/.err.log 文件，日志与退出码读取完全不变)。
+    from lamtools_core.win_spawn import creation_flags, startup_info
+
+    creationflags = creation_flags(new_process_group=True)
+    startupinfo = startup_info()
     # user:“旧执行不能继续产生未经授权的副作用”+(后台命令同样受代际守卫约束)。
     ensure_spawn_allowed()
     stdout_handle = stdout_path.open("w", encoding="utf-8", errors="replace")
@@ -104,6 +107,7 @@ def _run_background_subprocess_blocking(
             encoding="utf-8",
             errors="replace",
             creationflags=creationflags,
+            startupinfo=startupinfo,
         )
     except Exception as exc:
         stdout_handle.close()
@@ -705,6 +709,8 @@ def _wsl_path() -> str | None:
 
 @functools.lru_cache(maxsize=1)
 def _wsl_available() -> bool:
+    from lamtools_core import win_spawn
+
     executable = _wsl_path()
     if not executable:
         return False
@@ -714,7 +720,8 @@ def _wsl_available() -> bool:
             capture_output=True,
             timeout=4,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(探测 wsl 也不许弹窗)。
+            creationflags=win_spawn.creation_flags(),
         )
     except (OSError, subprocess.SubprocessError):
         return False

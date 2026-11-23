@@ -1,0 +1,113 @@
+/* user:“这个组内的 UI 设计与风格”+(真实页面共用标题、平面内容区和状态提示，外观由各自主题提供)。 */
+.sunday-page-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.sunday-page-title,
+.settings-title h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 720;
+  line-height: 1.3;
+  letter-spacing: -.015em;
+  overflow-wrap: anywhere;
+}
+
+.sunday-page-description,
+.settings-title p {
+  max-width: 72ch;
+  margin: var(--space-1) 0 0;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.sunday-page-panel {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, currentColor var(--alpha-active), transparent);
+  border-radius: var(--radius);
+  background: var(--settings-card-background, var(--theme-main-soft-background));
+}
+
+.sunday-page-panel--action {
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.sunday-page-panel--action:hover {
+  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
+}
+
+.sunday-page-panel--action:focus-visible {
+  outline: 2px solid var(--theme-main-text);
+  outline-offset: 2px;
+}
+
+.sunday-page-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-subtle-background);
+  color: color-mix(in srgb, var(--theme-main-text) 78%, transparent);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.sunday-page-status > svg { flex: none; }
+
+.sunday-page-status--error {
+  background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--red) 55%, var(--theme-main-text));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sunday-page-panel--action { transition: none; }
+}
+
+/* user:“同时收敛一下套系”+(资料分区、搜索范围和任务筛选的选中状态采用同一配方)。 */
+.sunday-page-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.sunday-page-tabs > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: var(--interaction-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text) 72%, transparent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sunday-page-tabs > button:hover {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+  color: var(--theme-main-text);
+}
+
+.sunday-page-tabs > button.active {
+  background: var(--settings-control-solid, var(--theme-control-solid));
+  color: var(--settings-control-text, var(--theme-control-text));
+}
+
+.sunday-page-tabs > button:focus-visible {
+  outline: 2px solid var(--theme-main-text);
+  outline-offset: 2px;
+}

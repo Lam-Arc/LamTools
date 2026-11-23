@@ -45,6 +45,8 @@ const props = withDefaults(defineProps<{
 const editMode = ref(false)
 const drafts = ref<DraftMap>({})
 const savedBodies = ref<Record<string, string>>({})
+const savedVersions = ref<Record<string, { revision: number; contentHash: string }>>({})
+const savingNotes = ref(new Set<string>())
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const saveError = ref('')
 const lockError = ref('')
@@ -60,10 +62,23 @@ const selectedId = computed(() => props.selected?.id || '')
 const bodyMd = computed(() => {
   const note = props.selected
   if (!note) return ''
-  return drafts.value[note.id]?.content ?? note.bodyMd
+  return drafts.value[note.id]?.content ?? savedBodies.value[note.id] ?? note.bodyMd
 })
 const originalBodyMd = computed(() => props.selected?.bodyMd || '')
-const dirty = computed(() => Boolean(props.selected && bodyMd.value !== originalBodyMd.value && savedBodies.value[props.selected.id] !== bodyMd.value))
+const dirty = computed(() => Boolean(props.selected && bodyMd.value !== (savedBodies.value[props.selected.id] ?? originalBodyMd.value)))
+const isSaving = computed(() => Boolean(props.selected && savingNotes.value.has(props.selected.id)))
+// user:“确保视觉、功能和交互不退化”+(收到更新版本时刷新已保存内容，同时保留尚未保存的草稿及其版本基线)。
+function reconcileRemote(note: StudyNote | null): void {
+  if (!note || savingNotes.value.has(note.id)) return
+  const version = savedVersions.value[note.id]
+  if (!version || note.revision <= version.revision) return
+  const draft = drafts.value[note.id]
+  const wasClean = !draft || draft.content === savedBodies.value[note.id]
+  savedBodies.value = { ...savedBodies.value, [note.id]: note.bodyMd }
+  savedVersions.value = { ...savedVersions.value, [note.id]: { revision: note.revision, contentHash: note.contentHash } }
+  if (wasClean && draft) { const next = { ...drafts.value }; delete next[note.id]; drafts.value = next }
+  if (props.selected?.id === note.id) saveState.value = 'idle'
+}
 const hasRemoteNotes = computed(() => props.notes.length > 0)
 const filteredNotes = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
@@ -78,7 +93,8 @@ function updateBody(value: string): void {
   const note = props.selected
   if (!note) return
   drafts.value = { ...drafts.value, [note.id]: { ...ensureDraft(note), content: value } }
-  saveState.value = 'idle'; saveError.value = ''
+  if (!isSaving.value) saveState.value = 'idle'
+  saveError.value = ''
 }
 function currentMeta(note: StudyNote): NoteDocumentSaveMeta {
   const draft = ensureDraft(note)
@@ -223,9 +239,10 @@ function saveErrorMessage(cause: unknown): string {
 }
 async function saveDocument(): Promise<void> {
   const note = props.selected
-  if (!note || !dirty.value || saveState.value === 'saving') return
+  if (!note || !dirty.value || savingNotes.value.has(note.id)) return
   if (!props.onSaveDocument) { saveState.value = 'error'; saveError.value = t("当前笔记没有保存处理，修改仍保留。"); return }
   saveState.value = 'saving'; saveError.value = ''; lockError.value = ''
+  savingNotes.value = new Set([...savingNotes.value, note.id])
   try {
     const content = bodyMd.value
     const result = await props.onSaveDocument(note, content, currentMeta(note))
@@ -233,13 +250,21 @@ async function saveDocument(): Promise<void> {
     // The draft remains in memory to preserve the editor contents, but its
     // CAS baseline must move to the server acknowledgement. Otherwise the
     // second consecutive save sends the first revision/hash and conflicts.
+    // user:“确保视觉、功能和交互不退化”+(保存确认只更新版本基线，不覆盖等待期间继续输入的内容)。
+    const currentContent = drafts.value[note.id]?.content ?? content
     drafts.value = {
       ...drafts.value,
-      [note.id]: { content, revision: latest.revision, contentHash: latest.contentHash },
+      [note.id]: { content: currentContent, revision: latest.revision, contentHash: latest.contentHash },
     }
     savedBodies.value = { ...savedBodies.value, [note.id]: content }
-    saveState.value = 'saved'
-  } catch (cause) { saveState.value = 'error'; saveError.value = saveErrorMessage(cause); lockError.value = saveError.value }
+    savedVersions.value = { ...savedVersions.value, [note.id]: { revision: latest.revision, contentHash: latest.contentHash } }
+    if (props.selected?.id === note.id) saveState.value = currentContent === content ? 'saved' : 'idle'
+  } catch (cause) {
+    if (props.selected?.id === note.id) { saveState.value = 'error'; saveError.value = saveErrorMessage(cause); lockError.value = saveError.value }
+  } finally {
+    const next = new Set(savingNotes.value); next.delete(note.id); savingNotes.value = next
+    if (props.selected?.id === note.id) reconcileRemote(props.selected)
+  }
 }
 function discardChanges(): void {
   const note = props.selected
@@ -333,6 +358,7 @@ function handleKeydown(event: KeyboardEvent): void {
   event.preventDefault(); void saveDocument()
 }
 watch(bodyMd, syncOutline, { immediate: true })
+watch(() => props.selected, note => reconcileRemote(note), { flush: 'sync' })
 watch(() => props.selected?.id, () => { editMode.value = false; saveState.value = 'idle'; saveError.value = ''; lockError.value = ''; void nextTick(syncOutline) })
 let releaseSelectionMenu: (() => void) | undefined
 onMounted(() => {
@@ -349,7 +375,8 @@ defineExpose({ requestNavigation, isDirty: dirty })
 
 <template>
   <section class="study-notes-manager" :aria-label="t('Markdown 笔记工作区')">
-    <div v-if="error" class="study-notes-error" role="alert">{{ error }}</div>
+    <!-- user:“这个组内的 UI 设计与风格”+(笔记页与其他页面共用标题和错误反馈样式)。 -->
+    <div v-if="error" class="sunday-page-status sunday-page-status--error" role="alert">{{ error }}</div>
     <header class="study-note-workspace-toolbar">
       <div class="study-note-workspace-actions">
         <button class="btn btn--ghost" type="button" :aria-pressed="editMode" @click="toggleEdit"><Pencil v-if="!editMode" :size="14" /><Eye v-else :size="14" />{{ editMode ? t("预览") : t("编辑") }}</button>
@@ -363,11 +390,11 @@ defineExpose({ requestNavigation, isDirty: dirty })
         </template>
       </div>
       <div class="study-note-workspace-actions">
-        <span v-if="saveState === 'saving'" class="study-notes-muted" role="status">{{ t("保存中…") }}</span>
+        <span v-if="isSaving" class="study-notes-muted" role="status">{{ t("保存中…") }}</span>
         <span v-else-if="saveState === 'saved'" class="study-note-save-success" role="status">{{ t("已保存") }}</span>
         <span v-else-if="dirty" class="study-notes-muted" role="status">{{ t("未保存") }}</span>
-        <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="saveState === 'saving'" @click="saveDocument"><Save :size="14" />{{ t("保存") }}</button>
-        <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="saveState === 'saving'" @click="discardChanges">{{ t("放弃") }}</button>
+        <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="isSaving" @click="saveDocument"><Save :size="14" />{{ t("保存") }}</button>
+        <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="isSaving" @click="discardChanges">{{ t("放弃") }}</button>
       </div>
     </header>
     <div v-if="detailLoading" class="study-note-detail-state" role="status">{{ t("正在加载笔记…") }}</div>
@@ -376,9 +403,9 @@ defineExpose({ requestNavigation, isDirty: dirty })
       <FilePlus2 :size="18" aria-hidden="true" /><p>{{ hasRemoteNotes ? t("从左侧文件树打开一篇笔记。") : t("还没有 Markdown 笔记。") }}</p><button v-if="onCreate" class="btn btn--ghost" type="button" @click="onCreate">{{ t("通过对话创建笔记") }}</button>
     </div>
     <article v-else class="study-note-detail" :data-note-id="selected.id">
-      <header class="study-note-detail-head"><div><h2>{{ selected.title }}</h2><p class="study-note-path">{{ selected.path || `${selected.title}.md` }}</p></div><button v-if="onOpenChat" class="btn btn--ghost" type="button" @click="onOpenChat"><MessageSquare :size="14" />{{ t("对话") }}</button></header>
-      <div v-if="detailError" class="study-note-detail-error" role="status">{{ detailError }} <button v-if="onRetryDetail" class="btn btn--ghost" type="button" @click="onRetryDetail">{{ t("重试") }}</button></div>
-      <div v-if="saveError || lockError" class="study-note-detail-error" role="alert">{{ saveError || lockError }}<span v-if="lockOverlap">{{ t("重合区域：") }}{{ lockOverlap }}</span></div>
+      <header class="study-note-detail-head sunday-page-heading"><div><h2 class="sunday-page-title">{{ selected.title }}</h2><p class="study-note-path">{{ selected.path || `${selected.title}.md` }}</p></div><button v-if="onOpenChat" class="btn btn--ghost" type="button" @click="onOpenChat"><MessageSquare :size="14" />{{ t("对话") }}</button></header>
+      <div v-if="detailError" class="study-note-detail-error sunday-page-status sunday-page-status--error" role="alert">{{ detailError }} <button v-if="onRetryDetail" class="btn btn--ghost" type="button" @click="onRetryDetail">{{ t("重试") }}</button></div>
+      <div v-if="saveError || lockError" class="study-note-detail-error sunday-page-status sunday-page-status--error" role="alert">{{ saveError || lockError }}<span v-if="lockOverlap">{{ t("重合区域：") }}{{ lockOverlap }}</span></div>
       <div class="study-note-document-layout">
         <aside v-if="outline.length" class="study-note-outline" :aria-label="t('文档大纲')"><h3>{{ t("大纲") }}</h3><button v-for="heading in outline" :key="heading.id" class="study-note-outline-link" type="button" :style="{ paddingLeft: `calc(var(--space-2) + (var(--space-2) * ${heading.level - 1}))` }" @click="scrollHeading(heading)">{{ heading.text }}</button></aside>
         <main class="study-note-main">

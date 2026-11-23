@@ -60,6 +60,16 @@ class CoreSyncJournal:
         db.add(row)
         return row
 
+    def _active_rust_db(self, db: Any | None = None) -> Any | None:
+        from .rust_db import get_rust_db
+
+        if db is not None and db.in_transaction():
+            return None
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None and rust_db.is_active:
+            return rust_db
+        return None
+
     async def prune(self, *, keep: int | None = None) -> int:
         """Drop the oldest journal rows, keeping a bounded replay window.
 
@@ -68,6 +78,10 @@ class CoreSyncJournal:
         existing contract; the journal was never the durable source of truth.
         """
         limit = max(1, int(keep if keep is not None else SYNC_JOURNAL_MAX_ROWS))
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call("sync_prune", {"keep": limit})
+            return int((res or {}).get("deleted") or 0)
 
         async def action(db: Any) -> int:
             newest = await db.scalar(select(func.coalesce(func.max(CoreSyncChange.seq), 0)))
@@ -84,6 +98,10 @@ class CoreSyncJournal:
         return await self.write_coordinator.run(action)
 
     async def current_cursor(self, db: Any | None = None) -> int:
+        rust_db = self._active_rust_db(db)
+        if rust_db is not None:
+            res = await rust_db.call("sync_cursors", {"workspace_id": self.workspace_id})
+            return int((res or {}).get("current") or 0)
         statement = select(func.coalesce(func.max(CoreSyncChange.seq), 0))
         if self.workspace_id:
             statement = statement.where(CoreSyncChange.workspace_id == self.workspace_id)
@@ -95,6 +113,11 @@ class CoreSyncJournal:
             return int(value or 0)
 
     async def oldest_cursor(self, db: Any | None = None) -> int | None:
+        rust_db = self._active_rust_db(db)
+        if rust_db is not None:
+            res = await rust_db.call("sync_cursors", {"workspace_id": self.workspace_id})
+            val = (res or {}).get("oldest")
+            return int(val) if val is not None else None
         statement = select(func.min(CoreSyncChange.seq))
         if self.workspace_id:
             statement = statement.where(CoreSyncChange.workspace_id == self.workspace_id)
@@ -107,11 +130,27 @@ class CoreSyncJournal:
 
     async def current_snapshot_revision(self, db: Any) -> int:
         """Return the highest durable thread snapshot revision in this scope."""
+        rust_db = self._active_rust_db(db)
+        if rust_db is not None:
+            res = await rust_db.call("sync_cursors", {"workspace_id": self.workspace_id})
+            return int((res or {}).get("snapshot_revision") or 0)
 
         value = await db.scalar(select(func.coalesce(func.max(CoreThreadSnapshot.revision), 0)))
         return int(value or 0)
 
     async def list_after(self, db: Any, cursor: int, *, limit: int = 500) -> list[dict[str, Any]]:
+        rust_db = self._active_rust_db(db)
+        if rust_db is not None:
+            res = await rust_db.call(
+                "sync_list_after",
+                {
+                    "workspace_id": self.workspace_id,
+                    "cursor": int(cursor),
+                    "limit": int(limit),
+                    "now_iso": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return list((res or {}).get("changes") or [])
         statement = select(CoreSyncChange).where(CoreSyncChange.seq > int(cursor))
         if self.workspace_id:
             statement = statement.where(CoreSyncChange.workspace_id == self.workspace_id)
@@ -123,11 +162,35 @@ class CoreSyncJournal:
         return [self._to_dict(row) for row in result.scalars().all()]
 
     async def get_change(self, change_id: str) -> dict[str, Any] | None:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call(
+                "sync_get_change",
+                {
+                    "workspace_id": self.workspace_id,
+                    "change_id": str(change_id),
+                    "header_only": False,
+                    "now_iso": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return (res or {}).get("change")
         async with self.session_factory() as db:
             row = await db.scalar(select(CoreSyncChange).where(CoreSyncChange.change_id == change_id))
             return self._to_dict(row) if row is not None else None
 
     async def get_change_header(self, change_id: str) -> dict[str, Any] | None:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            res = await rust_db.call(
+                "sync_get_change",
+                {
+                    "workspace_id": self.workspace_id,
+                    "change_id": str(change_id),
+                    "header_only": True,
+                    "now_iso": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return (res or {}).get("change")
         # user:“调查并检修 constant 内 sunday 出现过的所有报错，整理并给出方案，然后修复，不要出错”+(实时事件已传正文，同步通知只需版本与游标，读取时也不装载大字段)。
         columns = [c for c in CoreSyncChange.__table__.columns if c.name != "entity_json"]
         async with self.session_factory() as db:
@@ -143,6 +206,21 @@ class CoreSyncJournal:
         return header
 
     async def build_snapshot(self, db: Any) -> dict[str, Any]:
+        from .rust_db import get_rust_db
+
+        rust_db = get_rust_db(self.session_factory)
+        if rust_db is not None and not db.in_transaction():
+            # user:“加载/切换/多会话多 agent 同时读写”+(同步快照同样复用 Rust 轻量摘要，避免全表读取大 JSON)。
+            snap = await rust_db.call("build_sync_snapshot_threads")
+            return {
+                "workspace_id": self.workspace_id,
+                "workspace_revision": int(snap.get("workspace_revision") or 0),
+                "snapshot_revision": int(snap.get("snapshot_revision") or 0),
+                "projects": list(snap.get("projects") or []),
+                "threads": list(snap.get("threads") or []),
+                "snapshots": [],
+                "messages": [],
+            }
         projects = (await db.execute(
             select(CoreProject).order_by(CoreProject.created_at.asc(), CoreProject.id.asc())
         )).scalars().all()
@@ -200,6 +278,17 @@ class CoreSyncJournal:
         }
 
     async def sync(self, *, cursor: int | None, limit: int = 500) -> dict[str, Any]:
+        rust_db = self._active_rust_db()
+        if rust_db is not None:
+            return await rust_db.call(
+                "sync_run",
+                {
+                    "workspace_id": self.workspace_id,
+                    "cursor": int(cursor) if cursor is not None else None,
+                    "limit": int(limit),
+                    "now_iso": datetime.now(timezone.utc).isoformat(),
+                },
+            )
         async with self.session_factory() as db:
             current = await self.current_cursor(db)
             oldest = await self.oldest_cursor(db)

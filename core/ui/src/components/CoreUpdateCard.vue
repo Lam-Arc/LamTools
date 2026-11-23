@@ -18,10 +18,10 @@
         <button
           class="core-update-card__dismiss"
           type="button"
-          :aria-label="installBusy ? t('取消更新') : t('关闭')"
+          :aria-label="t('关闭')"
           data-update-dismiss
-          :disabled="downloaded || installing"
-          @click="requestCancel"
+          :disabled="installing"
+          @click="requestClose"
         >
           <X :size="15" :stroke-width="2" aria-hidden="true" />
         </button>
@@ -43,14 +43,19 @@
 
       <p v-if="error" class="core-update-card__note core-update-card__note--error" data-update-card-error>{{ error }}</p>
       <p v-else-if="statusLine" class="core-update-card__note" data-update-card-status>{{ statusLine }}</p>
+      <!-- user:“更新时可以后台下载。再次点更新键后的卡片继承进度”+(下载中要说明关掉卡片
+           不会打断传输，否则用户会以为点 X 就等于取消，再点一次又从 0 开始)。 -->
+      <p v-if="installBusy" class="core-update-card__note" data-update-background-hint>
+        {{ t("关掉卡片不会中断下载，可以继续用 Sunday；点左侧的更新图标回来看进度。") }}
+      </p>
 
       <footer class="core-update-card__actions">
         <button
           class="core-update-card__btn"
           type="button"
           data-update-cancel
-          :disabled="downloaded || installing"
-          @click="requestCancel"
+          :disabled="installing"
+          @click="requestCancelDownload"
         >{{ cancelLabel }}</button>
         <button
           class="core-update-card__btn core-update-card__btn--primary"
@@ -77,8 +82,9 @@ import { t } from '@/i18n/index.ts'
  * 原路缩回去。动效全部走 transform（GPU 合成），不碰布局。
  *
  * 卡片只说三件事：从哪个版本到哪个版本、更新摘要（有就显示）、以及此刻走到哪一步
- * （下载百分比 / 正在安装）。「更新」按下之后不再需要第二次点击：下载完成即自动安装，
- * 安装完由安装程序把应用重新拉起来。下载中「取消」真的会停掉传输。
+ * （下载百分比 / 正在安装）。下载属于后台：关掉卡片不会打断传输，再打开接上同一条
+ * 进度；只有「取消下载」会真的停掉它。卡片还开着时下载完成即自动安装，安装完由安装
+ * 程序把应用重新拉起来。
  */
 import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowRight, X } from 'lucide-vue-next'
@@ -138,23 +144,29 @@ const percentLabel = computed(() => {
 })
 
 const headTitle = computed(() => {
-  if (installing.value || downloaded.value) return t("正在安装更新")
+  if (installing.value) return t("正在安装更新")
+  if (downloaded.value) return t("更新已就绪")
   if (installBusy.value) return t("正在下载更新")
   return t("发现新版本 v{0}", { 0: props.latestVersion || '' })
 })
 const statusLine = computed(() => {
-  if (installing.value || downloaded.value) return t("安装完成后 Sunday 会自动重新打开。")
+  if (installing.value) return t("安装完成后 Sunday 会自动重新打开。")
+  // 后台下载可能比卡片活得更久：再次打开时它是“已经下好”，要能被点一下装掉，
+  // 而不是继续显示一句“正在安装…”却什么也不会发生。
+  if (downloaded.value) return t("安装包已下载并校验；点「立即安装」后 Sunday 会退出，装好后自动打开。")
   if (installBusy.value) return props.progressLabel || ''
   return ''
 })
 const cancelLabel = computed(() => (installBusy.value ? t("取消下载") : t("取消")))
 const confirmLabel = computed(() => {
-  if (installing.value || downloaded.value) return t("正在安装…")
+  if (installing.value) return t("正在安装…")
+  if (downloaded.value) return t("立即安装")
   if (installBusy.value) return props.progressLabel ? t("下载中") : t("下载中…")
   if (props.state === 'failed') return t("重试")
   return t("更新")
 })
-const confirmDisabled = computed(() => installBusy.value || downloaded.value || installing.value)
+// 已下载不再是“等着自动安装”的中间态：界面关掉过就由用户点「立即安装」。
+const confirmDisabled = computed(() => installBusy.value || installing.value)
 
 let context: gsap.Context | null = null
 let closing = false
@@ -204,25 +216,34 @@ async function close(): Promise<void> {
   emit('closed')
 }
 
-function requestCancel(): void {
-  // user:“确保视觉、功能和交互不退化”+(关闭动画期间忽略重复取消，避免重复发送取消请求)。
+/**
+ * 关掉卡片（X / 遮罩 / Esc）：传输留在后台继续。
+ *
+ * user:“更新时可以后台下载。再次点更新键后的卡片继承进度”+(关闭只收卡片，不打断下载；
+ * 重新点左侧的更新图标，看到的是同一条进度。安装一旦开始就无法中止，这时只允许看。)
+ */
+function requestClose(): void {
+  // user:“确保视觉、功能和交互不退化”+(关闭动画期间忽略重复请求，避免重复收起)。
   if (closing) return
-  // 下载中：「取消」停掉传输再收卡片；安装一旦开始就无法中止，这时只允许看。
+  // 安装开始以后不能关（关掉就看不到进度了）；已下载只是“等着装”，可以关，
+  // 下次打开还会从主机那把同一个已校验的安装包接回来。
+  if (installing.value) return
+  void close()
+}
+
+/** 明确要求取消下载：这是唯一会停掉后台传输的入口。 */
+function requestCancelDownload(): void {
+  if (closing) return
   if (installBusy.value) {
     emit('cancel')
     void close()
     return
   }
-  if (downloaded.value || installing.value) return
-  void close()
-}
-
-function requestClose(): void {
-  requestCancel()
+  requestClose()
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') requestCancel()
+  if (event.key === 'Escape') requestClose()
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))

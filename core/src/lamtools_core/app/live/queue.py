@@ -75,46 +75,80 @@ async def handle_queue_create_operation(
     payload["work_root"] = prepared.work_root
     if params.get("goal_continuation"):
         payload["goal_continuation"] = True
-    async def write(db: AsyncSession):
-        existing = await context.persistence.find_client_event(
-            db,
-            thread_id=thread_id,
-            client_message_id=client_message_id,
-            methods=QUEUE_ITEM_ACCEPTED_METHODS,
-        )
-        if existing is not None:
-            return existing, None
-        # 排队是"只增"的幂等追加：条目自带 queue_item_id 与 runtime_snapshot，
-        # 写入在事务内读的是最新快照，客户端传进来的期望修订号不参与任何读改写。
-        # 因此这里刻意不做 CAS：主回合等待后台子代理期间，会话修订号会被持续追加
-        # 的事件推高（本轮事件、成员转发事件），客户端在发起 RPC 前读到的修订号
-        # 几乎必然落后，CAS 会把一条完全合法的消息打成"Revision conflict"（用户
-        # 只能刷新重试才能发出）。真正需要乐观锁的是读改写类变更（turn.start、
-        # command.execute、queue.update/delete/guide、会话设置），它们各自的 CAS
-        # 一个都没有动，这里移除的只针对幂等追加。expected_revision 仍按参数校验
-        # （见本函数入口），但不再作为拒绝依据（2026-10-12）。
-        materialized = await context.host.member_hooks.materialize_queue(
-            db=db,
-            thread_id=thread_id,
-            queue_item_id=queue_item_id,
-            client_message_id=client_message_id,
-            prepared=prepared,
-            params=params,
-        )
-        event = await _append_app_event(
-            db,
-            context=context,
-            event=AppEventInput(
+    if getattr(context.persistence, "can_use_rust_write", False) and (
+        type(context.host.member_hooks).materialize_queue.__qualname__.startswith("DefaultCoreLiveMemberHooks.")
+    ):
+        from .events import _app_event_input
+        async with context.session_factory() as db:
+            existing = await context.persistence.find_client_event(
+                db,
                 thread_id=thread_id,
-                method="queue/itemAccepted",
-                item_id=queue_item_id,
                 client_message_id=client_message_id,
-                payload={**payload, **materialized.payload_extra},
-            ),
-        )
-        return event, materialized
+                methods=QUEUE_ITEM_ACCEPTED_METHODS,
+            )
+        if existing is not None:
+            event, materialized = existing, None
+        else:
+            materialized = await context.host.member_hooks.materialize_queue(
+                db=None,  # type: ignore[arg-type]
+                thread_id=thread_id,
+                queue_item_id=queue_item_id,
+                client_message_id=client_message_id,
+                prepared=prepared,
+                params=params,
+            )
+            ev_input = _app_event_input(
+                AppEventInput(
+                    thread_id=thread_id,
+                    method="queue/itemAccepted",
+                    item_id=queue_item_id,
+                    client_message_id=client_message_id,
+                    payload={**payload, **materialized.payload_extra},
+                )
+            )
+            envelopes = await context.persistence.append_batch_atomic(app_events=[ev_input])
+            event = envelopes[0]
+    else:
+        async def write(db: AsyncSession):
+            existing = await context.persistence.find_client_event(
+                db,
+                thread_id=thread_id,
+                client_message_id=client_message_id,
+                methods=QUEUE_ITEM_ACCEPTED_METHODS,
+            )
+            if existing is not None:
+                return existing, None
+            # 排队是"只增"的幂等追加：条目自带 queue_item_id 与 runtime_snapshot，
+            # 写入在事务内读的是最新快照，客户端传进来的期望修订号不参与任何读改写。
+            # 因此这里刻意不做 CAS：主回合等待后台子代理期间，会话修订号会被持续追加
+            # 的事件推高（本轮事件、成员转发事件），客户端在发起 RPC 前读到的修订号
+            # 几乎必然落后，CAS 会把一条完全合法的消息打成"Revision conflict"（用户
+            # 只能刷新重试才能发出）。真正需要乐观锁的是读改写类变更（turn.start、
+            # command.execute、queue.update/delete/guide、会话设置），它们各自的 CAS
+            # 一个都没有动，这里移除的只针对幂等追加。expected_revision 仍按参数校验
+            # （见本函数入口），但不再作为拒绝依据（2026-10-12）。
+            materialized = await context.host.member_hooks.materialize_queue(
+                db=db,
+                thread_id=thread_id,
+                queue_item_id=queue_item_id,
+                client_message_id=client_message_id,
+                prepared=prepared,
+                params=params,
+            )
+            event = await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    thread_id=thread_id,
+                    method="queue/itemAccepted",
+                    item_id=queue_item_id,
+                    client_message_id=client_message_id,
+                    payload={**payload, **materialized.payload_extra},
+                ),
+            )
+            return event, materialized
 
-    event, materialized = await context.persistence.write(write)
+        event, materialized = await context.persistence.write(write)
     await context.hub.publish(event)
     # Response queue item is rebuilt from the payload we just wrote; the queue
     # lives in the metadata row, so no full snapshot assembly is required.
@@ -181,11 +215,10 @@ async def handle_queue_update_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
         )
-    async def write(
-        db: AsyncSession,
-    ) -> tuple[str, AppEventEnvelope | None]:
-        # 队列条目本身存放在元数据行；更新计划不需要逐条装配会话内容。
-        snapshot = await context.persistence.load_metadata(db, thread_id)
+    if getattr(context.persistence, "can_use_rust_write", False):
+        from .events import _app_event_input
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load_metadata(db, thread_id)
         plan = build_queue_update_plan(
             snapshot,
             queue_item_id=queue_item_id,
@@ -194,24 +227,50 @@ async def handle_queue_update_operation(
             mode=str(params.get("mode") or "").strip() or None,
         )
         if not plan.applied:
-            return plan.reason, None
-        # 更新排队条目是幂等追加（queue_item_id 为键），计划在事务内基于最新元数据
-        # 行构建，客户端期望修订号不参与任何读改写。这里不做 CAS：活跃回合持续追加
-        # 事件会让客户端读到的修订号必然落后，CAS 会把合法的编辑打成修订冲突
-        # （2026-10-12，与 queue.create 同一原因）。
-        event = await _append_app_event(
-            db,
-            context=context,
-            event=AppEventInput(
-                thread_id=thread_id,
-                method="queue/itemUpdated",
-                item_id=queue_item_id,
-                payload=plan.payload or {},
-            ),
-        )
-        return "applied", event
+            outcome_kind, payload = plan.reason, None
+        else:
+            ev_input = _app_event_input(
+                AppEventInput(
+                    thread_id=thread_id,
+                    method="queue/itemUpdated",
+                    item_id=queue_item_id,
+                    payload=plan.payload or {},
+                )
+            )
+            envelopes = await context.persistence.append_batch_atomic(app_events=[ev_input])
+            outcome_kind, payload = "applied", envelopes[0]
+    else:
+        async def write(
+            db: AsyncSession,
+        ) -> tuple[str, AppEventEnvelope | None]:
+            # 队列条目本身存放在元数据行；更新计划不需要逐条装配会话内容。
+            snapshot = await context.persistence.load_metadata(db, thread_id)
+            plan = build_queue_update_plan(
+                snapshot,
+                queue_item_id=queue_item_id,
+                input_items=prepared.visible_input,
+                runtime_input_items=prepared.runtime_input,
+                mode=str(params.get("mode") or "").strip() or None,
+            )
+            if not plan.applied:
+                return plan.reason, None
+            # 更新排队条目是幂等追加（queue_item_id 为键），计划在事务内基于最新元数据
+            # 行构建，客户端期望修订号不参与任何读改写。这里不做 CAS：活跃回合持续追加
+            # 事件会让客户端读到的修订号必然落后，CAS 会把合法的编辑打成修订冲突
+            # （2026-10-12，与 queue.create 同一原因）。
+            event = await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    thread_id=thread_id,
+                    method="queue/itemUpdated",
+                    item_id=queue_item_id,
+                    payload=plan.payload or {},
+                ),
+            )
+            return "applied", event
 
-    outcome_kind, payload = await context.persistence.write(write)
+        outcome_kind, payload = await context.persistence.write(write)
     if outcome_kind != "applied":
         response_payload = {"applied": False, "reason": outcome_kind, "events": []}
         if _include_snapshot_param(params):
@@ -246,22 +305,35 @@ async def handle_queue_delete_operation(
         _expected_revision(params)  # 形状校验；删除是幂等追加，见 write 说明
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    async def write(db: AsyncSession) -> AppEventEnvelope:
-        # 删除排队条目只追加一个 queue_item_id 为键的 tombstone 事件，不读改写任何
-        # 共享字段；活跃回合持续追加事件时客户端修订号必然落后，CAS 会让用户根本删
-        # 不掉这条排队消息（2026-10-12）。因此与 queue.create 一致，不做修订号 CAS。
-        return await _append_app_event(
-            db,
-            context=context,
-            event=AppEventInput(
+    if getattr(context.persistence, "can_use_rust_write", False):
+        from .events import _app_event_input
+        ev_input = _app_event_input(
+            AppEventInput(
                 thread_id=thread_id,
                 method="queue/itemDeleted",
                 item_id=queue_item_id,
                 payload=queue_delete_payload(queue_item_id=queue_item_id, status="deleted"),
-            ),
+            )
         )
+        envelopes = await context.persistence.append_batch_atomic(app_events=[ev_input])
+        event = envelopes[0]
+    else:
+        async def write(db: AsyncSession) -> AppEventEnvelope:
+            # 删除排队条目只追加一个 queue_item_id 为键的 tombstone 事件，不读改写任何
+            # 共享字段；活跃回合持续追加事件时客户端修订号必然落后，CAS 会让用户根本删
+            # 不掉这条排队消息（2026-10-12）。因此与 queue.create 一致，不做修订号 CAS。
+            return await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    thread_id=thread_id,
+                    method="queue/itemDeleted",
+                    item_id=queue_item_id,
+                    payload=queue_delete_payload(queue_item_id=queue_item_id, status="deleted"),
+                ),
+            )
 
-    event = await context.persistence.write(write)
+        event = await context.persistence.write(write)
     await context.hub.publish(event)
     response_payload: dict[str, Any] = {"events": [event.to_dict()]}
     if _include_snapshot_param(params):
@@ -434,47 +506,87 @@ async def handle_queue_reorder_operation(
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
 
-    async def write(db: AsyncSession) -> tuple[str, AppEventEnvelope | None]:
-        existing = await context.persistence.find_client_event(
-            db,
-            thread_id=thread_id,
-            client_message_id=client_message_id,
-            methods={"queue/itemReordered"},
-        )
-        if existing is not None:
-            return "existing", existing
-        # 重排序只需要队列（元数据行），不需要装配全部会话条目。
-        snapshot = await context.persistence.load_metadata(db, thread_id)
-        queued_items = [item for item in (snapshot.get("queue") or []) if isinstance(item, dict)]
-        current_order = [
-            str(item.get("queue_item_id") or "") for item in sorted(queued_items, key=queue_order_key)
-        ]
-        still_queued = set(current_order)
-        requested: list[str] = []
-        seen: set[str] = set()
-        for entry in order:
-            queue_item_id = str(entry or "").strip()
-            # 请求里多出来的 id（并发删除/分发/引导）直接忽略，不让幽灵 id 混进事件。
-            if queue_item_id in still_queued and queue_item_id not in seen:
-                requested.append(queue_item_id)
-                seen.add(queue_item_id)
-        # 没被点名的条目（并发新排队）保持当前相对次序垫底。
-        ordered = [*requested, *[item_id for item_id in current_order if item_id not in seen]]
-        if ordered == current_order:
-            return "unchanged", None
-        event = await _append_app_event(
-            db,
-            context=context,
-            event=AppEventInput(
+    if getattr(context.persistence, "can_use_rust_write", False):
+        from .events import _app_event_input
+        async with context.session_factory() as db:
+            existing = await context.persistence.find_client_event(
+                db,
                 thread_id=thread_id,
-                method="queue/itemReordered",
                 client_message_id=client_message_id,
-                payload={"type": "queue", "order": ordered},
-            ),
-        )
-        return "applied", event
+                methods={"queue/itemReordered"},
+            )
+            if existing is not None:
+                outcome_kind, payload = "existing", existing
+            else:
+                snapshot = await context.persistence.load_metadata(db, thread_id)
+                queued_items = [item for item in (snapshot.get("queue") or []) if isinstance(item, dict)]
+                current_order = [
+                    str(item.get("queue_item_id") or "") for item in sorted(queued_items, key=queue_order_key)
+                ]
+                still_queued = set(current_order)
+                requested: list[str] = []
+                seen: set[str] = set()
+                for entry in order:
+                    queue_item_id = str(entry or "").strip()
+                    if queue_item_id in still_queued and queue_item_id not in seen:
+                        requested.append(queue_item_id)
+                        seen.add(queue_item_id)
+                ordered = [*requested, *[item_id for item_id in current_order if item_id not in seen]]
+                if ordered == current_order:
+                    outcome_kind, payload = "unchanged", None
+                else:
+                    ev_input = _app_event_input(
+                        AppEventInput(
+                            thread_id=thread_id,
+                            method="queue/itemReordered",
+                            client_message_id=client_message_id,
+                            payload={"type": "queue", "order": ordered},
+                        )
+                    )
+                    envelopes = await context.persistence.append_batch_atomic(app_events=[ev_input])
+                    outcome_kind, payload = "applied", envelopes[0]
+    else:
+        async def write(db: AsyncSession) -> tuple[str, AppEventEnvelope | None]:
+            existing = await context.persistence.find_client_event(
+                db,
+                thread_id=thread_id,
+                client_message_id=client_message_id,
+                methods={"queue/itemReordered"},
+            )
+            if existing is not None:
+                return "existing", existing
+            # 重排序只需要队列（元数据行），不需要装配全部会话条目。
+            snapshot = await context.persistence.load_metadata(db, thread_id)
+            queued_items = [item for item in (snapshot.get("queue") or []) if isinstance(item, dict)]
+            current_order = [
+                str(item.get("queue_item_id") or "") for item in sorted(queued_items, key=queue_order_key)
+            ]
+            still_queued = set(current_order)
+            requested: list[str] = []
+            seen: set[str] = set()
+            for entry in order:
+                queue_item_id = str(entry or "").strip()
+                # 请求里多出来的 id（并发删除/分发/引导）直接忽略，不让幽灵 id 混进事件。
+                if queue_item_id in still_queued and queue_item_id not in seen:
+                    requested.append(queue_item_id)
+                    seen.add(queue_item_id)
+            # 没被点名的条目（并发新排队）保持当前相对次序垫底。
+            ordered = [*requested, *[item_id for item_id in current_order if item_id not in seen]]
+            if ordered == current_order:
+                return "unchanged", None
+            event = await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    thread_id=thread_id,
+                    method="queue/itemReordered",
+                    client_message_id=client_message_id,
+                    payload={"type": "queue", "order": ordered},
+                ),
+            )
+            return "applied", event
 
-    outcome_kind, payload = await context.persistence.write(write)
+        outcome_kind, payload = await context.persistence.write(write)
     event = payload
     applied = outcome_kind == "applied"
     if applied and event is not None:

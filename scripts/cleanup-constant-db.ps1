@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Db,
     [string]$Python = 'python',
     [switch]$NoBackup,
@@ -16,7 +16,8 @@ if (-not $Db) {
     if (Test-Path -LiteralPath $candidate) {
         $Db = $candidate
     } else {
-        $Db = 'E:\setuptest\constant\.lam\core.db'
+        # user:“就把以后的 constant 装到 c 盘” -> “sunday/ 现在就迁吧”+(Constant 常驻实例已迁移至 C:\sunday\constant)
+        $Db = 'C:\sunday\constant\.lam\core.db'
     }
 }
 if (-not (Test-Path -LiteralPath $script)) {

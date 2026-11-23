@@ -14,7 +14,7 @@ from typing import Any
 import logging
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from lamtools_core.cli import (
     CoreHttpLLMClient,
@@ -65,6 +65,7 @@ from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
 from .memory_resume_supervisor import MemoryResumeSupervisor
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
+from .session_items import write_session_items
 from lamtools_core.artifact import ArtifactRegistry, ArtifactStore, kind_from_mime
 from lamtools_core.tool.command_runner import warm_command_shell
 from .live_router import create_core_live_router
@@ -602,6 +603,17 @@ def create_core_agent_http_app(
             project_store=core_db_handle.project_store,
             artifact_store=core_db_handle.artifact_store,
         )
+        # user:“先记到方案，再完成这个PRD”+(Library 本机文件与资产层挂在同一份
+        # Core 库里，走共享 live RPC；搜索复用本机 Everything，不建第二套索引)。
+        from lamtools_core.library.operations import build_library_service, register_library_operations
+
+        library_service = build_library_service(
+            session_factory=core_db_handle.session_factory,
+            write_coordinator=core_db_handle.persistence.write_coordinator,
+            data_dir=str(resolved_data_dir),
+        )
+        register_library_operations(agent_operations, service=library_service)
+        app_state["library_file_service"] = library_service
         _register_core_session_operations(
             agent_operations,
             session_store=session_store,
@@ -1191,12 +1203,36 @@ def create_core_agent_http_app(
         on_startup=[startup_core_agent],
         on_shutdown=[shutdown_core_agent],
     )
+    # user:“新增 item 写入端点（推荐）”+(写入复用真实 turn 的路径：runItem 事件
+    # → AppPersistenceHost 的事务内投影（core.items + item_order）→ live hub 广播。
+    # 这里只做接线，校验、id 派生和事件形状都在 app/session_items.py 里。)
+    async def write_thread_items(thread_id: str, body: Any) -> dict[str, Any]:
+        handle = app_state.get("core_db")
+        if handle is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "ITEM_WRITE_UNAVAILABLE",
+                    "message": "Core 数据库尚未就绪，稍后重试。",
+                },
+            )
+        return await write_session_items(
+            thread_id=thread_id,
+            items=list(getattr(body, "items", None) or []),
+            persistence=handle.persistence,
+            hub=live_hub,
+            session_factory=handle.session_factory,
+            client_item_id=str(getattr(body, "client_item_id", "") or ""),
+            turn_id=str(getattr(body, "turn_id", "") or ""),
+        )
+
     app.include_router(
         create_core_router(
             session_store=session_store,
             operations=operations,
             project_store=lambda: app_state["core_db"].project_store,
             publish_event=live_hub.publish,
+            write_items=write_thread_items,
             export_service=lambda: ConversationExportService(
                 app_state["core_db"].session_factory,
                 handoff_context_store=app_state["core_db"].handoff_context_store,
@@ -1324,11 +1360,98 @@ def create_core_agent_http_app(
         return {"path": (await actual_reference(path, work_root)).as_posix()}
 
     @app.get("/api/core/files/read-reference")
-    async def read_file_reference(path: str, work_root: str | None = None) -> FileResponse:
+    async def read_file_reference(path: str, work_root: str | None = None, inline: int = 0) -> FileResponse:
         # user:“‘@文件名’实际为一个 绝对地址”+(恢复后的消息仍可按原路径预览，不依赖旧 UI 附件状态)。
         import mimetypes
         candidate = await actual_reference(path, work_root)
-        return FileResponse(candidate, media_type=mimetypes.guess_type(candidate.name)[0], filename=candidate.name)
+        # user:“必须实测 read-reference 的响应头…如果 FileResponse(..., filename=...) 带出
+        # Content-Disposition: attachment，iframe 会变成下载而不是内联渲染”+
+        # (实测确实带 attachment：Starlette 的 FileResponse 默认 content_disposition_type='attachment'。
+        # 预览器用 iframe 走这个接口取字节，浏览器见到 attachment 会转成下载，所以这里按
+        # `inline=1` 显式切成 inline；默认仍是 attachment，不改其他调用方看到的响应头，
+        # 路由结构与参数名都不变。)
+        return FileResponse(
+            candidate,
+            media_type=mimetypes.guess_type(candidate.name)[0],
+            filename=candidate.name,
+            content_disposition_type="inline" if inline else "attachment",
+        )
+
+    @app.get("/api/core/library/raw")
+    async def library_raw(path: str) -> FileResponse:
+        """Library 预览取流：本机任意文件，内联返回，绝不触发下载。
+
+        user:“图片：缩略图、缩放、全屏；视频：播放；音频：播放；PDF：页面预览”
+        +(预览器只读这个口子；它就是 Library 搜索结果背后的那个文件，不做拷贝)。
+        """
+        import mimetypes
+
+        service = app_state.get("library_file_service")
+        if service is None:
+            raise HTTPException(status_code=503, detail="Library 文件服务未就绪")
+        try:
+            target = await service.raw_path(path)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="文件不存在") from exc
+        return FileResponse(
+            target,
+            media_type=mimetypes.guess_type(target.name)[0] or "application/octet-stream",
+            filename=target.name,
+            content_disposition_type="inline",
+        )
+
+    @app.get("/api/core/files/list")
+    async def list_directory(path: str, work_root: str | None = None, limit: int = 500) -> dict[str, Any]:
+        # user:“灯箱加上切换用的左右键”+(同目录同类的文件要能前后翻：只读一层目录，按名字排序，
+        # 由前端按预览族过滤，不在这里判断「哪个类型能翻」)。
+        import asyncio
+
+        root = Path(work_root or resolved_work_root)
+        if not root.is_absolute() or not root.is_dir():
+            raise HTTPException(status_code=400, detail="项目目录不存在")
+        target = Path(path)
+        if not target.is_absolute():
+            target = (root / path).resolve()
+        if not target.is_dir():
+            raise HTTPException(status_code=404, detail="目录不存在")
+        capped = max(1, min(int(limit), 2000))
+
+        def scan() -> list[dict[str, Any]]:
+            entries: list[dict[str, Any]] = []
+            for item in sorted(target.iterdir(), key=lambda entry: entry.name.lower()):
+                try:
+                    entries.append({"name": item.name, "path": item.as_posix(), "directory": item.is_dir()})
+                except OSError:
+                    continue
+                if len(entries) >= capped:
+                    break
+            return entries
+
+        return {"path": target.as_posix(), "entries": await asyncio.to_thread(scan)}
+
+    @app.get("/api/core/files/preview-image")
+    async def preview_image_reference(path: str, work_root: str | None = None) -> Response:
+        # user:“除了Office类，别的都把它修好”+(浏览器认不了的位图（TIF/TIFF）不该只能交给默认应用：
+        # 后端本机用 Pillow 转成 PNG 再给预览器看，图片查看器、标注、复制都照常工作。)
+        import asyncio
+        import io
+        from PIL import Image, ImageSequence
+
+        candidate = await actual_reference(path, work_root)
+
+        def rasterize() -> bytes:
+            with Image.open(candidate) as source:
+                frame = next(ImageSequence.Iterator(source), None) or source
+                mode = "RGBA" if frame.mode in {"RGBA", "LA", "P", "PA"} else "RGB"
+                buffer = io.BytesIO()
+                frame.convert(mode).save(buffer, format="PNG")
+                return buffer.getvalue()
+
+        try:
+            payload = await asyncio.to_thread(rasterize)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"这份图片无法转换预览：{exc}") from exc
+        return Response(payload, media_type="image/png", headers={"Content-Disposition": "inline"})
 
     @app.post("/api/core/files/open-reference")
     async def open_file_reference(request: Request) -> dict[str, Any]:
@@ -1337,11 +1460,71 @@ def create_core_agent_http_app(
         from lamtools_core.attachment.files import open_with_default_app
         payload = await request.json()
         path = await actual_reference(str(payload.get("path") or ""), payload.get("work_root"))
+        target = path.parent if payload.get("reveal") else path
         try:
-            await asyncio.to_thread(open_with_default_app, path.parent if payload.get("reveal") else path)
+            # user:“‘以默认应用打开’后窗口不再最上层，还要单独翻任务栏”+
+            # (把置前的真实结局带回界面：到前台 / 只闪了任务栏 / 失败。界面与自证脚本
+            # 因此能看出到底成没成，而不是一律收到一个 opened)。
+            foreground = await asyncio.to_thread(open_with_default_app, target)
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"status": "opened"}
+        result: dict[str, Any] = {"status": "opened"}
+        describe = getattr(foreground, "to_dict", None)
+        if callable(describe):
+            result["foreground"] = describe()
+        return result
+
+    # user:“给现有 search_files 能力一个可见入口”+
+    # (检索内核早就在 tool/workspace_files.py 里：glob + 内容匹配 + 扫描预算。
+    # 这里只把它接出来给界面用，不新写一套索引，也不改匹配与预算。)
+    @app.get("/api/core/files/search")
+    async def search_workspace_files(
+        query: str = Query(default=""),
+        mode: str = Query(default="name"),
+        path: str = Query(default="."),
+        limit: int = Query(default=50),
+        work_root: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        # user:“给现有 search_files 能力一个可见入口”+
+        # (匹配与扫描预算都在 tool/workspace_files.py；整形与「扫全了没有」的判定在
+        # tool/workspace_search.py。内层已把同步扫描放进线程，这里只解析请求与翻译失败。)
+        from lamtools_core.tool.workspace_search import search_workspace
+
+        root = Path(work_root or resolved_work_root)
+        try:
+            return await search_workspace(
+                work_root=root, query=query, mode=mode, path=path, limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # user:“转换（复用现有 document_normalize.py 的 docx/pdf/xlsx → Markdown）”+
+    # (转换是「一个文档 → 一个条目」的完整动作，逻辑在 artifact/convert.py；
+    # 这里只解析请求与把失败翻译成明确错误，不再出现第二份实现。)
+    @app.post("/api/core/files/convert")
+    async def convert_document_reference(request: Request) -> dict[str, Any]:
+        import asyncio
+        from lamtools_core.artifact.convert import (
+            DocumentConversionError,
+            convert_document_to_artifact,
+        )
+
+        payload = await request.json()
+        root = Path(str(payload.get("work_root") or resolved_work_root)).resolve()
+        if not root.is_absolute() or not root.is_dir():
+            raise HTTPException(status_code=400, detail="项目目录不存在")
+        target = await actual_reference(str(payload.get("path") or ""), str(root))
+        store: ArtifactStore = app_state["core_db"].artifact_store
+        project_id = str(payload.get("project_id") or "") or await store.resolve_project_id(root)
+        if not project_id:
+            raise HTTPException(status_code=400, detail="无法确定这份转换结果属于哪个项目")
+        try:
+            record = await convert_document_to_artifact(
+                store=store, project_id=project_id, work_root=root, path=target,
+            )
+        except DocumentConversionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"artifact": record.to_dict()}
 
     @app.post("/api/core/projects/{project_id}/artifacts")
     async def upload_project_artifact(
@@ -2121,6 +2304,10 @@ def _register_loadtools_operations(catalog: OperationCatalog) -> None:
             *default_core_tool_specs(),
             *durable_tool_specs(goal=True, arrange=True),
         ]
+        # Library 的本机文件工具跟随桌面主代理装配；列在 LoadTools 里便于用户看见。
+        from lamtools_core.library.tools import library_tool_spec
+
+        specs.append(library_tool_spec())
         # Plugin backends contribute their own model-facing tools. Read the
         # normalized runtime handles exposed by the generic operation catalog
         # instead of importing any plugin implementation from Core.

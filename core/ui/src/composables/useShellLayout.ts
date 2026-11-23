@@ -28,6 +28,8 @@ export const RIGHT_DRAWER_RETRACT_MS = 180
 export interface ShellLayoutOptions {
   /** localStorage key prefix for the consuming member product */
   storageKey: string
+  compactChrome?: boolean
+  requiresLeftDrawer?: () => boolean
   /** Initial density */
   density?: DensityMode
   /** Initial content width (560–1120) */
@@ -36,12 +38,15 @@ export interface ShellLayoutOptions {
   theme?: ThemeData
   /** Whether the right panel is visible at all */
   showRightPanel?: boolean
+  /** Runtime platform; 窄窗的移动端语义（抽屉、浮动开关）只对 mobile 生效 */
+  platform?: string
   /** Callback when settings button is clicked */
   onSettings?: () => void
 }
 
 export function useShellLayout(options: ShellLayoutOptions) {
   // --- state ---
+  // user:“不要让它自动缩进去，手动缩回后也应该有打开方式”+(桌面项目侧栏默认展开，由独立按钮切换)。
   const leftOpen = ref(true)
   const rightOpen = ref(false)
   const leftPinned = ref(true)
@@ -57,8 +62,10 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const theme = ref<ThemeData>(options.theme ?? { ...DEFAULT_THEME })
 
   // --- shell class ---
+  // user:“左竖栏按需出现，正常情况隐藏”+(设置等把导航放在会话侧栏的页面需要保留该栏)。
+  const leftDrawerShown = computed(() => !sidebarCollapsed.value && (leftOpen.value || Boolean(options.requiresLeftDrawer?.())))
   const shellClass = computed(() => ({
-    'left-open': leftOpen.value && !sidebarCollapsed.value,
+    'left-open': leftDrawerShown.value,
     'right-open': rightOpen.value,
     'right-pinned': rightPinned.value,
     [`density-${density.value}`]: true,
@@ -68,21 +75,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   /** True whenever the right rail occupies the workspace. */
   const rightDrawerShown = computed(() => rightOpen.value)
-
-  // The native title bar lives outside `.workspace-shell`, so mirror only the
-  // two live main-surface insets to :root for title-bar extensions such as
-  // Workflow tabs. This keeps them aligned while drawers open, close or pin.
-  const titlebarMainInsets = computed(() => {
-    // 右侧抽屉只剩贴边图标竖栏，宽度恒等于 --right-rail-width。
-    const rightWidth = 46
-    return {
-      // 拖过宽度后不能再交给 --sidebar-width：它在 :root 只能解析出默认档。
-      left: !leftOpen.value
-        ? '18px'
-        : leftWidth.value !== null ? `${leftWidth.value}px` : 'var(--sidebar-width)',
-      right: (rightOpen.value && rightPinned.value) ? `${rightWidth}px` : '18px',
-    }
-  })
 
   // --- shell CSS variables ---
   const shellStyle = computed(() => {
@@ -127,16 +119,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
     { immediate: true },
   )
 
-  watch(
-    titlebarMainInsets,
-    ({ left, right }) => {
-      if (typeof document === 'undefined') return
-      document.documentElement.style.setProperty('--titlebar-main-left', left)
-      document.documentElement.style.setProperty('--titlebar-main-right', right)
-    },
-    { immediate: true },
-  )
-
   /* 拖出来的宽度按视口收口：给聊天区至少留 360px，窄窗口也不会把主区挤没。 */
   function clampLeftWidth(value: number): number {
     const viewport = typeof window === 'undefined' ? 0 : window.innerWidth
@@ -172,7 +154,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
   }
 
   function onLeftDrawerLeave() {
-    if (!leftPinned.value) leftOpen.value = false
+    if (!options.compactChrome && !leftPinned.value) leftOpen.value = false
   }
 
   function onRightDrawerLeave() {
@@ -236,10 +218,11 @@ export function useShellLayout(options: ShellLayoutOptions) {
     // bypassed their open state and coupled this composable to their DOM,
     // audit 19 S3).
     if (
+      !options.compactChrome &&
       !leftPinned.value &&
       leftOpen.value &&
       !target.closest('.drawer-left') &&
-      !target.closest('.edge-left') &&
+      !target.closest('.workspace-left-rail') &&
       // 拖分界线不算“点在抽屉外”，否则会话栏会在拖动开始的一瞬间收起。
       !target.closest('.sidebar-resize-handle')
     ) {
@@ -268,7 +251,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     // fields) or when a repeat is held (audit 19 S3).
     if (event.repeat || isTypingTarget(event.target)) return
     // Ctrl+Tab → toggle left drawer
-    if (event.ctrlKey && event.key.toLowerCase() === 'tab') {
+    if (!options.compactChrome && event.ctrlKey && event.key.toLowerCase() === 'tab') {
       event.preventDefault()
       if (leftPinned.value) {
         leftPinned.value = false
@@ -288,7 +271,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     if (event.key === 'Escape') {
       if (isNarrowViewport.value) closeDrawers()
       else {
-        if (!leftPinned.value) leftOpen.value = false
+        if (!options.compactChrome && !leftPinned.value) leftOpen.value = false
         if (!rightPinned.value) rightOpen.value = false
       }
       return
@@ -296,9 +279,13 @@ export function useShellLayout(options: ShellLayoutOptions) {
   }
 
   let narrowMediaQuery: MediaQueryList | undefined
+  // user:“桌面端窄屏也会出现左上角的悬浮窗，这不对”+(那个浮动开关是手机打开抽屉的入口；
+  // 桌面端只考虑桌面布局，窗口再窄也不切换成移动端的抽屉语义。)
+  const mobilePlatform = options.platform === 'mobile'
   function syncViewportMode(event: MediaQueryList | MediaQueryListEvent) {
+    if (!mobilePlatform) return
     const wasNarrow = isNarrowViewport.value
-    isNarrowViewport.value = event.matches
+    isNarrowViewport.value = mobilePlatform && event.matches
     if (event.matches === wasNarrow) return
     if (!event.matches) {
       leftPinned.value = true
@@ -334,8 +321,6 @@ export function useShellLayout(options: ShellLayoutOptions) {
   })
 
   onUnmounted(() => {
-    document.documentElement.style.removeProperty('--titlebar-main-left')
-    document.documentElement.style.removeProperty('--titlebar-main-right')
     document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('keydown', onKeydown)
     if (narrowMediaQuery) {
@@ -390,6 +375,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
   return {
     // state
     leftOpen,
+    leftDrawerShown,
     rightOpen,
     leftPinned,
     rightPinned,

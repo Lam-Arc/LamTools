@@ -8,11 +8,36 @@ import { invoke } from '@tauri-apps/api/core'
  */
 const TICKET_KEY = 'sunday.p2p.ticket'
 
+/**
+ * 重连用的地址票（`sunday1:`）。
+ *
+ * user:“已授权设备后续能自动重连，不要求每次重新扫”+(配对票 `sunday2:` 只有 5 分钟
+ * 有效期，拿它当长期凭据必然过期；配对成功后要把地址票单独记下来，自动重连只认它)。
+ */
+const RESUME_KEY = 'sunday.p2p.resume'
+
 export function readTicket(): string {
   try {
     return localStorage.getItem(TICKET_KEY) || ''
   } catch {
     return ''
+  }
+}
+
+export function readResumeTicket(): string {
+  try {
+    return localStorage.getItem(RESUME_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function saveResumeTicket(ticket: string): void {
+  try {
+    if (ticket) localStorage.setItem(RESUME_KEY, ticket)
+    else localStorage.removeItem(RESUME_KEY)
+  } catch {
+    // 存储不可用只影响下次自动重连，这一次仍然能连。
   }
 }
 
@@ -30,6 +55,18 @@ interface Status {
   /** 正在拨号：宿主的 inner 锁被这次拨号占着，此时还没有可用隧道。 */
   connecting?: boolean
   peer?: string | null
+  /**
+   * user:“只有业务真正可用才显示「已连接电脑」”+(宿主给的分层结论：
+   * connected / connecting / degraded / waiting / offline，配一句原因)。
+   */
+  view?: string
+  reason?: string
+  layers?: {
+    transport?: boolean
+    device?: string
+    core?: string
+    session?: string
+  }
 }
 
 export async function remoteStatus(): Promise<Status | null> {
@@ -72,13 +109,16 @@ async function dialRemote(budgetMs = 5000): Promise<string | null> {
   // 隧道去读项目与模型，读一次空一次；现在如实报「正在连接」，这里等这一次的结果，
   // 而不是再拨一次把这一次顶掉)。
   if (status?.connecting) return await waitForTunnel(budgetMs)
-  const ticket = readTicket()
+  // 优先用地址票：配对票 5 分钟就过期，不能当长期凭据。
+  const ticket = readResumeTicket() || readTicket()
   if (!ticket) return null
   try {
     // user:“进去的时候加载界面居然要加载 30 秒”+(记住的电脑不在线时，以前要等满
     // 45 秒的拨号超时才肯落到本机；启动路径只给它一个很短的预算，超时立刻用本机)。
     const args: Record<string, unknown> = { ticket, name: 'Phone', timeoutMs: budgetMs }
-    const result = (await invoke('p2p_connect', args)) as { peer?: string }
+    const result = (await invoke('p2p_connect', args)) as { peer?: string; resume?: string }
+    // user:“已授权设备后续能自动重连”+(宿主把地址票带回来就存下；下次启动直接用它)。
+    if (typeof result?.resume === 'string' && result.resume) saveResumeTicket(result.resume)
     return result?.peer ?? ''
   } catch {
     return null
@@ -158,12 +198,14 @@ export function rememberDevice(ticket: string, name: string): void {
 export function forgetDevice(id: string): void {
   writeDevices(readDevices().filter((device) => device.id !== id))
   if (ticketDeviceId(readTicket()) === id) saveTicket('')
+  if (ticketDeviceId(readResumeTicket()) === id) saveResumeTicket('')
 }
 
 /** 切换当前使用的设备；空表示切回本机。 */
 export function activateDevice(id: string | null): void {
   if (!id || id === 'local') {
     saveTicket('')
+    saveResumeTicket('')
     return
   }
   const device = readDevices().find((item) => item.id === id)

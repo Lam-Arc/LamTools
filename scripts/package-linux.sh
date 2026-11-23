@@ -236,6 +236,8 @@ npm run build
 popd >/dev/null
 
 info "Building the Linux PyInstaller sidecar"
+# user:“打包发布，更新安装”+(Linux 后端与 Windows 后端都打包 Rust 会话数据库)。
+cargo build --locked --release --manifest-path "$SOURCE_ROOT/core/sunday-core/Cargo.toml" -p sunday-core-db
 pushd "$SOURCE_ROOT/core" >/dev/null
 "$PYTHON_BIN" -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
 popd >/dev/null

@@ -26,6 +26,16 @@ export interface AssistantDisplayPreferences {
   avatarSize: number
   /** 圆角率 0–100：100 为圆形，0 为方形 */
   avatarRoundness: number
+  // user:“界面中是否可以设置？颜色与材质配置？”+(气泡的形状、玻璃与两边填充色
+  // 也进同一份显示偏好，读侧与设置面板共用；空颜色表示继续跟随主题角色色)
+  /** 卡片（28px 大圆角）或胶囊（两端全圆） */
+  bubbleShape: 'card' | 'capsule'
+  /** 玻璃开关：开为毛玻璃，关为实色 */
+  bubbleGlass: boolean
+  /** 用户气泡填充色（#rrggbb），空串跟随角色默认色 */
+  bubbleUserColor: string
+  /** 助手气泡填充色（#rrggbb），空串跟随角色默认色 */
+  bubbleAssistantColor: string
 }
 
 /** 与其它本地偏好的键名风格一致（lamtools.core.*）。 */
@@ -40,6 +50,10 @@ export const ASSISTANT_DISPLAY_DEFAULTS: AssistantDisplayPreferences = {
   avatar: '',
   avatarSize: 28,
   avatarRoundness: 100,
+  bubbleShape: 'card',
+  bubbleGlass: true,
+  bubbleUserColor: '',
+  bubbleAssistantColor: '',
 }
 
 export const AVATAR_SIZE_MIN = 16
@@ -66,6 +80,14 @@ function clampNumber(value: unknown, min: number, max: number): number | undefin
   return Math.min(max, Math.max(min, Math.round(value)))
 }
 
+/** 气泡填充色只收 #rrggbb；空串表示跟随主题，其它写法一律丢弃。 */
+function clampColor(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (trimmed === '') return ''
+  return /^#[0-9a-f]{6}$/i.test(trimmed) ? trimmed.toLowerCase() : undefined
+}
+
 export function normalizeAssistantDisplayPreferences(value: unknown): Partial<AssistantDisplayPreferences> {
   if (!value || typeof value !== 'object') return {}
   const raw = value as Record<string, unknown>
@@ -78,6 +100,12 @@ export function normalizeAssistantDisplayPreferences(value: unknown): Partial<As
   if (size !== undefined) next.avatarSize = size
   const roundness = clampNumber(raw.avatarRoundness, AVATAR_ROUNDNESS_MIN, AVATAR_ROUNDNESS_MAX)
   if (roundness !== undefined) next.avatarRoundness = roundness
+  if (raw.bubbleShape === 'card' || raw.bubbleShape === 'capsule') next.bubbleShape = raw.bubbleShape
+  if (typeof raw.bubbleGlass === 'boolean') next.bubbleGlass = raw.bubbleGlass
+  const userColor = clampColor(raw.bubbleUserColor)
+  if (userColor !== undefined) next.bubbleUserColor = userColor
+  const assistantColor = clampColor(raw.bubbleAssistantColor)
+  if (assistantColor !== undefined) next.bubbleAssistantColor = assistantColor
   return next
 }
 
@@ -112,6 +140,10 @@ export function setAssistantDisplayPreferences(patch: Partial<AssistantDisplayPr
   if (typeof next.avatar === 'string') state.avatar = next.avatar
   if (typeof next.avatarSize === 'number') state.avatarSize = next.avatarSize
   if (typeof next.avatarRoundness === 'number') state.avatarRoundness = next.avatarRoundness
+  if (next.bubbleShape) state.bubbleShape = next.bubbleShape
+  if (typeof next.bubbleGlass === 'boolean') state.bubbleGlass = next.bubbleGlass
+  if (typeof next.bubbleUserColor === 'string') state.bubbleUserColor = next.bubbleUserColor
+  if (typeof next.bubbleAssistantColor === 'string') state.bubbleAssistantColor = next.bubbleAssistantColor
   const snapshot = assistantDisplaySnapshot()
   writeStored(snapshot)
   return snapshot

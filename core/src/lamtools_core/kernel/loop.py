@@ -928,6 +928,9 @@ class CoreLoopKernel:
         # the cumulative step count across resumes.
         steps_log = state.metadata.get("kernel_steps")
         index = len(steps_log) if isinstance(steps_log, list) else 0
+        # user:“最终 Step 开始后收到的所有引导，都应开启下一回合”+(一旦本回合
+        # 给出无工具调用的答复，本回合就不再消费引导；见 5.1 与 5.11)。
+        tail_guidance_deferred = False
         # user:“阶段一应该是从 turn start 开始”+(这个回合的第一个请求，其
         # “整理并发送”从本回合入口计时，而不是从 _stream_model 进入时才开始；
         # 后续步骤由 _stream_model 在步入口重新锚定)。
@@ -967,7 +970,8 @@ class CoreLoopKernel:
                     )
                     break
 
-                await self._consume_guidance(state, turn_input, history, index)
+                if not tail_guidance_deferred:
+                    await self._consume_guidance(state, turn_input, history, index)
                 # user:“模式、权限、思考强度在下一步生效（即时生效）”+(先落参数组，
                 # 再构建下一步的提示词、工具数组与模型请求)。
                 await self._apply_runtime_settings(state, turn_input)
@@ -1179,6 +1183,12 @@ class CoreLoopKernel:
                 # turn.is_natural_stop in decide_next as a done candidate.
                 if not turn.tool_calls and turn.reply:
                     turn.is_natural_stop = True
+                    # user:“引导的回合归属，应由其所在 Step 的最终结果决定”+(无
+                    # 工具调用的答复就是本回合的最终步：当场封口，之后到达的引导
+                    # 归下一回合；队列里已有的引导也不在本步消费，由执行层投递)。
+                    if turn_input.defer_tail_guidance:
+                        self._seal_guidance(turn_input)
+                        tail_guidance_deferred = True
 
                 # 5.6 Emit reply and kit events
                 if turn.reply:
@@ -1917,7 +1927,7 @@ class CoreLoopKernel:
                     step.metadata["done_without_final_text"] = True
                     state.metadata["done_without_final_text"] = True
 
-                if decision == "done" and not turn.tool_calls:
+                if decision == "done" and not turn.tool_calls and not tail_guidance_deferred:
                     if await self._consume_guidance(state, turn_input, history, index):
                         decision = "continue"
                         step.metadata["guidance_force_continue"] = True
@@ -1970,7 +1980,7 @@ class CoreLoopKernel:
                 # 收下的引导属于本回合，内核继续；边界处没有待处理引导时当场封口，
                 # 之后到达的引导一律改走新回合，绝不再用一次强制 continue 去延长
                 # 一个正在结束的回合)。
-                if decision == "done" and not turn.tool_calls:
+                if decision == "done" and not turn.tool_calls and not tail_guidance_deferred:
                     if await self._consume_guidance(state, turn_input, history, index, finalize=True):
                         decision = "continue"
                         step.metadata["guidance_force_continue"] = True

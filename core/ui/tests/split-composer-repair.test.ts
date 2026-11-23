@@ -11,8 +11,8 @@ import InlineFileComposer from '../src/components/InlineFileComposer.vue'
 import { createWorkbench } from '../src/workbench/createWorkbench'
 import { useAuxiliaryChat } from '../src/auxiliary/useAuxiliaryChat'
 import type { AuxiliaryEnvironment } from '../src/auxiliary/workspace'
-import type { SplitTab } from '../src/split/layout'
-import type { SplitWorkspaceController } from '../src/split/useSplitWorkspace'
+import type { SplitTab } from '../src/workspace/types'
+import type { WorkspaceController } from '../src/workspace/context'
 vi.mock('../src/workbench/createWorkbench', () => ({ createWorkbench: vi.fn() }))
 const wrappers: ReturnType<typeof mount>[] = []
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.clearAllMocks(); localStorage.clear() })
@@ -99,7 +99,7 @@ it('mounts shared controls and sends once with Enter while preserving IME confir
 it('routes native and overlay drops to the active auxiliary tab, and releases closed targets', () => {
   const { environment } = fixture()
   const state = { activePane: 'right', hidden: false, panes: { right: { activeTab: 'helper' } } }
-  const workspace = createAuxiliaryWorkspace({ state } as unknown as SplitWorkspaceController, environment)
+  const workspace = createAuxiliaryWorkspace({ state } as unknown as WorkspaceController, environment)
   const upload = vi.fn(), files = [{ path: 'E:/a.txt', name: 'a.txt' }]
   const unregister = workspace.registerAttachmentTarget('helper', upload)
   expect(workspace.routeAttachmentDrop(files)).toBe(true)

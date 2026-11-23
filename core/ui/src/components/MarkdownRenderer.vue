@@ -33,9 +33,13 @@ import DOMPurify from 'dompurify'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { isExternalUrl, openExternalUrl } from '@/helpers/openUrl.ts'
+// user:“Ctrl/Cmd + 点击链接直接进内置浏览器”+(分类与可用性判定统一在 browser/entry，这里只决定落点)。
+import { classifyLink, wantsInternalBrowser } from '@/browser/linkRouting'
+import { openInBrowser } from '@/browser/entry'
+import { showToast } from '@/composables/useCoreToast'
 import { renderAutoMathPlot } from '@/components/mathAutoPlot.ts'
 import { getCachedMarkdown, setCachedMarkdown } from '@/components/markdownRenderCache.ts'
-import { fadeStreamingText, type StreamingTextFade } from '@/components/streamingTextFade.ts'
+import { lastNewlineFrom, markBlockEnter } from '@/components/streamBlocks.ts'
 // user:“调查所有样式”+(Mermaid 原来写死深色主题，浅色主题下图表仍是深色；改为跟随当前主题)
 import { relativeLuminance } from '@/helpers/theme.ts'
 
@@ -809,7 +813,6 @@ const SEGMENT_CACHE_LIMIT = 200
 interface StreamedSegment {
   text: string
   nodes: ChildNode[]
-  fade: StreamingTextFade
 }
 
 let streamedSegments: StreamedSegment[] = []
@@ -818,6 +821,11 @@ let lastTailParseAt = Number.NEGATIVE_INFINITY
 let lastClosedCount = 0
 let lastStreamingLength = 0
 let streamingInitialized = false
+// user:“做C”+(块级落定：animated = 已落过动画的字符数；seen = 上一帧可见到的长度。
+//  两者配合保证“只动画这一帧新写完的那一段”，旧文本永远不重放)。
+let streamAnimatedChars = 0
+let streamSettledSource = 0
+
 // Bumped whenever the streamed DOM is abandoned (unmount, session switch, a
 // finished render taking over) so a queued tail timer can never write into a
 // container that now belongs to something else.
@@ -943,18 +951,14 @@ function cancelTailParse(): void {
   }
 }
 
-function parseTailSegment(index: number, text: string, container: HTMLElement, animate: boolean): void {
+function parseTailSegment(index: number, text: string, container: HTMLElement): void {
   cancelTailParse()
   const existing = streamedSegments[index]
   if (existing) disposeSegment(existing)
   const nodes = appendSegmentNodes(container, cachedSegmentHtml(text))
   mountProgressiveBlocks(nodes)
   hydrateImagesInNodes(nodes, localImageGeneration)
-  const segment: StreamedSegment = {
-    text,
-    nodes,
-    fade: fadeStreamingText(nodes, existing?.fade, animate),
-  }
+  const segment: StreamedSegment = { text, nodes }
   streamingStats.tailParses += 1
   if (existing) streamedSegments[index] = segment
   else streamedSegments.push(segment)
@@ -974,8 +978,21 @@ function scheduleTailParse(): void {
   }, delay)
 }
 
+// user:“做C”+(源文本出现新换行 = 这一块写完了；这一刻才把新出现的可见文字包一层动画。
+//  以源文本判断是因为 markdown 会把段落内的换行吃掉，DOM 里看不到换行)。
+function settleBlocks(container: HTMLElement, content: string): void {
+  const newline = lastNewlineFrom(content, streamSettledSource)
+  if (newline < 0) return
+  streamSettledSource = newline + 1
+  streamAnimatedChars = markBlockEnter(container, streamAnimatedChars)
+}
+
 function clearStreamedSegments(): void {
   cancelTailParse()
+  streamAnimatedChars = 0
+  streamSettledSource = 0
+  streamDirty = false
+  if (streamFrame !== null) { cancelAnimationFrame(streamFrame); streamFrame = null }
   streamingGeneration += 1
   for (const segment of [...streamedSegments]) disposeSegment(segment)
   streamedSegments = []
@@ -989,7 +1006,6 @@ function syncStreamingSegments(content: string, forceTail: boolean): void {
   const container = contentRoot.value
   if (!container) return
   const shrunk = content.length < lastStreamingLength
-  const animate = streamingInitialized && !shrunk
   streamingInitialized = true
   lastStreamingLength = content.length
   const blocks = splitStreamingSegments(content)
@@ -1011,23 +1027,17 @@ function syncStreamingSegments(content: string, forceTail: boolean): void {
   const keepStaleTail = reuse === closedCount && streamedSegments.length === closedCount + 1
   // A tail can close and grow in the same tick. Carry its reveal timeline
   // into the closed render rather than fading the whole paragraph again.
-  const previousTail = streamedSegments[reuse]?.fade
   const dropFrom = keepStaleTail ? closedCount + 1 : reuse
   while (streamedSegments.length > dropFrom) disposeSegment(streamedSegments.pop()!)
 
   // 3) Render the segments that just closed — exactly once each.
   while (streamedSegments.length < closedCount) {
     const text = blocks[streamedSegments.length]
-    const previousFade = streamedSegments.length === reuse ? previousTail : undefined
     streamingStats.closedParses += 1
     const nodes = appendSegmentNodes(container, cachedSegmentHtml(text))
     mountProgressiveBlocks(nodes)
     hydrateImagesInNodes(nodes, localImageGeneration)
-    streamedSegments.push({
-      text,
-      nodes,
-      fade: fadeStreamingText(nodes, previousFade, animate),
-    })
+    streamedSegments.push({ text, nodes })
   }
 
   const closedChanged = closedCount !== lastClosedCount
@@ -1038,9 +1048,13 @@ function syncStreamingSegments(content: string, forceTail: boolean): void {
   if (tailText === null) {
     if (renderedTail) disposeSegment(streamedSegments.pop()!)
     cancelTailParse()
+    settleBlocks(container, content)
     return
   }
-  if (renderedTail && renderedTail.text === tailText) return
+  if (renderedTail && renderedTail.text === tailText) {
+    settleBlocks(container, content)
+    return
+  }
 
   const due = forceTail
     || closedChanged
@@ -1048,8 +1062,10 @@ function syncStreamingSegments(content: string, forceTail: boolean): void {
     || shrunk
     || tailText.length < EAGER_TAIL_PARSE_LIMIT
     || Date.now() - lastTailParseAt >= TAIL_PARSE_INTERVAL_MS
-  if (due) parseTailSegment(closedCount, tailText, container, animate)
+  if (due) parseTailSegment(closedCount, tailText, container)
   else scheduleTailParse()
+  // user:“做C”+(只对刚写完的行落一次动画；未写完的最后一行保持静态)。
+  settleBlocks(container, content)
 }
 
 const renderedHtml = computed(() => {
@@ -1321,8 +1337,22 @@ watch(renderedHtml, async (html) => {
 // Streaming ticks: render the segments that just closed plus the open tail.
 // flush:'post' guarantees contentRoot is mounted/updated before we touch its
 // children.
-watch(() => props.content, (value) => {
-  if (props.streaming) syncStreamingSegments(value, false)
+// user:“现在的帧速是完全等于 chunk 速吗？”+
+// (不再每个 chunk 都重渲染：chunk 只标脏，画面在下一帧合并成一次，天然不超过 60 次/秒)。
+let streamDirty = false
+let streamFrame: number | null = null
+function scheduleStreamingSync(): void {
+  streamDirty = true
+  if (streamFrame !== null) return
+  streamFrame = requestAnimationFrame(() => {
+    streamFrame = null
+    if (!streamDirty) return
+    streamDirty = false
+    if (props.streaming && contentRoot.value) syncStreamingSegments(props.content, false)
+  })
+}
+watch(() => props.content, () => {
+  if (props.streaming) scheduleStreamingSync()
 }, { flush: 'post' })
 
 watch(uiLanguage, () => {
@@ -1397,6 +1427,18 @@ function onRootClick(event: MouseEvent) {
     event.preventDefault(); event.stopPropagation(); void referenceActions.open(target.dataset.filePath); return
   }
   const href = target.getAttribute('href') ?? ''
+  // user:“Ctrl/Cmd + 点击链接直接进内置浏览器”+(只接管 http(s)；开不出来就说原因并回落系统浏览器，
+  // 保证「点了有反应」，本地文件引用仍走预览器/编辑器)。
+  if (classifyLink(href).route === 'internal' && wantsInternalBrowser(event)) {
+    event.preventDefault()
+    event.stopPropagation()
+    const opened = openInBrowser(href)
+    if (!opened.ok) {
+      showToast('notice', t(opened.reason), 5000)
+      void openExternalUrl(href)
+    }
+    return
+  }
   if (!isExternalUrl(href)) return
   // Hand off to the OS browser and block the in-app navigation.
   event.preventDefault()
@@ -1451,6 +1493,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (streamFrame !== null) { cancelAnimationFrame(streamFrame); streamFrame = null }
   clearTimeout(mosaicResizeTimer)
   window.removeEventListener('resize', scheduleMosaicLayout)
   themeObserver?.disconnect()
@@ -1474,8 +1517,8 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 /* user:“辅助说明块呢？总的来说就是样式块”+(说明块使用主题语义色和文本标签，详情保留原生键盘操作)。 */
 .markdown-body :deep(.message-style-block) {
   --text: var(--theme-main-text);
-  margin: var(--space-3) 0;
-  padding: var(--space-3);
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
   color: var(--text);
   background: var(--theme-main-soft-background);
   border-inline-start: 3px solid color-mix(in srgb, var(--text) 45%, transparent);
@@ -1487,25 +1530,14 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 .markdown-body :deep([data-style-block="info"]) { border-inline-start-color: var(--blue); }
 .markdown-body :deep(.message-style-block > :last-child) { margin-bottom: 0; }
 .markdown-body :deep(.message-style-block summary) { color: var(--theme-main-text); }
-.markdown-body :deep(.stream-text-fade) {
-  animation: stream-text-reveal var(--dur-base, 180ms) var(--ease-out, ease-out) both;
-  animation-delay: calc(-1 * var(--stream-fade-age, 0ms));
-}
-
-@keyframes stream-text-reveal {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .markdown-body :deep(.stream-text-fade) {
-    animation: none;
-  }
-}
+/* 流式落定动画的唯一视觉来源已抽到 styles/stream-fade.css（本组件底部以 <style src> 引入，
+   预览页 .tmp/stream-fade-preview.html 用的也是同一份文件，避免两边漂移）。 */
 
 .markdown-body {
   font-size: 14px;
-  line-height: 1.5;
+  /* user:“消息区的内容渲染要更加紧凑，比如md的自动渲染，不要刻意留白或换行”+
+     (正文行高收到 1.45；块与块之间只留最小的呼吸位，不再用大段 margin 撑开)。 */
+  line-height: 1.45;
   color: var(--theme-main-text, #eee);
   word-break: break-word;
 }
@@ -1527,8 +1559,8 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 .markdown-body :deep(h2),
 .markdown-body :deep(h3),
 .markdown-body :deep(h4) {
-  margin: 18px 0 8px;
-  line-height: 1.25;
+  margin: 12px 0 4px;
+  line-height: 1.2;
   font-weight: 650;
 }
 .markdown-body :deep(h1) { font-size: 1.4em; }
@@ -1538,7 +1570,11 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 
 /* Paragraphs */
 .markdown-body :deep(p) {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
+}
+/* 松散列表项里 markdown 会包一层 <p>：别让它再撑一次段距。 */
+.markdown-body :deep(li > p) {
+  margin: 0;
 }
 .markdown-body :deep(p:last-child) {
   margin-bottom: 0;
@@ -1555,8 +1591,8 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 
 /* Code blocks */
 .markdown-body :deep(pre) {
-  margin: 6px 0;
-  padding: 10px 14px;
+  margin: 4px 0;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 4%, transparent);
   overflow-x: auto;
@@ -1588,7 +1624,7 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px;
-  margin: 8px 0;
+  margin: 6px 0;
 }
 
 /* 单张图也居中，避免独占一行时贴在左边。 */
@@ -1685,18 +1721,18 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 /* Lists */
 .markdown-body :deep(ul),
 .markdown-body :deep(ol) {
-  margin: 6px 0;
-  padding-left: 24px;
+  margin: 3px 0;
+  padding-left: 20px;
 }
 .markdown-body :deep(li) {
-  margin: 2px 0;
+  margin: 1px 0;
 }
 
 /* Blockquotes */
 .markdown-body :deep(blockquote) {
-  margin: 6px 0;
+  margin: 4px 0;
   max-width: 72ch;
-  padding: 6px 14px;
+  padding: 4px 12px;
   border-left: 3px solid color-mix(in srgb, var(--theme-main-text, var(--text, currentColor)) 22%, transparent);
   color: color-mix(in srgb, var(--theme-main-text, var(--text, currentColor)) 76%, transparent);
 }
@@ -1717,7 +1753,7 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
   width: auto;
   max-width: min(100%, 720px);
   max-height: min(62vh, 720px);
-  margin: var(--space-3) 0 var(--space-2);
+  margin: var(--space-2) 0 var(--space-1);
   border: 1px solid var(--theme-main-border);
   border-radius: var(--radius);
   object-fit: contain;
@@ -1745,7 +1781,7 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
   max-width: 100%;
   min-width: 0;
   margin: var(--space-2) 0;
-  padding: var(--space-3);
+  padding: var(--space-2);
   border: 1px solid var(--theme-main-border);
   border-radius: var(--radius);
   background: var(--theme-main-background);
@@ -1810,7 +1846,7 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
-  padding: 6px 10px;
+  padding: 4px 8px;
   text-align: left;
   font-size: 13px;
 }
@@ -1823,12 +1859,12 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 .markdown-body :deep(hr) {
   border: 0;
   border-top: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
-  margin: 14px 0;
+  margin: 10px 0;
 }
 
 /* Mermaid diagrams */
 .markdown-body :deep(.mermaid-diagram) {
-  margin: 10px 0;
+  margin: 8px 0;
   display: flex;
   justify-content: center;
 }
@@ -1848,7 +1884,7 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
    They reuse the main content surface and remain responsive like Mermaid. */
 .markdown-body :deep(.study-inline-svg) {
   width: min(100%, 720px);
-  margin: var(--space-3) auto;
+  margin: var(--space-2) auto;
   color: var(--theme-main-text, #f2efeb);
 }
 .markdown-body :deep(.study-inline-svg__graphic) {
@@ -1866,7 +1902,7 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 .markdown-body :deep(.math-auto-plot-anchor) { display: none; }
 .markdown-body :deep(.math-auto-plot) {
   width: min(100%, 720px);
-  margin: var(--space-3) auto;
+  margin: var(--space-2) auto;
   color: var(--theme-main-text, #f2efeb);
 }
 .markdown-body :deep(.math-auto-plot svg) {
@@ -1946,3 +1982,5 @@ defineExpose({ renderSegment: renderSegmentHtml, splitStreamingSegments, streami
 :deep(a.file-reference-link) { display: inline; overflow-wrap: anywhere; }
 :deep(.file-reference-icon) { display: inline-block; flex: none; margin-right: 3px; vertical-align: -3px; }
 </style>
+
+<style src="../styles/stream-fade.css"></style>

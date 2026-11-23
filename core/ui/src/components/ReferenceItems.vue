@@ -47,8 +47,11 @@ import { BookOpen, Image as ImageIcon, Link2, Play } from 'lucide-vue-next'
 import FileTypeBadge from '@/components/FileTypeBadge.vue'
 import { t } from '@/i18n/index.ts'
 import { useReferenceActions } from '@/helpers/referenceActions'
-import { useOptionalSplitWorkspace } from '@/split/useSplitWorkspace'
+import { useOptionalWorkspace } from '@/workspace/context'
 import { openFileInSplit } from '@/split/openFile'
+import { filePreviewTarget } from '@/preview/target'
+import { defaultPreviewHost } from '@/preview/hostPreference'
+import { openInLightbox, previewLightboxAvailable } from '@/preview/usePreviewLightbox'
 import { normalizeWebLink } from '@/helpers/webLinks'
 import type { CoreAttachment, ToolArtifact } from '@/types'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
@@ -56,7 +59,7 @@ import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
 defineOptions({ inheritAttrs: false })
 const props = withDefaults(defineProps<{ attachments?: CoreAttachment[]; artifacts?: ToolArtifact[]; transport: LamToolsTransport; projectId?: string | null; workRoot?: string | null; compact?: boolean; previewOnly?: boolean; heading?: string; foldAll?: boolean }>(), { attachments: () => [], artifacts: () => [], heading: '', foldAll: false })
 const actions = useReferenceActions(props.transport, () => props.workRoot || '')
-const splitWorkspace = useOptionalSplitWorkspace()
+const splitWorkspace = useOptionalWorkspace()
 type Item = { id: string; name: string; path: string; kind: string; mime: string; attachment?: string; artifactId?: string; link: boolean; memory: boolean; inline?: string }
 const items = computed<Item[]>(() => [
   ...props.attachments.map(a => ({ id: a.id, name: a.filename, path: a.path || '', kind: a.preview_type, mime: a.mime_type, attachment: a.id.startsWith('path:') ? undefined : a.id, link: false, memory: false })),
@@ -218,9 +221,24 @@ watch(() => items.value.map(i => i.id + '\0' + i.path + '\0' + i.kind).join('\n'
     catch (error) { if (run === generation) errors[item.id] = error instanceof Error ? error.message : '文件无法读取' }
   }
 }, { immediate: true })
+/**
+ * user:“媒体类（image/video/audio/pdf）→ 灯箱；文档类与文本 → 分屏”+
+ * (会话里点图片、音视频、PDF 先进灯箱，看完即关不打断对话；文档与文本仍走原来的分屏通道。
+ * 灯箱宿主不在场时返回 false，交回调用方，绝不静默吞掉这次点击。)
+ */
+function previewInLightbox(item: Item): boolean {
+  if (!previewLightboxAvailable()) return false
+  if (!item.path || item.link || item.memory || item.inline) return false
+  if (/^(pending:|data:|blob:)/i.test(item.path)) return false
+  const actual = resolvedPaths[item.id] || item.path
+  if (defaultPreviewHost(actual) !== 'lightbox') return false
+  openInLightbox(filePreviewTarget(actual, { workRoot: props.workRoot || '' }))
+  return true
+}
 async function preview(item: Item) {
   item.path = resolvedPaths[item.id] || item.path
   if (item.link) { await actions.open(item.path); return }
+  if (previewInLightbox(item)) return
   if (previewInSplit(item)) return
   // 点击可能早于后台路径核实完成：先补一次核实，再决定是否进分屏。
   if (item.attachment && !resolvedPaths[item.id] && props.transport) {
@@ -237,6 +255,7 @@ async function preview(item: Item) {
       item.path = actual; resolvedPaths[item.id] = actual
     } catch { /* The default-app fallback below reports the failure. */ }
   }
+  if (previewInLightbox(item)) return
   if (previewInSplit(item)) return
   // user:“没有浮窗预览这一说，砍掉”+(分屏不可用或预览开关关闭时，直接交给系统默认应用，
   // 不再弹出居中预览浮层；复制/打开文件夹仍走右键菜单)。

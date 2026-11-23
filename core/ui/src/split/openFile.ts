@@ -1,6 +1,6 @@
 import { baseName, splitContentFor } from './preview'
 import { splitPreviewEnabled } from './previewPreference'
-import type { SplitWorkspaceController } from './useSplitWorkspace'
+import type { WorkspaceController } from '@/workspace/types'
 import type { LamToolsTransport, TransportHttpResponse } from '@/transport'
 
 export interface SplitOpenScope {
@@ -20,14 +20,40 @@ export interface SplitOpenScope {
  * user:“把附件预览给做好”+(会话附件的受管副本在项目目录之外，文本编辑器会拒绝读取；
  * 这类文本文件改走只读文本预览，项目内文件仍进编辑器)。
  */
-export function openFileInSplit(controller: SplitWorkspaceController, path: string, scope: SplitOpenScope = {}) {
+// user:“V2-C1 过渡期：openFile 只需要 add/split，用结构类型同时接受新旧控制器”+
+// (两条控制器在迁移期并存；等 C2 删掉旧内核后，这里改成 WorkspaceController 即可)。
+export interface OpenFileController {
+  split: (...args: any[]) => any
+  add: (...args: any[]) => any
+  tabs?: any
+  /** 让分屏可见：收起状态（hidden）下点文件也必须看得到。 */
+  show?: (pane?: string) => void
+  state?: { panes?: Record<string, unknown>; hidden?: boolean; activePane?: string }
+}
+
+/** 主区之外的屏：用户已经开着分屏时，文档标签要落在这里，而不是顶掉主区里的会话。 */
+function splitPaneIds(controller: OpenFileController): string[] {
+  const panes = controller.state?.panes
+  if (!panes || typeof panes !== 'object') return []
+  return Object.keys(panes).filter(id => id !== 'main')
+}
+
+/**
+ * user:“Office走分屏路径，自动打开分屏或为已有分屏增加标签页”+
+ * (落点顺序：同类标签所在的屏 → 从指定屏向右新开 → 已经开着的分屏 → 主区。
+ *  加完标签后一定要把分屏亮出来：收起状态下只加标签等于什么都没发生。)
+ */
+export function openFileInSplit(controller: OpenFileController, path: string, scope: SplitOpenScope = {}) {
   let kind = splitContentFor(path)
   if (kind === 'editor' && isOutsideWorkRoot(path, scope.workRoot)) kind = 'preview'
   if (!scope.force && kind === 'preview' && !splitPreviewEnabled()) return null
-  const sameKind = controller.tabs.value.find(({ tab }) => tab.kind === kind)?.pane
+  const sameKind = controller.tabs.value.find((entry: { tab: { kind: string } }) => entry.tab.kind === kind)?.pane
   const from = scope.fromPane
-  const pane = sameKind || (from ? controller.split(from, 'right') || from : undefined)
-  return controller.add(
+  const open = splitPaneIds(controller)
+  const active = controller.state?.activePane
+  const preferred = active && active !== 'main' && open.includes(active) ? active : open[0]
+  const pane = sameKind || (from ? controller.split(from, 'right') || from : preferred)
+  const tab = controller.add(
     kind,
     path,
     baseName(path),
@@ -36,6 +62,10 @@ export function openFileInSplit(controller: SplitWorkspaceController, path: stri
     scope.workRoot,
     scope.projectId,
   )
+  if (!tab) return tab
+  if (typeof controller.show === 'function') controller.show(pane)
+  else if (controller.state) controller.state.hidden = false
+  return tab
 }
 
 function isOutsideWorkRoot(path: string, workRoot = ''): boolean {

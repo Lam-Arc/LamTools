@@ -33,6 +33,7 @@ const connectionOptions = [1, 2, 4, 8, 16].map(value => ({ value: String(value),
 const speedOptions = [{ value: '0', label: '不限速' }, { value: '1048576', label: '1 MB/s' }, { value: '5242880', label: '5 MB/s' }, { value: '10485760', label: '10 MB/s' }];
 const routeOptions = computed(() => [{ value: 'auto', label: '自动（跟随加速）' }, { value: 'direct', label: '直接连接' }, { value: 'proxy', label: '当前代理', disabled: !props.session.state?.proxy?.running }]);
 const taskLimits = reactive({});
+const pendingLimits = reactive({});
 const totalSpeed = computed(() =>
   props.session.tasks.reduce(
     (sum, task) => sum + (Number(task.downloadSpeed) || 0),
@@ -129,14 +130,19 @@ async function action(task, action) {
   await props.session.loadTasks();
 }
 async function limit(task, value) {
-  // user:“确保视觉、功能和交互不退化”+(保持原生选择框只在值变化时申请限速)。
-  if (value === (taskLimits[task.gid] || "0")) return;
-  taskLimits[task.gid] = value;
-  await props.session.run(
-    "transfer.action",
-    { gid: task.gid, action: "limit", bytes_per_second: Number(value) },
-    "下载限速已更新",
-  );
+  // user:“确保视觉、功能和交互不退化”+(限速成功后才更新显示；失败或取消可重试，处理中防止重复提交)。
+  if (pendingLimits[task.gid] || value === (taskLimits[task.gid] || "0")) return;
+  pendingLimits[task.gid] = true;
+  try {
+    const result = await props.session.run(
+      "transfer.action",
+      { gid: task.gid, action: "limit", bytes_per_second: Number(value) },
+      "下载限速已更新",
+    );
+    if (result && !result.cancelled) taskLimits[task.gid] = value;
+  } finally {
+    delete pendingLimits[task.gid];
+  }
 }
 async function verify(task) {
   const result = await props.session.run("transfer.verify", { gid: task.gid });
@@ -331,7 +337,7 @@ async function verify(task) {
         <div v-if="expanded === task.gid" class="nx-task-details">
           <span class="nx-subtle">{{ task.directory || "默认下载目录" }}</span>
           <div class="nx-actions">
-            <div class="nx-small-select"><span>下载速度</span><UiSelect :model-value="taskLimits[task.gid] || '0'" :options="speedOptions" aria-label="下载速度限制" data-transfer-task-limit :menu-min-width="120" @update:model-value="limit(task, $event)" /></div>
+            <div class="nx-small-select"><span>下载速度</span><UiSelect :model-value="taskLimits[task.gid] || '0'" :options="speedOptions" :disabled="Boolean(session.busy) || Boolean(pendingLimits[task.gid])" aria-label="下载速度限制" data-transfer-task-limit :menu-min-width="120" @update:model-value="limit(task, $event)" /></div>
             <button
               v-if="!['complete', 'removed'].includes(task.status)"
               class="btn nx-button btn--quiet"

@@ -18,20 +18,39 @@
   /* 会话栏与聊天区之间留 3px 间距（负 overlap 即让位）。 */
   /* 描边之间的可见背景带 1px。 */
   --left-overlap: -3px;
-  --left-peek: 18px;
-  /* 面板与界面下沿的留白（背景色由此透出）。布局变量可覆盖。 */
-  --shell-bottom-inset: var(--layout-bottom-inset, 6px);
+  /* user:“原有背景层让位，让主界面填充全屏”+(左侧不再露出背景缝：主界面贴到竖栏内缘)。 */
+  --left-peek: 0px;
+  /* user:“原有背景层让位，让主界面填充全屏”+
+     (不再给背景层留可见衬边：下沿归零、主界面贴到窗口底边；主题仍可把
+      --layout-bottom-inset 调回去)。 */
+  --shell-bottom-inset: var(--layout-bottom-inset, 0px);
   /* 最左竖栏（整界面导航）：桌面常驻，移动端为 0 宽不参与几何。布局变量可覆盖。 */
   --rail-width: var(--layout-rail-width, var(--app-rail-width, 46px));
   --main-left: calc(var(--left-peek) + var(--rail-width));
   --left-reveal: calc(var(--left-card-width) - var(--left-overlap));
   --left-visible-width: min(var(--left-card-width), var(--main-left));
+  /* —— Agent 纵向融合（选中会话与内容区的连接处）—— */
+  /* user:“当前选中的会话与右侧内容区形成连续轮廓…连接处上下用内凹圆角过渡”+
+     (这几条要在这里声明，不能放进 variables.css 的 :root：主题色是内联注入到 .workspace-shell 上的，
+      在 :root 里引用 --theme-main-text 会整条值失效，连接处就变透明了。
+      其余都是令牌：圆角复用 --radius，指示条宽度换成 0 就是关掉“少量强调”，
+      --session-fusion-plate-display 换成 none 就整条连接处都不画——关掉装饰后界面仍然可用。兜底用 --text/--bg)。 */
+  --session-fusion-fill: color-mix(in srgb, var(--theme-main-text, var(--text)) 7%, var(--theme-main-background, var(--bg)));
+  --session-fusion-indicator: color-mix(in srgb, var(--theme-main-text, var(--text)) 42%, transparent);
+  --session-fusion-indicator-width: 2px;
+  --session-fusion-radius: var(--radius);
+  /* user:“它应该止于侧栏内缘（或与连接层无缝对接），不能悬在缝里”+
+     (连接层只覆盖那条缝：伸入内容区的量归零，于是不会再在右侧露出一截深色方块；
+      跨缝的连续感由“行填充顶到侧栏内缘 + 缝本身与两侧同色”承担)。 */
+  --session-fusion-inset: 0px;
+  --session-fusion-plate-display: block;
   /* 右侧栏 = 贴右缘的图标竖栏（46px），悬停浮出的卡片浮在内容之上，
      不再挤压聊天区宽度。 */
   --right-rail-width: 46px;
   --right-drawer-width: var(--layout-right-drawer-width, var(--right-rail-width));
   --right-overlap: 0px;
-  --right-peek: 6px;
+  /* 右侧同样不留背景缝：右竖栏是浮在满屏主界面上的一条贴边栏。 */
+  --right-peek: 0px;
   /* 子代理分屏：主聊天区让出右侧一条（卡宽 + 卡间留缝），聊天区与输入栏
      都按这个内缩自行变窄——输入栏不需要知道分屏的存在，它只是容器窄了。
      `.workspace-shell--sub-agent-split` 打开时把这条宽度加进 --main-right。 */
@@ -41,7 +60,11 @@
   --main-right-base: var(--right-peek);
   --main-right: calc(var(--main-right-base) + var(--sub-agent-split-extra, 0px));
   --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
-  --main-x-padding: max(22px, 5vw);
+  /* user:“导航条应该独立，且内容为其让位，可以紧凑，但是不能重叠”+
+     (给聊天用户指令导航单开一条通道：通道 = 导航条 24 + 间距 16 + 贴边 4，
+       正文的左右留白至少这么宽；导航条落在通道里，标记与文字之间始终留 16px)。 */
+  --outline-rail-lane: calc(var(--space-5) + var(--space-4) + var(--space-1));
+  --main-x-padding: max(var(--outline-rail-lane), 5vw);
   --content-width: 780px;
   /* user:“消息区自适应填满宽度”+(主题里的内容宽度只约束整版界面；聊天正文列与输入栏
      改吃这条填满上限，容器窄就铺满，宽屏才收到 1040px，不再固定 780px 留出大片空白)。 */
@@ -66,6 +89,12 @@
   --theme-main-subtle-background: rgba(255, 255, 255, 0.028);
   --theme-main-sunken-background: rgba(0, 0, 0, 0.32);
   --theme-main-border: #818289;
+  /* user:“胶囊边框采用与图标同色适应明暗主题1.5px，填充底色采用墨黑色/石英白”+
+     “此四控件与其左侧的可拖拽空白区域，使用深灰色底”+
+     (墨黑/石英白由主题按明暗算出来；深灰底两档主题都保持深灰。这里是没加载
+      主题时的兜底，实际值由 helpers/theme.ts 注入)。 */
+  --theme-window-chrome-background: #2B2D32;
+  --theme-window-capsule-fill: #0C0D10;
   --theme-composer-background: #22242A;
   --theme-composer-text: #FBF7F0;
   --theme-composer-soft-background: rgba(255, 255, 255, 0.045);
@@ -74,8 +103,6 @@
   --theme-control-text: #2E3138;
   --theme-control-soft-background: rgba(255, 255, 252, 0.82);
   position: fixed;
-  /* The shell backdrop must continue behind the transparent custom titlebar;
-     child surfaces keep their own titlebar offset below. */
   inset: 0;
   overflow: hidden;
   background: var(--theme-backdrop-background);
@@ -148,11 +175,12 @@
   }
 }
 
-/* 没有会话栏时（左右都收起的整界面态），聊天区左侧不再与大圆角相接，
-   整体回到和右侧一致的大圆角。 */
+/* user:“为什么这里保留了圆角？没有铺满？”+
+   (主界面满屏后不再有“卡片浮在背景上”的外圆角：会话栏收起时也不给主区补圆角，
+    否则窗口四角会露出背景层)。 */
 @media (min-width: 641px) {
   .workspace-shell:not(.left-open) .workspace-main {
-    border-radius: var(--workspace-panel-radius-outer);
+    border-radius: 0;
   }
 }
 
@@ -194,6 +222,160 @@
 }
 .edge-right-label { display: none; }
 
+/* user:“左侧窄竖栏位置再分配…其余项做成左侧栏，与右侧栏保持样式同套系”+
+   (左栏不再是贴边悬停才滑出的窄条：常驻占住 --rail-width 这一列，主界面贴到
+    它的内缘；它自己铺主区底色，于是背景层也不会从左侧露出来。
+     窄窗（<=640）仍沿用手机式满幅主区与抽屉页脚导航，所以这一整套只在 641px 以上生效)。 */
+@media (min-width: 641px) {
+  .workspace-shell--compact-chrome {
+    --titlebar-offset: 0px;
+    --navigation-rail-width: var(--layout-rail-width, 46px);
+    --rail-width: var(--navigation-rail-width);
+    --left-peek: 0px;
+  }
+  .workspace-shell--compact-chrome .workspace-left-rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: var(--rail-width);
+    z-index: var(--z-edge-trigger);
+  }
+  .workspace-shell--compact-chrome .workspace-left-rail .app-rail {
+    display: flex;
+    /* 固定定位的百分比宽度按视口算，不能写 100%——这里必须回到左栏宽度。 */
+    width: var(--rail-width);
+    background: var(--theme-main-background);
+    color: var(--theme-main-text);
+  }
+  /* 常驻后不再需要贴边悬停唤起：那 4px 热区会把“想点内容”误判成“想开竖栏”。 */
+  .workspace-shell--compact-chrome .edge-left { display: none; }
+  /* user:“左侧窄竖栏位置再分配”+(项目侧栏的唤出入口挪到左栏右缘的一条窄热区：
+     指针贴上去就展开，和旧版“贴左边缘展开”的手感一致，只是换了贴的那条边)。 */
+  .workspace-shell--compact-chrome .workspace-rail-seam {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: var(--rail-width);
+    width: 6px;
+    z-index: var(--z-edge-trigger);
+  }
+}
+
+/* user:“右侧预留出最小化，最大化，关闭的按钮区域”+(只在右上角预留局部空间；工作区主体仍贴到顶边)。 */
+:root:has([data-window-controls]:not(.window-controls--preview)) {
+  /* user:“此四控件与其左侧的可拖拽空白区域，使用深灰色底”+
+     (右上角这一簇有了固定宽度：拖拽空白 + 圆形抽屉键 + 三键胶囊；
+      标题带按同一段宽度让位，不再按单枚按钮宽估算)。 */
+  --window-corner-height: var(--window-cluster-height);
+  --window-corner-width: var(--window-cluster-width);
+  --workspace-top-actions-inset: calc(var(--window-corner-width) + var(--space-2));
+}
+:root:has([data-native-window-controls]:not(.window-controls--preview)) {
+  --window-corner-width: calc(var(--window-control-size) * 5 + var(--space-2));
+}
+
+/* user:“与最大化、最小化以及关闭并列”+(抽屉和系统窗口按钮共用尺寸、图标和交互状态)。 */
+.window-control-button {
+  width: var(--window-control-size);
+  height: var(--window-control-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, var(--text)) 72%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.window-control-button:hover {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+  color: var(--theme-main-text);
+}
+.window-control-button:is(:active, [aria-expanded="true"]) {
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
+}
+.window-control-button svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 1.6;
+}
+/* user:“对当前的标题按钮（最小化/最大化/关闭）使用一个胶囊底包裹，胶囊边框采用与
+   图标同色适应明暗主题1.5px，填充底色采用墨黑色/石英白”+
+   (边框走 currentColor = 图标色，宽度 user:“边框改成1px”；填充是主题算出的
+     墨黑/石英白，深浅主题各自成立。
+     user:“边框沿对角线做一下明暗，左与上不变，右与下稍暗”+“边框半透”+
+     描边用 border-box 渐变绘制：左上保持图标色、右下沉一档，整圈再压到半透——
+     只在 1px 的环里画渐变，圆角不会被 border-image 打断)。 */
+.window-control-capsule {
+  --window-capsule-surface: var(--theme-window-capsule-fill);
+  display: inline-flex;
+  align-items: center;
+  padding: var(--window-capsule-pad);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background:
+    linear-gradient(var(--window-capsule-surface), var(--window-capsule-surface)) padding-box,
+    linear-gradient(135deg, var(--window-capsule-border) 0%, var(--window-capsule-border) 48%, color-mix(in srgb, var(--window-capsule-border) 72%, #000) 100%) border-box;
+}
+.window-control-capsule .window-control-button {
+  border-radius: 999px;
+}
+/* user:“左侧的「标签页抽屉」使用圆形底包裹，设计与刚才的胶囊一致”+
+   “大小一致化，胶囊多大圆就多大”+
+   (同一套 1px 描边 + 墨黑/石英白填充；圆的直径直接取胶囊外高，
+    两枚控件并排时体积相同)。 */
+[data-ws2-tab-drawer-trigger] {
+  --window-capsule-surface: var(--theme-window-capsule-fill);
+  /* user:“边再淡一点，（统一）”+(描边只用簇上那一条 --window-capsule-border，
+     和胶囊同一档；这里不再自己算 currentColor 的比例)。 */
+  /* 两份背景（填充面 + 描边环）收在一个变量里：悬停/按下时整体重申，
+     免得 .window-control-button:hover 的单层底色把描边环冲掉。 */
+  --window-capsule-paint:
+    linear-gradient(var(--window-capsule-surface), var(--window-capsule-surface)) padding-box,
+    linear-gradient(135deg, var(--window-capsule-border) 0%, var(--window-capsule-border) 48%, color-mix(in srgb, var(--window-capsule-border) 72%, #000) 100%) border-box;
+  width: var(--window-capsule-size);
+  height: var(--window-capsule-size);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: var(--window-capsule-paint);
+}
+/* user:“标签页抽屉那个按钮，用和胶囊那边一样的悬停显示方式就行”+
+   (和胶囊里的窗口键同一档 hover：底色只抬 alpha-hover、图标拉满，描边环不变)。 */
+[data-ws2-tab-drawer-trigger]:is(:hover, :focus-visible, [aria-expanded='true']) {
+  --window-capsule-surface: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), var(--theme-window-capsule-fill));
+  background: var(--window-capsule-paint);
+  color: var(--theme-main-text);
+}
+[data-ws2-tab-drawer-trigger]:active {
+  --window-capsule-surface: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), var(--theme-window-capsule-fill));
+  background: var(--window-capsule-paint);
+  color: var(--theme-main-text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .window-control-button { transition: none; }
+}
+.workspace-shell:has(> [data-window-controls]) :is(.drawer-right, .edge-right) {
+  top: var(--window-corner-height);
+}
+.workspace-shell:has(> [data-window-controls]) .workspace-chrome-overlays {
+  right: max(var(--right-peek), var(--window-corner-width));
+}
+.workspace-shell:has(> [data-window-controls]) [data-full-area-header] {
+  margin-right: max(0px, calc(var(--workspace-top-actions-inset) - var(--main-x-padding)));
+}
+.workspace-shell:has(> [data-window-controls]) [data-session-header] {
+  padding-right: max(0px, calc(var(--workspace-top-actions-inset) - var(--main-x-padding)));
+}
+
+/* user:“层级应为红>绿>黄”+(标签页抽屉在主区外单独绘制，避开窗口按钮并盖住工作区浮窗)。 */
+.workspace-chrome-overlays {
+  position: absolute;
+  top: var(--titlebar-offset, 0px);
+  right: var(--right-peek);
+  z-index: var(--z-popover);
+}
+
 /* =========================================================================
    Drawers — left sidebar / right panel
    ========================================================================= */
@@ -216,9 +398,13 @@
 .drawer-left {
   top: var(--titlebar-offset, 0px); bottom: var(--shell-bottom-inset, 6px); left: var(--rail-width);
   width: var(--left-visible-width);
-  border: 1px solid var(--theme-main-border);
-  border-radius: var(--workspace-panel-radius-outer) var(--workspace-panel-radius-inner)
-    var(--workspace-panel-radius-inner) var(--workspace-panel-radius-outer);
+  /* user:“去掉这里的白色边线”+“这里的白线是什么”+
+     (侧栏现在贴着左栏与窗口上下沿，任何一条外描边都会在顶部/底部画出一道亮线：
+      这里整圈都不要描边，分隔只留左栏右缘那条极淡竖线)。
+     user:“为什么这里保留了圆角？没有铺满？”+
+     (左栏与内容列都是满幅面，不再留外侧圆角——圆角处会露出背景层)。 */
+  border: 0;
+  border-radius: 0;
   background: var(--theme-main-background);
   box-shadow: var(--shadow-sm);
   transform: none;
@@ -324,7 +510,15 @@ body.sidebar-is-resizing .floating-composer {
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-2) 0;
-  color: var(--theme-backdrop-text);
+  /* user:“其余项做成左侧栏，与右侧栏保持样式同套系”+
+     (左栏现在坐在主界面上，底色与图标色都改由主区色派生——和右侧栏同一套
+      悬停/选中层级，只是右栏底下是背景玻璃、左栏底下是主区)。
+     user:“把它归进主区内容，中间进一条淡的不完全分割线（上下与边框链接）”+
+     (左栏右缘只留一条极淡的竖线：从窗口上沿连到下沿，和主界面边框接上，
+      不再是一整块分栏的硬边)。 */
+  border-right: 1px solid color-mix(in srgb, var(--theme-main-text) 7%, transparent);
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
 }
 
 .app-rail__spacer { flex: 1 1 auto; }
@@ -339,27 +533,20 @@ body.sidebar-is-resizing .floating-composer {
   border: 0;
   border-radius: var(--radius);
   background: transparent;
-  /* 图标始终使用不透明色，避免重叠路径逐笔合成后变亮。 */
-  color: var(--theme-backdrop-text);
+  /* 与右栏同一档静默色：默认 62% 主区文字色，悬停拉满。 */
+  color: color-mix(in srgb, var(--theme-main-text) 62%, transparent);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .app-rail__button:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
-}
-
-.app-rail__button[data-rail-entry][aria-pressed='false'] {
-  color: var(--sidebar-icon-muted-solid);
-}
-
-.app-rail__button[data-rail-entry][aria-pressed='false']:hover,
-.app-rail__button[data-rail-entry][aria-pressed='false']:focus-visible {
-  color: var(--sidebar-icon-hover-solid);
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
+  color: var(--theme-main-text);
 }
 
 .app-rail__button[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent);
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
+  color: var(--theme-main-text);
 }
 
 .app-rail__button:focus-visible {
@@ -604,6 +791,8 @@ body.sidebar-is-resizing .floating-composer {
   justify-content: space-between;
   gap: var(--space-2);
   width: 100%;
+  /* user:“上方的所有标题文字无法被左键拖动选中”+(顶部这一排也不出选区)。 */
+  user-select: none;
   /* 与下方「新建项目」拉开距离。 */
   margin-bottom: var(--space-2);
 }
@@ -1279,4 +1468,88 @@ body.sidebar-is-resizing .floating-composer {
   color: var(--theme-control-text, #fbf7f0);
   box-shadow: 0 6px 18px rgb(0 0 0 / 18%);
   -webkit-tap-highlight-color: transparent;
+}
+/* =========================================================================
+   选中会话与内容区的连接处（Agent 纵向融合）
+   ========================================================================= */
+/* user:“连接处上下用内凹圆角过渡（inverted radius，可用伪元素 + radial-gradient 或 SVG mask，纯 CSS 实现）”+
+   (两侧面板本来就同底色，会露馅的只有两处：中间的缝和两边的描边。连接处就是一条和面板同底色的「舌头」：
+    从会话栏右缘跨过那条缝、盖住聊天卡的左描边，再伸进内容区一点点；
+    四个角用 radial-gradient 各挖掉一个四分之一圆——挖掉的地方露出各自面板的底色，
+    于是轮廓变成“先向内收、再向外张”的平滑过渡，既没有直角拼接，也不是并排的独立胶囊卡片。
+    几何（--session-fusion-top/height/row-bleed）由会话栏量出来写到外壳上；这里只负责画。
+    关掉装饰：主题里把 --session-fusion-plate-display 设成 none（或 --session-fusion-inset 设成 0px）。 */
+.session-fusion {
+  display: none;
+  /* user:“图层 position:absolute; pointer-events:none; contain:layout paint”+
+     (绝对定位 + 布局/绘制隔离：它不可能改变任何祖先或兄弟的尺寸，也不可能造出滚动条——
+      外壳本身是 fixed;inset:0;overflow:hidden，这条回路因此没有“尺寸变化→再测量”的入口)。 */
+  position: absolute;
+  contain: layout paint;
+  z-index: calc(var(--z-main-surface, 300) + 3);
+  top: var(--session-fusion-top, 0px);
+  height: var(--session-fusion-height, 0px);
+  left: calc(var(--rail-width) + var(--left-visible-width));
+  width: calc(var(--main-left) - var(--rail-width) - var(--left-visible-width) + var(--session-fusion-inset));
+  pointer-events: none;
+  background: var(--session-fusion-fill);
+  transition:
+    top var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
+  -webkit-mask-image:
+    radial-gradient(circle at 0 0, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px)),
+    radial-gradient(circle at 100% 0, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px)),
+    radial-gradient(circle at 0 100%, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px)),
+    radial-gradient(circle at 100% 100%, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px));
+  mask-image:
+    radial-gradient(circle at 0 0, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px)),
+    radial-gradient(circle at 100% 0, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px)),
+    radial-gradient(circle at 0 100%, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px)),
+    radial-gradient(circle at 100% 100%, transparent 0 var(--session-fusion-radius), #000 calc(var(--session-fusion-radius) + 0.5px));
+}
+/* user:“关掉装饰后仍可用”+(只有几何真的量到时才画；窄窗里会话栏是抽屉浮层，不画连接处)。 */
+[data-session-fusion="on"] .session-fusion {
+  display: var(--session-fusion-plate-display, block);
+}
+@media (max-width: 640px) {
+  [data-session-fusion="on"] .session-fusion {
+    display: none;
+  }
+}
+
+
+/* =========================================================================
+   会话栏与主区之间的缝（A：同底色连续面）
+   ========================================================================= */
+/* user:“两者之间有一条从上到下的明显缝隙（红框圈出，约 4px 宽、贯穿整个高度）”+
+   (两块面板本来就是同一个 --theme-main-background；缝之所以显形，是因为 3px 的间隙露出外壳背景，
+    再加上两侧各 1px 描边、各两个内圆角。这里把缝填成同色、并去掉相向的描边与内圆角，
+    两块面就拼成一块；选中行的高亮再由 .session-fusion 跨过接缝画一条带内凹圆角的“舌头”)。 */
+.session-seam {
+  display: none;
+  position: absolute;
+  top: var(--titlebar-offset, 0px);
+  bottom: var(--shell-bottom-inset, 6px);
+  left: calc(var(--rail-width) + var(--left-visible-width));
+  width: calc(var(--main-left) - var(--rail-width) - var(--left-visible-width));
+  z-index: calc(var(--z-background-info, 10) + 1);
+  background: var(--theme-main-background);
+  pointer-events: none;
+  contain: layout paint;
+}
+
+/* 桌面端、会话栏展开时才有这条缝；窄窗里侧栏是抽屉浮层，不存在“两张卡并排”。 */
+@media (min-width: 641px) {
+  .workspace-shell.left-open .session-seam { display: block; }
+  /* 相向的两条描边与两个内圆角一起去掉：否则填了缝也会看到两条平行线。 */
+  .workspace-shell.left-open .drawer-left {
+    border-right-width: 0;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .workspace-shell.left-open .workspace-main {
+    border-left-width: 0;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
 }

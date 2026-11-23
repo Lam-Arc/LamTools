@@ -126,8 +126,15 @@ jobs:
         # spec: core/lamtools-core-backend.spec（路径相对 spec 所在目录，cd core 后执行；
         # 与本地 scripts/package.ps1 使用同一份 spec，杜绝双 spec 漂移）
         run: |
+          # user:“打包发布，更新安装”+(干净的发布运行器也要构建并打入 Rust 会话数据库)。
+          cargo build --locked --release --manifest-path core/sunday-core/Cargo.toml -p sunday-core-db
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cd core
           python -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'dist/SundayCore/_internal/lamtools_core/app/sunday_core_db.dll' -PathType Leaf)) {
+            throw 'The packaged backend is missing the Rust session database.'
+          }
 
       - name: Verify bundled plugin boundary
         shell: pwsh
@@ -213,6 +220,32 @@ jobs:
       - name: Verify GitHub plugin market against packaged backend
         run: python scripts/verify-plugin-market.py --exe "core/dist/SundayCore/SundayCore.exe"
 
+      # ---------- 2.5 P2P 传输程序 ----------
+      # user:“sunday-p2p.exe 纳入正式构建与安装”+(远程连接跑在这个独立进程里：iroh 的
+      # netwatch 在 Windows 拉 wmi，与桌面端已有的 windows crate 版本冲突，所以它不链进
+      # 主程序。以前没有任何构建步骤产出它，装完的用户点「生成配对二维码」只会看到
+      # 「找不到 sunday-p2p 传输程序」——功能装了等于没有)。
+      - name: Build P2P transport binary
+        run: cargo build --release --manifest-path core/p2p/Cargo.toml
+
+      - name: Verify P2P transport binary
+        shell: pwsh
+        run: |
+          $bin = "core/p2p/target/release/sunday-p2p.exe"
+          if (-not (Test-Path -LiteralPath $bin -PathType Leaf)) {
+            Write-Error "P2P transport was not built: $bin"
+            exit 1
+          }
+          # 帮助文本必须列全子命令：宿主会调用 serve / qr，验收脚本还会用 devices / revoke。
+          $help = (& $bin 2>&1 | Out-String)
+          foreach ($sub in @("serve", "call", "qr", "scan", "devices", "revoke")) {
+            if ($help -notmatch $sub) {
+              Write-Error "transport help is missing '$sub':`n$help"
+              exit 1
+            }
+          }
+          Write-Host "P2P transport OK ($([math]::Round((Get-Item $bin).Length / 1MB, 1)) MB)"
+
       # ---------- 3. Tauri 只构建应用，不调用官方 NSIS bundler ----------
       - name: Build Tauri application executable
         run: |
@@ -235,6 +268,12 @@ jobs:
           }
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
           Copy-Item -LiteralPath (Join-Path $releaseDir "Sunday.exe") -Destination (Join-Path $stageDir "Sunday.exe")
+          # user:“正式安装包”+(传输程序与 Sunday.exe 同级：宿主按这个位置找它)。
+          $transport = "core/p2p/target/release/sunday-p2p.exe"
+          if (-not (Test-Path -LiteralPath $transport -PathType Leaf)) {
+            throw "P2P transport binary is missing: $transport"
+          }
+          Copy-Item -LiteralPath $transport -Destination (Join-Path $stageDir "sunday-p2p.exe")
           Copy-Item -LiteralPath "core/dist/SundayCore" -Destination (Join-Path $stageDir "sunday-backend") -Recurse
           # user:“在这一次的 setup 里头再打一个清理脚本”+(CI 与本地 package.ps1
           # 共用同一份安装器清单：数据库清理脚本随安装包分发)。

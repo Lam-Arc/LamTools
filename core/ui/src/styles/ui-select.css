@@ -71,8 +71,6 @@
   padding: 6px;
   display: grid;
   gap: 4px;
-  /* 弹出入场：scale+淡入（popover-in 与项目菜单同源） */
-  animation: popover-in var(--dur-base) var(--ease-out);
   transform-origin: top;
 }
 .ui-select-menu--up {
@@ -162,7 +160,4 @@
     transition: none;
   }
 
-  .ui-select-menu {
-    animation: none;
-  }
 }

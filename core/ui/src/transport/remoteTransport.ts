@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
 import { ensureRemote, remoteStatus } from '@/app/remoteSession.ts'
+import { isUsable, MAX_RECONNECT_ATTEMPTS, retryDelayMs } from '@/app/remoteReconnect.ts'
 import { base64ToBytes, bytesToBase64, isReplaySafe } from '@/transport/remoteCodec.ts'
 
 import {
@@ -67,19 +68,31 @@ export class RemoteTransport implements LamToolsTransport {
   }
 
   /**
-   * 断线后自己连回去一次。
+   * 断线后自己连回去。
    *
-   * 拨号预算是 45 秒（蜂窝和走中继时握手要十几秒），失败就停，不做无限重试。
+   * user:“自动恢复：Wi-Fi/移动网络切换、电脑休眠唤醒、Core 重启后自动恢复”“短暂断线
+   * 尽量无感（不弹提示），持续异常才轻量提示”+(先快后慢地试：1s、2s、4s、5s 封顶，
+   * 有次数上限；只有宿主说「真的可用」才回到已连接，Core 还挂着就继续保持降级)。
    */
   private async recover(): Promise<void> {
     if (this.closed || this.recovery) return
     this.recovery = (async () => {
-      // 等一下再拨：切后台回来、一次瞬时丢包都在这段窗口里自愈，不值得为它重建整条隧道。
-      await new Promise((resolve) => setTimeout(resolve, 1_500))
-      if (this.closed) return
-      const peer = await ensureRemote(45_000)
-      if (this.closed) return
-      if (peer !== null) this.setState('connected')
+      for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt += 1) {
+        // 切后台回来、一次瞬时丢包都在这段窗口里自愈，不值得为它重建整条隧道。
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)))
+        if (this.closed) return
+        const peer = await ensureRemote(45_000)
+        if (this.closed) return
+        if (peer === null) continue
+        // user:“只有业务真正可用才显示已连接”+(隧道回来了但电脑上的 Core 没响，
+        // 仍然只能算「正在连接」，不能报已连接)。
+        const status = await remoteStatus()
+        if (isUsable(status)) {
+          this.setState('connected')
+          return
+        }
+        this.setState('connecting')
+      }
     })()
       .catch(() => undefined)
       .finally(() => {

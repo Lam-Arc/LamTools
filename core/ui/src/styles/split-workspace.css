@@ -2,8 +2,22 @@
 .split-workspace { --text: var(--theme-main-text); position: fixed; inset: var(--titlebar-offset, 0px) var(--main-right) var(--shell-bottom-inset, 6px) var(--main-left); z-index: var(--z-main-surface); pointer-events: none; color: var(--text); }
 .split-pane-frame, .split-tab-content { position: absolute; min-width: 0; min-height: 0; pointer-events: auto; background: var(--theme-main-background); overflow: hidden; }
 .split-pane-frame { border-radius: 0; }
+/* user:“Chrome 式标签层级不对，太高了，高于主区了”+
+   (层级只有三层：内容与标签同属第 0 层（标签靠 DOM 顺序在内容之前，绝不覆盖内容），
+    主区 --z-main-surface 高于所有 pane，交互指示层（插入线/拖拽预览/角柄）才抬到 --z-stage 以上
+    且只在交互期间挂载)。 */
+.split-pane-frame,
+.split-tab-content,
+.split-pane-bar { z-index: 0; }
 .split-tab-content { overflow: auto; overscroll-behavior: contain; border-radius: 0; }
-/* user:“标签和角铁太难看，重新设计”+(标签属于 main 区：文字跟随主区颜色，选中态只用轻底色，不再使用会变成白块的 control 软底色)。 */
+/* user:“悬浮窗：可拖动、可缩放的小窗…原生 webview 没有圆角与阴影，所以浮窗外观要用 DOM 边框 + 内缩”+
+   (定位与尺寸由 tabStyle 给到这个 section 上；底色必须让开，否则浮窗自己的圆角会被这块方底吃掉)。 */
+.split-tab-content--float { overflow: visible; background: transparent; border-radius: 0; animation: none; }
+.split-is-resizing .split-tab-content--float { pointer-events: auto; }
+/* user:“聚焦全屏：内容占满窗口，对话退居为可输入的窄条”+
+   (窄条里只留得下输入框与最近一句：正文不再按整屏版式排版，否则会被压成一条细缝)。 */
+/* user:“分屏是为了便于交互…聚焦全屏”+(聚焦时全屏键与分隔条都该消失：那一刻没有第二块屏可以拖)。
+   Both a11y and layout: the pane bar keeps a single visible exit, everything else belongs to the content. */
 .split-pane-bar { --text: var(--theme-main-text); height: var(--split-tabbar-height, 36px); display: flex; align-items: center; padding-inline: 22px var(--space-2); gap: var(--space-1); box-shadow: 0 1px color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
 .split-pane-bar.is-active { box-shadow: 0 1px color-mix(in srgb, var(--text) var(--alpha-active), transparent); }
 .split-pane-tabs { position: relative; display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; align-self: stretch; gap: var(--space-1); }
@@ -12,6 +26,9 @@
 .split-pane-tab > [role=tab] { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2); font: inherit; font-size: 12px; font-weight: 500; color: inherit; border: 0; background: transparent; cursor: pointer; white-space: nowrap; }
 .split-pane-tab > [role=tab] > span:first-of-type { overflow: hidden; text-overflow: ellipsis; }
 .split-pane-tab svg { flex-shrink: 0; opacity: .65; }
+/* user:“favicon 进标签栏”+(与其它标签图标同为 13px；无图标时用首字母占位)。 */
+.split-tab-favicon { flex: 0 0 auto; width: 13px; height: 13px; border-radius: 3px; object-fit: contain; }
+.split-tab-favicon--letter { display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600; text-transform: uppercase; background: color-mix(in srgb, var(--theme-main-text) 14%, transparent); color: inherit; }
 .split-pane-tab.is-selected svg { opacity: 1; }
 .split-icon-button, .split-tab-close { --text: var(--theme-main-text); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 65%, transparent); cursor: pointer; }
 .split-pane-close { color: color-mix(in srgb, var(--text) 45%, transparent); }
@@ -40,16 +57,59 @@
 .split-split-preview-line { position: absolute; background: color-mix(in srgb, var(--text) 38%, transparent); pointer-events: none; }
 .split-split-preview--merge .split-split-preview-area { border-color: color-mix(in srgb, var(--text) 35%, transparent); background: color-mix(in srgb, var(--text) 10%, transparent); }
 .split-split-preview--join .split-split-preview-area { border-color: color-mix(in srgb, var(--text) 45%, transparent); background: color-mix(in srgb, var(--text) 13%, transparent); }
-.split-focus-switch { position: absolute; bottom: var(--space-2); right: var(--space-2); display: flex; gap: var(--space-1); pointer-events: auto; }
 /* user:“分屏键...平时是隐藏的，只有当鼠标到了那个区域时才显示，而且分屏键不需要有背景 它只是一个图标就可以了”+(右上角入口默认透明，悬停/键盘聚焦才浮现；扩大一点命中区但不加底色)。 */
 .split-entry { position: absolute; right: var(--space-3); top: var(--space-2); z-index: var(--z-stage); opacity: 0; background: transparent !important; color: var(--theme-main-text); transition: opacity var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .split-entry::before { content: ''; position: absolute; inset: -6px; }
-.split-entry:is(:hover, :focus-visible) { opacity: 1; background: transparent !important; color: var(--theme-main-text); }
+/* user:“存在分屏时右上角分屏图标亮起并显示一个数字角标”+
+   (有分屏就常亮，不靠悬停提示此刻处于分屏中；角标是已开的分屏数量，用来替代删掉的角落计数。) */
+.split-entry:is(:hover, :focus-visible), .split-entry.is-active { opacity: 1; background: transparent !important; color: var(--theme-main-text); }
+/* user:“不再静默…不挡操作、不引入新概念、深浅主题都正常”+(折叠提示条：浮在工作区顶部，
+   容器整体不吃指针，只有两个按钮可点；底色/文字全部用语义色变量，深浅主题自动跟随)。 */
+/* user:“折叠态只保留一个持久入口：提示条降级为一次性提示”+
+   (提示条里只剩一句话，所以按钮的位置与内边距一并撤掉；容器仍然不吃指针)。 */
+.split-fold-notice { position: absolute; top: var(--space-2); left: 50%; transform: translateX(-50%); z-index: var(--z-composer); box-sizing: border-box; display: flex; align-items: center; max-width: min(92%, 460px); padding: var(--space-1) var(--space-3); border-radius: 999px; background: var(--theme-control-soft-background); color: var(--theme-main-text); font-size: 12px; box-shadow: 0 6px 18px color-mix(in srgb, var(--theme-main-text) 12%, transparent); pointer-events: none; }
+.split-fold-notice > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--theme-main-text) 72%, transparent); }
+/* user:“折叠时应能从按钮看出「分屏存在但被折叠」”+(数字还在，但角标改成描边空心：数量证明分屏存在，空心说明它没被画出来)。 */
+.split-entry.is-folded .split-entry__badge { background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-main-text) 45%, transparent); }
+.split-entry__badge { position: absolute; top: -4px; right: -5px; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 999px; background: color-mix(in srgb, var(--theme-main-text) 16%, transparent); color: var(--theme-main-text); font: inherit; font-size: 9px; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums; pointer-events: none; }
 .split-tab-content > .full-area-view, .split-tab-content > .full-area-column { width: 100%; height: 100%; margin: 0; padding: var(--space-3); box-sizing: border-box; }
 .split-tab-content .full-area-wide { margin: 0; }
-.workspace-shell--split .workspace-main { left: calc(var(--main-left) + var(--split-primary-x, 0px)); top: calc(var(--titlebar-offset, 0px) + var(--split-primary-y, 0px)); right: auto; bottom: auto; width: var(--layout-split-primary-width, var(--split-primary-width)); height: var(--split-primary-height); visibility: var(--split-primary-visible, visible); --main-x-padding: var(--space-5); transition: none; }
+/* user:“依旧不可见，你来完成新布局系统的开发工作”+(主区支持自由让位内边距，当非 Agent 内容为主区时隐藏底层 Agent 会话层) */
+.workspace-shell--split .workspace-main { left: calc(var(--main-left) + var(--split-primary-x, 0px)); top: calc(var(--titlebar-offset, 0px) + var(--split-primary-y, 0px)); right: auto; bottom: auto; width: var(--layout-split-primary-width, var(--split-primary-width)); height: var(--split-primary-height); padding: var(--ws2-yield-top, 0px) var(--ws2-yield-right, 0px) var(--ws2-yield-bottom, 0px) var(--ws2-yield-left, 0px); box-sizing: border-box; visibility: var(--split-primary-visible, visible); /* user:“内容为其让位”+“有分屏时会不会出bug”+
+  (分屏的 padding 简写会把主区左内边距整个换掉，正文于是从主区左缘起排——导航条用的是
+    --main-x-padding，仍会落在 4px 处压住文字。这里把通道重新加在分屏的左内边距上：
+    正文左缘 = 主区左缘 + 让位 + 通道，导航条仍在通道里，与文字保持 16px)。 */
+  padding-left: calc(var(--ws2-yield-left, 0px) + var(--outline-rail-lane, var(--space-6)));
+  --main-x-padding: max(var(--outline-rail-lane, var(--space-6)), var(--space-5)); transition: none; }
+/* user:“这个缝太大了。改成细线即可”+(分屏时主区右缘不再留整条通道留白：
+   右侧留白收到分界线旁 8px，边界本身交给 .ws2-divider 那条常显的 1px 细线；左侧通道保持不变。
+   线程的 width / 负外边距 / 内边距用同一组变量推，盒子不会因为只改一侧而溢出主区)。 */
+.workspace-shell--split .workspace-main { --main-right-padding: 0px; padding-right: calc(var(--ws2-yield-right, 0px) + var(--main-right-padding)); }
+.workspace-shell--split .thread {
+  width: calc(100% + var(--main-x-padding) + var(--main-right-padding));
+  margin-left: calc(-1 * var(--main-x-padding));
+  margin-right: calc(-1 * var(--main-right-padding));
+  padding-right: var(--main-right-padding);
+}
+/* user:“这里超出区域了，以及为什么 agent 和 browser 页面宽度不一，调整正确”+(非 Agent 主区收起左栏时去掉 18px 抽屉留白，使整体宽度与 Agent 视图左栏+主区完全对齐) */
+.workspace-shell.workspace-shell--main-replaced:not(.left-open) { --left-peek: 0px; --main-left: var(--rail-width); }
+.workspace-shell--main-replaced .workspace-main { visibility: hidden; pointer-events: none; }
 /* user:“辅助会话的输入栏样式与正常版一样就行”+(主区的固定位置只作用于浮动输入栏，侧屏复用组件时仍留在自身布局中)。 */
-.workspace-shell--split .composer-root--floating { --composer-full-width: min(var(--content-width), calc(var(--layout-split-primary-width, var(--split-primary-width)) - var(--space-5) * 2)); --composer-anchor-left: calc(var(--main-left) + var(--split-primary-x) + var(--layout-split-primary-width, var(--split-primary-width)) / 2); --composer-bottom-offset: calc(var(--shell-bottom-inset, 6px) + var(--split-primary-bottom)); visibility: var(--split-primary-visible, visible); }
+/* user:“输入栏跨出了主区——那条输入栏从聊天区一直横跨到右侧分屏上方，压住了打开内容/辅助对话按钮”+
+   (根因：宽度/锚点直接拼 --split-primary-* 与 --content-width，其中 --split-primary-x 没有兜底；
+    几何变量缺失时整条 calc 在计算值阶段失效 → left/width 退化成 auto，输入栏于是横跨整行。
+    这里先把「主内容列」落成两个**一定有效**的变量，再只用它们定位，并加一条 max-width 硬夹)。 */
+.workspace-shell--split .composer-root--floating {
+  /* user:“若主列几何变量缺失，就回退到主区容器的 getBoundingClientRect()”+
+     (--composer-measured-* 由 useComposerColumn 写入，是主区的真实矩形；没有它才用几何变量拼)。 */
+  --composer-column-left: var(--composer-measured-left, calc(var(--main-left) + var(--split-primary-x, 0px)));
+  --composer-column-width: var(--composer-measured-width, max(0px, var(--split-primary-width, 100vw)));
+  --composer-full-width: max(240px, min(calc(var(--composer-column-width) - var(--space-5) * 2), var(--content-fill-width, 1040px)));
+  --composer-anchor-left: calc(var(--composer-column-left) + var(--composer-column-width) / 2);
+  --composer-bottom-offset: calc(var(--shell-bottom-inset, 6px) + var(--split-primary-bottom, 0px));
+  visibility: var(--split-primary-visible, visible);
+  max-width: calc(var(--composer-column-width) - var(--space-2) * 2);
+}
 .workspace-shell--split .composer-root--floating > .floating-composer { transition: none; }
 .workspace-shell--split.workspace-shell--composer-center .composer-root--floating > .floating-composer { top: auto; bottom: calc(var(--composer-bottom-offset) + var(--space-4)); transform: translateX(-50%); }
 @media (prefers-reduced-motion: reduce) { .split-workspace *, .split-entry { transition: none !important; animation: none !important; } }
@@ -78,6 +138,16 @@
 .split-code-editor .cm-cursor { border-left-color: var(--theme-main-text); }
 .split-code-editor .cm-selectionBackground, .split-code-editor .cm-focused .cm-selectionBackground { background: color-mix(in srgb, var(--theme-main-text) 20%, transparent); }
 .split-content-status { display: flex; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-3); font-size: 11px; color: color-mix(in srgb, var(--text) 65%, transparent); border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+/* user:“给现有 search_files 能力一个可见入口”+
+   (检索条就是文件树的一部分：输入框、模式切换、清除，用现有按钮与输入样式，不新增令牌。) */
+.split-file-search { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+.split-file-search > svg { flex-shrink: 0; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-file-search input { --text: var(--theme-composer-text); flex: 1; min-width: 0; border: 0; border-radius: var(--radius-sm); outline: none !important; background: var(--theme-composer-background); color: var(--text); padding: var(--space-1) var(--space-2); font: inherit; font-size: 12px; }
+.split-file-search input::placeholder { color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-file-search .split-text-button { flex-shrink: 0; white-space: nowrap; }
+.split-file-search .split-text-button[aria-pressed="true"] { background: var(--theme-control-background); color: var(--theme-control-text); }
+/* 内容命中的那一行原文：跟在路径后面，放不下就省略，不再撑开整行。 */
+.split-file-hit-text { flex: 1 1 auto; min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--text) 62%, transparent); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .split-file-rows { padding-block: var(--space-2); }
 .split-file-rows > button { display: flex; align-items: center; width: 100%; gap: var(--space-2); padding-block: var(--space-1); padding-right: var(--space-2); border: 0; border-radius: 0; color: var(--theme-main-text); background: transparent; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .split-file-rows > button:hover, .split-file-rows > button:focus-visible { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
@@ -93,8 +163,28 @@
 .split-workspace--open::after { content: ''; position: absolute; inset: 0; border: 1px solid var(--theme-main-border); border-radius: inherit; pointer-events: none; z-index: var(--z-stage); }
 .split-workspace--open .split-pane-frame, .split-workspace--open .split-tab-content { border-radius: 0; }
 .workspace-shell--split .workspace-main { border: 0; box-shadow: none; border-radius: var(--split-primary-radius); }
-.workspace-shell--split .composer-root--floating > .floating-composer { top: auto; bottom: calc(var(--composer-bottom-offset) + var(--space-4)); transform: translateX(-50%); }
-.workspace-shell--split .workspace-main > .thread-header { padding-right: var(--space-6); }
+/* user:“存在分屏时将窗口变为小窗口，输入框会被向左挤走”+
+   (窄窗媒体查询改 left/right/width 而不改 transform，分屏规则改 transform 而不改 left，
+    两边各生效一半就会把卡片平移出主面板；这里把盒子的四项一起声明，谁也不能只生效一半。) */
+/* user:“输入栏不得越过主区与分屏的边界”+(宽度与左缘都从列变量推，再加一条 max-width 兜底：
+   即便上游少给了某个几何变量，也只会在列内偏一点，不会再横跨到分屏上方)。 */
+.workspace-shell--split .composer-root--floating > .floating-composer {
+  left: var(--composer-anchor-left);
+  right: auto;
+  width: var(--composer-full-width);
+  max-width: calc(var(--composer-column-width, 100vw) - var(--space-2) * 2);
+  top: auto;
+  bottom: calc(var(--composer-bottom-offset) + var(--space-4));
+  transform: translateX(-50%);
+}
+/* user:“此处的页眉与标题不见了”+(分屏主区没有普通主区的顶部内边距，标题直接占据一行，消息从下方滚动)。 */
+.workspace-shell--split .workspace-main > [data-session-header] {
+  margin-top: 0;
+  padding-right: var(--space-6);
+}
+.workspace-shell--split.left-open .workspace-main > [data-session-header] {
+  padding-left: var(--main-x-padding);
+}
 
 /* Empty-chat artwork must stay inside its own primary rectangle, including row layouts. */
 .workspace-shell--split .workspace-main .empty-session-hero { position: absolute; left: 50%; top: 36%; width: calc(100% - var(--space-6)); transform: translate(-50%, -50%); }
@@ -126,11 +216,29 @@
 
 /* user:“分屏预览器不支持图片吗？改一下图片，视频 office，什么东西都尽可能支持一下”+
    (预览分屏沿用分屏自己的主题变量与按键样式，不另起一套颜色)。 */
-.split-preview { height: 100%; min-height: 0; display: flex; flex-direction: column; --text: var(--theme-main-text); color: var(--text); outline: none; }
+.split-preview { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; --text: var(--theme-main-text); color: var(--text); outline: none; }
+/* user:“分屏预览的能力应该要比灯箱更多”+(常驻面板多出三件东西：左侧大纲、文档内查找、选中引用)。 */
+.split-preview-stage { flex: 1 1 auto; min-height: 0; display: flex; }
+.split-preview-main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.split-preview-outline { flex: 0 0 auto; width: 168px; min-height: 0; overflow: auto; padding: var(--space-2) var(--space-1); border-right: 1px solid color-mix(in srgb, var(--text) 8%, transparent); background: var(--theme-main-background); }
+.split-preview-outline-item { display: block; width: 100%; padding: 4px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: color-mix(in srgb, var(--text) 78%, transparent); font: inherit; font-size: 12px; line-height: 1.4; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.split-preview-outline-item:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+.split-preview-find { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent); background: var(--theme-main-background); }
+.split-preview-find input { flex: 1 1 auto; min-width: 0; padding: 3px var(--space-2); border: 1px solid color-mix(in srgb, var(--text) 14%, transparent); border-radius: var(--radius-sm); background: var(--theme-composer-background); color: var(--text); font: inherit; font-size: 12px; outline: none; }
+.split-preview-find input:focus-visible { border-color: color-mix(in srgb, var(--accent, #4f8cff) 60%, transparent); }
+.split-preview-find-count { flex: 0 0 auto; font-size: 11px; color: color-mix(in srgb, var(--text) 65%, transparent); }
+mark.split-find-hit { background: color-mix(in srgb, var(--accent, #4f8cff) 26%, transparent); color: inherit; border-radius: 2px; }
+mark.split-find-hit.is-active { background: color-mix(in srgb, var(--accent, #4f8cff) 55%, transparent); }
+.split-preview-send { position: absolute; top: 40px; right: var(--space-2); z-index: var(--z-popover); width: min(340px, calc(100% - var(--space-4))); }
+.split-preview-quote { position: absolute; z-index: var(--z-popover); display: inline-flex; align-items: center; gap: 6px; padding: 5px var(--space-2); border: 1px solid color-mix(in srgb, var(--text) 14%, transparent); border-radius: var(--radius-sm); background: var(--theme-main-background); color: var(--text); font: inherit; font-size: 12px; box-shadow: var(--shadow-md); cursor: pointer; }
+.split-preview-quote:hover { border-color: color-mix(in srgb, var(--accent, #4f8cff) 55%, transparent); }
 .split-preview-kind { flex: 0 0 auto; padding: 0 var(--space-1); font-size: 11px; color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-preview-zoom { min-width: 40px; font-size: 11px; text-align: center; color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-preview-body { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--theme-main-sunken-background); }
 .split-preview-body--media { display: grid; place-items: center; padding: var(--space-3); }
+/* 图片交给共用查看器后要占满整块预览区（网格居中会把它的高度压成 0）。 */
+.split-preview-body--image { display: flex; align-items: stretch; justify-content: stretch; padding: 0; }
+.split-preview-body--image > .preview-image { flex: 1 1 auto; width: 100%; min-height: 0; }
 .split-preview-body--media img { display: block; max-width: none; height: auto; margin: 0 auto; border-radius: var(--radius-sm); }
 .split-preview-body--media video { display: block; max-width: 100%; max-height: 100%; border-radius: var(--radius-sm); }
 .split-preview-body--audio { align-items: center; }
@@ -145,6 +253,19 @@
 .split-preview-text { min-height: 100%; margin: 0; padding: var(--space-4) var(--space-5); color: var(--text); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
 .split-preview-pager { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin-bottom: var(--space-2); font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); }
 .split-preview-canvas { display: block; margin: 0 auto; border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); }
+/* user:“这要求每个客户端都要有LibreOffice吗？”+(演示文稿版式由前端自己画：纸张按幻灯片比例，
+   形状用百分比定位，字号用容器宽度单位，面板一变宽就整页等比缩放，不依赖本机装了什么)。 */
+.pptx-slide { position: relative; width: 100%; max-width: 1100px; margin: 0 auto var(--space-4); overflow: hidden; border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); container-type: inline-size; color: #111111; }
+.pptx-slide-number { position: absolute; right: 6px; bottom: 4px; font-size: 10px; color: color-mix(in srgb, currentColor 40%, transparent); pointer-events: none; }
+.pptx-shape { position: absolute; box-sizing: border-box; overflow: hidden; transform-origin: center center; }
+.pptx-image { display: block; width: 100%; height: 100%; object-fit: fill; }
+.pptx-text { display: flex; flex-direction: column; box-sizing: border-box; width: 100%; height: 100%; }
+.pptx-text p { margin: 0; font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; line-height: 1.25; overflow-wrap: anywhere; }
+.pptx-bullet { white-space: pre; }
+.pptx-table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.pptx-table td { border: 1px solid color-mix(in srgb, #111111 20%, transparent); padding: 2px 4px; vertical-align: top; }
+.pptx-table .pptx-text { display: block; height: auto; padding: 0; }
+.pptx-table .pptx-text p { line-height: 1.2; }
 .split-preview-docx { padding: 0; }
 .split-preview-docx .docx-wrapper,
 .split-preview-docx .split-docx-page-wrapper { padding: 0; background: transparent; }
@@ -158,14 +279,6 @@
 .split-preview-sheet table { border-collapse: collapse; font-size: 12px; color: var(--text); }
 .split-preview-sheet td, .split-preview-sheet th { border: 1px solid color-mix(in srgb, var(--text) 12%, transparent); padding: 2px var(--space-1); white-space: pre-wrap; vertical-align: top; }
 .split-preview-sheet thead td, .split-preview-sheet thead th { background: var(--theme-main-soft-background); font-weight: 650; }
-.split-preview-slide { margin-bottom: var(--space-3); padding: var(--space-3); border: 1px solid var(--theme-main-border); border-radius: var(--radius); background: var(--theme-main-background); box-shadow: var(--shadow-sm); }
-.split-preview-slide header { display: flex; align-items: baseline; gap: var(--space-2); font-size: 14px; font-weight: 680; color: var(--text); }
-.split-preview-slide-index { flex: 0 0 auto; min-width: 20px; font-size: 11px; font-weight: 600; color: color-mix(in srgb, var(--text) 45%, transparent); }
-.split-preview-slide p { margin: var(--space-1) 0 0 var(--space-5); font-size: 13px; line-height: 1.55; color: var(--text); }
-.split-preview-slide footer { margin: var(--space-2) 0 0 var(--space-5); padding-top: var(--space-1); border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); font-size: 12px; color: color-mix(in srgb, var(--text) 65%, transparent); }
-.split-preview-slide footer p { margin-left: 0; font-size: 12px; }
-.split-preview-slide-images { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0 0 var(--space-5); }
-.split-preview-slide-images img { max-width: min(320px, 100%); max-height: 200px; border-radius: var(--radius-sm); object-fit: contain; background: var(--theme-main-sunken-background); }
 .split-is-dragging .split-pane-tab { cursor: grabbing; }
 .split-drop-enter-active, .split-drop-leave-active { transition: opacity var(--dur-fast) var(--ease-out); }
 .split-drop-enter-from, .split-drop-leave-to { opacity: 0; }
@@ -191,3 +304,71 @@
 .split-pane-frame.is-entering { animation: split-pane-enter 180ms var(--ease-out); }
 @keyframes split-pane-enter { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .split-corner-grip:hover::before { transform: rotate(var(--split-corner-rotation)); } }
+
+/* user:“分隔条命中 12px、可视 1px、hover 4px”+(命中区在布局里给，视觉只负责把 hover 加粗到 4px；
+   锁定时改成 not-allowed 并压暗，用户一看就知道“到头了”，不用拖一下才发现没反应)。 */
+.split-divider:is(:hover, :focus-visible)::before { background: color-mix(in srgb, var(--text) 30%, transparent); }
+.split-divider--columns:is(:hover, :focus-visible)::before { width: 4px; }
+.split-divider--rows:is(:hover, :focus-visible)::before { height: 4px; }
+.split-divider.is-locked { cursor: not-allowed; }
+.split-divider.is-locked::before { background: color-mix(in srgb, var(--text) 16%, transparent); }
+/* user:“拖动百分比 chip”+(气泡跟着分隔条走，只是一个读数，不吃指针)。 */
+.split-resize-chip { position: absolute; z-index: var(--z-composer); transform: translate(-50%, -50%); padding: 2px var(--space-2); border-radius: 999px; background: var(--theme-control-soft-background); color: var(--theme-main-text); font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; box-shadow: 0 4px 12px color-mix(in srgb, var(--theme-main-text) 14%, transparent); }
+
+/* user:“放不下时辅助屏收成主区边缘 32px 折叠条（图标+标题+数量），主区占满其余”+
+   (折叠条的宽度由组件用 --split-fold-strip-width 传进来，样式不再写死第二份 32px)。 */
+.split-fold-strip { position: absolute; z-index: var(--z-stage); box-sizing: border-box; width: var(--split-fold-strip-width, 32px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); padding-block: var(--space-2); border: 0; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-main-text) 8%, transparent); color: var(--theme-main-text); cursor: pointer; pointer-events: auto; transition: background var(--dur-fast) var(--ease-out); }
+.split-fold-strip:hover, .split-fold-strip:focus-visible { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); outline: none; }
+.split-fold-strip__icon { display: inline-flex; color: color-mix(in srgb, var(--theme-main-text) 70%, transparent); }
+.split-fold-strip__label { writing-mode: vertical-rl; font-size: 11px; color: color-mix(in srgb, var(--theme-main-text) 70%, transparent); }
+.split-fold-strip__count { font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* user:“仍放不下给实数字据 + 两个按钮（紧凑 642 / 关闭最小屏）”+(面板贴着折叠条出现，只说数字和出路)。 */
+.split-fold-panel { position: absolute; z-index: var(--z-composer); top: var(--space-3); right: var(--space-3); box-sizing: border-box; display: flex; flex-direction: column; gap: var(--space-2); width: min(240px, 80%); padding: var(--space-3); border-radius: var(--radius-md, var(--radius-sm)); background: var(--theme-control-soft-background); color: var(--theme-main-text); box-shadow: 0 8px 24px color-mix(in srgb, var(--theme-main-text) 16%, transparent); }
+.split-fold-panel p { margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--theme-main-text) 78%, transparent); }
+.split-fold-panel button { text-align: center; }
+
+/* user:“聚焦时其它屏隐藏、顶部常驻提示”+(聚焦是一个明确的状态，必须常驻一个可见出口)。 */
+.split-focus-hint { position: absolute; z-index: var(--z-composer); top: var(--space-2); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: var(--space-2); max-width: min(92%, 420px); padding: var(--space-1) var(--space-2); border-radius: 999px; background: var(--theme-control-soft-background); color: color-mix(in srgb, var(--theme-main-text) 78%, transparent); font-size: 12px; pointer-events: none; }
+.split-focus-hint > button { pointer-events: auto; }
+
+/* user:“拖拽期间命中判定由覆盖工作区的 overlay 计算（不依赖原生 webview 可见性）”+
+   (overlay 只负责挡住指针，不让它落进网页或编辑器；预览图形仍由下面的 preview 层绘制)。 */
+.split-drag-overlay { position: absolute; inset: 0; z-index: var(--z-stage); pointer-events: auto; cursor: grabbing; }
+.split-is-dragging, .split-is-dragging * { user-select: none !important; }
+.split-pane-tab.is-dragging { opacity: .4; }
+/* user:“标签 pointer 排序（2px 插入竖线）”+(竖线就是“松手后会插在这里”，位置由 insertIndex 决定)。 */
+.split-tab-insert, .split-pane-tab.is-insert-before::before { content: ''; position: absolute; top: var(--space-1); bottom: var(--space-1); left: -1px; width: 2px; border-radius: 1px; background: color-mix(in srgb, var(--theme-main-text) 55%, transparent); pointer-events: none; }
+.split-tab-insert--end { position: relative; top: auto; bottom: auto; align-self: stretch; margin-block: var(--space-1); }
+/* user:“溢出滚动 + 两侧 16px mask”+(渐隐只在还能滚的方向出现；滚到头就消失，不显示滚动条)。 */
+.split-pane-tabs.has-overflow-left { mask-image: linear-gradient(to right, transparent 0, black 16px); }
+.split-pane-tabs.has-overflow-right { mask-image: linear-gradient(to left, transparent 0, black 16px); }
+.split-pane-tabs.has-overflow-left.has-overflow-right { mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%); }
+
+/* user:“空屏给标题+主按钮+最近 3 项”+(空着的位置要说清“这里能放什么”，并给出三条可以直接点开的内容)。 */
+.split-empty { height: calc(100% - var(--split-tabbar-height, 36px)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-4); text-align: center; color: color-mix(in srgb, var(--text) 65%, transparent); }
+.split-empty strong { font-size: 13px; font-weight: 600; color: color-mix(in srgb, var(--text) 80%, transparent); }
+.split-empty small { font-size: 11px; }
+.split-empty__recent { display: flex; flex-direction: column; gap: 2px; margin: var(--space-1) 0 0; padding: 0; list-style: none; width: min(100%, 260px); }
+.split-empty__recent button { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.split-empty__recent button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); }
+/* user:“空屏：主按钮「打开内容」+ 次按钮「辅助对话」”+(并排两个动作，次按钮只留文字色，不与主按钮抢视线)。 */
+.split-empty__actions { display: flex; align-items: center; justify-content: center; gap: var(--space-2); }
+.split-empty__secondary { background: transparent; color: color-mix(in srgb, var(--text) 70%, transparent); }
+.split-empty__secondary:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
+
+/* user:“新屏 160ms --ease-out”+(新分屏只做一次短促的淡入，不做位移，避免看起来像整块界面在跳)。 */
+.split-pane-frame.is-entering { animation: split-pane-enter 160ms var(--ease-out) both; }
+@keyframes split-pane-enter { from { opacity: 0; } to { opacity: 1; } }
+
+/* user:“主工作区始终存在，是视觉中心；Agent / Browser 可成为主内容；左上角「Agent ▾」可作为切换入口”+
+   (主槽位画在主区矩形上，必须是不透明的：它盖住下面的聊天，但聊天仍挂载着——切回 Agent 不重启)。
+   圆角跟随主区那一角，主区默认占满。 */
+.split-main-slot { position: absolute; z-index: var(--z-main-surface); display: flex; flex-direction: column; box-sizing: border-box; overflow: hidden; border-radius: var(--radius-lg, 12px); background: var(--theme-main-background, var(--theme-backdrop-solid, var(--theme-control-background))); color: var(--theme-main-text); pointer-events: auto; }
+.split-main-slot-bar { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-2); box-sizing: border-box; height: var(--split-tabbar-height, 36px); padding-inline: var(--space-2); border-bottom: 1px solid var(--theme-main-border); }
+/* 根入口搬到 components/CoreContentRoot.vue（样式在 styles/content-root.css）：名称随主内容变化、
+   菜单分成「内容类型 / 打开方式」，这里不再留一份私有实现。 */
+.split-main-slot-title { min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--theme-main-text) 62%, transparent); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.split-main-slot-content { position: relative; flex: 1 1 auto; min-height: 0; }
+/* user:“固定前必须预览”+(确认条只占自己一块，不铺遮罩；Esc 与“取消”同义)。 */
+.split-pin-bar { position: absolute; left: 50%; bottom: var(--space-3); transform: translateX(-50%); z-index: var(--z-composer); display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); border-radius: 999px; background: var(--theme-control-soft-background); color: var(--theme-main-text); font-size: 12px; box-shadow: 0 8px 24px color-mix(in srgb, var(--theme-main-text) 16%, transparent); }
+.split-pin-bar__cancel { background: transparent; }

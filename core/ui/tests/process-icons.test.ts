@@ -261,11 +261,13 @@ describe('ProcessIcon.vue · 状态叠加', () => {
     expect(wrapper.find('.process-icon__badge').exists()).toBe(false)
   })
 
-  it('marks failure with a warning badge for both failed and error', () => {
+  // user:“我不是说错误标红吗？…就是仅仅简简单单地标红就行了”+(失败只让图标与摘要变红，
+  // 不再额外挂角标小点；运行态的细环此前也已按要求移除。)
+  it('marks failure by colour alone, with no extra badge or ring', () => {
     for (const status of ['failed', 'error'] as const) {
       const wrapper = mount(ProcessIcon, { props: { ...base, status } })
       expect(wrapper.classes()).toContain(`process-icon--${status}`)
-      expect(wrapper.find('.process-icon__badge').exists(), status).toBe(true)
+      expect(wrapper.find('.process-icon__badge').exists(), status).toBe(false)
       expect(wrapper.find('.process-icon__ring').exists(), status).toBe(false)
     }
   })

@@ -2,28 +2,28 @@
 
 由 `node scripts/ui-inventory.mjs` 从源码生成。范围包括 Sunday 桌面入口、界面及随附插件界面；不扫描移动端、官网、独立插件和归档。文件存在或匹配某种写法不等于该界面一定可达、组件可复用或存在缺陷。需要结合调用关系、实际状态和主题逐项核对。
 
-共 571 个文件。标记是粗略线索，不是问题数量：
+共 676 个文件。标记是粗略线索，不是问题数量：
 
-- button: 176
-- checkbox: 27
-- switch: 13
+- button: 198
+- checkbox: 38
+- switch: 15
 - range: 13
-- select: 33
-- dialog: 23
-- event: 240
-- grid: 146
-- flex: 164
-- animation: 109
-- reduced-motion: 126
-- theme: 167
-- tokens: 157
+- select: 35
+- dialog: 26
+- event: 267
+- grid: 170
+- flex: 182
+- animation: 111
+- reduced-motion: 130
+- theme: 188
+- tokens: 190
 
 ## 原生控件候选
 
 仅按源码标记估算，可能包含实验页、专用控件或动态属性；不是缺陷清单。
 
+- [core/ui/src/components/LocalFilesView.vue](../core/ui/src/components/LocalFilesView.vue)：select: 1
 - [core/ui/src/components/PetActionPanel.vue](../core/ui/src/components/PetActionPanel.vue)：select: 2
-- [core/ui/src/components/PetWorkspacePreview.vue](../core/ui/src/components/PetWorkspacePreview.vue)：select: 2、checkbox: 1
 - [core/ui/src/pet/ui/PetNavLab.vue](../core/ui/src/pet/ui/PetNavLab.vue)：checkbox: 4
 
 ## 文件与线索
@@ -52,7 +52,10 @@
 | [core/desktop/src/pet.ts](../core/desktop/src/pet.ts) | event |
 | [core/desktop/src/ping.ts](../core/desktop/src/ping.ts) | event |
 | [core/desktop/src/pingCard.ts](../core/desktop/src/pingCard.ts) | event |
+| [core/desktop/src/tmp-gap-check.ts](../core/desktop/src/tmp-gap-check.ts) | theme |
 | [core/desktop/src/tray.ts](../core/desktop/src/tray.ts) | event |
+| [core/desktop/tmp-gap-check.html](../core/desktop/tmp-gap-check.html) | — |
+| [core/desktop/tmp-gap-inner.html](../core/desktop/tmp-gap-inner.html) | — |
 | [core/desktop/tray.html](../core/desktop/tray.html) | — |
 | [core/src/lamtools_core/plugins/bundled/network-exploration/ui/page.mjs](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/page.mjs) | event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/src/lamtools_core/plugins/bundled/network-exploration/ui/quick.mjs](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/quick.mjs) | — |
@@ -76,14 +79,13 @@
 | [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TrafficDonut.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TrafficDonut.vue) | — |
 | [core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TransferView.vue](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/src/TransferView.vue) | button、select、event |
 | [core/src/lamtools_core/plugins/bundled/network-exploration/ui/store.mjs](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/store.mjs) | event |
-| [core/src/lamtools_core/plugins/bundled/network-exploration/ui/style.css](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/style.css) | grid、flex、animation、reduced-motion、theme、tokens |
+| [core/src/lamtools_core/plugins/bundled/network-exploration/ui/style.css](../core/src/lamtools_core/plugins/bundled/network-exploration/ui/style.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/src/lamtools_core/plugins/bundled/study/ui/index.ts](../core/src/lamtools_core/plugins/bundled/study/ui/index.ts) | — |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/api.ts](../core/src/lamtools_core/plugins/bundled/workflow/ui/api.ts) | — |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/canvas.ts](../core/src/lamtools_core/plugins/bundled/workflow/ui/canvas.ts) | — |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/catalog.ts](../core/src/lamtools_core/plugins/bundled/workflow/ui/catalog.ts) | — |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/document.ts](../core/src/lamtools_core/plugins/bundled/workflow/ui/document.ts) | — |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/EdgeConditionEditor.vue](../core/src/lamtools_core/plugins/bundled/workflow/ui/EdgeConditionEditor.vue) | button、dialog、event、grid、flex、reduced-motion、theme、tokens |
-| [core/src/lamtools_core/plugins/bundled/workflow/ui/flow-shims.d.ts](../core/src/lamtools_core/plugins/bundled/workflow/ui/flow-shims.d.ts) | — |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/HumanTaskPanel.vue](../core/src/lamtools_core/plugins/bundled/workflow/ui/HumanTaskPanel.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts](../core/src/lamtools_core/plugins/bundled/workflow/ui/index.ts) | — |
 | [core/src/lamtools_core/plugins/bundled/workflow/ui/NodeEditCard.vue](../core/src/lamtools_core/plugins/bundled/workflow/ui/NodeEditCard.vue) | button、checkbox、select、event、flex、theme、tokens |
@@ -117,8 +119,14 @@
 | [core/ui/model-lab.html](../core/ui/model-lab.html) | — |
 | [core/ui/src/agents/subAgentDisplay.ts](../core/ui/src/agents/subAgentDisplay.ts) | — |
 | [core/ui/src/agents/subAgentProjection.ts](../core/ui/src/agents/subAgentProjection.ts) | — |
+| [core/ui/src/agents/subAgentTabs.ts](../core/ui/src/agents/subAgentTabs.ts) | — |
+| [core/ui/src/annotation/AnnotationToolbar.vue](../core/ui/src/annotation/AnnotationToolbar.vue) | button、event、grid、flex、reduced-motion |
+| [core/ui/src/annotation/draw.ts](../core/ui/src/annotation/draw.ts) | — |
+| [core/ui/src/annotation/export.ts](../core/ui/src/annotation/export.ts) | — |
+| [core/ui/src/annotation/model.ts](../core/ui/src/annotation/model.ts) | — |
 | [core/ui/src/app/desktopFilePicker.ts](../core/ui/src/app/desktopFilePicker.ts) | — |
 | [core/ui/src/app/LamToolsApp.vue](../core/ui/src/app/LamToolsApp.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/app/remoteReconnect.ts](../core/ui/src/app/remoteReconnect.ts) | — |
 | [core/ui/src/app/remoteSession.ts](../core/ui/src/app/remoteSession.ts) | — |
 | [core/ui/src/app/runtime.ts](../core/ui/src/app/runtime.ts) | event |
 | [core/ui/src/app/useCorePageBindings.ts](../core/ui/src/app/useCorePageBindings.ts) | — |
@@ -139,6 +147,9 @@
 | [core/ui/src/artifacts/poster.ts](../core/ui/src/artifacts/poster.ts) | event |
 | [core/ui/src/auxiliary/useAuxiliaryChat.ts](../core/ui/src/auxiliary/useAuxiliaryChat.ts) | — |
 | [core/ui/src/auxiliary/workspace.ts](../core/ui/src/auxiliary/workspace.ts) | — |
+| [core/ui/src/browser/agentBridge.ts](../core/ui/src/browser/agentBridge.ts) | — |
+| [core/ui/src/browser/entry.ts](../core/ui/src/browser/entry.ts) | — |
+| [core/ui/src/browser/linkRouting.ts](../core/ui/src/browser/linkRouting.ts) | — |
 | [core/ui/src/components/AccountShell.vue](../core/ui/src/components/AccountShell.vue) | tokens |
 | [core/ui/src/components/AppRail.vue](../core/ui/src/components/AppRail.vue) | button、event |
 | [core/ui/src/components/ArtifactPanel.vue](../core/ui/src/components/ArtifactPanel.vue) | button、checkbox、select、event、grid、flex、theme、tokens |
@@ -146,15 +157,16 @@
 | [core/ui/src/components/AttachmentSourceMenu.vue](../core/ui/src/components/AttachmentSourceMenu.vue) | button、event、grid、reduced-motion、theme、tokens |
 | [core/ui/src/components/AttachmentTray.vue](../core/ui/src/components/AttachmentTray.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/components/AutoTextarea.vue](../core/ui/src/components/AutoTextarea.vue) | event、theme、tokens |
+| [core/ui/src/components/BrowserHomeView.vue](../core/ui/src/components/BrowserHomeView.vue) | button、switch、event、grid、flex、theme、tokens |
 | [core/ui/src/components/chatOutlineNavigator.ts](../core/ui/src/components/chatOutlineNavigator.ts) | — |
 | [core/ui/src/components/ChatOutlineNavigator.vue](../core/ui/src/components/ChatOutlineNavigator.vue) | button、dialog、event、grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/components/ChatThread.vue](../core/ui/src/components/ChatThread.vue) | — |
-| [core/ui/src/components/CommandPalette.vue](../core/ui/src/components/CommandPalette.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/CommandPalette.vue](../core/ui/src/components/CommandPalette.vue) | button、event、grid、flex、theme、tokens |
 | [core/ui/src/components/ComposerBar.vue](../core/ui/src/components/ComposerBar.vue) | event、reduced-motion、tokens |
 | [core/ui/src/components/context-menu/context-menu.ts](../core/ui/src/components/context-menu/context-menu.ts) | event |
 | [core/ui/src/components/context-menu/ContextMenuHost.vue](../core/ui/src/components/context-menu/ContextMenuHost.vue) | animation |
 | [core/ui/src/components/context-menu/ContextMenuItem.vue](../core/ui/src/components/context-menu/ContextMenuItem.vue) | button、event |
-| [core/ui/src/components/context-menu/ContextMenuPanel.vue](../core/ui/src/components/context-menu/ContextMenuPanel.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/context-menu/ContextMenuPanel.vue](../core/ui/src/components/context-menu/ContextMenuPanel.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/components/context-menu/ContextMenuSubmenu.vue](../core/ui/src/components/context-menu/ContextMenuSubmenu.vue) | button、event |
 | [core/ui/src/components/context-menu/index.ts](../core/ui/src/components/context-menu/index.ts) | — |
 | [core/ui/src/components/context-menu/types.ts](../core/ui/src/components/context-menu/types.ts) | — |
@@ -162,14 +174,17 @@
 | [core/ui/src/components/CoreAppPage.vue](../core/ui/src/components/CoreAppPage.vue) | — |
 | [core/ui/src/components/CoreArrangeManager.vue](../core/ui/src/components/CoreArrangeManager.vue) | button、select、event、grid、flex、theme、tokens |
 | [core/ui/src/components/CoreAuxiliaryChat.vue](../core/ui/src/components/CoreAuxiliaryChat.vue) | button、event |
+| [core/ui/src/components/CoreBubbleAppearance.vue](../core/ui/src/components/CoreBubbleAppearance.vue) | button、switch、event、grid、theme、tokens |
 | [core/ui/src/components/CoreChart.vue](../core/ui/src/components/CoreChart.vue) | animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/CoreConfirmDialog.vue](../core/ui/src/components/CoreConfirmDialog.vue) | button、dialog、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/CoreContentRoot.vue](../core/ui/src/components/CoreContentRoot.vue) | button、event |
 | [core/ui/src/components/CoreExecutionControls.vue](../core/ui/src/components/CoreExecutionControls.vue) | flex、tokens |
 | [core/ui/src/components/CoreGeneralEditor.vue](../core/ui/src/components/CoreGeneralEditor.vue) | button、switch、range、select、event、grid、flex、theme、tokens |
 | [core/ui/src/components/CoreGoalStrip.vue](../core/ui/src/components/CoreGoalStrip.vue) | button、event、flex、theme |
 | [core/ui/src/components/CoreHooksEditor.vue](../core/ui/src/components/CoreHooksEditor.vue) | button、switch、select、event、grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/components/CoreImageGenEditor.vue](../core/ui/src/components/CoreImageGenEditor.vue) | button、event、grid、theme、tokens |
 | [core/ui/src/components/CoreLoadToolsEditor.vue](../core/ui/src/components/CoreLoadToolsEditor.vue) | button、checkbox、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/CoreMessageSurface.vue](../core/ui/src/components/CoreMessageSurface.vue) | — |
 | [core/ui/src/components/CoreModelCatalog.vue](../core/ui/src/components/CoreModelCatalog.vue) | button、checkbox、switch、select、event、animation、reduced-motion |
 | [core/ui/src/components/CoreModelCatalogViewToggle.vue](../core/ui/src/components/CoreModelCatalogViewToggle.vue) | button、event、flex、theme、tokens |
 | [core/ui/src/components/CoreModelThinkingMenu.vue](../core/ui/src/components/CoreModelThinkingMenu.vue) | button、dialog、event、grid、flex、animation、reduced-motion、theme、tokens |
@@ -183,20 +198,18 @@
 | [core/ui/src/components/CoreQuestionGroup.vue](../core/ui/src/components/CoreQuestionGroup.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/CoreQueuedInputTray.vue](../core/ui/src/components/CoreQueuedInputTray.vue) | button、event、flex、theme、tokens |
 | [core/ui/src/components/CoreResourceStats.vue](../core/ui/src/components/CoreResourceStats.vue) | grid、flex、animation、reduced-motion、theme、tokens |
-| [core/ui/src/components/CoreRunModeCapsule.vue](../core/ui/src/components/CoreRunModeCapsule.vue) | button、event、flex、theme、tokens |
+| [core/ui/src/components/CoreRunModeCapsule.vue](../core/ui/src/components/CoreRunModeCapsule.vue) | button、event、grid、flex、theme、tokens |
 | [core/ui/src/components/CoreRuntimeMenu.vue](../core/ui/src/components/CoreRuntimeMenu.vue) | button、event、grid、flex、theme、tokens |
 | [core/ui/src/components/CoreSendStopButton.vue](../core/ui/src/components/CoreSendStopButton.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
-| [core/ui/src/components/CoreSessionTitleEditor.vue](../core/ui/src/components/CoreSessionTitleEditor.vue) | event、grid、theme |
+| [core/ui/src/components/CoreSessionTitleEditor.vue](../core/ui/src/components/CoreSessionTitleEditor.vue) | button、event、grid、theme、tokens |
 | [core/ui/src/components/CoreSettings.vue](../core/ui/src/components/CoreSettings.vue) | button、switch、select、event、flex |
 | [core/ui/src/components/CoreSkillsEditor.vue](../core/ui/src/components/CoreSkillsEditor.vue) | button、switch、select、event、flex、reduced-motion、theme、tokens |
-| [core/ui/src/components/CoreSplitBrowser.vue](../core/ui/src/components/CoreSplitBrowser.vue) | button、event |
+| [core/ui/src/components/CoreSplitBrowser.vue](../core/ui/src/components/CoreSplitBrowser.vue) | button、event、grid、flex、theme、tokens |
 | [core/ui/src/components/CoreSplitContent.vue](../core/ui/src/components/CoreSplitContent.vue) | button、event |
 | [core/ui/src/components/CoreSplitFileTree.vue](../core/ui/src/components/CoreSplitFileTree.vue) | button、event |
-| [core/ui/src/components/CoreSplitPane.vue](../core/ui/src/components/CoreSplitPane.vue) | button、event、reduced-motion |
 | [core/ui/src/components/CoreSplitPluginPage.vue](../core/ui/src/components/CoreSplitPluginPage.vue) | button、event、flex、theme、tokens |
 | [core/ui/src/components/CoreSplitPreview.vue](../core/ui/src/components/CoreSplitPreview.vue) | button、event |
 | [core/ui/src/components/CoreSplitTextEditor.vue](../core/ui/src/components/CoreSplitTextEditor.vue) | button、event |
-| [core/ui/src/components/CoreSplitWorkspace.vue](../core/ui/src/components/CoreSplitWorkspace.vue) | button、event、animation |
 | [core/ui/src/components/CoreStartPage.vue](../core/ui/src/components/CoreStartPage.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/components/CoreSubAgentActivityIndicator.vue](../core/ui/src/components/CoreSubAgentActivityIndicator.vue) | event、flex、animation、reduced-motion、theme |
 | [core/ui/src/components/CoreSubAgentDialog.vue](../core/ui/src/components/CoreSubAgentDialog.vue) | button、dialog、event、grid、flex、animation、reduced-motion、theme、tokens |
@@ -205,16 +218,23 @@
 | [core/ui/src/components/CoreSubAgentPanel.vue](../core/ui/src/components/CoreSubAgentPanel.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/CoreSubAgentView.vue](../core/ui/src/components/CoreSubAgentView.vue) | button、event、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/CoreSubmissionStatus.vue](../core/ui/src/components/CoreSubmissionStatus.vue) | button、event、flex、animation、reduced-motion、theme、tokens |
-| [core/ui/src/components/CoreSystemEventRow.vue](../core/ui/src/components/CoreSystemEventRow.vue) | flex、theme、tokens |
+| [core/ui/src/components/CoreSystemEventRow.vue](../core/ui/src/components/CoreSystemEventRow.vue) | event、flex、theme、tokens |
 | [core/ui/src/components/CoreToastHost.vue](../core/ui/src/components/CoreToastHost.vue) | button、event、animation |
 | [core/ui/src/components/CoreUpdateCard.vue](../core/ui/src/components/CoreUpdateCard.vue) | button、dialog、event、grid、flex、theme、tokens |
 | [core/ui/src/components/CoreWebSearchEditor.vue](../core/ui/src/components/CoreWebSearchEditor.vue) | button、select、event、grid、theme、tokens |
+| [core/ui/src/components/CoreWorkspace.vue](../core/ui/src/components/CoreWorkspace.vue) | event、theme、tokens |
+| [core/ui/src/components/CoreWorkspaceArea.vue](../core/ui/src/components/CoreWorkspaceArea.vue) | button、event |
+| [core/ui/src/components/CoreWorkspaceContentHost.vue](../core/ui/src/components/CoreWorkspaceContentHost.vue) | — |
+| [core/ui/src/components/CoreWorkspaceFloat.vue](../core/ui/src/components/CoreWorkspaceFloat.vue) | button、dialog、event |
 | [core/ui/src/components/CoreWorkspaceMenu.vue](../core/ui/src/components/CoreWorkspaceMenu.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
+| [core/ui/src/components/CoreWorkspaceTabDrawer.vue](../core/ui/src/components/CoreWorkspaceTabDrawer.vue) | button、dialog、event、flex、theme、tokens |
+| [core/ui/src/components/CoreWorkspaceTabs.vue](../core/ui/src/components/CoreWorkspaceTabs.vue) | button、event |
 | [core/ui/src/components/DirectCallView.vue](../core/ui/src/components/DirectCallView.vue) | button、select、event、grid、flex、theme、tokens |
 | [core/ui/src/components/DocumentEditor.vue](../core/ui/src/components/DocumentEditor.vue) | button、event |
 | [core/ui/src/components/FbTreeItem.vue](../core/ui/src/components/FbTreeItem.vue) | button、event、flex、tokens |
 | [core/ui/src/components/FileTypeBadge.vue](../core/ui/src/components/FileTypeBadge.vue) | grid |
-| [core/ui/src/components/FolderBrowserDialog.vue](../core/ui/src/components/FolderBrowserDialog.vue) | button、dialog、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/FirstRunChecklist.vue](../core/ui/src/components/FirstRunChecklist.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/FolderBrowserDialog.vue](../core/ui/src/components/FolderBrowserDialog.vue) | button、dialog、event、grid、flex、animation、theme、tokens |
 | [core/ui/src/components/FullAreaActions.vue](../core/ui/src/components/FullAreaActions.vue) | — |
 | [core/ui/src/components/FullAreaSidebarNav.vue](../core/ui/src/components/FullAreaSidebarNav.vue) | button、event |
 | [core/ui/src/components/HistoryLoadingIndicator.vue](../core/ui/src/components/HistoryLoadingIndicator.vue) | event、grid、flex、animation、reduced-motion、theme、tokens |
@@ -227,8 +247,9 @@
 | [core/ui/src/components/LibraryNameDialog.vue](../core/ui/src/components/LibraryNameDialog.vue) | button、dialog、event |
 | [core/ui/src/components/LibrarySearchField.vue](../core/ui/src/components/LibrarySearchField.vue) | — |
 | [core/ui/src/components/LibraryViewToggle.vue](../core/ui/src/components/LibraryViewToggle.vue) | button、event |
+| [core/ui/src/components/LocalFilesView.vue](../core/ui/src/components/LocalFilesView.vue) | button、select、dialog、event、grid、flex、animation、theme、tokens |
 | [core/ui/src/components/markdownRenderCache.ts](../core/ui/src/components/markdownRenderCache.ts) | — |
-| [core/ui/src/components/MarkdownRenderer.vue](../core/ui/src/components/MarkdownRenderer.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/MarkdownRenderer.vue](../core/ui/src/components/MarkdownRenderer.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/components/MaterialsView.vue](../core/ui/src/components/MaterialsView.vue) | button、dialog、event、animation |
 | [core/ui/src/components/mathAutoPlot.ts](../core/ui/src/components/mathAutoPlot.ts) | — |
 | [core/ui/src/components/MemoryView.vue](../core/ui/src/components/MemoryView.vue) | button、event、animation、theme、tokens |
@@ -239,7 +260,6 @@
 | [core/ui/src/components/OperationTrustSettings.vue](../core/ui/src/components/OperationTrustSettings.vue) | button、event |
 | [core/ui/src/components/PetActionPanel.vue](../core/ui/src/components/PetActionPanel.vue) | button、checkbox、range、select、event、grid、flex |
 | [core/ui/src/components/PetCreationPanel.vue](../core/ui/src/components/PetCreationPanel.vue) | button、event、grid、flex |
-| [core/ui/src/components/PetWorkspacePreview.vue](../core/ui/src/components/PetWorkspacePreview.vue) | button、checkbox、select、event、flex |
 | [core/ui/src/components/PingCaptureSandbox.vue](../core/ui/src/components/PingCaptureSandbox.vue) | button、event、grid、flex |
 | [core/ui/src/components/PlanLibraryView.vue](../core/ui/src/components/PlanLibraryView.vue) | button、event、animation |
 | [core/ui/src/components/PluginConfigPanel.vue](../core/ui/src/components/PluginConfigPanel.vue) | button、checkbox、select、event、grid、flex、animation、reduced-motion、tokens |
@@ -249,7 +269,8 @@
 | [core/ui/src/components/PluginRegionEntry.vue](../core/ui/src/components/PluginRegionEntry.vue) | — |
 | [core/ui/src/components/PluginsShell.vue](../core/ui/src/components/PluginsShell.vue) | — |
 | [core/ui/src/components/PluginSystemContributions.vue](../core/ui/src/components/PluginSystemContributions.vue) | — |
-| [core/ui/src/components/process/ProcessIcon.vue](../core/ui/src/components/process/ProcessIcon.vue) | event、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/PluginWindowLauncher.vue](../core/ui/src/components/PluginWindowLauncher.vue) | button、event、grid、flex |
+| [core/ui/src/components/process/ProcessIcon.vue](../core/ui/src/components/process/ProcessIcon.vue) | flex、reduced-motion、theme、tokens |
 | [core/ui/src/components/process/ProcessKvPill.vue](../core/ui/src/components/process/ProcessKvPill.vue) | button、event、flex、animation、reduced-motion、theme |
 | [core/ui/src/components/process/ProcessMediaPreview.vue](../core/ui/src/components/process/ProcessMediaPreview.vue) | button、event |
 | [core/ui/src/components/process/ProcessResultPills.vue](../core/ui/src/components/process/ProcessResultPills.vue) | button、event、grid、flex、reduced-motion、theme |
@@ -257,7 +278,8 @@
 | [core/ui/src/components/ProjectVisualPicker.vue](../core/ui/src/components/ProjectVisualPicker.vue) | button、event、grid、flex、theme、tokens |
 | [core/ui/src/components/RailAction.vue](../core/ui/src/components/RailAction.vue) | button、event |
 | [core/ui/src/components/ReferenceItems.vue](../core/ui/src/components/ReferenceItems.vue) | button、event、grid、flex、theme、tokens |
-| [core/ui/src/components/RemoteConnectionPanel.vue](../core/ui/src/components/RemoteConnectionPanel.vue) | button、event、grid、flex、theme、tokens |
+| [core/ui/src/components/RemoteConnectionPanel.vue](../core/ui/src/components/RemoteConnectionPanel.vue) | button、checkbox、event、grid、flex、theme、tokens |
+| [core/ui/src/components/remoteConnectionServices.ts](../core/ui/src/components/remoteConnectionServices.ts) | — |
 | [core/ui/src/components/RightSidebarChecklist.vue](../core/ui/src/components/RightSidebarChecklist.vue) | grid、flex、theme、tokens |
 | [core/ui/src/components/RightSidebarHost.vue](../core/ui/src/components/RightSidebarHost.vue) | button、event、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/RightSidebarLayoutEditor.vue](../core/ui/src/components/RightSidebarLayoutEditor.vue) | button、checkbox、event、grid、flex、theme、tokens |
@@ -269,13 +291,14 @@
 | [core/ui/src/components/RightSidebarWidgetRenderer.vue](../core/ui/src/components/RightSidebarWidgetRenderer.vue) | button、event、grid、flex、theme、tokens |
 | [core/ui/src/components/RuntimeChecklistCard.vue](../core/ui/src/components/RuntimeChecklistCard.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/RuntimePanel.vue](../core/ui/src/components/RuntimePanel.vue) | button、event、grid、animation、reduced-motion、theme |
-| [core/ui/src/components/SearchShell.vue](../core/ui/src/components/SearchShell.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
+| [core/ui/src/components/SearchShell.vue](../core/ui/src/components/SearchShell.vue) | button、event、grid、flex、theme、tokens |
+| [core/ui/src/components/SendToDeviceMenu.vue](../core/ui/src/components/SendToDeviceMenu.vue) | button、event、grid、flex、theme、tokens |
 | [core/ui/src/components/SessionSidebar.vue](../core/ui/src/components/SessionSidebar.vue) | button、event、flex、animation、theme、tokens |
 | [core/ui/src/components/settings/MessageStreamSettings.vue](../core/ui/src/components/settings/MessageStreamSettings.vue) | button、switch、range、select、event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/SettingsDraftDialog.vue](../core/ui/src/components/SettingsDraftDialog.vue) | — |
 | [core/ui/src/components/settingsSections.ts](../core/ui/src/components/settingsSections.ts) | — |
 | [core/ui/src/components/SettingsShell.vue](../core/ui/src/components/SettingsShell.vue) | button、event、animation、reduced-motion |
-| [core/ui/src/components/streamingTextFade.ts](../core/ui/src/components/streamingTextFade.ts) | — |
+| [core/ui/src/components/streamBlocks.ts](../core/ui/src/components/streamBlocks.ts) | — |
 | [core/ui/src/components/SundayLogo.vue](../core/ui/src/components/SundayLogo.vue) | event、grid、animation、reduced-motion |
 | [core/ui/src/components/SundayProgress.vue](../core/ui/src/components/SundayProgress.vue) | — |
 | [core/ui/src/components/SundayRange.vue](../core/ui/src/components/SundayRange.vue) | range、event |
@@ -286,17 +309,21 @@
 | [core/ui/src/components/ThemePreview.vue](../core/ui/src/components/ThemePreview.vue) | button、event |
 | [core/ui/src/components/ThemeStudio.vue](../core/ui/src/components/ThemeStudio.vue) | button、checkbox、switch、range、select、dialog、event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/components/ThinkingIntensitySlider.vue](../core/ui/src/components/ThinkingIntensitySlider.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
-| [core/ui/src/components/TitleBar.vue](../core/ui/src/components/TitleBar.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
-| [core/ui/src/components/UiSelect.vue](../core/ui/src/components/UiSelect.vue) | button、event |
+| [core/ui/src/components/TitleBar.vue](../core/ui/src/components/TitleBar.vue) | button、event、flex、theme、tokens |
+| [core/ui/src/components/TransferPanel.vue](../core/ui/src/components/TransferPanel.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/components/UiSelect.vue](../core/ui/src/components/UiSelect.vue) | button、event、animation |
 | [core/ui/src/components/UserReferenceText.vue](../core/ui/src/components/UserReferenceText.vue) | event、flex |
 | [core/ui/src/components/wikiNavigation.ts](../core/ui/src/components/wikiNavigation.ts) | — |
 | [core/ui/src/components/WikiView.vue](../core/ui/src/components/WikiView.vue) | button、event、grid、flex、reduced-motion、theme、tokens |
+| [core/ui/src/components/workspaceInjection.ts](../core/ui/src/components/workspaceInjection.ts) | — |
 | [core/ui/src/components/WorkspaceShell.vue](../core/ui/src/components/WorkspaceShell.vue) | button、event、animation、reduced-motion |
 | [core/ui/src/components/WritingBlock.vue](../core/ui/src/components/WritingBlock.vue) | button、event、flex、theme、tokens |
 | [core/ui/src/composables/index.ts](../core/ui/src/composables/index.ts) | — |
 | [core/ui/src/composables/radioGroupKeyboard.ts](../core/ui/src/composables/radioGroupKeyboard.ts) | button |
+| [core/ui/src/composables/sessionFusion.ts](../core/ui/src/composables/sessionFusion.ts) | — |
 | [core/ui/src/composables/trapDialogTab.ts](../core/ui/src/composables/trapDialogTab.ts) | — |
 | [core/ui/src/composables/useAssistantDisplayPreferences.ts](../core/ui/src/composables/useAssistantDisplayPreferences.ts) | — |
+| [core/ui/src/composables/useComposerColumn.ts](../core/ui/src/composables/useComposerColumn.ts) | event |
 | [core/ui/src/composables/useComposerCommandPalette.ts](../core/ui/src/composables/useComposerCommandPalette.ts) | — |
 | [core/ui/src/composables/useComposerLayout.ts](../core/ui/src/composables/useComposerLayout.ts) | event |
 | [core/ui/src/composables/useComposerMenuViewport.ts](../core/ui/src/composables/useComposerMenuViewport.ts) | event |
@@ -324,17 +351,21 @@
 | [core/ui/src/composables/useProcessSummaryClock.ts](../core/ui/src/composables/useProcessSummaryClock.ts) | — |
 | [core/ui/src/composables/useRightSidebarLayout.ts](../core/ui/src/composables/useRightSidebarLayout.ts) | — |
 | [core/ui/src/composables/useSessionCompletionNotices.ts](../core/ui/src/composables/useSessionCompletionNotices.ts) | — |
+| [core/ui/src/composables/useSessionFusion.ts](../core/ui/src/composables/useSessionFusion.ts) | event |
 | [core/ui/src/composables/useSettingsDraftGuard.ts](../core/ui/src/composables/useSettingsDraftGuard.ts) | — |
 | [core/ui/src/composables/useShellLayout.ts](../core/ui/src/composables/useShellLayout.ts) | event、theme |
 | [core/ui/src/composables/useTheme.ts](../core/ui/src/composables/useTheme.ts) | — |
 | [core/ui/src/composables/useThemeStudio.ts](../core/ui/src/composables/useThemeStudio.ts) | — |
+| [core/ui/src/composables/useWindowDrag.ts](../core/ui/src/composables/useWindowDrag.ts) | button |
 | [core/ui/src/composer/commandIcons.ts](../core/ui/src/composer/commandIcons.ts) | — |
+| [core/ui/src/composer/composerColumn.ts](../core/ui/src/composer/composerColumn.ts) | — |
 | [core/ui/src/composer/drafts.ts](../core/ui/src/composer/drafts.ts) | — |
 | [core/ui/src/composer/editorHeight.ts](../core/ui/src/composer/editorHeight.ts) | — |
 | [core/ui/src/composer/execution.ts](../core/ui/src/composer/execution.ts) | — |
 | [core/ui/src/composer/fileReferences.ts](../core/ui/src/composer/fileReferences.ts) | — |
 | [core/ui/src/composer/inputItems.ts](../core/ui/src/composer/inputItems.ts) | — |
 | [core/ui/src/composer/runMode.ts](../core/ui/src/composer/runMode.ts) | — |
+| [core/ui/src/composer/runModeTier.ts](../core/ui/src/composer/runModeTier.ts) | — |
 | [core/ui/src/composer/sessionComposer.ts](../core/ui/src/composer/sessionComposer.ts) | — |
 | [core/ui/src/composer/syntax.ts](../core/ui/src/composer/syntax.ts) | — |
 | [core/ui/src/composer/thinkingPalette.ts](../core/ui/src/composer/thinkingPalette.ts) | — |
@@ -352,28 +383,41 @@
 | [core/ui/src/demo/materials-lab.ts](../core/ui/src/demo/materials-lab.ts) | — |
 | [core/ui/src/demo/model-catalog-lab.ts](../core/ui/src/demo/model-catalog-lab.ts) | — |
 | [core/ui/src/demo/thinking-lab.ts](../core/ui/src/demo/thinking-lab.ts) | — |
+| [core/ui/src/design-system/AccountPreview.vue](../core/ui/src/design-system/AccountPreview.vue) | checkbox、grid、tokens |
 | [core/ui/src/design-system/ComposerPreview.vue](../core/ui/src/design-system/ComposerPreview.vue) | event |
+| [core/ui/src/design-system/DirectCallPreview.vue](../core/ui/src/design-system/DirectCallPreview.vue) | checkbox |
 | [core/ui/src/design-system/ExecutionControlsPreview.vue](../core/ui/src/design-system/ExecutionControlsPreview.vue) | checkbox、grid、theme、tokens |
+| [core/ui/src/design-system/FirstRunPreview.vue](../core/ui/src/design-system/FirstRunPreview.vue) | button、checkbox、event、grid、flex、tokens |
 | [core/ui/src/design-system/Gallery.vue](../core/ui/src/design-system/Gallery.vue) | button、checkbox、switch、range、select、event、grid、flex、theme、tokens |
 | [core/ui/src/design-system/libraryPreviewData.ts](../core/ui/src/design-system/libraryPreviewData.ts) | — |
+| [core/ui/src/design-system/LightboxPreview.vue](../core/ui/src/design-system/LightboxPreview.vue) | button、event |
 | [core/ui/src/design-system/main.ts](../core/ui/src/design-system/main.ts) | theme |
 | [core/ui/src/design-system/materialsPreviewData.ts](../core/ui/src/design-system/materialsPreviewData.ts) | — |
+| [core/ui/src/design-system/MotionPreview.vue](../core/ui/src/design-system/MotionPreview.vue) | button、checkbox、select、event、grid、flex、theme、tokens |
+| [core/ui/src/design-system/NetworkHomePreview.vue](../core/ui/src/design-system/NetworkHomePreview.vue) | checkbox、grid、tokens |
+| [core/ui/src/design-system/NetworkInspectionPreview.vue](../core/ui/src/design-system/NetworkInspectionPreview.vue) | grid、tokens |
+| [core/ui/src/design-system/NetworkProxyPreview.vue](../core/ui/src/design-system/NetworkProxyPreview.vue) | checkbox、grid、tokens |
+| [core/ui/src/design-system/NetworkSettingsPreview.vue](../core/ui/src/design-system/NetworkSettingsPreview.vue) | grid、tokens |
+| [core/ui/src/design-system/NetworkTransferPreview.vue](../core/ui/src/design-system/NetworkTransferPreview.vue) | checkbox、grid、tokens |
 | [core/ui/src/design-system/QueuedInputPreview.vue](../core/ui/src/design-system/QueuedInputPreview.vue) | checkbox |
+| [core/ui/src/design-system/SelectionAssistantPreview.vue](../core/ui/src/design-system/SelectionAssistantPreview.vue) | button、checkbox、event、grid、tokens |
+| [core/ui/src/design-system/SkillsHooksPreview.vue](../core/ui/src/design-system/SkillsHooksPreview.vue) | grid、tokens |
 | [core/ui/src/design-system/SplitBrowserPreview.vue](../core/ui/src/design-system/SplitBrowserPreview.vue) | checkbox、grid、theme、tokens |
 | [core/ui/src/design-system/SplitFilePreview.vue](../core/ui/src/design-system/SplitFilePreview.vue) | button、checkbox、event、grid、flex、theme、tokens |
-| [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue) | tokens |
+| [core/ui/src/design-system/SplitWorkspacePreview.vue](../core/ui/src/design-system/SplitWorkspacePreview.vue) | button、event、tokens |
+| [core/ui/src/design-system/StudyGraphsPreview.vue](../core/ui/src/design-system/StudyGraphsPreview.vue) | checkbox、grid、flex、theme、tokens |
+| [core/ui/src/design-system/StudyMarksPreview.vue](../core/ui/src/design-system/StudyMarksPreview.vue) | button、event、grid、theme、tokens |
+| [core/ui/src/design-system/StudyNotesPreview.vue](../core/ui/src/design-system/StudyNotesPreview.vue) | button、checkbox、event、grid、theme、tokens |
+| [core/ui/src/design-system/StudyNoteTreePreview.vue](../core/ui/src/design-system/StudyNoteTreePreview.vue) | checkbox、grid、theme、tokens |
+| [core/ui/src/design-system/TransferPreview.vue](../core/ui/src/design-system/TransferPreview.vue) | — |
+| [core/ui/src/design-system/TrayPreview.vue](../core/ui/src/design-system/TrayPreview.vue) | — |
 | [core/ui/src/directives/autoFollowScroll.ts](../core/ui/src/directives/autoFollowScroll.ts) | event |
 | [core/ui/src/directives/motionEnter.ts](../core/ui/src/directives/motionEnter.ts) | reduced-motion |
+| [core/ui/src/directives/reorderMotion.ts](../core/ui/src/directives/reorderMotion.ts) | — |
 | [core/ui/src/durable/api.ts](../core/ui/src/durable/api.ts) | — |
 | [core/ui/src/durable/types.ts](../core/ui/src/durable/types.ts) | — |
-| [core/ui/src/guide/GuideDemoSession.vue](../core/ui/src/guide/GuideDemoSession.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
-| [core/ui/src/guide/GuideHost.vue](../core/ui/src/guide/GuideHost.vue) | button、dialog、event、grid、flex、animation、reduced-motion、theme、tokens |
-| [core/ui/src/guide/GuidePractice.vue](../core/ui/src/guide/GuidePractice.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
-| [core/ui/src/guide/guideScript.ts](../core/ui/src/guide/guideScript.ts) | — |
-| [core/ui/src/guide/GuideStoryArt.vue](../core/ui/src/guide/GuideStoryArt.vue) | event、grid、animation、reduced-motion、theme、tokens |
-| [core/ui/src/guide/mockConversation.ts](../core/ui/src/guide/mockConversation.ts) | — |
-| [core/ui/src/guide/types.ts](../core/ui/src/guide/types.ts) | — |
-| [core/ui/src/guide/useGuide.ts](../core/ui/src/guide/useGuide.ts) | — |
+| [core/ui/src/firstRun/firstRun.ts](../core/ui/src/firstRun/firstRun.ts) | — |
+| [core/ui/src/helpers/artifactSource.ts](../core/ui/src/helpers/artifactSource.ts) | — |
 | [core/ui/src/helpers/assistantAvatarCrop.ts](../core/ui/src/helpers/assistantAvatarCrop.ts) | — |
 | [core/ui/src/helpers/assistantBubbles.ts](../core/ui/src/helpers/assistantBubbles.ts) | — |
 | [core/ui/src/helpers/autoGrowTextarea.ts](../core/ui/src/helpers/autoGrowTextarea.ts) | — |
@@ -385,11 +429,14 @@
 | [core/ui/src/helpers/fileTypeIcon.ts](../core/ui/src/helpers/fileTypeIcon.ts) | — |
 | [core/ui/src/helpers/index.ts](../core/ui/src/helpers/index.ts) | — |
 | [core/ui/src/helpers/messageStreamStyle.ts](../core/ui/src/helpers/messageStreamStyle.ts) | theme |
+| [core/ui/src/helpers/messageSurfaceAngle.ts](../core/ui/src/helpers/messageSurfaceAngle.ts) | — |
 | [core/ui/src/helpers/mosaicLayout.ts](../core/ui/src/helpers/mosaicLayout.ts) | — |
 | [core/ui/src/helpers/openUrl.ts](../core/ui/src/helpers/openUrl.ts) | — |
 | [core/ui/src/helpers/pluginWindow.ts](../core/ui/src/helpers/pluginWindow.ts) | — |
 | [core/ui/src/helpers/processIcons.ts](../core/ui/src/helpers/processIcons.ts) | — |
 | [core/ui/src/helpers/progressMetrics.ts](../core/ui/src/helpers/progressMetrics.ts) | — |
+| [core/ui/src/helpers/questionGroupAnswered.ts](../core/ui/src/helpers/questionGroupAnswered.ts) | — |
+| [core/ui/src/helpers/questionGroupCopy.ts](../core/ui/src/helpers/questionGroupCopy.ts) | — |
 | [core/ui/src/helpers/referenceActions.ts](../core/ui/src/helpers/referenceActions.ts) | — |
 | [core/ui/src/helpers/runtimeSteps.ts](../core/ui/src/helpers/runtimeSteps.ts) | — |
 | [core/ui/src/helpers/runtimeStepStatus.ts](../core/ui/src/helpers/runtimeStepStatus.ts) | — |
@@ -458,10 +505,12 @@
 | [core/ui/src/pet/render/threeLayer.ts](../core/ui/src/pet/render/threeLayer.ts) | — |
 | [core/ui/src/pet/render/types.ts](../core/ui/src/pet/render/types.ts) | — |
 | [core/ui/src/pet/settingsOptions.ts](../core/ui/src/pet/settingsOptions.ts) | — |
+| [core/ui/src/pet/translate/client.ts](../core/ui/src/pet/translate/client.ts) | — |
+| [core/ui/src/pet/translate/request.ts](../core/ui/src/pet/translate/request.ts) | — |
 | [core/ui/src/pet/ui/bubbleLayout.ts](../core/ui/src/pet/ui/bubbleLayout.ts) | — |
 | [core/ui/src/pet/ui/bubbleStore.ts](../core/ui/src/pet/ui/bubbleStore.ts) | — |
 | [core/ui/src/pet/ui/CaptureApp.vue](../core/ui/src/pet/ui/CaptureApp.vue) | button、event、grid |
-| [core/ui/src/pet/ui/CaptureEditor.vue](../core/ui/src/pet/ui/CaptureEditor.vue) | button、dialog、event、grid、flex |
+| [core/ui/src/pet/ui/CaptureEditor.vue](../core/ui/src/pet/ui/CaptureEditor.vue) | button、select、dialog、event、grid、flex |
 | [core/ui/src/pet/ui/hotkeyAccelerator.ts](../core/ui/src/pet/ui/hotkeyAccelerator.ts) | — |
 | [core/ui/src/pet/ui/overlayTheme.ts](../core/ui/src/pet/ui/overlayTheme.ts) | event |
 | [core/ui/src/pet/ui/pet-surface.css](../core/ui/src/pet/ui/pet-surface.css) | — |
@@ -492,6 +541,25 @@
 | [core/ui/src/plugins/registry.ts](../core/ui/src/plugins/registry.ts) | — |
 | [core/ui/src/plugins/styles.ts](../core/ui/src/plugins/styles.ts) | event |
 | [core/ui/src/plugins/types.ts](../core/ui/src/plugins/types.ts) | — |
+| [core/ui/src/preview/browserHandoff.ts](../core/ui/src/preview/browserHandoff.ts) | — |
+| [core/ui/src/preview/composerBridge.ts](../core/ui/src/preview/composerBridge.ts) | — |
+| [core/ui/src/preview/hostPreference.ts](../core/ui/src/preview/hostPreference.ts) | — |
+| [core/ui/src/preview/imageClipboard.ts](../core/ui/src/preview/imageClipboard.ts) | — |
+| [core/ui/src/preview/imageView.ts](../core/ui/src/preview/imageView.ts) | — |
+| [core/ui/src/preview/pdfjsAssets.ts](../core/ui/src/preview/pdfjsAssets.ts) | — |
+| [core/ui/src/preview/pptxLayout.ts](../core/ui/src/preview/pptxLayout.ts) | — |
+| [core/ui/src/preview/PreviewImageViewer.vue](../core/ui/src/preview/PreviewImageViewer.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/preview/PreviewLightbox.vue](../core/ui/src/preview/PreviewLightbox.vue) | button、dialog、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/preview/PreviewMediaPlayer.vue](../core/ui/src/preview/PreviewMediaPlayer.vue) | button、event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/preview/PreviewPdfViewer.vue](../core/ui/src/preview/PreviewPdfViewer.vue) | button、event、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/preview/PreviewSurface.vue](../core/ui/src/preview/PreviewSurface.vue) | button、event、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/preview/PreviewTextViewer.vue](../core/ui/src/preview/PreviewTextViewer.vue) | button、event、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/preview/resolve.ts](../core/ui/src/preview/resolve.ts) | — |
+| [core/ui/src/preview/route.ts](../core/ui/src/preview/route.ts) | — |
+| [core/ui/src/preview/siblings.ts](../core/ui/src/preview/siblings.ts) | — |
+| [core/ui/src/preview/target.ts](../core/ui/src/preview/target.ts) | — |
+| [core/ui/src/preview/transport.ts](../core/ui/src/preview/transport.ts) | — |
+| [core/ui/src/preview/usePreviewLightbox.ts](../core/ui/src/preview/usePreviewLightbox.ts) | — |
 | [core/ui/src/projects/client.ts](../core/ui/src/projects/client.ts) | — |
 | [core/ui/src/projects/types.ts](../core/ui/src/projects/types.ts) | — |
 | [core/ui/src/projects/workspace.ts](../core/ui/src/projects/workspace.ts) | — |
@@ -501,16 +569,24 @@
 | [core/ui/src/sessions/completion.ts](../core/ui/src/sessions/completion.ts) | — |
 | [core/ui/src/sessions/mode-state.ts](../core/ui/src/sessions/mode-state.ts) | — |
 | [core/ui/src/sessions/visibility.ts](../core/ui/src/sessions/visibility.ts) | — |
+| [core/ui/src/split/browserAddress.ts](../core/ui/src/split/browserAddress.ts) | — |
+| [core/ui/src/split/browserErrorText.ts](../core/ui/src/split/browserErrorText.ts) | — |
+| [core/ui/src/split/browserHome.ts](../core/ui/src/split/browserHome.ts) | — |
+| [core/ui/src/split/browserIcons.ts](../core/ui/src/split/browserIcons.ts) | — |
+| [core/ui/src/split/browserLayout.ts](../core/ui/src/split/browserLayout.ts) | — |
 | [core/ui/src/split/browserOverlay.ts](../core/ui/src/split/browserOverlay.ts) | — |
+| [core/ui/src/split/browserOverlays.ts](../core/ui/src/split/browserOverlays.ts) | — |
+| [core/ui/src/split/browserRecovery.ts](../core/ui/src/split/browserRecovery.ts) | — |
+| [core/ui/src/split/browserSession.ts](../core/ui/src/split/browserSession.ts) | — |
+| [core/ui/src/split/browserVisibility.ts](../core/ui/src/split/browserVisibility.ts) | — |
 | [core/ui/src/split/documents.ts](../core/ui/src/split/documents.ts) | event |
+| [core/ui/src/split/hitTest.ts](../core/ui/src/split/hitTest.ts) | event |
 | [core/ui/src/split/keyboardScope.ts](../core/ui/src/split/keyboardScope.ts) | — |
-| [core/ui/src/split/layout.ts](../core/ui/src/split/layout.ts) | — |
 | [core/ui/src/split/native.ts](../core/ui/src/split/native.ts) | — |
 | [core/ui/src/split/openFile.ts](../core/ui/src/split/openFile.ts) | — |
 | [core/ui/src/split/preview.ts](../core/ui/src/split/preview.ts) | — |
 | [core/ui/src/split/previewPreference.ts](../core/ui/src/split/previewPreference.ts) | — |
 | [core/ui/src/split/useSplitAgent.ts](../core/ui/src/split/useSplitAgent.ts) | — |
-| [core/ui/src/split/useSplitWorkspace.ts](../core/ui/src/split/useSplitWorkspace.ts) | event |
 | [core/ui/src/study/anchors.ts](../core/ui/src/study/anchors.ts) | — |
 | [core/ui/src/study/annotations.ts](../core/ui/src/study/annotations.ts) | — |
 | [core/ui/src/study/api.ts](../core/ui/src/study/api.ts) | — |
@@ -538,6 +614,8 @@
 | [core/ui/src/styles/chat-thread-reasoning.css](../core/ui/src/styles/chat-thread-reasoning.css) | grid、flex、animation、reduced-motion、theme |
 | [core/ui/src/styles/chat-thread-shell.css](../core/ui/src/styles/chat-thread-shell.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/styles/chat-thread-tools.css](../core/ui/src/styles/chat-thread-tools.css) | grid、flex、theme、tokens |
+| [core/ui/src/styles/composer-compact.css](../core/ui/src/styles/composer-compact.css) | flex、tokens |
+| [core/ui/src/styles/content-root.css](../core/ui/src/styles/content-root.css) | flex、theme、tokens |
 | [core/ui/src/styles/core-model-catalog.css](../core/ui/src/styles/core-model-catalog.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/styles/core-settings-base.css](../core/ui/src/styles/core-settings-base.css) | grid、flex、theme、tokens |
 | [core/ui/src/styles/core-settings-model-editor.css](../core/ui/src/styles/core-settings-model-editor.css) | grid、flex、reduced-motion、theme、tokens |
@@ -550,8 +628,11 @@
 | [core/ui/src/styles/layout.css](../core/ui/src/styles/layout.css) | button、checkbox、range、event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/styles/library-styles.css](../core/ui/src/styles/library-styles.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/styles/library-surface.css](../core/ui/src/styles/library-surface.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/styles/message-bubbles.css](../core/ui/src/styles/message-bubbles.css) | grid、tokens |
 | [core/ui/src/styles/message-stream.css](../core/ui/src/styles/message-stream.css) | event、animation、reduced-motion、theme |
+| [core/ui/src/styles/message-surface.css](../core/ui/src/styles/message-surface.css) | theme |
 | [core/ui/src/styles/optical-glass.css](../core/ui/src/styles/optical-glass.css) | theme、tokens |
+| [core/ui/src/styles/page-surfaces.css](../core/ui/src/styles/page-surfaces.css) | flex、reduced-motion、theme、tokens |
 | [core/ui/src/styles/plugin-editor-cards.css](../core/ui/src/styles/plugin-editor-cards.css) | grid、flex、theme、tokens |
 | [core/ui/src/styles/plugin-editor-details.css](../core/ui/src/styles/plugin-editor-details.css) | grid、flex、animation、reduced-motion、tokens |
 | [core/ui/src/styles/plugin-editor-shell.css](../core/ui/src/styles/plugin-editor-shell.css) | grid、flex、theme、tokens |
@@ -559,15 +640,18 @@
 | [core/ui/src/styles/process-media.css](../core/ui/src/styles/process-media.css) | grid、flex、reduced-motion、theme |
 | [core/ui/src/styles/session-sidebar.css](../core/ui/src/styles/session-sidebar.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
 | [core/ui/src/styles/split-workspace.css](../core/ui/src/styles/split-workspace.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/styles/stream-fade.css](../core/ui/src/styles/stream-fade.css) | event、animation、reduced-motion、tokens |
 | [core/ui/src/styles/sunday-button.css](../core/ui/src/styles/sunday-button.css) | flex、reduced-motion、theme、tokens |
 | [core/ui/src/styles/sunday-controls.css](../core/ui/src/styles/sunday-controls.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/styles/sunday-motion.css](../core/ui/src/styles/sunday-motion.css) | event、animation、reduced-motion、tokens |
 | [core/ui/src/styles/sunday-spinner.css](../core/ui/src/styles/sunday-spinner.css) | event、animation、reduced-motion |
 | [core/ui/src/styles/sunday-switch.css](../core/ui/src/styles/sunday-switch.css) | flex、reduced-motion、theme、tokens |
 | [core/ui/src/styles/sunday-task-indicator.css](../core/ui/src/styles/sunday-task-indicator.css) | grid |
 | [core/ui/src/styles/theme-editor.css](../core/ui/src/styles/theme-editor.css) | range、grid、flex、reduced-motion、theme、tokens |
-| [core/ui/src/styles/ui-select.css](../core/ui/src/styles/ui-select.css) | grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/styles/ui-select.css](../core/ui/src/styles/ui-select.css) | grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/styles/variables.css](../core/ui/src/styles/variables.css) | theme、tokens |
 | [core/ui/src/styles/workspace-shell.css](../core/ui/src/styles/workspace-shell.css) | event、grid、flex、animation、reduced-motion、theme、tokens |
+| [core/ui/src/styles/workspace-v2.css](../core/ui/src/styles/workspace-v2.css) | grid、flex、reduced-motion、theme、tokens |
 | [core/ui/src/themeStudio/align.ts](../core/ui/src/themeStudio/align.ts) | — |
 | [core/ui/src/themeStudio/annotation.ts](../core/ui/src/themeStudio/annotation.ts) | — |
 | [core/ui/src/themeStudio/bootstrap.ts](../core/ui/src/themeStudio/bootstrap.ts) | — |
@@ -583,6 +667,12 @@
 | [core/ui/src/themeStudio/schema.ts](../core/ui/src/themeStudio/schema.ts) | — |
 | [core/ui/src/themeStudio/store.ts](../core/ui/src/themeStudio/store.ts) | — |
 | [core/ui/src/themeStudio/validate.ts](../core/ui/src/themeStudio/validate.ts) | — |
+| [core/ui/src/transfer/codes.ts](../core/ui/src/transfer/codes.ts) | — |
+| [core/ui/src/transfer/dispatch.ts](../core/ui/src/transfer/dispatch.ts) | — |
+| [core/ui/src/transfer/received.ts](../core/ui/src/transfer/received.ts) | — |
+| [core/ui/src/transfer/send.ts](../core/ui/src/transfer/send.ts) | — |
+| [core/ui/src/transfer/shape.ts](../core/ui/src/transfer/shape.ts) | — |
+| [core/ui/src/transfer/useTransferBook.ts](../core/ui/src/transfer/useTransferBook.ts) | event |
 | [core/ui/src/transport/directTransport.ts](../core/ui/src/transport/directTransport.ts) | event |
 | [core/ui/src/transport/index.ts](../core/ui/src/transport/index.ts) | — |
 | [core/ui/src/transport/ipcTransport.ts](../core/ui/src/transport/ipcTransport.ts) | — |
@@ -596,8 +686,23 @@
 | [core/ui/src/uiRegistry/index.ts](../core/ui/src/uiRegistry/index.ts) | — |
 | [core/ui/src/uiRegistry/registry.ts](../core/ui/src/uiRegistry/registry.ts) | — |
 | [core/ui/src/uiRegistry/types.ts](../core/ui/src/uiRegistry/types.ts) | — |
-| [core/ui/src/vite-env.d.ts](../core/ui/src/vite-env.d.ts) | — |
 | [core/ui/src/workbench/createWorkbench.ts](../core/ui/src/workbench/createWorkbench.ts) | — |
 | [core/ui/src/workbench/index.ts](../core/ui/src/workbench/index.ts) | — |
 | [core/ui/src/workbench/types.ts](../core/ui/src/workbench/types.ts) | — |
+| [core/ui/src/workspace/composition.ts](../core/ui/src/workspace/composition.ts) | — |
+| [core/ui/src/workspace/compute.ts](../core/ui/src/workspace/compute.ts) | — |
+| [core/ui/src/workspace/constants.ts](../core/ui/src/workspace/constants.ts) | — |
+| [core/ui/src/workspace/context.ts](../core/ui/src/workspace/context.ts) | — |
+| [core/ui/src/workspace/hit.ts](../core/ui/src/workspace/hit.ts) | — |
+| [core/ui/src/workspace/index.ts](../core/ui/src/workspace/index.ts) | — |
+| [core/ui/src/workspace/interaction.ts](../core/ui/src/workspace/interaction.ts) | — |
+| [core/ui/src/workspace/model.ts](../core/ui/src/workspace/model.ts) | — |
+| [core/ui/src/workspace/ops.ts](../core/ui/src/workspace/ops.ts) | — |
+| [core/ui/src/workspace/persist.ts](../core/ui/src/workspace/persist.ts) | — |
+| [core/ui/src/workspace/rootEntry.ts](../core/ui/src/workspace/rootEntry.ts) | — |
+| [core/ui/src/workspace/surface.ts](../core/ui/src/workspace/surface.ts) | — |
+| [core/ui/src/workspace/tabs.ts](../core/ui/src/workspace/tabs.ts) | — |
+| [core/ui/src/workspace/types.ts](../core/ui/src/workspace/types.ts) | — |
+| [core/ui/src/workspace/useWorkspace.ts](../core/ui/src/workspace/useWorkspace.ts) | event |
+| [core/ui/src/workspace/visibility.ts](../core/ui/src/workspace/visibility.ts) | — |
 | [core/ui/thinking-lab.html](../core/ui/thinking-lab.html) | grid、flex、theme |

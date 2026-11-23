@@ -199,7 +199,7 @@ describe('useCoreExecutionControlsState', () => {
       shallow_thinking_enabled: true,
       context_window_tokens: 128_000,
       max_tokens: 16_000,
-      active_mode: 'execute',
+      active_mode: 'work',
     })
 
     state.selectModel('model-1')
@@ -379,7 +379,7 @@ describe('per-session composer parameter group', () => {
       modelId: 'model-2',
       thinkingMode: 'light',
       shallowThinkingEnabled: true,
-      activeMode: 'consider',
+      activeMode: 'chat',
       permissionPreset: 'auto',
     })
   })
@@ -402,7 +402,7 @@ describe('per-session composer parameter group', () => {
       modelId: 'model-2',
       thinkingMode: 'light',
       shallowThinkingEnabled: false,
-      activeMode: 'consider',
+      activeMode: 'chat',
       permissionPreset: 'auto',
     })
 
@@ -410,7 +410,7 @@ describe('per-session composer parameter group', () => {
       modelId: 'model-2',
       thinkingMode: 'light',
       shallowThinkingEnabled: false,
-      activeMode: 'consider',
+      activeMode: 'chat',
       permissionPreset: 'auto',
     })
     await nextTick()

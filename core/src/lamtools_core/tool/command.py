@@ -98,11 +98,12 @@ from lamtools_core.runtime.execution_guard import (
 
 
 def _windows_command_creationflags() -> int:
-    if sys.platform != "win32":
-        return 0
-    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    return flags
+    # user:“启动后台任务时会弹命令行窗，能不能隐藏掉？”+(命令工具的子进程一样不许弹窗：
+    # 统一从 win_spawn 取标志，仍然保留 CREATE_NEW_PROCESS_GROUP 以便整组终止；
+    # 输出依旧走 PIPE，进度回调与超时逻辑不受影响)。
+    from lamtools_core.win_spawn import creation_flags
+
+    return creation_flags(new_process_group=True)
 
 
 def terminate_process_tree(

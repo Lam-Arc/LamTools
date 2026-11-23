@@ -18,26 +18,14 @@
 /* 资料库顶部的三大项切换：和筛选页签同一套配方（同一处方两处用），
    只加一条分界线，把「最外层分区」和分区内部的页签分开。 */
 .library-surface .library-sections {
-  display: flex;
-  align-items: center;
+  /* user:“这里有一些东西被异常折叠了”+(分区栏保留按钮高度，内容超过分屏时由资料库页面滚动)。 */
+  flex: 0 0 auto;
   flex-wrap: wrap;
-  gap: var(--space-1);
   margin-bottom: var(--space-4);
   padding-bottom: var(--space-2);
   border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
 }
-.library-surface .library-sections button {
-  padding: 4px var(--space-3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 65%, transparent);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-.library-surface .library-sections button:hover { background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent); color: var(--text); }
-.library-surface .library-sections button.active { background: color-mix(in srgb, var(--text) var(--alpha-active), transparent); color: var(--text); font-weight: 600; }
+
 /* ── 资料区的资料库版式（对标 ChatGPT 资料库）：大标题 + 右侧整条工具 ── */
 .library-surface .materials-head {
   display: flex;
@@ -978,4 +966,15 @@ body.library-drag-selecting .library-surface .library-row { cursor: crosshair; }
   /* 执行中不再转圈，色点仍在——状态本身不靠动画传达。 */
   .library-surface .library-status[data-plan-status='executing']::before { animation: none; }
   .library-surface .library-dialog-enter-active, .library-surface .library-dialog-leave-active, .library-surface .library-dialog-enter-active .dialog-card, .library-surface .library-dialog-leave-active .dialog-card { transition-duration: 0ms; }
+}
+/* user:“文件树、资料库、预览器里对文件加「发送到设备」”+(设备清单贴在点击处；
+   门面只接住空白点击，不改变资料墙的布局)。 */
+.materials-send-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+
+.materials-send-menu {
+  position: fixed;
 }
